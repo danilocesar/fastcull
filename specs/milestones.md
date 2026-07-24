@@ -15,7 +15,7 @@ SQLite cache, EXIF read. `fastcull-cli scan|thumbs` subcommands. Perf budgets
 enforced by release-mode tests (criterion benches provide the numbers). DoD:
 raw-pipeline + catalog-cache acceptance criteria pass against the 3 real A1 files —
 except the sidecar-at-open criterion, which is deferred to M3 where XMP parsing
-lands (deferral flagged for the user's sign-off at M1 close per the gate rules).
+lands (deferral approved by the user, 2026-07-24). **M1 closed 2026-07-24.**
 
 ## M2 — Grid UI (prototype risk first)
 Slint window, windowed-model virtualized grid, zoom column steps, progressive
