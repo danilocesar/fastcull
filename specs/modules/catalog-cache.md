@@ -13,6 +13,12 @@
 - `ImageRecord`: path, size, mtime, load state (Placeholder → Loaded → Failed),
   EXIF summary (capture time, camera model/serial, sequence number), pick state,
   IPTC data, burst id, copied flag.
+- **Deferral (recorded)**: the Sony maker-note SequenceNumber is NOT in
+  `ExifSummary` until the burst milestone (M7) — rawler 0.7 exposes no maker
+  notes (upstream has the parsing commented out), so M7 needs an in-tree Sony
+  maker-note reader. When the field is added it must be `#[serde(default)]`
+  and the cache `schema_ver` must be bumped, or pre-M7 cached rows silently
+  lack sequence numbers.
 - Pre-existing sidecars are read during load (pipeline metadata pass) so picks and
   IPTC from a previous session (or Photo Mechanic) appear in the UI.
 - Folder watching (`notify` crate): files added/removed while a session is open are

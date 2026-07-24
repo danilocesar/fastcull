@@ -10,6 +10,7 @@
 //! else: **a RAW file is never opened for writing** — all state goes to XMP
 //! sidecars.
 
+pub mod exif;
 pub mod raw;
 
 /// Application version, shared by the CLI and the UI shell.

@@ -7,4 +7,6 @@ license.workspace = true
 repository.workspace = true
 
 [dependencies]
+rawler = "0.7"
+serde = { version = "1", features = ["derive"] }
 thiserror = "2"
