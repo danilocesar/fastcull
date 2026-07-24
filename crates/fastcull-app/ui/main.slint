@@ -69,8 +69,10 @@ export component MainWindow inherits Window {
                 y: cell.y;
                 width: cell.w;
                 height: cell.h;
-                background: cell.has-image
-                    ? #000000
+                // Spec: real folders get neutral gray placeholders; the
+                // hue tint is only for --synthetic cells (seed >= 0).
+                background: cell.has-image ? #000000
+                    : cell.seed < 0 ? #2a2a2e
                     : hsv(Math.mod(cell.seed * 47, 360), 0.30, 0.22);
                 border-width: cell.is-cursor ? 3px : 0px;
                 border-color: #4da3ff;

@@ -83,10 +83,16 @@ impl GridLayout {
     }
 
     /// Scroll offset that keeps `index`'s row fully visible, moving as
-    /// little as possible from `scroll_y`.
+    /// little as possible from `scroll_y`. A cell taller than the viewport
+    /// (1-column loupe on a 16:9 window) is top-aligned and stable on
+    /// repeated calls — the top/bottom rules would otherwise oscillate
+    /// (QE finding: ~260 px flip per keypress).
     pub fn scroll_to_reveal(&self, index: usize, scroll_y: f32, viewport_height: f32) -> f32 {
         let (_, top) = self.position(index);
         let bottom = top + self.cell_height;
+        if self.cell_height + 2.0 * CELL_GAP > viewport_height {
+            return (top - CELL_GAP).max(0.0);
+        }
         if top - CELL_GAP < scroll_y {
             (top - CELL_GAP).max(0.0)
         } else if bottom + CELL_GAP > scroll_y + viewport_height {
@@ -230,6 +236,33 @@ mod tests {
         assert_eq!(zoom_step(0, 1), 1);
         assert_eq!(zoom_step(6, 1), 6);
         assert_eq!(zoom_step(3, -3), 0);
+    }
+
+    /// Regression (QE defect D1): a cell taller than the viewport must
+    /// top-align and stay put on repeated reveals, never oscillate.
+    #[test]
+    fn reveal_of_oversized_cell_is_stable() {
+        let l = GridLayout::new(6, 1920.0, 50); // 1 column, cell_h ~1272
+        let viewport = 1020.0;
+        assert!(l.cell_height > viewport);
+        let s1 = l.scroll_to_reveal(5, 0.0, viewport);
+        let s2 = l.scroll_to_reveal(5, s1, viewport);
+        let s3 = l.scroll_to_reveal(5, s2, viewport);
+        assert_eq!(s1, s2, "reveal must be idempotent");
+        assert_eq!(s2, s3);
+        let (_, top) = l.position(5);
+        assert!((s1 - (top - CELL_GAP)).abs() < 0.01, "top-aligned");
+    }
+
+    /// N=1 (loupe) windowing: exactly the on-screen image ± margin exists.
+    #[test]
+    fn visible_range_at_single_column() {
+        let l = GridLayout::new(6, 1920.0, 100);
+        let row_pitch = l.cell_height + CELL_GAP;
+        let r = l.visible_range(100, 10.0 * row_pitch, row_pitch, 1);
+        assert!(r.contains(&10));
+        // Viewport row + partial-overlap row + one margin row each side.
+        assert!(r.len() <= 6, "tight window at N=1, got {r:?}");
     }
 
     #[test]

@@ -24,7 +24,19 @@ pipeline `Thumb` events. Placeholder cells render immediately (gray + filename)
 before their thumb arrives.
 
 `CellData`: image id, texture, pick state, burst color index (-1 = none),
-failed flag, copied flag, selected flag.
+failed flag, copied flag, selected flag. (Fields arrive with their milestones:
+M2 ships texture/failed/cursor; pick badge M3, copied M6, burst M7.)
+
+Recorded deviations/decisions (M2):
+- Thumb JPEG→texture decode happens on the UI thread, bounded to ~32 decodes
+  per refresh with leftovers deferred to a follow-up tick (≈16 ms worst-case
+  stall on a page jump). `slint::Image` is not `Send`, so some UI-side
+  conversion is unavoidable; moving the JPEG decode itself off-thread is an
+  M4 follow-up together with the asset LRU.
+- Ctrl+scroll zoom is deferred: Slint's Flickable consumes wheel events and
+  an overlay TouchArea would steal the drag/click gestures. Keyboard `+`/`-`
+  covers M2; revisit during M4 polish (needs user OK to defer past v1 if it
+  stays unsolved).
 
 ## Visual language
 

@@ -12,24 +12,36 @@ use std::rc::Rc;
 use fastcull_core::catalog::Session;
 use fastcull_core::grid::{self, GridLayout, Nav};
 use fastcull_core::pipeline::{JobSpec, Pipeline, SessionEvent};
-use slint::{ComponentHandle, VecModel};
+use slint::{ComponentHandle, Model, VecModel};
 
 slint::include_modules!();
 
 /// Rows kept alive around the viewport in the windowed model.
 const MARGIN_ROWS: usize = 1;
 
+/// UI-thread decode budget per refresh (~0.5 ms per 320 px thumb): bounds the
+/// stall of a Home/End jump into a fully-thumbed region; the remainder is
+/// decoded on follow-up refreshes (deviation from the never-decode-on-UI
+/// rule recorded in ui-grid.md — slint::Image itself is not Send).
+const DECODES_PER_REFRESH: usize = 32;
+
 struct AppState {
     labels: Vec<String>,
     zoom: usize,
     cursor: usize,
-    /// Encoded thumbs by index (30–60 KB each); decoded lazily per window.
+    /// Encoded thumbs by index (30–60 KB each); decoded lazily per window,
+    /// bytes dropped after decode (the SQLite cache keeps the encoded copy).
     thumb_jpegs: HashMap<usize, Vec<u8>>,
     /// Decoded images, kept for the session (spec: thumbs are cheap).
     images: HashMap<usize, slint::Image>,
     failed: HashSet<usize>,
     pipeline: Option<Pipeline>,
     thumbs_done: usize,
+    /// True for --synthetic sessions: cells get distinct placeholder hues;
+    /// real folders use the spec's neutral gray.
+    synthetic: bool,
+    /// The one VecModel the window binds; refresh mutates it in place.
+    cells: Rc<VecModel<CellData>>,
 }
 
 impl AppState {
@@ -42,7 +54,10 @@ fn main() {
     let args: Vec<String> = std::env::args().skip(1).collect();
     let (labels, jobs): (Vec<String>, Option<Vec<JobSpec>>) = match args.as_slice() {
         [flag, n] if flag == "--synthetic" => {
-            let n: usize = n.parse().expect("--synthetic N");
+            let Ok(n) = n.parse::<usize>() else {
+                eprintln!("usage: fastcull-app <folder> | --synthetic <count>");
+                std::process::exit(2);
+            };
             ((0..n).map(|i| format!("SYN{i:05}.ARW")).collect(), None)
         }
         [folder] => {
@@ -72,7 +87,10 @@ fn main() {
         }
     };
 
+    let synthetic = jobs.is_none();
     let window = MainWindow::new().expect("creating window");
+    let cells = Rc::new(VecModel::from(Vec::<CellData>::new()));
+    window.set_cells(slint::ModelRc::from(Rc::clone(&cells)));
     let state = Rc::new(RefCell::new(AppState {
         labels,
         zoom: 1, // 8 columns
@@ -82,6 +100,8 @@ fn main() {
         failed: HashSet::new(),
         pipeline: None,
         thumbs_done: 0,
+        synthetic,
+        cells,
     }));
 
     // Start the engine for real folders; events polled on a UI timer.
@@ -210,39 +230,60 @@ fn refresh(win: &MainWindow, state: &Rc<RefCell<AppState>>) {
         pipeline.set_visible(range.clone());
     }
 
-    // Decode any encoded thumbs entering the window.
+    // Decode encoded thumbs entering the window, bounded per refresh so a
+    // page jump never stalls a frame; leftovers get a follow-up refresh.
     let to_decode: Vec<usize> = range
         .clone()
         .filter(|i| st.thumb_jpegs.contains_key(i) && !st.images.contains_key(i))
         .collect();
-    for index in to_decode {
-        if let Some(image) = st.thumb_jpegs.get(&index).and_then(|b| decode_image(b)) {
+    let leftovers = to_decode.len() > DECODES_PER_REFRESH;
+    for index in to_decode.into_iter().take(DECODES_PER_REFRESH) {
+        // Encoded bytes are dropped after decode: the SQLite cache keeps
+        // the encoded copy, no need for a third one in RAM.
+        if let Some(image) = st.thumb_jpegs.remove(&index).and_then(|b| decode_image(&b)) {
             st.images.insert(index, image);
         }
     }
-
-    let cells: Vec<CellData> = range
-        .clone()
-        .map(|index| {
-            let (x, y) = layout.position(index);
-            let image = st.images.get(&index);
-            CellData {
-                x,
-                y,
-                w: layout.cell_width,
-                h: layout.cell_height,
-                image: image.cloned().unwrap_or_default(),
-                has_image: image.is_some(),
-                failed: st.failed.contains(&index),
-                label: st.labels.get(index).cloned().unwrap_or_default().into(),
-                is_cursor: index == st.cursor,
-                seed: index as i32,
+    if leftovers {
+        let win_weak = win.as_weak();
+        let state_rc = Rc::clone(state);
+        slint::Timer::single_shot(std::time::Duration::from_millis(16), move || {
+            if let Some(win) = win_weak.upgrade() {
+                refresh(&win, &state_rc);
             }
-        })
-        .collect();
+        });
+    }
+
+    // Mutate the one bound VecModel in place (spec: reuse, don't recreate).
+    let model = Rc::clone(&st.cells);
+    let mut row = 0usize;
+    for index in range.clone() {
+        let (x, y) = layout.position(index);
+        let image = st.images.get(&index);
+        let cell = CellData {
+            x,
+            y,
+            w: layout.cell_width,
+            h: layout.cell_height,
+            image: image.cloned().unwrap_or_default(),
+            has_image: image.is_some(),
+            failed: st.failed.contains(&index),
+            label: st.labels.get(index).cloned().unwrap_or_default().into(),
+            is_cursor: index == st.cursor,
+            seed: if st.synthetic { index as i32 } else { -1 },
+        };
+        if row < model.row_count() {
+            model.set_row_data(row, cell);
+        } else {
+            model.push(cell);
+        }
+        row += 1;
+    }
+    while model.row_count() > row {
+        model.remove(model.row_count() - 1);
+    }
 
     win.set_virtual_height(layout.total_height);
-    win.set_cells(slint::ModelRc::new(VecModel::from(cells)));
     win.set_status(
         format!(
             "{} images — {} thumbs loaded — {} columns — window {}..{}",
