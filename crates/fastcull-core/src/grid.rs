@@ -1,0 +1,251 @@
+//! Grid layout math for the zoomable thumbnail view (`specs/modules/ui-grid.md`).
+//!
+//! Pure functions — no UI types — so the windowed-model computation that
+//! drives Slint's virtualization is fully unit-testable in core. The app
+//! crate feeds in viewport geometry and gets back which cells exist, where
+//! they sit, and how the cursor moves.
+//!
+//! Coordinates are f32 logical pixels, origin at the top of the full
+//! (virtual) grid; the UI subtracts its scroll offset.
+
+/// Zoom ladder: number of columns per step; index 6 (1 column) is the loupe
+/// per the spec's one-axis zoom model.
+pub const ZOOM_COLUMNS: [usize; 7] = [12, 8, 6, 4, 3, 2, 1];
+
+/// 3:2 landscape cells (Sony A1 native aspect). Portrait images letterbox
+/// inside the cell.
+pub const CELL_ASPECT: f32 = 1.5;
+
+/// Gap between cells in logical pixels.
+pub const CELL_GAP: f32 = 6.0;
+
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub struct GridLayout {
+    pub columns: usize,
+    pub cell_width: f32,
+    pub cell_height: f32,
+    /// Total virtual height of the grid for `item_count` items.
+    pub total_height: f32,
+}
+
+impl GridLayout {
+    /// Layout for a zoom step within a viewport of `viewport_width`.
+    pub fn new(zoom_step: usize, viewport_width: f32, item_count: usize) -> Self {
+        let columns = ZOOM_COLUMNS[zoom_step.min(ZOOM_COLUMNS.len() - 1)];
+        let cell_width = (viewport_width - CELL_GAP * (columns as f32 + 1.0)) / columns as f32;
+        let cell_width = cell_width.max(1.0);
+        let cell_height = cell_width / CELL_ASPECT;
+        let rows = item_count.div_ceil(columns.max(1));
+        let total_height = rows as f32 * (cell_height + CELL_GAP) + CELL_GAP;
+        Self {
+            columns,
+            cell_width,
+            cell_height,
+            total_height,
+        }
+    }
+
+    pub fn row_of(&self, index: usize) -> usize {
+        index / self.columns
+    }
+
+    /// Top-left position of a cell in virtual-grid coordinates.
+    pub fn position(&self, index: usize) -> (f32, f32) {
+        let row = self.row_of(index);
+        let col = index % self.columns;
+        (
+            CELL_GAP + col as f32 * (self.cell_width + CELL_GAP),
+            CELL_GAP + row as f32 * (self.cell_height + CELL_GAP),
+        )
+    }
+
+    /// Indexes whose cells intersect the viewport `[scroll_y, scroll_y +
+    /// viewport_height)`, expanded by `margin_rows` on each side (the
+    /// windowed model: only these cells exist UI-side).
+    pub fn visible_range(
+        &self,
+        item_count: usize,
+        scroll_y: f32,
+        viewport_height: f32,
+        margin_rows: usize,
+    ) -> std::ops::Range<usize> {
+        if item_count == 0 {
+            return 0..0;
+        }
+        let row_pitch = self.cell_height + CELL_GAP;
+        let first_row = ((scroll_y - CELL_GAP) / row_pitch).floor().max(0.0) as usize;
+        let last_row = ((scroll_y + viewport_height) / row_pitch).ceil() as usize;
+        let first_row = first_row.saturating_sub(margin_rows);
+        let last_row = last_row + margin_rows;
+        let start = (first_row * self.columns).min(item_count);
+        let end = ((last_row + 1) * self.columns).min(item_count);
+        start..end
+    }
+
+    /// Scroll offset that keeps `index`'s row fully visible, moving as
+    /// little as possible from `scroll_y`.
+    pub fn scroll_to_reveal(&self, index: usize, scroll_y: f32, viewport_height: f32) -> f32 {
+        let (_, top) = self.position(index);
+        let bottom = top + self.cell_height;
+        if top - CELL_GAP < scroll_y {
+            (top - CELL_GAP).max(0.0)
+        } else if bottom + CELL_GAP > scroll_y + viewport_height {
+            (bottom + CELL_GAP - viewport_height).max(0.0)
+        } else {
+            scroll_y
+        }
+    }
+}
+
+/// Cursor movement over the item list in grid terms.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Nav {
+    Left,
+    Right,
+    Up,
+    Down,
+    PageUp,
+    PageDown,
+    Home,
+    End,
+}
+
+/// New cursor index for a navigation key. `rows_per_page` is the number of
+/// fully visible rows (≥1). Clamps at the ends; never leaves `0..item_count`.
+pub fn navigate(
+    cursor: usize,
+    item_count: usize,
+    columns: usize,
+    rows_per_page: usize,
+    nav: Nav,
+) -> usize {
+    if item_count == 0 {
+        return 0;
+    }
+    let last = item_count - 1;
+    let columns = columns.max(1);
+    let page = columns * rows_per_page.max(1);
+    let target = match nav {
+        Nav::Left => cursor.saturating_sub(1),
+        Nav::Right => cursor + 1,
+        Nav::Up => cursor.saturating_sub(columns),
+        Nav::Down => {
+            // Moving down from the last (possibly partial) row stays put
+            // rather than jumping to End: predictable during fast culling.
+            if cursor + columns > last {
+                cursor
+            } else {
+                cursor + columns
+            }
+        }
+        Nav::PageUp => cursor.saturating_sub(page),
+        Nav::PageDown => (cursor + page).min(last),
+        Nav::Home => 0,
+        Nav::End => last,
+    };
+    target.min(last)
+}
+
+/// Zoom step change, clamped to the ladder. Positive `delta` zooms in
+/// (fewer columns).
+pub fn zoom_step(current: usize, delta: i32) -> usize {
+    let max = ZOOM_COLUMNS.len() as i32 - 1;
+    (current as i32 + delta).clamp(0, max) as usize
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn layout_fills_viewport_width() {
+        let l = GridLayout::new(1, 1600.0, 100); // 8 columns
+        assert_eq!(l.columns, 8);
+        let expected = (1600.0 - CELL_GAP * 9.0) / 8.0;
+        assert!((l.cell_width - expected).abs() < 0.01);
+        assert!((l.cell_height - expected / 1.5).abs() < 0.01);
+    }
+
+    #[test]
+    fn single_column_is_loupe_sized() {
+        let l = GridLayout::new(6, 1600.0, 10);
+        assert_eq!(l.columns, 1);
+        assert!(l.cell_width > 1500.0);
+    }
+
+    #[test]
+    fn total_height_counts_partial_rows() {
+        let l = GridLayout::new(1, 1600.0, 9); // 8 cols -> 2 rows (8 + 1)
+        let row_pitch = l.cell_height + CELL_GAP;
+        assert!((l.total_height - (2.0 * row_pitch + CELL_GAP)).abs() < 0.01);
+    }
+
+    #[test]
+    fn visible_range_windows_with_margin() {
+        let l = GridLayout::new(1, 1600.0, 2000); // 8 columns
+        let row_pitch = l.cell_height + CELL_GAP;
+        // Viewport showing rows ~4..8
+        let range = l.visible_range(2000, 4.0 * row_pitch, 4.0 * row_pitch, 1);
+        assert!(range.start <= 3 * 8, "margin row above included");
+        assert!(range.end >= 9 * 8, "margin row below included");
+        assert!(range.len() < 120, "window stays small: {}", range.len());
+    }
+
+    #[test]
+    fn visible_range_edges() {
+        let l = GridLayout::new(0, 1200.0, 5); // 12 columns, 5 items: 1 row
+        assert_eq!(l.visible_range(5, 0.0, 800.0, 2), 0..5);
+        assert_eq!(l.visible_range(0, 0.0, 800.0, 2), 0..0);
+        // Scrolled far past the end clamps to item count.
+        let r = l.visible_range(5, 1e6, 800.0, 2);
+        assert!(r.start <= 5 && r.end == 5);
+    }
+
+    #[test]
+    fn navigate_clamps_and_stays_in_partial_rows() {
+        // 10 items, 4 columns: rows [0..4),[4..8),[8..10)
+        assert_eq!(navigate(0, 10, 4, 2, Nav::Left), 0);
+        assert_eq!(navigate(9, 10, 4, 2, Nav::Right), 9);
+        assert_eq!(navigate(1, 10, 4, 2, Nav::Down), 5);
+        assert_eq!(navigate(5, 10, 4, 2, Nav::Down), 9);
+        assert_eq!(navigate(7, 10, 4, 2, Nav::Down), 7); // would pass End: stay
+        assert_eq!(navigate(9, 10, 4, 2, Nav::Up), 5);
+        assert_eq!(navigate(9, 10, 4, 2, Nav::Home), 0);
+        assert_eq!(navigate(0, 10, 4, 2, Nav::End), 9);
+        assert_eq!(navigate(0, 10, 4, 2, Nav::PageDown), 8);
+        assert_eq!(navigate(8, 10, 4, 2, Nav::PageUp), 0);
+        assert_eq!(navigate(0, 0, 4, 2, Nav::Down), 0); // empty folder
+    }
+
+    #[test]
+    fn navigate_single_column_acts_like_filmstrip() {
+        assert_eq!(navigate(3, 10, 1, 5, Nav::Down), 4);
+        assert_eq!(navigate(3, 10, 1, 5, Nav::Right), 4);
+        assert_eq!(navigate(3, 10, 1, 5, Nav::Up), 2);
+    }
+
+    #[test]
+    fn zoom_ladder_clamps() {
+        assert_eq!(zoom_step(0, -1), 0);
+        assert_eq!(zoom_step(0, 1), 1);
+        assert_eq!(zoom_step(6, 1), 6);
+        assert_eq!(zoom_step(3, -3), 0);
+    }
+
+    #[test]
+    fn scroll_to_reveal_moves_minimally() {
+        let l = GridLayout::new(1, 1600.0, 2000);
+        let row_pitch = l.cell_height + CELL_GAP;
+        let viewport = 3.0 * row_pitch;
+        // Cell below the viewport: scroll down just enough.
+        let idx_row10 = 10 * 8;
+        let s = l.scroll_to_reveal(idx_row10, 0.0, viewport);
+        let (_, top) = l.position(idx_row10);
+        assert!(s + viewport >= top + l.cell_height);
+        // Already visible: unchanged.
+        assert_eq!(l.scroll_to_reveal(idx_row10, s, viewport), s);
+        // Cell above: scroll up to its top.
+        let s2 = l.scroll_to_reveal(0, s, viewport);
+        assert_eq!(s2, 0.0);
+    }
+}

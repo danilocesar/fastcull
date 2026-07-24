@@ -13,6 +13,7 @@
 pub mod cache;
 pub mod catalog;
 pub mod exif;
+pub mod grid;
 pub mod pipeline;
 pub mod raw;
 
