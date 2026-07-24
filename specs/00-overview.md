@@ -24,6 +24,11 @@ file for full RAW decode.
 - No catalog/database of the user's library — a session is one folder.
 - No card ingest (v2), no star ratings/color labels (v2), no monitor ICC color
   management (v2), no macOS (v2), no video files.
+- No reject-file handling: after copy-picks, rejects stay where they are (user
+  deletes them manually later — recorded decision from the persona review).
+- No undo stack (arrow-back + re-mark covers culling; IPTC has a single-level
+  revert-last-apply). No paired-JPEG handling (v2 candidate). No burst
+  stack/unstack (post-v1 nice-to-have).
 - No cloud, no AI culling, no telemetry. Ever, for the last one.
 
 ## Reference camera

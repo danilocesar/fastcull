@@ -2,9 +2,14 @@
 
 ## Catalog
 
-- `Session::open(folder)` scans one directory (non-recursive, v1) for supported RAW
-  extensions (from rawler's known set; `.ARW` first-class) and returns immediately
-  with placeholder `ImageRecord`s — no per-file I/O at scan time.
+- `Session::open(folder)` scans one directory (non-recursive, v1 — the user's
+  ingest produces one flat folder per job) for supported RAW extensions (from
+  rawler's known set; `.ARW` first-class) and returns immediately with
+  placeholder `ImageRecord`s — no per-file I/O at scan time.
+- Same-stem JPEG siblings (`DSC01234.ARW` + `DSC01234.JPG`) are ignored in v1:
+  not shown, not copied. Recorded user decision — he shoots RAW+JPEG but does
+  not care yet; showing/copying paired JPEGs is a v2 candidate, so the scan
+  code should keep the sibling check cheap to add.
 - `ImageRecord`: path, size, mtime, load state (Placeholder → Loaded → Failed),
   EXIF summary (capture time, camera model/serial, sequence number), pick state,
   IPTC data, burst id, copied flag.

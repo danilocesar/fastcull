@@ -39,7 +39,10 @@ case-preservingly (first spelling wins; comparison is Unicode-casefolded).
   every selected image; empty template fields leave existing values untouched.
 - Keyword apply is additive (union), not replacement.
 - Manual panel edit on a multi-selection behaves the same way, field-by-field.
-- Every apply is one undoable session operation (single undo step for the batch).
+- Revert: the session keeps the pre-apply IPTC state of the **last** batch apply
+  and offers "Revert last apply" (single level, cleared by the next apply or
+  session close). There is no general undo stack in v1 (user decision after
+  persona review, which flagged the previous wording as a dangling promise).
 
 ## Acceptance criteria (tests)
 
@@ -51,3 +54,5 @@ case-preservingly (first spelling wins; comparison is Unicode-casefolded).
       templates still load.
 - [ ] All-or-nothing: a failing expansion on image 2 of 3 leaves images 1 and 3
       unmodified.
+- [ ] Revert-last-apply restores exact pre-apply state (incl. keyword lists) and
+      is single-level: a second revert is a no-op.

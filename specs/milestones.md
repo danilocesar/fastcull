@@ -28,14 +28,25 @@ darktable-cli round-trip.
 
 ## M4 — Loupe
 Fit + 1:1 zoom, pan, DCT-scaled fit decode, ±2 prefetch, auto-advance on mark.
+DoD additionally: **tag a runnable 0.x release** — per the persona review this is
+the earliest genuinely usable build (grid cull + 1:1 sharpness checks + sidecars).
 
-## M5 — IPTC
-Panel, multi-select apply, templates + variables, config persistence.
+*(M5–M7 reordered after the persona review + user decisions: filter before IPTC
+because the IPTC pass starts with "filter to picked, select all"; copy-picks
+before bursts because copy is the exit move of every session and bursts are
+decoration.)*
 
-## M6 — Filter/sort + bursts
-filter.rs predicates + bar UI; burst.rs grouping + border rendering.
+## M5 — Filter/sort + IPTC
+filter.rs predicates + bar UI (pick-state filters with counts first); then IPTC
+panel, multi-select apply, templates + variables, revert-last-apply, config
+persistence.
 
-## M7 — Copy picks + packaging
-fileops plan/execute + dialog + report. cargo-dist packaging: Linux AppImage,
-Windows zip/MSI. DoD: full manual acceptance script in specs/00-overview terms:
-open 2,000 A1 files → cull → IPTC → copy → darktable sees everything.
+## M6 — Copy picks
+fileops plan/execute + dialog + report: rename templates, auto-rename collision
+default, BLAKE3 verification, sidecar lockstep.
+
+## M7 — Bursts + packaging
+burst.rs grouping + border rendering + in-burst filter. cargo-dist packaging:
+Linux AppImage, Windows zip/MSI. DoD: full manual acceptance script in
+specs/00-overview terms: open **5,000** A1 files → cull → IPTC → copy →
+darktable sees everything.

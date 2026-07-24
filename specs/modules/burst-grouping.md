@@ -24,6 +24,10 @@ filename as tiebreaker).
 
 `max_gap` and min run length are config values, not constants.
 
+Later nice-to-have (post-v1, user decision after persona review): stack/unstack —
+a small icon on each burst group to collapse it to one representative frame and
+step inside it. v1 ships borders + the in-burst filter only.
+
 ## Acceptance criteria (tests)
 
 - [ ] Synthetic EXIF sets: single shots (Seq=0) never grouped; a 20 fps A1 burst

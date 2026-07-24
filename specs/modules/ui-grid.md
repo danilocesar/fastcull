@@ -28,7 +28,8 @@ failed flag, copied flag, selected flag.
 
 ## Visual language
 
-- Pick: green check badge (top-left). Reject: red X badge + 40% dimmed thumb.
+- Pick: small star badge (top-left; user decision — "mark the ones taken with a
+  little star"). Reject: red X badge + 40% dimmed thumb.
 - Burst: 3 px border in the group color; groups are visually contiguous because
   sort is capture-time by default.
 - Selection: accent outline; multi-select via Ctrl/Shift-click and Shift+arrows.
@@ -39,16 +40,19 @@ failed flag, copied flag, selected flag.
 | Key | Action |
 |---|---|
 | Arrows / PgUp / PgDn / Home / End | navigate (grid and loupe) |
-| `P` or `Space` | pick | 
-| `X` | reject |
+| `Y`, `P` or `Space` | pick (take) |
+| `N` or `X` | reject |
 | `U` | clear mark |
 | `+` / `-` / Ctrl+scroll | zoom in/out (grid columns → loupe → 1:1) |
 | `Z` | toggle fit ↔ 1:1 in loupe |
 | `G` | jump back to grid (from loupe) |
 | `I` | toggle IPTC panel |
 | `Ctrl+A` | select all (filtered set) |
-| `Ctrl+C` (menu: Copy picks…) | open copy dialog |
+| `Ctrl+E` (menu: Copy picks…) | open copy dialog (`Ctrl+C` stays clipboard-idle: user decision after persona review — never repurpose it) |
 | `1`–`5`, `0` | reserved (star ratings, v2) — must not conflict |
+
+There is no undo stack in v1 (user decision): a mis-marked frame during
+auto-advance is fixed with arrow-back + re-mark, which costs one keystroke.
 
 Pick/reject in loupe auto-advances to the next image (config: on by default).
 
@@ -67,5 +71,6 @@ Pick/reject in loupe auto-advances to the next image (config: on by default).
       incl. partial rows, tiny folders, and N=1.
 - [ ] Slint screenshot smoke tests: grid with placeholder + loaded + badge states;
       loupe fit and 1:1.
-- [ ] Manual acceptance (per release): 2,000-file A1 folder scrolls at 60 fps after
-      thumbs load; pick→auto-advance→pick loop in loupe has no perceived latency.
+- [ ] Manual acceptance (per release): 5,000-file A1 folder (a bad evening, per
+      persona review) scrolls at 60 fps after thumbs load; pick→auto-advance→pick
+      loop in loupe has no perceived latency.
