@@ -33,8 +33,15 @@ Rust lives in `~/.cargo/bin` (rustup, no system packages).
 
 ## Step validation gate (mandatory)
 
-No implementation step is *completed* — no task marked done, no milestone-step
-commit declared finished — until BOTH project subagents have reviewed it:
+**Before implementation**: any new feature, spec, or milestone-scope decision
+gets a usefulness review by **almost-human-user**
+(`.claude/agents/almost-human-user.md`) — a persona of a real culling-tool user.
+IN-MY-WAY verdicts and workflow gaps are discussed with the user before coding
+starts; his "Questions for the user" are relayed verbatim.
+
+**After implementation**: no step is *completed* — no task marked done, no
+milestone-step commit declared finished — until BOTH project subagents have
+reviewed it:
 
 1. **validator** (`.claude/agents/validator.md`): adversarial review — what is
    missing, remaining, or risky; spec/ADR/CLAUDE.md conformance.
