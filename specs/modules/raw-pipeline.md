@@ -20,8 +20,15 @@ decoding RAW sensor data on the hot path.
      with zune-jpeg, SIMD-resized (`fast_image_resize`) to 320 px.
    - **FullRes**: largest embedded JPEG (A1: 8640×5760 `JpgFromRaw`) decoded with
      turbojpeg. **Known gap**: rawler 0.7 does not expose the A1 full-res JPEG
-     (`full_image()` returns 1616×1080). Implement an in-tree IFD-offset extractor
-     using rawler's TIFF parser. Do NOT upstream without explicit user approval.
+     (`full_image()` returns 1616×1080). Discovery therefore uses an in-tree,
+     from-scratch minimal TIFF/IFD walker (`raw/tiff.rs`) rather than rawler's
+     TIFF parser: it operates on any `Read + Seek` (enabling the counting-reader
+     budget tests), reads only IFD tables and JPEG headers, and is hardened
+     against hostile files (offset cycles, entry-count bombs, out-of-range
+     offsets) — properties rawler's path-based API doesn't offer. rawler remains
+     the EXIF/metadata and RAW-decode-fallback dependency. BigTIFF (magic 43)
+     containers are rejected as not-TIFF. Do NOT upstream anything without
+     explicit user approval.
    - **FitPreview**: same bytes as FullRes decoded with turbojpeg DCT scaling
      (1/2, 1/4, 1/8) choosing the smallest scale ≥ screen size.
 3. Fallback chain when a source is missing (non-A1 cameras): full-res JPEG → mid
