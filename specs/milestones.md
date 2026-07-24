@@ -1,7 +1,9 @@
 # Milestones
 
 Each milestone lands as one or more commits with green CI. Definition of done (DoD)
-includes the listed spec acceptance criteria turning into passing tests.
+includes the listed spec acceptance criteria turning into passing tests, plus the
+step validation gate in CLAUDE.md: every step is reviewed by the `validator` and
+`qe-engineer` subagents before it counts as complete.
 
 ## M0 — Scaffold ✔ (this commit series)
 Repo, GPL-3.0, workspace (core/cli/app), specs tree, CLAUDE.md, testdata fetcher,

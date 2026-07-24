@@ -31,6 +31,26 @@ Rust lives in `~/.cargo/bin` (rustup, no system packages).
 6. Performance budgets in `01-architecture.md` are regression-tested — a change
    that breaks a criterion threshold is a failing change.
 
+## Step validation gate (mandatory)
+
+No implementation step is *completed* — no task marked done, no milestone-step
+commit declared finished — until BOTH project subagents have reviewed it:
+
+1. **validator** (`.claude/agents/validator.md`): adversarial review — what is
+   missing, remaining, or risky; spec/ADR/CLAUDE.md conformance.
+2. **qe-engineer** (`.claude/agents/qe-engineer.md`): executes the change —
+   criterion-by-criterion spec verification, regression run, hostile inputs.
+
+Rules of the gate:
+- Run both after the step's implementation is believed finished (they can run in
+  parallel). FAIL findings must be fixed and the failing agent re-run.
+- PASS-WITH-CONCERNS / PASS-WITH-GAPS: address the findings or record the
+  explicit decision to defer them (in the task or commit message) — silence is
+  not acceptance. Deferring a *spec acceptance criterion* requires the user's OK.
+- Findings are fixed by the implementer, never by the reviewing agents.
+- The gate applies to implementation steps (code, specs, CI); trivial fixups
+  (typos, comment wording) are exempt.
+
 ## Conventions
 
 - Rust 2021, `cargo fmt` formatting, clippy clean at `-D warnings`.
