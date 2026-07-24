@@ -104,19 +104,26 @@ impl PreviewCache {
         if version != 0 && version != SCHEMA_VERSION {
             return Err(CacheError::SchemaMismatch { found: version });
         }
-        conn.execute_batch(&format!(
-            "PRAGMA journal_mode = WAL;
-             CREATE TABLE IF NOT EXISTS previews (
-                 path       TEXT PRIMARY KEY,
-                 size       INTEGER NOT NULL,
-                 mtime_ns   INTEGER NOT NULL,
-                 exif_json  TEXT NOT NULL,
-                 thumb_jpeg BLOB NOT NULL,
-                 last_used  INTEGER NOT NULL
-             );
-             CREATE INDEX IF NOT EXISTS previews_last_used ON previews(last_used);
-             PRAGMA user_version = {SCHEMA_VERSION};"
-        ))?;
+        // Run the schema batch only on uninitialized files: WAL journal mode
+        // is persistent, so initialized DBs need no writes at open — this
+        // also keeps concurrent opens of an existing DB write-free. Callers
+        // that open one DB from several threads at once should open it once
+        // first to serialize creation (Pipeline::start does).
+        if version == 0 {
+            conn.execute_batch(&format!(
+                "PRAGMA journal_mode = WAL;
+                 CREATE TABLE IF NOT EXISTS previews (
+                     path       TEXT PRIMARY KEY,
+                     size       INTEGER NOT NULL,
+                     mtime_ns   INTEGER NOT NULL,
+                     exif_json  TEXT NOT NULL,
+                     thumb_jpeg BLOB NOT NULL,
+                     last_used  INTEGER NOT NULL
+                 );
+                 CREATE INDEX IF NOT EXISTS previews_last_used ON previews(last_used);
+                 PRAGMA user_version = {SCHEMA_VERSION};"
+            ))?;
+        }
         // Exercise the table so a corrupt file fails here, inside try_open.
         conn.query_row("SELECT COUNT(*) FROM previews", [], |r| r.get::<_, i64>(0))?;
         Ok(Self { conn })

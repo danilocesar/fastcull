@@ -37,6 +37,11 @@
 - Stores the 320 px thumb + EXIF summary; the JPEG-q80 re-encode is the
   pipeline's job (the cache stores the bytes it is given). Fit and FullRes
   assets are never cached (cheap to re-extract).
+- **EXIF-failure rule (recorded decision)**: an image whose thumb extracts but
+  whose EXIF read fails is cached with an all-None EXIF summary — the
+  zero-RAW-reads-on-reopen guarantee outranks metadata completeness. On a
+  cache hit such an image reports empty metadata rather than re-reading the
+  RAW each session.
 - Reopening a folder must paint entirely from cache with zero RAW reads (event
   stream assertable — verified in the pipeline module, which owns the reads).
 - Size cap (default 2 GiB) enforced by LRU eviction on `last_used`

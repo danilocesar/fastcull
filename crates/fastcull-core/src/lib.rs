@@ -13,6 +13,7 @@
 pub mod cache;
 pub mod catalog;
 pub mod exif;
+pub mod pipeline;
 pub mod raw;
 
 /// Application version, shared by the CLI and the UI shell.
