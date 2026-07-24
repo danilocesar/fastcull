@@ -1,0 +1,48 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+env:
+  CARGO_TERM_COLOR: always
+
+jobs:
+  test:
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, windows-latest]
+    runs-on: ${{ matrix.os }}
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          components: clippy, rustfmt
+
+      - uses: Swatinem/rust-cache@v2
+
+      - name: Cache sample RAWs
+        uses: actions/cache@v4
+        with:
+          path: testdata/raws
+          key: testdata-raws-v1
+
+      - name: Fetch sample RAWs
+        if: runner.os != 'Windows'
+        run: testdata/fetch.sh
+      - name: Fetch sample RAWs (Windows)
+        if: runner.os == 'Windows'
+        shell: bash
+        run: testdata/fetch.sh
+
+      - name: Format check
+        run: cargo fmt --all -- --check
+
+      - name: Clippy
+        run: cargo clippy --workspace --all-targets -- -D warnings
+
+      - name: Tests
+        run: cargo test --workspace
