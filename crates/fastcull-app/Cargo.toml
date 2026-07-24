@@ -1,0 +1,10 @@
+[package]
+name = "fastcull-app"
+description = "FastCull desktop application (Slint UI shell)"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+repository.workspace = true
+
+[dependencies]
+fastcull-core.workspace = true

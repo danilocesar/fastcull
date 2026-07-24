@@ -1,0 +1,10 @@
+[package]
+name = "fastcull-cli"
+description = "Headless FastCull driver; the vehicle for integration tests"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+repository.workspace = true
+
+[dependencies]
+fastcull-core.workspace = true

@@ -1,0 +1,9 @@
+[package]
+name = "fastcull-core"
+description = "Culling engine: RAW preview pipeline, XMP sidecars, IPTC, burst grouping, file ops"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+repository.workspace = true
+
+[dependencies]
