@@ -1,0 +1,10 @@
+# Rust
+/target
+**/*.rs.bk
+
+# Test data: large RAW files are fetched by testdata/fetch.sh, never committed
+/testdata/raws/
+
+# Local tooling
+/.direnv/
+*.swp
