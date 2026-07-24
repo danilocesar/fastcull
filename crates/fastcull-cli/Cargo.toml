@@ -7,4 +7,6 @@ license.workspace = true
 repository.workspace = true
 
 [dependencies]
+anyhow = "1"
+clap = { version = "4", features = ["derive"] }
 fastcull-core.workspace = true

@@ -52,10 +52,13 @@ copy picks
   metadata loaded, pick changed…); the app crate translates events into Slint model
   updates on the UI thread. No shared mutable state across that boundary.
 
-## Performance budgets (regression-tested, see benches/)
+## Performance budgets (regression-tested)
 
 Measured baselines on the 32-thread reference machine; CI thresholds set ~2× looser
-to absorb runner variance.
+to absorb runner variance. Enforcement: `crates/fastcull-core/tests/perf_budgets.rs`
+(release-mode tests, dedicated CI step — skipped in debug builds where decode
+timing is meaningless). Numbers for humans: criterion benches in
+`crates/fastcull-core/benches/hot_path.rs` (`cargo bench -p fastcull-core`).
 
 | Operation | Baseline | CI threshold |
 |---|---|---|

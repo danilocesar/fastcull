@@ -7,6 +7,7 @@ license.workspace = true
 repository.workspace = true
 
 [dependencies]
+directories = "6"
 fast_image_resize = "5"
 jpeg-encoder = "0.6"
 rawler = "0.7"
@@ -15,3 +16,11 @@ serde = { version = "1", features = ["derive"] }
 serde_json = "1"
 thiserror = "2"
 zune-jpeg = "0.4"
+
+[dev-dependencies]
+criterion = "0.5"
+zune-jpeg = "0.4"
+
+[[bench]]
+name = "hot_path"
+harness = false

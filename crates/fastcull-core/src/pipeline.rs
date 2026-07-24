@@ -305,7 +305,7 @@ fn process_job(shared: &Shared, cache: &mut Option<PreviewCache>, index: usize) 
         });
     }
 
-    match make_thumb(spec) {
+    match make_grid_thumb(spec) {
         Ok((thumb_jpeg, width, height)) => {
             // Cache the thumb even when the EXIF read failed (as an
             // all-None summary): the zero-RAW-reads-on-reopen guarantee
@@ -335,7 +335,8 @@ fn process_job(shared: &Shared, cache: &mut Option<PreviewCache>, index: usize) 
 }
 
 /// Extract the grid-source preview, decode, resize to 320 px, re-encode q80.
-fn make_thumb(spec: &JobSpec) -> Result<(Vec<u8>, u32, u32), String> {
+/// Public so benches and the CLI can exercise the exact hot path.
+pub fn make_grid_thumb(spec: &JobSpec) -> Result<(Vec<u8>, u32, u32), String> {
     let mut file = std::fs::File::open(&spec.path).map_err(|e| format!("open: {e}"))?;
     let previews = find_embedded_jpegs(&mut file).map_err(|e| format!("parse: {e}"))?;
     let source = previews

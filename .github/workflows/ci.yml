@@ -46,3 +46,6 @@ jobs:
 
       - name: Tests
         run: cargo test --workspace
+
+      - name: Performance budgets (release)
+        run: cargo test --release -p fastcull-core --test perf_budgets

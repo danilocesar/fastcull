@@ -229,6 +229,20 @@ impl PreviewCache {
     }
 }
 
+/// The per-user default cache DB location (spec: one DB per user) — product
+/// policy lives here in core so the CLI and the app can never drift onto
+/// different caches (validator finding). Opens the DB once, which creates it
+/// and opportunistically enforces the default size cap; explicit caller-
+/// provided cache paths are uncapped in v1 (recorded in catalog-cache.md).
+pub fn default_cache_path() -> Option<std::path::PathBuf> {
+    let dirs = directories::ProjectDirs::from("org", "fastcull", "fastcull")?;
+    let path = dirs.cache_dir().join("previews.db");
+    if let Ok(mut cache) = PreviewCache::open(&path) {
+        cache.enforce_cap(DEFAULT_CAP_BYTES).ok();
+    }
+    Some(path)
+}
+
 /// Paths are keyed by their lossy UTF-8 form: stable, and collisions would
 /// require two distinct non-UTF8 paths with identical lossy forms AND
 /// identical size+mtime — acceptable for a cache.

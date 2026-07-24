@@ -47,7 +47,11 @@
 - Size cap (default 2 GiB) enforced by LRU eviction on `last_used`
   (1 s resolution, path tie-break). The cap bounds logical thumb bytes; the
   DB file itself plateaus at its high-water mark (no VACUUM — recorded
-  decision, pages are reused).
+  decision, pages are reused). Enforcement point (recorded decision): the cap
+  is applied when the default per-user DB is resolved via
+  `cache::default_cache_path()` (CLI/app startup); explicitly caller-provided
+  cache paths are uncapped in v1, and a single long session may exceed the
+  cap until the next startup.
 - Concurrency: 5 s busy-timeout; WAL mode. Only a provably unusable FILE
   (SQLITE_NOTADB / corrupt / schema-version mismatch) is deleted and recreated
   (with its -wal/-shm sidecars, logged once). Lock contention must NEVER

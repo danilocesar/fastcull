@@ -60,4 +60,6 @@ decoding RAW sensor data on the hot path.
 - [ ] `set_visible` promotion: with a saturated queue, a newly visible image's thumb
       arrives before ≥90% of background items (deterministic test with a fake
       2-thread pool and instrumented job order).
-- [ ] Criterion benches enforce the budgets in `01-architecture.md`.
+- [ ] The budgets in `01-architecture.md` are enforced by release-mode tests
+      (`tests/perf_budgets.rs`, dedicated CI step); criterion benches
+      (`benches/hot_path.rs`) provide the numbers for humans.
