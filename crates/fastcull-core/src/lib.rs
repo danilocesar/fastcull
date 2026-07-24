@@ -10,6 +10,7 @@
 //! else: **a RAW file is never opened for writing** — all state goes to XMP
 //! sidecars.
 
+pub mod cache;
 pub mod catalog;
 pub mod exif;
 pub mod raw;

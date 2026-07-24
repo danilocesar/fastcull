@@ -26,15 +26,28 @@
 
 ## Cache (SQLite via rusqlite, bundled)
 
-- One DB per user (config-dir), table `previews(path, size, mtime, exif_json,
-  thumb_jpeg BLOB, schema_ver)`. Key = (path, size, mtime): any mismatch is a miss;
-  stale rows for a path are replaced on write.
-- Stores the 320 px thumb (re-encoded JPEG q80, ~30–60 KB) + EXIF summary. Fit and
-  FullRes assets are never cached (cheap to re-extract).
+- One DB per user (config-dir; location wiring lands with the CLI/app — until
+  then the DB path is caller-provided). Table:
+  `previews(path TEXT PRIMARY KEY, size, mtime_ns, exif_json, thumb_jpeg BLOB,
+  last_used)`, schema version via `PRAGMA user_version`. Lookup hit requires
+  path + size + mtime_ns to all match; a store replaces the path's row.
+- **No-mtime rule (recorded decision)**: entries whose mtime cannot be read
+  (or predates the epoch) are never cached — store is a no-op, lookup always
+  misses. A cache key that cannot detect staleness is worse than no cache.
+- Stores the 320 px thumb + EXIF summary; the JPEG-q80 re-encode is the
+  pipeline's job (the cache stores the bytes it is given). Fit and FullRes
+  assets are never cached (cheap to re-extract).
 - Reopening a folder must paint entirely from cache with zero RAW reads (event
-  stream assertable).
-- Size cap (default 2 GiB) enforced by LRU eviction on `last_used`.
-- Corrupt/old-schema DB: delete and recreate silently (it is only a cache), log once.
+  stream assertable — verified in the pipeline module, which owns the reads).
+- Size cap (default 2 GiB) enforced by LRU eviction on `last_used`
+  (1 s resolution, path tie-break). The cap bounds logical thumb bytes; the
+  DB file itself plateaus at its high-water mark (no VACUUM — recorded
+  decision, pages are reused).
+- Concurrency: 5 s busy-timeout; WAL mode. Only a provably unusable FILE
+  (SQLITE_NOTADB / corrupt / schema-version mismatch) is deleted and recreated
+  (with its -wal/-shm sidecars, logged once). Lock contention must NEVER
+  trigger deletion — deleting a merely-locked DB under a live connection
+  loses data and can SIGBUS the peer process.
 
 ## Acceptance criteria (tests)
 
