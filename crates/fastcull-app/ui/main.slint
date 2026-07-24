@@ -1,0 +1,129 @@
+// FastCull main window: virtualized zoomable grid (specs/modules/ui-grid.md).
+// The Rust side owns all layout math; `cells` contains ONLY the visible
+// window (+margin) of cells with absolute positions inside the Flickable.
+
+export struct CellData {
+    x: length,
+    y: length,
+    w: length,
+    h: length,
+    image: image,
+    has-image: bool,
+    failed: bool,
+    label: string,
+    is-cursor: bool,
+    seed: int,
+}
+
+export component MainWindow inherits Window {
+    title: "FastCull";
+    preferred-width: 1440px;
+    preferred-height: 900px;
+    background: #161618;
+
+    in property <[CellData]> cells: [];
+    in property <length> virtual-height: 0px;
+    in property <string> status: "";
+    // Scroll offset (negative Flickable viewport-y); Rust reads and writes it.
+    in-out property <length> vp-y: 0px;
+    // Geometry the Rust layout math needs.
+    out property <length> grid-width: self.width;
+    out property <length> grid-height: self.height - statusbar.height;
+
+    callback viewport-changed();
+    callback nav(string);
+
+    changed vp-y => { root.viewport-changed(); }
+    changed width => { root.viewport-changed(); }
+    changed height => { root.viewport-changed(); }
+
+    forward-focus: keys;
+
+    keys := FocusScope {
+        width: 100%;
+        height: parent.height - statusbar.height;
+
+        key-pressed(event) => {
+            if (event.text == Key.LeftArrow) { root.nav("left"); return accept; }
+            if (event.text == Key.RightArrow) { root.nav("right"); return accept; }
+            if (event.text == Key.UpArrow) { root.nav("up"); return accept; }
+            if (event.text == Key.DownArrow) { root.nav("down"); return accept; }
+            if (event.text == Key.PageUp) { root.nav("pgup"); return accept; }
+            if (event.text == Key.PageDown) { root.nav("pgdn"); return accept; }
+            if (event.text == Key.Home) { root.nav("home"); return accept; }
+            if (event.text == Key.End) { root.nav("end"); return accept; }
+            if (event.text == "+" || event.text == "=") { root.nav("zoom-in"); return accept; }
+            if (event.text == "-") { root.nav("zoom-out"); return accept; }
+            reject
+        }
+
+        flick := Flickable {
+            width: 100%;
+            height: 100%;
+            viewport-width: root.width;
+            viewport-height: root.virtual-height;
+            viewport-y <=> root.vp-y;
+
+            for cell in root.cells: Rectangle {
+                x: cell.x;
+                y: cell.y;
+                width: cell.w;
+                height: cell.h;
+                background: cell.has-image
+                    ? #000000
+                    : hsv(Math.mod(cell.seed * 47, 360), 0.30, 0.22);
+                border-width: cell.is-cursor ? 3px : 0px;
+                border-color: #4da3ff;
+
+                if cell.has-image: Image {
+                    source: cell.image;
+                    width: 100%;
+                    height: 100%;
+                    image-fit: contain;
+                }
+                if !cell.has-image: Text {
+                    text: cell.label;
+                    color: #808088;
+                    font-size: 11px;
+                    width: 100%;
+                    height: 100%;
+                    horizontal-alignment: center;
+                    vertical-alignment: center;
+                    overflow: elide;
+                }
+                if cell.failed: Rectangle {
+                    x: 4px;
+                    y: 4px;
+                    width: 18px;
+                    height: 18px;
+                    border-radius: 9px;
+                    background: #c03030;
+                    Text {
+                        text: "!";
+                        color: white;
+                        font-size: 12px;
+                        horizontal-alignment: center;
+                        vertical-alignment: center;
+                        width: 100%;
+                        height: 100%;
+                    }
+                }
+            }
+        }
+    }
+
+    statusbar := Rectangle {
+        y: parent.height - self.height;
+        width: 100%;
+        height: 26px;
+        background: #202024;
+        Text {
+            text: root.status;
+            color: #a8a8b0;
+            font-size: 12px;
+            x: 10px;
+            vertical-alignment: center;
+            height: 100%;
+        }
+    }
+}

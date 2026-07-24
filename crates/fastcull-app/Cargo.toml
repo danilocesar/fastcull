@@ -8,3 +8,20 @@ repository.workspace = true
 
 [dependencies]
 fastcull-core.workspace = true
+# Interim renderer selection: the intended production renderer is femtovg
+# (GPU/OpenGL), but building it needs system packages not yet installed
+# (fontconfig-devel and friends — see specs/adr/0002). The software renderer
+# compiles dependency-free; switch the feature once the dev packages land:
+#   sudo dnf install fontconfig-devel libxkbcommon-devel wayland-devel \
+#                    mesa-libGL-devel
+# then replace "renderer-software" with "renderer-femtovg".
+slint = { version = "1", default-features = false, features = [
+    "std",
+    "backend-winit",
+    "renderer-software",
+    "compat-1-2",
+] }
+zune-jpeg = "0.4"
+
+[build-dependencies]
+slint-build = "1"

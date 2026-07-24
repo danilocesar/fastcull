@@ -22,6 +22,10 @@ jobs:
         with:
           components: clippy, rustfmt
 
+      - name: Install Linux GUI build dependencies (slint/winit)
+        if: runner.os == 'Linux'
+        run: sudo apt-get update && sudo apt-get install -y libfontconfig1-dev libxkbcommon-dev
+
       - uses: Swatinem/rust-cache@v2
 
       - name: Cache sample RAWs
