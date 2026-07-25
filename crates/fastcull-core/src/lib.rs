@@ -17,6 +17,7 @@ pub mod grid;
 pub mod loupe;
 pub mod pipeline;
 pub mod raw;
+pub mod sidecar_writer;
 pub mod viewassets;
 pub mod xmp;
 

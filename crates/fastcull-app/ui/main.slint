@@ -13,6 +13,8 @@ export struct CellData {
     label: string,
     is-cursor: bool,
     seed: int,
+    // 0 = unmarked, 1 = picked (star), 2 = rejected (X + dim)
+    pick: int,
 }
 
 export component MainWindow inherits Window {
@@ -58,6 +60,9 @@ export component MainWindow inherits Window {
             if (event.text == Key.End) { root.nav("end"); return accept; }
             if (event.text == "+" || event.text == "=") { root.nav("zoom-in"); return accept; }
             if (event.text == "-") { root.nav("zoom-out"); return accept; }
+            if (event.text == "y" || event.text == "Y" || event.text == "p" || event.text == "P" || event.text == " ") { root.nav("pick"); return accept; }
+            if (event.text == "n" || event.text == "N" || event.text == "x" || event.text == "X") { root.nav("reject"); return accept; }
+            if (event.text == "u" || event.text == "U") { root.nav("clear"); return accept; }
             if (event.text == "z" || event.text == "Z") { root.nav("one2one"); return accept; }
             if (event.text == "g" || event.text == "G" || event.text == Key.Escape) { root.nav("grid"); return accept; }
             reject
@@ -96,6 +101,26 @@ export component MainWindow inherits Window {
                     horizontal-alignment: center;
                     vertical-alignment: center;
                     overflow: elide;
+                }
+                // Rejected: dim the cell (rendered above the image).
+                if cell.pick == 2: Rectangle {
+                    background: #000000;
+                    opacity: 0.4;
+                }
+                // Pick badges (above image, below cursor border).
+                if cell.pick == 1: Text {
+                    text: "★";
+                    color: #ffd24d;
+                    font-size: 20px;
+                    x: 8px;
+                    y: 4px;
+                }
+                if cell.pick == 2: Text {
+                    text: "✕";
+                    color: #ff5a5a;
+                    font-size: 18px;
+                    x: 8px;
+                    y: 4px;
                 }
                 // Cursor overlay: LAST child = rendered on top of the image
                 // (spec: the selector must be visible on every cell state).

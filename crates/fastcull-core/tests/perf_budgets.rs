@@ -152,7 +152,7 @@ fn budget_pipeline_throughput_over_60_per_sec() {
     while done < total {
         match rx.recv_timeout(Duration::from_secs(60)).unwrap() {
             SessionEvent::ThumbReady { .. } | SessionEvent::Failed { .. } => done += 1,
-            SessionEvent::MetadataReady { .. } => {}
+            SessionEvent::MetadataReady { .. } | SessionEvent::Sidecar { .. } => {}
         }
     }
     let elapsed = t.elapsed();

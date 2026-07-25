@@ -67,6 +67,13 @@ pub enum SessionEvent {
         index: usize,
         reason: String,
     },
+    /// A pre-existing sidecar was found at load (M1-deferred criterion,
+    /// approved for M3): picks from a previous session (or another tool)
+    /// reappear. Emitted only when the sidecar file exists.
+    Sidecar {
+        index: usize,
+        pick: crate::catalog::PickState,
+    },
 }
 
 struct QueueState {
@@ -273,6 +280,18 @@ fn process_job(shared: &Shared, cache: &mut Option<PreviewCache>, index: usize) 
     let send = |event: SessionEvent| {
         shared.events.send(event).ok();
     };
+
+    // Sidecar-at-open: read fresh on every load (never cached — another
+    // tool may have changed it between sessions).
+    let sc = crate::xmp::sidecar_path(&spec.path);
+    if sc.exists() {
+        if let Ok(state) = crate::xmp::read_sidecar(&sc) {
+            send(SessionEvent::Sidecar {
+                index,
+                pick: state.pick,
+            });
+        }
+    }
 
     // Cache hit: no RAW reads at all.
     if let Some(cache) = cache.as_mut() {

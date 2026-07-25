@@ -22,6 +22,19 @@ struct Cli {
 enum Command {
     /// List the RAW files of a folder (instant, no file contents read).
     Scan { folder: PathBuf },
+    /// Mark picks/rejects headlessly (writes darktable-compatible sidecars).
+    Cull {
+        folder: PathBuf,
+        /// File names (not paths) to mark as picked.
+        #[arg(long, num_args = 1..)]
+        pick: Vec<String>,
+        /// File names to mark as rejected.
+        #[arg(long, num_args = 1..)]
+        reject: Vec<String>,
+        /// File names to clear back to unmarked.
+        #[arg(long, num_args = 1..)]
+        clear: Vec<String>,
+    },
     /// Run the thumbnail pipeline over a folder and report throughput.
     /// Exits 2 when any file failed (recorded decision: scripts must be able
     /// to detect partial failure without parsing output).
@@ -45,6 +58,12 @@ enum Command {
 fn main() -> anyhow::Result<()> {
     match Cli::parse().command {
         Command::Scan { folder } => scan(&folder),
+        Command::Cull {
+            folder,
+            pick,
+            reject,
+            clear,
+        } => cull(&folder, &pick, &reject, &clear),
         Command::Thumbs {
             folder,
             out,
@@ -76,6 +95,40 @@ fn scan(folder: &std::path::Path) -> anyhow::Result<()> {
             String::new()
         }
     );
+    Ok(())
+}
+
+fn cull(
+    folder: &std::path::Path,
+    pick: &[String],
+    reject: &[String],
+    clear: &[String],
+) -> anyhow::Result<()> {
+    use fastcull_core::catalog::PickState;
+    let mut failures = 0usize;
+    let mut apply = |names: &[String], state: PickState| {
+        for name in names {
+            let raw = folder.join(name);
+            if !raw.is_file() {
+                eprintln!("SKIPPED {name}: no such file in folder");
+                failures += 1;
+                continue;
+            }
+            match fastcull_core::xmp::write_pick(&raw, state) {
+                Ok(()) => println!("{state:?}	{name}"),
+                Err(e) => {
+                    eprintln!("FAILED {name}: {e}");
+                    failures += 1;
+                }
+            }
+        }
+    };
+    apply(pick, PickState::Picked);
+    apply(reject, PickState::Rejected);
+    apply(clear, PickState::Unmarked);
+    if failures > 0 {
+        std::process::exit(2);
+    }
     Ok(())
 }
 
@@ -156,7 +209,7 @@ fn thumbs(
                 }
             }
             Ok(SessionEvent::Failed { index, reason }) => failures.push((index, reason)),
-            Ok(SessionEvent::MetadataReady { .. }) => {}
+            Ok(SessionEvent::MetadataReady { .. }) | Ok(SessionEvent::Sidecar { .. }) => {}
             Err(_) => anyhow::bail!("pipeline hung up before finishing"),
         }
     }

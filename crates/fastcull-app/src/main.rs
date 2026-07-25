@@ -35,6 +35,14 @@ const MIDS_CAP: usize = 64;
 
 struct AppState {
     labels: Vec<String>,
+    /// RAW paths for real sessions (empty for --synthetic).
+    paths: Vec<std::path::PathBuf>,
+    /// Pick state per image (mirrors sidecars; synthetic = in-memory only).
+    picks: Vec<fastcull_core::catalog::PickState>,
+    /// Images whose pick the user changed this session: sidecar-at-open
+    /// events must not overwrite fresh user intent.
+    touched: HashSet<usize>,
+    writer: Option<fastcull_core::sidecar_writer::SidecarWriter>,
     zoom: usize,
     cursor: usize,
     /// Encoded thumbs by index (30–60 KB each); decoded lazily per window,
@@ -144,12 +152,21 @@ fn main() {
     };
 
     let synthetic = jobs.is_none();
+    let count_init = labels.len();
+    let paths_init: Vec<std::path::PathBuf> = jobs
+        .as_deref()
+        .map(|j| j.iter().map(|s| s.path.clone()).collect())
+        .unwrap_or_default();
     let window = MainWindow::new().expect("creating window");
     let cells = Rc::new(VecModel::from(Vec::<CellData>::new()));
     window.set_cells(slint::ModelRc::from(Rc::clone(&cells)));
     let start_at_loupe = start_11 || start_loupe;
     let state = Rc::new(RefCell::new(AppState {
         labels,
+        paths: paths_init,
+        picks: vec![fastcull_core::catalog::PickState::Unmarked; count_init],
+        touched: HashSet::new(),
+        writer: (!synthetic).then(fastcull_core::sidecar_writer::SidecarWriter::start),
         zoom: if start_at_loupe {
             grid::ZOOM_COLUMNS.len() - 1
         } else {
@@ -242,6 +259,16 @@ fn main() {
                                 dirty = true;
                             }
                             SessionEvent::MetadataReady { .. } => {}
+                            SessionEvent::Sidecar { index, pick } => {
+                                // Picks from a previous session/tool — never
+                                // override what the user changed just now.
+                                if !st.touched.contains(&index) {
+                                    if let Some(slot) = st.picks.get_mut(index) {
+                                        *slot = pick;
+                                        dirty = true;
+                                    }
+                                }
+                            }
                         }
                     }
                     let at_loupe = st.zoom == grid::ZOOM_COLUMNS.len() - 1;
@@ -366,6 +393,26 @@ fn handle_nav(win: &MainWindow, state: &Rc<RefCell<AppState>>, key: &str) {
     let mut st = state.borrow_mut();
     let loupe_step = grid::ZOOM_COLUMNS.len() - 1;
     match key {
+        "pick" | "reject" | "clear" => {
+            let pick = match key {
+                "pick" => fastcull_core::catalog::PickState::Picked,
+                "reject" => fastcull_core::catalog::PickState::Rejected,
+                _ => fastcull_core::catalog::PickState::Unmarked,
+            };
+            let cursor = st.cursor;
+            if let Some(slot) = st.picks.get_mut(cursor) {
+                *slot = pick;
+                st.touched.insert(cursor);
+                if let (Some(writer), Some(path)) = (&st.writer, st.paths.get(cursor)) {
+                    writer.mark(path.clone(), pick);
+                }
+                // Auto-advance in the loupe (spec: on by default): mark
+                // lands on the pre-advance cursor, then move on.
+                if st.zoom == loupe_step {
+                    st.cursor = grid::navigate(cursor, st.count(), 1, 1, Nav::Right);
+                }
+            }
+        }
         // One seamless zoom axis (spec): columns -> loupe fit -> 1:1.
         "one2one" => {
             if st.loupe.is_some() {
@@ -605,6 +652,11 @@ fn refresh(win: &MainWindow, state: &Rc<RefCell<AppState>>) {
             label: st.labels.get(index).cloned().unwrap_or_default().into(),
             is_cursor: index == st.cursor,
             seed: if st.synthetic { index as i32 } else { -1 },
+            pick: match st.picks.get(index) {
+                Some(fastcull_core::catalog::PickState::Picked) => 1,
+                Some(fastcull_core::catalog::PickState::Rejected) => 2,
+                _ => 0,
+            },
         };
         if row < model.row_count() {
             model.set_row_data(row, cell);
@@ -618,14 +670,26 @@ fn refresh(win: &MainWindow, state: &Rc<RefCell<AppState>>) {
     }
 
     win.set_virtual_height(layout.total_height);
+    let picked_n = st
+        .picks
+        .iter()
+        .filter(|p| **p == fastcull_core::catalog::PickState::Picked)
+        .count();
+    let rejected_n = st
+        .picks
+        .iter()
+        .filter(|p| **p == fastcull_core::catalog::PickState::Rejected)
+        .count();
     win.set_status(
         format!(
-            "{} ({}/{}) — {} images, {} thumbs loaded — {} column{}",
+            "{} ({}/{}) — {} images, {} thumbs loaded — ★{} ✕{} — {} column{}",
             st.labels.get(cursor).cloned().unwrap_or_default(),
             cursor + 1,
             count.max(1),
             count,
             st.thumbs_done.min(count),
+            picked_n,
+            rejected_n,
             layout.columns,
             if layout.columns == 1 { "" } else { "s" }
         )

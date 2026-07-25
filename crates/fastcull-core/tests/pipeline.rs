@@ -104,6 +104,7 @@ fn a1_files_produce_320px_thumbs_and_metadata() {
                 assert_eq!(exif.camera_model.as_deref(), Some("ILCE-1"));
                 metas += 1;
             }
+            SessionEvent::Sidecar { .. } => panic!("no sidecars exist in testdata"),
             SessionEvent::Failed { index, reason } => {
                 panic!("unexpected failure for job {index}: {reason}")
             }
@@ -186,6 +187,7 @@ fn second_run_serves_from_cache_without_touching_raws() {
             SessionEvent::Failed { index, reason } => {
                 panic!("cache should have served job {index}: {reason}")
             }
+            SessionEvent::Sidecar { .. } => panic!("no sidecars exist for these copies"),
         }
     }
     #[cfg(unix)]
@@ -250,4 +252,31 @@ fn promoted_jobs_finish_before_background_bulk() {
             "visible job {promoted} finished at position {pos}; order {thumb_order:?}"
         );
     }
+}
+
+/// Sidecar-at-open (M1-deferred criterion, approved for M3): a folder with
+/// existing sidecars yields Sidecar events so previous culls reappear.
+#[test]
+fn existing_sidecars_are_reported_at_load() {
+    let dir = tmp();
+    let raw = dir.join("marked.ARW");
+    std::fs::copy(testdata("A1_full_compressed.ARW"), &raw).unwrap();
+    fastcull_core::xmp::write_pick(&raw, fastcull_core::catalog::PickState::Rejected).unwrap();
+
+    let (pipeline, rx) = Pipeline::start(vec![spec_for(raw)], None, 1);
+    let mut got_sidecar = false;
+    let mut terminal = false;
+    while !terminal {
+        match rx.recv_timeout(Duration::from_secs(120)).expect("event") {
+            SessionEvent::Sidecar { index: 0, pick } => {
+                assert_eq!(pick, fastcull_core::catalog::PickState::Rejected);
+                got_sidecar = true;
+            }
+            SessionEvent::ThumbReady { .. } | SessionEvent::Failed { .. } => terminal = true,
+            _ => {}
+        }
+    }
+    assert!(got_sidecar, "no Sidecar event for a folder with sidecars");
+    drop(pipeline);
+    std::fs::remove_dir_all(&dir).ok();
 }
