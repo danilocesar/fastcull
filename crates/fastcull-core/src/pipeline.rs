@@ -379,6 +379,9 @@ pub fn make_grid_thumb(spec: &JobSpec) -> Result<(Vec<u8>, u32, u32), String> {
         u32::try_from(src_w).map_err(|_| "width overflow")?,
         u32::try_from(src_h).map_err(|_| "height overflow")?,
     );
+    // Soft-rotate to display orientation (spec: every rung).
+    let (pixels, src_w, src_h) =
+        crate::raw::apply_orientation(pixels, src_w, src_h, previews.orientation);
 
     let (dst_w, dst_h) = fit_long_edge(src_w, src_h, THUMB_LONG_EDGE);
     let src_image = fast_image_resize::images::Image::from_vec_u8(

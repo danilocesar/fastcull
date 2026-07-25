@@ -316,6 +316,7 @@ fn decode_ladder(
     let mut file = std::fs::File::open(path).map_err(|e| format!("open: {e}"))?;
     let previews = find_embedded_jpegs(&mut file).map_err(|e| format!("parse: {e}"))?;
 
+    let orientation = previews.orientation;
     let mut rungs: Vec<crate::raw::EmbeddedJpeg> = Vec::new();
     if let Some(mid) = previews.grid_source() {
         rungs.push(mid.clone());
@@ -335,7 +336,7 @@ fn decode_ladder(
         if rung_long <= achieved {
             continue; // already have this rung or better
         }
-        match decode_jpeg_rung(&mut file, rung) {
+        match decode_jpeg_rung(&mut file, rung, orientation) {
             Ok(image) => {
                 publish(shared, index, image);
                 achieved = rung_long;
@@ -392,6 +393,7 @@ fn publish(shared: &Shared, index: usize, image: FullImage) {
 fn decode_jpeg_rung(
     file: &mut std::fs::File,
     rung: &crate::raw::EmbeddedJpeg,
+    orientation: u16,
 ) -> Result<FullImage, String> {
     let bytes = read_jpeg(file, rung).map_err(|e| format!("read: {e}"))?;
     let options = zune_jpeg::zune_core::options::DecoderOptions::default()
@@ -401,10 +403,14 @@ fn decode_jpeg_rung(
     let mut decoder = zune_jpeg::JpegDecoder::new_with_options(&bytes, options);
     let rgb = decoder.decode().map_err(|e| format!("decode: {e}"))?;
     let (w, h) = decoder.dimensions().ok_or("no dimensions")?;
+    let w = u32::try_from(w).map_err(|_| "width overflow")?;
+    let h = u32::try_from(h).map_err(|_| "height overflow")?;
+    // Soft-rotate to display orientation (spec: every rung).
+    let (rgb, w, h) = crate::raw::apply_orientation(rgb, w, h, orientation);
     Ok(FullImage {
         rgb: Arc::new(rgb),
-        width: u32::try_from(w).map_err(|_| "width overflow")?,
-        height: u32::try_from(h).map_err(|_| "height overflow")?,
+        width: w,
+        height: h,
     })
 }
 

@@ -19,8 +19,9 @@ use rusqlite::{Connection, OptionalExtension};
 use crate::exif::ExifSummary;
 
 /// Bump when the schema or the meaning of stored data changes (e.g. when
-/// SequenceNumber joins ExifSummary in M7).
-const SCHEMA_VERSION: i32 = 1;
+/// SequenceNumber joins ExifSummary in M7). v2: thumbs are stored
+/// post-orientation — v1 thumbs of portrait images were sideways.
+const SCHEMA_VERSION: i32 = 2;
 
 /// Default size cap for stored thumbnails (spec: 2 GiB).
 pub const DEFAULT_CAP_BYTES: u64 = 2 * 1024 * 1024 * 1024;

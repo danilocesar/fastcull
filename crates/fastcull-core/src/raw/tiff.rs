@@ -18,6 +18,7 @@ pub enum TiffError {
 }
 
 // Tags we care about.
+const TAG_ORIENTATION: u16 = 0x0112;
 const TAG_IMAGE_WIDTH: u16 = 0x0100;
 const TAG_IMAGE_LENGTH: u16 = 0x0101;
 const TAG_SUB_IFDS: u16 = 0x014A;
@@ -61,9 +62,13 @@ impl Endian {
 
 /// Walk all IFDs reachable from the TIFF header (next-IFD chain + SubIFDs,
 /// breadth-first) and collect JPEG pointers.
-pub(crate) fn walk_jpeg_pointers<R: Read + Seek>(
-    reader: &mut R,
-) -> Result<Vec<JpegPointer>, TiffError> {
+pub(crate) struct WalkResult {
+    pub jpegs: Vec<JpegPointer>,
+    /// EXIF orientation (1 when absent): first IFD0-chain value wins.
+    pub orientation: u16,
+}
+
+pub(crate) fn walk_jpeg_pointers<R: Read + Seek>(reader: &mut R) -> Result<WalkResult, TiffError> {
     reader.seek(SeekFrom::Start(0))?;
     let mut header = [0u8; 8];
     reader
@@ -83,6 +88,7 @@ pub(crate) fn walk_jpeg_pointers<R: Read + Seek>(
     )];
     let mut visited = std::collections::HashSet::new();
     let mut found = Vec::new();
+    let mut orientation = 0u16;
 
     while let Some(offset) = queue.pop() {
         if offset == 0 || !visited.insert(offset) || visited.len() > MAX_IFDS {
@@ -90,11 +96,27 @@ pub(crate) fn walk_jpeg_pointers<R: Read + Seek>(
         }
         // A malformed IFD ends that branch of the walk, not the whole scan:
         // other IFDs may still hold usable previews.
-        if read_ifd(reader, offset, endian, &mut queue, &mut found).is_err() {
+        if read_ifd(
+            reader,
+            offset,
+            endian,
+            &mut queue,
+            &mut found,
+            &mut orientation,
+        )
+        .is_err()
+        {
             continue;
         }
     }
-    Ok(found)
+    Ok(WalkResult {
+        jpegs: found,
+        orientation: if (1..=8).contains(&orientation) {
+            orientation
+        } else {
+            1
+        },
+    })
 }
 
 fn read_ifd<R: Read + Seek>(
@@ -103,6 +125,7 @@ fn read_ifd<R: Read + Seek>(
     endian: Endian,
     queue: &mut Vec<u64>,
     found: &mut Vec<JpegPointer>,
+    orientation: &mut u16,
 ) -> Result<(), TiffError> {
     reader.seek(SeekFrom::Start(offset))?;
     let mut b2 = [0u8; 2];
@@ -135,6 +158,11 @@ fn read_ifd<R: Read + Seek>(
         match tag {
             TAG_JPEG_OFFSET => jpeg_offset = scalar.map(u64::from),
             TAG_JPEG_LENGTH => jpeg_len = scalar.map(u64::from),
+            TAG_ORIENTATION => {
+                if *orientation == 0 {
+                    *orientation = scalar.unwrap_or(0) as u16;
+                }
+            }
             TAG_IMAGE_WIDTH => width = scalar,
             TAG_IMAGE_LENGTH => height = scalar,
             // Type 4 = LONG; type 13 = IFD (used by some vendors for SubIFDs).
@@ -275,7 +303,20 @@ pub(crate) mod tests {
     }
 
     fn walk(builder: &TiffBuilder) -> Vec<JpegPointer> {
-        walk_jpeg_pointers(&mut builder.cursor()).unwrap()
+        walk_jpeg_pointers(&mut builder.cursor()).unwrap().jpegs
+    }
+
+    #[test]
+    fn orientation_is_captured_from_first_ifd() {
+        let mut b = TiffBuilder::new(true);
+        let ifd = b.add_ifd(&[(TAG_ORIENTATION, 3, 1, 6)], 0);
+        b.set_ifd0(ifd);
+        assert_eq!(walk_jpeg_pointers(&mut b.cursor()).unwrap().orientation, 6);
+        // Absent or absurd values normalize to 1.
+        let mut b2 = TiffBuilder::new(true);
+        let ifd2 = b2.add_ifd(&[(TAG_ORIENTATION, 3, 1, 99)], 0);
+        b2.set_ifd0(ifd2);
+        assert_eq!(walk_jpeg_pointers(&mut b2.cursor()).unwrap().orientation, 1);
     }
 
     #[test]

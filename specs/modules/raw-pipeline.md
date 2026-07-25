@@ -53,6 +53,17 @@ decoding RAW sensor data on the hot path.
    preview upscaled → half-size RAW decode via rawler (background priority only,
    with a "rendered from RAW" badge event) → `Failed(reason)`.
 
+## Orientation (user requirement 2026-07-25)
+
+Embedded previews are stored in sensor orientation; the EXIF Orientation tag
+(IFD0 0x0112) says how to display them. Photo Mechanic soft-rotates and so
+does FastCull: orientation is extracted by the TIFF walker and applied to the
+DECODED PIXELS of every rung (thumb, mid, full-res) before display — RAW
+files and sidecars are never modified. All 8 EXIF orientation values are
+handled (rotations + mirrored forms). Cache note: the thumb cache stores
+post-rotation pixels, so introducing this bumped the cache schema version
+(pre-orientation thumbs invalidate wholesale).
+
 ## Priority queue contract
 
 - Three levels: `Visible` > `Prefetch` (loupe ±2) > `Background` (sequential file
