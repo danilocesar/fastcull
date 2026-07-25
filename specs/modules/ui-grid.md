@@ -68,6 +68,23 @@ auto-advance is fixed with arrow-back + re-mark, which costs one keystroke.
 
 Pick/reject in loupe auto-advances to the next image (config: on by default).
 
+## Window chrome (menu bar — user-requested 2026-07-24, lands M5)
+
+Slim native menu bar (Slint MenuBar); the keyboard remains the fast path —
+menus are discoverability, never a required route:
+
+- **File**: Open Folder… (native picker via `rfd`; replaces CLI-only launch),
+  Copy Picks… (`Ctrl+E`, enabled from M6), Settings… (placeholder entry,
+  disabled until a settings dialog exists — post-v1 candidate), Quit.
+- **View**: Zoom In/Out (`+`/`-`), IPTC Panel (`I`, from M5), Filter Bar.
+- **Help**: Keyboard Shortcuts (small popup listing the keyboard map — the
+  map in this spec is the source of truth), About.
+
+Acceptance: opening a folder via the menu behaves identically to the CLI
+argument (same session path); the shortcuts popup lists every binding in this
+spec and closes with Esc. Persona (almost-human-user) reviews this section at
+M5 implementation start per the gate.
+
 ## Filter & sort bar
 
 - Filters (combinable): All / Picked / Rejected / Unmarked / In-burst-only.

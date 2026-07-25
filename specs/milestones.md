@@ -38,10 +38,11 @@ because the IPTC pass starts with "filter to picked, select all"; copy-picks
 before bursts because copy is the exit move of every session and bursts are
 decoration.)*
 
-## M5 — Filter/sort + IPTC
+## M5 — Filter/sort + IPTC + window chrome
 filter.rs predicates + bar UI (pick-state filters with counts first); then IPTC
 panel, multi-select apply, templates + variables, revert-last-apply, config
-persistence.
+persistence. Window chrome (user-requested): menu bar with Open Folder… picker,
+Help → Keyboard Shortcuts popup, Settings placeholder (see ui-grid.md).
 
 ## M6 — Copy picks
 fileops plan/execute + dialog + report: rename templates, auto-rename collision
