@@ -7,6 +7,7 @@ license.workspace = true
 repository.workspace = true
 
 [dependencies]
+fast_image_resize = "5"
 fastcull-core.workspace = true
 # femtovg = GPU/OpenGL renderer (ADR 0002). Building it needs system dev
 # packages: fontconfig-devel libxkbcommon-devel wayland-devel mesa-libGL-devel

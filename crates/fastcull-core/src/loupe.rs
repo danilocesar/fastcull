@@ -54,6 +54,10 @@ struct LoupeState {
     /// (validator MAJOR finding).
     best_long: HashMap<usize, u32>,
     in_flight: Vec<usize>,
+    /// Upgrade targets requested while the index was in flight at a smaller
+    /// target: re-queued when the flight lands (QE defect — the upgrade was
+    /// silently dropped, 1:1 never arrived without the app's refresh loop).
+    deferred: HashMap<usize, u32>,
     /// LRU cache: index -> (image, last-focus stamp).
     cache: HashMap<usize, (FullImage, u64)>,
     cached_bytes: usize,
@@ -124,12 +128,15 @@ impl LoupeEngine {
         wanted.sort_by_key(|i| std::cmp::Reverse(i.abs_diff(index)));
         wanted.push(index);
         for i in wanted {
-            if !sufficient_cached(&mut state, i, display_long, stamp)
-                && !state.in_flight.contains(&i)
-                && !state.failed.contains(&i)
+            if !sufficient_cached(&mut state, i, display_long, stamp) && !state.failed.contains(&i)
             {
-                state.queue.retain(|(q, _)| *q != i);
-                state.queue.push((i, display_long));
+                if state.in_flight.contains(&i) {
+                    let e = state.deferred.entry(i).or_insert(0);
+                    *e = (*e).max(display_long);
+                } else {
+                    state.queue.retain(|(q, _)| *q != i);
+                    state.queue.push((i, display_long));
+                }
             }
         }
         let hit = state.cache.get(&index).map(|(img, _)| img.clone());
@@ -156,14 +163,17 @@ impl LoupeEngine {
             if i >= count {
                 continue;
             }
-            if !sufficient_cached(&mut state, i, display_long, stamp)
-                && !state.in_flight.contains(&i)
-                && !state.failed.contains(&i)
+            if !sufficient_cached(&mut state, i, display_long, stamp) && !state.failed.contains(&i)
             {
-                state.queue.retain(|(q, _)| *q != i);
-                // Front of the vec = popped last: focused work stays first.
-                state.queue.insert(0, (i, display_long));
-                queued_any = true;
+                if state.in_flight.contains(&i) {
+                    let e = state.deferred.entry(i).or_insert(0);
+                    *e = (*e).max(display_long);
+                } else {
+                    state.queue.retain(|(q, _)| *q != i);
+                    // Front of the vec = popped last: focused work stays first.
+                    state.queue.insert(0, (i, display_long));
+                    queued_any = true;
+                }
             }
         }
         drop(state);
@@ -256,6 +266,17 @@ fn worker(shared: &Shared) {
 
         let mut state = lock(shared);
         state.in_flight.retain(|i| *i != index);
+        // Re-queue any upgrade that arrived while this flight was airborne.
+        if let Some(target) = state.deferred.remove(&index) {
+            let stamp = shared.stamp.load(Ordering::Relaxed);
+            if !sufficient_cached(&mut state, index, target, stamp)
+                && !state.failed.contains(&index)
+            {
+                state.queue.retain(|(q, _)| *q != index);
+                state.queue.push((index, target));
+                shared.wakeup.notify_all();
+            }
+        }
         if let Err(reason) = outcome {
             state.failed.insert(index);
             drop(state);

@@ -54,6 +54,10 @@ struct AppState {
     /// Mid-rung textures (1616x1080, ~5 MB each) for intermediate zooms
     /// whose cells outgrow the 320 px thumb; pruned to the visible window.
     mids: HashMap<usize, slint::Image>,
+    /// Bookkeeping for `mids` (core-side, tested by tests/zoom_walk.rs):
+    /// which rung each held texture is, and what must be adopted from the
+    /// engine cache when no event will fire.
+    va: fastcull_core::viewassets::ViewAssets,
 }
 
 impl AppState {
@@ -119,6 +123,7 @@ fn main() {
         one2one: false,
         last_grid_zoom: 1,
         mids: HashMap::new(),
+        va: fastcull_core::viewassets::ViewAssets::default(),
     }));
 
     // Start the engines for real folders; events polled on a UI timer.
@@ -191,11 +196,12 @@ fn main() {
                     for event in loupe_rx.try_iter() {
                         match event {
                             fastcull_core::loupe::LoupeEvent::Ready { index, image } => {
-                                let is_mid = image.width.max(image.height) <= 2048;
-                                if is_mid {
+                                let long = image.width.max(image.height);
+                                if long <= 2048 {
                                     // Mid rung (~5 MB copy): grid-cell quality
                                     // for intermediate zooms; cheap, always keep.
                                     st.mids.insert(index, fullres_texture(&image));
+                                    st.va.note_held(index, long);
                                 } else if at_loupe {
                                     // Full rung: 150 MB copy only while the
                                     // loupe can use it; core LRU keeps pixels.
@@ -379,12 +385,20 @@ fn refresh(win: &MainWindow, state: &Rc<RefCell<AppState>>) {
     let cell_phys = layout.cell_width * win.window().scale_factor();
     let want_mid = !at_loupe && cell_phys > 320.0 * 1.25;
     if want_mid {
-        if let Some(loupe) = &st.loupe {
-            loupe.want(range.clone(), cell_phys as u32);
+        let stx = &mut *st;
+        if let Some(loupe) = &stx.loupe {
+            // ensure() also returns cached images no event will announce
+            // (the zoom-walk bug: pruned-and-revisited cells stayed thumbs).
+            for (index, image) in stx.va.ensure(range.clone(), cell_phys as u32, loupe) {
+                let (held_long, texture) = adopt_texture(&image);
+                stx.va.note_held(index, held_long);
+                stx.mids.insert(index, texture);
+            }
         }
     }
     let keep = range.clone();
     st.mids.retain(|i, _| keep.contains(i));
+    st.va.prune(&keep);
 
     let cursor = st.cursor;
     let fullres_for = |st: &AppState, index: usize| -> Option<slint::Image> {
@@ -490,6 +504,43 @@ fn insert_fullres(st: &mut AppState, index: usize, texture: slint::Image) {
             .unwrap_or(0);
         st.fullres.remove(victim);
     }
+}
+
+/// Adopt an engine-cached image as a grid-cell texture: mid rungs directly,
+/// full-res downscaled to mid size first (rare, ~30 ms — only for images
+/// visited at 1:1 and then viewed at an intermediate zoom) so the mids layer
+/// stays ~5 MB per texture.
+fn adopt_texture(image: &fastcull_core::loupe::FullImage) -> (u32, slint::Image) {
+    let long = image.width.max(image.height);
+    if long <= 2048 {
+        return (long, fullres_texture(image));
+    }
+    let (dst_w, dst_h) = if image.width >= image.height {
+        (
+            1616u32,
+            (image.height as u64 * 1616 / image.width as u64).max(1) as u32,
+        )
+    } else {
+        (
+            (image.width as u64 * 1616 / image.height as u64).max(1) as u32,
+            1616u32,
+        )
+    };
+    let src = fast_image_resize::images::Image::from_vec_u8(
+        image.width,
+        image.height,
+        image.rgb.as_ref().clone(),
+        fast_image_resize::PixelType::U8x3,
+    )
+    .expect("valid source image");
+    let mut dst =
+        fast_image_resize::images::Image::new(dst_w, dst_h, fast_image_resize::PixelType::U8x3);
+    fast_image_resize::Resizer::new()
+        .resize(&src, &mut dst, None)
+        .expect("resize");
+    let buffer =
+        slint::SharedPixelBuffer::<slint::Rgb8Pixel>::clone_from_slice(dst.buffer(), dst_w, dst_h);
+    (dst_w.max(dst_h), slint::Image::from_rgb8(buffer))
 }
 
 /// Build a slint texture from a decoded full-res image (one 150 MB copy —
