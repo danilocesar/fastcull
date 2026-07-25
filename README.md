@@ -80,6 +80,40 @@ Tagged releases (`v*`) additionally publish Linux and Windows archives on the
 [Releases page](https://github.com/danilocesar/fastcull/releases) — those are the
 builds to hand to other people; CI artifacts are for your own testing.
 
+## Cutting a release
+
+Releases are produced by [dist](https://opensource.axo.dev/cargo-dist/) (formerly
+cargo-dist). `dist-workspace.toml` is the configuration;
+`.github/workflows/release.yml` is **generated from it** and should never be edited
+by hand.
+
+To release `0.1.0`:
+
+```sh
+# 1. bump [workspace.package] version in Cargo.toml, then refresh Cargo.lock
+cargo check --workspace
+# 2. see exactly which archives the tag will produce, before creating it
+dist plan
+# 3. commit, tag, push
+git commit -am "Release 0.1.0"
+git tag v0.1.0
+git push && git push --tags
+```
+
+Pushing the tag starts `release.yml`, which builds on a Linux and a Windows runner,
+uploads `fastcull-app-<target>` and `fastcull-cli-<target>` archives plus SHA-256
+checksums, and creates the GitHub Release. Nothing is published until the tag is
+pushed; the workflow also runs in plan-only mode on pull requests, so a broken
+`dist-workspace.toml` is caught before it can break a real release.
+
+After changing `dist-workspace.toml`, regenerate the workflow and commit both files
+together:
+
+```sh
+cargo install cargo-dist --locked --version 0.32.0   # or the prebuilt installer
+dist init --yes
+```
+
 ## License
 
 GPL-3.0-or-later. See [LICENSE](LICENSE).

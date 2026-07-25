@@ -18,3 +18,13 @@ fastcull-core = { path = "crates/fastcull-core" }
 [profile.release]
 opt-level = 3
 lto = "thin"
+
+# Compiler settings used only for tagged-release builds (see
+# dist-workspace.toml). `inherits = "release"` means "start from [profile.release]
+# above", so release archives are optimised exactly like a local
+# `cargo build --release`; keeping it a separate profile lets release tuning
+# change later without disturbing the profile the perf budgets are measured on.
+# Added by `dist init`.
+[profile.dist]
+inherits = "release"
+lto = "thin"

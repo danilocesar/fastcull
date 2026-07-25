@@ -1,0 +1,37 @@
+[workspace]
+members = ["cargo:."]
+
+# Config for 'dist' (https://opensource.axo.dev/cargo-dist/) — the tool that
+# turns a `vX.Y.Z` git tag into a GitHub Release with prebuilt archives.
+# Regenerate .github/workflows/release.yml after editing this file:
+#     dist init --yes      (or: dist generate)
+[dist]
+# Pinned so CI and local runs agree; bumping this means re-running `dist init`.
+cargo-dist-version = "0.32.0"
+# CI backend: generates .github/workflows/release.yml, triggered by v* tags.
+ci = "github"
+# No curl|sh / PowerShell / Homebrew / npm installers: FastCull is a GUI app
+# people download and run, not a shell tool. Plain archives only.
+installers = []
+# The two platforms the user actually uses. Adding macOS or ARM later is a
+# one-line change plus a `dist init --yes` to regenerate the workflow.
+targets = ["x86_64-unknown-linux-gnu", "x86_64-pc-windows-msvc"]
+# Publish the archives as GitHub Release assets.
+hosting = "github"
+# Link Microsoft's C runtime into the Windows binaries so they run on a bare
+# Windows install with no "Visual C++ Redistributable" prerequisite. This is
+# dist's default; stated explicitly because README promises it.
+msvc-crt-static = true
+# Every archive carries the GPL text and the README (which holds the written
+# offer of corresponding source). Spelled out instead of relying on dist's
+# `auto-includes` guesswork, so renaming either file breaks the build loudly
+# rather than quietly shipping binaries without their licence.
+auto-includes = false
+include = ["LICENSE", "README.md"]
+
+# The Linux release build compiles the Slint/femtovg GUI, which needs the same
+# system dev packages the test workflow installs (.github/workflows/ci.yml).
+# dist installs these on the Linux runner before building.
+[dist.dependencies.apt]
+libfontconfig1-dev = '*'
+libxkbcommon-dev = '*'
