@@ -114,12 +114,30 @@ argument (same session path); the shortcuts popup lists every binding in this
 spec and closes with Esc. Persona (almost-human-user) reviews this section at
 M5 implementation start per the gate.
 
-## Filter & sort bar
+## Filter & sort bar (M5 decisions recorded 2026-07-25)
 
-- Filters (combinable): All / Picked / Rejected / Unmarked / In-burst-only.
+- Filters: SINGLE-choice chips — All / Picked / Rejected / Unmarked (user
+  decision: single choice is enough; combinations dropped). In-burst-only
+  joins in M7 with bursts themselves (persona: no dead chips).
 - Sort: capture time (default) ↑↓, filename ↑↓.
 - Implemented as pure predicates in `fastcull-core::filter` over the session;
   the grid binds to the filtered+sorted view. Counts shown per filter state.
+- **Filtered-view mutation rules (blocking spec gap closed pre-M5)**: marking
+  an image so it no longer matches the active filter removes it from view
+  LIVE; the cursor lands on the next image in the filtered view (else the
+  previous, else none); counts update immediately. When the filter itself
+  changes, the cursor goes to the nearest surviving image, else the first.
+  The inbox-zero loop (filter Unmarked, Y/N until empty) must work exactly.
+- **Focus containment (blocking spec gap closed pre-M5)**: while ANY text
+  field has focus, no single-key shortcut fires — typing "Xavier" must not
+  reject a photo. Enter commits the field and returns focus to the grid;
+  Esc in a field abandons the edit (second Esc acts on the panel/view).
+- Per-image keywording is a same-evening flow (user decision): a focus-jump
+  key into the keyword field, comma-separated entry, Enter commits + returns
+  to the grid. Batch-apply perf target: picks-scale (hundreds), not
+  whole-folder (user decision).
+- No Open Recent / save-template-UI / filter hotkeys in M5 (user decision:
+  keep it minimal; templates.toml is hand-edited in v1).
 
 ## Acceptance criteria
 

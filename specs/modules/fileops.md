@@ -44,6 +44,11 @@ Cancellation: between files only; already-copied files remain (report says so).
 rejected and unmarked files stay untouched where they are; the user deletes them
 manually later. No move/delete-rejects operation in v1 (revisit only if asked).
 
+Note for verification design (persona observation 2026-07-25): a truncated
+ARW can still show a perfect thumbnail — the embedded JPEG sits at the front
+of the file — so "looks fine in the grid" proves nothing about integrity;
+BLAKE3 verification is the only truth at copy time.
+
 ## Acceptance criteria (tests)
 
 - [ ] Plan: template expansion, collision detection, dest-inside-source rejection,
