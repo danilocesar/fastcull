@@ -231,6 +231,15 @@ impl ReadPool {
         state.controller.shrink_above = shrink_above;
     }
 
+    /// Growth-asserting tests must not depend on the host's core count:
+    /// on 4-core CI runners the real cap equals the floor and growth is
+    /// impossible (the warm-probe regression test failed there for exactly
+    /// that reason while passing on 32-core dev machines).
+    #[cfg(test)]
+    fn set_cap_for_test(&self, cap: usize) {
+        self.lock().controller.cap = cap;
+    }
+
     /// Wait for release at `priority` (lower = more urgent). `sampled` marks
     /// a preview-read section eligible to become the probe; the EXIF section
     /// passes false (rawler parse CPU would contaminate the sample).
@@ -914,6 +923,7 @@ mod tests {
     fn pool_warm_probe_cannot_outvote_stuck_read() {
         let pool = ReadPool::new();
         pool.set_thresholds_for_test(Duration::from_millis(150), Duration::from_secs(60));
+        pool.set_cap_for_test(POOL_MIN_READERS + 2); // headroom even on 4-core CI
         let stuck = pool.acquire(0, false);
         std::thread::sleep(Duration::from_millis(300)); // older than grow_below
         drop(pool.acquire(0, true)); // ~0 ms warm probe

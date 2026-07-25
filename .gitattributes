@@ -1,0 +1,4 @@
+# Golden XMP fixtures are compared byte-for-byte against generated
+# sidecars (which always emit LF): CRLF conversion on Windows checkout
+# made fresh_sidecars_match_golden_fixtures fail in CI. No eol mangling.
+crates/fastcull-core/tests/golden/*.xmp -text
