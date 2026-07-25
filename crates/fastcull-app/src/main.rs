@@ -333,11 +333,22 @@ fn main() {
     // Deterministic (validator finding: a fixed delay captured the fit view
     // as the "1:1" frame on slow/debug runs): thumbs settle >=1.5 s, and in
     // --start-11 mode the cursor's FULL-RES texture must be adopted before
-    // the shutter fires (hard cap 15 s so a hang still produces a frame).
+    // the shutter fires. If it never is, FAIL LOUDLY instead of capturing
+    // the fit frame as the "1:1" (CI diagnosis 2026-07-25: the old
+    // fire-anyway 15 s cap produced a confusing diff-is-zero test failure on
+    // slow Windows debug runners); the cap is generous because a debug-build
+    // 50 MP decode on a virtualized runner is legitimately slow.
     let shot_timer = slint::Timer::default();
+    // Screenshot mode must NEVER exit 0 without its file: if anything ends
+    // the event loop before the shutter fires (window closed under load —
+    // validator-observed flake), the harness would otherwise see a clean
+    // exit and fail later with a bare file-not-found.
+    let screenshot_requested = screenshot.is_some();
+    let shot_written = Rc::new(std::cell::Cell::new(false));
     if let Some(out) = screenshot {
         let win = window.as_weak();
         let state_rc = Rc::clone(&state);
+        let shot_written = Rc::clone(&shot_written);
         let started = std::time::Instant::now();
         shot_timer.start(
             slint::TimerMode::Repeated,
@@ -345,23 +356,30 @@ fn main() {
             move || {
                 let Some(win) = win.upgrade() else { return };
                 let elapsed = started.elapsed();
-                let ready = {
+                let one2one_ready = {
                     let st = state_rc.borrow();
-                    let one2one_ready = !st.one2one
+                    !st.one2one
                         || st.fullres.iter().any(|(i, img)| {
                             *i == st.cursor
                                 && img.size().width.max(img.size().height)
                                     > fastcull_core::loupe::MID_RUNG_MAX_LONG
-                        });
-                    elapsed >= std::time::Duration::from_millis(1500)
-                        && (one2one_ready || elapsed > std::time::Duration::from_secs(15))
+                        })
                 };
-                if !ready {
+                if !one2one_ready && elapsed > std::time::Duration::from_secs(60) {
+                    eprintln!(
+                        "screenshot: full-res texture never adopted for the 1:1 \
+                         frame within 60 s — refusing to capture the wrong state"
+                    );
+                    slint::quit_event_loop().ok();
+                    std::process::exit(1);
+                }
+                if elapsed < std::time::Duration::from_millis(1500) || !one2one_ready {
                     return;
                 }
                 match win.window().take_snapshot() {
                     Ok(buf) => {
                         let ok = write_snapshot_jpeg(&out, &buf);
+                        shot_written.set(ok);
                         slint::quit_event_loop().ok();
                         if !ok {
                             eprintln!("screenshot: failed to write {}", out.display());
@@ -378,6 +396,13 @@ fn main() {
         );
     }
     window.run().expect("running event loop");
+    if screenshot_requested && !shot_written.get() {
+        eprintln!(
+            "screenshot: event loop ended before the snapshot was captured \
+             (window closed early?) — failing instead of exiting clean"
+        );
+        std::process::exit(2);
+    }
     // Shutdown policy (recorded, 01-architecture.md): the ONLY thing that
     // must complete is the sidecar flush. Pipeline/loupe workers are
     // read-only and the cache is crash-safe (WAL), so we exit without

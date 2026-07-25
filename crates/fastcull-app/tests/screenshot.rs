@@ -20,13 +20,20 @@ fn shoot(args: &[&str], out: &Path) {
         .env("FASTCULL_NO_CACHE", "1") // never touch the user's real cache
         .spawn()
         .expect("spawn app");
-    let deadline = Instant::now() + Duration::from_secs(60);
+    // Strictly beyond the app's own 60 s readiness cap (measured from timer
+    // start, i.e. after startup/scan): the cap must be able to fire and
+    // exit(1) with its diagnostic BEFORE this harness gives up, or a slow
+    // runner reports a generic timeout and leaks the child (validator M2).
+    let deadline = Instant::now() + Duration::from_secs(90);
     loop {
         if let Some(status) = child.try_wait().expect("wait") {
             assert!(status.success(), "app exited with {status}");
             break;
         }
-        assert!(Instant::now() < deadline, "screenshot run timed out");
+        if Instant::now() >= deadline {
+            child.kill().ok();
+            panic!("screenshot run timed out (no exit within 90 s)");
+        }
         std::thread::sleep(Duration::from_millis(200));
     }
 }
