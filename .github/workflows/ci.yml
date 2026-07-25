@@ -24,7 +24,7 @@ jobs:
 
       - name: Install Linux GUI build dependencies (slint/winit)
         if: runner.os == 'Linux'
-        run: sudo apt-get update && sudo apt-get install -y libfontconfig1-dev libxkbcommon-dev
+        run: sudo apt-get update && sudo apt-get install -y libfontconfig1-dev libxkbcommon-dev xvfb
 
       - uses: Swatinem/rust-cache@v2
 
@@ -50,6 +50,13 @@ jobs:
 
       - name: Tests
         run: cargo test --workspace
+
+      - name: Screenshot smoke tests (Linux, headless X)
+        if: runner.os == 'Linux'
+        run: xvfb-run -a cargo test --release -p fastcull-app --test screenshot
+      - name: Screenshot smoke tests (Windows)
+        if: runner.os == 'Windows'
+        run: cargo test --release -p fastcull-app --test screenshot
 
       # Advisory only (user decision 2026-07-25): shared virtualized runners
       # cannot gate wall-clock budgets; enforcement happens on reference

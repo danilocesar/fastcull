@@ -8,6 +8,7 @@ repository.workspace = true
 
 [dependencies]
 fast_image_resize = "5"
+jpeg-encoder = "0.6"
 fastcull-core.workspace = true
 # femtovg = GPU/OpenGL renderer (ADR 0002). Building it needs system dev
 # packages: fontconfig-devel libxkbcommon-devel wayland-devel mesa-libGL-devel
@@ -16,8 +17,14 @@ slint = { version = "1", default-features = false, features = [
     "std",
     "backend-winit",
     "renderer-femtovg",
+    # software renderer compiled in solely for --screenshot mode
+    # (take_snapshot is unsupported on the GPU renderer -> black frames)
+    "renderer-software",
     "compat-1-2",
 ] }
+zune-jpeg = "0.4"
+
+[dev-dependencies]
 zune-jpeg = "0.4"
 
 [build-dependencies]
