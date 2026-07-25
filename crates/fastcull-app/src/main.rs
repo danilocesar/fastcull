@@ -82,6 +82,11 @@ struct AppState {
     last_pan_write: Option<(f32, f32)>,
     /// Which image the overlay last showed (trace bookkeeping only).
     last_overlay_cursor: Option<usize>,
+    /// False until the user first moves the cursor or marks (issue #4):
+    /// while untouched, the cursor tracks the view's FIRST image through
+    /// the progressive metadata re-sorts, so a folder never opens with
+    /// the cursor stranded mid-grid (name order vs capture order).
+    cursor_touched: bool,
     /// Grid zoom to return to when leaving the loupe with G/Esc.
     last_grid_zoom: usize,
     /// Mid-rung textures (1616x1080, ~5 MB each) for intermediate zooms
@@ -163,7 +168,14 @@ fn recompute_view_keep_cursor(st: &mut AppState) {
     let old_view = std::mem::take(&mut st.view);
     let old_cursor = old_view.contains(&st.cursor).then_some(st.cursor);
     recompute_view(st);
-    if let Some(id) =
+    if !st.cursor_touched {
+        // Issue #4: before the first user interaction the cursor is "the
+        // first image", not a pinned id — capture keys stream in and
+        // re-sort the view under it.
+        if let Some(first) = st.view.first() {
+            st.cursor = *first;
+        }
+    } else if let Some(id) =
         fastcull_core::filter::cursor_after_filter_change(&old_view, old_cursor, &st.view)
     {
         st.cursor = id;
@@ -211,6 +223,7 @@ fn load_folder(state: &Rc<RefCell<AppState>>, folder: &std::path::Path) -> Resul
     st.touched.clear();
     st.sidecar_failures = 0;
     st.cursor = 0;
+    st.cursor_touched = false;
     st.thumb_jpegs.clear();
     st.images.clear();
     st.failed.clear();
@@ -334,6 +347,7 @@ fn main() {
         pan_center: (0.5, 0.5),
         last_pan_write: None,
         last_overlay_cursor: None,
+        cursor_touched: false,
         last_grid_zoom: 1,
         mids: HashMap::new(),
         va: fastcull_core::viewassets::ViewAssets::default(),
@@ -414,7 +428,10 @@ fn main() {
                     (SortKey::Filename, true) => (SortKey::Filename, false),
                     (SortKey::Filename, false) => (SortKey::CaptureTime, true),
                 };
-                recompute_view(&mut st);
+                // Through the cursor-aware recompute (validator: plain
+                // recompute here skipped the pre-touch snap, making the
+                // cursor after a sort click timing-dependent again).
+                recompute_view_keep_cursor(&mut st);
             }
             reveal_cursor(&win, &state);
         });
@@ -479,6 +496,10 @@ fn main() {
             {
                 let mut st = state.borrow_mut();
                 capture_pan(&win, &mut st);
+                // Clicking to pixel-peep is as much a claim as any other
+                // click (validator: a capture-key re-sort could otherwise
+                // swap the image under an active 1:1 inspection).
+                st.cursor_touched = true;
                 st.pan_center = (fx.clamp(0.0, 1.0), fy.clamp(0.0, 1.0));
                 let at_ceiling = max_factor(&win, &st)
                     .is_some_and(|max| clamped_factor(&win, &st) >= max - 1e-3);
@@ -509,6 +530,7 @@ fn main() {
                 let pitch = layout.cell_height + grid::CELL_GAP;
                 let pos = (((cy + scroll_y) / pitch.max(1.0)) as usize).min(st.view.len() - 1);
                 st.cursor = st.view[pos]; // tall windows: click also selects
+                st.cursor_touched = true;
                 let (cell_x, cell_y) = layout.position(pos);
                 st.pan_center = match aspect_for(&st, st.cursor) {
                     // Cell-local click -> image fraction (core math,
@@ -894,6 +916,24 @@ fn handle_nav_inner(win: &MainWindow, state: &Rc<RefCell<AppState>>, key: &str) 
     // A drag since the last render moved the pan; fold it in before any
     // action reads or resets the pan center.
     capture_pan(win, &mut st);
+    // Marks and navigation claim the cursor (issue #4); zoom keys do not
+    // move it and stay neutral.
+    if matches!(
+        key,
+        "pick"
+            | "reject"
+            | "clear"
+            | "left"
+            | "right"
+            | "up"
+            | "down"
+            | "pgup"
+            | "pgdn"
+            | "home"
+            | "end"
+    ) {
+        st.cursor_touched = true;
+    }
     let loupe_step = grid::ZOOM_COLUMNS.len() - 1;
     match key {
         "pick" | "reject" | "clear" => {
@@ -1108,10 +1148,15 @@ fn refresh_inner(win: &MainWindow, state: &Rc<RefCell<AppState>>) {
         let (_, cur_top) = layout.position(cur_pos);
         let cur_visible =
             cur_top < scroll_y + viewport_h && cur_top + layout.cell_height > scroll_y;
-        if !cur_visible {
+        // Guard against pre-layout geometry (issue #4 debugging: refreshes
+        // before the window lays out see a NEGATIVE viewport height, made
+        // the cursor look "scrolled away", and spuriously claimed it —
+        // killing the untouched-snap and leaving the final cursor racy).
+        if !cur_visible && viewport_h > 0.0 {
             let center_row =
                 ((scroll_y + viewport_h * 0.5) / (layout.cell_height + grid::CELL_GAP)) as usize;
             st.cursor = st.view[center_row.min(view_len - 1)];
+            st.cursor_touched = true; // scrolling the loupe IS cursor movement
         }
         if let Some(loupe) = &st.loupe {
             // focus() returns the cached image on a warm hit: the rebuild

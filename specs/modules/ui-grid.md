@@ -113,6 +113,18 @@ Recorded deviations/decisions (M2):
   cursor follows scrolling so full-res loading and marks always apply to what
   the user is looking at.
 - The status bar always names the cursor image (filename, position N/M).
+- **Untouched-cursor rule (issue #4, 2026-07-25)**: from session open until the
+  user's FIRST interaction, the cursor is "the first image of the view", not a
+  pinned id — capture keys stream in progressively and re-sort the view under
+  it, and a folder must never open with the cursor stranded mid-grid (real
+  case: name order vs capture order put it at position 795/1450). The cursor
+  is CLAIMED (id-pinned from then on, all rules above apply) by: any mark,
+  any navigation key, loupe scroll-follow with laid-out geometry, and any
+  loupe/fit click. NOT claiming it: zoom keys (they don't move it), filter
+  and sort changes (pre-touch these snap to the new view's first image —
+  overriding the nearest-survivor rule until the claim), and engine events.
+  Open Folder resets to unclaimed. Pre-layout geometry (a refresh before the
+  window has a real height) must never claim or move the cursor.
 
 ## Visual language
 
@@ -177,6 +189,14 @@ Acceptance: opening a folder via the menu behaves identically to the CLI
 argument (same session path); the shortcuts popup lists every binding in this
 spec and closes with Esc. Persona (almost-human-user) reviews this section at
 M5 implementation start per the gate.
+
+**Folderless launch (user requirement 2026-07-25, issue #5)**: `fastcull-app`
+with NO arguments must open the normal window in the empty state with the
+message "No folder open — File > Open Folder… (Ctrl+O)" and a working menu
+bar — never exit with a usage error (a desktop launcher / double-clicked
+binary has no arguments; today's behavior of printing usage to a terminal
+nobody sees and exiting is a broken first run). The CLI usage error remains
+for genuinely malformed invocations (unknown flags, nonexistent folder).
 
 Chrome staging (recorded 2026-07-25, M5 step 2): the IPTC Panel menu item
 lands together with the panel itself (later M5 step), as do `I`, `K`,

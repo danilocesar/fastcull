@@ -257,6 +257,56 @@ fn one_to_one_entry_is_center_anchored() {
     );
 }
 
+/// Issue #4 regression: opening a folder where NAME order diverges from
+/// CAPTURE order must land the cursor on the capture-first image (view
+/// position 0), not the name-first one (image id 0) — a real 1,450-file
+/// folder opened with the cursor stranded at position 795. Crafted
+/// fixture: the LATEST capture gets the name that sorts first. Asserted
+/// via the 1:1 overlay trace (loupe idx = settled cursor id).
+#[test]
+fn cursor_opens_on_capture_first_image() {
+    if !has_display() {
+        eprintln!("screenshot smoke skipped: no display server");
+        return;
+    }
+    let _s = serial();
+    let dir = out_dir().join("cursor-order");
+    std::fs::create_dir_all(&dir).unwrap();
+    // a_late.ARW: captured 15:29:55 (uncompressed fixture); b_early.ARW:
+    // captured 15:29:13 (compressed fixture). Name-first = capture-LAST.
+    std::fs::copy(
+        raws_dir().join("A1_full_uncompressed.ARW"),
+        dir.join("a_late.ARW"),
+    )
+    .unwrap();
+    std::fs::copy(
+        raws_dir().join("A1_full_compressed.ARW"),
+        dir.join("b_early.ARW"),
+    )
+    .unwrap();
+    let out = out_dir().join("cursor-order.jpg");
+    let bin = env!("CARGO_BIN_EXE_fastcull-app");
+    let output = std::process::Command::new(bin)
+        .arg("--start-11")
+        .arg(&dir)
+        .arg("--screenshot")
+        .arg(&out)
+        .env("FASTCULL_NO_CACHE", "1")
+        .env("FASTCULL_TRACE", "1")
+        .output()
+        .expect("run app");
+    assert!(output.status.success(), "app exited with {}", output.status);
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    let line = stderr
+        .lines()
+        .rfind(|l| l.contains("loupe idx"))
+        .unwrap_or_else(|| panic!("no loupe trace line in stderr:\n{stderr}"));
+    assert!(
+        line.contains("loupe idx 1 "), // trailing space: id 1, not 10/11/…
+        "cursor must open on the capture-first image (b_early = id 1), got: {line}"
+    );
+}
+
 /// M5 chrome smoke (validator finding: the menu bar, filter bar and empty
 /// state had zero automated coverage): an empty folder must render the
 /// empty-state message under the chrome and exit cleanly, not crash or
