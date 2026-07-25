@@ -18,6 +18,7 @@ pub mod loupe;
 pub mod pipeline;
 pub mod raw;
 pub mod viewassets;
+pub mod xmp;
 
 /// Application version, shared by the CLI and the UI shell.
 pub const VERSION: &str = env!("CARGO_PKG_VERSION");
