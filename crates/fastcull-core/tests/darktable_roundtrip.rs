@@ -11,7 +11,7 @@
 use std::path::PathBuf;
 
 use fastcull_core::catalog::PickState;
-use fastcull_core::xmp::write_pick;
+use fastcull_core::xmp::{write_keywords, write_pick};
 
 fn darktable_cli() -> Option<&'static str> {
     let ok = std::process::Command::new("darktable-cli")
@@ -54,6 +54,13 @@ fn darktable_reads_fastcull_picks_and_rejects() {
     std::fs::copy(&source, &rejected).unwrap();
     write_pick(&picked, PickState::Picked).unwrap();
     write_pick(&rejected, PickState::Rejected).unwrap();
+    // Keywords half of the round-trip (M5): written by the same code path
+    // the template apply uses; includes Unicode and a pipe hierarchy.
+    write_keywords(
+        &picked,
+        &["owl".into(), "são joão".into(), "Nature|Birds".into()],
+    )
+    .unwrap();
 
     for (input, out) in [(&picked, "p.jpg"), (&rejected, "r.jpg")] {
         let status = std::process::Command::new(cli)
@@ -86,6 +93,31 @@ fn darktable_reads_fastcull_picks_and_rejects() {
     assert_eq!(picked_flags & 0x8, 0, "picked must not be rejected");
     assert_ne!(rejected_flags & 0x8, 0, "rejected bit must be set");
     assert_eq!(rejected_flags & 7, 0, "rejected carries no stars");
+
+    // Keywords: darktable stores tag names in <configdir>/data.db and the
+    // image<->tag links in library.db (tagged_images). All three of our
+    // keywords — plain, Unicode, pipe-hierarchy — must be attached to
+    // picked.ARW.
+    conn.execute(
+        "ATTACH DATABASE ?1 AS data",
+        [cfg.join("data.db").to_str().unwrap()],
+    )
+    .unwrap();
+    let tag_count: i64 = conn
+        .query_row(
+            "SELECT COUNT(DISTINCT t.name) FROM tagged_images ti \
+             JOIN images i ON i.id = ti.imgid \
+             JOIN data.tags t ON t.id = ti.tagid \
+             WHERE i.filename = 'picked.ARW' \
+             AND t.name IN ('owl', 'são joão', 'Nature|Birds')",
+            [],
+            |r| r.get(0),
+        )
+        .unwrap();
+    assert_eq!(
+        tag_count, 3,
+        "darktable must import all three FastCull keywords as tags"
+    );
 
     std::fs::remove_dir_all(&base).ok();
 }

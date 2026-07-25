@@ -15,6 +15,7 @@ pub mod catalog;
 pub mod exif;
 pub mod filter;
 pub mod grid;
+pub mod iptc;
 pub mod loupe;
 pub mod pipeline;
 pub mod raw;

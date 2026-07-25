@@ -10,11 +10,12 @@
 //!   attributes pass through unchanged.
 //! - Writes are atomic: temp file in the same directory, fsync, rename.
 //!
-//! Field mapping (M3 scope): Rejected → `xmp:Rating="-1"`, Picked →
-//! `xmp:Rating="1"`, Unmarked → attribute absent. Reads accept the rating as
-//! an attribute or a child element and any positive value counts as Picked
-//! (stars are v2). `dc:subject` keywords are read (for display and future
-//! IPTC work) but not yet written — keyword writing lands with M5.
+//! Field mapping: Rejected → `xmp:Rating="-1"`, Picked → `xmp:Rating="1"`,
+//! Unmarked → attribute absent. Reads accept the rating as an attribute or
+//! a child element and any positive value counts as Picked (stars are v2).
+//! Keywords (M5): read from `dc:subject`, written as `dc:subject` +
+//! `lr:hierarchicalSubject` bags (both, like digiKam/LR — see
+//! `write_keywords`); the darktable round-trip test covers both halves.
 
 use std::io::Write as _;
 use std::path::{Path, PathBuf};
@@ -178,6 +179,120 @@ fn new_sidecar(pick: PickState) -> String {
     )
 }
 
+/// Write `keywords` into the sidecar for `raw_path` as `dc:subject` +
+/// `lr:hierarchicalSubject` bags (xmp-sidecars.md mapping: both, like
+/// digiKam/Lightroom — darktable imports either). Read-modify-write:
+/// existing bags of BOTH properties are replaced wholesale (the session's
+/// keyword list is the full truth for them), everything else — rating,
+/// foreign nodes, unknown namespaces — passes through unchanged. An empty
+/// list removes the bags. Atomic like every sidecar write.
+pub fn write_keywords(raw_path: &Path, keywords: &[String]) -> Result<(), XmpError> {
+    let path = sidecar_path(raw_path);
+    let existing = match std::fs::read(&path) {
+        Ok(bytes) => bytes,
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound => {
+            new_sidecar(PickState::Unmarked).into_bytes()
+        }
+        Err(e) => return Err(e.into()),
+    };
+    let output = rewrite_keywords(&existing, keywords)?;
+    atomic_write(&path, output.as_bytes())
+}
+
+/// XML-escaped `rdf:li` rows for a keyword bag, matching the fresh-sidecar
+/// indentation (three spaces to the bag, four to the items).
+fn keyword_bags(keywords: &[String]) -> String {
+    let lis: String = keywords
+        .iter()
+        .map(|k| {
+            let esc = k
+                .replace('&', "&amp;")
+                .replace('<', "&lt;")
+                .replace('>', "&gt;");
+            format!("     <rdf:li>{esc}</rdf:li>\n")
+        })
+        .collect();
+    format!(
+        "\n   <dc:subject>\n    <rdf:Bag>\n{lis}    </rdf:Bag>\n   </dc:subject>\
+         \n   <lr:hierarchicalSubject>\n    <rdf:Bag>\n{lis}    </rdf:Bag>\n   </lr:hierarchicalSubject>\n  "
+    )
+}
+
+/// Event-level rewrite: drop every existing `dc:subject` /
+/// `lr:hierarchicalSubject` element (any rdf:Description block), then emit
+/// fresh bags inside the FIRST rdf:Description, ensuring its `dc:`/`lr:`
+/// namespaces. The first Description in Empty form (`<rdf:Description/>`)
+/// is expanded to Start+End so it can hold children.
+fn rewrite_keywords(existing: &[u8], keywords: &[String]) -> Result<String, XmpError> {
+    if std::str::from_utf8(existing).is_err() {
+        return Err(XmpError::NotUtf8);
+    }
+    // ONLY the two properties the mapping table assigns to us; anything
+    // else (digiKam:TagsList, acdsee:categories, …) is foreign and must
+    // survive untouched (preserve-unknown rule). Matched by LOCAL name,
+    // symmetric with read_sidecar: a sidecar binding the DC namespace to
+    // another prefix (dcx:subject) would otherwise keep a stale bag that
+    // resurrects deleted keywords on the next read (validator finding).
+    let is_subject = |name: &[u8]| matches!(local_name(name), b"subject" | b"hierarchicalSubject");
+    let mut reader = quick_xml::Reader::from_reader(existing);
+    reader.config_mut().trim_text(false);
+    let mut writer = quick_xml::Writer::new(Vec::new());
+    let mut buf = Vec::new();
+    let mut first_done = false;
+    let mut skip_depth = 0usize; // >0: inside an old subject element
+    loop {
+        let event = reader.read_event_into(&mut buf)?;
+        match event {
+            Event::Eof => break,
+            Event::Start(ref e) if is_subject(e.name().as_ref()) => skip_depth += 1,
+            Event::Empty(ref e) if skip_depth == 0 && is_subject(e.name().as_ref()) => {}
+            Event::End(ref e) if skip_depth > 0 && is_subject(e.name().as_ref()) => skip_depth -= 1,
+            _ if skip_depth > 0 => {}
+            Event::Start(ref e) | Event::Empty(ref e) if is_rdf_description(e) && !first_done => {
+                first_done = true;
+                let was_empty = matches!(event, Event::Empty(_));
+                let mut out =
+                    BytesStart::new(String::from_utf8_lossy(e.name().as_ref()).into_owned());
+                let (mut has_dc, mut has_lr) = (false, false);
+                for attr in e.attributes() {
+                    let attr = attr?;
+                    match attr.key.as_ref() {
+                        b"xmlns:dc" => has_dc = true,
+                        b"xmlns:lr" => has_lr = true,
+                        _ => {}
+                    }
+                    out.push_attribute(attr);
+                }
+                if !keywords.is_empty() {
+                    if !has_dc {
+                        out.push_attribute(("xmlns:dc", "http://purl.org/dc/elements/1.1/"));
+                    }
+                    if !has_lr {
+                        out.push_attribute(("xmlns:lr", "http://ns.adobe.com/lightroom/1.0/"));
+                    }
+                }
+                writer.write_event(Event::Start(out))?;
+                if !keywords.is_empty() {
+                    writer
+                        .get_mut()
+                        .extend_from_slice(keyword_bags(keywords).as_bytes());
+                }
+                if was_empty {
+                    writer.write_event(Event::End(quick_xml::events::BytesEnd::new(
+                        String::from_utf8_lossy(e.name().as_ref()).into_owned(),
+                    )))?;
+                }
+            }
+            other => writer.write_event(other)?,
+        }
+        buf.clear();
+    }
+    if !first_done {
+        return Err(XmpError::NoDescription);
+    }
+    Ok(String::from_utf8_lossy(&writer.into_inner()).into_owned())
+}
+
 /// Event-level rewrite of an existing sidecar: only the first
 /// `rdf:Description`'s `xmp:Rating` attribute is added/replaced/removed;
 /// everything else round-trips. Also ensures the xmp namespace exists on
@@ -274,8 +389,13 @@ fn rewrite_rating(existing: &[u8], pick: PickState) -> Result<String, XmpError> 
 }
 
 fn atomic_write(path: &Path, bytes: &[u8]) -> Result<(), XmpError> {
+    // Unique temp per call (QE race harness: a FIXED tmp name let two
+    // concurrent writers interleave bytes into one tmp and rename the
+    // merge into place — permanently corrupt sidecar within 2 iterations).
+    static SEQ: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
+    let unique = SEQ.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
     let mut tmp_os = path.as_os_str().to_owned();
-    tmp_os.push(".fastcull-tmp");
+    tmp_os.push(format!(".fastcull-tmp-{}-{unique}", std::process::id()));
     let tmp = PathBuf::from(tmp_os);
     {
         let mut f = std::fs::File::create(&tmp)?;
@@ -334,6 +454,164 @@ mod tests {
             read_sidecar(Path::new("/nope/none.ARW.xmp")).unwrap(),
             SidecarState::default()
         );
+    }
+
+    /// Keywords round-trip: write -> read yields the same list, in order,
+    /// for plain, Unicode, XML-hostile and pipe-hierarchy keywords
+    /// (property-style over a seeded set — no fuzzing dep, deterministic).
+    #[test]
+    fn keywords_roundtrip_hostile_and_unicode() {
+        let dir = tmp();
+        let cases: Vec<Vec<String>> = vec![
+            vec![],
+            vec!["bird".into()],
+            vec!["são joão".into(), "写真".into(), "Grünheide".into()],
+            vec!["a&b".into(), "x<y>z".into(), "\"quoted\"".into()],
+            vec!["Nature|Birds|Owls".into(), "flat".into()],
+            (1..=40).map(|i| format!("kw{i}")).collect(),
+        ];
+        for (i, kws) in cases.iter().enumerate() {
+            let raw = dir.join(format!("kw{i}.ARW"));
+            write_keywords(&raw, kws).unwrap();
+            let state = read_sidecar(&sidecar_path(&raw)).unwrap();
+            assert_eq!(&state.keywords, kws, "case {i}");
+            // Idempotent second write (replacement, not accumulation).
+            write_keywords(&raw, kws).unwrap();
+            assert_eq!(read_sidecar(&sidecar_path(&raw)).unwrap().keywords, *kws);
+            // Both mapped properties present when non-empty (dt reads
+            // either; digiKam/LR read lr:).
+            let text = std::fs::read_to_string(sidecar_path(&raw)).unwrap();
+            assert_eq!(text.contains("dc:subject"), !kws.is_empty());
+            assert_eq!(text.contains("lr:hierarchicalSubject"), !kws.is_empty());
+        }
+        std::fs::remove_dir_all(&dir).ok();
+    }
+
+    /// Keywords and rating edits compose: neither write clobbers the other,
+    /// and clearing keywords removes both bags.
+    #[test]
+    fn keywords_and_rating_compose_and_clear() {
+        let dir = tmp();
+        let raw = dir.join("c.ARW");
+        write_pick(&raw, PickState::Picked).unwrap();
+        write_keywords(&raw, &["owl".into(), "eule".into()]).unwrap();
+        let state = read_sidecar(&sidecar_path(&raw)).unwrap();
+        assert_eq!(state.pick, PickState::Picked);
+        assert_eq!(state.keywords, vec!["owl", "eule"]);
+        // Rating rewrite preserves keyword bags.
+        write_pick(&raw, PickState::Rejected).unwrap();
+        let state = read_sidecar(&sidecar_path(&raw)).unwrap();
+        assert_eq!(state.pick, PickState::Rejected);
+        assert_eq!(state.keywords, vec!["owl", "eule"]);
+        // Clearing removes the bags entirely.
+        write_keywords(&raw, &[]).unwrap();
+        let text = std::fs::read_to_string(sidecar_path(&raw)).unwrap();
+        assert!(!text.contains("dc:subject") && !text.contains("hierarchicalSubject"));
+        assert_eq!(
+            read_sidecar(&sidecar_path(&raw)).unwrap().pick,
+            PickState::Rejected,
+            "clearing keywords must not touch the rating"
+        );
+        std::fs::remove_dir_all(&dir).ok();
+    }
+
+    /// Preserve-unknown for keyword writes: foreign keyword-ADJACENT nodes
+    /// (digiKam:TagsList) and everything else survive; only our two mapped
+    /// properties are replaced.
+    #[test]
+    fn keyword_write_preserves_foreign_nodes() {
+        let dir = tmp();
+        let raw = dir.join("d.ARW");
+        let sc = sidecar_path(&raw);
+        std::fs::write(
+            &sc,
+            r#"<?xpacket begin="" id="W5M0MpCehiHzreSzNTczkc9d"?>
+<x:xmpmeta xmlns:x="adobe:ns:meta/">
+ <rdf:RDF xmlns:rdf="http://www.w3.org/1999/02/22-rdf-syntax-ns#">
+  <rdf:Description rdf:about="" xmlns:dc="http://purl.org/dc/elements/1.1/"
+    xmlns:digiKam="http://www.digikam.org/ns/1.0/" xmp:Rating="1" xmlns:xmp="http://ns.adobe.com/xap/1.0/">
+   <dc:subject><rdf:Bag><rdf:li>old</rdf:li></rdf:Bag></dc:subject>
+   <digiKam:TagsList><rdf:Seq><rdf:li>People/Ana</rdf:li></rdf:Seq></digiKam:TagsList>
+   <dt:history xmlns:dt="http://darktable.sf.net/">opaque</dt:history>
+  </rdf:Description>
+ </rdf:RDF>
+</x:xmpmeta>
+<?xpacket end="w"?>
+"#,
+        )
+        .unwrap();
+        write_keywords(&raw, &["new".into()]).unwrap();
+        let text = std::fs::read_to_string(&sc).unwrap();
+        assert!(!text.contains(">old<"), "our old bag replaced");
+        assert!(text.contains(">new<"));
+        assert!(text.contains("People/Ana"), "digiKam list preserved");
+        assert!(text.contains("dt:history"), "darktable history preserved");
+        assert!(text.contains("xmp:Rating=\"1\""), "rating preserved");
+        std::fs::remove_dir_all(&dir).ok();
+    }
+
+    /// A nonstandard prefix bound to the DC namespace must not keep a
+    /// stale bag that resurrects deleted keywords (validator finding: the
+    /// write side previously matched literal prefixes only, asymmetric
+    /// with the local-name read side).
+    #[test]
+    fn keyword_write_replaces_alias_prefixed_bags() {
+        let dir = tmp();
+        let raw = dir.join("e.ARW");
+        let sc = sidecar_path(&raw);
+        std::fs::write(
+            &sc,
+            r#"<?xpacket begin="" id="W5M0MpCehiHzreSzNTczkc9d"?>
+<x:xmpmeta xmlns:x="adobe:ns:meta/">
+ <rdf:RDF xmlns:rdf="http://www.w3.org/1999/02/22-rdf-syntax-ns#">
+  <rdf:Description rdf:about="" xmlns:dcx="http://purl.org/dc/elements/1.1/">
+   <dcx:subject><rdf:Bag><rdf:li>legacy</rdf:li></rdf:Bag></dcx:subject>
+  </rdf:Description>
+ </rdf:RDF>
+</x:xmpmeta>
+<?xpacket end="w"?>
+"#,
+        )
+        .unwrap();
+        write_keywords(&raw, &["new".into()]).unwrap();
+        let state = read_sidecar(&sc).unwrap();
+        assert_eq!(state.keywords, vec!["new"], "stale alias bag must go");
+        std::fs::remove_dir_all(&dir).ok();
+    }
+
+    /// Concurrency (QE race harness, 500 iterations → corruption within 2
+    /// with the old fixed tmp name): parallel pick + keyword writers on
+    /// ONE sidecar must never leave an unreadable file. Last-writer-wins
+    /// per property is acceptable; corruption is not.
+    #[test]
+    fn concurrent_pick_and_keyword_writes_never_corrupt() {
+        let dir = tmp();
+        let raw = dir.join("race.ARW");
+        write_pick(&raw, PickState::Picked).unwrap();
+        let r1 = raw.clone();
+        let t1 = std::thread::spawn(move || {
+            for i in 0..200 {
+                let pick = if i % 2 == 0 {
+                    PickState::Picked
+                } else {
+                    PickState::Rejected
+                };
+                // Transient rename races are the OS's business; corruption
+                // below is ours.
+                let _ = write_pick(&r1, pick);
+            }
+        });
+        let r2 = raw.clone();
+        let t2 = std::thread::spawn(move || {
+            for i in 0..200 {
+                let _ = write_keywords(&r2, &[format!("kw{i}")]);
+            }
+        });
+        t1.join().unwrap();
+        t2.join().unwrap();
+        // The file must parse and read cleanly after the storm.
+        read_sidecar(&sidecar_path(&raw)).expect("sidecar must never be corrupted");
+        std::fs::remove_dir_all(&dir).ok();
     }
 
     /// The trust contract: foreign nodes (darktable history, Lightroom crs)

@@ -47,23 +47,32 @@ plan must never race a pending sidecar write).
 
 M3 ships pick/reject only: `xmp:Rating` write (attribute form; legacy element
 and `xap:` forms are removed/replaced on rewrite), sidecar-at-open, writer
-thread, darktable round-trip asserting RATINGS. Keyword/IPTC WRITING — and
-with it the keywords half of the round-trip assertion plus the property-based
-Unicode round-trip tests — lands in M5 where the IPTC editor exists.
+thread, darktable round-trip asserting RATINGS. Keyword WRITING landed with
+M5 (2026-07-25): `write_keywords` replaces the `dc:subject` +
+`lr:hierarchicalSubject` bags wholesale (the session's keyword list is the
+full truth for those two properties; everything else — including foreign
+keyword stores like `digiKam:TagsList` — is preserved), an empty list
+removes the bags, and the darktable round-trip asserts all three keyword
+shapes (plain, Unicode, pipe-hierarchy) land as tags. IPTC FIELD writing
+(title/creator/city/…) lands with the IPTC panel step.
 Write failures are surfaced to the UI (status-bar warning + stderr).
 
 ## Acceptance criteria (tests)
 
 - [x] Golden-file tests: each pick state serializes byte-identically to
       checked-in fixtures (`tests/golden/*.xmp`); the IPTC set joins in M5.
-- [ ] Round-trip: write → read yields identical state (property-based test over
-      arbitrary IPTC strings incl. Unicode, quotes, `&`, CJK, emoji).
+- [x] Round-trip (keywords half, M5): write → read yields the identical
+      keyword list over a deterministic hostile set (Unicode, quotes, `&`,
+      `<`/`>`, CJK, pipe hierarchies, 40-item lists); idempotent rewrite;
+      composes with rating writes both ways. IPTC field strings join with
+      the panel step.
 - [x] Preservation: a fixture sidecar containing foreign nodes (fake
       `crs:`/darktable `darktable:history` blocks) survives our edit with those
       nodes intact (`foreign_nodes_survive_rating_edits` + QE 50-cycle fuzz).
-- [ ] **darktable round-trip (integration, Linux)**: `darktable-cli` with throwaway
+- [x] **darktable round-trip (integration, Linux)**: `darktable-cli` with throwaway
       `--configdir`/`--library` in a temp dir (NEVER the user's real config)
       imports an A1 file + our sidecar; exported/queried state shows our rating and
-      keywords. Skipped gracefully when darktable-cli is absent.
+      keywords (ratings since M3; keywords asserted against data.db/tagged_images
+      since M5). Skipped gracefully when darktable-cli is absent.
 - [x] Atomicity: kill -9 during a write storm leaves only valid XML files
       (`tests/xmp_crash.rs`: child storms writes, parent SIGKILLs 15 rounds).
