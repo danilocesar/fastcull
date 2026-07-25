@@ -31,6 +31,10 @@ pub enum XmpError {
     Xml(#[from] quick_xml::Error),
     #[error("sidecar attribute error: {0}")]
     Attr(#[from] quick_xml::events::attributes::AttrError),
+    #[error("sidecar is not valid UTF-8 — refusing to rewrite it")]
+    NotUtf8,
+    #[error("sidecar has no rdf:Description — refusing to guess its structure")]
+    NoDescription,
 }
 
 /// State FastCull understands inside a sidecar. Everything else in the file
@@ -89,7 +93,7 @@ pub fn read_sidecar(path: &Path) -> Result<SidecarState, XmpError> {
                     // xmp:Rating as attribute.
                     for attr in e.attributes() {
                         let attr = attr?;
-                        if attr.key.as_ref() == b"xmp:Rating" {
+                        if matches!(attr.key.as_ref(), b"xmp:Rating" | b"xap:Rating") {
                             if let Ok(v) = std::str::from_utf8(&attr.value) {
                                 if let Ok(r) = v.trim().parse::<i32>() {
                                     state.pick = rating_to_pick(r);
@@ -101,7 +105,7 @@ pub fn read_sidecar(path: &Path) -> Result<SidecarState, XmpError> {
                     in_subject = true;
                 } else if name == b"li" && in_subject {
                     in_li = true;
-                } else if e.name().as_ref() == b"xmp:Rating" {
+                } else if matches!(e.name().as_ref(), b"xmp:Rating" | b"xap:Rating") {
                     in_rating_element = true;
                 }
             }
@@ -112,7 +116,7 @@ pub fn read_sidecar(path: &Path) -> Result<SidecarState, XmpError> {
                     in_subject = false;
                 } else if name == b"li" {
                     in_li = false;
-                } else if e.name().as_ref() == b"xmp:Rating" {
+                } else if matches!(e.name().as_ref(), b"xmp:Rating" | b"xap:Rating") {
                     in_rating_element = false;
                 }
             }
@@ -155,7 +159,7 @@ pub fn write_pick(raw_path: &Path, pick: PickState) -> Result<(), XmpError> {
     atomic_write(&path, output.as_bytes())
 }
 
-/// Fresh minimal sidecar (deterministic — golden-file tested).
+/// Fresh minimal sidecar; byte-compared against tests/golden/*.xmp.
 fn new_sidecar(pick: PickState) -> String {
     let rating_attr = pick_to_rating(pick)
         .map(|r| format!("\n    xmp:Rating=\"{r}\""))
@@ -179,15 +183,42 @@ fn new_sidecar(pick: PickState) -> String {
 /// everything else round-trips. Also ensures the xmp namespace exists on
 /// that element when a rating is written.
 fn rewrite_rating(existing: &[u8], pick: PickState) -> Result<String, XmpError> {
+    // Refuse non-UTF8 up front: the lossy path would silently mangle a
+    // sidecar we promised to preserve (QE defect).
+    if std::str::from_utf8(existing).is_err() {
+        return Err(XmpError::NotUtf8);
+    }
     let mut reader = quick_xml::Reader::from_reader(existing);
     reader.config_mut().trim_text(false);
     let mut writer = quick_xml::Writer::new(Vec::new());
     let mut buf = Vec::new();
     let mut done = false;
+    let mut in_first_description = 0usize; // element depth inside it
+    let mut skip_rating_depth = 0usize; // >0: inside an old rating ELEMENT
     loop {
         let event = reader.read_event_into(&mut buf)?;
         match event {
             Event::Eof => break,
+            // Drop the legacy rating ELEMENT entirely (validator HIGH: the
+            // attribute+element pair contradicted itself and clear() could
+            // never clear). Both xmp: and xap: prefixes count.
+            Event::Start(ref e)
+                if in_first_description > 0
+                    && matches!(e.name().as_ref(), b"xmp:Rating" | b"xap:Rating") =>
+            {
+                skip_rating_depth += 1;
+            }
+            Event::Empty(ref e)
+                if in_first_description > 0
+                    && skip_rating_depth == 0
+                    && matches!(e.name().as_ref(), b"xmp:Rating" | b"xap:Rating") => {}
+            Event::End(ref e)
+                if skip_rating_depth > 0
+                    && matches!(e.name().as_ref(), b"xmp:Rating" | b"xap:Rating") =>
+            {
+                skip_rating_depth -= 1;
+            }
+            _ if skip_rating_depth > 0 => {} // swallow the old element's body
             Event::Start(ref e) | Event::Empty(ref e) if !done && is_rdf_description(e) => {
                 let empty = matches!(event, Event::Empty(_));
                 let mut out =
@@ -196,7 +227,7 @@ fn rewrite_rating(existing: &[u8], pick: PickState) -> Result<String, XmpError> 
                 for attr in e.attributes() {
                     let attr = attr?;
                     match attr.key.as_ref() {
-                        b"xmp:Rating" => continue, // replaced below
+                        b"xmp:Rating" | b"xap:Rating" => continue, // replaced below
                         b"xmlns:xmp" => has_xmp_ns = true,
                         _ => {}
                     }
@@ -212,12 +243,27 @@ fn rewrite_rating(existing: &[u8], pick: PickState) -> Result<String, XmpError> 
                     writer.write_event(Event::Empty(out))?;
                 } else {
                     writer.write_event(Event::Start(out))?;
+                    in_first_description = 1;
                 }
                 done = true;
+            }
+            Event::Start(ref _e) if in_first_description > 0 => {
+                in_first_description += 1;
+                writer.write_event(event)?;
+            }
+            Event::End(ref _e) if in_first_description > 0 => {
+                in_first_description -= 1;
+                writer.write_event(event)?;
             }
             other => writer.write_event(other)?,
         }
         buf.clear();
+    }
+    if !done {
+        // A sidecar without rdf:Description (zero-byte, bare text, junk that
+        // parses): the mark would silently vanish (QE defect) — error out so
+        // the writer surfaces it.
+        return Err(XmpError::NoDescription);
     }
     Ok(String::from_utf8_lossy(&writer.into_inner()).into_owned())
 }
@@ -351,6 +397,97 @@ mod tests {
         .unwrap();
         assert_eq!(read_sidecar(&sc).unwrap().pick, PickState::Picked);
         std::fs::remove_dir_all(&dir).ok();
+    }
+
+    /// Regression (validator HIGH / QE D1): element-form ratings must be
+    /// replaced/removed, never left to contradict the attribute.
+    #[test]
+    fn element_form_rating_is_replaced_and_clearable() {
+        let dir = tmp();
+        let raw = dir.join("e.ARW");
+        let sc = sidecar_path(&raw);
+        std::fs::write(
+            &sc,
+            r#"<x:xmpmeta xmlns:x="adobe:ns:meta/"><rdf:RDF xmlns:rdf="http://www.w3.org/1999/02/22-rdf-syntax-ns#">
+ <rdf:Description rdf:about="" xmlns:xmp="http://ns.adobe.com/xap/1.0/" xmlns:dc="http://purl.org/dc/elements/1.1/">
+  <xmp:Rating>3</xmp:Rating>
+  <dc:title><rdf:Alt><rdf:li xml:lang="x-default">keep me</rdf:li></rdf:Alt></dc:title>
+ </rdf:Description>
+</rdf:RDF></x:xmpmeta>"#,
+        )
+        .unwrap();
+        write_pick(&raw, PickState::Rejected).unwrap();
+        let text = std::fs::read_to_string(&sc).unwrap();
+        assert!(!text.contains("<xmp:Rating>"), "old element must be gone");
+        assert!(text.contains("keep me"), "sibling elements preserved");
+        assert_eq!(read_sidecar(&sc).unwrap().pick, PickState::Rejected);
+        write_pick(&raw, PickState::Unmarked).unwrap();
+        let cleared = std::fs::read_to_string(&sc).unwrap();
+        assert!(!cleared.contains("Rating"), "clear must actually clear");
+        assert_eq!(read_sidecar(&sc).unwrap().pick, PickState::Unmarked);
+        std::fs::remove_dir_all(&dir).ok();
+    }
+
+    /// Regression (QE D4): the legacy xap: prefix is the same namespace.
+    #[test]
+    fn legacy_xap_prefix_is_read_and_replaced() {
+        let dir = tmp();
+        let raw = dir.join("f.ARW");
+        let sc = sidecar_path(&raw);
+        std::fs::write(
+            &sc,
+            r#"<x:xmpmeta xmlns:x="adobe:ns:meta/"><rdf:RDF xmlns:rdf="http://www.w3.org/1999/02/22-rdf-syntax-ns#">
+ <rdf:Description rdf:about="" xmlns:xap="http://ns.adobe.com/xap/1.0/" xap:Rating="2"/>
+</rdf:RDF></x:xmpmeta>"#,
+        )
+        .unwrap();
+        assert_eq!(read_sidecar(&sc).unwrap().pick, PickState::Picked);
+        write_pick(&raw, PickState::Rejected).unwrap();
+        let text = std::fs::read_to_string(&sc).unwrap();
+        assert!(!text.contains("xap:Rating"), "legacy attr replaced");
+        assert_eq!(read_sidecar(&sc).unwrap().pick, PickState::Rejected);
+        std::fs::remove_dir_all(&dir).ok();
+    }
+
+    /// Regression (QE D2/D3): junk that parses and description-less XML must
+    /// error, never be mangled or silently dropped.
+    #[test]
+    fn junk_and_descriptionless_sidecars_error_untouched() {
+        let dir = tmp();
+        for (name, bytes) in [
+            ("jpeg.ARW", &b"\xff\xd8\xff\xe0\x00\x10JFIF\x00"[..]),
+            ("empty.ARW", &b""[..]),
+            (
+                "nodesc.ARW",
+                &b"<x:xmpmeta xmlns:x=\"adobe:ns:meta/\"></x:xmpmeta>"[..],
+            ),
+        ] {
+            let raw = dir.join(name);
+            let sc = sidecar_path(&raw);
+            std::fs::write(&sc, bytes).unwrap();
+            assert!(write_pick(&raw, PickState::Picked).is_err(), "{name}");
+            assert_eq!(std::fs::read(&sc).unwrap(), bytes, "{name} clobbered");
+        }
+        std::fs::remove_dir_all(&dir).ok();
+    }
+
+    /// Golden files: fresh sidecars are byte-identical to checked-in
+    /// fixtures (spec acceptance criterion).
+    #[test]
+    fn fresh_sidecars_match_golden_fixtures() {
+        for (pick, golden) in [
+            (PickState::Picked, "picked.xmp"),
+            (PickState::Rejected, "rejected.xmp"),
+            (PickState::Unmarked, "unmarked.xmp"),
+        ] {
+            let expected = std::fs::read_to_string(
+                std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+                    .join("tests/golden")
+                    .join(golden),
+            )
+            .unwrap();
+            assert_eq!(new_sidecar(pick), expected, "golden drift: {golden}");
+        }
     }
 
     #[test]

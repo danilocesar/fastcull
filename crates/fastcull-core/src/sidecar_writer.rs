@@ -25,17 +25,29 @@ pub struct SidecarWriter {
     handle: Option<std::thread::JoinHandle<()>>,
 }
 
+/// A failed sidecar write, surfaced to the UI (a cull that silently does
+/// not persist would betray the user — gate finding).
+#[derive(Debug, Clone)]
+pub struct WriteFailure {
+    pub path: PathBuf,
+    pub reason: String,
+}
+
 impl SidecarWriter {
-    pub fn start() -> Self {
+    pub fn start() -> (Self, Receiver<WriteFailure>) {
         let (tx, rx) = std::sync::mpsc::channel();
+        let (err_tx, err_rx) = std::sync::mpsc::channel();
         let handle = std::thread::Builder::new()
             .name("sidecar-writer".into())
-            .spawn(move || writer_loop(rx))
+            .spawn(move || writer_loop(rx, err_tx))
             .expect("spawn sidecar writer");
-        Self {
-            tx: Some(tx),
-            handle: Some(handle),
-        }
+        (
+            Self {
+                tx: Some(tx),
+                handle: Some(handle),
+            },
+            err_rx,
+        )
     }
 
     /// Queue a pick for `raw_path`; the sidecar lands within the debounce
@@ -68,7 +80,7 @@ impl Drop for SidecarWriter {
     }
 }
 
-fn writer_loop(rx: Receiver<Msg>) {
+fn writer_loop(rx: Receiver<Msg>, err_tx: Sender<WriteFailure>) {
     // Latest pick per path + its write deadline; later marks supersede.
     let mut pending: HashMap<PathBuf, (PickState, Instant)> = HashMap::new();
     loop {
@@ -82,22 +94,26 @@ fn writer_loop(rx: Receiver<Msg>) {
                 pending.insert(path, (pick, Instant::now() + DEBOUNCE));
             }
             Ok(Msg::Flush(ack)) => {
-                drain(&mut pending, /*only_due=*/ false);
+                drain(&mut pending, /*only_due=*/ false, &err_tx);
                 ack.send(()).ok();
             }
             Err(RecvTimeoutError::Timeout) => {
-                drain(&mut pending, /*only_due=*/ true);
+                drain(&mut pending, /*only_due=*/ true, &err_tx);
             }
             Err(RecvTimeoutError::Disconnected) => {
                 // Shutdown: nothing may be lost.
-                drain(&mut pending, false);
+                drain(&mut pending, false, &err_tx);
                 return;
             }
         }
     }
 }
 
-fn drain(pending: &mut HashMap<PathBuf, (PickState, Instant)>, only_due: bool) {
+fn drain(
+    pending: &mut HashMap<PathBuf, (PickState, Instant)>,
+    only_due: bool,
+    err_tx: &Sender<WriteFailure>,
+) {
     let now = Instant::now();
     let due: Vec<PathBuf> = pending
         .iter()
@@ -107,9 +123,15 @@ fn drain(pending: &mut HashMap<PathBuf, (PickState, Instant)>, only_due: bool) {
     for path in due {
         if let Some((pick, _)) = pending.remove(&path) {
             if let Err(e) = write_pick(&path, pick) {
-                // A sidecar failure must never take the writer down; the
-                // mark stays visible in-session and the error is logged.
+                // A sidecar failure must never take the writer down; it is
+                // surfaced to the UI (and logged for headless callers).
                 eprintln!("fastcull: sidecar write failed for {}: {e}", path.display());
+                err_tx
+                    .send(WriteFailure {
+                        path: path.clone(),
+                        reason: e.to_string(),
+                    })
+                    .ok();
             }
         }
     }
@@ -135,7 +157,7 @@ mod tests {
     fn flush_barrier_makes_marks_durable_immediately() {
         let dir = tmp();
         let raw = dir.join("a.ARW");
-        let writer = SidecarWriter::start();
+        let (writer, _errs) = SidecarWriter::start();
         writer.mark(raw.clone(), PickState::Picked);
         writer.flush(); // no debounce wait
         assert_eq!(
@@ -149,7 +171,7 @@ mod tests {
     fn rapid_remarks_coalesce_to_the_last_value() {
         let dir = tmp();
         let raw = dir.join("b.ARW");
-        let writer = SidecarWriter::start();
+        let (writer, _errs) = SidecarWriter::start();
         for pick in [
             PickState::Picked,
             PickState::Rejected,
@@ -171,7 +193,7 @@ mod tests {
         let dir = tmp();
         let raws: Vec<PathBuf> = (0..20).map(|i| dir.join(format!("c{i}.ARW"))).collect();
         {
-            let writer = SidecarWriter::start();
+            let (writer, _errs) = SidecarWriter::start();
             for raw in &raws {
                 writer.mark(raw.clone(), PickState::Picked);
             }
@@ -191,7 +213,7 @@ mod tests {
     fn debounce_writes_without_flush_within_window() {
         let dir = tmp();
         let raw = dir.join("d.ARW");
-        let writer = SidecarWriter::start();
+        let (writer, _errs) = SidecarWriter::start();
         writer.mark(raw.clone(), PickState::Picked);
         let deadline = Instant::now() + Duration::from_secs(10);
         loop {
@@ -203,5 +225,27 @@ mod tests {
         }
         drop(writer);
         std::fs::remove_dir_all(&dir).ok();
+    }
+}
+
+#[cfg(test)]
+mod error_tests {
+    use super::*;
+    use std::path::PathBuf;
+
+    /// A write failure must reach the error channel (gate finding: culling
+    /// a read-only card looked fully successful).
+    #[test]
+    fn failed_writes_are_surfaced() {
+        let (writer, errs) = SidecarWriter::start();
+        writer.mark(
+            PathBuf::from("/proc/definitely/not/writable/x.ARW"),
+            PickState::Picked,
+        );
+        writer.flush();
+        let failure = errs
+            .recv_timeout(std::time::Duration::from_secs(5))
+            .expect("failure must be surfaced");
+        assert!(failure.path.to_string_lossy().contains("x.ARW"));
     }
 }

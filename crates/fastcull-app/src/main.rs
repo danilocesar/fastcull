@@ -43,6 +43,8 @@ struct AppState {
     /// events must not overwrite fresh user intent.
     touched: HashSet<usize>,
     writer: Option<fastcull_core::sidecar_writer::SidecarWriter>,
+    /// Failed sidecar writes this session (surfaced in the status bar).
+    sidecar_failures: usize,
     zoom: usize,
     cursor: usize,
     /// Encoded thumbs by index (30–60 KB each); decoded lazily per window,
@@ -166,7 +168,8 @@ fn main() {
         paths: paths_init,
         picks: vec![fastcull_core::catalog::PickState::Unmarked; count_init],
         touched: HashSet::new(),
-        writer: (!synthetic).then(fastcull_core::sidecar_writer::SidecarWriter::start),
+        writer: None, // wired below with its error channel
+        sidecar_failures: 0,
         zoom: if start_at_loupe {
             grid::ZOOM_COLUMNS.len() - 1
         } else {
@@ -188,6 +191,12 @@ fn main() {
         va: fastcull_core::viewassets::ViewAssets::default(),
     }));
 
+    let mut sidecar_errs = None;
+    if !synthetic {
+        let (writer, errs) = fastcull_core::sidecar_writer::SidecarWriter::start();
+        state.borrow_mut().writer = Some(writer);
+        sidecar_errs = Some(errs);
+    }
     // Start the engines for real folders; events polled on a UI timer.
     let event_rx = jobs.map(|jobs| {
         let paths: Vec<std::path::PathBuf> = jobs.iter().map(|j| j.path.clone()).collect();
@@ -272,6 +281,17 @@ fn main() {
                         }
                     }
                     let at_loupe = st.zoom == grid::ZOOM_COLUMNS.len() - 1;
+                    if let Some(errs) = &sidecar_errs {
+                        for failure in errs.try_iter() {
+                            st.sidecar_failures += 1;
+                            eprintln!(
+                                "fastcull: sidecar write failed for {}: {}",
+                                failure.path.display(),
+                                failure.reason
+                            );
+                            dirty = true;
+                        }
+                    }
                     for event in loupe_rx.try_iter() {
                         match event {
                             fastcull_core::loupe::LoupeEvent::Ready { index, image } => {
@@ -358,6 +378,10 @@ fn main() {
         );
     }
     window.run().expect("running event loop");
+    // Deterministic flush-on-close (gate finding: relying on the Rc/Drop
+    // chain could lose marks made in the final debounce window).
+    let writer = state.borrow_mut().writer.take();
+    drop(writer); // drains every pending sidecar write, then joins
 }
 
 /// Snapshot writer: always JPEG q92 regardless of the output extension
@@ -683,7 +707,7 @@ fn refresh(win: &MainWindow, state: &Rc<RefCell<AppState>>) {
         .count();
     win.set_status(
         format!(
-            "{} ({}/{}) — {} images, {} thumbs loaded — ★{} ✕{} — {} column{}",
+            "{} ({}/{}) — {} images, {} thumbs loaded — ★{} ✕{}{} — {} column{}",
             st.labels.get(cursor).cloned().unwrap_or_default(),
             cursor + 1,
             count.max(1),
@@ -691,6 +715,11 @@ fn refresh(win: &MainWindow, state: &Rc<RefCell<AppState>>) {
             st.thumbs_done.min(count),
             picked_n,
             rejected_n,
+            if st.sidecar_failures > 0 {
+                format!(" — ⚠{} sidecar write failures", st.sidecar_failures)
+            } else {
+                String::new()
+            },
             layout.columns,
             if layout.columns == 1 { "" } else { "s" }
         )

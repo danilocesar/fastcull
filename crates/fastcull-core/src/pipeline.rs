@@ -285,11 +285,14 @@ fn process_job(shared: &Shared, cache: &mut Option<PreviewCache>, index: usize) 
     // tool may have changed it between sessions).
     let sc = crate::xmp::sidecar_path(&spec.path);
     if sc.exists() {
-        if let Ok(state) = crate::xmp::read_sidecar(&sc) {
-            send(SessionEvent::Sidecar {
+        match crate::xmp::read_sidecar(&sc) {
+            Ok(state) => send(SessionEvent::Sidecar {
                 index,
                 pick: state.pick,
-            });
+            }),
+            // A malformed sidecar must not vanish silently: the previous
+            // cull is gone from view and the user deserves a trace.
+            Err(e) => eprintln!("fastcull: unreadable sidecar {}: {e}", sc.display()),
         }
     }
 

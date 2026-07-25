@@ -43,10 +43,19 @@ Owned by the dedicated sidecar-writer thread (`01-architecture.md`): mutations a
 debounced ≤1 s per image, flushed on session close and on copy-picks start (a copy
 plan must never race a pending sidecar write).
 
+## M3/M5 scope split (recorded 2026-07-25, pending the user's OK for the M5 half)
+
+M3 ships pick/reject only: `xmp:Rating` write (attribute form; legacy element
+and `xap:` forms are removed/replaced on rewrite), sidecar-at-open, writer
+thread, darktable round-trip asserting RATINGS. Keyword/IPTC WRITING — and
+with it the keywords half of the round-trip assertion plus the property-based
+Unicode round-trip tests — lands in M5 where the IPTC editor exists.
+Write failures are surfaced to the UI (status-bar warning + stderr).
+
 ## Acceptance criteria (tests)
 
-- [ ] Golden-file tests: each pick state + representative IPTC set serializes
-      byte-identically to checked-in `.xmp` fixtures.
+- [x] Golden-file tests: each pick state serializes byte-identically to
+      checked-in fixtures (`tests/golden/*.xmp`); the IPTC set joins in M5.
 - [ ] Round-trip: write → read yields identical state (property-based test over
       arbitrary IPTC strings incl. Unicode, quotes, `&`, CJK, emoji).
 - [ ] Preservation: a fixture sidecar containing foreign nodes (fake
@@ -56,5 +65,5 @@ plan must never race a pending sidecar write).
       `--configdir`/`--library` in a temp dir (NEVER the user's real config)
       imports an A1 file + our sidecar; exported/queried state shows our rating and
       keywords. Skipped gracefully when darktable-cli is absent.
-- [ ] Atomicity: kill -9 during a write storm leaves only valid XML files
-      (crash-test harness: child process writes in a loop, parent kills it).
+- [x] Atomicity: kill -9 during a write storm leaves only valid XML files
+      (`tests/xmp_crash.rs`: child storms writes, parent SIGKILLs 15 rounds).

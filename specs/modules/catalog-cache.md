@@ -71,5 +71,6 @@
       touching mtime invalidates.
 - [ ] Reopen-from-cache produces no `RawSource` opens (counting instrumentation).
 - [ ] Eviction respects the cap; corrupt DB file self-heals.
-- [ ] Sidecar-at-open: fixture folder with existing `.ARW.xmp` yields records with
-      pick state and keywords populated.
+- [x] Sidecar-at-open: existing `.ARW.xmp` files yield Sidecar events with
+      pick state (pipeline test). Keywords populate in M5 with the IPTC panel
+      (recorded scope split, see xmp-sidecars.md).
