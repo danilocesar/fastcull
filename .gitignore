@@ -8,3 +8,4 @@
 # Local tooling
 /.direnv/
 *.swp
+.claude/
