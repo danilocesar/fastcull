@@ -282,16 +282,36 @@ fn main() {
 
     refresh(&window, &state);
 
-    // Screenshot mode: give the pipeline ~1.5 s to deliver thumbs, then
-    // snapshot the window and quit.
+    // Screenshot mode: wait for content readiness, then snapshot and quit.
+    // Deterministic (validator finding: a fixed delay captured the fit view
+    // as the "1:1" frame on slow/debug runs): thumbs settle >=1.5 s, and in
+    // --start-11 mode the cursor's FULL-RES texture must be adopted before
+    // the shutter fires (hard cap 15 s so a hang still produces a frame).
     let shot_timer = slint::Timer::default();
     if let Some(out) = screenshot {
         let win = window.as_weak();
+        let state_rc = Rc::clone(&state);
+        let started = std::time::Instant::now();
         shot_timer.start(
-            slint::TimerMode::SingleShot,
-            std::time::Duration::from_millis(2500),
+            slint::TimerMode::Repeated,
+            std::time::Duration::from_millis(250),
             move || {
                 let Some(win) = win.upgrade() else { return };
+                let elapsed = started.elapsed();
+                let ready = {
+                    let st = state_rc.borrow();
+                    let one2one_ready = !st.one2one
+                        || st.fullres.iter().any(|(i, img)| {
+                            *i == st.cursor
+                                && img.size().width.max(img.size().height)
+                                    > fastcull_core::loupe::MID_RUNG_MAX_LONG
+                        });
+                    elapsed >= std::time::Duration::from_millis(1500)
+                        && (one2one_ready || elapsed > std::time::Duration::from_secs(15))
+                };
+                if !ready {
+                    return;
+                }
                 match win.window().take_snapshot() {
                     Ok(buf) => {
                         let ok = write_snapshot_jpeg(&out, &buf);

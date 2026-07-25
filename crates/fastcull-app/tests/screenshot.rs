@@ -133,10 +133,37 @@ fn one_to_one_screenshot_shows_pixels() {
         return;
     }
     let _s = serial();
+    let fit = out_dir().join("fit-for-diff.jpg");
+    shoot(&[raws_dir().to_str().unwrap(), "--start-loupe"], &fit);
     let out = out_dir().join("loupe-11.jpg");
     shoot(&[raws_dir().to_str().unwrap(), "--start-11"], &out);
     let var = region_variance(&out, 0.5, 0.5);
     assert!(var > 50.0, "1:1 overlay shows no photo (variance {var:.1})");
+    // 1:1 must actually differ from the fit view — a byte-identical frame
+    // means the shutter fired before full-res was adopted (validator
+    // finding: the old fixed delay made this test pass vacuously).
+    let diff = mean_abs_diff(&fit, &out);
+    assert!(
+        diff > 2.0,
+        "1:1 frame is (near-)identical to fit (mean abs diff {diff:.2}) — captured the wrong state"
+    );
+}
+
+/// Mean absolute per-channel difference between two same-sized frames.
+fn mean_abs_diff(a: &Path, b: &Path) -> f64 {
+    let decode = |p: &Path| {
+        let bytes = std::fs::read(p).expect("frame");
+        let mut dec = zune_jpeg::JpegDecoder::new(&bytes);
+        dec.decode().expect("decode")
+    };
+    let (pa, pb) = (decode(a), decode(b));
+    assert_eq!(pa.len(), pb.len(), "frame size mismatch");
+    let sum: u64 = pa
+        .iter()
+        .zip(pb.iter())
+        .map(|(x, y)| (*x as i16 - *y as i16).unsigned_abs() as u64)
+        .sum();
+    sum as f64 / pa.len() as f64
 }
 
 #[test]
