@@ -30,10 +30,14 @@ darktable-cli round-trip.
 
 ## M4 — Loupe *(order swapped with M3 by user decision 2026-07-25: full-res
 zoom quality first, culling marks second — implemented 2026-07-25)*
+**M4 closed 2026-07-25**: loupe quality + walk behavior confirmed by the user
+on real shoot folders; v0.1.0 tagged. Open M2/M4 stragglers tracked: Slint
+screenshot smoke tests (next), Ctrl+scroll decision.
 Fit + 1:1 zoom, pan, ±2 prefetch via the dedicated loupe engine (single
 full-res asset, see raw-pipeline.md recorded deviation). Auto-advance-on-mark
 moves to M3 with the marks themselves. DoD: **tag a runnable 0.x release**
-once the user confirms loupe quality (the earliest genuinely usable build).
+once the user confirms loupe quality (the earliest genuinely usable build) —
+done: v0.1.0.
 
 *(M5–M7 reordered after the persona review + user decisions: filter before IPTC
 because the IPTC pass starts with "filter to picked, select all"; copy-picks
