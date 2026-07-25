@@ -51,5 +51,9 @@ jobs:
       - name: Tests
         run: cargo test --workspace
 
-      - name: Performance budgets (release)
+      # Advisory only (user decision 2026-07-25): shared virtualized runners
+      # cannot gate wall-clock budgets; enforcement happens on reference
+      # hardware in every gate round (specs/01-architecture.md).
+      - name: Performance budgets (release, advisory)
+        continue-on-error: true
         run: cargo test --release -p fastcull-core --test perf_budgets

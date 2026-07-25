@@ -9,7 +9,8 @@ decoding RAW sensor data on the hot path.
 
 - In: file paths from `catalog`; priority hints from the UI (visible range, loupe pos).
 - Out: per image, up to three assets delivered as `SessionEvent`s:
-  `Thumb` (320 px, grid), `FitPreview` (screen-sized), `FullRes` (1:1 pixels).
+  `Thumb` (320 px, grid), `Mid` (1616-class, large grid cells + loupe fit),
+  `FullRes` (1:1 pixels) — climbed per the 25% ladder rule below.
 
 ## Extraction strategy (per file)
 
@@ -41,6 +42,13 @@ decoding RAW sensor data on the hot path.
      full-res decodes must never queue behind a background thumbnail sweep.
      turbojpeg DCT scaling is a recorded FUTURE optimization only (saves
      ~35–45% on the cook; the ladder already hides that latency).
+     The ladder applies to GRID CELLS too (user bug 2026-07-25): any cell
+     wider than 320 × 1.25 physical px is served by the mid rung via
+     `LoupeEngine::want(range, cell_width)`; UI-side bookkeeping lives in
+     core (`viewassets.rs::ViewAssets`) so it is testable — `ensure()` also
+     adopts engine-cached images that emit no event (the pruned-and-
+     revisited-cell bug). Scrolled-past want-requests are CULLED on every
+     want() call so visible cells never starve behind stale backlog.
 3. Fallback chain when a source is missing (non-A1 cameras): full-res JPEG → mid
    preview upscaled → half-size RAW decode via rawler (background priority only,
    with a "rendered from RAW" badge event) → `Failed(reason)`.
@@ -57,9 +65,14 @@ decoding RAW sensor data on the hot path.
 
 - Thumbs: unbounded (≈200 KB each; 5,000 images ≈ 1 GB worst case — acceptable; the
   SQLite cache lets us evict and re-load cheaply if this ever pinches).
-- FullRes decodes: LRU capped at 2 GiB (configurable). FitPreviews count toward it.
+- FullRes decodes: LRU capped at 2 GiB (configurable). mid-rung textures count toward it.
 
 ## Acceptance criteria (tests)
+
+- [ ] **MANDATORY zoom-quality gate (user mandate 2026-07-25)**:
+      `tests/zoom_walk.rs` (the user's 2-column forward-walk repro + the
+      fast-scroll starvation variant) MUST pass — in release mode, against
+      the real A1 files — before ANY zoom-quality problem is declared fixed.
 
 - [ ] For each of the 3 A1 test files: grid thumb is produced from the 1616×1080
       preview (assert source dimensions), FullRes is 8640×5760.

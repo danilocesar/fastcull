@@ -23,7 +23,16 @@ fn testdata(name: &str) -> PathBuf {
     path
 }
 
-/// A 20-image folder built from symlinks to the three real A1 files.
+/// A folder built from symlinks to the three real A1 files (copies on
+/// Windows — kept smaller there to bound CI disk/time).
+fn walk_count() -> usize {
+    if cfg!(windows) {
+        8
+    } else {
+        20
+    }
+}
+
 fn folder_of_20() -> (PathBuf, Vec<PathBuf>) {
     let dir = std::env::temp_dir().join(format!(
         "fastcull-zoomwalk-{}-{:?}",
@@ -37,7 +46,7 @@ fn folder_of_20() -> (PathBuf, Vec<PathBuf>) {
         testdata("A1_full_lossless_compressed.ARW"),
         testdata("A1_full_uncompressed.ARW"),
     ];
-    let paths: Vec<PathBuf> = (0..20)
+    let paths: Vec<PathBuf> = (0..walk_count())
         .map(|i| {
             let p = dir.join(format!("DSC{i:05}.ARW"));
             #[cfg(unix)]
@@ -104,6 +113,54 @@ fn walking_at_two_columns_never_leaves_an_image_below_its_rung() {
     assert!(
         min_needed <= 1616,
         "mid rung must be able to serve the cells"
+    );
+    drop(engine);
+    std::fs::remove_dir_all(&dir).ok();
+}
+
+/// Fast continuous scroll (validator finding): sweeping the cursor without
+/// waiting must NOT leave the final window starved behind a stale backlog
+/// of scrolled-past requests — want() culls them. The decode count proves
+/// culling: without it every swept cell gets cooked (~walk_count decodes).
+#[test]
+fn fast_scroll_backlog_does_not_starve_final_window() {
+    let (dir, paths) = folder_of_20();
+    let count = paths.len();
+    let (engine, rx) = LoupeEngine::start(paths, DEFAULT_BUDGET_BYTES);
+    let mut va = ViewAssets::default();
+    let cell_phys: u32 = 940;
+
+    // Sweep like a fast scroll: no settling between steps.
+    for cursor in 0..count {
+        let visible = cursor.saturating_sub(1)..(cursor + 3).min(count);
+        va.prune(&visible);
+        for (index, image) in va.ensure(visible.clone(), cell_phys, &engine) {
+            va.note_held(index, image.width.max(image.height));
+        }
+    }
+
+    // The final window must settle promptly and cheaply.
+    let final_visible = count.saturating_sub(3)..count;
+    let mut ready_events = 0usize;
+    let deadline = Instant::now() + Duration::from_secs(10);
+    loop {
+        for (index, image) in va.ensure(final_visible.clone(), cell_phys, &engine) {
+            va.note_held(index, image.width.max(image.height));
+        }
+        while let Ok(event) = rx.recv_timeout(Duration::from_millis(20)) {
+            if let LoupeEvent::Ready { index, image } = event {
+                ready_events += 1;
+                va.note_held(index, image.width.max(image.height));
+            }
+        }
+        if final_visible.clone().all(|i| va.satisfied(i, cell_phys)) {
+            break;
+        }
+        assert!(Instant::now() < deadline, "final window starved by backlog");
+    }
+    assert!(
+        ready_events <= 10,
+        "stale backlog was decoded instead of culled: {ready_events} Ready events"
     );
     drop(engine);
     std::fs::remove_dir_all(&dir).ok();

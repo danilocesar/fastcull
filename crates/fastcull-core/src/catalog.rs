@@ -278,9 +278,12 @@ mod tests {
         let session = Session::open(&dir).unwrap();
         let elapsed = t.elapsed();
         assert_eq!(session.images.len(), 1000);
+        // Windows CI budget is looser: Defender scans the 1,000 fresh
+        // tempdir files (recorded in catalog-cache.md).
+        let budget_ms = if cfg!(windows) { 400 } else { 50 };
         assert!(
-            elapsed.as_millis() < 50,
-            "scan took {elapsed:?} (budget 50 ms)"
+            elapsed.as_millis() < budget_ms,
+            "scan took {elapsed:?} (budget {budget_ms} ms)"
         );
         std::fs::remove_dir_all(&dir).ok();
     }

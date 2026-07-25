@@ -26,6 +26,10 @@ pub const DEFAULT_BUDGET_BYTES: usize = 2 * 1024 * 1024 * 1024;
 /// Asset ladder rule (user decision): a loaded asset serves any display up
 /// to 25% larger than itself; beyond that the next rung is cooked.
 pub const UPSCALE_THRESHOLD: f32 = 1.25;
+/// Assets at or below this long edge are "mid rung" class (grid-cell size).
+pub const MID_RUNG_MAX_LONG: u32 = 2048;
+/// Downscale target when adopting a full-res image for a grid cell.
+pub const MID_RUNG_TARGET: u32 = 1616;
 
 /// A decoded full-resolution image, shared with the UI without copying.
 #[derive(Debug, Clone)]
@@ -47,7 +51,8 @@ struct LoupeState {
     /// from the back); one entry per index — the LATEST target wins (it
     /// reflects current intent; an escalation dropped while in flight
     /// self-heals via the Ready→refresh loop).
-    queue: Vec<(usize, u32)>,
+    /// Third field: true = focused/prefetch origin (survives want-culling).
+    queue: Vec<(usize, u32, bool)>,
     /// Best rung a file can ever provide (long edge), learned when its
     /// ladder tops out: an asset at this size is sufficient for ANY display
     /// — without this memo, 1:1 (u32::MAX target) re-parsed files forever
@@ -134,8 +139,8 @@ impl LoupeEngine {
                     let e = state.deferred.entry(i).or_insert(0);
                     *e = (*e).max(display_long);
                 } else {
-                    state.queue.retain(|(q, _)| *q != i);
-                    state.queue.push((i, display_long));
+                    state.queue.retain(|(q, _, _)| *q != i);
+                    state.queue.push((i, display_long, true));
                 }
             }
         }
@@ -158,6 +163,10 @@ impl LoupeEngine {
         let count = self.shared.paths.len();
         let stamp = self.shared.stamp.fetch_add(1, Ordering::Relaxed) + 1;
         let mut state = lock(&self.shared);
+        // This call defines the CURRENT visible set: cull all stale grid
+        // wants so scrolled-past cells never starve on-screen ones
+        // (validator finding — the backlog ran before visible work).
+        state.queue.retain(|(_, _, focus_origin)| *focus_origin);
         let mut queued_any = false;
         for i in indexes {
             if i >= count {
@@ -169,9 +178,11 @@ impl LoupeEngine {
                     let e = state.deferred.entry(i).or_insert(0);
                     *e = (*e).max(display_long);
                 } else {
-                    state.queue.retain(|(q, _)| *q != i);
+                    if state.queue.iter().any(|(q, _, _)| *q == i) {
+                        continue; // already scheduled by focus/prefetch
+                    }
                     // Front of the vec = popped last: focused work stays first.
-                    state.queue.insert(0, (i, display_long));
+                    state.queue.insert(0, (i, display_long, false));
                     queued_any = true;
                 }
             }
@@ -228,7 +239,7 @@ fn worker(shared: &Shared) {
                 if shared.shutdown.load(Ordering::SeqCst) {
                     return;
                 }
-                if let Some((index, display_long)) = state.queue.pop() {
+                if let Some((index, display_long, _)) = state.queue.pop() {
                     if let Some((img, _)) = state.cache.get(&index) {
                         let best = state.best_long.get(&index).copied();
                         if serves(img, display_long)
@@ -266,20 +277,25 @@ fn worker(shared: &Shared) {
 
         let mut state = lock(shared);
         state.in_flight.retain(|i| *i != index);
-        // Re-queue any upgrade that arrived while this flight was airborne.
+        // Record failure BEFORE draining deferred upgrades: the old order
+        // re-queued a doomed index and emitted a duplicate Failed
+        // (validator + QE finding, 300/300 repro).
+        let failure = outcome.err();
+        if failure.is_some() {
+            state.failed.insert(index);
+        }
         if let Some(target) = state.deferred.remove(&index) {
             let stamp = shared.stamp.load(Ordering::Relaxed);
-            if !sufficient_cached(&mut state, index, target, stamp)
-                && !state.failed.contains(&index)
+            if !state.failed.contains(&index)
+                && !sufficient_cached(&mut state, index, target, stamp)
             {
-                state.queue.retain(|(q, _)| *q != index);
-                state.queue.push((index, target));
+                state.queue.retain(|(q, _, _)| *q != index);
+                state.queue.push((index, target, true));
                 shared.wakeup.notify_all();
             }
         }
-        if let Err(reason) = outcome {
-            state.failed.insert(index);
-            drop(state);
+        drop(state);
+        if let Some(reason) = failure {
             shared
                 .events
                 .send(LoupeEvent::Failed { index, reason })

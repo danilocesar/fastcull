@@ -56,8 +56,10 @@ copy picks
 
 Measured baselines on the 32-thread reference machine; CI thresholds set ~2× looser
 to absorb runner variance. Enforcement: `crates/fastcull-core/tests/perf_budgets.rs`
-(release-mode tests, dedicated CI step — skipped in debug builds where decode
-timing is meaningless). Numbers for humans: criterion benches in
+(release-mode tests) on REFERENCE HARDWARE — they run in every local gate
+round. The CI step is advisory-only (`continue-on-error`, user decision
+2026-07-25): shared virtualized runners cannot meaningfully gate wall-clock
+budgets. Skipped in debug builds where decode timing is meaningless. Numbers for humans: criterion benches in
 `crates/fastcull-core/benches/hot_path.rs` (`cargo bench -p fastcull-core`).
 
 | Operation | Baseline | CI threshold |

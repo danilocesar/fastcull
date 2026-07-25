@@ -34,6 +34,10 @@ Recorded deviations/decisions (M2):
   stall on a page jump). `slint::Image` is not `Send`, so some UI-side
   conversion is unavoidable; moving the JPEG decode itself off-thread is an
   M4 follow-up together with the asset LRU.
+- Grid cells above 320×1.25 physical px display the mid rung (raw-pipeline.md
+  ladder); full-res images adopted for grid cells are downscaled to mid size
+  on the UI thread, bounded to 2 adoptions per refresh with follow-up ticks
+  (same budget philosophy as thumb decodes above).
 - Ctrl+scroll zoom is deferred: Slint's Flickable consumes wheel events and
   an overlay TouchArea would steal the drag/click gestures. Keyboard `+`/`-`
   covers M2; revisit during M4 polish (needs user OK to defer past v1 if it

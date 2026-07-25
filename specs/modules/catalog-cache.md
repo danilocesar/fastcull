@@ -60,7 +60,8 @@
 
 ## Acceptance criteria (tests)
 
-- [ ] Scan of a 1,000-entry tempdir returns in < 50 ms with all placeholders.
+- [ ] Scan of a 1,000-entry tempdir returns in < 50 ms with all placeholders
+      (< 400 ms on Windows CI — Defender scans fresh tempdir files; recorded).
 - [ ] Cache hit round-trip: store → lookup returns identical thumb bytes + EXIF;
       touching mtime invalidates.
 - [ ] Reopen-from-cache produces no `RawSource` opens (counting instrumentation).

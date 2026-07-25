@@ -25,6 +25,14 @@ const MARGIN_ROWS: usize = 1;
 /// rule recorded in ui-grid.md — slint::Image itself is not Send).
 const DECODES_PER_REFRESH: usize = 32;
 
+/// Full-res→mid adoptions per refresh (~35 ms each): bounds the stall when
+/// leaving 1:1 after a burst walk (validator finding); leftovers follow up.
+const ADOPTS_PER_REFRESH: usize = 2;
+
+/// Belt-and-braces cap on mid textures (~5 MB each) beyond the prune-to-
+/// visible-window bound (recorded decision: 4K + 6 columns worst case).
+const MIDS_CAP: usize = 64;
+
 struct AppState {
     labels: Vec<String>,
     zoom: usize,
@@ -197,11 +205,13 @@ fn main() {
                         match event {
                             fastcull_core::loupe::LoupeEvent::Ready { index, image } => {
                                 let long = image.width.max(image.height);
-                                if long <= 2048 {
+                                if long <= fastcull_core::loupe::MID_RUNG_MAX_LONG {
                                     // Mid rung (~5 MB copy): grid-cell quality
                                     // for intermediate zooms; cheap, always keep.
-                                    st.mids.insert(index, fullres_texture(&image));
-                                    st.va.note_held(index, long);
+                                    if st.mids.len() < MIDS_CAP || st.mids.contains_key(&index) {
+                                        st.mids.insert(index, fullres_texture(&image));
+                                        st.va.note_held(index, long);
+                                    }
                                 } else if at_loupe {
                                     // Full rung: 150 MB copy only while the
                                     // loupe can use it; core LRU keeps pixels.
@@ -389,10 +399,24 @@ fn refresh(win: &MainWindow, state: &Rc<RefCell<AppState>>) {
         if let Some(loupe) = &stx.loupe {
             // ensure() also returns cached images no event will announce
             // (the zoom-walk bug: pruned-and-revisited cells stayed thumbs).
-            for (index, image) in stx.va.ensure(range.clone(), cell_phys as u32, loupe) {
+            let adopts = stx.va.ensure(range.clone(), cell_phys as u32, loupe);
+            let leftover = adopts.len() > ADOPTS_PER_REFRESH;
+            for (index, image) in adopts.into_iter().take(ADOPTS_PER_REFRESH) {
+                if stx.mids.len() >= MIDS_CAP && !stx.mids.contains_key(&index) {
+                    break;
+                }
                 let (held_long, texture) = adopt_texture(&image);
                 stx.va.note_held(index, held_long);
                 stx.mids.insert(index, texture);
+            }
+            if leftover {
+                let win_weak = win.as_weak();
+                let state_rc = Rc::clone(state);
+                slint::Timer::single_shot(std::time::Duration::from_millis(16), move || {
+                    if let Some(win) = win_weak.upgrade() {
+                        refresh(&win, &state_rc);
+                    }
+                });
             }
         }
     }
@@ -511,25 +535,28 @@ fn insert_fullres(st: &mut AppState, index: usize, texture: slint::Image) {
 /// visited at 1:1 and then viewed at an intermediate zoom) so the mids layer
 /// stays ~5 MB per texture.
 fn adopt_texture(image: &fastcull_core::loupe::FullImage) -> (u32, slint::Image) {
+    use fastcull_core::loupe::{MID_RUNG_MAX_LONG, MID_RUNG_TARGET};
     let long = image.width.max(image.height);
-    if long <= 2048 {
+    if long <= MID_RUNG_MAX_LONG {
         return (long, fullres_texture(image));
     }
+    let t = u64::from(MID_RUNG_TARGET);
     let (dst_w, dst_h) = if image.width >= image.height {
         (
-            1616u32,
-            (image.height as u64 * 1616 / image.width as u64).max(1) as u32,
+            MID_RUNG_TARGET,
+            (u64::from(image.height) * t / u64::from(image.width)).max(1) as u32,
         )
     } else {
         (
-            (image.width as u64 * 1616 / image.height as u64).max(1) as u32,
-            1616u32,
+            (u64::from(image.width) * t / u64::from(image.height)).max(1) as u32,
+            MID_RUNG_TARGET,
         )
     };
-    let src = fast_image_resize::images::Image::from_vec_u8(
+    // Borrowed source: no 150 MB clone of the full-res pixels (validator).
+    let src = fast_image_resize::images::ImageRef::new(
         image.width,
         image.height,
-        image.rgb.as_ref().clone(),
+        image.rgb.as_ref(),
         fast_image_resize::PixelType::U8x3,
     )
     .expect("valid source image");
