@@ -29,15 +29,18 @@ decoding RAW sensor data on the hot path.
      the EXIF/metadata and RAW-decode-fallback dependency. BigTIFF (magic 43)
      containers are rejected as not-TIFF. Do NOT upstream anything without
      explicit user approval.
-   - **FitPreview — folded into FullRes (M4 recorded deviation, pending
-     the user's OK as an acceptance-criterion change)**: the loupe uses ONE
-     asset — the fully decoded full-res RGB — GPU-scaled for fit and native
-     for 1:1. zune-jpeg (pure Rust) decodes it in ~140 ms, inside the 350 ms
-     budget; turbojpeg DCT scaling is not used (system-lib dependency, and
-     the second decode saved no user-visible latency). Loupe assets are
-     served by a dedicated 2-worker engine (`loupe.rs`) with its own event
-     channel rather than through the thumbnail pipeline's queue — full-res
-     decodes must never queue behind a background thumbnail sweep.
+   - **Loupe asset ladder (user decision 2026-07-25, replaces the separate
+     DCT FitPreview)**: display the best already-loaded asset immediately,
+     and cook a higher-resolution one ONLY when the display size exceeds the
+     loaded asset by more than 25% (the `UPSCALE_THRESHOLD = 1.25` rule).
+     Rungs for the A1: 320 px thumb → 1616×1080 mid preview (~5 ms decode —
+     covers fit view on ≲1.9k-wide viewports instantly) → 8640×5760 full
+     (~140 ms, cooked in background for 1:1 and large displays; the shown
+     image swaps in place when ready, never blocks). Loupe assets are served
+     by a dedicated 2-worker engine (`loupe.rs`) with its own event channel —
+     full-res decodes must never queue behind a background thumbnail sweep.
+     turbojpeg DCT scaling is a recorded FUTURE optimization only (saves
+     ~35–45% on the cook; the ladder already hides that latency).
 3. Fallback chain when a source is missing (non-A1 cameras): full-res JPEG → mid
    preview upscaled → half-size RAW decode via rawler (background priority only,
    with a "rendered from RAW" badge event) → `Failed(reason)`.

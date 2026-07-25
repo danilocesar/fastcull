@@ -350,7 +350,14 @@ fn refresh(win: &MainWindow, state: &Rc<RefCell<AppState>>) {
             // path for textures evicted UI-side (validator finding — going
             // backwards previously degraded to the thumb forever).
             let focus_index = st.cursor;
-            let hit = loupe.focus(focus_index);
+            // Ladder target: fit view needs the viewport in physical pixels;
+            // 1:1 always demands the top rung.
+            let display_long = if st.one2one {
+                u32::MAX
+            } else {
+                (win.get_grid_width() * win.window().scale_factor()) as u32
+            };
+            let hit = loupe.focus(focus_index, display_long);
             let missing = !st.fullres.iter().any(|(i, _)| *i == focus_index);
             if let (Some(image), true) = (hit, missing) {
                 let texture = fullres_texture(&image);
