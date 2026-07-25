@@ -44,8 +44,9 @@ struct AppState {
     cells: Rc<VecModel<CellData>>,
     /// Full-res loupe assets (real sessions only).
     loupe: Option<fastcull_core::loupe::LoupeEngine>,
-    /// UI-side textures for the focused image ± neighbors; tiny keyed cache,
-    /// oldest dropped beyond 3 (the core LRU holds the pixel data).
+    /// UI-side textures for the focused image ± neighbors: sized to the
+    /// prefetch ring (5) and cursor-protected on eviction (see
+    /// insert_fullres); the core LRU holds the pixel data for rebuilds.
     fullres: Vec<(usize, slint::Image)>,
     one2one: bool,
     /// Grid zoom to return to when leaving the loupe with G/Esc.
@@ -332,9 +333,18 @@ fn refresh(win: &MainWindow, state: &Rc<RefCell<AppState>>) {
     // what the user is looking at.
     let at_loupe = layout.columns == 1;
     if at_loupe && count > 0 {
-        let center_row =
-            ((scroll_y + viewport_h * 0.5) / (layout.cell_height + grid::CELL_GAP)) as usize;
-        st.cursor = center_row.min(count - 1);
+        // Scroll moves the cursor ONLY when the cursor's cell left the
+        // viewport: unconditionally snapping to the center row made arrow
+        // keys a no-op on tall windows where >2 rows fit (validator
+        // finding — move, no scroll needed, snap-back to center).
+        let (_, cur_top) = layout.position(st.cursor);
+        let cur_visible =
+            cur_top < scroll_y + viewport_h && cur_top + layout.cell_height > scroll_y;
+        if !cur_visible {
+            let center_row =
+                ((scroll_y + viewport_h * 0.5) / (layout.cell_height + grid::CELL_GAP)) as usize;
+            st.cursor = center_row.min(count - 1);
+        }
         if let Some(loupe) = &st.loupe {
             // focus() returns the cached image on a warm hit: the rebuild
             // path for textures evicted UI-side (validator finding — going

@@ -64,6 +64,13 @@ fn corrupt_file_reports_failed_and_engine_survives() {
             other => panic!("unexpected {other:?}"),
         }
     }
+    // Negative cache: re-focusing the failed index must not re-decode or
+    // re-emit (validator finding — a corrupt file was retried forever).
+    engine.focus(0);
+    assert!(
+        rx.recv_timeout(Duration::from_millis(800)).is_err(),
+        "failed index was re-attempted"
+    );
     std::fs::remove_dir_all(&dir).ok();
 }
 

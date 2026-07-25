@@ -10,7 +10,8 @@ burst borders, and the IPTC side panel shell.
 
 Zoom levels: column count `N ∈ {12, 8, 6, 4, 3, 2, 1}` (Ctrl+scroll / `+`/`-`
 step through; pinch later). At `N = 1` the view is the **loupe**:
-- First stop: fit-to-screen (FitPreview asset).
+- First stop: fit-to-screen (full-res asset GPU-scaled — see the recorded
+  FitPreview fold in raw-pipeline.md).
 - Further zoom-in: 1:1 (FullRes asset as GPU texture, panning with drag/arrows).
 - Zooming out from loupe returns to the grid **centered on the current image**.
 
@@ -75,8 +76,8 @@ Recorded deviations/decisions (M2):
 | `N` or `X` | reject |
 | `U` | clear mark |
 | `+` / `-` / Ctrl+scroll | zoom in/out (grid columns → loupe → 1:1) |
-| `Z` | toggle fit ↔ 1:1 in loupe |
-| `G` | jump back to grid (from loupe) |
+| `Z` | toggle fit ↔ 1:1 in loupe; from a grid zoom: jump straight to loupe 1:1 |
+| `G` or `Esc` | back to the grid at the previous grid zoom (from loupe/1:1) |
 | `I` | toggle IPTC panel |
 | `Ctrl+A` | select all (filtered set) |
 | `Ctrl+E` (menu: Copy picks…) | open copy dialog (`Ctrl+C` stays clipboard-idle: user decision after persona review — never repurpose it) |
