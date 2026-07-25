@@ -100,6 +100,10 @@ impl PreviewCache {
         // The pipeline has background writers while the UI reads; without a
         // busy timeout every overlap surfaces as SQLITE_BUSY immediately.
         conn.busy_timeout(std::time::Duration::from_secs(5))?;
+        // WAL-safe and MUCH faster commits (the cache is expendable by
+        // design): synchronous=FULL held write locks long enough on Windows
+        // CI (Defender scanning the -wal) to blow past the busy timeout.
+        conn.pragma_update(None, "synchronous", "NORMAL")?;
         let version: i32 = conn.query_row("PRAGMA user_version", [], |r| r.get(0))?;
         if version != 0 && version != SCHEMA_VERSION {
             return Err(CacheError::SchemaMismatch { found: version });
@@ -156,10 +160,12 @@ impl PreviewCache {
         let Ok(exif) = serde_json::from_str(&exif_json) else {
             return Ok(None);
         };
-        self.conn.execute(
-            "UPDATE previews SET last_used = ?2 WHERE path = ?1",
-            rusqlite::params![path_key(path), now_secs()],
-        )?;
+        with_busy_retry(|| {
+            self.conn.execute(
+                "UPDATE previews SET last_used = ?2 WHERE path = ?1",
+                rusqlite::params![path_key(path), now_secs()],
+            )
+        })?;
         Ok(Some(CachedPreview { exif, thumb_jpeg }))
     }
 
@@ -177,18 +183,20 @@ impl PreviewCache {
             return Ok(());
         };
         let exif_json = serde_json::to_string(exif)?;
-        self.conn.execute(
-            "INSERT OR REPLACE INTO previews (path, size, mtime_ns, exif_json, thumb_jpeg, last_used)
-             VALUES (?1, ?2, ?3, ?4, ?5, ?6)",
-            rusqlite::params![
-                path_key(path),
-                size as i64,
-                mtime_ns,
-                exif_json,
-                thumb_jpeg,
-                now_secs()
-            ],
-        )?;
+        with_busy_retry(|| {
+            self.conn.execute(
+                "INSERT OR REPLACE INTO previews (path, size, mtime_ns, exif_json, thumb_jpeg, last_used)
+                 VALUES (?1, ?2, ?3, ?4, ?5, ?6)",
+                rusqlite::params![
+                    path_key(path),
+                    size as i64,
+                    mtime_ns,
+                    &exif_json,
+                    thumb_jpeg,
+                    now_secs()
+                ],
+            )
+        })?;
         Ok(())
     }
 
@@ -248,6 +256,30 @@ pub fn default_cache_path() -> Option<std::path::PathBuf> {
 /// identical size+mtime — acceptable for a cache.
 fn path_key(path: &Path) -> String {
     path.to_string_lossy().into_owned()
+}
+
+/// Bounded retry for lock contention beyond the busy timeout (seen on
+/// Windows CI: antivirus + slow fsync can exceed even a 5 s timeout). A
+/// cache must degrade to waiting, not to errors.
+fn with_busy_retry<T>(
+    mut op: impl FnMut() -> Result<T, rusqlite::Error>,
+) -> Result<T, rusqlite::Error> {
+    let mut attempt = 0u32;
+    loop {
+        match op() {
+            Err(rusqlite::Error::SqliteFailure(f, _))
+                if attempt < 5
+                    && matches!(
+                        f.code,
+                        rusqlite::ErrorCode::DatabaseBusy | rusqlite::ErrorCode::DatabaseLocked
+                    ) =>
+            {
+                attempt += 1;
+                std::thread::sleep(std::time::Duration::from_millis(50 * u64::from(attempt)));
+            }
+            other => return other,
+        }
+    }
 }
 
 fn mtime_nanos(mtime: Option<SystemTime>) -> Option<i64> {
