@@ -108,9 +108,20 @@ git push && git push --tags
 
 Pushing the tag starts `release.yml`, which builds on a Linux and a Windows runner,
 uploads `fastcull-app-<target>` and `fastcull-cli-<target>` archives plus SHA-256
-checksums, and creates the GitHub Release. Nothing is published until the tag is
-pushed; the workflow also runs in plan-only mode on pull requests, so a broken
-`dist-workspace.toml` is caught before it can break a real release.
+checksums, and creates the GitHub Release. It also attaches a `source.tar.gz` — the
+complete corresponding source for the binaries, as the GPL requires.
+
+Two things worth knowing before you rely on it:
+
+- The trigger is not literally `v*`. dist generates the glob
+  `**[0-9]+.[0-9]+.[0-9]+*`, so *any* tag containing a `X.Y.Z` triplet starts the
+  workflow. A tag whose version does not match `Cargo.toml` fails in the first job
+  and creates nothing.
+- On pull requests the workflow only runs `dist plan`; it never builds. That catches
+  a malformed `dist-workspace.toml`, but **not** a missing `include` file or a
+  platform build break. Those first appear when a real tag is pushed — which is why
+  the first run of this pipeline should use a throwaway prerelease tag such as
+  `v0.1.1-rc.1` (dist marks those `--prerelease`, and they can be deleted after).
 
 If a release run fails halfway, the tag is already public. Recover by deleting both
 the release and the tag, then fixing and re-tagging:
@@ -121,18 +132,20 @@ git push --delete origin v0.1.1
 git tag -d v0.1.1
 ```
 
-A safe way to exercise the pipeline for the first time is a prerelease tag such as
-`v0.1.1-rc.1`: dist marks those `--prerelease` on GitHub, and they can be deleted
-afterwards.
-
 After changing `dist-workspace.toml`, regenerate the workflow and commit both files
 together:
 
 ```sh
 cargo install cargo-dist --locked --version 0.32.0   # or the prebuilt installer
 dist generate          # rewrites .github/workflows/release.yml
-dist generate --check  # verifies the workflow matches the config
+dist generate --check  # fails if release.yml was hand-edited
 ```
+
+`dist generate --check` only compares the generated workflow against what dist
+would write now; it does **not** validate the rest of `dist-workspace.toml`. Keys
+like `targets`, `installers` and `[dist.dependencies.apt]` are read at release time
+by the workflow itself, so changing them takes effect without regeneration — and
+without any check catching a typo. Use `dist plan` to see what they actually do.
 
 Use `dist generate`, **not** `dist init` — `init` rewrites `dist-workspace.toml`
 and replaces its explanatory comments with boilerplate.
@@ -147,7 +160,10 @@ conveyed under GPL version 3 — "or later" applies to our source, not to the li
 result. The complete corresponding source code for any binary we publish is the git
 commit it was built from, in this repository:
 <https://github.com/danilocesar/fastcull>. CI artifacts record that commit in
-`BUILD-INFO.txt`; release archives record it in the release tag.
+`BUILD-INFO.txt`. Release archives do not carry the commit inside them — the
+release tag on GitHub identifies it, and every release also ships a
+`source.tar.gz` of exactly that source. Run `fastcull-cli --version` if you need
+to tell two unpacked archives apart.
 
 Those executables also contain hundreds of Rust crates under MIT, Apache-2.0,
 BSD, Unicode-3.0, MPL-2.0 and other licences, most of which require their notice

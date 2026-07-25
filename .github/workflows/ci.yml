@@ -103,6 +103,10 @@ jobs:
         run: |
           set -euo pipefail
           bindir=target/x86_64-pc-windows-msvc/release
+          # Start from an empty folder: CI checkouts are fresh, but this step
+          # is also meant to be runnable locally, where a leftover file from a
+          # previous run would otherwise be uploaded as if it belonged.
+          rm -rf artifact
           mkdir -p artifact
           cp "$bindir/fastcull-app.exe" artifact/
           cp "$bindir/fastcull-cli.exe" artifact/
