@@ -12,6 +12,11 @@
 use std::path::PathBuf;
 use std::time::{Duration, Instant};
 
+/// Engine tests decode 50 MP JPEGs; run them serially — four parallel
+/// engines on a 2-vCPU debug-mode CI runner starved each other past the
+/// event timeouts (Windows flake).
+static SERIAL: std::sync::Mutex<()> = std::sync::Mutex::new(());
+
 use fastcull_core::loupe::{LoupeEngine, LoupeEvent, DEFAULT_BUDGET_BYTES, UPSCALE_THRESHOLD};
 use fastcull_core::viewassets::ViewAssets;
 
@@ -61,6 +66,9 @@ fn folder_of_20() -> (PathBuf, Vec<PathBuf>) {
 
 #[test]
 fn walking_at_two_columns_never_leaves_an_image_below_its_rung() {
+    let _serial = SERIAL
+        .lock()
+        .unwrap_or_else(std::sync::PoisonError::into_inner);
     let (dir, paths) = folder_of_20();
     let count = paths.len();
     let (engine, rx) = LoupeEngine::start(paths, DEFAULT_BUDGET_BYTES);
@@ -124,6 +132,9 @@ fn walking_at_two_columns_never_leaves_an_image_below_its_rung() {
 /// culling: without it every swept cell gets cooked (~walk_count decodes).
 #[test]
 fn fast_scroll_backlog_does_not_starve_final_window() {
+    let _serial = SERIAL
+        .lock()
+        .unwrap_or_else(std::sync::PoisonError::into_inner);
     let (dir, paths) = folder_of_20();
     let count = paths.len();
     let (engine, rx) = LoupeEngine::start(paths, DEFAULT_BUDGET_BYTES);

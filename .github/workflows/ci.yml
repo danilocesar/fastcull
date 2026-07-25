@@ -24,7 +24,7 @@ jobs:
 
       - name: Install Linux GUI build dependencies (slint/winit)
         if: runner.os == 'Linux'
-        run: sudo apt-get update && sudo apt-get install -y libfontconfig1-dev libxkbcommon-dev xvfb
+        run: sudo apt-get update && sudo apt-get install -y libfontconfig1-dev libxkbcommon-dev libxkbcommon-x11-0 xvfb
 
       - uses: Swatinem/rust-cache@v2
 

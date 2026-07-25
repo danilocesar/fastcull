@@ -3,6 +3,11 @@
 use std::path::PathBuf;
 use std::time::Duration;
 
+/// Engine tests decode 50 MP JPEGs; run them serially — four parallel
+/// engines on a 2-vCPU debug-mode CI runner starved each other past the
+/// event timeouts (Windows flake).
+static SERIAL: std::sync::Mutex<()> = std::sync::Mutex::new(());
+
 use fastcull_core::loupe::{LoupeEngine, LoupeEvent, DEFAULT_BUDGET_BYTES};
 
 fn testdata(name: &str) -> PathBuf {
@@ -26,13 +31,16 @@ fn a1_paths() -> Vec<PathBuf> {
 
 #[test]
 fn focus_decodes_fullres_and_prefetches_neighbors() {
+    let _serial = SERIAL
+        .lock()
+        .unwrap_or_else(std::sync::PoisonError::into_inner);
     let (engine, rx) = LoupeEngine::start(a1_paths(), DEFAULT_BUDGET_BYTES);
     // display 8640 forces the top rung of the ladder.
     assert!(engine.focus(1, 8640).is_none(), "cold cache");
     // Every index publishes rungs ending at full-res (mid rung may precede).
     let mut best = std::collections::HashMap::new();
     while best.len() < 3 || best.values().any(|&(w, _)| w != 8640) {
-        match rx.recv_timeout(Duration::from_secs(60)).expect("event") {
+        match rx.recv_timeout(Duration::from_secs(120)).expect("event") {
             LoupeEvent::Ready { index, image } => {
                 best.insert(index, (image.width, image.height));
             }
@@ -49,6 +57,9 @@ fn focus_decodes_fullres_and_prefetches_neighbors() {
 
 #[test]
 fn corrupt_file_reports_failed_and_engine_survives() {
+    let _serial = SERIAL
+        .lock()
+        .unwrap_or_else(std::sync::PoisonError::into_inner);
     let dir = std::env::temp_dir().join(format!("fastcull-loupe-{}", std::process::id()));
     std::fs::create_dir_all(&dir).unwrap();
     let bad = dir.join("bad.ARW");
@@ -62,7 +73,7 @@ fn corrupt_file_reports_failed_and_engine_survives() {
     // rung have both arrived, so the quiet-window check below can't be
     // tripped by a still-cooking rung of index 1.
     while !(got_fail && got_top_rung) {
-        match rx.recv_timeout(Duration::from_secs(60)).expect("event") {
+        match rx.recv_timeout(Duration::from_secs(120)).expect("event") {
             LoupeEvent::Failed { index: 0, .. } => got_fail = true,
             LoupeEvent::Ready { index: 1, image } => got_top_rung = image.width == 8640,
             other => panic!("unexpected {other:?}"),
@@ -80,11 +91,14 @@ fn corrupt_file_reports_failed_and_engine_survives() {
 
 #[test]
 fn tight_budget_evicts_but_serves_focus() {
+    let _serial = SERIAL
+        .lock()
+        .unwrap_or_else(std::sync::PoisonError::into_inner);
     // Budget below two A1 images: the engine must still serve each focus.
     let (engine, rx) = LoupeEngine::start(a1_paths(), 200 * 1024 * 1024);
     for target in [0usize, 1, 2, 0] {
         engine.focus(target, 8640);
-        let deadline = std::time::Instant::now() + Duration::from_secs(60);
+        let deadline = std::time::Instant::now() + Duration::from_secs(120);
         loop {
             if engine.peek(target).is_some() {
                 break;
@@ -101,11 +115,14 @@ fn tight_budget_evicts_but_serves_focus() {
 /// expensive full-res rung must NOT be cooked (user's 25% rule).
 #[test]
 fn small_display_stops_at_mid_rung() {
+    let _serial = SERIAL
+        .lock()
+        .unwrap_or_else(std::sync::PoisonError::into_inner);
     let (engine, rx) = LoupeEngine::start(a1_paths(), DEFAULT_BUDGET_BYTES);
     engine.focus(1, 1600);
     let mut got = 0;
     while got < 3 {
-        match rx.recv_timeout(Duration::from_secs(60)).expect("event") {
+        match rx.recv_timeout(Duration::from_secs(120)).expect("event") {
             LoupeEvent::Ready { image, .. } => {
                 assert_eq!((image.width, image.height), (1616, 1080));
                 got += 1;
@@ -119,7 +136,7 @@ fn small_display_stops_at_mid_rung() {
     engine.focus(1, u32::MAX);
     loop {
         if let LoupeEvent::Ready { index: 1, image } =
-            rx.recv_timeout(Duration::from_secs(60)).expect("event")
+            rx.recv_timeout(Duration::from_secs(120)).expect("event")
         {
             if image.width == 8640 {
                 break;
