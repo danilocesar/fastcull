@@ -1,6 +1,8 @@
 // FastCull main window: virtualized zoomable grid (specs/modules/ui-grid.md).
 // The Rust side owns all layout math; `cells` contains ONLY the visible
 // window (+margin) of cells with absolute positions inside the Flickable.
+// M5 adds the menu bar, the filter/sort bar, the inbox-zero empty state and
+// the keyboard-shortcuts popup.
 
 export struct CellData {
     x: length,
@@ -17,6 +19,28 @@ export struct CellData {
     pick: int,
 }
 
+component Chip inherits Rectangle {
+    in property <string> label;
+    in property <bool> active;
+    callback clicked();
+    height: 24px;
+    width: t.preferred-width + 18px;
+    border-radius: 12px;
+    background: root.active ? #3a6ea5 : #2c2c30;
+    t := Text {
+        text: root.label;
+        color: root.active ? #ffffff : #b8b8c0;
+        font-size: 12px;
+        horizontal-alignment: center;
+        vertical-alignment: center;
+        width: 100%;
+        height: 100%;
+    }
+    TouchArea {
+        clicked => { root.clicked(); }
+    }
+}
+
 export component MainWindow inherits Window {
     title: "FastCull";
     preferred-width: 1440px;
@@ -30,14 +54,33 @@ export component MainWindow inherits Window {
     in property <image> loupe-image;
     in property <length> loupe-w: 0px;
     in property <length> loupe-h: 0px;
+    // Filter/sort bar state (M5): counts per chip, the active single-choice
+    // filter, and the sort cycle label. All owned by Rust.
+    in property <int> counts-all: 0;
+    in property <int> counts-picked: 0;
+    in property <int> counts-rejected: 0;
+    in property <int> counts-unmarked: 0;
+    in property <string> active-filter: "all";
+    in property <string> sort-label: "Capture ↑";
+    in property <bool> filter-bar-visible: true;
+    // Inbox-zero / empty-view message ("" = view has images).
+    in property <string> empty-message: "";
+    in-out property <bool> shortcuts-visible: false;
     // Scroll offset (negative Flickable viewport-y); Rust reads and writes it.
     in-out property <length> vp-y: 0px;
-    // Geometry the Rust layout math needs.
-    out property <length> grid-width: self.width;
-    out property <length> grid-height: self.height - statusbar.height;
+    // Geometry the Rust layout math needs (the grid area = flickable size).
+    out property <length> grid-width: content.width;
+    out property <length> grid-height: keys.height - bar-h;
+
+    property <length> bar-h: root.filter-bar-visible ? 34px : 0px;
 
     callback viewport-changed();
     callback nav(string);
+    callback set-filter(string);
+    callback cycle-sort();
+    callback toggle-filter-bar();
+    callback open-folder();
+    callback quit();
 
     changed vp-y => { root.viewport-changed(); }
     changed width => { root.viewport-changed(); }
@@ -45,143 +88,306 @@ export component MainWindow inherits Window {
 
     forward-focus: keys;
 
-    keys := FocusScope {
-        width: 100%;
-        height: parent.height - statusbar.height;
-
-        key-pressed(event) => {
-            if (event.text == Key.LeftArrow) { root.nav("left"); return accept; }
-            if (event.text == Key.RightArrow) { root.nav("right"); return accept; }
-            if (event.text == Key.UpArrow) { root.nav("up"); return accept; }
-            if (event.text == Key.DownArrow) { root.nav("down"); return accept; }
-            if (event.text == Key.PageUp) { root.nav("pgup"); return accept; }
-            if (event.text == Key.PageDown) { root.nav("pgdn"); return accept; }
-            if (event.text == Key.Home) { root.nav("home"); return accept; }
-            if (event.text == Key.End) { root.nav("end"); return accept; }
-            if (event.text == "+" || event.text == "=") { root.nav("zoom-in"); return accept; }
-            if (event.text == "-") { root.nav("zoom-out"); return accept; }
-            if (event.text == "y" || event.text == "Y" || event.text == "p" || event.text == "P" || event.text == " ") { root.nav("pick"); return accept; }
-            if (event.text == "n" || event.text == "N" || event.text == "x" || event.text == "X") { root.nav("reject"); return accept; }
-            if (event.text == "u" || event.text == "U") { root.nav("clear"); return accept; }
-            if (event.text == "z" || event.text == "Z") { root.nav("one2one"); return accept; }
-            if (event.text == "g" || event.text == "G" || event.text == Key.Escape) { root.nav("grid"); return accept; }
-            reject
+    MenuBar {
+        Menu {
+            title: "File";
+            MenuItem {
+                title: "Open Folder…";
+                activated => { root.open-folder(); }
+            }
+            MenuItem {
+                title: "Copy Picks… (M6)";
+                enabled: false;
+            }
+            MenuItem {
+                title: "Settings… (soon)";
+                enabled: false;
+            }
+            MenuItem {
+                title: "Quit";
+                activated => { root.quit(); }
+            }
         }
+        Menu {
+            title: "View";
+            MenuItem {
+                title: "Zoom In (+)";
+                activated => { root.nav("zoom-in"); }
+            }
+            MenuItem {
+                title: "Zoom Out (-)";
+                activated => { root.nav("zoom-out"); }
+            }
+            MenuItem {
+                title: "Filter Bar";
+                activated => { root.toggle-filter-bar(); }
+            }
+        }
+        Menu {
+            title: "Help";
+            MenuItem {
+                title: "Keyboard Shortcuts";
+                activated => { root.shortcuts-visible = true; }
+            }
+            MenuItem {
+                title: "About FastCull";
+                activated => { root.shortcuts-visible = true; }
+            }
+        }
+    }
 
-        flick := Flickable {
+    content := Rectangle {
+        keys := FocusScope {
             width: 100%;
-            height: 100%;
-            viewport-width: root.width;
-            viewport-height: root.virtual-height;
-            viewport-y <=> root.vp-y;
+            height: parent.height - statusbar.height;
 
-            for cell in root.cells: Rectangle {
-                x: cell.x;
-                y: cell.y;
-                width: cell.w;
-                height: cell.h;
-                // Spec: real folders get neutral gray placeholders; the
-                // hue tint is only for --synthetic cells (seed >= 0).
-                background: cell.has-image ? #000000
-                    : cell.seed < 0 ? #2a2a2e
-                    : hsv(Math.mod(cell.seed * 47, 360), 0.30, 0.22);
-
-                if cell.has-image: Image {
-                    source: cell.image;
-                    width: 100%;
-                    height: 100%;
-                    image-fit: contain;
+            key-pressed(event) => {
+                // Shortcuts popup swallows Esc first (spec: closes with Esc).
+                if (root.shortcuts-visible && event.text == Key.Escape) {
+                    root.shortcuts-visible = false;
+                    return accept;
                 }
-                if !cell.has-image: Text {
-                    text: cell.label;
-                    color: #808088;
-                    font-size: 11px;
+                if (event.modifiers.control) {
+                    if (event.text == "o" || event.text == "O") { root.open-folder(); return accept; }
+                    if (event.text == "q" || event.text == "Q") { root.quit(); return accept; }
+                    return reject;
+                }
+                if (event.text == Key.LeftArrow) { root.nav("left"); return accept; }
+                if (event.text == Key.RightArrow) { root.nav("right"); return accept; }
+                if (event.text == Key.UpArrow) { root.nav("up"); return accept; }
+                if (event.text == Key.DownArrow) { root.nav("down"); return accept; }
+                if (event.text == Key.PageUp) { root.nav("pgup"); return accept; }
+                if (event.text == Key.PageDown) { root.nav("pgdn"); return accept; }
+                if (event.text == Key.Home) { root.nav("home"); return accept; }
+                if (event.text == Key.End) { root.nav("end"); return accept; }
+                if (event.text == "+" || event.text == "=") { root.nav("zoom-in"); return accept; }
+                if (event.text == "-") { root.nav("zoom-out"); return accept; }
+                if (event.text == "y" || event.text == "Y" || event.text == "p" || event.text == "P" || event.text == " ") { root.nav("pick"); return accept; }
+                if (event.text == "n" || event.text == "N" || event.text == "x" || event.text == "X") { root.nav("reject"); return accept; }
+                if (event.text == "u" || event.text == "U") { root.nav("clear"); return accept; }
+                if (event.text == "z" || event.text == "Z") { root.nav("one2one"); return accept; }
+                if (event.text == "g" || event.text == "G" || event.text == Key.Escape) { root.nav("grid"); return accept; }
+                reject
+            }
+
+            if root.filter-bar-visible: Rectangle {
+                x: 0;
+                y: 0;
+                width: 100%;
+                height: root.bar-h;
+                background: #1d1d21;
+                HorizontalLayout {
+                    padding-left: 8px;
+                    padding-right: 8px;
+                    spacing: 6px;
+                    alignment: start;
+                    Chip {
+                        y: 5px;
+                        label: "All " + root.counts-all;
+                        active: root.active-filter == "all";
+                        clicked => { root.set-filter("all"); }
+                    }
+                    Chip {
+                        y: 5px;
+                        label: "★ " + root.counts-picked;
+                        active: root.active-filter == "picked";
+                        clicked => { root.set-filter("picked"); }
+                    }
+                    Chip {
+                        y: 5px;
+                        label: "✕ " + root.counts-rejected;
+                        active: root.active-filter == "rejected";
+                        clicked => { root.set-filter("rejected"); }
+                    }
+                    Chip {
+                        y: 5px;
+                        label: "Unmarked " + root.counts-unmarked;
+                        active: root.active-filter == "unmarked";
+                        clicked => { root.set-filter("unmarked"); }
+                    }
+                    Chip {
+                        y: 5px;
+                        label: root.sort-label;
+                        active: false;
+                        clicked => { root.cycle-sort(); }
+                    }
+                }
+            }
+
+            flick := Flickable {
+                y: root.bar-h;
+                width: 100%;
+                height: parent.height - root.bar-h;
+                viewport-width: root.width;
+                viewport-height: root.virtual-height;
+                viewport-y <=> root.vp-y;
+
+                for cell in root.cells: Rectangle {
+                    x: cell.x;
+                    y: cell.y;
+                    width: cell.w;
+                    height: cell.h;
+                    // Spec: real folders get neutral gray placeholders; the
+                    // hue tint is only for --synthetic cells (seed >= 0).
+                    background: cell.has-image ? #000000
+                        : cell.seed < 0 ? #2a2a2e
+                        : hsv(Math.mod(cell.seed * 47, 360), 0.30, 0.22);
+
+                    if cell.has-image: Image {
+                        source: cell.image;
+                        width: 100%;
+                        height: 100%;
+                        image-fit: contain;
+                    }
+                    if !cell.has-image: Text {
+                        text: cell.label;
+                        color: #808088;
+                        font-size: 11px;
+                        width: 100%;
+                        height: 100%;
+                        horizontal-alignment: center;
+                        vertical-alignment: center;
+                        overflow: elide;
+                    }
+                    // Rejected: dim the cell (rendered above the image).
+                    if cell.pick == 2: Rectangle {
+                        background: #000000;
+                        opacity: 0.4;
+                    }
+                    // Pick badges (above image, below cursor border).
+                    if cell.pick == 1: Text {
+                        text: "★";
+                        color: #ffd24d;
+                        font-size: 20px;
+                        x: 8px;
+                        y: 4px;
+                    }
+                    if cell.pick == 2: Text {
+                        text: "✕";
+                        color: #ff5a5a;
+                        font-size: 18px;
+                        x: 8px;
+                        y: 4px;
+                    }
+                    // Cursor overlay: LAST child = rendered on top of the image
+                    // (spec: the selector must be visible on every cell state).
+                    if cell.is-cursor: Rectangle {
+                        border-width: 3px;
+                        border-color: #4da3ff;
+                        background: transparent;
+                    }
+                    if cell.failed: Rectangle {
+                        x: parent.width - 22px;
+                        y: 4px;
+                        width: 18px;
+                        height: 18px;
+                        border-radius: 9px;
+                        background: #c03030;
+                        Text {
+                            text: "!";
+                            color: white;
+                            font-size: 12px;
+                            horizontal-alignment: center;
+                            vertical-alignment: center;
+                            width: 100%;
+                            height: 100%;
+                        }
+                    }
+                }
+            }
+
+            // Inbox-zero / empty-view state (persona G2): the payoff moment
+            // gets a face, not a blank void.
+            if root.empty-message != "": Rectangle {
+                y: root.bar-h;
+                width: 100%;
+                height: parent.height - root.bar-h;
+                background: #161618;
+                Text {
+                    text: root.empty-message;
+                    color: #a8a8b0;
+                    font-size: 16px;
                     width: 100%;
                     height: 100%;
                     horizontal-alignment: center;
                     vertical-alignment: center;
-                    overflow: elide;
                 }
-                // Rejected: dim the cell (rendered above the image).
-                if cell.pick == 2: Rectangle {
-                    background: #000000;
-                    opacity: 0.4;
+            }
+        }
+
+        // 1:1 loupe overlay (Z): the full-res image pannable by drag.
+        if root.one2one: Rectangle {
+            width: 100%;
+            height: parent.height - statusbar.height;
+            background: #000000;
+            Flickable {
+                width: 100%;
+                height: 100%;
+                viewport-width: max(root.loupe-w, parent.width);
+                viewport-height: max(root.loupe-h, parent.height);
+                Image {
+                    source: root.loupe-image;
+                    x: max(0px, (parent.width - root.loupe-w) / 2);
+                    y: max(0px, (parent.height - root.loupe-h) / 2);
+                    width: root.loupe-w;
+                    height: root.loupe-h;
                 }
-                // Pick badges (above image, below cursor border).
-                if cell.pick == 1: Text {
-                    text: "★";
-                    color: #ffd24d;
-                    font-size: 20px;
-                    x: 8px;
-                    y: 4px;
-                }
-                if cell.pick == 2: Text {
-                    text: "✕";
-                    color: #ff5a5a;
-                    font-size: 18px;
-                    x: 8px;
-                    y: 4px;
-                }
-                // Cursor overlay: LAST child = rendered on top of the image
-                // (spec: the selector must be visible on every cell state).
-                if cell.is-cursor: Rectangle {
-                    border-width: 3px;
-                    border-color: #4da3ff;
-                    background: transparent;
-                }
-                if cell.failed: Rectangle {
-                    x: parent.width - 22px;
-                    y: 4px;
-                    width: 18px;
-                    height: 18px;
-                    border-radius: 9px;
-                    background: #c03030;
+            }
+        }
+
+        // Keyboard-shortcuts popup (Help menu; Esc closes). The keyboard map
+        // in ui-grid.md is the source of truth for this list.
+        if root.shortcuts-visible: Rectangle {
+            width: 100%;
+            height: parent.height - statusbar.height;
+            background: #000000aa;
+            TouchArea {
+                clicked => { root.shortcuts-visible = false; }
+            }
+            Rectangle {
+                x: (parent.width - self.width) / 2;
+                y: (parent.height - self.height) / 2;
+                width: 480px;
+                height: min(560px, parent.height - 40px);
+                border-radius: 8px;
+                background: #202028;
+                border-width: 1px;
+                border-color: #3a3a44;
+                VerticalLayout {
+                    padding: 18px;
+                    spacing: 8px;
                     Text {
-                        text: "!";
-                        color: white;
-                        font-size: 12px;
-                        horizontal-alignment: center;
-                        vertical-alignment: center;
-                        width: 100%;
-                        height: 100%;
+                        text: "Keyboard shortcuts";
+                        color: #ffffff;
+                        font-size: 16px;
+                    }
+                    Text {
+                        text: "Arrows / PgUp / PgDn / Home / End   navigate\nY, P or Space   pick (take)\nN or X   reject\nU   clear mark\n+ / -   zoom in / out (grid → loupe → 1:1)\nCtrl+scroll   zoom (soon)\nZ   toggle fit ↔ 1:1 (from grid: jump to 1:1)\nG or Esc   back to the grid\nK   keyword field (IPTC panel, soon)\nI   IPTC panel (soon)\nShift+arrows   extend selection (soon)\nCtrl+A   select all (soon)\nCtrl+O   open folder\nCtrl+E   copy picks (M6)\nCtrl+Q   quit\n1–5, 0   reserved (star ratings, v2)";
+                        color: #c8c8d0;
+                        font-size: 13px;
+                    }
+                    Text {
+                        text: "FastCull — GPL-3.0-or-later. Esc or click to close.";
+                        color: #707078;
+                        font-size: 11px;
                     }
                 }
             }
         }
-    }
 
-    // 1:1 loupe overlay (Z): the full-res image pannable by drag.
-    if root.one2one: Rectangle {
-        width: 100%;
-        height: parent.height - statusbar.height;
-        background: #000000;
-        Flickable {
+        statusbar := Rectangle {
+            y: parent.height - self.height;
             width: 100%;
-            height: 100%;
-            viewport-width: max(root.loupe-w, parent.width);
-            viewport-height: max(root.loupe-h, parent.height);
-            Image {
-                source: root.loupe-image;
-                x: max(0px, (parent.width - root.loupe-w) / 2);
-                y: max(0px, (parent.height - root.loupe-h) / 2);
-                width: root.loupe-w;
-                height: root.loupe-h;
+            height: 26px;
+            background: #202024;
+            Text {
+                text: root.status;
+                color: #a8a8b0;
+                font-size: 12px;
+                x: 10px;
+                vertical-alignment: center;
+                height: 100%;
             }
-        }
-    }
-
-    statusbar := Rectangle {
-        y: parent.height - self.height;
-        width: 100%;
-        height: 26px;
-        background: #202024;
-        Text {
-            text: root.status;
-            color: #a8a8b0;
-            font-size: 12px;
-            x: 10px;
-            vertical-alignment: center;
-            height: 100%;
         }
     }
 }

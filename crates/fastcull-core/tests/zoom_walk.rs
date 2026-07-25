@@ -81,11 +81,11 @@ fn walking_at_two_columns_never_leaves_an_image_below_its_rung() {
     // Walk the cursor forward like arrow keys; the visible window is the
     // 2x2 block around the cursor (like the app's windowed model).
     for cursor in 0..count {
-        let visible = cursor.saturating_sub(1)..(cursor + 3).min(count);
+        let visible: Vec<usize> = (cursor.saturating_sub(1)..(cursor + 3).min(count)).collect();
         va.prune(&visible); // UI drops off-screen textures — the trigger of the bug
         let deadline = Instant::now() + Duration::from_secs(20);
         loop {
-            for (index, image) in va.ensure(visible.clone(), cell_phys, &engine) {
+            for (index, image) in va.ensure(&visible, cell_phys, &engine) {
                 // (the app would build a texture here)
                 let long = image.width.max(image.height);
                 assert!(long >= 320, "index {index}");
@@ -96,7 +96,7 @@ fn walking_at_two_columns_never_leaves_an_image_below_its_rung() {
                     va.note_held(index, image.width.max(image.height));
                 }
             }
-            let all_good = visible.clone().all(|i| va.satisfied(i, cell_phys));
+            let all_good = visible.iter().all(|i| va.satisfied(*i, cell_phys));
             if all_good {
                 break;
             }
@@ -105,12 +105,12 @@ fn walking_at_two_columns_never_leaves_an_image_below_its_rung() {
                 "cursor at {cursor}: images {:?} stuck below the {cell_phys}px rung \
                  (the user-reported walk regression) — held state: {:?}",
                 visible
-                    .clone()
-                    .filter(|i| !va.satisfied(*i, cell_phys))
+                    .iter()
+                    .filter(|i| !va.satisfied(**i, cell_phys))
                     .collect::<Vec<_>>(),
                 visible
-                    .clone()
-                    .map(|i| (i, va.satisfied(i, cell_phys)))
+                    .iter()
+                    .map(|i| (*i, va.satisfied(*i, cell_phys)))
                     .collect::<Vec<_>>()
             );
         }
@@ -143,19 +143,19 @@ fn fast_scroll_backlog_does_not_starve_final_window() {
 
     // Sweep like a fast scroll: no settling between steps.
     for cursor in 0..count {
-        let visible = cursor.saturating_sub(1)..(cursor + 3).min(count);
+        let visible: Vec<usize> = (cursor.saturating_sub(1)..(cursor + 3).min(count)).collect();
         va.prune(&visible);
-        for (index, image) in va.ensure(visible.clone(), cell_phys, &engine) {
+        for (index, image) in va.ensure(&visible, cell_phys, &engine) {
             va.note_held(index, image.width.max(image.height));
         }
     }
 
     // The final window must settle promptly and cheaply.
-    let final_visible = count.saturating_sub(3)..count;
+    let final_visible: Vec<usize> = (count.saturating_sub(3)..count).collect();
     let mut ready_events = 0usize;
     let deadline = Instant::now() + Duration::from_secs(10);
     loop {
-        for (index, image) in va.ensure(final_visible.clone(), cell_phys, &engine) {
+        for (index, image) in va.ensure(&final_visible, cell_phys, &engine) {
             va.note_held(index, image.width.max(image.height));
         }
         while let Ok(event) = rx.recv_timeout(Duration::from_millis(20)) {
@@ -164,7 +164,7 @@ fn fast_scroll_backlog_does_not_starve_final_window() {
                 va.note_held(index, image.width.max(image.height));
             }
         }
-        if final_visible.clone().all(|i| va.satisfied(i, cell_phys)) {
+        if final_visible.iter().all(|i| va.satisfied(*i, cell_phys)) {
             break;
         }
         assert!(Instant::now() < deadline, "final window starved by backlog");

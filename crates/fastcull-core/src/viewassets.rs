@@ -30,23 +30,25 @@ impl ViewAssets {
     }
 
     /// Drop bookkeeping for indexes outside `keep` (UI prunes textures too).
-    pub fn prune(&mut self, keep: &std::ops::Range<usize>) {
+    /// A slice of image ids, not a range: with a filter active the visible
+    /// window is an arbitrary subset of the session (M5).
+    pub fn prune(&mut self, keep: &[usize]) {
         self.held.retain(|i, _| keep.contains(i));
     }
 
-    /// Ensure every index in `range` will reach an asset for `display_long`:
+    /// Ensure every index in `indexes` will reach an asset for `display_long`:
     /// schedules engine work AND returns cached images the UI must adopt now
     /// because the engine considers them served (no event will fire). The
     /// returned images may be low rungs — later Ready events upgrade them.
     pub fn ensure(
         &mut self,
-        range: std::ops::Range<usize>,
+        indexes: &[usize],
         display_long: u32,
         engine: &LoupeEngine,
     ) -> Vec<(usize, FullImage)> {
-        engine.want(range.clone(), display_long);
+        engine.want(indexes.iter().copied(), display_long);
         let mut adopt = Vec::new();
-        for index in range {
+        for &index in indexes {
             if self.satisfied(index, display_long) {
                 continue;
             }

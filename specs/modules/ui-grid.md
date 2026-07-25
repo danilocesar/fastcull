@@ -83,7 +83,11 @@ Recorded deviations/decisions (M2):
 | `Z` | toggle fit ↔ 1:1 in loupe; from a grid zoom: jump straight to loupe 1:1 |
 | `G` or `Esc` | back to the grid at the previous grid zoom (from loupe/1:1) |
 | `I` | toggle IPTC panel |
+| `K` | focus the keyword field of the IPTC panel (persona G3, provisional 2026-07-25 pending user confirmation — `K` is free and mnemonic) |
+| Shift+arrows | extend selection (persona G7: was only in Visual language; the map is the popup's source of truth) |
 | `Ctrl+A` | select all (filtered set) |
+| `Ctrl+O` | Open Folder… (persona accelerator gap, provisional) |
+| `Ctrl+Q` | Quit (persona accelerator gap, provisional) |
 | `Ctrl+E` (menu: Copy picks…) | open copy dialog (`Ctrl+C` stays clipboard-idle: user decision after persona review — never repurpose it) |
 | `1`–`5`, `0` | reserved (star ratings, v2) — must not conflict |
 
@@ -96,6 +100,13 @@ I select Y or N, the UI should automatically move to the next image").
 Clearing (`U`) does not advance. This becomes a configuration option
 (default: on) when the settings dialog lands (File menu placeholder,
 post-v1); until then it is always on.
+
+**Advance/removal composition (persona gap G1, 2026-07-25 — the rule that
+keeps the inbox-zero loop honest)**: when a mark removes the image from the
+active filtered view, the live-removal cursor rule IS the advance —
+auto-advance must NOT apply on top of it. Auto-advance applies only when
+the marked image stays in the view. Net cursor movement per mark is exactly
+one image, always.
 
 ## Window chrome (menu bar — user-requested 2026-07-24, lands M5)
 
@@ -113,6 +124,12 @@ Acceptance: opening a folder via the menu behaves identically to the CLI
 argument (same session path); the shortcuts popup lists every binding in this
 spec and closes with Esc. Persona (almost-human-user) reviews this section at
 M5 implementation start per the gate.
+
+Chrome staging (recorded 2026-07-25, M5 step 2): the IPTC Panel menu item
+lands together with the panel itself (later M5 step), as do `I`, `K`,
+Shift+arrows and `Ctrl+A` — the popup lists them as "(soon)" until then.
+"About" opens the shortcuts popup (which carries the license line) until a
+dedicated About dialog is worth its weight — deferred, not forgotten.
 
 ## Filter & sort bar (M5 decisions recorded 2026-07-25)
 
@@ -139,9 +156,29 @@ M5 implementation start per the gate.
 - No Open Recent / save-template-UI / filter hotkeys in M5 (user decision:
   keep it minimal; templates.toml is hand-edited in v1).
 
+**Persona-review defaults adopted 2026-07-25 (user AFK; provisional until
+he confirms, all cheap to change):**
+- **Inbox-zero empty state (G2)**: when the filtered view empties, the grid
+  shows an empty-state message with final counts ("0 unmarked — N picked,
+  M rejected"), no cursor. If it happens while in loupe, the view drops
+  back to the grid empty state. The cursor contract's "exactly one cell"
+  rule applies only to non-empty views.
+- **Keyword commit (G4)**: Enter commits + returns focus to the grid;
+  cursor STAYS (spec letter). Commit-and-advance (Photo Mechanic style)
+  recorded as a future config option alongside auto-advance.
+- **Template apply UI (G5)**: the IPTC panel shell includes a template
+  dropdown (reading templates.toml) + Apply button + "Revert last apply"
+  button — templates that cannot be applied from the UI are dead weight
+  (persona). Revert semantics per iptc-templates.md (single level).
+- **Filter-bar hide (G6)**: hiding the bar (View > Filter Bar) resets the
+  filter to All — a filter must never be active while invisible.
+- **Field edge cases (G7)**: click-away from a half-typed field commits
+  (same as Enter, without the focus return); Tab cycles panel fields;
+  default sort is capture time ascending.
+
 ## Acceptance criteria
 
-- [ ] `filter.rs` unit tests: every filter/sort combination over a synthetic
+- [x] `filter.rs` unit tests: every filter/sort combination over a synthetic
       session, counts included.
 - [ ] Windowed-model tests (core side): visible-range → model-window computation,
       incl. partial rows, tiny folders, and N=1.
@@ -157,3 +194,17 @@ M5 implementation start per the gate.
 - [ ] Manual acceptance (per release): 5,000-file A1 folder (a bad evening, per
       persona review) scrolls at 60 fps after thumbs load; pick→auto-advance→pick
       loop in loupe has no perceived latency.
+
+## Debug facilities (env vars, app-level)
+
+Documented because they ship in release builds (validator finding):
+
+- `FASTCULL_TRACE=1`: eprintln any UI-thread phase (`handle_nav`, `refresh`
+  stages, texture adoption) exceeding 20 ms, plus loupe-ready marks — the
+  evidence channel for hang reports.
+- `FASTCULL_DRIVE="6000:one2one;9000:grid;12000:quit"`: timed injection of
+  nav actions (same names `handle_nav` takes, plus `quit`) for headless
+  reproduction and QE runs — Wayland offers no external input automation.
+  Malformed entries are skipped silently. Scripts may include mark actions
+  (`pick`/`reject`), which write real sidecars — QE runs target throwaway
+  copies of test data only.

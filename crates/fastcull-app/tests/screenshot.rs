@@ -211,3 +211,27 @@ fn synthetic_screenshot_renders_cells() {
         "synthetic grid rendered black (mean luma {luma:.2})"
     );
 }
+
+/// M5 chrome smoke (validator finding: the menu bar, filter bar and empty
+/// state had zero automated coverage): an empty folder must render the
+/// empty-state message under the chrome and exit cleanly, not crash or
+/// paint a uniform frame.
+#[test]
+fn empty_folder_renders_chrome_and_empty_state() {
+    if !has_display() {
+        eprintln!("screenshot smoke skipped: no display server");
+        return;
+    }
+    let _s = serial();
+    let empty = out_dir().join("empty-session-dir");
+    std::fs::create_dir_all(&empty).unwrap();
+    let out = out_dir().join("empty-state.jpg");
+    shoot(&[empty.to_str().unwrap()], &out);
+    let (w, h, _) = analyze(&out);
+    assert!(w >= 640 && h >= 480, "implausible snapshot size {w}x{h}");
+    let var = region_variance(&out, 1.0, 1.0);
+    assert!(
+        var > 1.0,
+        "empty-state frame is uniform — no chrome/message rendered (variance {var:.2})"
+    );
+}

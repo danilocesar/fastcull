@@ -53,6 +53,7 @@ fn pool_cap() -> usize {
 /// halving reaches the floor in 3 windows.
 struct PoolController {
     limit: usize,
+    floor: usize,
     cap: usize,
     grow_below: Duration,
     shrink_above: Duration,
@@ -60,9 +61,28 @@ struct PoolController {
 
 impl PoolController {
     fn new() -> Self {
+        // FASTCULL_MAX_READERS=N (user request 2026-07-25, raw-pipeline.md):
+        // debug/testing override REPLACING the adaptive cap — N above the
+        // core count raises the ceiling (spec: an override, not merely a
+        // limiter). N <= 4 also lowers the floor, so N=1 pins a single
+        // reader and N=4 restores the old fixed-4 behavior; unset = adaptive.
+        let over = std::env::var("FASTCULL_MAX_READERS")
+            .ok()
+            .and_then(|v| v.parse::<usize>().ok())
+            .filter(|n| *n >= 1);
+        Self::with_override(over)
+    }
+
+    fn with_override(max_readers: Option<usize>) -> Self {
+        let (floor, cap) = match max_readers {
+            Some(n) => (POOL_MIN_READERS.min(n), n),
+            None => (POOL_MIN_READERS, pool_cap()),
+        };
+        let cap = cap.max(floor);
         Self {
-            limit: POOL_MIN_READERS,
-            cap: pool_cap(),
+            limit: POOL_MIN_READERS.clamp(floor, cap),
+            floor,
+            cap,
             grow_below: Duration::from_millis(200),
             shrink_above: Duration::from_millis(500),
         }
@@ -75,7 +95,7 @@ impl PoolController {
 
     /// Multiplicative decrease, clamped at the floor.
     fn shrink_halve(&mut self) {
-        self.limit = (self.limit / 2).max(POOL_MIN_READERS);
+        self.limit = (self.limit / 2).max(self.floor);
     }
 }
 
@@ -844,10 +864,26 @@ mod tests {
     fn test_controller(cap: usize) -> PoolController {
         PoolController {
             limit: POOL_MIN_READERS,
+            floor: POOL_MIN_READERS,
             cap,
             grow_below: Duration::from_millis(200),
             shrink_above: Duration::from_millis(500),
         }
+    }
+
+    /// FASTCULL_MAX_READERS override semantics (spec: caps the adaptive
+    /// range; at or below the floor it pins the pool to a fixed size).
+    #[test]
+    fn controller_override_caps_and_pins() {
+        let c = PoolController::with_override(Some(1));
+        assert_eq!((c.limit, c.floor, c.cap), (1, 1, 1), "N=1 pins one reader");
+        let c = PoolController::with_override(Some(4));
+        assert_eq!((c.limit, c.floor, c.cap), (4, 4, 4), "N=4 = old fixed gate");
+        let c = PoolController::with_override(Some(6));
+        assert_eq!((c.limit, c.floor, c.cap), (4, 4, 6), "N>4 caps growth only");
+        let c = PoolController::with_override(None);
+        assert_eq!((c.limit, c.floor), (4, 4));
+        assert_eq!(c.cap, pool_cap());
     }
 
     #[test]

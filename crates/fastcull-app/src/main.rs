@@ -76,12 +76,162 @@ struct AppState {
     /// which rung each held texture is, and what must be adopted from the
     /// engine cache when no event will fire.
     va: fastcull_core::viewassets::ViewAssets,
+    /// M5 filter/sort state: the grid binds to `view` (image ids passing the
+    /// filter, in sort order); `cursor` remains an IMAGE id throughout.
+    query: fastcull_core::filter::ViewQuery,
+    view: Vec<usize>,
+    /// EXIF capture sort keys, filled by MetadataReady events (None until
+    /// metadata loads; keyless images sort after keyed ones by name).
+    capture_keys: Vec<Option<String>>,
+    filter_bar_visible: bool,
+    /// Engine event receivers live in state so File > Open Folder can swap
+    /// the whole session without restarting the event pump.
+    pipeline_rx: Option<std::sync::mpsc::Receiver<SessionEvent>>,
+    loupe_rx: Option<std::sync::mpsc::Receiver<fastcull_core::loupe::LoupeEvent>>,
+    sidecar_errs: Option<std::sync::mpsc::Receiver<fastcull_core::sidecar_writer::WriteFailure>>,
+}
+
+/// FASTCULL_TRACE=1: log UI-thread stalls to stderr (any handle_nav /
+/// refresh phase over the trace threshold). Debug facility for hang
+/// reports — zero cost when off.
+fn trace_enabled() -> bool {
+    static ON: std::sync::OnceLock<bool> = std::sync::OnceLock::new();
+    *ON.get_or_init(|| std::env::var_os("FASTCULL_TRACE").is_some())
+}
+
+fn trace_clock() -> u128 {
+    static START: std::sync::OnceLock<std::time::Instant> = std::sync::OnceLock::new();
+    START
+        .get_or_init(std::time::Instant::now)
+        .elapsed()
+        .as_millis()
+}
+
+fn trace_slow(label: &str, t0: Option<std::time::Instant>) {
+    if let Some(t0) = t0 {
+        let ms = t0.elapsed().as_millis();
+        if ms > 20 {
+            eprintln!("fastcull-trace: [{}] {label} took {ms} ms", trace_clock());
+        }
+    }
+}
+
+fn trace_mark(label: &str) {
+    if trace_enabled() {
+        eprintln!("fastcull-trace: [{}] {label}", trace_clock());
+    }
 }
 
 impl AppState {
     fn count(&self) -> usize {
         self.labels.len()
     }
+
+    /// The cursor's position in the current view (None = cursor image is
+    /// filtered out or the view is empty).
+    fn cursor_pos(&self) -> Option<usize> {
+        self.view.iter().position(|id| *id == self.cursor)
+    }
+}
+
+fn recompute_view(st: &mut AppState) {
+    st.view = fastcull_core::filter::view(&st.picks, &st.labels, &st.capture_keys, &st.query);
+}
+
+/// Recompute the view AND re-apply the cursor rules. Every membership
+/// change — a filter switch, but also pump-driven ones (sidecar picks
+/// landing under an active filter, progressive capture keys) — must leave
+/// the cursor on a view member (nearest survivor), and an emptied view has
+/// no loupe to be in (persona G2). Validator finding: the pump previously
+/// recomputed membership alone, leaving a cursor no cell owned.
+fn recompute_view_keep_cursor(st: &mut AppState) {
+    let old_view = std::mem::take(&mut st.view);
+    let old_cursor = old_view.contains(&st.cursor).then_some(st.cursor);
+    recompute_view(st);
+    if let Some(id) =
+        fastcull_core::filter::cursor_after_filter_change(&old_view, old_cursor, &st.view)
+    {
+        st.cursor = id;
+    }
+    let loupe_step = grid::ZOOM_COLUMNS.len() - 1;
+    if st.view.is_empty() && st.zoom == loupe_step {
+        st.one2one = false;
+        st.zoom = st.last_grid_zoom.min(loupe_step - 1);
+    }
+}
+
+/// Swap the session to `folder` (startup CLI path and File > Open Folder
+/// share this — spec: identical behavior). Drops the old engines first:
+/// pipeline/loupe workers stop, the old sidecar writer flushes on drop.
+fn load_folder(state: &Rc<RefCell<AppState>>, folder: &std::path::Path) -> Result<(), String> {
+    let session = Session::open(folder).map_err(|e| e.to_string())?;
+    let labels: Vec<String> = session
+        .images
+        .iter()
+        .map(|i| i.file_name().into_owned())
+        .collect();
+    let jobs: Vec<JobSpec> = session
+        .images
+        .iter()
+        .map(|i| JobSpec {
+            path: i.path.clone(),
+            size: i.size,
+            mtime: i.mtime,
+        })
+        .collect();
+    let mut st = state.borrow_mut();
+    st.pipeline = None;
+    st.loupe = None;
+    st.pipeline_rx = None;
+    st.loupe_rx = None;
+    drop(st.writer.take()); // flush barrier for the previous session's marks
+    st.sidecar_errs = None;
+
+    let count = labels.len();
+    let paths: Vec<std::path::PathBuf> = jobs.iter().map(|j| j.path.clone()).collect();
+    st.labels = labels;
+    st.paths = paths.clone();
+    st.picks = vec![fastcull_core::catalog::PickState::Unmarked; count];
+    st.touched.clear();
+    st.sidecar_failures = 0;
+    st.cursor = 0;
+    st.thumb_jpegs.clear();
+    st.images.clear();
+    st.failed.clear();
+    st.thumbs_done = 0;
+    st.synthetic = false;
+    st.fullres.clear();
+    st.one2one = false;
+    st.mids.clear();
+    st.va = fastcull_core::viewassets::ViewAssets::default();
+    st.capture_keys = vec![None; count];
+    // A new folder starts unfiltered: a hidden active filter on a fresh
+    // session would look like missing files.
+    st.query = fastcull_core::filter::ViewQuery::default();
+
+    let (writer, errs) = fastcull_core::sidecar_writer::SidecarWriter::start();
+    st.writer = Some(writer);
+    st.sidecar_errs = Some(errs);
+    // FASTCULL_NO_CACHE: hermetic test runs must not touch the user's
+    // real per-user cache DB (validator/QE finding).
+    let cache_path = if std::env::var_os("FASTCULL_NO_CACHE").is_some() {
+        None
+    } else {
+        fastcull_core::cache::default_cache_path()
+    };
+    let (pipeline, rx) = Pipeline::start(
+        jobs,
+        cache_path,
+        std::thread::available_parallelism().map_or(4, |n| n.get()),
+    );
+    let (loupe, loupe_rx) =
+        fastcull_core::loupe::LoupeEngine::start(paths, fastcull_core::loupe::DEFAULT_BUDGET_BYTES);
+    st.pipeline = Some(pipeline);
+    st.loupe = Some(loupe);
+    st.pipeline_rx = Some(rx);
+    st.loupe_rx = Some(loupe_rx);
+    recompute_view(&mut st);
+    Ok(())
 }
 
 fn main() {
@@ -118,57 +268,35 @@ fn main() {
         .position(|a| a == "--start-loupe")
         .map(|i| args.remove(i))
         .is_some();
-    let (labels, jobs): (Vec<String>, Option<Vec<JobSpec>>) = match args.as_slice() {
+    enum Launch {
+        Synthetic(usize),
+        Folder(std::path::PathBuf),
+    }
+    let launch = match args.as_slice() {
         [flag, n] if flag == "--synthetic" => {
             let Ok(n) = n.parse::<usize>() else {
                 eprintln!("usage: fastcull-app <folder> | --synthetic <count>");
                 std::process::exit(2);
             };
-            ((0..n).map(|i| format!("SYN{i:05}.ARW")).collect(), None)
+            Launch::Synthetic(n)
         }
-        [folder] => {
-            let session = Session::open(std::path::Path::new(folder)).unwrap_or_else(|e| {
-                eprintln!("fastcull: {e}");
-                std::process::exit(1);
-            });
-            let labels = session
-                .images
-                .iter()
-                .map(|i| i.file_name().into_owned())
-                .collect();
-            let jobs = session
-                .images
-                .iter()
-                .map(|i| JobSpec {
-                    path: i.path.clone(),
-                    size: i.size,
-                    mtime: i.mtime,
-                })
-                .collect();
-            (labels, Some(jobs))
-        }
+        [folder] => Launch::Folder(folder.into()),
         _ => {
             eprintln!("usage: fastcull-app <folder> | --synthetic <count>");
             std::process::exit(2);
         }
     };
 
-    let synthetic = jobs.is_none();
-    let count_init = labels.len();
-    let paths_init: Vec<std::path::PathBuf> = jobs
-        .as_deref()
-        .map(|j| j.iter().map(|s| s.path.clone()).collect())
-        .unwrap_or_default();
     let window = MainWindow::new().expect("creating window");
     let cells = Rc::new(VecModel::from(Vec::<CellData>::new()));
     window.set_cells(slint::ModelRc::from(Rc::clone(&cells)));
     let start_at_loupe = start_11 || start_loupe;
     let state = Rc::new(RefCell::new(AppState {
-        labels,
-        paths: paths_init,
-        picks: vec![fastcull_core::catalog::PickState::Unmarked; count_init],
+        labels: Vec::new(),
+        paths: Vec::new(),
+        picks: Vec::new(),
         touched: HashSet::new(),
-        writer: None, // wired below with its error channel
+        writer: None,
         sidecar_failures: 0,
         zoom: if start_at_loupe {
             grid::ZOOM_COLUMNS.len() - 1
@@ -181,7 +309,7 @@ fn main() {
         failed: HashSet::new(),
         pipeline: None,
         thumbs_done: 0,
-        synthetic,
+        synthetic: false,
         cells,
         loupe: None,
         fullres: Vec::new(),
@@ -189,38 +317,35 @@ fn main() {
         last_grid_zoom: 1,
         mids: HashMap::new(),
         va: fastcull_core::viewassets::ViewAssets::default(),
+        query: fastcull_core::filter::ViewQuery::default(),
+        view: Vec::new(),
+        capture_keys: Vec::new(),
+        filter_bar_visible: true,
+        pipeline_rx: None,
+        loupe_rx: None,
+        sidecar_errs: None,
     }));
 
-    let mut sidecar_errs = None;
-    if !synthetic {
-        let (writer, errs) = fastcull_core::sidecar_writer::SidecarWriter::start();
-        state.borrow_mut().writer = Some(writer);
-        sidecar_errs = Some(errs);
+    match launch {
+        Launch::Synthetic(n) => {
+            let mut st = state.borrow_mut();
+            st.labels = (0..n).map(|i| format!("SYN{i:05}.ARW")).collect();
+            st.picks = vec![fastcull_core::catalog::PickState::Unmarked; n];
+            st.capture_keys = vec![None; n];
+            st.synthetic = true;
+            recompute_view(&mut st);
+        }
+        Launch::Folder(path) => {
+            if let Err(e) = load_folder(&state, &path) {
+                eprintln!("fastcull: {e}");
+                std::process::exit(1);
+            }
+            // load_folder resets one2one; --start-11 wants it back on.
+            if start_11 {
+                state.borrow_mut().one2one = true;
+            }
+        }
     }
-    // Start the engines for real folders; events polled on a UI timer.
-    let event_rx = jobs.map(|jobs| {
-        let paths: Vec<std::path::PathBuf> = jobs.iter().map(|j| j.path.clone()).collect();
-        // FASTCULL_NO_CACHE: hermetic test runs must not touch the user's
-        // real per-user cache DB (validator/QE finding).
-        let cache_path = if std::env::var_os("FASTCULL_NO_CACHE").is_some() {
-            None
-        } else {
-            fastcull_core::cache::default_cache_path()
-        };
-        let (pipeline, rx) = Pipeline::start(
-            jobs,
-            cache_path,
-            std::thread::available_parallelism().map_or(4, |n| n.get()),
-        );
-        let (loupe, loupe_rx) = fastcull_core::loupe::LoupeEngine::start(
-            paths,
-            fastcull_core::loupe::DEFAULT_BUDGET_BYTES,
-        );
-        let mut st = state.borrow_mut();
-        st.pipeline = Some(pipeline);
-        st.loupe = Some(loupe);
-        (rx, loupe_rx)
-    });
 
     {
         let state = Rc::clone(&state);
@@ -239,11 +364,95 @@ fn main() {
             handle_nav(&win, &state, key.as_str());
         });
     }
+    {
+        let state = Rc::clone(&state);
+        let win = window.as_weak();
+        window.on_set_filter(move |name| {
+            let Some(win) = win.upgrade() else { return };
+            let filter = match name.as_str() {
+                "picked" => fastcull_core::filter::PickFilter::Picked,
+                "rejected" => fastcull_core::filter::PickFilter::Rejected,
+                "unmarked" => fastcull_core::filter::PickFilter::Unmarked,
+                _ => fastcull_core::filter::PickFilter::All,
+            };
+            apply_filter_change(&win, &state, filter);
+        });
+    }
+    {
+        let state = Rc::clone(&state);
+        let win = window.as_weak();
+        window.on_cycle_sort(move || {
+            let Some(win) = win.upgrade() else { return };
+            {
+                use fastcull_core::filter::SortKey;
+                let mut st = state.borrow_mut();
+                // Cycle: Capture ↑ → Capture ↓ → Name ↑ → Name ↓ → …
+                let q = &mut st.query;
+                (q.sort, q.ascending) = match (q.sort, q.ascending) {
+                    (SortKey::CaptureTime, true) => (SortKey::CaptureTime, false),
+                    (SortKey::CaptureTime, false) => (SortKey::Filename, true),
+                    (SortKey::Filename, true) => (SortKey::Filename, false),
+                    (SortKey::Filename, false) => (SortKey::CaptureTime, true),
+                };
+                recompute_view(&mut st);
+            }
+            reveal_cursor(&win, &state);
+        });
+    }
+    {
+        let state = Rc::clone(&state);
+        let win = window.as_weak();
+        window.on_toggle_filter_bar(move || {
+            let Some(win) = win.upgrade() else { return };
+            let hide_resets = {
+                let mut st = state.borrow_mut();
+                st.filter_bar_visible = !st.filter_bar_visible;
+                win.set_filter_bar_visible(st.filter_bar_visible);
+                // Persona G6: a filter must never be active while invisible.
+                !st.filter_bar_visible && st.query.filter != fastcull_core::filter::PickFilter::All
+            };
+            if hide_resets {
+                apply_filter_change(&win, &state, fastcull_core::filter::PickFilter::All);
+            } else {
+                reveal_cursor(&win, &state);
+            }
+        });
+    }
+    {
+        let state = Rc::clone(&state);
+        let win = window.as_weak();
+        window.on_open_folder(move || {
+            let Some(win) = win.upgrade() else { return };
+            let Some(folder) = rfd::FileDialog::new().pick_folder() else {
+                return; // user cancelled
+            };
+            match load_folder(&state, &folder) {
+                Ok(()) => {
+                    // Menu-open behaves like the CLI argument (spec): fresh
+                    // grid zoom, cursor at the first image.
+                    let mut st = state.borrow_mut();
+                    st.zoom = 1;
+                    st.last_grid_zoom = 1;
+                    drop(st);
+                    win.set_vp_y(0.0);
+                    refresh(&win, &state);
+                }
+                Err(e) => {
+                    eprintln!("fastcull: {e}");
+                    win.set_status(format!("Open folder failed: {e}").into());
+                }
+            }
+        });
+    }
+    window.on_quit(|| {
+        slint::quit_event_loop().ok();
+    });
 
-    // Pipeline event pump: drain pending events every 33 ms; refresh once if
-    // anything relevant arrived.
+    // Engine event pump: drain pending events every 33 ms; refresh once if
+    // anything relevant arrived. Receivers live in AppState so File > Open
+    // Folder can swap the session under a running pump.
     let timer = slint::Timer::default();
-    if let Some((rx, loupe_rx)) = event_rx {
+    {
         let state = Rc::clone(&state);
         let win = window.as_weak();
         timer.start(
@@ -253,7 +462,12 @@ fn main() {
                 let mut dirty = false;
                 {
                     let mut st = state.borrow_mut();
-                    for event in rx.try_iter() {
+                    let events: Vec<SessionEvent> = st
+                        .pipeline_rx
+                        .as_ref()
+                        .map(|rx| rx.try_iter().collect())
+                        .unwrap_or_default();
+                    for event in events {
                         match event {
                             SessionEvent::ThumbReady {
                                 index, thumb_jpeg, ..
@@ -267,7 +481,15 @@ fn main() {
                                 st.thumbs_done += 1;
                                 dirty = true;
                             }
-                            SessionEvent::MetadataReady { .. } => {}
+                            SessionEvent::MetadataReady { index, exif, .. } => {
+                                // Capture-time sort keys arrive progressively;
+                                // the view re-sorts as they land (spec:
+                                // keyless images sort after keyed ones).
+                                if let Some(slot) = st.capture_keys.get_mut(index) {
+                                    *slot = exif.sort_key();
+                                    dirty = true;
+                                }
+                            }
                             SessionEvent::Sidecar { index, pick } => {
                                 // Picks from a previous session/tool — never
                                 // override what the user changed just now.
@@ -281,21 +503,28 @@ fn main() {
                         }
                     }
                     let at_loupe = st.zoom == grid::ZOOM_COLUMNS.len() - 1;
-                    if let Some(errs) = &sidecar_errs {
-                        for failure in errs.try_iter() {
-                            st.sidecar_failures += 1;
-                            eprintln!(
-                                "fastcull: sidecar write failed for {}: {}",
-                                failure.path.display(),
-                                failure.reason
-                            );
-                            dirty = true;
-                        }
+                    let failures: Vec<_> = st
+                        .sidecar_errs
+                        .as_ref()
+                        .map(|rx| rx.try_iter().collect())
+                        .unwrap_or_default();
+                    for _failure in failures {
+                        // Count for the status bar only: the writer's drain
+                        // already eprintlns the path+reason (QE finding —
+                        // logging here too printed every failure twice).
+                        st.sidecar_failures += 1;
+                        dirty = true;
                     }
-                    for event in loupe_rx.try_iter() {
+                    let loupe_events: Vec<_> = st
+                        .loupe_rx
+                        .as_ref()
+                        .map(|rx| rx.try_iter().collect())
+                        .unwrap_or_default();
+                    for event in loupe_events {
                         match event {
                             fastcull_core::loupe::LoupeEvent::Ready { index, image } => {
                                 let long = image.width.max(image.height);
+                                trace_mark(&format!("loupe ready idx {index} long {long}"));
                                 if long <= fastcull_core::loupe::MID_RUNG_MAX_LONG {
                                     // Mid rung (~5 MB copy): grid-cell quality
                                     // for intermediate zooms; cheap, always keep.
@@ -317,6 +546,10 @@ fn main() {
                             }
                         }
                     }
+                    if dirty {
+                        // Picks/keys may have changed membership or order.
+                        recompute_view_keep_cursor(&mut st);
+                    }
                 }
                 if dirty {
                     if let Some(win) = win.upgrade() {
@@ -328,6 +561,32 @@ fn main() {
     }
 
     refresh(&window, &state);
+
+    // FASTCULL_DRIVE="6000:one2one;12000:grid;15000:quit": timed nav
+    // injection for headless hang debugging (companion to FASTCULL_TRACE —
+    // no display-automation tooling needed on Wayland).
+    if let Ok(script) = std::env::var("FASTCULL_DRIVE") {
+        for step in script.split(';') {
+            let Some((ms, key)) = step.split_once(':') else {
+                continue;
+            };
+            let Ok(ms) = ms.trim().parse::<u64>() else {
+                continue;
+            };
+            let key = key.trim().to_string();
+            let win = window.as_weak();
+            let state = Rc::clone(&state);
+            slint::Timer::single_shot(std::time::Duration::from_millis(ms), move || {
+                let Some(win) = win.upgrade() else { return };
+                trace_mark(&format!("drive: {key}"));
+                if key == "quit" {
+                    slint::quit_event_loop().ok();
+                    return;
+                }
+                handle_nav(&win, &state, &key);
+            });
+        }
+    }
 
     // Screenshot mode: wait for content readiness, then snapshot and quit.
     // Deterministic (validator finding: a fixed delay captured the fit view
@@ -448,7 +707,38 @@ fn write_snapshot_jpeg(
     std::fs::write(out, data).is_ok()
 }
 
+/// Re-anchor the scroll so the cursor is visible, then refresh. Order per
+/// the cursor contract: virtual height BEFORE viewport-y.
+fn reveal_cursor(win: &MainWindow, state: &Rc<RefCell<AppState>>) {
+    let (layout, viewport_h, scroll_y) = current_geometry(win, state);
+    let pos = state.borrow().cursor_pos().unwrap_or(0);
+    let new_scroll = layout.scroll_to_reveal(pos, scroll_y, viewport_h);
+    win.set_virtual_height(layout.total_height);
+    win.set_vp_y(-new_scroll);
+    refresh(win, state);
+}
+
+/// Switch the single-choice filter chip (spec cursor rule + persona G2).
+fn apply_filter_change(
+    win: &MainWindow,
+    state: &Rc<RefCell<AppState>>,
+    filter: fastcull_core::filter::PickFilter,
+) {
+    {
+        let mut st = state.borrow_mut();
+        st.query.filter = filter;
+        recompute_view_keep_cursor(&mut st);
+    }
+    reveal_cursor(win, state);
+}
+
 fn handle_nav(win: &MainWindow, state: &Rc<RefCell<AppState>>, key: &str) {
+    let t0 = trace_enabled().then(std::time::Instant::now);
+    handle_nav_inner(win, state, key);
+    trace_slow(&format!("handle_nav({key})"), t0);
+}
+
+fn handle_nav_inner(win: &MainWindow, state: &Rc<RefCell<AppState>>, key: &str) {
     let (layout, viewport_h, scroll_y) = current_geometry(win, state);
     let mut st = state.borrow_mut();
     let loupe_step = grid::ZOOM_COLUMNS.len() - 1;
@@ -460,17 +750,33 @@ fn handle_nav(win: &MainWindow, state: &Rc<RefCell<AppState>>, key: &str) {
                 _ => fastcull_core::catalog::PickState::Unmarked,
             };
             let cursor = st.cursor;
-            if let Some(slot) = st.picks.get_mut(cursor) {
+            // Marks land on the cursor image only while it is in the view
+            // (an empty filtered view has nothing to mark).
+            if let (Some(old_pos), Some(slot)) = (st.cursor_pos(), st.picks.get_mut(cursor)) {
                 *slot = pick;
                 st.touched.insert(cursor);
                 if let (Some(writer), Some(path)) = (&st.writer, st.paths.get(cursor)) {
                     writer.mark(path.clone(), pick);
                 }
-                // Auto-advance after pick/reject at EVERY zoom level (user
-                // decision 2026-07-25; future config option). The mark lands
-                // on the pre-advance cursor; clearing (U) stays put.
-                if key != "clear" {
-                    st.cursor = grid::navigate(cursor, st.count(), 1, 1, Nav::Right);
+                // Advance/removal composition (spec, persona G1): net
+                // movement is exactly one image. Auto-advance after Y/N
+                // (user decision 2026-07-25; future config option); U stays.
+                recompute_view(&mut st);
+                match fastcull_core::filter::cursor_after_mark(
+                    cursor,
+                    old_pos,
+                    &st.view,
+                    key != "clear",
+                ) {
+                    Some(id) => st.cursor = id,
+                    None => {
+                        // Inbox zero (persona G2): leaving the loupe — the
+                        // empty state is a grid-level view.
+                        if st.zoom == loupe_step {
+                            st.one2one = false;
+                            st.zoom = st.last_grid_zoom.min(loupe_step - 1);
+                        }
+                    }
                 }
             }
         }
@@ -519,9 +825,16 @@ fn handle_nav(win: &MainWindow, state: &Rc<RefCell<AppState>>, key: &str) {
                 "end" => Nav::End,
                 _ => return,
             };
-            let rows_per_page =
-                ((viewport_h / (layout.cell_height + grid::CELL_GAP)) as usize).max(1);
-            st.cursor = grid::navigate(st.cursor, st.count(), layout.columns, rows_per_page, nav);
+            // Navigation happens over VIEW positions; the cursor stays an
+            // image id (M5 filter model).
+            if !st.view.is_empty() {
+                let rows_per_page =
+                    ((viewport_h / (layout.cell_height + grid::CELL_GAP)) as usize).max(1);
+                let pos = st.cursor_pos().unwrap_or(0);
+                let new_pos =
+                    grid::navigate(pos, st.view.len(), layout.columns, rows_per_page, nav);
+                st.cursor = st.view[new_pos];
+            }
         }
     }
     // Keep the cursor visible under the (possibly new) layout. Order matters
@@ -529,8 +842,9 @@ fn handle_nav(win: &MainWindow, state: &Rc<RefCell<AppState>>, key: &str) {
     // CURRENT viewport-height, so the new virtual height must land first or
     // the reveal gets clamped against stale bounds and the cursor scrolls
     // out of view.
-    let layout = GridLayout::new(st.zoom, win.get_grid_width(), st.count());
-    let new_scroll = layout.scroll_to_reveal(st.cursor, scroll_y, viewport_h);
+    let layout = GridLayout::new(st.zoom, win.get_grid_width(), st.view.len());
+    let pos = st.cursor_pos().unwrap_or(0);
+    let new_scroll = layout.scroll_to_reveal(pos, scroll_y, viewport_h);
     drop(st);
     win.set_virtual_height(layout.total_height);
     win.set_vp_y(-new_scroll);
@@ -539,7 +853,7 @@ fn handle_nav(win: &MainWindow, state: &Rc<RefCell<AppState>>, key: &str) {
 
 fn current_geometry(win: &MainWindow, state: &Rc<RefCell<AppState>>) -> (GridLayout, f32, f32) {
     let st = state.borrow();
-    let layout = GridLayout::new(st.zoom, win.get_grid_width(), st.count());
+    let layout = GridLayout::new(st.zoom, win.get_grid_width(), st.view.len());
     let viewport_h = win.get_grid_height();
     let scroll_y = (-win.get_vp_y()).max(0.0);
     (layout, viewport_h, scroll_y)
@@ -547,20 +861,33 @@ fn current_geometry(win: &MainWindow, state: &Rc<RefCell<AppState>>) -> (GridLay
 
 /// Rebuild the windowed model for the current viewport.
 fn refresh(win: &MainWindow, state: &Rc<RefCell<AppState>>) {
+    let t0 = trace_enabled().then(std::time::Instant::now);
+    refresh_inner(win, state);
+    trace_slow("refresh", t0);
+}
+
+fn refresh_inner(win: &MainWindow, state: &Rc<RefCell<AppState>>) {
     let (layout, viewport_h, scroll_y) = current_geometry(win, state);
     let mut st = state.borrow_mut();
-    let count = st.count();
-    let range = layout.visible_range(count, scroll_y, viewport_h, MARGIN_ROWS);
+    let view_len = st.view.len();
+    // Visible VIEW positions; `ids` are the image ids shown there (the two
+    // coincide only with filter=All + capture sort before keys arrive).
+    let range = layout.visible_range(view_len, scroll_y, viewport_h, MARGIN_ROWS);
+    let ids: Vec<usize> = range.clone().map(|pos| st.view[pos]).collect();
 
     // Tell the engine what is on screen (priority promotion).
     if let Some(pipeline) = &st.pipeline {
-        pipeline.set_visible(range.clone());
+        pipeline.promote(
+            ids.iter().copied(),
+            fastcull_core::pipeline::Priority::Visible,
+        );
     }
 
     // Decode encoded thumbs entering the window, bounded per refresh so a
     // page jump never stalls a frame; leftovers get a follow-up refresh.
-    let to_decode: Vec<usize> = range
-        .clone()
+    let to_decode: Vec<usize> = ids
+        .iter()
+        .copied()
         .filter(|i| st.thumb_jpegs.contains_key(i) && !st.images.contains_key(i))
         .collect();
     let leftovers = to_decode.len() > DECODES_PER_REFRESH;
@@ -585,18 +912,19 @@ fn refresh(win: &MainWindow, state: &Rc<RefCell<AppState>>) {
     // contract): scrolling moves the cursor, and full-res always targets
     // what the user is looking at.
     let at_loupe = layout.columns == 1;
-    if at_loupe && count > 0 {
+    if at_loupe && view_len > 0 {
         // Scroll moves the cursor ONLY when the cursor's cell left the
         // viewport: unconditionally snapping to the center row made arrow
         // keys a no-op on tall windows where >2 rows fit (validator
         // finding — move, no scroll needed, snap-back to center).
-        let (_, cur_top) = layout.position(st.cursor);
+        let cur_pos = st.cursor_pos().unwrap_or(0);
+        let (_, cur_top) = layout.position(cur_pos);
         let cur_visible =
             cur_top < scroll_y + viewport_h && cur_top + layout.cell_height > scroll_y;
         if !cur_visible {
             let center_row =
                 ((scroll_y + viewport_h * 0.5) / (layout.cell_height + grid::CELL_GAP)) as usize;
-            st.cursor = center_row.min(count - 1);
+            st.cursor = st.view[center_row.min(view_len - 1)];
         }
         if let Some(loupe) = &st.loupe {
             // focus() returns the cached image on a warm hit: the rebuild
@@ -613,8 +941,10 @@ fn refresh(win: &MainWindow, state: &Rc<RefCell<AppState>>) {
             let hit = loupe.focus(focus_index, display_long);
             let missing = !st.fullres.iter().any(|(i, _)| *i == focus_index);
             if let (Some(image), true) = (hit, missing) {
+                let t1 = trace_enabled().then(std::time::Instant::now);
                 let texture = fullres_texture(&image);
                 insert_fullres(&mut st, focus_index, texture);
+                trace_slow("refresh: fullres_texture copy", t1);
             }
         }
     }
@@ -628,15 +958,17 @@ fn refresh(win: &MainWindow, state: &Rc<RefCell<AppState>>) {
         if let Some(loupe) = &stx.loupe {
             // ensure() also returns cached images no event will announce
             // (the zoom-walk bug: pruned-and-revisited cells stayed thumbs).
-            let adopts = stx.va.ensure(range.clone(), cell_phys as u32, loupe);
+            let adopts = stx.va.ensure(&ids, cell_phys as u32, loupe);
             let leftover = adopts.len() > ADOPTS_PER_REFRESH;
             for (index, image) in adopts.into_iter().take(ADOPTS_PER_REFRESH) {
                 if stx.mids.len() >= MIDS_CAP && !stx.mids.contains_key(&index) {
                     break;
                 }
+                let t1 = trace_enabled().then(std::time::Instant::now);
                 let (held_long, texture) = adopt_texture(&image);
                 stx.va.note_held(index, held_long);
                 stx.mids.insert(index, texture);
+                trace_slow("refresh: mid-rung adopt/downscale", t1);
             }
             if leftover {
                 let win_weak = win.as_weak();
@@ -649,9 +981,8 @@ fn refresh(win: &MainWindow, state: &Rc<RefCell<AppState>>) {
             }
         }
     }
-    let keep = range.clone();
-    st.mids.retain(|i, _| keep.contains(i));
-    st.va.prune(&keep);
+    st.mids.retain(|i, _| ids.contains(i));
+    st.va.prune(&ids);
 
     let cursor = st.cursor;
     let fullres_for = |st: &AppState, index: usize| -> Option<slint::Image> {
@@ -683,8 +1014,9 @@ fn refresh(win: &MainWindow, state: &Rc<RefCell<AppState>>) {
     // Mutate the one bound VecModel in place (spec: reuse, don't recreate).
     let model = Rc::clone(&st.cells);
     let mut row = 0usize;
-    for index in range.clone() {
-        let (x, y) = layout.position(index);
+    for pos in range.clone() {
+        let index = st.view[pos];
+        let (x, y) = layout.position(pos);
         let full = if at_loupe {
             fullres_for(&st, index)
         } else {
@@ -731,26 +1063,74 @@ fn refresh(win: &MainWindow, state: &Rc<RefCell<AppState>>) {
     }
 
     win.set_virtual_height(layout.total_height);
-    let picked_n = st
-        .picks
-        .iter()
-        .filter(|p| **p == fastcull_core::catalog::PickState::Picked)
-        .count();
-    let rejected_n = st
-        .picks
-        .iter()
-        .filter(|p| **p == fastcull_core::catalog::PickState::Rejected)
-        .count();
+
+    // Filter bar + status (M5): live counts, active chip, sort label,
+    // inbox-zero empty state (persona G2).
+    let counts = fastcull_core::filter::counts(&st.picks);
+    win.set_counts_all(counts.all as i32);
+    win.set_counts_picked(counts.picked as i32);
+    win.set_counts_rejected(counts.rejected as i32);
+    win.set_counts_unmarked(counts.unmarked as i32);
+    win.set_filter_bar_visible(st.filter_bar_visible);
+    use fastcull_core::filter::{PickFilter, SortKey};
+    win.set_active_filter(
+        match st.query.filter {
+            PickFilter::All => "all",
+            PickFilter::Picked => "picked",
+            PickFilter::Rejected => "rejected",
+            PickFilter::Unmarked => "unmarked",
+        }
+        .into(),
+    );
+    win.set_sort_label(
+        match (st.query.sort, st.query.ascending) {
+            (SortKey::CaptureTime, true) => "Capture ↑",
+            (SortKey::CaptureTime, false) => "Capture ↓",
+            (SortKey::Filename, true) => "Name ↑",
+            (SortKey::Filename, false) => "Name ↓",
+        }
+        .into(),
+    );
+    let count = st.count();
+    win.set_empty_message(if view_len == 0 && count > 0 {
+        let what = match st.query.filter {
+            PickFilter::All => "images",
+            PickFilter::Picked => "picked",
+            PickFilter::Rejected => "rejected",
+            PickFilter::Unmarked => "unmarked",
+        };
+        format!(
+            "0 {what} — ★{} picked, ✕{} rejected, {} unmarked of {}",
+            counts.picked, counts.rejected, counts.unmarked, counts.all
+        )
+        .into()
+    } else if count == 0 {
+        "No images — File > Open Folder… (Ctrl+O)".into()
+    } else {
+        slint::SharedString::default()
+    });
+
+    let cursor_pos = st.cursor_pos();
+    let cursor_in_view = cursor_pos.is_some();
+    let showing = if st.query.filter == PickFilter::All {
+        String::new()
+    } else {
+        format!(" — showing {view_len} of {count}")
+    };
     win.set_status(
         format!(
-            "{} ({}/{}) — {} images, {} thumbs loaded — ★{} ✕{}{} — {} column{}",
-            st.labels.get(cursor).cloned().unwrap_or_default(),
-            cursor + 1,
-            count.max(1),
-            count,
+            "{} ({}/{}){} — {} thumbs loaded — ★{} ✕{}{} — {} column{}",
+            if cursor_in_view {
+                st.labels.get(cursor).cloned().unwrap_or_default()
+            } else {
+                String::new()
+            },
+            cursor_pos.map_or(0, |p| p + 1),
+            view_len.max(1),
+            showing,
             st.thumbs_done.min(count),
-            picked_n,
-            rejected_n,
+            counts.picked,
+            counts.rejected,
             if st.sidecar_failures > 0 {
                 format!(" — ⚠{} sidecar write failures", st.sidecar_failures)
             } else {

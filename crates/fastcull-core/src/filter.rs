@@ -120,6 +120,26 @@ pub fn cursor_after_removal(new_view: &[usize], old_pos: usize) -> Option<usize>
     Some(new_view[old_pos.min(new_view.len() - 1)])
 }
 
+/// Cursor rule after MARKING the cursor image (spec, persona gap G1
+/// 2026-07-25): net movement is exactly one image, always. If the mark
+/// removed the image from the filtered view, the removal rule IS the
+/// advance; auto-advance applies only when the image stays in view.
+/// `old_pos` is the cursor's position in the pre-mark view.
+pub fn cursor_after_mark(
+    marked_id: usize,
+    old_pos: usize,
+    new_view: &[usize],
+    auto_advance: bool,
+) -> Option<usize> {
+    match new_view.iter().position(|id| *id == marked_id) {
+        // Image left the view: the slide-in IS the advance.
+        None => cursor_after_removal(new_view, old_pos),
+        // Image stayed: advance one (clamped at the end) or stay put.
+        Some(pos) if auto_advance => Some(new_view[(pos + 1).min(new_view.len() - 1)]),
+        Some(pos) => Some(new_view[pos]),
+    }
+}
+
 /// Cursor rule for a FILTER change (spec): keep the cursor image if it
 /// survived; else the nearest survivor from the old view (scanning outward
 /// from the old position); else the first image of the new view.
@@ -266,6 +286,25 @@ mod tests {
         // Removing the LAST falls back to the new last (previous image).
         assert_eq!(cursor_after_removal(&[10, 20], 2), Some(20));
         assert_eq!(cursor_after_removal(&[], 0), None);
+    }
+
+    /// Persona gap G1: marking must move the cursor exactly one image —
+    /// the removal rule and auto-advance must never compose (double-skip).
+    #[test]
+    fn mark_advances_exactly_one_image() {
+        // Filter=Unmarked view [10, 20, 30]; marking 10 removes it: the
+        // new view's slide-in (20 at pos 0) IS the advance.
+        assert_eq!(cursor_after_mark(10, 0, &[20, 30], true), Some(20));
+        // Filter=All: image stays in view; auto-advance moves one right.
+        assert_eq!(cursor_after_mark(10, 0, &[10, 20, 30], true), Some(20));
+        // At the end of the view: clamp, don't wrap.
+        assert_eq!(cursor_after_mark(30, 2, &[10, 20, 30], true), Some(30));
+        // Auto-advance off (U / future config): stay on the image.
+        assert_eq!(cursor_after_mark(10, 0, &[10, 20, 30], false), Some(10));
+        // Removing the LAST image of the view: previous slides under.
+        assert_eq!(cursor_after_mark(30, 2, &[10, 20], true), Some(20));
+        // View emptied: inbox zero.
+        assert_eq!(cursor_after_mark(10, 0, &[], true), None);
     }
 
     #[test]

@@ -135,6 +135,16 @@ Design (validator design review 2026-07-25: ADOPT-WITH-CHANGES, incorporated):
   stall). Upward, +1 per fast probe from the floor; on fast media probes
   are milliseconds apart, so the ramp is invisible. The floor guarantees
   the proven baseline of 4 at all times — there is no "stuck at 1" state.
+- **Override** (user request 2026-07-25): `FASTCULL_MAX_READERS=N` replaces
+  the adaptive cap for debugging/testing. N at or below the floor also lowers
+  the floor — `=1` pins a single reader, `=4` restores the old fixed-4
+  behavior; `>4` sets the ceiling to exactly N, **including above the core
+  count** (it is an override, not merely a limiter: QE observed 94 readers
+  with `=999` on 32 cores — useful for saturating high-latency NAS mounts,
+  self-inflicted otherwise). Unset = fully adaptive. Env var (not a CLI
+  flag) so the app and the CLI honor the same knob (verified in both;
+  `FASTCULL_NO_CACHE`, by contrast, is app-only — the CLI uses
+  `--no-cache`).
 - **Debug visibility** (user request 2026-07-25): every limit change is
   logged to **stderr** (`eprintln`, consistent with all FastCull
   diagnostics; stdout belongs to CLI output) as
