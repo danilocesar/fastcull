@@ -122,8 +122,15 @@ M5 implementation start per the gate.
       session, counts included.
 - [ ] Windowed-model tests (core side): visible-range → model-window computation,
       incl. partial rows, tiny folders, and N=1.
-- [ ] Slint screenshot smoke tests: grid with placeholder + loaded + badge states;
-      loupe fit and 1:1.
+- [x] Slint screenshot smoke tests (`fastcull-app --screenshot <out>` +
+      `tests/screenshot.rs`): grid placeholder (synthetic), loaded thumbnails
+      (texture-variance asserted), failed-badge session, loupe fit
+      (`--start-loupe`) and 1:1 (`--start-11`). Recorded limitations:
+      snapshots are always JPEG q92 regardless of extension; `--screenshot`
+      forces the software renderer (take_snapshot yields black frames on the
+      GPU renderer), so these tests do NOT exercise the shipping femtovg
+      renderer — GPU-specific visual regressions need eyes or a future
+      GPU-capture harness. Tests set FASTCULL_NO_CACHE for hermeticity.
 - [ ] Manual acceptance (per release): 5,000-file A1 folder (a bad evening, per
       persona review) scrolls at 60 fps after thumbs load; pick→auto-advance→pick
       loop in loupe has no perceived latency.

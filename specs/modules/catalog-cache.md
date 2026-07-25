@@ -52,7 +52,12 @@
   `cache::default_cache_path()` (CLI/app startup); explicitly caller-provided
   cache paths are uncapped in v1, and a single long session may exceed the
   cap until the next startup.
-- Concurrency: 5 s busy-timeout; WAL mode. Only a provably unusable FILE
+- Concurrency: 5 s busy-timeout; WAL mode; `synchronous=NORMAL` (recorded
+  decision: WAL-safe, and FULL's fsync-heavy commits held write locks past
+  the busy timeout on Windows CI — worst case on power loss is losing recent
+  cache rows, which only cost a re-extract). Writes additionally use a
+  bounded busy-retry (5 attempts, backoff); the LRU `last_used` bump is
+  best-effort so contention can never fail a read. Only a provably unusable FILE
   (SQLITE_NOTADB / corrupt / schema-version mismatch) is deleted and recreated
   (with its -wal/-shm sidecars, logged once). Lock contention must NEVER
   trigger deletion — deleting a merely-locked DB under a live connection

@@ -160,12 +160,15 @@ impl PreviewCache {
         let Ok(exif) = serde_json::from_str(&exif_json) else {
             return Ok(None);
         };
+        // LRU bookkeeping is best-effort: a busy cache must degrade to a
+        // slightly stale last_used, never to a failed READ (gate finding).
         with_busy_retry(|| {
             self.conn.execute(
                 "UPDATE previews SET last_used = ?2 WHERE path = ?1",
                 rusqlite::params![path_key(path), now_secs()],
             )
-        })?;
+        })
+        .ok();
         Ok(Some(CachedPreview { exif, thumb_jpeg }))
     }
 
@@ -213,11 +216,13 @@ impl PreviewCache {
                 return Ok(());
             }
             // Evict the oldest 64 rows per round to amortize the SUM.
-            let evicted = self.conn.execute(
-                "DELETE FROM previews WHERE path IN
-                 (SELECT path FROM previews ORDER BY last_used ASC, path ASC LIMIT 64)",
-                [],
-            )?;
+            let evicted = with_busy_retry(|| {
+                self.conn.execute(
+                    "DELETE FROM previews WHERE path IN
+                     (SELECT path FROM previews ORDER BY last_used ASC, path ASC LIMIT 64)",
+                    [],
+                )
+            })?;
             if evicted == 0 {
                 return Ok(());
             }
@@ -481,6 +486,24 @@ mod tests {
             .unwrap();
         assert_eq!(version, SCHEMA_VERSION);
         std::fs::remove_dir_all(&dir).ok();
+    }
+
+    #[test]
+    fn busy_retry_retries_then_succeeds() {
+        let mut calls = 0;
+        let result = with_busy_retry(|| {
+            calls += 1;
+            if calls < 3 {
+                Err(rusqlite::Error::SqliteFailure(
+                    rusqlite::ffi::Error::new(rusqlite::ffi::SQLITE_BUSY),
+                    Some("database is locked".into()),
+                ))
+            } else {
+                Ok(42)
+            }
+        });
+        assert_eq!(result.unwrap(), 42);
+        assert_eq!(calls, 3);
     }
 
     #[test]

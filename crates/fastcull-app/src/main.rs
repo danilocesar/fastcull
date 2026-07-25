@@ -86,7 +86,7 @@ fn main() {
             Some(path.into())
         }
         Some(_) => {
-            eprintln!("usage: --screenshot <out.png>");
+            eprintln!("usage: --screenshot <out.jpg>");
             std::process::exit(2);
         }
         None => None,
@@ -96,6 +96,18 @@ fn main() {
         // software renderer supports it and is fine for smoke tests.
         std::env::set_var("SLINT_BACKEND", "winit-software");
     }
+    // --start-loupe / --start-11: open directly at loupe zoom (fit or 1:1) —
+    // used by the screenshot smoke tests to capture those states.
+    let start_11 = args
+        .iter()
+        .position(|a| a == "--start-11")
+        .map(|i| args.remove(i))
+        .is_some();
+    let start_loupe = args
+        .iter()
+        .position(|a| a == "--start-loupe")
+        .map(|i| args.remove(i))
+        .is_some();
     let (labels, jobs): (Vec<String>, Option<Vec<JobSpec>>) = match args.as_slice() {
         [flag, n] if flag == "--synthetic" => {
             let Ok(n) = n.parse::<usize>() else {
@@ -135,9 +147,14 @@ fn main() {
     let window = MainWindow::new().expect("creating window");
     let cells = Rc::new(VecModel::from(Vec::<CellData>::new()));
     window.set_cells(slint::ModelRc::from(Rc::clone(&cells)));
+    let start_at_loupe = start_11 || start_loupe;
     let state = Rc::new(RefCell::new(AppState {
         labels,
-        zoom: 1, // 8 columns
+        zoom: if start_at_loupe {
+            grid::ZOOM_COLUMNS.len() - 1
+        } else {
+            1 // 8 columns
+        },
         cursor: 0,
         thumb_jpegs: HashMap::new(),
         images: HashMap::new(),
@@ -148,7 +165,7 @@ fn main() {
         cells,
         loupe: None,
         fullres: Vec::new(),
-        one2one: false,
+        one2one: start_11,
         last_grid_zoom: 1,
         mids: HashMap::new(),
         va: fastcull_core::viewassets::ViewAssets::default(),
@@ -157,9 +174,16 @@ fn main() {
     // Start the engines for real folders; events polled on a UI timer.
     let event_rx = jobs.map(|jobs| {
         let paths: Vec<std::path::PathBuf> = jobs.iter().map(|j| j.path.clone()).collect();
+        // FASTCULL_NO_CACHE: hermetic test runs must not touch the user's
+        // real per-user cache DB (validator/QE finding).
+        let cache_path = if std::env::var_os("FASTCULL_NO_CACHE").is_some() {
+            None
+        } else {
+            fastcull_core::cache::default_cache_path()
+        };
         let (pipeline, rx) = Pipeline::start(
             jobs,
-            fastcull_core::cache::default_cache_path(),
+            cache_path,
             std::thread::available_parallelism().map_or(4, |n| n.get()),
         );
         let (loupe, loupe_rx) = fastcull_core::loupe::LoupeEngine::start(
@@ -265,12 +289,12 @@ fn main() {
         let win = window.as_weak();
         shot_timer.start(
             slint::TimerMode::SingleShot,
-            std::time::Duration::from_millis(1500),
+            std::time::Duration::from_millis(2500),
             move || {
                 let Some(win) = win.upgrade() else { return };
                 match win.window().take_snapshot() {
                     Ok(buf) => {
-                        let ok = save_png(&out, &buf);
+                        let ok = write_snapshot_jpeg(&out, &buf);
                         slint::quit_event_loop().ok();
                         if !ok {
                             eprintln!("screenshot: failed to write {}", out.display());
@@ -289,14 +313,13 @@ fn main() {
     window.run().expect("running event loop");
 }
 
-/// Minimal PNG writer for snapshots (RGBA8): jpeg-encoder is already a
-/// workspace dep but PNG keeps screenshots lossless; use the tiny `png`-less
-/// route via jpeg for now? No — write a PPM-free simple PNG via the `image`
-/// ecosystem would add deps; snapshots are JPEG q92 instead (adequate for
-/// smoke comparisons) with a .png-forbidden guard.
-fn save_png(out: &std::path::Path, buf: &slint::SharedPixelBuffer<slint::Rgba8Pixel>) -> bool {
-    // Encode as JPEG regardless of extension (documented in ui-grid.md);
-    // convert RGBA -> RGB.
+/// Snapshot writer: always JPEG q92 regardless of the output extension
+/// (recorded in ui-grid.md — lossless PNG would need an extra dependency and
+/// smoke comparisons don't require it). RGBA in, RGB JPEG out.
+fn write_snapshot_jpeg(
+    out: &std::path::Path,
+    buf: &slint::SharedPixelBuffer<slint::Rgba8Pixel>,
+) -> bool {
     let rgb: Vec<u8> = buf
         .as_slice()
         .iter()

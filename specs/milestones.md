@@ -31,8 +31,9 @@ darktable-cli round-trip.
 ## M4 — Loupe *(order swapped with M3 by user decision 2026-07-25: full-res
 zoom quality first, culling marks second — implemented 2026-07-25)*
 **M4 closed 2026-07-25**: loupe quality + walk behavior confirmed by the user
-on real shoot folders; v0.1.0 tagged. Open M2/M4 stragglers tracked: Slint
-screenshot smoke tests (next), Ctrl+scroll decision.
+on real shoot folders; v0.1.0 tagged. Open M2/M4 stragglers: screenshot
+smoke tests DONE 2026-07-25 (grid/placeholder/badge/loupe-fit/1:1);
+Ctrl+scroll decision still open.
 Fit + 1:1 zoom, pan, ±2 prefetch via the dedicated loupe engine (single
 full-res asset, see raw-pipeline.md recorded deviation). Auto-advance-on-mark
 moves to M3 with the marks themselves. DoD: **tag a runnable 0.x release**
