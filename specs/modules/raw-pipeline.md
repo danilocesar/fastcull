@@ -64,12 +64,123 @@ handled (rotations + mirrored forms). Cache note: the thumb cache stores
 post-rotation pixels, so introducing this bumped the cache schema version
 (pre-orientation thumbs invalidate wholesale).
 
-## I/O gate (added 2026-07-25 after a real hang)
+## Adaptive read pool (user requirement 2026-07-25, replaces the fixed 4-permit gate)
 
-At most 4 RAW files are READ concurrently across the pipeline (decode remains
-fully parallel): 32 simultaneous readers drove a microSD into minute-long
-kernel I/O queues — slow removable media serves few streams well. Loupe
-workers (2) are inherently within budget.
+History: 32 simultaneous readers drove a microSD into minute-long kernel I/O
+queues (blk_mq) and blocked shutdown — slow removable media serves few streams
+well. A fixed limit of 4 fixed the hang but cannot react when the medium
+degrades further mid-session (e.g. a concurrent multi-GB transfer to the same
+card). Requirement (user, 2026-07-25): a **pool manager** owns the release
+of read workers and adapts their number to the medium's measured behavior.
+
+Design (validator design review 2026-07-25: ADOPT-WITH-CHANGES, incorporated):
+
+- **Pool manager**: owns `(limit, in_flight)`. A worker asks the manager for
+  release before entering a read section; `acquire` waits while
+  `in_flight >= limit`. Decode remains fully parallel and unmanaged.
+- **Bounds** (user decisions 2026-07-25, second round): **floor 4** — the
+  empirically proven-safe value is always available; NAS/network mounts must
+  never be throttled below it. **Cap = CPU core count** ("if the loader is
+  not stuck, we can add more up to the number of CPU cores"): growth beyond
+  the floor is earned probe by probe, so slow media never sees the high end.
+  Initial limit = floor 4, preserving the QE-verified cold-open behavior on
+  healthy media. Local-media benchmark for the record (2026-07-25, reference
+  machine, 300-job run): fixed-4 = 350/333 files/s vs fixed-8 = 313 files/s —
+  local NVMe is decode-bound, so growth is for latency-bound sources
+  (network mounts), not local throughput.
+- **Probe measurement**: at most one *probe* read is outstanding at any time;
+  the first read granted while no probe is outstanding becomes the probe.
+  The probe paces GROWTH (one growth decision per completed probe); shrink
+  signals come from the whole in-flight set (see stall watching below).
+  All timings are **pure in-permit read time** (queue/wait time is NEVER
+  included — measuring wait creates a positive-feedback collapse). Only
+  probe-eligible reads are the preview-read section (open + IFD walk + `read_jpeg`)
+  feeds the controller; the EXIF section is pool-managed but not sampled
+  (rawler parse CPU would contaminate it). Cache hits bypass the pool and
+  produce no samples. Reads larger than 2 MB feed NO decision — neither
+  completion NOR stall (validator H1: the exclusion must cover every
+  decision path, or the non-A1 full-res-as-grid fallback stall-shrinks a
+  healthy medium to the floor); the size is known before the bulk read, so
+  the probe is neutralized as soon as its payload is chosen.
+- **Control rule** (AIMD with hysteresis dead-band): probe < 200 ms →
+  release one more worker (+1, clamp cap); probe > 500 ms → **halve** the
+  limit (clamp floor 4); otherwise hold. Halving (not −1) is required by
+  the core-count cap: recovering from a warm-cache-pumped limit of 32 on a
+  suddenly-slow card takes 3 halvings instead of 28 single steps.
+- **Growth requires "the loader is not stuck" — literally** (live incident
+  2026-07-25: warm 0 ms page-cache probes pumped the limit 4 → 22 while
+  every cold read sat wedged on a saturated microSD; fast probes have
+  survivorship bias — stuck reads never report). A fast probe grows the
+  limit ONLY when no other in-flight NON-EXCLUDED read is older than the
+  grow threshold: one wedged normal read anywhere vetoes all growth.
+  Excluded (>2 MB) reads neither vouch nor indict — accepted residual: a
+  genuinely wedged large read vetoes nothing and triggers no shrink (large
+  reads legitimately run long; counting them would permanently veto growth
+  on non-A1 fallback folders).
+- **Stall watching covers EVERY in-flight read, not just the probe**
+  (persona review: in the original incident reads didn't come back slow,
+  they didn't come back at all). If the oldest non-excluded in-flight read
+  exceeds the shrink threshold, the manager halves WITHOUT waiting for any
+  completion — checked on every pool touch (acquires and releases alike)
+  plus a periodic re-check by blocked waiters. Shrinks (stall or slow
+  completion) are throttled to **one per shrink-threshold window**: a
+  persistent wedge walks cap → floor in ~3 windows (~1.5 s), with no
+  collapse cascade from many simultaneous slow observations. Known blind
+  spot (recorded): if the limit equals the worker count and EVERY worker is
+  wedged inside a read, no thread touches the pool until the first read
+  returns, so the cascade starts late — harm is bounded to the reads
+  already in flight (no new reads can be issued in that state), the same
+  surface non-preemptive shrink already accepts.
+- **Degradation bound**: cap to floor in ≤3 halvings (~1.5 s of sustained
+  stall). Upward, +1 per fast probe from the floor; on fast media probes
+  are milliseconds apart, so the ramp is invisible. The floor guarantees
+  the proven baseline of 4 at all times — there is no "stuck at 1" state.
+- **Debug visibility** (user request 2026-07-25): every limit change is
+  logged to **stderr** (`eprintln`, consistent with all FastCull
+  diagnostics; stdout belongs to CLI output) as
+  `fastcull: read pool N -> M workers (probe read X ms | read stalled for
+  X ms; K reading)` where K is the number of reads actually in flight at
+  that moment (user request: show how many workers are actually alive).
+  Steady state logs nothing (clamped no-op changes are not printed).
+- **Retirement is non-preemptive**: a shrink only lowers `limit`; reads in
+  progress always finish (never cancelled), the slot is simply not re-released.
+- **Priority-aware release**: waiting workers queue with a
+  (job priority, arrival seq) ticket; a freed or newly-grown slot goes to the
+  lowest ticket — a visible thumbnail is released before background prefetch
+  even at the floor. Growing the limit must wake ALL waiters
+  (lost-wakeup hazard, previously bitten).
+- **Scope**: thumbnail pipeline only. Loupe full-res reads BYPASS the pool
+  on purpose (user decision 2026-07-25: "full-res should bypass it, as
+  full-res has priority") — the 2 loupe workers stay ungated; a 12 MB
+  full-res read would also poison a latency-threshold controller. Risk on
+  record (persona): at the floor on a dying card, an ungated loupe full-res
+  read can still hit the card hard — revisit if the hang class ever
+  reappears via the loupe path.
+
+Persona questions resolved by the user (2026-07-25):
+- NAS/network culling IS part of his workflow → resolved by the **floor of
+  4** (a healthy-but-distant source is never throttled below the proven
+  baseline) plus the core-count cap (fast probes let latency-bound sources
+  earn more streams). The relative-baseline signal stays a recorded future
+  option if absolute thresholds prove wrong on his NAS in practice.
+- Cull-while-ingesting: "usually no" — the shrink path is a safety net, not
+  a daily-driver optimization.
+- Status-bar "slow storage" hint: mooted by the floor (there is no
+  pinned-at-1 state); stderr limit-change lines are the debug surface.
+
+Testability requirements: clamp arithmetic (grow/halve, cap/floor) lives in
+a pure struct with clock-free unit tests; the clocked decisions (thresholds,
+dead-band, growth veto, stall, shrink throttle) are unit-tested at the pool
+level with test-injected thresholds whose margins are WIDE relative to
+scheduler noise (≥100 ms between a sleep and the boundary it must not
+cross — pool tests must stay reliable on loaded CI runners). Covered
+deterministically: growth veto by a stuck read, dead-band hold, stall
+halving without completion, one-shrink-per-window throttle, large-read
+exclusion from every decision, priority handoff, and the grant invariant —
+`concurrent readers <= the limit at grant time <= cap` (during a
+non-preemptive shrink, readers granted earlier may transiently exceed the
+NEW lower limit; that is by design) — replacing the one-off manual fd proof
+from the fixed-gate era.
 
 ## Priority queue contract
 
