@@ -51,6 +51,9 @@ struct AppState {
     one2one: bool,
     /// Grid zoom to return to when leaving the loupe with G/Esc.
     last_grid_zoom: usize,
+    /// Mid-rung textures (1616x1080, ~5 MB each) for intermediate zooms
+    /// whose cells outgrow the 320 px thumb; pruned to the visible window.
+    mids: HashMap<usize, slint::Image>,
 }
 
 impl AppState {
@@ -115,6 +118,7 @@ fn main() {
         fullres: Vec::new(),
         one2one: false,
         last_grid_zoom: 1,
+        mids: HashMap::new(),
     }));
 
     // Start the engines for real folders; events polled on a UI timer.
@@ -187,10 +191,14 @@ fn main() {
                     for event in loupe_rx.try_iter() {
                         match event {
                             fastcull_core::loupe::LoupeEvent::Ready { index, image } => {
-                                // Skip the 150 MB texture copy for prefetches
-                                // arriving after the user left the loupe; the
-                                // core LRU keeps the pixels for peek-rebuild.
-                                if at_loupe {
+                                let is_mid = image.width.max(image.height) <= 2048;
+                                if is_mid {
+                                    // Mid rung (~5 MB copy): grid-cell quality
+                                    // for intermediate zooms; cheap, always keep.
+                                    st.mids.insert(index, fullres_texture(&image));
+                                } else if at_loupe {
+                                    // Full rung: 150 MB copy only while the
+                                    // loupe can use it; core LRU keeps pixels.
                                     let texture = fullres_texture(&image);
                                     insert_fullres(&mut st, index, texture);
                                 }
@@ -365,6 +373,19 @@ fn refresh(win: &MainWindow, state: &Rc<RefCell<AppState>>) {
             }
         }
     }
+    // Intermediate-zoom ladder (user bug report: cells looked bad between
+    // 8-column and loupe): cells wider than 320*1.25 physical px outgrow the
+    // thumb — climb them to the mid rung via the same 25% rule.
+    let cell_phys = layout.cell_width * win.window().scale_factor();
+    let want_mid = !at_loupe && cell_phys > 320.0 * 1.25;
+    if want_mid {
+        if let Some(loupe) = &st.loupe {
+            loupe.want(range.clone(), cell_phys as u32);
+        }
+    }
+    let keep = range.clone();
+    st.mids.retain(|i, _| keep.contains(i));
+
     let cursor = st.cursor;
     let fullres_for = |st: &AppState, index: usize| -> Option<slint::Image> {
         st.fullres
@@ -376,8 +397,11 @@ fn refresh(win: &MainWindow, state: &Rc<RefCell<AppState>>) {
     // previous image must never pose as the current one), and sized in
     // logical pixels divided by the scale factor so 1:1 means device pixels
     // on HiDPI (validator finding — sharpness judging must not upsample).
+    // 1:1 requires the TOP rung: showing the mid rung at native 1616 px
+    // would be a misleading scale jump (validator finding) — hold the fit
+    // view until the full-res texture lands.
     let overlay = st.one2one && at_loupe;
-    match fullres_for(&st, cursor) {
+    match fullres_for(&st, cursor).filter(|img| img.size().width.max(img.size().height) > 2048) {
         Some(img) if overlay => {
             let size = img.size();
             let sf = win.window().scale_factor();
@@ -399,7 +423,18 @@ fn refresh(win: &MainWindow, state: &Rc<RefCell<AppState>>) {
         } else {
             None
         };
-        let image = full.as_ref().or(st.images.get(&index));
+        // Quality ladder per cell: loupe full-res > mid rung (large cells
+        // or loupe fallback) > 320px thumb > placeholder.
+        let image = full
+            .as_ref()
+            .or_else(|| {
+                if want_mid || at_loupe {
+                    st.mids.get(&index)
+                } else {
+                    None
+                }
+            })
+            .or(st.images.get(&index));
         let cell = CellData {
             x,
             y,

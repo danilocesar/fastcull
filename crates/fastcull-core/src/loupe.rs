@@ -44,8 +44,15 @@ pub enum LoupeEvent {
 #[derive(Default)]
 struct LoupeState {
     /// Pending (index, display-long-edge), most urgent last (workers pop
-    /// from the back); one entry per index keeping the largest target.
+    /// from the back); one entry per index — the LATEST target wins (it
+    /// reflects current intent; an escalation dropped while in flight
+    /// self-heals via the Ready→refresh loop).
     queue: Vec<(usize, u32)>,
+    /// Best rung a file can ever provide (long edge), learned when its
+    /// ladder tops out: an asset at this size is sufficient for ANY display
+    /// — without this memo, 1:1 (u32::MAX target) re-parsed files forever
+    /// (validator MAJOR finding).
+    best_long: HashMap<usize, u32>,
     in_flight: Vec<usize>,
     /// LRU cache: index -> (image, last-focus stamp).
     cache: HashMap<usize, (FullImage, u64)>,
@@ -117,13 +124,10 @@ impl LoupeEngine {
         wanted.sort_by_key(|i| std::cmp::Reverse(i.abs_diff(index)));
         wanted.push(index);
         for i in wanted {
-            let sufficient = if let Some((img, s)) = state.cache.get_mut(&i) {
-                *s = stamp;
-                serves(img, display_long)
-            } else {
-                false
-            };
-            if !sufficient && !state.in_flight.contains(&i) && !state.failed.contains(&i) {
+            if !sufficient_cached(&mut state, i, display_long, stamp)
+                && !state.in_flight.contains(&i)
+                && !state.failed.contains(&i)
+            {
                 state.queue.retain(|(q, _)| *q != i);
                 state.queue.push((i, display_long));
             }
@@ -137,6 +141,35 @@ impl LoupeEngine {
     /// Cached image without scheduling anything (e.g. re-render).
     pub fn peek(&self, index: usize) -> Option<FullImage> {
         lock(&self.shared).cache.get(&index).map(|(i, _)| i.clone())
+    }
+
+    /// Grid-cell ladder (same 25% rule as focus): ensure every `index` has
+    /// an asset serving `display_long`, at lower urgency than the focused
+    /// image — used by intermediate zoom levels whose cells outgrow the
+    /// 320 px thumb. Does not touch the focused index or prefetch ring.
+    pub fn want(&self, indexes: impl IntoIterator<Item = usize>, display_long: u32) {
+        let count = self.shared.paths.len();
+        let stamp = self.shared.stamp.fetch_add(1, Ordering::Relaxed) + 1;
+        let mut state = lock(&self.shared);
+        let mut queued_any = false;
+        for i in indexes {
+            if i >= count {
+                continue;
+            }
+            if !sufficient_cached(&mut state, i, display_long, stamp)
+                && !state.in_flight.contains(&i)
+                && !state.failed.contains(&i)
+            {
+                state.queue.retain(|(q, _)| *q != i);
+                // Front of the vec = popped last: focused work stays first.
+                state.queue.insert(0, (i, display_long));
+                queued_any = true;
+            }
+        }
+        drop(state);
+        if queued_any {
+            self.shared.wakeup.notify_all();
+        }
     }
 }
 
@@ -164,6 +197,19 @@ fn serves(img: &FullImage, display_long: u32) -> bool {
     asset_long * UPSCALE_THRESHOLD >= display_long as f32
 }
 
+/// Cached-and-sufficient check (refreshing the LRU stamp): an asset counts
+/// as sufficient when it serves the display OR it already is the best rung
+/// this file can provide (terminal-rung memo).
+fn sufficient_cached(state: &mut LoupeState, index: usize, display_long: u32, stamp: u64) -> bool {
+    let best = state.best_long.get(&index).copied();
+    if let Some((img, s)) = state.cache.get_mut(&index) {
+        *s = stamp;
+        serves(img, display_long) || best.is_some_and(|b| img.width.max(img.height) >= b)
+    } else {
+        false
+    }
+}
+
 fn worker(shared: &Shared) {
     loop {
         let (index, display_long) = {
@@ -174,8 +220,11 @@ fn worker(shared: &Shared) {
                 }
                 if let Some((index, display_long)) = state.queue.pop() {
                     if let Some((img, _)) = state.cache.get(&index) {
-                        if serves(img, display_long) {
-                            continue; // upgraded meanwhile
+                        let best = state.best_long.get(&index).copied();
+                        if serves(img, display_long)
+                            || best.is_some_and(|b| img.width.max(img.height) >= b)
+                        {
+                            continue; // upgraded or topped out meanwhile
                         }
                     }
                     state.in_flight.push(index);
@@ -243,26 +292,47 @@ fn decode_ladder(
         return Err("no usable embedded preview".into());
     }
 
-    let mut published = false;
+    let mut achieved = current_long;
     for rung in &rungs {
         let rung_long = rung.width.max(rung.height);
-        if rung_long <= current_long {
+        if rung_long <= achieved {
             continue; // already have this rung or better
         }
-        let image = decode_jpeg_rung(&mut file, rung)?;
-        publish(shared, index, image);
-        published = true;
-        if serves_dims(rung.width, rung.height, display_long) {
-            return Ok(());
+        match decode_jpeg_rung(&mut file, rung) {
+            Ok(image) => {
+                publish(shared, index, image);
+                achieved = rung_long;
+                if serves_dims(rung.width, rung.height, display_long) {
+                    return Ok(());
+                }
+            }
+            Err(reason) => {
+                // A broken HIGHER rung must not fail an image that already
+                // has a good lower rung (validator MAJOR: valid mid +
+                // truncated full-res would badge Failed AND show an image).
+                // Memoize what we achieved so the ladder quiesces.
+                if achieved > 0 {
+                    note_best(shared, index, achieved);
+                    return Ok(());
+                }
+                return Err(reason);
+            }
         }
     }
-    // Nothing better than the cache existed; that is fine, not an error —
-    // but a file where NO rung decoded is a failure.
-    if published || current_long > 0 {
+    // Ladder topped out below the display target: memoize the terminal rung
+    // so this file is never re-parsed for an unreachable target.
+    if achieved > 0 {
+        note_best(shared, index, achieved);
         Ok(())
     } else {
         Err("no decodable preview".into())
     }
+}
+
+fn note_best(shared: &Shared, index: usize, long: u32) {
+    let mut state = lock(shared);
+    let entry = state.best_long.entry(index).or_insert(0);
+    *entry = (*entry).max(long);
 }
 
 fn serves_dims(w: u32, h: u32, display_long: u32) -> bool {
