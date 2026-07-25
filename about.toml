@@ -1,0 +1,53 @@
+# Configuration for `cargo about`, which collects the licences of every crate
+# linked into the FastCull binaries and writes THIRD-PARTY-LICENSES.md.
+# Regenerate after changing dependencies:
+#
+#     cargo install cargo-about --locked --features cli
+#     cargo about generate about.hbs -o THIRD-PARTY-LICENSES.md
+#
+# Only the platforms we actually ship binaries for (see dist-workspace.toml);
+# without this, cargo-about would also pull in macOS/Android/wasm-only crates
+# that are never part of a FastCull executable.
+targets = [
+    "x86_64-unknown-linux-gnu",
+    "x86_64-pc-windows-msvc",
+]
+
+# Optional dependencies that are never enabled do not end up in the binary.
+ignore-build-dependencies = false
+ignore-dev-dependencies = true
+ignore-transitive-dependencies = false
+
+# Licences we are willing to ship. A dependency arriving under anything not in
+# this list makes `cargo about generate` fail, which is the point: it forces a
+# conscious decision instead of silently distributing something incompatible
+# with GPL-3.0.
+accepted = [
+    "Apache-2.0",
+    "Apache-2.0 WITH LLVM-exception",
+    "BSD-2-Clause",
+    "BSD-3-Clause",
+    "BSL-1.0",
+    "CC0-1.0",
+    "CDLA-Permissive-2.0",
+    # Slint is GPL-3.0-only (or a paid commercial licence). This is why the
+    # binaries as a whole are GPLv3, not "v3 or later" like our own source.
+    "GPL-3.0-only",
+    "GPL-3.0-or-later",
+    "IJG",
+    "ISC",
+    # rawler declares plain LGPL-2.1 (no "or later"); see README/NOTICE.
+    "LGPL-2.1",
+    "LGPL-2.1-only",
+    "LGPL-2.1-or-later",
+    "LGPL-3.0-or-later",
+    "MIT",
+    "MIT-0",
+    "MPL-2.0",
+    "NCSA",
+    "OpenSSL",
+    "Unicode-3.0",
+    "Unicode-DFS-2016",
+    "Unlicense",
+    "Zlib",
+]
