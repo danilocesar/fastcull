@@ -64,7 +64,9 @@ impl Endian {
 /// breadth-first) and collect JPEG pointers.
 pub(crate) struct WalkResult {
     pub jpegs: Vec<JpegPointer>,
-    /// EXIF orientation (1 when absent): first IFD0-chain value wins.
+    /// EXIF orientation (1 when absent): first value found during the walk
+    /// wins — for ARW that is IFD0 (which always carries it); files whose
+    /// IFD0 lacks the tag may pick it up from a sub-IFD.
     pub orientation: u16,
 }
 

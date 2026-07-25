@@ -121,14 +121,21 @@ fn budget_fullres_decode_under_350ms() {
         .map(|_| {
             let t = Instant::now();
             let mut d = zune_jpeg::JpegDecoder::new(&bytes);
-            d.decode().unwrap();
+            let px = d.decode().unwrap();
+            // Portrait frames pay the soft-rotation too (validator M-2:
+            // orientation cost must live inside the budget, and portrait is
+            // the COMMON case for a pro shooter). Fixtures are landscape,
+            // so force the rotate path explicitly.
+            let (w, h) = d.dimensions().unwrap();
+            let rotated = fastcull_core::raw::apply_orientation(px, w as u32, h as u32, 8);
+            std::hint::black_box(rotated);
             t.elapsed()
         })
         .collect();
     let med = median(samples);
     assert!(
         med < Duration::from_millis(350),
-        "full-res decode median {med:?} (budget 350 ms)"
+        "full-res decode+rotate median {med:?} (budget 350 ms)"
     );
 }
 

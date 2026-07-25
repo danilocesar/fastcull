@@ -64,6 +64,13 @@ handled (rotations + mirrored forms). Cache note: the thumb cache stores
 post-rotation pixels, so introducing this bumped the cache schema version
 (pre-orientation thumbs invalidate wholesale).
 
+## I/O gate (added 2026-07-25 after a real hang)
+
+At most 4 RAW files are READ concurrently across the pipeline (decode remains
+fully parallel): 32 simultaneous readers drove a microSD into minute-long
+kernel I/O queues — slow removable media serves few streams well. Loupe
+workers (2) are inherently within budget.
+
 ## Priority queue contract
 
 - Three levels: `Visible` > `Prefetch` (loupe ±2) > `Background` (sequential file

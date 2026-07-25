@@ -110,7 +110,7 @@ fn cull(
         for name in names {
             // Names only — never paths (a ../ would write outside the
             // folder; QE demonstrated exactly that).
-            if name.contains('/') || name.contains('\\') || name == ".." {
+            if name.contains('/') || name.contains('\\') || name.contains(':') || name == ".." {
                 eprintln!("SKIPPED {name}: must be a file name, not a path");
                 failures += 1;
                 continue;

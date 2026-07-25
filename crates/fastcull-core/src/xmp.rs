@@ -193,7 +193,7 @@ fn rewrite_rating(existing: &[u8], pick: PickState) -> Result<String, XmpError> 
     let mut writer = quick_xml::Writer::new(Vec::new());
     let mut buf = Vec::new();
     let mut done = false;
-    let mut in_first_description = 0usize; // element depth inside it
+    let mut desc_depth = 0usize; // element depth inside ANY rdf:Description
     let mut skip_rating_depth = 0usize; // >0: inside an old rating ELEMENT
     loop {
         let event = reader.read_event_into(&mut buf)?;
@@ -203,13 +203,12 @@ fn rewrite_rating(existing: &[u8], pick: PickState) -> Result<String, XmpError> 
             // attribute+element pair contradicted itself and clear() could
             // never clear). Both xmp: and xap: prefixes count.
             Event::Start(ref e)
-                if in_first_description > 0
-                    && matches!(e.name().as_ref(), b"xmp:Rating" | b"xap:Rating") =>
+                if desc_depth > 0 && matches!(e.name().as_ref(), b"xmp:Rating" | b"xap:Rating") =>
             {
                 skip_rating_depth += 1;
             }
             Event::Empty(ref e)
-                if in_first_description > 0
+                if desc_depth > 0
                     && skip_rating_depth == 0
                     && matches!(e.name().as_ref(), b"xmp:Rating" | b"xap:Rating") => {}
             Event::End(ref e)
@@ -219,7 +218,11 @@ fn rewrite_rating(existing: &[u8], pick: PickState) -> Result<String, XmpError> 
                 skip_rating_depth -= 1;
             }
             _ if skip_rating_depth > 0 => {} // swallow the old element's body
-            Event::Start(ref e) | Event::Empty(ref e) if !done && is_rdf_description(e) => {
+            // Sanitize EVERY Description (canonical RDF splits schemas into
+            // one block each — validator M-1: a rating in the second block
+            // previously survived and contradicted ours); the NEW rating
+            // goes into the first block only.
+            Event::Start(ref e) | Event::Empty(ref e) if is_rdf_description(e) => {
                 let empty = matches!(event, Event::Empty(_));
                 let mut out =
                     BytesStart::new(String::from_utf8_lossy(e.name().as_ref()).into_owned());
@@ -233,26 +236,28 @@ fn rewrite_rating(existing: &[u8], pick: PickState) -> Result<String, XmpError> 
                     }
                     out.push_attribute(attr);
                 }
-                if let Some(rating) = pick_to_rating(pick) {
-                    if !has_xmp_ns {
-                        out.push_attribute(("xmlns:xmp", "http://ns.adobe.com/xap/1.0/"));
+                if !done {
+                    if let Some(rating) = pick_to_rating(pick) {
+                        if !has_xmp_ns {
+                            out.push_attribute(("xmlns:xmp", "http://ns.adobe.com/xap/1.0/"));
+                        }
+                        out.push_attribute(("xmp:Rating", rating));
                     }
-                    out.push_attribute(("xmp:Rating", rating));
                 }
                 if empty {
                     writer.write_event(Event::Empty(out))?;
                 } else {
                     writer.write_event(Event::Start(out))?;
-                    in_first_description = 1;
+                    desc_depth += 1;
                 }
                 done = true;
             }
-            Event::Start(ref _e) if in_first_description > 0 => {
-                in_first_description += 1;
+            Event::Start(ref _e) if desc_depth > 0 => {
+                desc_depth += 1;
                 writer.write_event(event)?;
             }
-            Event::End(ref _e) if in_first_description > 0 => {
-                in_first_description -= 1;
+            Event::End(ref _e) if desc_depth > 0 => {
+                desc_depth -= 1;
                 writer.write_event(event)?;
             }
             other => writer.write_event(other)?,
@@ -424,6 +429,42 @@ mod tests {
         write_pick(&raw, PickState::Unmarked).unwrap();
         let cleared = std::fs::read_to_string(&sc).unwrap();
         assert!(!cleared.contains("Rating"), "clear must actually clear");
+        assert_eq!(read_sidecar(&sc).unwrap().pick, PickState::Unmarked);
+        std::fs::remove_dir_all(&dir).ok();
+    }
+
+    /// Regression (validator M-1): canonical RDF puts each schema in its own
+    /// Description — ratings must be sanitized in ALL of them, written into
+    /// the first only.
+    #[test]
+    fn multi_description_ratings_are_sanitized_everywhere() {
+        let dir = tmp();
+        let raw = dir.join("m.ARW");
+        let sc = sidecar_path(&raw);
+        std::fs::write(
+            &sc,
+            r#"<x:xmpmeta xmlns:x="adobe:ns:meta/"><rdf:RDF xmlns:rdf="http://www.w3.org/1999/02/22-rdf-syntax-ns#">
+ <rdf:Description rdf:about="" xmlns:dc="http://purl.org/dc/elements/1.1/">
+  <dc:subject><rdf:Bag><rdf:li>bird</rdf:li></rdf:Bag></dc:subject>
+ </rdf:Description>
+ <rdf:Description rdf:about="" xmlns:xmp="http://ns.adobe.com/xap/1.0/" xmp:Rating="5">
+  <xmp:Rating>3</xmp:Rating>
+ </rdf:Description>
+</rdf:RDF></x:xmpmeta>"#,
+        )
+        .unwrap();
+        write_pick(&raw, PickState::Rejected).unwrap();
+        let text = std::fs::read_to_string(&sc).unwrap();
+        assert_eq!(
+            text.matches("Rating").count(),
+            1,
+            "exactly one rating may remain: {text}"
+        );
+        assert_eq!(read_sidecar(&sc).unwrap().pick, PickState::Rejected);
+        assert!(text.contains("bird"), "foreign content preserved");
+        write_pick(&raw, PickState::Unmarked).unwrap();
+        let cleared = std::fs::read_to_string(&sc).unwrap();
+        assert!(!cleared.contains("Rating"));
         assert_eq!(read_sidecar(&sc).unwrap().pick, PickState::Unmarked);
         std::fs::remove_dir_all(&dir).ok();
     }

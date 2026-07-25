@@ -378,10 +378,21 @@ fn main() {
         );
     }
     window.run().expect("running event loop");
-    // Deterministic flush-on-close (gate finding: relying on the Rc/Drop
-    // chain could lose marks made in the final debounce window).
+    // Shutdown policy (recorded, 01-architecture.md): the ONLY thing that
+    // must complete is the sidecar flush. Pipeline/loupe workers are
+    // read-only and the cache is crash-safe (WAL), so we exit without
+    // joining them - 32 readers stuck in kernel I/O on a dying card once
+    // held the process un-killable for minutes (user report; the process
+    // even survived SIGKILL until the card responded). A watchdog bounds
+    // the flush itself in case the sidecars live on that same dead card.
+    std::thread::spawn(|| {
+        std::thread::sleep(std::time::Duration::from_secs(8));
+        eprintln!("fastcull: shutdown watchdog fired - storage not responding; exiting");
+        std::process::exit(1);
+    });
     let writer = state.borrow_mut().writer.take();
     drop(writer); // drains every pending sidecar write, then joins
+    std::process::exit(0);
 }
 
 /// Snapshot writer: always JPEG q92 regardless of the output extension

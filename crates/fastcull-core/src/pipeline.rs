@@ -27,6 +27,57 @@ use crate::cache::PreviewCache;
 use crate::exif::ExifSummary;
 use crate::raw::{find_embedded_jpegs, read_jpeg};
 
+/// Concurrent RAW-file reads across the pipeline (decode stays fully
+/// parallel): 32 simultaneous readers drove a microSD into minute-long
+/// kernel I/O queues (blk_mq) and even blocked process shutdown — slow
+/// removable media serves few streams well (raw-pipeline.md).
+const MAX_CONCURRENT_READS: usize = 4;
+
+/// Tiny counting gate for the read phase.
+struct IoGate {
+    state: Mutex<usize>,
+    cv: Condvar,
+}
+
+impl IoGate {
+    fn new(permits: usize) -> Self {
+        Self {
+            state: Mutex::new(permits),
+            cv: Condvar::new(),
+        }
+    }
+    fn acquire(&self) -> IoPermit<'_> {
+        let mut free = self
+            .state
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
+        while *free == 0 {
+            free = self
+                .cv
+                .wait(free)
+                .unwrap_or_else(std::sync::PoisonError::into_inner);
+        }
+        *free -= 1;
+        IoPermit { gate: self }
+    }
+}
+
+struct IoPermit<'a> {
+    gate: &'a IoGate,
+}
+
+impl Drop for IoPermit<'_> {
+    fn drop(&mut self) {
+        let mut free = self
+            .gate
+            .state
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
+        *free += 1;
+        self.gate.cv.notify_one();
+    }
+}
+
 /// Grid thumbnails: long edge in pixels.
 pub const THUMB_LONG_EDGE: u32 = 320;
 /// Grid thumbnails: JPEG re-encode quality.
@@ -95,6 +146,7 @@ struct Shared {
     cache_path: Option<PathBuf>,
     events: Sender<SessionEvent>,
     shutdown: AtomicBool,
+    io_gate: IoGate,
 }
 
 /// Handle to the running pipeline. Dropping it stops the workers (queued jobs
@@ -145,6 +197,7 @@ impl Pipeline {
             cache_path,
             events: tx,
             shutdown: AtomicBool::new(false),
+            io_gate: IoGate::new(MAX_CONCURRENT_READS),
         });
         let workers = (0..num_threads.max(1))
             .map(|_| {
@@ -318,7 +371,10 @@ fn process_job(shared: &Shared, cache: &mut Option<PreviewCache>, index: usize) 
         }
     }
 
-    let exif = crate::exif::read_exif_summary(&spec.path).ok();
+    let exif = {
+        let _permit = shared.io_gate.acquire();
+        crate::exif::read_exif_summary(&spec.path).ok()
+    };
     if let Some(exif) = &exif {
         send(SessionEvent::MetadataReady {
             index,
@@ -327,7 +383,7 @@ fn process_job(shared: &Shared, cache: &mut Option<PreviewCache>, index: usize) 
         });
     }
 
-    match make_grid_thumb(spec) {
+    match make_grid_thumb_gated(spec, Some(&shared.io_gate)) {
         Ok((thumb_jpeg, width, height)) => {
             // Cache the thumb even when the EXIF read failed (as an
             // all-None summary): the zero-RAW-reads-on-reopen guarantee
@@ -359,13 +415,25 @@ fn process_job(shared: &Shared, cache: &mut Option<PreviewCache>, index: usize) 
 /// Extract the grid-source preview, decode, resize to 320 px, re-encode q80.
 /// Public so benches and the CLI can exercise the exact hot path.
 pub fn make_grid_thumb(spec: &JobSpec) -> Result<(Vec<u8>, u32, u32), String> {
-    let mut file = std::fs::File::open(&spec.path).map_err(|e| format!("open: {e}"))?;
-    let previews = find_embedded_jpegs(&mut file).map_err(|e| format!("parse: {e}"))?;
-    let source = previews
-        .grid_source()
-        .ok_or("no usable embedded preview")?
-        .clone();
-    let jpeg_bytes = read_jpeg(&mut file, &source).map_err(|e| format!("read: {e}"))?;
+    make_grid_thumb_gated(spec, None)
+}
+
+fn make_grid_thumb_gated(
+    spec: &JobSpec,
+    gate: Option<&IoGate>,
+) -> Result<(Vec<u8>, u32, u32), String> {
+    // Read phase under the I/O gate; decode below runs fully parallel.
+    let (previews, jpeg_bytes) = {
+        let _permit = gate.map(|g| g.acquire());
+        let mut file = std::fs::File::open(&spec.path).map_err(|e| format!("open: {e}"))?;
+        let previews = find_embedded_jpegs(&mut file).map_err(|e| format!("parse: {e}"))?;
+        let source = previews
+            .grid_source()
+            .ok_or("no usable embedded preview")?
+            .clone();
+        let bytes = read_jpeg(&mut file, &source).map_err(|e| format!("read: {e}"))?;
+        (previews, bytes)
+    };
 
     // Force RGB output so grayscale/CMYK previews also become valid thumbs.
     let options = zune_jpeg::zune_core::options::DecoderOptions::default()

@@ -69,6 +69,16 @@ budgets. Skipped in debug builds where decode timing is meaningless. Numbers for
 | full-res 8640×5760 decode | 130–150 ms | < 350 ms |
 | pipeline throughput (all cores) | ~300 files/s | > 60 files/s (4-core runner) |
 
+## Shutdown policy (recorded 2026-07-25)
+
+On window close the app flushes the sidecar writer (the only durability-
+critical work) and then calls `process::exit` WITHOUT joining pipeline/loupe
+workers: they are read-only and the preview cache is WAL-crash-safe, while a
+worker stuck in uninterruptible kernel I/O on a dying card once kept the
+process alive through SIGKILL for minutes. An 8 s watchdog bounds even the
+sidecar flush when the sidecars themselves live on dead storage (marks are
+then lost with a stderr notice — the device is gone either way).
+
 ## Error philosophy
 
 A single unreadable/corrupt file must never break a session: the record is flagged

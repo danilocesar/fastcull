@@ -58,9 +58,9 @@ Write failures are surfaced to the UI (status-bar warning + stderr).
       checked-in fixtures (`tests/golden/*.xmp`); the IPTC set joins in M5.
 - [ ] Round-trip: write → read yields identical state (property-based test over
       arbitrary IPTC strings incl. Unicode, quotes, `&`, CJK, emoji).
-- [ ] Preservation: a fixture sidecar containing foreign nodes (fake
+- [x] Preservation: a fixture sidecar containing foreign nodes (fake
       `crs:`/darktable `darktable:history` blocks) survives our edit with those
-      nodes intact.
+      nodes intact (`foreign_nodes_survive_rating_edits` + QE 50-cycle fuzz).
 - [ ] **darktable round-trip (integration, Linux)**: `darktable-cli` with throwaway
       `--configdir`/`--library` in a temp dir (NEVER the user's real config)
       imports an A1 file + our sidecar; exported/queried state shows our rating and
