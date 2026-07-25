@@ -14,6 +14,7 @@ pub mod cache;
 pub mod catalog;
 pub mod exif;
 pub mod grid;
+pub mod loupe;
 pub mod pipeline;
 pub mod raw;
 

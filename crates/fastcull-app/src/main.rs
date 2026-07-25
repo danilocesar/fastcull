@@ -42,6 +42,12 @@ struct AppState {
     synthetic: bool,
     /// The one VecModel the window binds; refresh mutates it in place.
     cells: Rc<VecModel<CellData>>,
+    /// Full-res loupe assets (real sessions only).
+    loupe: Option<fastcull_core::loupe::LoupeEngine>,
+    /// UI-side textures for the focused image ± neighbors; tiny keyed cache,
+    /// oldest dropped beyond 3 (the core LRU holds the pixel data).
+    fullres: Vec<(usize, slint::Image)>,
+    one2one: bool,
 }
 
 impl AppState {
@@ -102,17 +108,27 @@ fn main() {
         thumbs_done: 0,
         synthetic,
         cells,
+        loupe: None,
+        fullres: Vec::new(),
+        one2one: false,
     }));
 
-    // Start the engine for real folders; events polled on a UI timer.
+    // Start the engines for real folders; events polled on a UI timer.
     let event_rx = jobs.map(|jobs| {
+        let paths: Vec<std::path::PathBuf> = jobs.iter().map(|j| j.path.clone()).collect();
         let (pipeline, rx) = Pipeline::start(
             jobs,
             fastcull_core::cache::default_cache_path(),
             std::thread::available_parallelism().map_or(4, |n| n.get()),
         );
-        state.borrow_mut().pipeline = Some(pipeline);
-        rx
+        let (loupe, loupe_rx) = fastcull_core::loupe::LoupeEngine::start(
+            paths,
+            fastcull_core::loupe::DEFAULT_BUDGET_BYTES,
+        );
+        let mut st = state.borrow_mut();
+        st.pipeline = Some(pipeline);
+        st.loupe = Some(loupe);
+        (rx, loupe_rx)
     });
 
     {
@@ -136,7 +152,7 @@ fn main() {
     // Pipeline event pump: drain pending events every 33 ms; refresh once if
     // anything relevant arrived.
     let timer = slint::Timer::default();
-    if let Some(rx) = event_rx {
+    if let Some((rx, loupe_rx)) = event_rx {
         let state = Rc::clone(&state);
         let win = window.as_weak();
         timer.start(
@@ -163,6 +179,17 @@ fn main() {
                             SessionEvent::MetadataReady { .. } => {}
                         }
                     }
+                    for event in loupe_rx.try_iter() {
+                        if let fastcull_core::loupe::LoupeEvent::Ready { index, image } = event {
+                            let texture = fullres_texture(&image);
+                            st.fullres.retain(|(i, _)| *i != index);
+                            st.fullres.push((index, texture));
+                            while st.fullres.len() > 3 {
+                                st.fullres.remove(0);
+                            }
+                            dirty = true;
+                        }
+                    }
                 }
                 if dirty {
                     if let Some(win) = win.upgrade() {
@@ -181,9 +208,26 @@ fn handle_nav(win: &MainWindow, state: &Rc<RefCell<AppState>>, key: &str) {
     let (layout, viewport_h, scroll_y) = current_geometry(win, state);
     let mut st = state.borrow_mut();
     match key {
+        "one2one" => {
+            if st.loupe.is_some() {
+                st.one2one = !st.one2one;
+                if st.one2one {
+                    st.zoom = grid::ZOOM_COLUMNS.len() - 1; // Z implies loupe zoom
+                }
+            }
+        }
+        "grid" => {
+            st.one2one = false;
+            if st.zoom == grid::ZOOM_COLUMNS.len() - 1 {
+                st.zoom = 1; // back to 8 columns, centered on cursor via reveal
+            }
+        }
         "zoom-in" | "zoom-out" => {
             let delta = if key == "zoom-in" { 1 } else { -1 };
             st.zoom = grid::zoom_step(st.zoom, delta);
+            if st.zoom < grid::ZOOM_COLUMNS.len() - 1 {
+                st.one2one = false;
+            }
         }
         nav => {
             let nav = match nav {
@@ -254,12 +298,41 @@ fn refresh(win: &MainWindow, state: &Rc<RefCell<AppState>>) {
         });
     }
 
+    // Loupe: at 1-column zoom, request full-res for the cursor (±prefetch)
+    // and use the full-res texture for any cell that has one.
+    let at_loupe = layout.columns == 1;
+    if at_loupe {
+        if let Some(loupe) = &st.loupe {
+            loupe.focus(st.cursor);
+        }
+    }
+    let cursor = st.cursor;
+    let fullres_for = |st: &AppState, index: usize| -> Option<slint::Image> {
+        st.fullres
+            .iter()
+            .find(|(i, _)| *i == index)
+            .map(|(_, img)| img.clone())
+    };
+    // 1:1 overlay properties follow the cursor's full-res availability.
+    win.set_one2one(st.one2one && at_loupe);
+    if let Some(img) = fullres_for(&st, cursor) {
+        let size = img.size();
+        win.set_loupe_w(size.width as f32);
+        win.set_loupe_h(size.height as f32);
+        win.set_loupe_image(img);
+    }
+
     // Mutate the one bound VecModel in place (spec: reuse, don't recreate).
     let model = Rc::clone(&st.cells);
     let mut row = 0usize;
     for index in range.clone() {
         let (x, y) = layout.position(index);
-        let image = st.images.get(&index);
+        let full = if at_loupe {
+            fullres_for(&st, index)
+        } else {
+            None
+        };
+        let image = full.as_ref().or(st.images.get(&index));
         let cell = CellData {
             x,
             y,
@@ -295,6 +368,17 @@ fn refresh(win: &MainWindow, state: &Rc<RefCell<AppState>>) {
         )
         .into(),
     );
+}
+
+/// Build a slint texture from a decoded full-res image (one 150 MB copy —
+/// slint owns its pixel buffers; the core LRU keeps the original).
+fn fullres_texture(image: &fastcull_core::loupe::FullImage) -> slint::Image {
+    let buffer = slint::SharedPixelBuffer::<slint::Rgb8Pixel>::clone_from_slice(
+        &image.rgb,
+        image.width,
+        image.height,
+    );
+    slint::Image::from_rgb8(buffer)
 }
 
 fn decode_image(jpeg: &[u8]) -> Option<slint::Image> {
