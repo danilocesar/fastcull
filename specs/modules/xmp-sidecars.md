@@ -43,7 +43,7 @@ Owned by the dedicated sidecar-writer thread (`01-architecture.md`): mutations a
 debounced ≤1 s per image, flushed on session close and on copy-picks start (a copy
 plan must never race a pending sidecar write).
 
-## M3/M5 scope split (recorded 2026-07-25, pending the user's OK for the M5 half)
+## M3/M5 scope split (recorded and APPROVED by the user 2026-07-25)
 
 M3 ships pick/reject only: `xmp:Rating` write (attribute form; legacy element
 and `xap:` forms are removed/replaced on rewrite), sidecar-at-open, writer

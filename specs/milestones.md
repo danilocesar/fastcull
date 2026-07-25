@@ -23,10 +23,13 @@ loading, keyboard navigation, placeholder/badge visuals. DoD: 2,000-file synthet
 folder scrolls smoothly; screenshot smoke tests. **Start with the windowed-model
 spike — if Slint can't hit 60 fps here, escalate to the user before proceeding.**
 
-## M3 — Culling
-Pick/reject session state, sidecar writer thread, XMP serializer. `fastcull-cli
-cull` for scripted marking. DoD: xmp-sidecars acceptance criteria incl. sandboxed
-darktable-cli round-trip.
+## M3 — Culling — **CLOSED 2026-07-25** *(built after M4 per the swap)*
+Pick/reject session state (Y/N/U + badges + auto-advance everywhere), sidecar
+writer thread, XMP serializer with preservation, sidecar-at-open,
+`fastcull-cli cull`, EXIF orientation on all rungs, I/O gate + bounded
+shutdown. DoD met: xmp-sidecars acceptance criteria pass incl. the sandboxed
+darktable-cli round-trip (ratings verified in darktable 5.4.1's library.db);
+keyword halves moved to M5 (scope split approved by the user).
 
 ## M4 — Loupe *(order swapped with M3 by user decision 2026-07-25: full-res
 zoom quality first, culling marks second — implemented 2026-07-25)*
