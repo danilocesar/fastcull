@@ -53,15 +53,18 @@ testdata/fetch.sh   # downloads sample RAWs (needed for integration tests)
 
 ## Testing on Windows
 
-Every green CI run on `main` (and on any pull request) attaches a ready-to-run
-Windows build, so you never have to set up a Rust toolchain on the Windows machine.
+Every CI run whose Windows job passes — on `main` and on pull requests — attaches a
+ready-to-run Windows build, so you never have to set up a Rust toolchain on the
+Windows machine. (The Linux and Windows jobs are independent, so check that the
+whole run is green, not just that an artifact exists.)
 
 1. Open <https://github.com/danilocesar/fastcull/actions/workflows/ci.yml> and click
    the most recent run with a green check mark.
 2. Scroll to the **Artifacts** section at the bottom of the run summary page and
    download **`fastcull-windows-x64`**. GitHub always hands it over as a `.zip`.
 3. Unzip it anywhere. It contains `fastcull-app.exe`, `fastcull-cli.exe`, `LICENSE`,
-   this README, and a `BUILD-INFO.txt` naming the exact commit it was built from.
+   `THIRD-PARTY-LICENSES.md`, this README, and a `BUILD-INFO.txt` naming the exact
+   commit it was built from.
 4. Double-click `fastcull-app.exe`.
 
 The first launch shows a blue **"Windows protected your PC"** dialog. That is
@@ -87,16 +90,19 @@ cargo-dist). `dist-workspace.toml` is the configuration;
 `.github/workflows/release.yml` is **generated from it** and should never be edited
 by hand.
 
-To release `0.1.0`:
+**A `v0.1.0` tag already exists** (it marks the end of milestone M4, a commit that
+predates this pipeline). The first tag that actually builds a release must be a new
+version — bump `[workspace.package] version` in `Cargo.toml` first. To release
+`0.1.1`:
 
 ```sh
-# 1. bump [workspace.package] version in Cargo.toml, then refresh Cargo.lock
+# 1. bump the version in Cargo.toml, then refresh Cargo.lock
 cargo check --workspace
 # 2. see exactly which archives the tag will produce, before creating it
 dist plan
 # 3. commit, tag, push
-git commit -am "Release 0.1.0"
-git tag v0.1.0
+git commit -am "Release 0.1.1"
+git tag v0.1.1
 git push && git push --tags
 ```
 
@@ -106,20 +112,48 @@ checksums, and creates the GitHub Release. Nothing is published until the tag is
 pushed; the workflow also runs in plan-only mode on pull requests, so a broken
 `dist-workspace.toml` is caught before it can break a real release.
 
+If a release run fails halfway, the tag is already public. Recover by deleting both
+the release and the tag, then fixing and re-tagging:
+
+```sh
+gh release delete v0.1.1 --yes    # only if a release/draft was created
+git push --delete origin v0.1.1
+git tag -d v0.1.1
+```
+
+A safe way to exercise the pipeline for the first time is a prerelease tag such as
+`v0.1.1-rc.1`: dist marks those `--prerelease` on GitHub, and they can be deleted
+afterwards.
+
 After changing `dist-workspace.toml`, regenerate the workflow and commit both files
 together:
 
 ```sh
 cargo install cargo-dist --locked --version 0.32.0   # or the prebuilt installer
-dist init --yes
+dist generate          # rewrites .github/workflows/release.yml
+dist generate --check  # verifies the workflow matches the config
 ```
+
+Use `dist generate`, **not** `dist init` — `init` rewrites `dist-workspace.toml`
+and replaces its explanatory comments with boilerplate.
 
 ## License
 
-GPL-3.0-or-later. See [LICENSE](LICENSE).
+FastCull's own source code is GPL-3.0-or-later. See [LICENSE](LICENSE).
 
-FastCull binaries are distributed under the same licence. The complete
-corresponding source code for any binary we publish is the git commit it was built
-from, in this repository: <https://github.com/danilocesar/fastcull>. CI artifacts
-record that commit in `BUILD-INFO.txt`; release archives record it in the release
-tag.
+The **binaries** we publish link Slint, which is offered under GPL-3.0-**only** (or
+a paid commercial licence), so a distributed FastCull executable as a whole is
+conveyed under GPL version 3 — "or later" applies to our source, not to the linked
+result. The complete corresponding source code for any binary we publish is the git
+commit it was built from, in this repository:
+<https://github.com/danilocesar/fastcull>. CI artifacts record that commit in
+`BUILD-INFO.txt`; release archives record it in the release tag.
+
+Those executables also contain hundreds of Rust crates under MIT, Apache-2.0,
+BSD, Unicode-3.0, MPL-2.0 and other licences, most of which require their notice
+to travel with the binary. [THIRD-PARTY-LICENSES.md](THIRD-PARTY-LICENSES.md)
+collects them and ships inside every artifact and release archive; regenerate it
+with `cargo about generate about.hbs -o THIRD-PARTY-LICENSES.md` after changing
+dependencies.
+
+This software is based in part on the work of the Independent JPEG Group.

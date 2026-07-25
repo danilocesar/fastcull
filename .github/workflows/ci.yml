@@ -66,41 +66,58 @@ jobs:
         run: cargo test --release -p fastcull-core --test perf_budgets
 
       # ---------------------------------------------------------------
-      # Windows test build. Runs only after everything above passed, so a
-      # downloadable .exe always corresponds to a green run.
+      # Windows test build. These steps sit last in the job, so the .exe
+      # is only produced once this job's own checks have passed.
       #
       # `-C target-feature=+crt-static` links the Microsoft C runtime into
       # the .exe instead of loading it from the machine at start-up. The user
       # can then copy the file to any Windows box without first installing
-      # the "Visual C++ Redistributable". It is set here and nowhere else:
-      # the test/clippy steps above must keep the default dynamic CRT,
-      # because switching it changes how every crate is compiled and would
-      # throw away their build cache.
+      # the "Visual C++ Redistributable".
+      #
+      # `--target x86_64-pc-windows-msvc` is what keeps that flag honest and
+      # cheap. Without it, RUSTFLAGS would also apply to build scripts and
+      # proc macros, which have to run on the machine doing the build --
+      # exactly the mismatch that makes static-CRT builds fail in confusing
+      # ways -- and cargo would compile a second full copy of every
+      # dependency next to the ones the tests above already built. Naming
+      # the target explicitly is the same thing cargo-dist does for the
+      # release archives (see dist-workspace.toml). Output then lands in
+      # target/x86_64-pc-windows-msvc/release/ rather than target/release/.
       # ---------------------------------------------------------------
       - name: Build Windows test binaries (release, static CRT)
         if: runner.os == 'Windows'
         env:
           RUSTFLAGS: -C target-feature=+crt-static
-        run: cargo build --release --locked -p fastcull-app -p fastcull-cli
+        run: cargo build --release --locked --target x86_64-pc-windows-msvc -p fastcull-app -p fastcull-cli
 
       - name: Stage Windows artifact
         if: runner.os == 'Windows'
         shell: bash
+        env:
+          # On a pull_request event GITHUB_SHA is a throwaway merge commit
+          # that GitHub garbage-collects, so it is useless as the "here is
+          # the corresponding source" pointer the GPL asks for. Prefer the
+          # real head commit of the branch under test.
+          SOURCE_SHA: ${{ github.event.pull_request.head.sha || github.sha }}
+          SOURCE_REF: ${{ github.event.pull_request.head.ref || github.ref_name }}
         run: |
           set -euo pipefail
+          bindir=target/x86_64-pc-windows-msvc/release
           mkdir -p artifact
-          cp target/release/fastcull-app.exe artifact/
-          cp target/release/fastcull-cli.exe artifact/
-          # GPL-3.0-or-later: the licence text and a pointer to the
-          # corresponding source ship with every binary we hand out.
+          cp "$bindir/fastcull-app.exe" artifact/
+          cp "$bindir/fastcull-cli.exe" artifact/
+          # Licence obligations: our own GPL text plus a pointer to the
+          # corresponding source, and the notices of the third-party crates
+          # linked into these executables.
           cp LICENSE artifact/
           cp README.md artifact/
+          cp THIRD-PARTY-LICENSES.md artifact/
           cat > artifact/BUILD-INFO.txt <<EOF
           FastCull unsigned Windows test build
           ====================================
 
-          commit:   ${GITHUB_SHA}
-          ref:      ${GITHUB_REF}
+          commit:   ${SOURCE_SHA}
+          ref:      ${SOURCE_REF}
           run:      ${GITHUB_SERVER_URL}/${GITHUB_REPOSITORY}/actions/runs/${GITHUB_RUN_ID}
           built at: $(date -u +'%Y-%m-%dT%H:%M:%SZ')
 
@@ -108,11 +125,28 @@ jobs:
           "Windows protected your PC" the first time you start them: click
           "More info", then "Run anyway".
 
-          FastCull is free software under the GNU General Public License
-          version 3 or later (see LICENSE). The complete corresponding
-          source for this build is the commit above, at
+          FastCull is free software; see LICENSE for the GNU General Public
+          License and THIRD-PARTY-LICENSES.md for the licences of the
+          libraries linked into these executables. The complete
+          corresponding source for this build is the commit above, at
           ${GITHUB_SERVER_URL}/${GITHUB_REPOSITORY}
           EOF
+
+      # The README and BUILD-INFO.txt promise "no Visual C++ Redistributable
+      # needed". Check it instead of trusting it: a statically linked binary
+      # has no VCRUNTIME140 import, and the .exe must actually start.
+      - name: Verify Windows artifact (static CRT + starts)
+        if: runner.os == 'Windows'
+        shell: bash
+        run: |
+          set -euo pipefail
+          for exe in artifact/fastcull-app.exe artifact/fastcull-cli.exe; do
+            if grep -aq 'VCRUNTIME140' "$exe"; then
+              echo "::error::$exe imports VCRUNTIME140 -- the static CRT flag did not take effect"
+              exit 1
+            fi
+          done
+          ./artifact/fastcull-cli.exe --version
 
       - name: Upload Windows test binaries
         if: runner.os == 'Windows'

@@ -1,0 +1,35 @@
+# Third-party licences
+
+FastCull is free software under the GNU General Public License; see `LICENSE`.
+The executables we distribute also statically link the Rust crates listed below.
+Most of their licences require this notice to travel with the binary, which is why
+this file is included in every CI artifact and release archive.
+
+This software is based in part on the work of the Independent JPEG Group.
+
+This file is generated — do not edit it by hand. Regenerate with:
+
+    cargo about generate about.hbs -o THIRD-PARTY-LICENSES.md
+
+## Licences in use
+
+{{#each overview}}
+- {{{name}}} ({{count}} crate(s))
+{{/each}}
+
+## Full licence texts
+
+{{#each licenses}}
+### {{{name}}}
+
+Used by:
+
+{{#each used_by}}
+- [{{{crate.name}}} {{{crate.version}}}]({{#if crate.repository}}{{{crate.repository}}}{{else}}https://crates.io/crates/{{{crate.name}}}{{/if}})
+{{/each}}
+
+```
+{{{text}}}
+```
+
+{{/each}}

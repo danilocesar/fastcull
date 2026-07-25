@@ -63,3 +63,18 @@ burst.rs grouping + border rendering + in-burst filter. cargo-dist packaging:
 Linux AppImage, Windows zip/MSI. DoD: full manual acceptance script in
 specs/00-overview terms: open **5,000** A1 files → cull → IPTC → copy →
 darktable sees everything.
+
+**Packaging partially pulled forward into M5** (2026-07-25), because the user needs a
+Windows executable to test the app long before M7. What already landed:
+
+- CI uploads an unsigned Windows test build (`fastcull-windows-x64`) from every run
+  of the Windows job — see the "Testing on Windows" section of README.md.
+- cargo-dist ("dist") 0.32.0 is configured in `dist-workspace.toml` and generates
+  `.github/workflows/release.yml`; a `v*` tag produces a GitHub Release with
+  `.tar.xz` (Linux) and `.zip` (Windows) archives plus SHA-256 checksums, each
+  archive carrying LICENSE, README.md and THIRD-PARTY-LICENSES.md.
+
+Still owned by M7: **Linux AppImage** and **Windows MSI** (dist can generate an MSI
+via its `msi` installer; AppImage needs separate tooling), and the end-to-end
+verification of the release workflow itself — no tag has been pushed yet, so the
+Windows leg of `release.yml` and the GitHub Release step have never executed.
