@@ -51,6 +51,41 @@ cargo test --workspace
 testdata/fetch.sh   # downloads sample RAWs (needed for integration tests)
 ```
 
+## Testing on Windows
+
+Every green CI run on `main` (and on any pull request) attaches a ready-to-run
+Windows build, so you never have to set up a Rust toolchain on the Windows machine.
+
+1. Open <https://github.com/danilocesar/fastcull/actions/workflows/ci.yml> and click
+   the most recent run with a green check mark.
+2. Scroll to the **Artifacts** section at the bottom of the run summary page and
+   download **`fastcull-windows-x64`**. GitHub always hands it over as a `.zip`.
+3. Unzip it anywhere. It contains `fastcull-app.exe`, `fastcull-cli.exe`, `LICENSE`,
+   this README, and a `BUILD-INFO.txt` naming the exact commit it was built from.
+4. Double-click `fastcull-app.exe`.
+
+The first launch shows a blue **"Windows protected your PC"** dialog. That is
+SmartScreen reacting to an executable nobody has paid a certificate authority to
+sign — not a virus warning. Click **More info**, then **Run anyway**. Windows
+remembers the choice for that copy of the file; a newly downloaded build asks again.
+
+Notes:
+
+- Artifacts expire **14 days** after the run; grab a fresh one after that.
+- Downloading artifacts requires being signed in to GitHub.
+- The binaries are linked against a static C runtime, so no "Visual C++
+  Redistributable" install is needed.
+
+Tagged releases (`v*`) additionally publish Linux and Windows archives on the
+[Releases page](https://github.com/danilocesar/fastcull/releases) — those are the
+builds to hand to other people; CI artifacts are for your own testing.
+
 ## License
 
 GPL-3.0-or-later. See [LICENSE](LICENSE).
+
+FastCull binaries are distributed under the same licence. The complete
+corresponding source code for any binary we publish is the git commit it was built
+from, in this repository: <https://github.com/danilocesar/fastcull>. CI artifacts
+record that commit in `BUILD-INFO.txt`; release archives record it in the release
+tag.

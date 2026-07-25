@@ -64,3 +64,61 @@ jobs:
       - name: Performance budgets (release, advisory)
         continue-on-error: true
         run: cargo test --release -p fastcull-core --test perf_budgets
+
+      # ---------------------------------------------------------------
+      # Windows test build. Runs only after everything above passed, so a
+      # downloadable .exe always corresponds to a green run.
+      #
+      # `-C target-feature=+crt-static` links the Microsoft C runtime into
+      # the .exe instead of loading it from the machine at start-up. The user
+      # can then copy the file to any Windows box without first installing
+      # the "Visual C++ Redistributable". It is set here and nowhere else:
+      # the test/clippy steps above must keep the default dynamic CRT,
+      # because switching it changes how every crate is compiled and would
+      # throw away their build cache.
+      # ---------------------------------------------------------------
+      - name: Build Windows test binaries (release, static CRT)
+        if: runner.os == 'Windows'
+        env:
+          RUSTFLAGS: -C target-feature=+crt-static
+        run: cargo build --release --locked -p fastcull-app -p fastcull-cli
+
+      - name: Stage Windows artifact
+        if: runner.os == 'Windows'
+        shell: bash
+        run: |
+          set -euo pipefail
+          mkdir -p artifact
+          cp target/release/fastcull-app.exe artifact/
+          cp target/release/fastcull-cli.exe artifact/
+          # GPL-3.0-or-later: the licence text and a pointer to the
+          # corresponding source ship with every binary we hand out.
+          cp LICENSE artifact/
+          cp README.md artifact/
+          cat > artifact/BUILD-INFO.txt <<EOF
+          FastCull unsigned Windows test build
+          ====================================
+
+          commit:   ${GITHUB_SHA}
+          ref:      ${GITHUB_REF}
+          run:      ${GITHUB_SERVER_URL}/${GITHUB_REPOSITORY}/actions/runs/${GITHUB_RUN_ID}
+          built at: $(date -u +'%Y-%m-%dT%H:%M:%SZ')
+
+          These binaries are not code-signed. Windows SmartScreen will show
+          "Windows protected your PC" the first time you start them: click
+          "More info", then "Run anyway".
+
+          FastCull is free software under the GNU General Public License
+          version 3 or later (see LICENSE). The complete corresponding
+          source for this build is the commit above, at
+          ${GITHUB_SERVER_URL}/${GITHUB_REPOSITORY}
+          EOF
+
+      - name: Upload Windows test binaries
+        if: runner.os == 'Windows'
+        uses: actions/upload-artifact@v4
+        with:
+          name: fastcull-windows-x64
+          path: artifact/
+          retention-days: 14
+          if-no-files-found: error

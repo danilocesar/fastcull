@@ -8,3 +8,6 @@
 # Local tooling
 /.direnv/
 *.swp
+
+# Staging dir the CI workflow fills before uploading the Windows test build
+/artifact/
