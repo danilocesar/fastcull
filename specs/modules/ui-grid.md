@@ -90,7 +90,12 @@ Recorded deviations/decisions (M2):
 There is no undo stack in v1 (user decision): a mis-marked frame during
 auto-advance is fixed with arrow-back + re-mark, which costs one keystroke.
 
-Pick/reject in loupe auto-advances to the next image (config: on by default).
+Picking (`Y`) or rejecting (`N`) auto-advances the cursor to the next image
+at EVERY zoom level — grid and loupe alike (user decision 2026-07-25: "once
+I select Y or N, the UI should automatically move to the next image").
+Clearing (`U`) does not advance. This becomes a configuration option
+(default: on) when the settings dialog lands (File menu placeholder,
+post-v1); until then it is always on.
 
 ## Window chrome (menu bar — user-requested 2026-07-24, lands M5)
 

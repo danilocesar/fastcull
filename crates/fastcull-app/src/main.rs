@@ -406,9 +406,10 @@ fn handle_nav(win: &MainWindow, state: &Rc<RefCell<AppState>>, key: &str) {
                 if let (Some(writer), Some(path)) = (&st.writer, st.paths.get(cursor)) {
                     writer.mark(path.clone(), pick);
                 }
-                // Auto-advance in the loupe (spec: on by default): mark
-                // lands on the pre-advance cursor, then move on.
-                if st.zoom == loupe_step {
+                // Auto-advance after pick/reject at EVERY zoom level (user
+                // decision 2026-07-25; future config option). The mark lands
+                // on the pre-advance cursor; clearing (U) stays put.
+                if key != "clear" {
                     st.cursor = grid::navigate(cursor, st.count(), 1, 1, Nav::Right);
                 }
             }
