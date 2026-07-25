@@ -9,13 +9,14 @@ use std::sync::mpsc::{Receiver, RecvTimeoutError, Sender, SyncSender};
 use std::time::{Duration, Instant};
 
 use crate::catalog::PickState;
-use crate::xmp::write_pick;
+use crate::xmp::{write_keywords, write_pick};
 
 /// Debounce window: a burst of re-marks on one image becomes one write.
 const DEBOUNCE: Duration = Duration::from_millis(700);
 
 enum Msg {
     Mark(PathBuf, PickState),
+    Keywords(PathBuf, Vec<String>),
     Flush(SyncSender<()>),
 }
 
@@ -58,6 +59,16 @@ impl SidecarWriter {
         }
     }
 
+    /// Queue a keyword-list write for `raw_path` (M5: the IPTC panel and
+    /// template apply route here — ALL sidecar writes serialize through
+    /// this one thread; parallel raw `write_*` calls are corruption-safe
+    /// since the unique-temp fix but still last-writer-wins per property).
+    pub fn keywords(&self, raw_path: PathBuf, keywords: Vec<String>) {
+        if let Some(tx) = &self.tx {
+            tx.send(Msg::Keywords(raw_path, keywords)).ok();
+        }
+    }
+
     /// Barrier: returns once every queued write has hit disk. The copy
     /// engine calls this before planning (a pick made a moment ago must be
     /// in the copied sidecar).
@@ -80,9 +91,17 @@ impl Drop for SidecarWriter {
     }
 }
 
+/// One queued write: the latest value per (path, property) wins.
+enum PendingWrite {
+    Pick(PickState),
+    Keywords(Vec<String>),
+}
+
 fn writer_loop(rx: Receiver<Msg>, err_tx: Sender<WriteFailure>) {
-    // Latest pick per path + its write deadline; later marks supersede.
-    let mut pending: HashMap<PathBuf, (PickState, Instant)> = HashMap::new();
+    // Latest value per (path, property) + its write deadline; later
+    // mutations supersede. Picks and keywords are separate entries so a
+    // keyword edit never delays a pick write past its window.
+    let mut pending: HashMap<(PathBuf, u8), (PendingWrite, Instant)> = HashMap::new();
     loop {
         let timeout = pending
             .values()
@@ -91,7 +110,16 @@ fn writer_loop(rx: Receiver<Msg>, err_tx: Sender<WriteFailure>) {
             .unwrap_or(Duration::from_secs(3600));
         match rx.recv_timeout(timeout) {
             Ok(Msg::Mark(path, pick)) => {
-                pending.insert(path, (pick, Instant::now() + DEBOUNCE));
+                pending.insert(
+                    (path, 0),
+                    (PendingWrite::Pick(pick), Instant::now() + DEBOUNCE),
+                );
+            }
+            Ok(Msg::Keywords(path, kws)) => {
+                pending.insert(
+                    (path, 1),
+                    (PendingWrite::Keywords(kws), Instant::now() + DEBOUNCE),
+                );
             }
             Ok(Msg::Flush(ack)) => {
                 drain(&mut pending, /*only_due=*/ false, &err_tx);
@@ -110,19 +138,24 @@ fn writer_loop(rx: Receiver<Msg>, err_tx: Sender<WriteFailure>) {
 }
 
 fn drain(
-    pending: &mut HashMap<PathBuf, (PickState, Instant)>,
+    pending: &mut HashMap<(PathBuf, u8), (PendingWrite, Instant)>,
     only_due: bool,
     err_tx: &Sender<WriteFailure>,
 ) {
     let now = Instant::now();
-    let due: Vec<PathBuf> = pending
+    let due: Vec<(PathBuf, u8)> = pending
         .iter()
         .filter(|(_, (_, deadline))| !only_due || *deadline <= now)
-        .map(|(p, _)| p.clone())
+        .map(|(k, _)| k.clone())
         .collect();
-    for path in due {
-        if let Some((pick, _)) = pending.remove(&path) {
-            if let Err(e) = write_pick(&path, pick) {
+    for key in due {
+        if let Some((write, _)) = pending.remove(&key) {
+            let path = &key.0;
+            let result = match &write {
+                PendingWrite::Pick(pick) => write_pick(path, *pick),
+                PendingWrite::Keywords(kws) => write_keywords(path, kws),
+            };
+            if let Err(e) = result {
                 // A sidecar failure must never take the writer down; it is
                 // surfaced to the UI (and logged for headless callers).
                 eprintln!("fastcull: sidecar write failed for {}: {e}", path.display());
@@ -185,6 +218,32 @@ mod tests {
             read_sidecar(&sidecar_path(&raw)).unwrap().pick,
             PickState::Rejected
         );
+        std::fs::remove_dir_all(&dir).ok();
+    }
+
+    /// Keyword writes serialize through the same thread as picks and
+    /// coalesce per property: interleaved marks and keyword edits on one
+    /// image land as the LAST value of each, no corruption, no loss.
+    #[test]
+    fn keywords_and_picks_serialize_and_coalesce() {
+        let dir = tmp();
+        let raw = dir.join("k.ARW");
+        let (writer, _errs) = SidecarWriter::start();
+        for i in 0..50 {
+            writer.mark(
+                raw.clone(),
+                if i % 2 == 0 {
+                    PickState::Picked
+                } else {
+                    PickState::Rejected
+                },
+            );
+            writer.keywords(raw.clone(), vec![format!("kw{i}")]);
+        }
+        writer.flush();
+        let state = read_sidecar(&sidecar_path(&raw)).unwrap();
+        assert_eq!(state.pick, PickState::Rejected, "last mark wins");
+        assert_eq!(state.keywords, vec!["kw49"], "last keyword list wins");
         std::fs::remove_dir_all(&dir).ok();
     }
 
