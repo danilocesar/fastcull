@@ -66,7 +66,22 @@ struct AppState {
     /// prefetch ring (5) and cursor-protected on eviction (see
     /// insert_fullres); the core LRU holds the pixel data for rebuilds.
     fullres: Vec<(usize, slint::Image)>,
-    one2one: bool,
+    /// DESIRED loupe zoom factor relative to fit (ui-grid.md zoom ladder):
+    /// 1.0 = fit, `f32::INFINITY` = 1:1 wanted before the full-res texture
+    /// (and thus the real ceiling) is known. Clamped to the 1:1 ceiling at
+    /// render time; the overlay shows only when the clamped factor > 1.
+    zoom_factor: f32,
+    /// Pan anchor as a fractional image coordinate (0..1). Persists across
+    /// image navigation (contract: lock 1:1 on the eye, arrow through the
+    /// burst); resets to center when returning to fit.
+    pan_center: (f32, f32),
+    /// The loupe offsets we last WROTE to the Flickable: when the read-back
+    /// differs, the user dragged, and the drag wins over `pan_center` (a
+    /// mid-drag engine refresh must not yank the view back). None while the
+    /// overlay is hidden.
+    last_pan_write: Option<(f32, f32)>,
+    /// Which image the overlay last showed (trace bookkeeping only).
+    last_overlay_cursor: Option<usize>,
     /// Grid zoom to return to when leaving the loupe with G/Esc.
     last_grid_zoom: usize,
     /// Mid-rung textures (1616x1080, ~5 MB each) for intermediate zooms
@@ -155,7 +170,8 @@ fn recompute_view_keep_cursor(st: &mut AppState) {
     }
     let loupe_step = grid::ZOOM_COLUMNS.len() - 1;
     if st.view.is_empty() && st.zoom == loupe_step {
-        st.one2one = false;
+        st.zoom_factor = 1.0;
+        st.pan_center = (0.5, 0.5);
         st.zoom = st.last_grid_zoom.min(loupe_step - 1);
     }
 }
@@ -201,7 +217,8 @@ fn load_folder(state: &Rc<RefCell<AppState>>, folder: &std::path::Path) -> Resul
     st.thumbs_done = 0;
     st.synthetic = false;
     st.fullres.clear();
-    st.one2one = false;
+    st.zoom_factor = 1.0;
+    st.pan_center = (0.5, 0.5);
     st.mids.clear();
     st.va = fastcull_core::viewassets::ViewAssets::default();
     st.capture_keys = vec![None; count];
@@ -313,7 +330,10 @@ fn main() {
         cells,
         loupe: None,
         fullres: Vec::new(),
-        one2one: start_11,
+        zoom_factor: if start_11 { f32::INFINITY } else { 1.0 },
+        pan_center: (0.5, 0.5),
+        last_pan_write: None,
+        last_overlay_cursor: None,
         last_grid_zoom: 1,
         mids: HashMap::new(),
         va: fastcull_core::viewassets::ViewAssets::default(),
@@ -340,9 +360,9 @@ fn main() {
                 eprintln!("fastcull: {e}");
                 std::process::exit(1);
             }
-            // load_folder resets one2one; --start-11 wants it back on.
+            // load_folder resets the zoom; --start-11 wants 1:1 back on.
             if start_11 {
-                state.borrow_mut().one2one = true;
+                state.borrow_mut().zoom_factor = f32::INFINITY;
             }
         }
     }
@@ -447,6 +467,72 @@ fn main() {
     window.on_quit(|| {
         slint::quit_event_loop().ok();
     });
+    {
+        // Click in the zoom overlay: "center HERE" (user decision
+        // 2026-07-25). At 1:1 it re-centers; below 1:1 it also jumps to
+        // 1:1 (persona default: below the ceiling a click means "show me
+        // pixels HERE"). Fractions arrive image-relative from Slint.
+        let state = Rc::clone(&state);
+        let win = window.as_weak();
+        window.on_loupe_clicked(move |fx, fy| {
+            let Some(win) = win.upgrade() else { return };
+            {
+                let mut st = state.borrow_mut();
+                capture_pan(&win, &mut st);
+                st.pan_center = (fx.clamp(0.0, 1.0), fy.clamp(0.0, 1.0));
+                let at_ceiling = max_factor(&win, &st)
+                    .is_some_and(|max| clamped_factor(&win, &st) >= max - 1e-3);
+                // Below the ceiling a click also zooms to 1:1 — unless the
+                // known ceiling is at/below fit (small file: nothing to
+                // zoom into; the desire stays at fit — validator L1).
+                if !at_ceiling && max_factor(&win, &st).is_none_or(|max| max > 1.0) {
+                    st.zoom_factor = f32::INFINITY;
+                }
+            }
+            refresh(&win, &state);
+        });
+    }
+    {
+        // Click at loupe fit: land at 1:1 centered on the clicked point.
+        // Coordinates are grid-area local; map through the cell layout and
+        // the contain-fitted image rect.
+        let state = Rc::clone(&state);
+        let win = window.as_weak();
+        window.on_fit_clicked(move |cx, cy| {
+            let Some(win) = win.upgrade() else { return };
+            let (layout, _viewport_h, scroll_y) = current_geometry(&win, &state);
+            {
+                let mut st = state.borrow_mut();
+                if st.view.is_empty() || st.loupe.is_none() {
+                    return;
+                }
+                let pitch = layout.cell_height + grid::CELL_GAP;
+                let pos = (((cy + scroll_y) / pitch.max(1.0)) as usize).min(st.view.len() - 1);
+                st.cursor = st.view[pos]; // tall windows: click also selects
+                let (cell_x, cell_y) = layout.position(pos);
+                st.pan_center = match aspect_for(&st, st.cursor) {
+                    // Cell-local click -> image fraction (core math,
+                    // unit-tested incl. portrait cells: zoompan).
+                    Some(aspect) => fastcull_core::zoompan::contain_click_frac(
+                        layout.cell_width,
+                        layout.cell_height,
+                        aspect,
+                        cx - cell_x,
+                        cy - (cell_y - scroll_y),
+                    ),
+                    // No texture yet (placeholder): zoom to the center.
+                    None => (0.5, 0.5),
+                };
+                // Small-file guard (validator): a known ceiling at or
+                // below fit means there is nothing to zoom INTO — leaving
+                // the desire at fit keeps the next `-` meaningful.
+                if max_factor(&win, &st).is_none_or(|max| max > 1.0) {
+                    st.zoom_factor = f32::INFINITY;
+                }
+            }
+            refresh(&win, &state);
+        });
+    }
 
     // Engine event pump: drain pending events every 33 ms; refresh once if
     // anything relevant arrived. Receivers live in AppState so File > Open
@@ -617,7 +703,7 @@ fn main() {
                 let elapsed = started.elapsed();
                 let one2one_ready = {
                     let st = state_rc.borrow();
-                    !st.one2one
+                    st.zoom_factor <= 1.0
                         || st.fullres.iter().any(|(i, img)| {
                             *i == st.cursor
                                 && img.size().width.max(img.size().height)
@@ -718,6 +804,70 @@ fn reveal_cursor(win: &MainWindow, state: &Rc<RefCell<AppState>>) {
     refresh(win, state);
 }
 
+/// Width/height aspect of the best texture held for an image (any rung —
+/// aspect is rung-invariant). None while only the placeholder exists.
+fn aspect_for(st: &AppState, index: usize) -> Option<f32> {
+    let size = st
+        .fullres
+        .iter()
+        .find(|(i, _)| *i == index)
+        .map(|(_, img)| img.size())
+        .or_else(|| st.mids.get(&index).map(|img| img.size()))
+        .or_else(|| st.images.get(&index).map(|img| img.size()))?;
+    (size.height > 0).then(|| size.width as f32 / size.height as f32)
+}
+
+/// The 1:1 zoom ceiling relative to fit for the cursor image, derived from
+/// its full-res texture (`ui-grid.md` zoom ladder: 1:1 means device
+/// pixels). None until the top rung is adopted — the ceiling is unknowable
+/// before the native dimensions are.
+fn max_factor(win: &MainWindow, st: &AppState) -> Option<f32> {
+    let img = st
+        .fullres
+        .iter()
+        .find(|(i, _)| *i == st.cursor)
+        .map(|(_, img)| img)?;
+    let size = img.size();
+    if size.width.max(size.height) <= fastcull_core::loupe::MID_RUNG_MAX_LONG {
+        return None; // not the top rung: native size unknown
+    }
+    let sf = win.window().scale_factor();
+    let (nw, nh) = (size.width as f32 / sf, size.height as f32 / sf);
+    let s = fastcull_core::zoompan::fit_scale(win.get_grid_width(), win.get_loupe_area_h(), nw, nh);
+    Some(1.0 / s)
+}
+
+/// The factor actually rendered: desired, clamped to the known 1:1
+/// ceiling (an INFINITY desire = "1:1 as soon as we know where that is").
+fn clamped_factor(win: &MainWindow, st: &AppState) -> f32 {
+    match max_factor(win, st) {
+        Some(max) => st.zoom_factor.clamp(1.0, max.max(1.0)),
+        None => st.zoom_factor.max(1.0),
+    }
+}
+
+/// Fold a drag-pan back into the fractional pan center: drags move the
+/// Flickable viewport without Rust hearing about it, so every mutation
+/// path reads the offsets back before acting. Programmatic writes are
+/// recognized via `last_pan_write` and never misread as drags.
+fn capture_pan(win: &MainWindow, st: &mut AppState) {
+    if !win.get_one2one() {
+        return;
+    }
+    let (vx, vy) = (win.get_loupe_vx(), win.get_loupe_vy());
+    let Some((wx, wy)) = st.last_pan_write else {
+        return; // overlay not yet driven by us: nothing to fold back
+    };
+    if (vx - wx).abs() < 0.5 && (vy - wy).abs() < 0.5 {
+        return; // no drag since our last write
+    }
+    st.pan_center = (
+        fastcull_core::zoompan::frac_at_center(win.get_grid_width(), win.get_loupe_w(), vx),
+        fastcull_core::zoompan::frac_at_center(win.get_loupe_area_h(), win.get_loupe_h(), vy),
+    );
+    st.last_pan_write = Some((vx, vy));
+}
+
 /// Switch the single-choice filter chip (spec cursor rule + persona G2).
 fn apply_filter_change(
     win: &MainWindow,
@@ -741,6 +891,9 @@ fn handle_nav(win: &MainWindow, state: &Rc<RefCell<AppState>>, key: &str) {
 fn handle_nav_inner(win: &MainWindow, state: &Rc<RefCell<AppState>>, key: &str) {
     let (layout, viewport_h, scroll_y) = current_geometry(win, state);
     let mut st = state.borrow_mut();
+    // A drag since the last render moved the pan; fold it in before any
+    // action reads or resets the pan center.
+    capture_pan(win, &mut st);
     let loupe_step = grid::ZOOM_COLUMNS.len() - 1;
     match key {
         "pick" | "reject" | "clear" => {
@@ -773,32 +926,55 @@ fn handle_nav_inner(win: &MainWindow, state: &Rc<RefCell<AppState>>, key: &str) 
                         // Inbox zero (persona G2): leaving the loupe — the
                         // empty state is a grid-level view.
                         if st.zoom == loupe_step {
-                            st.one2one = false;
+                            st.zoom_factor = 1.0;
+                            st.pan_center = (0.5, 0.5);
                             st.zoom = st.last_grid_zoom.min(loupe_step - 1);
                         }
                     }
                 }
             }
         }
-        // One seamless zoom axis (spec): columns -> loupe fit -> 1:1.
+        // One seamless zoom axis (spec): columns -> loupe fit -> x1.5
+        // ladder -> 1:1 (ui-grid.md Loupe zoom ladder, 2026-07-25).
         "one2one" => {
+            // Z: fit -> 1:1; zoomed (1:1 or intermediate) -> back to fit;
+            // from a grid zoom: jump straight to loupe 1:1.
             if st.loupe.is_some() {
                 if st.zoom < loupe_step {
                     st.last_grid_zoom = st.zoom;
-                    st.zoom = loupe_step; // Z from grid jumps to loupe 1:1
+                    st.zoom = loupe_step;
+                    st.zoom_factor = f32::INFINITY;
+                } else if st.zoom_factor > 1.0 {
+                    st.zoom_factor = 1.0;
+                    st.pan_center = (0.5, 0.5); // fit forgets the pan spot
+                } else if max_factor(win, &st).is_none_or(|max| max > 1.0) {
+                    // Small-file guard (validator L1): a known ceiling at
+                    // or below fit has no 1:1 to jump to; leaving the
+                    // desire at fit keeps the next `-` meaningful.
+                    st.zoom_factor = f32::INFINITY;
                 }
-                st.one2one = !st.one2one;
             }
         }
         "grid" => {
-            st.one2one = false;
+            st.zoom_factor = 1.0;
+            st.pan_center = (0.5, 0.5);
             if st.zoom == loupe_step {
                 st.zoom = st.last_grid_zoom.min(loupe_step - 1);
             }
         }
         "zoom-in" => {
             if st.zoom == loupe_step {
-                st.one2one = st.loupe.is_some(); // fit -> 1:1
+                if st.loupe.is_some() {
+                    // Climb one x1.5 stop from the CLAMPED factor (the
+                    // desired one may be INFINITY from an earlier Z). An
+                    // unknown ceiling (full-res not decoded yet) climbs
+                    // optimistically; the render clamp lands it at 1:1.
+                    let actual = clamped_factor(win, &st);
+                    st.zoom_factor = match max_factor(win, &st) {
+                        Some(max) => fastcull_core::zoompan::ladder_up(actual, max),
+                        None => actual * fastcull_core::zoompan::ZOOM_STEP,
+                    };
+                }
             } else {
                 if st.zoom + 1 == loupe_step {
                     st.last_grid_zoom = st.zoom;
@@ -807,8 +983,19 @@ fn handle_nav_inner(win: &MainWindow, state: &Rc<RefCell<AppState>>, key: &str) 
             }
         }
         "zoom-out" => {
-            if st.one2one {
-                st.one2one = false; // 1:1 -> fit, not straight to the grid
+            if st.zoom_factor > 1.0 {
+                // Retrace the x1.5 stops down to fit, never straight to
+                // the grid. Unknown ceiling: nothing above fit was ever
+                // rendered, so fit is the only honest stop.
+                let actual = clamped_factor(win, &st);
+                st.zoom_factor = if max_factor(win, &st).is_some() {
+                    fastcull_core::zoompan::ladder_down(actual)
+                } else {
+                    1.0
+                };
+                if st.zoom_factor <= 1.0 {
+                    st.pan_center = (0.5, 0.5); // fit forgets the pan spot
+                }
             } else {
                 st.zoom = grid::zoom_step(st.zoom, -1);
             }
@@ -932,8 +1119,9 @@ fn refresh_inner(win: &MainWindow, state: &Rc<RefCell<AppState>>) {
             // backwards previously degraded to the thumb forever).
             let focus_index = st.cursor;
             // Ladder target: fit view needs the viewport in physical pixels;
-            // 1:1 always demands the top rung.
-            let display_long = if st.one2one {
+            // any factor above fit demands the top rung (quality rule:
+            // intermediate zooms render from full-res, never upscaled mid).
+            let display_long = if st.zoom_factor > 1.0 {
                 u32::MAX
             } else {
                 (win.get_grid_width() * win.window().scale_factor()) as u32
@@ -991,25 +1179,60 @@ fn refresh_inner(win: &MainWindow, state: &Rc<RefCell<AppState>>) {
             .find(|(i, _)| *i == index)
             .map(|(_, img)| img.clone())
     };
-    // 1:1 overlay: only shown when the CURSOR's texture exists (a stale
-    // previous image must never pose as the current one), and sized in
-    // logical pixels divided by the scale factor so 1:1 means device pixels
-    // on HiDPI (validator finding — sharpness judging must not upsample).
-    // 1:1 requires the TOP rung: showing the mid rung at native 1616 px
-    // would be a misleading scale jump (validator finding) — hold the fit
-    // view until the full-res texture lands.
-    let overlay = st.one2one && at_loupe;
-    match fullres_for(&st, cursor).filter(|img| img.size().width.max(img.size().height) > 2048) {
+    // Zoom overlay (any factor above fit, capped at 1:1): only shown when
+    // the CURSOR's texture exists (a stale previous image must never pose
+    // as the current one), sized as fit-extent × factor in logical pixels
+    // so the capped factor means device pixels on HiDPI (validator
+    // finding — sharpness judging must not upsample). Every factor above
+    // fit requires the TOP rung (ui-grid.md quality rule: never upscale
+    // the mid rung for a sharpness-critical view) — hold the fit view
+    // until the full-res texture lands.
+    capture_pan(win, &mut st); // drag since last render wins over pan_center
+    let factor = clamped_factor(win, &st);
+    let overlay = factor > 1.0 && at_loupe;
+    match fullres_for(&st, cursor).filter(|img| {
+        img.size().width.max(img.size().height) > fastcull_core::loupe::MID_RUNG_MAX_LONG
+    }) {
         Some(img) if overlay => {
             let size = img.size();
             let sf = win.window().scale_factor();
-            win.set_loupe_w(size.width as f32 / sf);
-            win.set_loupe_h(size.height as f32 / sf);
+            let (nw, nh) = (size.width as f32 / sf, size.height as f32 / sf);
+            let (vw, vh) = (win.get_grid_width(), win.get_loupe_area_h());
+            let s = fastcull_core::zoompan::fit_scale(vw, vh, nw, nh);
+            // Texture present => max_factor was known => factor is finite.
+            let (ew, eh) = (nw * s * factor, nh * s * factor);
+            let ox = fastcull_core::zoompan::offset_centering(vw, ew, st.pan_center.0);
+            let oy = fastcull_core::zoompan::offset_centering(vh, eh, st.pan_center.1);
+            win.set_loupe_w(ew);
+            win.set_loupe_h(eh);
             win.set_loupe_image(img);
+            win.set_loupe_vx(ox);
+            win.set_loupe_vy(oy);
+            // Trace on any offset, visibility or CURSOR change (QE: silent
+            // same-size persistence made cross-image forensics blind).
+            if st.last_pan_write != Some((ox, oy))
+                || !win.get_one2one()
+                || st.last_overlay_cursor != Some(cursor)
+            {
+                trace_mark(&format!(
+                    "loupe idx {cursor} factor {factor:.3} extent {ew:.0}x{eh:.0} \
+                     center {:.3},{:.3} off {ox:.0},{oy:.0}",
+                    st.pan_center.0, st.pan_center.1
+                ));
+            }
+            st.last_pan_write = Some((ox, oy));
+            st.last_overlay_cursor = Some(cursor);
             win.set_one2one(true);
         }
-        _ => win.set_one2one(false),
+        _ => {
+            win.set_one2one(false);
+            st.last_pan_write = None;
+            st.last_overlay_cursor = None;
+        }
     }
+    // Click-to-zoom at fit is armed only at N=1 with no overlay showing
+    // (grid clicks keep their meaning; empty views have nothing to zoom).
+    win.set_fit_click_armed(at_loupe && !win.get_one2one() && !st.view.is_empty());
 
     // Mutate the one bound VecModel in place (spec: reuse, don't recreate).
     let model = Rc::clone(&st.cells);

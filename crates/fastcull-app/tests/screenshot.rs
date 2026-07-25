@@ -212,6 +212,51 @@ fn synthetic_screenshot_renders_cells() {
     );
 }
 
+/// Center-anchored 1:1 entry regression (ui-grid.md zoom ladder; THE user
+/// bug: 1:1 opened on the top-left corner). Runs --start-11 with tracing
+/// and asserts the overlay's own report: factor at the ceiling, pan center
+/// at the image center, and STRICTLY negative offsets on both axes — the
+/// corner bug rendered at off 0,0.
+#[test]
+fn one_to_one_entry_is_center_anchored() {
+    if !has_display() {
+        eprintln!("screenshot smoke skipped: no display server");
+        return;
+    }
+    let _s = serial();
+    let out = out_dir().join("center-anchor.jpg");
+    let bin = env!("CARGO_BIN_EXE_fastcull-app");
+    let output = std::process::Command::new(bin)
+        .arg("--start-11")
+        .arg(raws_dir())
+        .arg("--screenshot")
+        .arg(&out)
+        .env("FASTCULL_NO_CACHE", "1")
+        .env("FASTCULL_TRACE", "1")
+        .output()
+        .expect("run app");
+    assert!(output.status.success(), "app exited with {}", output.status);
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    let line = stderr
+        .lines()
+        .rfind(|l| l.contains("loupe idx"))
+        .unwrap_or_else(|| panic!("no loupe trace line in stderr:\n{stderr}"));
+    assert!(
+        line.contains("center 0.500,0.500"),
+        "1:1 entry did not anchor on the image center: {line}"
+    );
+    let offsets: Vec<f32> = line
+        .split(" off ")
+        .nth(1)
+        .and_then(|s| s.trim().split(',').map(|n| n.trim().parse().ok()).collect())
+        .unwrap_or_else(|| panic!("unparseable offsets in: {line}"));
+    assert!(
+        offsets.len() == 2 && offsets.iter().all(|o| *o < -50.0),
+        "corner-entry regression: offsets {offsets:?} (center entry needs \
+         strictly negative pan on both axes): {line}"
+    );
+}
+
 /// M5 chrome smoke (validator finding: the menu bar, filter bar and empty
 /// state had zero automated coverage): an empty folder must render the
 /// empty-state message under the chrome and exit cleanly, not crash or

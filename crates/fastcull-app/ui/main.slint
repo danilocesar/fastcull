@@ -54,6 +54,20 @@ export component MainWindow inherits Window {
     in property <image> loupe-image;
     in property <length> loupe-w: 0px;
     in property <length> loupe-h: 0px;
+    // Zoomed-loupe pan offsets (Flickable viewport, <= 0). Two-way: Rust
+    // writes them on zoom/anchor changes, drag-pan updates them, Rust reads
+    // them back to keep the fractional pan center (ui-grid.md zoom ladder).
+    in-out property <length> loupe-vx: 0px;
+    in-out property <length> loupe-vy: 0px;
+    // The loupe overlay area (Rust needs it for fit/1:1 factor math). The
+    // overlay's height is content.height - statusbar.height, and keys is
+    // ALREADY statusbar-short — so this is keys.height exactly (validator
+    // finding: subtracting the statusbar here again put every anchor 13px
+    // high and let bottom-edge clamps masquerade as user drags).
+    out property <length> loupe-area-h: keys.height;
+    // Arm the fit-view click-to-zoom TouchArea (loupe fit only — never at
+    // grid zooms, where clicks keep their normal meaning).
+    in property <bool> fit-click-armed: false;
     // Filter/sort bar state (M5): counts per chip, the active single-choice
     // filter, and the sort cycle label. All owned by Rust.
     in property <int> counts-all: 0;
@@ -81,6 +95,11 @@ export component MainWindow inherits Window {
     callback toggle-filter-bar();
     callback open-folder();
     callback quit();
+    // Click-to-zoom (ui-grid.md: a click is always "center HERE").
+    // loupe-clicked: fractional image coordinates inside the zoom overlay.
+    // fit-clicked: raw coordinates in the grid area at loupe fit.
+    callback loupe-clicked(float, float);
+    callback fit-clicked(length, length);
 
     changed vp-y => { root.viewport-changed(); }
     changed width => { root.viewport-changed(); }
@@ -296,6 +315,16 @@ export component MainWindow inherits Window {
                 }
             }
 
+            // Click-to-zoom at loupe fit (armed by Rust only at N=1 with no
+            // zoom overlay): click a spot, land at 1:1 centered on it.
+            // Coordinates are grid-area local; Rust adds the scroll offset.
+            if root.fit-click-armed: TouchArea {
+                y: root.bar-h;
+                width: 100%;
+                height: parent.height - root.bar-h;
+                clicked => { root.fit-clicked(self.pressed-x, self.pressed-y); }
+            }
+
             // Inbox-zero / empty-view state (persona G2): the payoff moment
             // gets a face, not a blank void.
             if root.empty-message != "": Rectangle {
@@ -315,7 +344,10 @@ export component MainWindow inherits Window {
             }
         }
 
-        // 1:1 loupe overlay (Z): the full-res image pannable by drag.
+        // Zoomed loupe overlay (any factor above fit, capped at 1:1): the
+        // full-res texture GPU-scaled to loupe-w/h, pannable by drag; a
+        // click (press+release without movement — Flickable grabs real
+        // drags) re-centers on the clicked point (ui-grid.md zoom ladder).
         if root.one2one: Rectangle {
             width: 100%;
             height: parent.height - statusbar.height;
@@ -325,12 +357,25 @@ export component MainWindow inherits Window {
                 height: 100%;
                 viewport-width: max(root.loupe-w, parent.width);
                 viewport-height: max(root.loupe-h, parent.height);
-                Image {
+                viewport-x <=> root.loupe-vx;
+                viewport-y <=> root.loupe-vy;
+                zoomed-img := Image {
                     source: root.loupe-image;
                     x: max(0px, (parent.width - root.loupe-w) / 2);
                     y: max(0px, (parent.height - root.loupe-h) / 2);
                     width: root.loupe-w;
                     height: root.loupe-h;
+                }
+                TouchArea {
+                    x: zoomed-img.x;
+                    y: zoomed-img.y;
+                    width: zoomed-img.width;
+                    height: zoomed-img.height;
+                    clicked => {
+                        root.loupe-clicked(
+                            self.pressed-x / max(1px, self.width),
+                            self.pressed-y / max(1px, self.height));
+                    }
                 }
             }
         }
@@ -362,7 +407,7 @@ export component MainWindow inherits Window {
                         font-size: 16px;
                     }
                     Text {
-                        text: "Arrows / PgUp / PgDn / Home / End   navigate\nY, P or Space   pick (take)\nN or X   reject\nU   clear mark\n+ / -   zoom in / out (grid → loupe → 1:1)\nCtrl+scroll   zoom (soon)\nZ   toggle fit ↔ 1:1 (from grid: jump to 1:1)\nG or Esc   back to the grid\nK   keyword field (IPTC panel, soon)\nI   IPTC panel (soon)\nShift+arrows   extend selection (soon)\nCtrl+A   select all (soon)\nCtrl+O   open folder\nCtrl+E   copy picks (M6)\nCtrl+Q   quit\n1–5, 0   reserved (star ratings, v2)";
+                        text: "Arrows / PgUp / PgDn / Home / End   navigate\nY, P or Space   pick (take)\nN or X   reject\nU   clear mark\n+ / -   zoom in / out (grid → loupe fit → ×1.5 steps → 1:1, center held)\nCtrl+scroll   zoom (soon)\nZ   fit → 1:1; zoomed → back to fit (from grid: jump to 1:1)\nClick in loupe   center on the clicked point (fit → 1:1)\nG or Esc   back to the grid\nK   keyword field (IPTC panel, soon)\nI   IPTC panel (soon)\nShift+arrows   extend selection (soon)\nCtrl+A   select all (soon)\nCtrl+O   open folder\nCtrl+E   copy picks (M6)\nCtrl+Q   quit\n1–5, 0   reserved (star ratings, v2)";
                         color: #c8c8d0;
                         font-size: 13px;
                     }

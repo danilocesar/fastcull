@@ -12,8 +12,60 @@ Zoom levels: column count `N ∈ {12, 8, 6, 4, 3, 2, 1}` (Ctrl+scroll / `+`/`-`
 step through; pinch later). At `N = 1` the view is the **loupe**:
 - First stop: fit-to-screen (full-res asset GPU-scaled — see the recorded
   FitPreview fold in raw-pipeline.md).
-- Further zoom-in: 1:1 (FullRes asset as GPU texture, panning with drag/arrows).
+- Further zoom-in: the ×1.5 ladder below, capped at 1:1 (FullRes asset as GPU
+  texture, panning with drag; arrows NAVIGATE at every zoom level — they are
+  never repurposed for panning, the burst focus-check loop depends on it).
 - Zooming out from loupe returns to the grid **centered on the current image**.
+
+### Loupe zoom ladder (user decisions 2026-07-25, persona-validated)
+
+The user request that drove this: "+ should not be a big jump to 1:1 — slow
+increase — and it must never show the corner of the image; keep the center
+where it is."
+
+- **Steps**: from fit, each `+` multiplies the zoom factor by **1.5**
+  (fit → 1.5× → 2.25× → …), computed as `fit × 1.5ⁿ` so `-` retraces the
+  ladder's stops with no drift (a stop within rounding distance of the
+  1:1 ceiling folds into it rather than producing a duplicate press). A step that would exceed 1:1 lands
+  **exactly at 1:1** (a `+` that visibly does almost nothing reads as a
+  broken key). Zoom NEVER passes 1:1 (user: beyond that you are judging the
+  embedded JPEG, not focus). When 1:1 ≤ fit (small file), `+` at fit does
+  nothing — clamped, no flicker.
+- **Anchor**: every zoom step (in or out, `+`/`-`/`Z`/click entry alike)
+  keeps the **center of the currently visible region** fixed. At fit that
+  equals the image center (fixes the corner-entry bug); after a pan it means
+  repeated `+` stays on the subject the user panned to. Zooming out clamps
+  the offset to image bounds as the frame approaches fit; at fit the offset
+  is definitionally zero.
+- **`Z`**: from fit → 1:1; from 1:1 OR any intermediate factor → back to fit
+  (user decision: `Z` below 1:1 is the escape hatch, not "show me pixels").
+  One keystroke each way, always.
+- **Click-to-zoom** (user: yes): a click is always "center HERE" (user
+  decision 2026-07-25: "single clicks centralize the image in the clicked
+  point"). At fit it jumps straight to **1:1 anchored on the clicked
+  point**; at 1:1 it re-centers the view on the clicked point (no zoom
+  change — `Z` is the exit, no gesture is wasted on what a key does); at an
+  intermediate factor it goes to 1:1 at the point (persona default, one
+  line to flip: below 1:1 a click means "show me pixels HERE"). Click fires
+  only on press+release without movement — it must not fight the pan drag.
+  Drag-pan keeps working at every factor above fit.
+- **Persistence across images (contract, was accident)**: navigating or
+  pick/reject-advancing to another image keeps BOTH the zoom factor and the
+  pan center, carried as a **fractional center of the image** and clamped
+  for differing dimensions/orientations (lock 1:1 on the eye, arrow through
+  the burst, Y/N each frame). Returning to fit forgets the pan spot — a
+  fresh zoom-in re-centers (a stale pan from three images ago is a trap).
+- **Quality rule**: intermediate factors are rendered from the **full-res
+  rung** once cached (GPU-downscaled): ANY factor above fit requests the
+  top rung outright (`display_long = u32::MAX` — a proportional request
+  could legitimately resolve to the mid rung under the 25% ladder rule,
+  which the next sentence forbids). NEVER upscale the mid rung for a
+  sharpness-critical view — a soft 2× makes the user reject sharp frames.
+  While full-res is still decoding, the existing swap-in-place behavior
+  applies (same as 1:1 today).
+- `G`/Esc from an intermediate factor → grid at the previous grid zoom, the
+  factor is discarded (re-entering the loupe starts at fit; persistence is
+  for walking images INSIDE the loupe, not across grid round-trips).
 
 ## Virtualization (the M2 prototype risk)
 
@@ -79,8 +131,9 @@ Recorded deviations/decisions (M2):
 | `Y`, `P` or `Space` | pick (take) |
 | `N` or `X` | reject |
 | `U` | clear mark |
-| `+` / `-` / Ctrl+scroll | zoom in/out (grid columns → loupe → 1:1) |
-| `Z` | toggle fit ↔ 1:1 in loupe; from a grid zoom: jump straight to loupe 1:1 |
+| `+` / `-` / Ctrl+scroll | zoom in/out (grid columns → loupe fit → ×1.5 ladder → 1:1, center-anchored; see Loupe zoom ladder) |
+| `Z` | from fit: jump to 1:1; from 1:1 or any intermediate factor: back to fit; from a grid zoom: jump straight to loupe 1:1 |
+| click (loupe) | center HERE: at fit/intermediate → 1:1 anchored on the clicked point; at 1:1 → re-center on the clicked point |
 | `G` or `Esc` | back to the grid at the previous grid zoom (from loupe/1:1) |
 | `I` | toggle IPTC panel |
 | `K` | focus the keyword field of the IPTC panel (persona G3, provisional 2026-07-25 pending user confirmation — `K` is free and mnemonic) |

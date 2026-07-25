@@ -21,6 +21,7 @@ pub mod raw;
 pub mod sidecar_writer;
 pub mod viewassets;
 pub mod xmp;
+pub mod zoompan;
 
 /// Application version, shared by the CLI and the UI shell.
 pub const VERSION: &str = env!("CARGO_PKG_VERSION");
