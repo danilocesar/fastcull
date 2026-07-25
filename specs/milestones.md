@@ -28,10 +28,12 @@ Pick/reject session state, sidecar writer thread, XMP serializer. `fastcull-cli
 cull` for scripted marking. DoD: xmp-sidecars acceptance criteria incl. sandboxed
 darktable-cli round-trip.
 
-## M4 — Loupe
-Fit + 1:1 zoom, pan, DCT-scaled fit decode, ±2 prefetch, auto-advance on mark.
-DoD additionally: **tag a runnable 0.x release** — per the persona review this is
-the earliest genuinely usable build (grid cull + 1:1 sharpness checks + sidecars).
+## M4 — Loupe *(order swapped with M3 by user decision 2026-07-25: full-res
+zoom quality first, culling marks second — implemented 2026-07-25)*
+Fit + 1:1 zoom, pan, ±2 prefetch via the dedicated loupe engine (single
+full-res asset, see raw-pipeline.md recorded deviation). Auto-advance-on-mark
+moves to M3 with the marks themselves. DoD: **tag a runnable 0.x release**
+once the user confirms loupe quality (the earliest genuinely usable build).
 
 *(M5–M7 reordered after the persona review + user decisions: filter before IPTC
 because the IPTC pass starts with "filter to picked, select all"; copy-picks

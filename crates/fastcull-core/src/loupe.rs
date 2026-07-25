@@ -47,6 +47,9 @@ struct LoupeState {
     /// LRU cache: index -> (image, last-focus stamp).
     cache: HashMap<usize, (FullImage, u64)>,
     cached_bytes: usize,
+    /// Indexes that failed to decode: never re-queued (a corrupt file must
+    /// not be re-attempted on every focus — validator finding).
+    failed: std::collections::HashSet<usize>,
     /// The image the user is looking at: never evicted, even over-budget —
     /// evicting it after decode would strand the loupe forever (found by
     /// the tight-budget integration test).
@@ -115,7 +118,7 @@ impl LoupeEngine {
             } else {
                 false
             };
-            if !cached && !state.in_flight.contains(&i) {
+            if !cached && !state.in_flight.contains(&i) && !state.failed.contains(&i) {
                 state.queue.retain(|q| *q != i);
                 state.queue.push(i);
             }
@@ -189,6 +192,7 @@ fn worker(shared: &Shared) {
                 shared.events.send(LoupeEvent::Ready { index, image }).ok();
             }
             Err(reason) => {
+                state.failed.insert(index);
                 drop(state);
                 shared
                     .events

@@ -80,8 +80,6 @@ export component MainWindow inherits Window {
                 background: cell.has-image ? #000000
                     : cell.seed < 0 ? #2a2a2e
                     : hsv(Math.mod(cell.seed * 47, 360), 0.30, 0.22);
-                border-width: cell.is-cursor ? 3px : 0px;
-                border-color: #4da3ff;
 
                 if cell.has-image: Image {
                     source: cell.image;
@@ -98,6 +96,13 @@ export component MainWindow inherits Window {
                     horizontal-alignment: center;
                     vertical-alignment: center;
                     overflow: elide;
+                }
+                // Cursor overlay: LAST child = rendered on top of the image
+                // (spec: the selector must be visible on every cell state).
+                if cell.is-cursor: Rectangle {
+                    border-width: 3px;
+                    border-color: #4da3ff;
+                    background: transparent;
                 }
                 if cell.failed: Rectangle {
                     x: 4px;

@@ -29,8 +29,15 @@ decoding RAW sensor data on the hot path.
      the EXIF/metadata and RAW-decode-fallback dependency. BigTIFF (magic 43)
      containers are rejected as not-TIFF. Do NOT upstream anything without
      explicit user approval.
-   - **FitPreview**: same bytes as FullRes decoded with turbojpeg DCT scaling
-     (1/2, 1/4, 1/8) choosing the smallest scale ≥ screen size.
+   - **FitPreview — folded into FullRes (M4 recorded deviation, pending
+     the user's OK as an acceptance-criterion change)**: the loupe uses ONE
+     asset — the fully decoded full-res RGB — GPU-scaled for fit and native
+     for 1:1. zune-jpeg (pure Rust) decodes it in ~140 ms, inside the 350 ms
+     budget; turbojpeg DCT scaling is not used (system-lib dependency, and
+     the second decode saved no user-visible latency). Loupe assets are
+     served by a dedicated 2-worker engine (`loupe.rs`) with its own event
+     channel rather than through the thumbnail pipeline's queue — full-res
+     decodes must never queue behind a background thumbnail sweep.
 3. Fallback chain when a source is missing (non-A1 cameras): full-res JPEG → mid
    preview upscaled → half-size RAW decode via rawler (background priority only,
    with a "rendered from RAW" badge event) → `Failed(reason)`.

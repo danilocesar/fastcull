@@ -38,6 +38,25 @@ Recorded deviations/decisions (M2):
   covers M2; revisit during M4 polish (needs user OK to defer past v1 if it
   stays unsolved).
 
+## Cursor (the selector) — behavior contract (added after user bug report 2026-07-25)
+
+- Exactly one cell is the cursor at any time; it marks where keyboard actions
+  (pick/reject/zoom) land.
+- Visual: a 3 px accent (blue) border drawn as an overlay ON TOP of the cell's
+  content — never underneath the image (Slint renders children above a
+  Rectangle's own border, so the border must be a top-most child overlay).
+  It must be visible on every cell state: placeholder, loaded, failed.
+- After any keyboard navigation or zoom change, the cursor must be fully
+  visible: the grid's virtual height is updated BEFORE the scroll offset is
+  written, so the Flickable never clamps the reveal against stale bounds.
+- Mouse/wheel scrolling does not move the cursor in multi-column grid views —
+  scrolling is browsing, the cursor stays where the user parked it (it may
+  leave the viewport; the next arrow key first brings it back into view).
+- Exception at 1-column (loupe) zoom: the visible image IS the cursor — the
+  cursor follows scrolling so full-res loading and marks always apply to what
+  the user is looking at.
+- The status bar always names the cursor image (filename, position N/M).
+
 ## Visual language
 
 - Pick: small star badge (top-left; user decision — "mark the ones taken with a

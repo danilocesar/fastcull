@@ -48,6 +48,8 @@ struct AppState {
     /// oldest dropped beyond 3 (the core LRU holds the pixel data).
     fullres: Vec<(usize, slint::Image)>,
     one2one: bool,
+    /// Grid zoom to return to when leaving the loupe with G/Esc.
+    last_grid_zoom: usize,
 }
 
 impl AppState {
@@ -111,6 +113,7 @@ fn main() {
         loupe: None,
         fullres: Vec::new(),
         one2one: false,
+        last_grid_zoom: 1,
     }));
 
     // Start the engines for real folders; events polled on a UI timer.
@@ -179,15 +182,23 @@ fn main() {
                             SessionEvent::MetadataReady { .. } => {}
                         }
                     }
+                    let at_loupe = st.zoom == grid::ZOOM_COLUMNS.len() - 1;
                     for event in loupe_rx.try_iter() {
-                        if let fastcull_core::loupe::LoupeEvent::Ready { index, image } = event {
-                            let texture = fullres_texture(&image);
-                            st.fullres.retain(|(i, _)| *i != index);
-                            st.fullres.push((index, texture));
-                            while st.fullres.len() > 3 {
-                                st.fullres.remove(0);
+                        match event {
+                            fastcull_core::loupe::LoupeEvent::Ready { index, image } => {
+                                // Skip the 150 MB texture copy for prefetches
+                                // arriving after the user left the loupe; the
+                                // core LRU keeps the pixels for peek-rebuild.
+                                if at_loupe {
+                                    let texture = fullres_texture(&image);
+                                    insert_fullres(&mut st, index, texture);
+                                }
+                                dirty = true;
                             }
-                            dirty = true;
+                            fastcull_core::loupe::LoupeEvent::Failed { index, .. } => {
+                                st.failed.insert(index); // badge; core won't retry
+                                dirty = true;
+                            }
                         }
                     }
                 }
@@ -207,26 +218,39 @@ fn main() {
 fn handle_nav(win: &MainWindow, state: &Rc<RefCell<AppState>>, key: &str) {
     let (layout, viewport_h, scroll_y) = current_geometry(win, state);
     let mut st = state.borrow_mut();
+    let loupe_step = grid::ZOOM_COLUMNS.len() - 1;
     match key {
+        // One seamless zoom axis (spec): columns -> loupe fit -> 1:1.
         "one2one" => {
             if st.loupe.is_some() {
-                st.one2one = !st.one2one;
-                if st.one2one {
-                    st.zoom = grid::ZOOM_COLUMNS.len() - 1; // Z implies loupe zoom
+                if st.zoom < loupe_step {
+                    st.last_grid_zoom = st.zoom;
+                    st.zoom = loupe_step; // Z from grid jumps to loupe 1:1
                 }
+                st.one2one = !st.one2one;
             }
         }
         "grid" => {
             st.one2one = false;
-            if st.zoom == grid::ZOOM_COLUMNS.len() - 1 {
-                st.zoom = 1; // back to 8 columns, centered on cursor via reveal
+            if st.zoom == loupe_step {
+                st.zoom = st.last_grid_zoom.min(loupe_step - 1);
             }
         }
-        "zoom-in" | "zoom-out" => {
-            let delta = if key == "zoom-in" { 1 } else { -1 };
-            st.zoom = grid::zoom_step(st.zoom, delta);
-            if st.zoom < grid::ZOOM_COLUMNS.len() - 1 {
-                st.one2one = false;
+        "zoom-in" => {
+            if st.zoom == loupe_step {
+                st.one2one = st.loupe.is_some(); // fit -> 1:1
+            } else {
+                if st.zoom + 1 == loupe_step {
+                    st.last_grid_zoom = st.zoom;
+                }
+                st.zoom = grid::zoom_step(st.zoom, 1);
+            }
+        }
+        "zoom-out" => {
+            if st.one2one {
+                st.one2one = false; // 1:1 -> fit, not straight to the grid
+            } else {
+                st.zoom = grid::zoom_step(st.zoom, -1);
             }
         }
         nav => {
@@ -246,10 +270,15 @@ fn handle_nav(win: &MainWindow, state: &Rc<RefCell<AppState>>, key: &str) {
             st.cursor = grid::navigate(st.cursor, st.count(), layout.columns, rows_per_page, nav);
         }
     }
-    // Keep the cursor visible under the (possibly new) layout.
+    // Keep the cursor visible under the (possibly new) layout. Order matters
+    // (spec, cursor contract): the Flickable clamps viewport-y against its
+    // CURRENT viewport-height, so the new virtual height must land first or
+    // the reveal gets clamped against stale bounds and the cursor scrolls
+    // out of view.
     let layout = GridLayout::new(st.zoom, win.get_grid_width(), st.count());
     let new_scroll = layout.scroll_to_reveal(st.cursor, scroll_y, viewport_h);
     drop(st);
+    win.set_virtual_height(layout.total_height);
     win.set_vp_y(-new_scroll);
     refresh(win, state);
 }
@@ -298,12 +327,25 @@ fn refresh(win: &MainWindow, state: &Rc<RefCell<AppState>>) {
         });
     }
 
-    // Loupe: at 1-column zoom, request full-res for the cursor (±prefetch)
-    // and use the full-res texture for any cell that has one.
+    // Loupe: at 1-column zoom the visible image IS the cursor (spec, cursor
+    // contract): scrolling moves the cursor, and full-res always targets
+    // what the user is looking at.
     let at_loupe = layout.columns == 1;
-    if at_loupe {
+    if at_loupe && count > 0 {
+        let center_row =
+            ((scroll_y + viewport_h * 0.5) / (layout.cell_height + grid::CELL_GAP)) as usize;
+        st.cursor = center_row.min(count - 1);
         if let Some(loupe) = &st.loupe {
-            loupe.focus(st.cursor);
+            // focus() returns the cached image on a warm hit: the rebuild
+            // path for textures evicted UI-side (validator finding — going
+            // backwards previously degraded to the thumb forever).
+            let focus_index = st.cursor;
+            let hit = loupe.focus(focus_index);
+            let missing = !st.fullres.iter().any(|(i, _)| *i == focus_index);
+            if let (Some(image), true) = (hit, missing) {
+                let texture = fullres_texture(&image);
+                insert_fullres(&mut st, focus_index, texture);
+            }
         }
     }
     let cursor = st.cursor;
@@ -313,13 +355,21 @@ fn refresh(win: &MainWindow, state: &Rc<RefCell<AppState>>) {
             .find(|(i, _)| *i == index)
             .map(|(_, img)| img.clone())
     };
-    // 1:1 overlay properties follow the cursor's full-res availability.
-    win.set_one2one(st.one2one && at_loupe);
-    if let Some(img) = fullres_for(&st, cursor) {
-        let size = img.size();
-        win.set_loupe_w(size.width as f32);
-        win.set_loupe_h(size.height as f32);
-        win.set_loupe_image(img);
+    // 1:1 overlay: only shown when the CURSOR's texture exists (a stale
+    // previous image must never pose as the current one), and sized in
+    // logical pixels divided by the scale factor so 1:1 means device pixels
+    // on HiDPI (validator finding — sharpness judging must not upsample).
+    let overlay = st.one2one && at_loupe;
+    match fullres_for(&st, cursor) {
+        Some(img) if overlay => {
+            let size = img.size();
+            let sf = win.window().scale_factor();
+            win.set_loupe_w(size.width as f32 / sf);
+            win.set_loupe_h(size.height as f32 / sf);
+            win.set_loupe_image(img);
+            win.set_one2one(true);
+        }
+        _ => win.set_one2one(false),
     }
 
     // Mutate the one bound VecModel in place (spec: reuse, don't recreate).
@@ -359,15 +409,35 @@ fn refresh(win: &MainWindow, state: &Rc<RefCell<AppState>>) {
     win.set_virtual_height(layout.total_height);
     win.set_status(
         format!(
-            "{} images — {} thumbs loaded — {} columns — window {}..{}",
+            "{} ({}/{}) — {} images, {} thumbs loaded — {} column{}",
+            st.labels.get(cursor).cloned().unwrap_or_default(),
+            cursor + 1,
+            count.max(1),
             count,
             st.thumbs_done.min(count),
             layout.columns,
-            range.start,
-            range.end
+            if layout.columns == 1 { "" } else { "s" }
         )
         .into(),
     );
+}
+
+/// Keep a full-res texture, protecting the cursor's and capping at the
+/// prefetch ring size (5 = cursor ±2): the old 3-slot FIFO let the prefetch
+/// evict the focused image itself (validator HIGH finding; the user saw it as
+/// back-arrow quality degradation).
+fn insert_fullres(st: &mut AppState, index: usize, texture: slint::Image) {
+    st.fullres.retain(|(i, _)| *i != index);
+    st.fullres.push((index, texture));
+    let cursor = st.cursor;
+    while st.fullres.len() > 5 {
+        let victim = st
+            .fullres
+            .iter()
+            .position(|(i, _)| *i != cursor)
+            .unwrap_or(0);
+        st.fullres.remove(victim);
+    }
 }
 
 /// Build a slint texture from a decoded full-res image (one 150 MB copy —
