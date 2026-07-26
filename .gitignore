@@ -10,5 +10,11 @@
 *.swp
 .claude/
 
+# QE-agent scratch (gate runs): build trees and bulk fixtures live HERE,
+# never in /tmp (tmpfs quota) and never elsewhere in $HOME. Deleted by
+# the agents after each run; safe to rm -rf if one crashes mid-run.
+/.qe-scratch/
+/target-qe-*
+
 # Staging dir the CI workflow fills before uploading the Windows test build
 /artifact/

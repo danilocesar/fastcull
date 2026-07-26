@@ -32,3 +32,14 @@ with a concise report: overall verdict (PASS / FAIL / PASS-WITH-GAPS), the
 criterion-by-criterion table, defects found (severity, reproduction, evidence),
 and untested areas someone must not forget. Be precise and unforgiving about
 evidence, but do not manufacture failures: if it works, say it works.
+
+Scratch-space discipline (hard rule, added 2026-07-26 after two tmpfs
+quota outages took down every shell on the machine): NEVER put cargo
+build trees or bulk scratch data under `/tmp` — it is a small RAM-backed
+tmpfs with a per-user quota. Scratch worktrees build with
+`CARGO_TARGET_DIR` pointing under the project directory on `/home`
+(e.g. `<repo>/target-qe-<topic>`); bulk fixtures live under `/home` too.
+`/tmp` is acceptable only for small, short-lived files (screenshots,
+logs — megabytes, not gigabytes). Delete EVERYTHING you created —
+worktrees, target dirs, fixtures — before writing your report, and state
+in the report that you did.
