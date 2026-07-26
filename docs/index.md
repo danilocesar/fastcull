@@ -1,9 +1,10 @@
 # FastCull — getting started
 
 FastCull is a fast, keyboard-first photo culling tool: point it at a
-folder of RAW files, mark keepers and rejects at full speed, stamp
-metadata, and copy the verified keepers out. It never edits or develops
-photos — that stays with darktable (or whatever you develop in).
+folder of RAW files — or JPEGs — mark keepers and rejects at full
+speed, stamp metadata, and copy the verified keepers out. It never
+edits or develops photos — that stays with darktable (or whatever you
+develop in).
 
 ## Install
 
@@ -57,6 +58,15 @@ Three facts before you press a single key:
 One thing to know up front: **FastCull reads one folder, not its
 subfolders.** If you open `2026-07-25/` and your files live in
 `2026-07-25/card1/`, you'll see "No images" — open `card1/` itself.
+
+**What gets imported**: every RAW format the decoder knows (Sony,
+Canon, Nikon, Fuji, DNG, …) plus JPEGs. One rule for JPEGs: a JPEG
+that has a RAW twin with the same name (`DSC01234.ARW` +
+`DSC01234.JPG`, straight from a RAW+JPEG camera setting) stays hidden —
+you cull the RAW, and the moment counts once. A JPEG on its own (phone
+cards, a second body shooting JPEG, darktable exports elsewhere) is a
+first-class image: cull it, tag it, copy it like any RAW. Videos and
+other non-photo files are simply ignored.
 
 ## Where do the files come from?
 

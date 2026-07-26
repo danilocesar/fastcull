@@ -58,8 +58,28 @@ impl ExifSummary {
     }
 }
 
-/// Read the EXIF summary of one RAW file (a few ms: IFD tables only).
+/// Read the EXIF summary of one RAW file (a few ms: IFD tables only) —
+/// or of a bare JPEG (issue #8: the APP1 block, via the in-tree
+/// hardened walker; rawler has no JPEG decoder).
 pub fn read_exif_summary(path: &Path) -> Result<ExifSummary, ExifError> {
+    let is_jpeg = path
+        .extension()
+        .and_then(|e| e.to_str())
+        .is_some_and(|ext| ext.eq_ignore_ascii_case("jpg") || ext.eq_ignore_ascii_case("jpeg"));
+    if is_jpeg {
+        let mut file = std::fs::File::open(path).map_err(|e| ExifError::Open(e.to_string()))?;
+        // Absent/hostile APP1 degrades to an empty summary (no capture
+        // time -> filename-order sort), matching the RAW failure rule.
+        let exif = crate::raw::jpeg_exif::read_jpeg_exif(&mut file).unwrap_or_default();
+        return Ok(ExifSummary {
+            camera_make: exif.make,
+            camera_model: exif.model,
+            serial_number: exif.serial,
+            capture_time: exif.date_time_original,
+            subsec: exif.subsec_original,
+            sequence_number: None, // Sony JPEG maker notes: out of scope v1
+        });
+    }
     let source = RawSource::new(path).map_err(|e| ExifError::Open(e.to_string()))?;
     let decoder = rawler::get_decoder(&source).map_err(|e| ExifError::Metadata(e.to_string()))?;
     let metadata = decoder

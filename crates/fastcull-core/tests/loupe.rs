@@ -41,7 +41,7 @@ fn focus_decodes_fullres_and_prefetches_neighbors() {
     let mut best = std::collections::HashMap::new();
     while best.len() < 3 || best.values().any(|&(w, _)| w != 8640) {
         match rx.recv_timeout(Duration::from_secs(120)).expect("event") {
-            LoupeEvent::Ready { index, image } => {
+            LoupeEvent::Ready { index, image, .. } => {
                 best.insert(index, (image.width, image.height));
             }
             LoupeEvent::Failed { index, reason } => panic!("{index} failed: {reason}"),
@@ -75,7 +75,9 @@ fn corrupt_file_reports_failed_and_engine_survives() {
     while !(got_fail && got_top_rung) {
         match rx.recv_timeout(Duration::from_secs(120)).expect("event") {
             LoupeEvent::Failed { index: 0, .. } => got_fail = true,
-            LoupeEvent::Ready { index: 1, image } => got_top_rung = image.width == 8640,
+            LoupeEvent::Ready {
+                index: 1, image, ..
+            } => got_top_rung = image.width == 8640,
             other => panic!("unexpected {other:?}"),
         }
     }
@@ -135,12 +137,69 @@ fn small_display_stops_at_mid_rung() {
     // Zooming to 1:1 later cooks the top rung for the same index.
     engine.focus(1, u32::MAX);
     loop {
-        if let LoupeEvent::Ready { index: 1, image } =
-            rx.recv_timeout(Duration::from_secs(120)).expect("event")
+        if let LoupeEvent::Ready {
+            index: 1, image, ..
+        } = rx.recv_timeout(Duration::from_secs(120)).expect("event")
         {
             if image.width == 8640 {
                 break;
             }
         }
     }
+}
+
+/// Issue #8 / QE gap: the `terminal` flag on Ready events — a bare
+/// JPEG's single rung is terminal (the app adopts it as the top rung
+/// for the zoom ceiling); an ARW's mid rung is NOT (the full rung
+/// follows), and its full rung IS.
+#[test]
+fn terminal_flag_marks_a_files_best_rung() {
+    let _serial = SERIAL
+        .lock()
+        .unwrap_or_else(std::sync::PoisonError::into_inner);
+    // Bare JPEG: extract the mid preview of a real A1 file.
+    let arw = testdata("A1_full_compressed.ARW");
+    let mut f = std::fs::File::open(&arw).unwrap();
+    let previews = fastcull_core::raw::find_embedded_jpegs(&mut f).unwrap();
+    let grid = previews.grid_source().expect("mid preview");
+    let bytes = fastcull_core::raw::read_jpeg(&mut f, grid).unwrap();
+    let dir = std::env::temp_dir().join(format!("fastcull-terminal-{}", std::process::id()));
+    std::fs::remove_dir_all(&dir).ok();
+    std::fs::create_dir_all(&dir).unwrap();
+    let jpg = dir.join("solo.jpg");
+    std::fs::write(&jpg, &bytes).unwrap();
+
+    let (engine, rx) = LoupeEngine::start(vec![jpg], DEFAULT_BUDGET_BYTES);
+    engine.focus(0, 8640);
+    match rx.recv_timeout(Duration::from_secs(120)).expect("event") {
+        LoupeEvent::Ready { terminal, .. } => {
+            assert!(terminal, "a bare JPEG's only rung is its best");
+        }
+        other => panic!("unexpected {other:?}"),
+    }
+    drop(engine);
+
+    // ARW: the mid rung is not terminal, the 8640 top rung is.
+    let (engine, rx) = LoupeEngine::start(vec![arw], DEFAULT_BUDGET_BYTES);
+    engine.focus(0, 8640);
+    let mut seen_mid = false;
+    let mut seen_top = false;
+    while !(seen_mid && seen_top) {
+        match rx.recv_timeout(Duration::from_secs(120)).expect("event") {
+            LoupeEvent::Ready {
+                image, terminal, ..
+            } => {
+                if image.width == 1616 {
+                    assert!(!terminal, "mid rung must not read as the best");
+                    seen_mid = true;
+                } else if image.width == 8640 {
+                    assert!(terminal, "the top rung IS the best");
+                    seen_top = true;
+                }
+            }
+            other => panic!("unexpected {other:?}"),
+        }
+    }
+    drop(engine);
+    std::fs::remove_dir_all(&dir).ok();
 }

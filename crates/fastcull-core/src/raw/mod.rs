@@ -12,6 +12,7 @@
 //! tags); raw sensor data lives in a SubIFD with no JPEG pointer tags.
 
 mod jpeg;
+pub mod jpeg_exif;
 pub mod sony;
 mod tiff;
 
@@ -48,6 +49,11 @@ const USEFUL_MIN_PIXELS: u64 = 100_000;
 #[derive(Debug, Clone)]
 pub struct EmbeddedPreviews {
     pub candidates: Vec<EmbeddedJpeg>,
+    /// True when the source IS a bare image file (issue #8): the single
+    /// whole-file candidate is the actual image, not a 160x120 embedded
+    /// thumbnail — the min-useful-pixels filter must not apply (QE: a
+    /// 380x260 messenger JPEG became a Failed cell).
+    pub whole_file: bool,
     /// EXIF orientation (1–8; 1 = as stored). Previews are stored in sensor
     /// orientation — apply this to decoded pixels before display
     /// (raw-pipeline.md, user requirement 2026-07-25).
@@ -58,6 +64,7 @@ impl Default for EmbeddedPreviews {
     fn default() -> Self {
         Self {
             candidates: Vec::new(),
+            whole_file: false,
             orientation: 1,
         }
     }
@@ -68,6 +75,9 @@ impl EmbeddedPreviews {
     /// falling back to the smallest larger one (cheapest decode that still
     /// yields a thumb) if no mid-size preview exists.
     pub fn grid_source(&self) -> Option<&EmbeddedJpeg> {
+        if self.whole_file {
+            return self.candidates.first();
+        }
         self.candidates
             .iter()
             .filter(|c| (USEFUL_MIN_PIXELS..=GRID_SOURCE_MAX_PIXELS).contains(&c.pixels()))
@@ -82,6 +92,9 @@ impl EmbeddedPreviews {
 
     /// Source for loupe fit/1:1: the largest embedded JPEG.
     pub fn fullres(&self) -> Option<&EmbeddedJpeg> {
+        if self.whole_file {
+            return self.candidates.first();
+        }
         self.candidates
             .iter()
             .filter(|c| c.pixels() >= USEFUL_MIN_PIXELS)
@@ -97,6 +110,36 @@ impl EmbeddedPreviews {
 /// determined are dropped.
 pub fn find_embedded_jpegs<R: Read + Seek>(reader: &mut R) -> Result<EmbeddedPreviews, TiffError> {
     let file_len = reader.seek(SeekFrom::End(0))?;
+
+    // A bare JPEG file (issue #8) IS its own single "embedded preview"
+    // covering the whole file — every rung of the thumb/loupe ladder
+    // then works unchanged, format-agnostically.
+    if jpeg::has_jpeg_signature(reader, 0)? {
+        if let Some((width, height)) = jpeg::sniff_dimensions(reader, 0, file_len)? {
+            // Orientation from the JPEG's own APP1 (degrades to 1) — the
+            // pipeline soft-rotates every rung with it, so portrait phone
+            // shots come out upright (persona requirement).
+            let orientation = jpeg_exif::read_jpeg_exif(reader)
+                .map(|e| e.orientation)
+                .unwrap_or(1);
+            return Ok(EmbeddedPreviews {
+                candidates: vec![EmbeddedJpeg {
+                    offset: 0,
+                    len: file_len,
+                    width,
+                    height,
+                }],
+                whole_file: true,
+                orientation,
+            });
+        }
+        // JPEG signature but undecipherable headers: a JPEG-flavored
+        // error, not the misleading "not a TIFF container" (QE note).
+        return Err(TiffError::Malformed(
+            "JPEG signature but no parseable SOF header",
+        ));
+    }
+
     let walk = tiff::walk_jpeg_pointers(reader)?;
 
     let mut candidates: Vec<EmbeddedJpeg> = Vec::new();
@@ -132,6 +175,7 @@ pub fn find_embedded_jpegs<R: Read + Seek>(reader: &mut R) -> Result<EmbeddedPre
     candidates.sort_by_key(|c| std::cmp::Reverse((c.pixels(), c.len)));
     Ok(EmbeddedPreviews {
         candidates,
+        whole_file: false,
         orientation: walk.orientation,
     })
 }
@@ -228,6 +272,7 @@ mod tests {
     fn grid_source_prefers_largest_at_or_below_2mp() {
         let previews = EmbeddedPreviews {
             candidates: vec![jpeg(8640, 5760), jpeg(1616, 1080), jpeg(160, 120)],
+            whole_file: false,
             orientation: 1,
         };
         let grid = previews.grid_source().unwrap();
@@ -242,6 +287,7 @@ mod tests {
     fn grid_source_falls_back_to_smallest_larger_preview() {
         let previews = EmbeddedPreviews {
             candidates: vec![jpeg(8640, 5760), jpeg(4000, 3000)],
+            whole_file: false,
             orientation: 1,
         };
         let grid = previews.grid_source().unwrap();
@@ -252,10 +298,30 @@ mod tests {
     fn tiny_thumbnails_are_never_selected() {
         let previews = EmbeddedPreviews {
             candidates: vec![jpeg(160, 120)],
+            whole_file: false,
             orientation: 1,
         };
         assert!(previews.grid_source().is_none());
         assert!(previews.fullres().is_none());
+    }
+
+    /// Issue #8 / QE D1: a WHOLE-FILE candidate (bare JPEG) is the actual
+    /// image, exempt from the min-useful-pixels filter — a 380x260
+    /// messenger JPEG must never become a Failed cell.
+    #[test]
+    fn whole_file_candidate_is_exempt_from_min_pixels() {
+        let previews = EmbeddedPreviews {
+            candidates: vec![jpeg(380, 260)],
+            whole_file: true,
+            orientation: 1,
+        };
+        assert!(previews.grid_source().is_some());
+        assert!(previews.fullres().is_some());
+        assert_eq!(
+            previews.grid_source().map(|c| c.offset),
+            previews.fullres().map(|c| c.offset),
+            "single rung serves both roles"
+        );
     }
 
     /// Regression (validator finding): two IFDs pointing at the same payload

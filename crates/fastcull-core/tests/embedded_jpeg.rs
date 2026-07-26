@@ -162,3 +162,41 @@ fn tempdir() -> PathBuf {
     std::fs::create_dir_all(&dir).unwrap();
     dir
 }
+
+/// Issue #8: a BARE JPEG file is its own single whole-file "preview" —
+/// grid and loupe sources both resolve to it, and an APP1-less extracted
+/// preview reads orientation 1. End-to-end with real bytes: extract the
+/// mid preview from a real A1 ARW, write it as a .jpg, and run the same
+/// discovery the pipeline uses.
+#[test]
+fn bare_jpeg_is_its_own_whole_file_preview() {
+    let mut file = File::open(testdata(A1_FILES[0])).unwrap();
+    let previews = find_embedded_jpegs(&mut file).unwrap();
+    let grid = previews.grid_source().expect("A1 has a mid preview");
+    let jpeg_bytes = read_jpeg(&mut file, grid).unwrap();
+
+    let dir = std::env::temp_dir().join(format!("fastcull-jpeg-src-{}", std::process::id()));
+    std::fs::remove_dir_all(&dir).ok();
+    std::fs::create_dir_all(&dir).unwrap();
+    let jpg_path = dir.join("extracted.jpg");
+    std::fs::write(&jpg_path, &jpeg_bytes).unwrap();
+
+    let mut jpg = File::open(&jpg_path).unwrap();
+    let previews = find_embedded_jpegs(&mut jpg).unwrap();
+    assert_eq!(previews.candidates.len(), 1, "whole file = one candidate");
+    let only = &previews.candidates[0];
+    assert_eq!(only.offset, 0);
+    assert_eq!(only.len, jpeg_bytes.len() as u64);
+    assert!(only.width > 0 && only.height > 0);
+    assert_eq!(previews.orientation, 1, "no APP1 -> as stored");
+    assert_eq!(
+        previews.grid_source().map(|c| c.offset),
+        previews.fullres().map(|c| c.offset),
+        "grid and loupe both resolve to the file itself (single rung)"
+    );
+    // The extracted range round-trips through the same reader the
+    // pipeline uses.
+    let back = read_jpeg(&mut jpg, only).unwrap();
+    assert_eq!(back, jpeg_bytes);
+    std::fs::remove_dir_all(&dir).ok();
+}

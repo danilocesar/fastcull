@@ -17,6 +17,14 @@ read the same properties but haven't been round-trip tested — for
 Lightroom you may need to rename sidecars to `NAME.xmp` on import. If
 this matters to your workflow, say so in an issue.
 
+**I shoot RAW+JPEG — where are my JPEGs?**
+Hidden on purpose: a JPEG with a same-name RAW twin doesn't appear as a
+second grid entry (that would double your cull and split your picks).
+You cull the RAW; the in-camera JPEG stays untouched in the folder.
+Making the pair travel together through Copy Picks — and a setting to
+show pairs — is planned alongside a Settings dialog. JPEGs *without* a
+RAW twin are always imported.
+
 **I opened my shoot folder and it says "No images".**
 FastCull reads one folder, not subfolders. Open the folder that
 actually contains the RAW files (e.g. `.../2026-07-25/card1/`).

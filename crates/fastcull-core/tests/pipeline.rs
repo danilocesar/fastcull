@@ -290,3 +290,48 @@ fn existing_sidecars_are_reported_at_load() {
     drop(pipeline);
     std::fs::remove_dir_all(&dir).ok();
 }
+
+/// Issue #8: a bare JPEG flows through the SAME pipeline as a RAW —
+/// thumb decoded from the file itself, metadata from its APP1 (here:
+/// none, an extracted preview) — and never fails the session.
+#[test]
+fn jpeg_source_produces_thumb_and_metadata() {
+    // Build a real JPEG from an A1 embedded preview.
+    let arw = testdata("A1_full_compressed.ARW");
+    let mut f = std::fs::File::open(&arw).unwrap();
+    let previews = fastcull_core::raw::find_embedded_jpegs(&mut f).unwrap();
+    let grid = previews.grid_source().expect("mid preview");
+    let bytes = fastcull_core::raw::read_jpeg(&mut f, grid).unwrap();
+    let dir = tmp();
+    let jpg = dir.join("solo.jpg");
+    std::fs::write(&jpg, &bytes).unwrap();
+
+    let (pipeline, rx) = Pipeline::start(vec![spec_for(jpg)], None, 2);
+    let events = collect_events(&rx, 2);
+    let mut thumb_ok = false;
+    let mut meta_ok = false;
+    for event in &events {
+        match event {
+            SessionEvent::ThumbReady {
+                index, thumb_jpeg, ..
+            } => {
+                assert_eq!(*index, 0);
+                assert!(!thumb_jpeg.is_empty(), "thumb must decode from the file");
+                thumb_ok = true;
+            }
+            SessionEvent::MetadataReady { index, exif, .. } => {
+                assert_eq!(*index, 0);
+                // Extracted preview has no APP1: empty summary, no error.
+                assert_eq!(exif.capture_time, None);
+                meta_ok = true;
+            }
+            SessionEvent::Failed { reason, .. } => {
+                panic!("JPEG source must not fail: {reason}")
+            }
+            SessionEvent::Sidecar { .. } => {}
+        }
+    }
+    assert!(thumb_ok && meta_ok);
+    drop(pipeline);
+    std::fs::remove_dir_all(&dir).ok();
+}

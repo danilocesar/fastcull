@@ -41,8 +41,19 @@ pub struct FullImage {
 
 #[derive(Debug, Clone)]
 pub enum LoupeEvent {
-    Ready { index: usize, image: FullImage },
-    Failed { index: usize, reason: String },
+    Ready {
+        index: usize,
+        image: FullImage,
+        /// True when this is the file's BEST possible rung (its native
+        /// resolution): single-rung sources (bare JPEGs, issue #8) have a
+        /// terminal rung at or below mid-class size, and the app needs
+        /// the signal to learn the zoom ceiling from it.
+        terminal: bool,
+    },
+    Failed {
+        index: usize,
+        reason: String,
+    },
 }
 
 #[derive(Default)]
@@ -330,6 +341,10 @@ fn decode_ladder(
         return Err("no usable embedded preview".into());
     }
 
+    let top_long = rungs
+        .last()
+        .map(|r| r.width.max(r.height))
+        .unwrap_or_default();
     let mut achieved = current_long;
     for rung in &rungs {
         let rung_long = rung.width.max(rung.height);
@@ -338,7 +353,7 @@ fn decode_ladder(
         }
         match decode_jpeg_rung(&mut file, rung, orientation) {
             Ok(image) => {
-                publish(shared, index, image);
+                publish(shared, index, image, rung_long >= top_long);
                 achieved = rung_long;
                 if serves_dims(rung.width, rung.height, display_long) {
                     return Ok(());
@@ -377,7 +392,7 @@ fn serves_dims(w: u32, h: u32, display_long: u32) -> bool {
     w.max(h) as f32 * UPSCALE_THRESHOLD >= display_long as f32
 }
 
-fn publish(shared: &Shared, index: usize, image: FullImage) {
+fn publish(shared: &Shared, index: usize, image: FullImage, terminal: bool) {
     let mut state = lock(shared);
     let stamp = shared.stamp.load(Ordering::Relaxed);
     if let Some((old, _)) = state.cache.remove(&index) {
@@ -387,7 +402,14 @@ fn publish(shared: &Shared, index: usize, image: FullImage) {
     state.cache.insert(index, (image.clone(), stamp));
     evict_to_budget(&mut state, shared.budget);
     drop(state);
-    shared.events.send(LoupeEvent::Ready { index, image }).ok();
+    shared
+        .events
+        .send(LoupeEvent::Ready {
+            index,
+            image,
+            terminal,
+        })
+        .ok();
 }
 
 fn decode_jpeg_rung(

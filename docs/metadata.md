@@ -3,8 +3,9 @@
 ## Where your work goes
 
 Every mark and every metadata edit is written to an XMP sidecar next to
-the RAW: `DSC01234.ARW.xmp`. That's darktable's native naming, and
-what's inside is deliberately boring, standard XMP:
+the image: `DSC01234.ARW.xmp` (and `IMG_0042.JPG.xmp` for JPEGs — same
+convention). That's darktable's native naming, and what's inside is
+deliberately boring, standard XMP:
 
 | In FastCull | In the sidecar | In darktable |
 |---|---|---|

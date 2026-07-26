@@ -6,10 +6,26 @@
   ingest produces one flat folder per job) for supported RAW extensions (from
   rawler's known set; `.ARW` first-class) and returns immediately with
   placeholder `ImageRecord`s — no per-file I/O at scan time.
-- Same-stem JPEG siblings (`DSC01234.ARW` + `DSC01234.JPG`) are ignored in v1:
-  not shown, not copied. Recorded user decision — he shoots RAW+JPEG but does
-  not care yet; showing/copying paired JPEGs is a v2 candidate, so the scan
-  code should keep the sibling check cheap to add.
+- **JPEG import rule (issue #8, persona-designed, 2026-07-26)**: the scan
+  keeps RAW extensions plus `.jpg`/`.jpeg` (case-insensitive). A JPEG
+  with a same-stem RAW sibling (`DSC01234.ARW` + `DSC01234.JPG`, any
+  case) stays HIDDEN — the RAW represents the moment, and darktable
+  exports dropped back into a shoot folder stay out of the grid. A JPEG
+  with no RAW sibling is a first-class image (JPEG-only folders — phone
+  cards, second bodies on JPEG — work end to end). The rule is
+  deterministic and folder-content-driven: NO include/ignore setting in
+  v1 (persona IN-MY-WAY on invisible toggle state via env/CLI; the
+  user's requested setting arrives as "show paired JPEGs too" WITH the
+  Settings dialog, and this rule stays its default). Only a REAL FILE
+  counts as a hiding RAW: a directory or broken symlink named
+  `DSC001.ARW` does not swallow `DSC001.JPG` (the hiding rationale
+  presumes a shown RAW). Non-UTF8 stems import both sides — a name
+  that cannot be compared never hides anything (recorded, cosmetic:
+  cameras emit ASCII). Deferred with it:
+  RAW+JPEG pairing (one entry, both files travel through copy-picks) —
+  two-entry import is recorded as rejected outright. Non-image files
+  (video etc.) are silently ignored, never broken cells. HEIC/PNG/TIFF
+  are explicitly out of scope.
 - `ImageRecord`: path, size, mtime, load state (Placeholder → Loaded → Failed),
   EXIF summary (capture time, camera model/serial, sequence number), pick state,
   IPTC data, burst id, copied flag.

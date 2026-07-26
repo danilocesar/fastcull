@@ -68,17 +68,17 @@ fn decipher_table() -> [u8; 256] {
     table
 }
 
-struct En(bool); // little?
+pub(super) struct En(pub(super) bool); // little?
 
 impl En {
-    fn u16(&self, b: [u8; 2]) -> u16 {
+    pub(super) fn u16(&self, b: [u8; 2]) -> u16 {
         if self.0 {
             u16::from_le_bytes(b)
         } else {
             u16::from_be_bytes(b)
         }
     }
-    fn u32(&self, b: [u8; 4]) -> u32 {
+    pub(super) fn u32(&self, b: [u8; 4]) -> u32 {
         if self.0 {
             u32::from_le_bytes(b)
         } else {
@@ -88,7 +88,7 @@ impl En {
 }
 
 /// Find `tag` in the IFD at `offset`; return (type, count, value bytes).
-fn find_in_ifd<R: Read + Seek>(
+pub(super) fn find_in_ifd<R: Read + Seek>(
     reader: &mut R,
     offset: u64,
     en: &En,

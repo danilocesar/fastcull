@@ -92,7 +92,7 @@ fn walking_at_two_columns_never_leaves_an_image_below_its_rung() {
                 va.note_held(index, long);
             }
             while let Ok(event) = rx.recv_timeout(Duration::from_millis(20)) {
-                if let LoupeEvent::Ready { index, image } = event {
+                if let LoupeEvent::Ready { index, image, .. } = event {
                     va.note_held(index, image.width.max(image.height));
                 }
             }
@@ -159,7 +159,7 @@ fn fast_scroll_backlog_does_not_starve_final_window() {
             va.note_held(index, image.width.max(image.height));
         }
         while let Ok(event) = rx.recv_timeout(Duration::from_millis(20)) {
-            if let LoupeEvent::Ready { index, image } = event {
+            if let LoupeEvent::Ready { index, image, .. } = event {
                 ready_events += 1;
                 va.note_held(index, image.width.max(image.height));
             }

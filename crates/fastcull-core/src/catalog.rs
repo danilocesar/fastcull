@@ -1,15 +1,18 @@
 //! Folder scan and per-image session records.
 //!
 //! Spec: `specs/modules/catalog-cache.md`. `Session::open` scans exactly one
-//! directory (non-recursive), keeps only RAW extensions rawler knows, and
-//! returns instantly with placeholder records — file *contents* are never read
-//! at scan time (only directory metadata: size and mtime, needed for cache
-//! keys). Same-stem JPEG siblings are ignored in v1 (recorded user decision).
+//! directory (non-recursive), keeps RAW extensions rawler knows plus
+//! UNPAIRED .jpg/.jpeg (issue #8), and returns instantly with placeholder
+//! records — file *contents* are never read at scan time (only directory
+//! metadata: size and mtime, needed for cache keys). A JPEG with a
+//! same-stem RAW sibling stays hidden: the RAW represents the moment
+//! (pairing/copy-through is a deferred milestone).
 //!
 //! M1 scope: records carry load state, EXIF summary slot, and pick state.
 //! IPTC data, burst ids, and the copied flag join the record in their own
 //! milestones; folder watching (`notify`) arrives with the UI session in M2.
 
+use std::collections::HashSet;
 use std::path::{Path, PathBuf};
 use std::time::SystemTime;
 
@@ -82,14 +85,38 @@ pub struct Session {
 }
 
 impl Session {
-    /// Scan `folder` (non-recursive) for RAW files and return placeholder
-    /// records in filename order. No file contents are read.
+    /// Scan `folder` (non-recursive) for RAW files — and unpaired JPEGs
+    /// (issue #8): a JPEG with a same-stem RAW sibling stays hidden (the
+    /// RAW represents the moment; also keeps darktable exports dropped
+    /// back into a shoot folder out of the grid), a JPEG without one is
+    /// a first-class image. Returns placeholder records in filename
+    /// order. No file contents are read.
     pub fn open(folder: &Path) -> Result<Self, CatalogError> {
         if !folder.is_dir() {
             return Err(CatalogError::NotADirectory(folder.to_path_buf()));
         }
         let entries = std::fs::read_dir(folder)
             .map_err(|e| CatalogError::OpenFolder(folder.to_path_buf(), e))?;
+        let entries: Vec<_> = entries.collect();
+
+        // Pass 1: the RAW stems, for the paired-JPEG rule (deterministic,
+        // folder-content-driven — no setting; persona/user decision).
+        // Only REAL files count (validator: a directory named DSC001.ARW
+        // must not swallow DSC001.JPG — hiding presumes a shown RAW), so
+        // a broken/unreadable "RAW" leaves its JPEG twin visible too.
+        let mut raw_stems: HashSet<String> = HashSet::new();
+        for entry in entries.iter().flatten() {
+            let path = entry.path();
+            if has_raw_extension(&path)
+                && std::fs::metadata(&path)
+                    .map(|m| m.is_file())
+                    .unwrap_or(false)
+            {
+                if let Some(stem) = path.file_stem().and_then(|s| s.to_str()) {
+                    raw_stems.insert(stem.to_ascii_lowercase());
+                }
+            }
+        }
 
         let mut images = Vec::new();
         let mut scan_errors = 0usize;
@@ -100,8 +127,13 @@ impl Session {
                 continue;
             };
             let path = entry.path();
-            if !has_raw_extension(&path) {
-                continue;
+            let unpaired_jpeg = has_jpeg_extension(&path)
+                && path
+                    .file_stem()
+                    .and_then(|s| s.to_str())
+                    .is_none_or(|stem| !raw_stems.contains(&stem.to_ascii_lowercase()));
+            if !has_raw_extension(&path) && !unpaired_jpeg {
+                continue; // non-images (videos etc.) are silently ignored
             }
             // Metadata only (no open/read of contents). `fs::metadata`
             // follows symlinks so a `link.ARW -> real.ARW` is a first-class
@@ -133,17 +165,24 @@ impl Session {
 }
 
 /// True if the path has an extension rawler can decode (case-insensitive).
-/// Plain JPEG/TIFF siblings are not sessions material in v1.
 fn has_raw_extension(path: &Path) -> bool {
     let Some(ext) = path.extension().and_then(|e| e.to_str()) else {
         return false;
     };
     let ext = ext.to_ascii_lowercase();
     // rawler's list contains true RAW containers plus "dng"; it does not
-    // contain jpg/jpeg/tif, which is exactly the v1 behavior we want.
+    // contain jpg/jpeg/tif.
     rawler::decoders::supported_extensions()
         .iter()
         .any(|known| known.eq_ignore_ascii_case(&ext))
+}
+
+/// True for .jpg/.jpeg (case-insensitive) — the only non-RAW stills
+/// imported in v1 (issue #8; HEIC/PNG/TIFF explicitly out of scope).
+fn has_jpeg_extension(path: &Path) -> bool {
+    path.extension()
+        .and_then(|e| e.to_str())
+        .is_some_and(|ext| ext.eq_ignore_ascii_case("jpg") || ext.eq_ignore_ascii_case("jpeg"))
 }
 
 #[cfg(test)]
@@ -165,7 +204,7 @@ mod tests {
     }
 
     #[test]
-    fn scan_keeps_raw_extensions_case_insensitively() {
+    fn scan_keeps_raw_extensions_case_insensitively_and_unpaired_jpegs() {
         let dir = make_folder(&[
             "b.ARW", "a.arw", "c.Arw", "d.CR3", "e.nef", "x.jpg", "y.txt", "z.xmp",
         ]);
@@ -175,11 +214,74 @@ mod tests {
             .iter()
             .map(|i| i.file_name().into_owned())
             .collect();
-        assert_eq!(names, ["a.arw", "b.ARW", "c.Arw", "d.CR3", "e.nef"]);
+        // x.jpg has no same-stem RAW sibling: first-class image (issue #8).
+        assert_eq!(
+            names,
+            ["a.arw", "b.ARW", "c.Arw", "d.CR3", "e.nef", "x.jpg"]
+        );
         assert!(session
             .images
             .iter()
             .all(|i| i.state == LoadState::Placeholder && i.pick == PickState::Unmarked));
+        std::fs::remove_dir_all(&dir).ok();
+    }
+
+    /// Issue #8 pairing rule: a JPEG with a same-stem RAW sibling stays
+    /// hidden (any case combination); unpaired JPEGs import; JPEG-only
+    /// folders work; non-images (videos etc.) are silently ignored.
+    #[test]
+    fn scan_hides_paired_jpegs_imports_unpaired_ignores_nonimages() {
+        let dir = make_folder(&[
+            "DSC001.ARW",
+            "DSC001.JPG", // paired: hidden (RAW represents the moment)
+            "dsc002.arw",
+            "DSC002.jpeg", // paired case-insensitively: hidden
+            "DSC003.JPG",  // unpaired: imported
+            "phone.jpeg",  // unpaired: imported
+            "clip.MP4",    // never a broken cell
+            "notes.txt",
+        ]);
+        let session = Session::open(&dir).unwrap();
+        let names: Vec<String> = session
+            .images
+            .iter()
+            .map(|i| i.file_name().into_owned())
+            .collect();
+        assert_eq!(
+            names,
+            ["DSC001.ARW", "DSC003.JPG", "dsc002.arw", "phone.jpeg"]
+        );
+        std::fs::remove_dir_all(&dir).ok();
+    }
+
+    /// JPEG-only folder (phone/family cards): every JPEG imports.
+    #[test]
+    fn scan_jpeg_only_folder_imports_everything() {
+        let dir = make_folder(&["IMG_1.jpg", "IMG_2.JPEG", "IMG_3.jpeg"]);
+        let session = Session::open(&dir).unwrap();
+        assert_eq!(session.images.len(), 3);
+        std::fs::remove_dir_all(&dir).ok();
+    }
+
+    /// A DIRECTORY named like a RAW must not swallow its same-stem JPEG
+    /// (validator repro: the moment vanished entirely — hiding presumes
+    /// a SHOWN RAW).
+    #[test]
+    fn scan_directory_named_like_raw_does_not_hide_the_jpeg() {
+        let dir = make_folder(&["DSC002.jpg"]);
+        std::fs::create_dir_all(dir.join("DSC001.ARW")).unwrap();
+        std::fs::write(dir.join("DSC001.JPG"), b"stub").unwrap();
+        let session = Session::open(&dir).unwrap();
+        let names: Vec<String> = session
+            .images
+            .iter()
+            .map(|i| i.file_name().into_owned())
+            .collect();
+        assert_eq!(
+            names,
+            ["DSC001.JPG", "DSC002.jpg"],
+            "the fake-RAW directory neither imports nor hides anything"
+        );
         std::fs::remove_dir_all(&dir).ok();
     }
 

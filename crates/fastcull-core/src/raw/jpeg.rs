@@ -48,6 +48,63 @@ pub(crate) fn sniff_dimensions<R: Read + Seek>(
     Ok(parse_sof(&head))
 }
 
+/// Locate the Exif TIFF block inside a bare JPEG's APP1 segment (issue
+/// #8): returns `(absolute_offset, len)` of the TIFF header, or `None`
+/// when there is no `Exif\0\0` APP1 in the pre-SOS segments. Reads at
+/// most `SNIFF_LIMIT` bytes of headers; never decodes.
+pub(crate) fn app1_tiff_bounds<R: Read + Seek>(
+    reader: &mut R,
+) -> Result<Option<(u64, u64)>, TiffError> {
+    reader.seek(SeekFrom::Start(0))?;
+    let mut head = vec![0u8; SNIFF_LIMIT as usize];
+    let mut filled = 0;
+    while filled < head.len() {
+        let n = reader.read(&mut head[filled..])?;
+        if n == 0 {
+            break;
+        }
+        filled += n;
+    }
+    head.truncate(filled);
+    if head.len() < 4 || head[0] != 0xFF || head[1] != 0xD8 {
+        return Ok(None);
+    }
+    let mut pos = 2usize;
+    loop {
+        if pos + 4 > head.len() {
+            return Ok(None);
+        }
+        if head[pos] != 0xFF {
+            return Ok(None); // not a marker: bail, never guess
+        }
+        // Skip fill bytes (FF FF ... marker).
+        while pos + 4 <= head.len() && head[pos + 1] == 0xFF {
+            pos += 1;
+        }
+        let marker = head[pos + 1];
+        if marker == 0xDA || marker == 0xD9 {
+            return Ok(None); // SOS/EOI: image data begins, no Exif APP1
+        }
+        let seg_len = u16::from_be_bytes([head[pos + 2], head[pos + 3]]) as usize;
+        if seg_len < 2 {
+            return Ok(None);
+        }
+        if marker == 0xE1 {
+            // APP1: payload starts after the 2-byte length.
+            let payload = pos + 4;
+            if payload + 6 <= head.len() && &head[payload..payload + 6] == b"Exif\0\0" {
+                let tiff = payload + 6;
+                let tiff_len = seg_len.saturating_sub(2 + 6);
+                if tiff_len >= 8 {
+                    return Ok(Some((tiff as u64, tiff_len as u64)));
+                }
+                return Ok(None);
+            }
+        }
+        pos += 2 + seg_len;
+    }
+}
+
 /// Scan JPEG segments for SOF0–SOF15 (excluding DHT/JPG/DAC markers) and
 /// return (width, height).
 fn parse_sof(data: &[u8]) -> Option<(u32, u32)> {

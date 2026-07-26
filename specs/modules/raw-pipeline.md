@@ -55,6 +55,28 @@ decoding RAW sensor data on the hot path.
 
 ## Orientation (user requirement 2026-07-25)
 
+**Bare JPEG sources (issue #8)**: a `.jpg`/`.jpeg` session file IS its
+own single whole-file "embedded preview" (`find_embedded_jpegs` returns
+one candidate at offset 0), so the thumb/loupe ladder works
+format-agnostically — the grid and loupe sources both resolve to the
+file itself. Single-rung consequences (recorded at the gate): the loupe
+`Ready` event carries a `terminal` flag (this rung is the file's best),
+and the app adopts a TERMINAL mid-class-or-smaller texture as the top
+rung so the zoom ceiling is knowable — without it, small JPEGs
+(≤ 2048 px long edge: phone/web/export files) dead-ended the zoom path.
+A > 2 MP JPEG's only grid source is the whole file, so its FIRST thumb
+decode costs full resolution (the 25 ms ARW thumb budget does not apply
+to JPEG sources; the cache absorbs re-opens). Extension decides the
+EXIF path while the JPEG signature decides the preview path: a JPEG
+renamed `.ARW` gets thumbnails by signature and an empty rawler
+summary; an ARW renamed `.jpg` gets previews by TIFF walk and an empty
+JPEG summary — both degrade, neither errors. Its EXIF (capture time, SubSec,
+make/model/serial, Orientation) comes from the APP1 `Exif\0\0` TIFF
+block via the in-tree hardened walker (`raw/jpeg_exif.rs` — rawler has
+no JPEG path); an absent or hostile APP1 degrades to an empty summary
+and orientation 1, never an error. Sony JPEG maker notes (burst
+sequence) are out of scope in v1: JPEGs group via the generic time path.
+
 Embedded previews are stored in sensor orientation; the EXIF Orientation tag
 (IFD0 0x0112) says how to display them. Photo Mechanic soft-rotates and so
 does FastCull: orientation is extracted by the TIFF walker and applied to the

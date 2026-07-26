@@ -76,6 +76,10 @@ struct AppState {
     cells: Rc<VecModel<CellData>>,
     /// Full-res loupe assets (real sessions only).
     loupe: Option<fastcull_core::loupe::LoupeEngine>,
+    /// Images whose best rung is mid-class-or-smaller but TERMINAL (the
+    /// file's native size — bare JPEGs, issue #8): their small texture
+    /// counts as the top rung for the zoom ceiling.
+    terminal_native: HashSet<usize>,
     /// UI-side textures for the focused image ± neighbors: sized to the
     /// prefetch ring (5) and cursor-protected on eviction (see
     /// insert_fullres); the core LRU holds the pixel data for rebuilds.
@@ -291,6 +295,7 @@ fn load_folder(state: &Rc<RefCell<AppState>>, folder: &std::path::Path) -> Resul
     st.thumbs_done = 0;
     st.synthetic = false;
     st.fullres.clear();
+    st.terminal_native.clear();
     st.zoom_factor = 1.0;
     st.pan_center = (0.5, 0.5);
     st.mids.clear();
@@ -430,6 +435,7 @@ fn main() {
         session_open: false,
         cells,
         loupe: None,
+        terminal_native: HashSet::new(),
         fullres: Vec::new(),
         zoom_factor: if start_11 { f32::INFINITY } else { 1.0 },
         pan_center: (0.5, 0.5),
@@ -1304,12 +1310,26 @@ fn main() {
                         .unwrap_or_default();
                     for event in loupe_events {
                         match event {
-                            fastcull_core::loupe::LoupeEvent::Ready { index, image } => {
+                            fastcull_core::loupe::LoupeEvent::Ready {
+                                index,
+                                image,
+                                terminal,
+                            } => {
                                 let long = image.width.max(image.height);
                                 trace_mark(&format!("loupe ready idx {index} long {long}"));
                                 if long <= fastcull_core::loupe::MID_RUNG_MAX_LONG {
                                     // Mid rung (~5 MB copy): grid-cell quality
                                     // for intermediate zooms; cheap, always keep.
+                                    if terminal {
+                                        // The file's BEST rung (bare JPEG,
+                                        // issue #8): this IS native — keep it
+                                        // as the top rung so the zoom ceiling
+                                        // is knowable (validator MAJOR: small
+                                        // JPEGs dead-ended the zoom path).
+                                        st.terminal_native.insert(index);
+                                        let texture = fullres_texture(&image);
+                                        insert_fullres(&mut st, index, texture);
+                                    }
                                     if st.mids.len() < MIDS_CAP || st.mids.contains_key(&index) {
                                         st.mids.insert(index, fullres_texture(&image));
                                         st.va.note_held(index, long);
@@ -1413,8 +1433,13 @@ fn main() {
                     st.zoom_factor <= 1.0
                         || st.fullres.iter().any(|(i, img)| {
                             *i == st.cursor
-                                && img.size().width.max(img.size().height)
+                                && (img.size().width.max(img.size().height)
                                     > fastcull_core::loupe::MID_RUNG_MAX_LONG
+                                    // A terminal small texture IS the top
+                                    // rung (bare JPEGs, issue #8 — QE D2:
+                                    // the 60s refusal hit every small-JPEG
+                                    // --start-11 run).
+                                    || st.terminal_native.contains(&st.cursor))
                         })
                 };
                 if !one2one_ready && elapsed > std::time::Duration::from_secs(60) {
@@ -1839,7 +1864,9 @@ fn max_factor(win: &MainWindow, st: &AppState) -> Option<f32> {
         .find(|(i, _)| *i == st.cursor)
         .map(|(_, img)| img)?;
     let size = img.size();
-    if size.width.max(size.height) <= fastcull_core::loupe::MID_RUNG_MAX_LONG {
+    if size.width.max(size.height) <= fastcull_core::loupe::MID_RUNG_MAX_LONG
+        && !st.terminal_native.contains(&st.cursor)
+    {
         return None; // not the top rung: native size unknown
     }
     let sf = win.window().scale_factor();
@@ -2572,6 +2599,7 @@ fn refresh_inner(win: &MainWindow, state: &Rc<RefCell<AppState>>) {
     let overlay = factor > 1.0 && at_loupe;
     match fullres_for(&st, cursor).filter(|img| {
         img.size().width.max(img.size().height) > fastcull_core::loupe::MID_RUNG_MAX_LONG
+            || st.terminal_native.contains(&cursor)
     }) {
         Some(img) if overlay => {
             let size = img.size();
