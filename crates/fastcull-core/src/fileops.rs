@@ -729,12 +729,20 @@ mod tests {
         let p = super::plan(&sources, &dest, None, ExistsMode::Rename, &HashSet::new()).unwrap();
         let (_h, rx) = execute(p);
         let report = drain(rx);
-        assert_eq!(report.copied, 1);
-        assert_eq!(report.copied_ids, vec![0]);
+        // The unreadable-source injection is chmod-based and only exists
+        // on unix; on Windows both files legitimately copy (CI caught the
+        // unconditional assertion counting 2).
         #[cfg(unix)]
         {
+            assert_eq!(report.copied, 1);
+            assert_eq!(report.copied_ids, vec![0]);
             assert_eq!(report.failed.len(), 1, "{:?}", report.failed);
             assert!(!report.all_verified);
+        }
+        #[cfg(not(unix))]
+        {
+            assert_eq!(report.copied, 2);
+            assert!(report.failed.is_empty());
         }
         assert_eq!(
             std::fs::read(dest.join("good.ARW")).unwrap(),
