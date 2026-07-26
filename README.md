@@ -1,175 +1,174 @@
 # FastCull
 
-**Fast, open-source photo culling for working photographers.** A Photo Mechanic-class
-ingest-and-select tool for Linux and Windows: open a folder of thousands of 100 MB RAW
-files, see them instantly, pick the keepers, tag them with IPTC metadata, and hand the
-selects to [darktable](https://www.darktable.org/) with every rating and tag intact.
+**Cull thousands of RAW photos at the speed you can think.**
 
-## Why it's fast
+FastCull is a fast, keyboard-first, catalog-free culling tool for Linux and
+Windows. Point it at a folder of RAW files and thumbnails appear near-instantly —
+no import step, no database, no waiting. Fly through the shoot with the keyboard,
+pick the keepers, reject the misses, tag the picks with IPTC metadata, and copy
+them to a selects folder with every file checksum-verified. Then open them in
+[darktable](https://www.darktable.org/) (or Lightroom, or digiKam) and everything
+you marked is already there.
 
-FastCull never decodes RAW sensor data on the interactive path. Every modern RAW file
-embeds camera-rendered JPEG previews — the Sony A1, for example, embeds a full-resolution
-8640×5760 JPEG plus a 1616×1080 preview in every ARW. FastCull reads only those bytes
-(~0.5 MB of a 100 MB file for the grid) and decodes them on all cores.
+Your RAW files are **never modified**. Not once, not ever. Everything FastCull
+writes goes into industry-standard XMP sidecar files next to your images.
 
-Measured on the reference machine (32-thread Ryzen, real A1 files): ~300 files/sec for
-the thumbnail grid pipeline vs. 0.6–1.2 **seconds** per file for a full RAW decode —
-the embedded-preview strategy is two orders of magnitude faster.
+## What it looks like
 
-## Core features (v1)
+![Culling a folder in FastCull: grid, picks, loupe, 1:1](docs/assets/fastcull-cull.gif)
 
-- Catalog-free: open any folder, cull, done. No import step, no database to manage.
-- Zoomable grid: many columns → few → single-image loupe → 1:1, one continuous gesture.
-- Keyboard-first pick/reject culling.
-- Burst detection: frames from the same burst get a colored border.
-- IPTC metadata editing — single image or multi-select — with saved templates and
-  variables (`{date}`, `{seq}`, …).
-- Filter and sort: picked / rejected / unmarked / bursts, by time or name.
-- Copy picks to a destination folder with rename templates; XMP sidecars travel along.
-- Darktable-compatible by construction: all state is written to `<name>.<ext>.xmp`
-  sidecars using the fields darktable, digiKam, and Lightroom read. RAW files are
-  **never** modified.
+A culling pass in six beats: open a folder, mark picks and rejects from the
+keyboard, check a frame in the loupe, punch in to 1:1.
+
+![Thumbnail grid with picks, rejects and live filter counts](docs/assets/fastcull-grid.jpg)
+
+The grid mid-cull: star and X badges on marked frames, live pick/reject/unmarked
+counts in the filter bar.
+
+![Loupe fit view](docs/assets/fastcull-loupe.jpg)
+
+The loupe fit view — one keystroke from the grid, rendered from the camera's
+embedded JPEG.
+
+![1:1 pixel view of a 50 MP Sony A1 file](docs/assets/fastcull-1to1.jpg)
+
+1:1 on a 50 MP A1 file: chrome drops away, pixels only.
+
+The screenshots show real RAW files: Sony sample shots from
+[raw.pixls.us](https://raw.pixls.us/), all published there under
+[CC0](https://creativecommons.org/publicdomain/zero/1.0/) (public domain).
+
+## Why it's so fast
+
+FastCull borrows the idea that made Photo Mechanic legendary: **never decode RAW
+sensor data while you're looking at pictures.** Every modern camera embeds
+ready-made JPEG previews inside each RAW file — a Sony A1 ARW, for example,
+carries both a grid-sized preview and a full-resolution 8640×5760 JPEG. FastCull
+reads only those bytes (about 0.5 MB out of a 100 MB file for a thumbnail) and
+decodes them on every core you have.
+
+The result, measured on real Sony A1 files: **~300 files/second** through the
+thumbnail pipeline on a 32-thread machine, versus roughly one second *per file*
+for a full RAW decode. Slow SD cards and network shares are handled with adaptive
+I/O, so culling straight off the card mount works too.
+
+## What it does
+
+- **Catalog-free** — open a folder, cull, done. Nothing to import, nothing to
+  clean up afterwards.
+- **One continuous zoom** — from a 12-column grid down to a single-image loupe
+  and a center-anchored 1:1 pixel view, all on the same two keys.
+- **Keyboard-first culling** — pick, reject, or clear with single keys;
+  marking auto-advances to the next frame so your hands never leave home row.
+- **Filter and sort** — one keypress-away chips for picked / rejected /
+  unmarked (with live counts), sorted by capture time or filename.
+- **IPTC metadata** — caption, keywords, and more, applied to one image or a
+  multi-selection, with saved templates and variables like `{date}` and `{seq}`.
+- **Copy Picks** — copy your keepers (and their sidecars) to a destination
+  folder, with rename templates and **BLAKE3 checksum verification** on every
+  file — the green light you want before formatting a card.
+- **Sidecar-only writes** — all state lives in `<name>.<ext>.xmp` files using
+  the fields darktable, digiKam, and Lightroom read. RAW files stay untouched.
+
+FastCull deliberately does *not* develop or edit RAWs — that's darktable's job.
+It does one thing: get you from a full card to a tagged, verified selects folder
+as fast as possible.
+
+## Getting FastCull
+
+FastCull is pre-1.0 and there are no packaged releases yet — but you can try it
+today.
+
+**Windows** — a ready-to-run test build is attached to every green CI run: grab
+the `fastcull-windows-x64` artifact from the
+[**Actions** tab](https://github.com/danilocesar/fastcull/actions) (you'll
+need to be signed in to GitHub). Details, including the one-time SmartScreen
+prompt, are in [RELEASING.md](RELEASING.md).
+
+**Linux** — build from source with a standard Rust toolchain
+([rustup](https://rustup.rs/)):
+
+```sh
+# dev packages needed: fontconfig, libxkbcommon, wayland, and mesa
+cargo build --release
+./target/release/fastcull-app /path/to/your/photos
+```
+
+## Your first five minutes
+
+Open a folder and keep your hands on the keyboard — that's the whole trick.
+
+| Key | Action |
+|---|---|
+| Arrows / PgUp / PgDn / Home / End | move around |
+| `Y`, `P` or `Space` | pick — and auto-advance to the next frame |
+| `N` or `X` | reject — and auto-advance |
+| `U` | clear a mark |
+| `+` / `-` | zoom: grid columns → loupe → gently up to 1:1 |
+| `Z` | jump straight between fit and 1:1 |
+| `G` or `Esc` | back to the grid |
+| `I` / `K` | IPTC panel / jump to the keyword field |
+| `Ctrl+A`, Shift+arrows | select many images at once |
+| `Ctrl+E` | Copy Picks… |
+
+That's the short list. The full map lives in the app under
+**Help → Keyboard Shortcuts** and in the
+[grid & loupe spec](specs/modules/ui-grid.md).
+
+A typical evening: open the folder → `+`/`-` to a comfortable grid → `Y`/`N`
+through the shoot (drop to 1:1 with `Z` when focus is in doubt) → filter to
+*Unmarked* and empty it → filter to *Picked*, `Ctrl+A`, apply an IPTC template →
+`Ctrl+E`, copy to the selects folder, wait for "all checksums verified" → done.
+
+## Plays well with darktable & friends
+
+Pick states and IPTC metadata are written as darktable-compatible XMP sidecars —
+and that's not an aspiration, it's a test: FastCull's sidecars are round-trip
+verified against a real darktable in the test suite. Lightroom and digiKam read
+the same fields. Cull in FastCull, edit wherever you like.
 
 ## Camera support
 
-Any camera supported by [rawler](https://github.com/dnglab/dnglab) works; the
-**Sony A1 is the reference camera** and is covered by the test suite with real files
-(compressed, lossless-compressed, and uncompressed ARW).
+The **Sony A1** is the reference camera — 100% supported and enforced by tests
+against real files in all three ARW variants. Any other camera supported by
+[rawler](https://github.com/dnglab/dnglab) should work through its embedded
+previews on a best-effort basis. If your camera misbehaves, please
+[open an issue](https://github.com/danilocesar/fastcull/issues) — sample files
+make fixes fast.
 
-## Stack
+## Project status
 
-Rust workspace: `fastcull-core` (all logic, UI-free, fully tested), `fastcull-app`
-([Slint](https://slint.dev/) GPU-rendered UI), `fastcull-cli` (headless driver used by
-integration tests). See `specs/` for the full architecture and module specifications —
-this project is developed spec-first.
+FastCull is **pre-1.0 and under heavy development** — the core workflow (open →
+cull → tag → copy with verification) is in place, with Copy Picks as the most
+recent addition. Expect rough edges and rapid change. The roadmap lives in
+[specs/milestones.md](specs/milestones.md).
 
-## Building
+## Learn more
 
-```sh
-cargo build --release
-cargo test --workspace
-testdata/fetch.sh   # downloads sample RAWs (needed for integration tests)
-```
+- **[specs/](specs/)** — the full design documentation. This project is
+  developed spec-first, so the specs are current, detailed, and the source of
+  truth for every behavior.
+- **User guide** — a plain-Markdown usage guide under `docs/` is planned for
+  the 1.0 release
+  ([issue #9](https://github.com/danilocesar/fastcull/issues/9)).
 
-## Testing on Windows
+## Contributing & feedback
 
-Every CI run whose Windows job passes — on `main` and on pull requests — attaches a
-ready-to-run Windows build, so you never have to set up a Rust toolchain on the
-Windows machine. (The Linux and Windows jobs are independent, so check that the
-whole run is green, not just that an artifact exists.)
-
-1. Open <https://github.com/danilocesar/fastcull/actions/workflows/ci.yml> and click
-   the most recent run with a green check mark.
-2. Scroll to the **Artifacts** section at the bottom of the run summary page and
-   download **`fastcull-windows-x64`**. GitHub always hands it over as a `.zip`.
-3. Unzip it anywhere. It contains `fastcull-app.exe`, `fastcull-cli.exe`, `LICENSE`,
-   `THIRD-PARTY-LICENSES.md`, this README, and a `BUILD-INFO.txt` naming the exact
-   commit it was built from.
-4. Double-click `fastcull-app.exe`.
-
-The first launch shows a blue **"Windows protected your PC"** dialog. That is
-SmartScreen reacting to an executable nobody has paid a certificate authority to
-sign — not a virus warning. Click **More info**, then **Run anyway**. Windows
-remembers the choice for that copy of the file; a newly downloaded build asks again.
-
-Notes:
-
-- Artifacts expire **14 days** after the run; grab a fresh one after that.
-- Downloading artifacts requires being signed in to GitHub.
-- The binaries are linked against a static C runtime, so no "Visual C++
-  Redistributable" install is needed.
-
-Tagged releases (`v*`) additionally publish Linux and Windows archives on the
-[Releases page](https://github.com/danilocesar/fastcull/releases) — those are the
-builds to hand to other people; CI artifacts are for your own testing.
-
-## Cutting a release
-
-Releases are produced by [dist](https://opensource.axo.dev/cargo-dist/) (formerly
-cargo-dist). `dist-workspace.toml` is the configuration;
-`.github/workflows/release.yml` is **generated from it** and should never be edited
-by hand.
-
-**A `v0.1.0` tag already exists** (it marks the end of milestone M4, a commit that
-predates this pipeline). The first tag that actually builds a release must be a new
-version — bump `[workspace.package] version` in `Cargo.toml` first. To release
-`0.1.1`:
-
-```sh
-# 1. bump the version in Cargo.toml, then refresh Cargo.lock
-cargo check --workspace
-# 2. see exactly which archives the tag will produce, before creating it
-dist plan
-# 3. commit, tag, push
-git commit -am "Release 0.1.1"
-git tag v0.1.1
-git push && git push --tags
-```
-
-Pushing the tag starts `release.yml`, which builds on a Linux and a Windows runner,
-uploads `fastcull-app-<target>` and `fastcull-cli-<target>` archives plus SHA-256
-checksums, and creates the GitHub Release. It also attaches a `source.tar.gz` — the
-complete corresponding source for the binaries, as the GPL requires.
-
-Two things worth knowing before you rely on it:
-
-- The trigger is not literally `v*`. dist generates the glob
-  `**[0-9]+.[0-9]+.[0-9]+*`, so *any* tag containing a `X.Y.Z` triplet starts the
-  workflow. A tag whose version does not match `Cargo.toml` fails in the first job
-  and creates nothing.
-- On pull requests the workflow only runs `dist plan`; it never builds. That catches
-  a malformed `dist-workspace.toml`, but **not** a missing `include` file or a
-  platform build break. Those first appear when a real tag is pushed — which is why
-  the first run of this pipeline should use a throwaway prerelease tag such as
-  `v0.1.1-rc.1` (dist marks those `--prerelease`, and they can be deleted after).
-
-If a release run fails halfway, the tag is already public. Recover by deleting both
-the release and the tag, then fixing and re-tagging:
-
-```sh
-gh release delete v0.1.1 --yes    # only if a release/draft was created
-git push --delete origin v0.1.1
-git tag -d v0.1.1
-```
-
-After changing `dist-workspace.toml`, regenerate the workflow and commit both files
-together:
-
-```sh
-cargo install cargo-dist --locked --version 0.32.0   # or the prebuilt installer
-dist generate          # rewrites .github/workflows/release.yml
-dist generate --check  # fails if release.yml was hand-edited
-```
-
-`dist generate --check` only compares the generated workflow against what dist
-would write now; it does **not** validate the rest of `dist-workspace.toml`. Keys
-like `targets`, `installers` and `[dist.dependencies.apt]` are read at release time
-by the workflow itself, so changing them takes effect without regeneration — and
-without any check catching a typo. Use `dist plan` to see what they actually do.
-
-Use `dist generate`, **not** `dist init` — `init` rewrites `dist-workspace.toml`
-and replaces its explanatory comments with boilerplate.
+Bug reports, camera samples, and workflow feedback are all welcome — please
+[open an issue](https://github.com/danilocesar/fastcull/issues). If you'd like
+to contribute code: this is a spec-driven
+repository, so start by reading the relevant `specs/modules/*.md` — changes are
+expected to keep code and spec in agreement. Release and Windows-testing
+procedures for maintainers are in [RELEASING.md](RELEASING.md).
 
 ## License
 
-FastCull's own source code is GPL-3.0-or-later. See [LICENSE](LICENSE).
-
-The **binaries** we publish link Slint, which is offered under GPL-3.0-**only** (or
-a paid commercial licence), so a distributed FastCull executable as a whole is
-conveyed under GPL version 3 — "or later" applies to our source, not to the linked
-result. The complete corresponding source code for any binary we publish is the git
-commit it was built from, in this repository:
-<https://github.com/danilocesar/fastcull>. CI artifacts record that commit in
-`BUILD-INFO.txt`. Release archives do not carry the commit inside them — the
-release tag on GitHub identifies it, and every release also ships a
-`source.tar.gz` of exactly that source. Run `fastcull-cli --version` if you need
-to tell two unpacked archives apart.
-
-Those executables also contain hundreds of Rust crates under MIT, Apache-2.0,
-BSD, Unicode-3.0, MPL-2.0 and other licences, most of which require their notice
-to travel with the binary. [THIRD-PARTY-LICENSES.md](THIRD-PARTY-LICENSES.md)
-collects them and ships inside every artifact and release archive; regenerate it
-with `cargo about generate about.hbs -o THIRD-PARTY-LICENSES.md` after changing
-dependencies.
+FastCull's source code is licensed **GPL-3.0-or-later** — see
+[LICENSE](LICENSE). Published binaries link [Slint](https://slint.dev/) (GPL-3.0
+only), so a distributed FastCull executable as a whole is conveyed under GPLv3;
+"or later" applies to this project's own source. Bundled third-party crate
+licenses are collected in
+[THIRD-PARTY-LICENSES.md](THIRD-PARTY-LICENSES.md), which ships with every
+build.
 
 This software is based in part on the work of the Independent JPEG Group.
