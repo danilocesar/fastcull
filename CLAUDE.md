@@ -4,6 +4,12 @@ Spec-driven repo: **specs/ is the source of truth.** Read the relevant
 `specs/modules/*.md` before touching a module; if implementation must deviate,
 update the spec in the same commit and say why in the commit message.
 
+**docs/ follows specs/ (M8)**: `docs/` is the user-facing guide distilled from
+the specs. A commit that changes user-visible behavior (or its module spec)
+updates the affected `docs/` page in the same commit — the page map is
+index↔release/install, culling↔ui-grid+burst-grouping, metadata↔xmp-sidecars+
+iptc-templates, copy-picks↔fileops, faq↔catalog-cache+everything else.
+
 ## Commands
 
 ```sh

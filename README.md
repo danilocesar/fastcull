@@ -7,8 +7,8 @@ Windows. Point it at a folder of RAW files and thumbnails appear near-instantly 
 no import step, no database, no waiting. Fly through the shoot with the keyboard,
 pick the keepers, reject the misses, tag the picks with IPTC metadata, and copy
 them to a selects folder with every file checksum-verified. Then open them in
-[darktable](https://www.darktable.org/) (or Lightroom, or digiKam) and everything
-you marked is already there.
+[darktable](https://www.darktable.org/) (or digiKam — standard XMP sidecars)
+and everything you marked is already there.
 
 Your RAW files are **never modified**. Not once, not ever. Everything FastCull
 writes goes into industry-standard XMP sidecar files next to your images.
@@ -76,16 +76,15 @@ as fast as possible.
 
 ## Getting FastCull
 
-FastCull is pre-1.0 and there are no packaged releases yet — but you can try it
-today.
+Download the latest archive for Linux or Windows from the
+[**Releases page**](https://github.com/danilocesar/fastcull/releases) —
+plain zip/tar.xz, no installer. The
+[user guide's install page](docs/index.md) covers the two platform
+gotchas (Windows SmartScreen, Linux runtime libraries).
 
-**Windows** — a ready-to-run test build is attached to every green CI run: grab
-the `fastcull-windows-x64` artifact from the
-[**Actions** tab](https://github.com/danilocesar/fastcull/actions) (you'll
-need to be signed in to GitHub). Details, including the one-time SmartScreen
-prompt, are in [RELEASING.md](RELEASING.md).
-
-**Linux** — build from source with a standard Rust toolchain
+Want the bleeding edge instead? Every green CI run attaches a Windows
+build under the [**Actions** tab](https://github.com/danilocesar/fastcull/actions),
+and Linux builds from source with a standard Rust toolchain
 ([rustup](https://rustup.rs/)):
 
 ```sh
@@ -100,20 +99,16 @@ Open a folder and keep your hands on the keyboard — that's the whole trick.
 
 | Key | Action |
 |---|---|
-| Arrows / PgUp / PgDn / Home / End | move around |
-| `Y`, `P` or `Space` | pick — and auto-advance to the next frame |
-| `N` or `X` | reject — and auto-advance |
-| `U` | clear a mark |
-| `+` / `-` | zoom: grid columns → loupe → gently up to 1:1 |
-| `Z` | jump straight between fit and 1:1 |
+| Arrows | move around |
+| `Y` | pick — and auto-advance to the next frame |
+| `N` | reject — and auto-advance |
+| `+` / `-` / `Z` | zoom: grid → loupe → 1:1 |
 | `G` or `Esc` | back to the grid |
-| `I` / `K` | IPTC panel / jump to the keyword field |
-| `Ctrl+A`, Shift+arrows | select many images at once |
 | `Ctrl+E` | Copy Picks… |
 
-That's the short list. The full map lives in the app under
-**Help → Keyboard Shortcuts** and in the
-[grid & loupe spec](specs/modules/ui-grid.md).
+That's the survival kit. The **[user guide](docs/index.md)** has the
+rest — the full keyboard map, bursts, metadata templates, and the FAQ —
+and the same map lives in the app under **Help → Keyboard Shortcuts**.
 
 A typical evening: open the folder → `+`/`-` to a comfortable grid → `Y`/`N`
 through the shoot (drop to 1:1 with `Z` when focus is in doubt) → filter to
@@ -124,8 +119,9 @@ through the shoot (drop to 1:1 with `Z` when focus is in doubt) → filter to
 
 Pick states and IPTC metadata are written as darktable-compatible XMP sidecars —
 and that's not an aspiration, it's a test: FastCull's sidecars are round-trip
-verified against a real darktable in the test suite. Lightroom and digiKam read
-the same fields. Cull in FastCull, edit wherever you like.
+verified against a real darktable in the test suite. digiKam reads the same
+standard fields; for Lightroom there's a naming caveat, covered honestly in
+[the FAQ](docs/faq.md). Cull in FastCull, edit wherever you like.
 
 ## Camera support
 
@@ -145,12 +141,11 @@ recent addition. Expect rough edges and rapid change. The roadmap lives in
 
 ## Learn more
 
+- **[User guide](docs/index.md)** — install, culling, metadata
+  templates, Copy Picks, and the FAQ, in five short pages.
 - **[specs/](specs/)** — the full design documentation. This project is
   developed spec-first, so the specs are current, detailed, and the source of
   truth for every behavior.
-- **User guide** — a plain-Markdown usage guide under `docs/` is planned for
-  the 1.0 release
-  ([issue #9](https://github.com/danilocesar/fastcull/issues/9)).
 
 ## Contributing & feedback
 

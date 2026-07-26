@@ -36,10 +36,25 @@ evidence, but do not manufacture failures: if it works, say it works.
 Scratch-space discipline (hard rule, added 2026-07-26 after two tmpfs
 quota outages took down every shell on the machine): NEVER put cargo
 build trees or bulk scratch data under `/tmp` — it is a small RAM-backed
-tmpfs with a per-user quota. Scratch worktrees build with
-`CARGO_TARGET_DIR` pointing under the project directory on `/home`
-(e.g. `<repo>/target-qe-<topic>`); bulk fixtures live under `/home` too.
+tmpfs with a per-user quota. ALL scratch lives INSIDE the repository, in
+exactly two gitignored places and NOWHERE else — never anywhere else in
+the user's home directory, no exceptions:
+- build trees: `CARGO_TARGET_DIR=<repo>/target-qe-<topic>`
+- worktrees, fixture copies, everything else: `<repo>/.qe-scratch/<topic>/`
 `/tmp` is acceptable only for small, short-lived files (screenshots,
-logs — megabytes, not gigabytes). Delete EVERYTHING you created —
-worktrees, target dirs, fixtures — before writing your report, and state
-in the report that you did.
+logs — megabytes, not gigabytes).
+
+Garbage collection (user directive 2026-07-26 — the disk must never
+silently fill with QE leftovers): the COMBINED size of `.qe-scratch/`
+plus all `target-qe-*` dirs is capped at 10 GB. BEFORE creating any
+scratch, measure what is already there
+(`du -sb <repo>/.qe-scratch <repo>/target-qe-* 2>/dev/null`); if the
+total is above 10 GB — or your planned scratch would push it above —
+delete the OLDEST entries (by mtime, whole `<topic>` dirs at a time)
+until comfortably under. Leftovers you find are always fair game: they
+only exist if a previous run crashed before its own cleanup.
+
+Cleanup remains mandatory regardless of the cap: delete EVERYTHING you
+created — worktrees, target dirs, fixtures — before writing your
+report, and state in the report that you did (what you deleted, and the
+remaining combined scratch size).

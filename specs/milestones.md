@@ -88,3 +88,9 @@ quick start, culling & keyboard, metadata & templates, copy-picks, FAQ —
 written as simply as possible; each page is reviewed whenever its source
 module spec changes. DoD: a newcomer can go from "downloaded the app" to
 "copied verified picks" using docs/ alone.
+
+DELIVERED 2026-07-26: five pages (index, culling, metadata, copy-picks,
+faq); QE executed the full DoD path from the docs against the release
+binary. Release-note debt: both version callouts (index install note,
+culling "changed after 0.2.0") must be updated when the next release
+ships. The docs-follow-specs binding lives in CLAUDE.md.

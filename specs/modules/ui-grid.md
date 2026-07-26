@@ -367,7 +367,7 @@ brightening during wheel scrolling (needs an activity decay timer).
 | `Y`, `P` or `Space` | pick (take) |
 | `N` or `X` | reject |
 | `U` | clear mark |
-| `+` / `-` / Ctrl+scroll | zoom in/out (grid columns → loupe fit → ×1.5 ladder → 1:1, center-anchored; see Loupe zoom ladder) |
+| `+` / `-` | zoom in/out (grid columns → loupe fit → ×1.5 ladder → 1:1, center-anchored; see Loupe zoom ladder; Ctrl+scroll stays RESERVED per the Mouse & pointer contract) |
 | `Z` | from fit: jump to 1:1; from 1:1 or any intermediate factor: back to fit; from a grid zoom: jump straight to loupe 1:1 |
 | wheel | grid: scroll the view; loupe: zoom one ladder stop, anchored under the pointer (down at fit does nothing; the wheel no longer steps between images) — see Mouse & pointer contract |
 | click (loupe) | above fit: center on the clicked point (no factor change); at fit: nothing |
