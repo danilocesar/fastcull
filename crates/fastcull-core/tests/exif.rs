@@ -73,3 +73,49 @@ fn unicode_path_reads_fine() {
     assert_eq!(summary.camera_model.as_deref(), Some("ILCE-1"));
     std::fs::remove_dir_all(&dir).ok();
 }
+
+/// M7: the Sony maker-note sequence reader against the real A1 files —
+/// all three are single shots (releaseMode2 = 0, ciphered 9400 version
+/// byte 0x31), validated against exiftool's Sony.pm ground truth.
+#[test]
+fn a1_files_read_single_shot_sequence() {
+    for name in [
+        "A1_full_compressed.ARW",
+        "A1_full_lossless_compressed.ARW",
+        "A1_full_uncompressed.ARW",
+    ] {
+        let path = std::path::PathBuf::from(env!("CARGO_MANIFEST_DIR"))
+            .join("../../testdata/raws")
+            .join(name);
+        assert!(path.is_file(), "run testdata/fetch.sh first");
+        let mut f = std::fs::File::open(&path).unwrap();
+        let seq = fastcull_core::raw::sony::read_sequence(&mut f)
+            .unwrap_or_else(|| panic!("{name}: no sequence info"));
+        assert_eq!(seq.release_mode2, 0, "{name}: single drive");
+        assert_eq!(seq.sequence_image_number, 1, "{name}: raw 0 + 1");
+        assert_eq!(seq.burst_seq(), 0, "{name}: declared single");
+    }
+}
+
+/// End-to-end over the real files: full summaries -> FrameMeta -> group().
+/// Three single shots must produce zero groups (burst-grouping.md, last
+/// acceptance criterion).
+#[test]
+fn a1_files_group_as_zero_bursts() {
+    let frames: Vec<_> = [
+        "A1_full_compressed.ARW",
+        "A1_full_lossless_compressed.ARW",
+        "A1_full_uncompressed.ARW",
+    ]
+    .iter()
+    .map(|name| {
+        let summary = read_exif_summary(&testdata(name)).unwrap();
+        fastcull_core::burst::FrameMeta::from_summary(&summary)
+    })
+    .collect();
+    let grouping =
+        fastcull_core::burst::group(&frames, &fastcull_core::burst::BurstConfig::default());
+    for (i, g) in grouping.group.iter().enumerate() {
+        assert!(g.is_none(), "frame {i} unexpectedly grouped: {g:?}");
+    }
+}

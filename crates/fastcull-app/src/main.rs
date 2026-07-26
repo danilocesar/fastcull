@@ -112,6 +112,15 @@ struct AppState {
     /// EXIF capture sort keys, filled by MetadataReady events (None until
     /// metadata loads; keyless images sort after keyed ones by name).
     capture_keys: Vec<Option<String>>,
+    /// Burst inputs per image (M7), from MetadataReady summaries.
+    frame_meta: Vec<fastcull_core::burst::FrameMeta>,
+    /// Burst outputs by IMAGE id: group membership, badge count on the
+    /// group's first frame (0 = no badge), and "7/23" position. Rebuilt
+    /// at most once per pump tick while metadata streams (burst_dirty).
+    burst_of: Vec<Option<usize>>,
+    burst_badge: Vec<usize>,
+    burst_pos: Vec<Option<(usize, usize)>>,
+    burst_dirty: bool,
     /// Per-image IPTC state (M5 panel): seeded from sidecars at open,
     /// edited by the panel, persisted via SidecarWriter::iptc.
     iptc: Vec<fastcull_core::iptc::IptcData>,
@@ -277,6 +286,11 @@ fn load_folder(state: &Rc<RefCell<AppState>>, folder: &std::path::Path) -> Resul
     st.mids.clear();
     st.va = fastcull_core::viewassets::ViewAssets::default();
     st.capture_keys = vec![None; count];
+    st.frame_meta = vec![fastcull_core::burst::FrameMeta::default(); count];
+    st.burst_of = vec![None; count];
+    st.burst_badge = vec![0; count];
+    st.burst_pos = vec![None; count];
+    st.burst_dirty = false;
     st.iptc = vec![fastcull_core::iptc::IptcData::default(); count];
     st.touched_iptc.clear();
     st.panel_cache = Default::default();
@@ -411,6 +425,11 @@ fn main() {
         query: fastcull_core::filter::ViewQuery::default(),
         view: Vec::new(),
         capture_keys: Vec::new(),
+        frame_meta: Vec::new(),
+        burst_of: Vec::new(),
+        burst_badge: Vec::new(),
+        burst_pos: Vec::new(),
+        burst_dirty: false,
         iptc: Vec::new(),
         touched_iptc: HashSet::new(),
         panel_cache: Default::default(),
@@ -438,6 +457,10 @@ fn main() {
             st.labels = (0..n).map(|i| format!("SYN{i:05}.ARW")).collect();
             st.picks = vec![fastcull_core::catalog::PickState::Unmarked; n];
             st.capture_keys = vec![None; n];
+            st.frame_meta = vec![fastcull_core::burst::FrameMeta::default(); n];
+            st.burst_of = vec![None; n];
+            st.burst_badge = vec![0; n];
+            st.burst_pos = vec![None; n];
             st.iptc = vec![fastcull_core::iptc::IptcData::default(); n];
             st.synthetic = true;
             recompute_view(&mut st);
@@ -1073,6 +1096,10 @@ fn main() {
                                     *slot = exif.sort_key();
                                     dirty = true;
                                 }
+                                if let Some(slot) = st.frame_meta.get_mut(index) {
+                                    *slot = fastcull_core::burst::FrameMeta::from_summary(&exif);
+                                    st.burst_dirty = true;
+                                }
                             }
                             SessionEvent::Sidecar { index, pick, iptc } => {
                                 // Picks from a previous session/tool — never
@@ -1210,6 +1237,10 @@ fn main() {
                     if dirty {
                         // Picks/keys may have changed membership or order.
                         recompute_view_keep_cursor(&mut st);
+                    }
+                    if st.burst_dirty {
+                        st.burst_dirty = false;
+                        recompute_bursts(&mut st);
                     }
                 }
                 if dirty {
@@ -1580,6 +1611,40 @@ fn copy_replan(win: &MainWindow, st: &mut AppState) {
     }
 }
 
+/// Rebuild burst grouping (M7, burst-grouping.md): always over CAPTURE
+/// order of the WHOLE session (the spec's input contract) regardless of
+/// the UI's filter/sort; results are indexed by image id for the grid
+/// badge, the status position, and the `[`/`]` boundary keys.
+fn recompute_bursts(st: &mut AppState) {
+    let capture_query = fastcull_core::filter::ViewQuery {
+        filter: fastcull_core::filter::PickFilter::All,
+        sort: fastcull_core::filter::SortKey::CaptureTime,
+        ascending: true,
+    };
+    let order =
+        fastcull_core::filter::view(&st.picks, &st.labels, &st.capture_keys, &capture_query);
+    let frames: Vec<fastcull_core::burst::FrameMeta> = order
+        .iter()
+        .map(|id| st.frame_meta.get(*id).cloned().unwrap_or_default())
+        .collect();
+    let grouping =
+        fastcull_core::burst::group(&frames, &fastcull_core::burst::BurstConfig::default());
+    let n = st.labels.len();
+    st.burst_of = vec![None; n];
+    st.burst_badge = vec![0; n];
+    st.burst_pos = vec![None; n];
+    let positions = grouping.positions(); // one O(n) pass, not per-frame
+    for (pos_in_order, id) in order.iter().enumerate() {
+        st.burst_of[*id] = grouping.group[pos_in_order];
+        // Badge goes on the group's FIRST frame (position 1) — with
+        // interleaved bodies members need not be contiguous.
+        if let Some((1, size)) = positions[pos_in_order] {
+            st.burst_badge[*id] = size;
+        }
+        st.burst_pos[*id] = positions[pos_in_order];
+    }
+}
+
 /// Re-read templates.toml (session open + panel toggle = the spec's
 /// read-on-open live-reload). Parse errors and CLEAR warnings both land in
 /// the panel warning strip.
@@ -1887,6 +1952,8 @@ fn handle_nav_inner(win: &MainWindow, state: &Rc<RefCell<AppState>>, key: &str) 
             | "pgdn"
             | "home"
             | "end"
+            | "burst-prev"
+            | "burst-next"
     ) {
         st.cursor_touched = true;
     }
@@ -1999,6 +2066,26 @@ fn handle_nav_inner(win: &MainWindow, state: &Rc<RefCell<AppState>>, key: &str) 
                 }
             } else {
                 st.zoom = grid::zoom_step(st.zoom, -1);
+            }
+        }
+        // [ / ]: previous/next burst boundary over the FILTERED view
+        // (burst-grouping.md UI contract): first visible frame of the
+        // adjacent group; singles are their own territory; clamps.
+        "burst-prev" | "burst-next" => {
+            if !st.view.is_empty() {
+                let pos = st.cursor_pos().unwrap_or(0);
+                let view = st.view.clone();
+                let group_of = |p: usize| st.burst_of.get(view[p]).copied().flatten();
+                let new_pos = fastcull_core::burst::next_boundary(
+                    pos,
+                    view.len(),
+                    group_of,
+                    key == "burst-next",
+                );
+                st.cursor = view[new_pos];
+                // Plain navigation resets the Shift-span anchor, same as
+                // the arrow keys (selection contract, ui-grid.md).
+                st.selection.reset_anchor();
             }
         }
         "select-all" => {
@@ -2294,6 +2381,7 @@ fn refresh_inner(win: &MainWindow, state: &Rc<RefCell<AppState>>) {
             selected: st.selection.is_selected(index),
             id: index as i32,
             copied: st.copied_to.contains_key(&index),
+            burst_count: st.burst_badge.get(index).copied().unwrap_or(0) as i32,
             seed: if st.synthetic { index as i32 } else { -1 },
             pick: match st.picks.get(index) {
                 Some(fastcull_core::catalog::PickState::Picked) => 1,
@@ -2395,9 +2483,17 @@ fn refresh_inner(win: &MainWindow, state: &Rc<RefCell<AppState>>) {
         }
         .into(),
     );
+    // M7: "· burst 7/23" when the cursor sits inside a group.
+    let burst_note = st
+        .burst_pos
+        .get(cursor)
+        .copied()
+        .flatten()
+        .map(|(p, n)| format!(" · burst {p}/{n}"))
+        .unwrap_or_default();
     win.set_status(
         format!(
-            "{} ({}/{}){} — {} thumbs loaded — ★{} ✕{}{} — {} column{}",
+            "{} ({}/{}){}{} — {} thumbs loaded — ★{} ✕{}{} — {} column{}",
             if cursor_in_view {
                 st.labels.get(cursor).cloned().unwrap_or_default()
             } else {
@@ -2406,6 +2502,7 @@ fn refresh_inner(win: &MainWindow, state: &Rc<RefCell<AppState>>) {
             cursor_pos.map_or(0, |p| p + 1),
             view_len.max(1),
             showing,
+            burst_note,
             st.thumbs_done.min(count),
             counts.picked,
             counts.rejected,

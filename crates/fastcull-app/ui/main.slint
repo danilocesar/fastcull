@@ -19,6 +19,8 @@ export struct CellData {
     selected: bool,
     id: int,
     copied: bool,
+    // M7: burst size shown on the group's FIRST frame only (0 = none).
+    burst-count: int,
     seed: int,
     // 0 = unmarked, 1 = picked (star), 2 = rejected (X + dim)
     pick: int,
@@ -262,6 +264,8 @@ export component MainWindow inherits Window {
                     if (!root.iptc-visible) { root.iptc-toggle(); }
                     return accept;
                 }
+                if (event.text == "[") { root.nav("burst-prev"); return accept; }
+                if (event.text == "]") { root.nav("burst-next"); return accept; }
                 if (event.text == Key.LeftArrow) { root.nav("left"); return accept; }
                 if (event.text == Key.RightArrow) { root.nav("right"); return accept; }
                 if (event.text == Key.UpArrow) { root.nav("up"); return accept; }
@@ -401,6 +405,26 @@ export component MainWindow inherits Window {
                         border-width: 2px;
                         border-color: #3a6ea5;
                         background: transparent;
+                    }
+                    // Burst badge (M7): boundary marker + depth gauge on
+                    // the group's first frame ("×23"); bottom-right, away
+                    // from the pick badge corner (burst-grouping.md).
+                    if cell.burst-count > 0: Rectangle {
+                        x: parent.width - t-burst.preferred-width - 14px;
+                        y: parent.height - 22px;
+                        width: t-burst.preferred-width + 10px;
+                        height: 18px;
+                        border-radius: 4px;
+                        background: #202028cc;
+                        t-burst := Text {
+                            text: "×" + cell.burst-count;
+                            color: #d8d8e0;
+                            font-size: 11px;
+                            horizontal-alignment: center;
+                            vertical-alignment: center;
+                            width: 100%;
+                            height: 100%;
+                        }
                     }
                     // Copied badge (M6): the session's "this one is safe
                     // at the destination" mark.
@@ -580,7 +604,7 @@ export component MainWindow inherits Window {
                         font-size: 16px;
                     }
                     Text {
-                        text: "Arrows / PgUp / PgDn / Home / End   navigate\nY, P or Space   pick (take)\nN or X   reject\nU   clear mark\n+ / -   zoom in / out (grid → loupe fit → ×1.5 steps → 1:1, center held)\nCtrl+scroll   zoom (soon)\nZ   fit → 1:1; zoomed → back to fit (from grid: jump to 1:1)\nClick in loupe   center on the clicked point (fit → 1:1)\nG or Esc   back to the grid\nK   keyword field (opens the IPTC panel)\nI   IPTC panel\nShift+arrows   extend selection\nCtrl+A   select all (filtered set)\nCtrl+O   open folder\nCtrl+E   copy picks (M6)\nCtrl+Q   quit\n1–5, 0   reserved (star ratings, v2)";
+                        text: "Arrows / PgUp / PgDn / Home / End   navigate\nY, P or Space   pick (take)\nN or X   reject\nU   clear mark\n+ / -   zoom in / out (grid → loupe fit → ×1.5 steps → 1:1, center held)\nCtrl+scroll   zoom (soon)\nZ   fit → 1:1; zoomed → back to fit (from grid: jump to 1:1)\nClick in loupe   center on the clicked point (fit → 1:1)\nG or Esc   back to the grid\nK   keyword field (opens the IPTC panel)\nI   IPTC panel\nShift+arrows   extend selection\nCtrl+A   select all (filtered set)\n[ / ]   previous / next burst\nCtrl+O   open folder\nCtrl+E   copy picks (M6)\nCtrl+Q   quit\n1–5, 0   reserved (star ratings, v2)";
                         color: #c8c8d0;
                         font-size: 13px;
                     }

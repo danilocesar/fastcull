@@ -30,6 +30,13 @@ pub struct ExifSummary {
     pub capture_time: Option<String>,
     /// EXIF `SubSecTimeOriginal`: fractional-second digits, e.g. `"57"`.
     pub subsec: Option<String>,
+    /// Sony burst sequence (M7, maker-note Tag9400c via `raw::sony`):
+    /// None = tag absent / non-Sony; Some(0) = declared single (normal
+    /// drive); Some(n>=1) = 1-based position in a continuous burst.
+    /// `#[serde(default)]` because pre-M7 cache rows lack it (the cache
+    /// schema version was bumped so those rows re-read anyway).
+    #[serde(default)]
+    pub sequence_number: Option<u32>,
 }
 
 impl ExifSummary {
@@ -70,6 +77,12 @@ pub fn read_exif_summary(path: &Path) -> Result<ExifSummary, ExifError> {
             .sub_sec_time_original
             .clone()
             .and_then(non_empty),
+        // Maker-note pass (in-tree — rawler exposes none): failure of any
+        // kind degrades to None; bursts fall back to the Δt-only path.
+        sequence_number: std::fs::File::open(path)
+            .ok()
+            .and_then(|mut f| crate::raw::sony::read_sequence(&mut f))
+            .map(|s| s.burst_seq()),
     })
 }
 

@@ -12,6 +12,7 @@
 //! tags); raw sensor data lives in a SubIFD with no JPEG pointer tags.
 
 mod jpeg;
+pub mod sony;
 mod tiff;
 
 use std::io::{Read, Seek, SeekFrom};

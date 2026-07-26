@@ -4,7 +4,7 @@
 
 The one continuous view: a zoomable virtualized grid that morphs from many columns
 to a single-image loupe with 1:1 pixel zoom. Plus the filter/sort bar, pick badges,
-burst borders, and the IPTC side panel shell.
+burst badges, and the IPTC side panel shell.
 
 ## Zoom model (one axis, seamless)
 
@@ -215,7 +215,8 @@ row margin; scroll/zoom recomputes the window and mutates the model in place
 pipeline `Thumb` events. Placeholder cells render immediately (gray + filename)
 before their thumb arrives.
 
-`CellData`: image id, texture, pick state, burst color index (-1 = none),
+`CellData`: image id, texture, pick state, burst count (`burst-count: int`,
+>0 only on a group's first frame — the "×N" badge; 0 = no badge),
 failed flag, copied flag, selected flag. (Fields arrive with their milestones:
 M2 ships texture/failed/cursor; pick badge M3, copied M6, burst M7.)
 
@@ -302,8 +303,10 @@ brightening during wheel scrolling (needs an activity decay timer).
 
 - Pick: small star badge (top-left; user decision — "mark the ones taken with a
   little star"). Reject: red X badge + 40% dimmed thumb.
-- Burst: 3 px border in the group color; groups are visually contiguous because
-  sort is capture-time by default.
+- Burst (M7, persona-redesigned): count badge "×N" on each group's first
+  frame + optional thin two-tone bottom strip; NEVER a full-perimeter
+  border (cursor/selection own borders). See burst-grouping.md UI
+  contract.
 - Selection: accent outline; multi-select via Ctrl/Shift-click and Shift+arrows.
 - Failed file: warning badge + tooltip with reason.
 
@@ -327,6 +330,7 @@ brightening during wheel scrolling (needs an activity decay timer).
 | `K` | focus the keyword field, opening the IPTC panel if needed (persona G3; implemented with the panel step — K is never a dead key) |
 | Shift+arrows | extend selection (span anchor..cursor over view positions; a new span replaces the previous one — shrink/flip works) |
 | `Ctrl+A` | select all (filtered set) |
+| `[` / `]` | burst boundary jump (M7): `]` = next frame whose group differs (in a contiguous capture-sorted view that is the next group's first frame; with non-contiguous members it follows view order); `[` = re-anchor on the current group's first visible frame, crossing to the previous group only from there (CD-player convention); claims the cursor; carries loupe zoom/pan persistence; see burst-grouping.md |
 | `Ctrl+O` | Open Folder… (persona accelerator gap, provisional) |
 | `Ctrl+Q` | Quit (persona accelerator gap, provisional) |
 | `Ctrl+E` (menu: Copy picks…) | open copy dialog (`Ctrl+C` stays clipboard-idle: user decision after persona review — never repurpose it) |
@@ -382,8 +386,10 @@ dedicated About dialog is worth its weight — deferred, not forgotten.
 ## Filter & sort bar (M5 decisions recorded 2026-07-25)
 
 - Filters: SINGLE-choice chips — All / Picked / Rejected / Unmarked (user
-  decision: single choice is enough; combinations dropped). In-burst-only
-  joins in M7 with bursts themselves (persona: no dead chips).
+  decision: single choice is enough; combinations dropped). The in-burst-only
+  chip was CUT at M7 kickoff (persona IN-MY-WAY, user-delegated: chips
+  are single-choice, so it would trade away Unmarked and break the
+  inbox-zero loop; the `[`/`]` burst-jump keys serve the actual need).
 - Sort: capture time (default) ↑↓, filename ↑↓.
 - Implemented as pure predicates in `fastcull-core::filter` over the session;
   the grid binds to the filtered+sorted view. Counts shown per filter state.
