@@ -461,15 +461,19 @@ fn scrollbar_sits_between_grid_and_panel() {
     let px = dec.decode().expect("decode snapshot");
     let (w, h) = dec.dimensions().expect("dims");
     let (x0, x1) = ((w as f64 * 0.779) as usize, (w as f64 * 0.792) as usize);
-    let (y0, y1) = ((h as f64 * 0.08) as usize, (h as f64 * 0.60) as usize);
+    let (y0, y1) = ((h as f64 * 0.05) as usize, (h as f64 * 0.70) as usize);
     let bright = (y0..y1)
         .flat_map(|y| (x0..x1).map(move |x| (y * w + x) * 3))
         .filter(|i| {
             0.299 * px[*i] as f64 + 0.587 * px[*i + 1] as f64 + 0.114 * px[*i + 2] as f64 > 120.0
         })
         .count();
+    // Threshold sized against BOTH outcomes with margin: a buried/missing
+    // thumb reads 0 bright px; a rendered thumb reads ~90 on a 1x-scale
+    // CI runner (observed) and 100+ at 1.25x locally. 40 discriminates
+    // with headroom either way (CI flaked at the old 100).
     assert!(
-        bright > 100,
+        bright > 40,
         "no scrollbar thumb in the grid/panel seam ({bright} bright px) — \
          bar buried under the panel or not rendered (issue #12 / ui-grid.md)"
     );
