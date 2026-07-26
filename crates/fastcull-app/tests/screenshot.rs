@@ -19,16 +19,34 @@ fn shoot(args: &[&str], out: &Path) {
 /// child must be killed, not block the harness forever (validator M2; the
 /// issue #12 test initially bypassed this via a bare `Command::status()`).
 fn shoot_env(args: &[&str], envs: &[(&str, &str)], out: &Path) {
+    shoot_env_stderr(args, envs, out);
+}
+
+/// Watchdogged run that also captures stderr (for FASTCULL_TRACE
+/// assertions). Every test that spawns the app goes through this — a bare
+/// `Command::output()`/`status()` has no deadline and hangs the harness
+/// (validator M2, re-found on the issue #6 test).
+fn shoot_env_stderr(args: &[&str], envs: &[(&str, &str)], out: &Path) -> String {
     let bin = env!("CARGO_BIN_EXE_fastcull-app");
     let mut cmd = std::process::Command::new(bin);
     cmd.args(args)
         .arg("--screenshot")
         .arg(out)
-        .env("FASTCULL_NO_CACHE", "1"); // never touch the user's real cache
+        .env("FASTCULL_NO_CACHE", "1") // never touch the user's real cache
+        .stderr(std::process::Stdio::piped());
     for (k, v) in envs {
         cmd.env(k, v);
     }
     let mut child = cmd.spawn().expect("spawn app");
+    // Drain stderr on a thread so a chatty child can't fill the pipe and
+    // deadlock against our try_wait loop.
+    let mut stderr_pipe = child.stderr.take().expect("stderr piped");
+    let drain = std::thread::spawn(move || {
+        use std::io::Read;
+        let mut buf = String::new();
+        stderr_pipe.read_to_string(&mut buf).ok();
+        buf
+    });
     // Strictly beyond the app's own 60 s readiness cap (measured from timer
     // start, i.e. after startup/scan): the cap must be able to fire and
     // exit(1) with its diagnostic BEFORE this harness gives up, or a slow
@@ -36,11 +54,16 @@ fn shoot_env(args: &[&str], envs: &[(&str, &str)], out: &Path) {
     let deadline = Instant::now() + Duration::from_secs(90);
     loop {
         if let Some(status) = child.try_wait().expect("wait") {
-            assert!(status.success(), "app exited with {status}");
-            break;
+            let stderr = drain.join().unwrap_or_default();
+            assert!(
+                status.success(),
+                "app exited with {status}; stderr:\n{stderr}"
+            );
+            return stderr;
         }
         if Instant::now() >= deadline {
             child.kill().ok();
+            drain.join().ok();
             panic!("screenshot run timed out (no exit within 90 s)");
         }
         std::thread::sleep(Duration::from_millis(200));
@@ -108,7 +131,25 @@ fn serial() -> std::sync::MutexGuard<'static, ()> {
 }
 
 fn out_dir() -> PathBuf {
-    let dir = std::env::temp_dir().join(format!("fastcull-shots-{}", std::process::id()));
+    // Best-effort reaping of STALE sibling dirs first: each run leaks a
+    // pid-named dir (~6 MB of JPEGs), and on a tmpfs /tmp the accumulation
+    // has exhausted the disk quota twice (QE finding). One hour of grace
+    // keeps concurrent/recent runs (and their failure artifacts) intact.
+    let tmp = std::env::temp_dir();
+    if let Ok(entries) = std::fs::read_dir(&tmp) {
+        let cutoff = std::time::SystemTime::now() - Duration::from_secs(3600);
+        for e in entries.flatten() {
+            let name = e.file_name();
+            let stale = name.to_string_lossy().starts_with("fastcull-shots-")
+                && e.metadata()
+                    .and_then(|m| m.modified())
+                    .is_ok_and(|t| t < cutoff);
+            if stale {
+                std::fs::remove_dir_all(e.path()).ok();
+            }
+        }
+    }
+    let dir = tmp.join(format!("fastcull-shots-{}", std::process::id()));
     std::fs::create_dir_all(&dir).unwrap();
     dir
 }
@@ -455,6 +496,62 @@ fn empty_folder_renders_chrome_and_empty_state() {
     assert!(
         var > 1.0,
         "empty-state frame is uniform — no chrome/message rendered (variance {var:.2})"
+    );
+}
+
+/// Issue #6 smoke: rapid keyboard navigation at 1:1 must never fold a
+/// phantom "drag" into pan_center (the capture_pan trace fires on any
+/// fold — during pure keyboard nav there must be none) and must exit
+/// cleanly. LIMITATION, recorded in the issue: the visible 0x0-frame
+/// symptom needs the GPU renderer + real key repeat and is NOT
+/// reproducible under the software renderer — the structural fix (the
+/// overlay is visibility-toggled, never re-created) plus this misfold
+/// guard is what CAN be checked headlessly; the visual check stays
+/// manual per the machine-freeze protocol.
+#[test]
+fn rapid_nav_at_one_to_one_never_folds_a_phantom_drag() {
+    if !has_display() {
+        eprintln!("screenshot smoke skipped: no display server");
+        return;
+    }
+    let _s = serial();
+    let dir = out_dir().join("rapid-nav");
+    std::fs::create_dir_all(&dir).unwrap();
+    for (src, dst) in [
+        ("A1_full_compressed.ARW", "a.ARW"),
+        ("A1_full_lossless_compressed.ARW", "b.ARW"),
+        ("A1_full_uncompressed.ARW", "c.ARW"),
+    ] {
+        std::fs::copy(raws_dir().join(src), dir.join(dst)).unwrap();
+    }
+    let out = out_dir().join("rapid-nav.jpg");
+    let stderr = shoot_env_stderr(
+        &["--start-11", dir.to_str().unwrap()],
+        &[
+            ("FASTCULL_TRACE", "1"),
+            // The whole barrage sits BELOW the shutter's 1500 ms floor, so
+            // every key fires before the earliest possible snapshot — with
+            // real margin on release runners where all rungs decode in
+            // ~400 ms and the readiness gate would otherwise open early
+            // (validator: the old 1400+ timing sat exactly at the
+            // assertion threshold, one scheduler flip from failure).
+            (
+                "FASTCULL_DRIVE",
+                "700:right;750:left;800:right;850:left;900:right;950:left;1000:right;1050:left",
+            ),
+        ],
+        &out,
+    );
+    let fired = stderr.lines().filter(|l| l.contains("drive: ")).count();
+    assert!(
+        fired >= 6,
+        "nav barrage never ran ({fired} drive marks) — shutter fired too early, retune timings:\n{stderr}"
+    );
+    let folds: Vec<&str> = stderr.lines().filter(|l| l.contains("pan fold")).collect();
+    assert!(
+        folds.is_empty(),
+        "phantom drag folded into pan_center during keyboard-only nav:\n{}",
+        folds.join("\n")
     );
 }
 

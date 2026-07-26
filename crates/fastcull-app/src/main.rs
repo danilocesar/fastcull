@@ -1791,6 +1791,13 @@ fn capture_pan(win: &MainWindow, st: &mut AppState) {
     if !win.get_one2one() {
         return;
     }
+    // Issue #6 guard: only fold offsets back for the image we last drove
+    // the overlay FOR. Mid-navigation, a readback delta is a Flickable
+    // clamp/init artifact, never a user drag — the hand is on the arrow
+    // key, not the mouse.
+    if st.last_overlay_cursor != Some(st.cursor) {
+        return;
+    }
     let (vx, vy) = (win.get_loupe_vx(), win.get_loupe_vy());
     let Some((wx, wy)) = st.last_pan_write else {
         return; // overlay not yet driven by us: nothing to fold back
@@ -1802,6 +1809,13 @@ fn capture_pan(win: &MainWindow, st: &mut AppState) {
         fastcull_core::zoompan::frac_at_center(win.get_grid_width(), win.get_loupe_w(), vx),
         fastcull_core::zoompan::frac_at_center(win.get_loupe_area_h(), win.get_loupe_h(), vy),
     );
+    // Forensics for issue #6: a "drag" fold nobody dragged (e.g. a
+    // recreated/clamped Flickable writing back through the two-way
+    // binding) corrupts pan_center mid-navigation.
+    trace_mark(&format!(
+        "pan fold: read {vx:.0},{vy:.0} (last write {wx:.0},{wy:.0}) -> center {:.3},{:.3}",
+        st.pan_center.0, st.pan_center.1
+    ));
     st.last_pan_write = Some((vx, vy));
 }
 

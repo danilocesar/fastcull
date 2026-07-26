@@ -52,6 +52,15 @@ where it is."
   for differing dimensions/orientations (lock 1:1 on the eye, arrow through
   the burst, Y/N each frame). Returning to fit forgets the pan spot — a
   fresh zoom-in re-centers (a stale pan from three images ago is a trap).
+  Implementation rule (issue #6): the zoom overlay is a PERMANENT element
+  whose visibility is toggled — never a conditional (`if`) element. A
+  conditional is re-created on every texture gap during held-arrow
+  navigation, and a fresh Flickable initializes/clamps its viewport
+  before the offset write lands: one 0,0 frame per transition, a visible
+  top-left stream under key repeat. Mid-navigation offset read-backs are
+  never folded into the pan center (`capture_pan` folds only when the
+  overlay still belongs to the cursor's image — the hand is on the arrow
+  key, not the mouse).
 - **Quality rule**: intermediate factors are rendered from the **full-res
   rung** once cached (GPU-downscaled): ANY factor above fit requests the
   top rung outright (`display_long = u32::MAX` — a proportional request

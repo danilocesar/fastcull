@@ -556,7 +556,16 @@ export component MainWindow inherits Window {
         // full-res texture GPU-scaled to loupe-w/h, pannable by drag; a
         // click (press+release without movement — Flickable grabs real
         // drags) re-centers on the clicked point (ui-grid.md zoom ladder).
-        if root.one2one: Rectangle {
+        // ALWAYS instantiated, visibility-toggled — never `if root.one2one`
+        // (issue #6): a conditional element is torn down and re-created on
+        // every texture gap during held-arrow navigation, and a freshly
+        // created Flickable initializes/clamps its viewport before Rust's
+        // offset write lands — one frame at 0,0 per transition, a visible
+        // top-left stream at 20 fps culling. An invisible element is
+        // neither rendered nor hit-tested, so the grid beneath keeps its
+        // input when the overlay is down.
+        Rectangle {
+            visible: root.one2one;
             // Overlay covers the GRID area, not the window: with the IPTC
             // panel open the loupe must not extend under it (issue #12 —
             // Rust sizes the image from grid-width, so a full-window
