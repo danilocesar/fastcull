@@ -64,8 +64,8 @@ Linux AppImage, Windows zip/MSI. DoD: full manual acceptance script in
 specs/00-overview terms: open **5,000** A1 files → cull → IPTC → copy →
 darktable sees everything.
 
-**Packaging partially pulled forward into M5** (2026-07-25), because the user needs a
-Windows executable to test the app long before M7. What already landed:
+**Packaging partially pulled forward into M5** (2026-07-25), because the user
+needs a Windows executable to test the app long before M7. What already landed:
 
 - CI uploads an unsigned Windows test build (`fastcull-windows-x64`) from every run
   of the Windows job — see the "Testing on Windows" section of README.md.

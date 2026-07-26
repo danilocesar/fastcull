@@ -258,7 +258,7 @@ dedicated About dialog is worth its weight — deferred, not forgotten.
   keep it minimal; templates.toml is hand-edited in v1).
 
 **Persona-review defaults adopted 2026-07-25 (user AFK; provisional until
-he confirms, all cheap to change):**
+the user confirms, all cheap to change):**
 - **Inbox-zero empty state (G2)**: when the filtered view empties, the grid
   shows an empty-state message with final counts ("0 unmarked — N picked,
   M rejected"), no cursor. If it happens while in loupe, the view drops

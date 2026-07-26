@@ -70,8 +70,8 @@ jobs:
       # is only produced once this job's own checks have passed.
       #
       # `-C target-feature=+crt-static` links the Microsoft C runtime into
-      # the .exe instead of loading it from the machine at start-up. The user
-      # can then copy the file to any Windows box without first installing
+      # the .exe instead of loading it from the machine at start-up. The
+      # user can then copy the file to any Windows box without first installing
       # the "Visual C++ Redistributable".
       #
       # `--target x86_64-pc-windows-msvc` is what keeps that flag honest and

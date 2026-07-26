@@ -2382,8 +2382,8 @@ fn refresh_inner(win: &MainWindow, state: &Rc<RefCell<AppState>>) {
 
 /// Keep a full-res texture, protecting the cursor's and capping at the
 /// prefetch ring size (5 = cursor ±2): the old 3-slot FIFO let the prefetch
-/// evict the focused image itself (validator HIGH finding; the user saw it as
-/// back-arrow quality degradation).
+/// evict the focused image itself (validator HIGH finding; the user saw it
+/// as back-arrow quality degradation).
 fn insert_fullres(st: &mut AppState, index: usize, texture: slint::Image) {
     st.fullres.retain(|(i, _)| *i != index);
     st.fullres.push((index, texture));

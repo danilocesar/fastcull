@@ -1,6 +1,6 @@
 //! THE ZOOM-WALK QUALITY TEST (user-mandated 2026-07-25).
 //!
-//! the user's reproduction: open a folder, press `+` to 2 columns (4 images
+//! The user's reproduction: open a folder, press `+` to 2 columns (4 images
 //! on screen), arrow forward repeatedly — around the 8th image the shown
 //! picture degraded to the upscaled 320 px thumb and never recovered.
 //!

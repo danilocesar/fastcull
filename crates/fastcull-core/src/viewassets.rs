@@ -3,7 +3,7 @@
 //! and — critically — pulls from the engine's cache when no event will come
 //! (an index the engine already served produces NO Ready event; relying on
 //! events alone left pruned-and-revisited cells stuck on the 320 px thumb —
-//! the user's "+4 then arrow 8 times, image 8 looks bad" bug).
+//! the user's "+4 then arrow 8 times, image 8 looks bad" bug report).
 
 use std::collections::HashMap;
 

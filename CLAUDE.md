@@ -37,7 +37,7 @@ Rust lives in `~/.cargo/bin` (rustup, no system packages).
 gets a usefulness review by **almost-human-user**
 (`.claude/agents/almost-human-user.md`) — a persona of a real culling-tool user.
 IN-MY-WAY verdicts and workflow gaps are discussed with the user before coding
-starts; his "Questions for the user" are relayed verbatim.
+starts; his questions for the user are relayed verbatim.
 
 **After implementation**: no step is *completed* — no task marked done, no
 milestone-step commit declared finished — until BOTH project subagents have
@@ -66,5 +66,5 @@ Rules of the gate:
   integration; golden files under `crates/fastcull-core/tests/golden/`.
 - Test data: real RAWs go in `testdata/raws/` (gitignored, fetched by script);
   only tiny synthetic fixtures are committed.
-- User context: a professional Sony A1 shooter, ex-Qt developer, new to
-  Rust. Explanations in PRs/commits should not assume Rust fluency.
+- User context: the user is a professional Sony A1 shooter, ex-Qt developer,
+  new to Rust. Explanations in PRs/commits should not assume Rust fluency.
