@@ -16,7 +16,8 @@
   deterministic and folder-content-driven: NO include/ignore setting in
   v1 (persona IN-MY-WAY on invisible toggle state via env/CLI; the
   user's requested setting arrives as "show paired JPEGs too" WITH the
-  Settings dialog, and this rule stays its default). Only a REAL FILE
+  Settings dialog, and this rule stays its default — tracked as issue
+  #15, postponed). Only a REAL FILE
   counts as a hiding RAW: a directory or broken symlink named
   `DSC001.ARW` does not swallow `DSC001.JPG` (the hiding rationale
   presumes a shown RAW). Non-UTF8 stems import both sides — a name
