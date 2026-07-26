@@ -15,22 +15,22 @@ writes goes into industry-standard XMP sidecar files next to your images.
 
 ## What it looks like
 
-![Culling a folder in FastCull: grid, picks, loupe, 1:1](docs/assets/fastcull-cull.gif)
+<img src="docs/assets/fastcull-cull.gif" alt="Culling a folder in FastCull: grid, picks, loupe, 1:1" width="720">
 
 A culling pass in six beats: open a folder, mark picks and rejects from the
 keyboard, check a frame in the loupe, punch in to 1:1.
 
-![Thumbnail grid with picks, rejects and live filter counts](docs/assets/fastcull-grid.jpg)
+<img src="docs/assets/fastcull-grid.jpg" alt="Thumbnail grid with picks, rejects and live filter counts" width="560">
 
 The grid mid-cull: star and X badges on marked frames, live pick/reject/unmarked
 counts in the filter bar.
 
-![Loupe fit view](docs/assets/fastcull-loupe.jpg)
+<img src="docs/assets/fastcull-loupe.jpg" alt="Loupe fit view" width="560">
 
 The loupe fit view — one keystroke from the grid, rendered from the camera's
 embedded JPEG.
 
-![1:1 pixel view of a 50 MP Sony A1 file](docs/assets/fastcull-1to1.jpg)
+<img src="docs/assets/fastcull-1to1.jpg" alt="1:1 pixel view of a 50 MP Sony A1 file" width="560">
 
 1:1 on a 50 MP A1 file: chrome drops away, pixels only.
 

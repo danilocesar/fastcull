@@ -134,4 +134,6 @@ BLAKE3 verification is the only truth at copy time.
 - [x] No partial files after simulated failure (temp-name copy verified) —
       asserted inside execute_copies_verifies_and_isolates_failures.
 - [ ] Cross-platform: paths with spaces/Unicode; Windows reserved-name rejection
+      — DEFERRED with the user's explicit OK (2026-07-26, "low priority"),
+      tracked as issue #10; spaces/Unicode half already QE-verified
       (`CON`, `NUL`, trailing dots) at plan time.

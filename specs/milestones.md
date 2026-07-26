@@ -60,12 +60,6 @@ default, BLAKE3 verification, sidecar lockstep.
 
 ## M7 — Bursts + packaging
 
-**Docs deliverable (user request 2026-07-26, issue #9)**: a `docs/` usage
-guide distilled from the specs — plain Markdown, web-readable (GitHub
-renderer; Pages-ready) — ships with the v1 release. Drafting may start any
-time after M6 (behavior M2–M6 is stable and specced); each page is
-reviewed whenever its source module spec changes.
-
 burst.rs grouping + border rendering + in-burst filter. cargo-dist packaging:
 Linux AppImage, Windows zip/MSI. DoD: full manual acceptance script in
 specs/00-overview terms: open **5,000** A1 files → cull → IPTC → copy →
@@ -85,3 +79,12 @@ Still owned by M7: **Linux AppImage** and **Windows MSI** (dist can generate an 
 via its `msi` installer; AppImage needs separate tooling), and the end-to-end
 verification of the release workflow itself — no tag has been pushed yet, so the
 Windows leg of `release.yml` and the GitHub Release step have never executed.
+
+## M8 — Documentation (user decision 2026-07-26)
+
+A `docs/` usage guide distilled from the specs (issue #9): plain Markdown,
+web-readable (GitHub renderer; Pages-ready later). Task-oriented pages —
+quick start, culling & keyboard, metadata & templates, copy-picks, FAQ —
+written as simply as possible; each page is reviewed whenever its source
+module spec changes. DoD: a newcomer can go from "downloaded the app" to
+"copied verified picks" using docs/ alone.
