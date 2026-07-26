@@ -40,15 +40,12 @@ where it is."
 - **`Z`**: from fit → 1:1; from 1:1 OR any intermediate factor → back to fit
   (user decision: `Z` below 1:1 is the escape hatch, not "show me pixels").
   One keystroke each way, always.
-- **Click-to-zoom** (user: yes): a click is always "center HERE" (user
-  decision 2026-07-25: "single clicks centralize the image in the clicked
-  point"). At fit it jumps straight to **1:1 anchored on the clicked
-  point**; at 1:1 it re-centers the view on the clicked point (no zoom
-  change — `Z` is the exit, no gesture is wasted on what a key does); at an
-  intermediate factor it goes to 1:1 at the point (persona default, one
-  line to flip: below 1:1 a click means "show me pixels HERE"). Click fires
-  only on press+release without movement — it must not fight the pan drag.
-  Drag-pan keeps working at every factor above fit.
+- **Click-to-zoom**: a single click is always "center HERE" (user decision
+  2026-07-25: "single clicks centralize the image in the clicked point"),
+  and **double-click** is the gesture that reaches 1:1 (user decision
+  2026-07-26, superseding the earlier "single click at fit jumps to 1:1"
+  rule). Full gesture table in *Mouse & pointer contract* below — that
+  section is the source of truth for anything the mouse does.
 - **Persistence across images (contract, was accident)**: navigating or
   pick/reject-advancing to another image keeps BOTH the zoom factor and the
   pan center, carried as a **fractional center of the image** and clamped
@@ -66,6 +63,111 @@ where it is."
 - `G`/Esc from an intermediate factor → grid at the previous grid zoom, the
   factor is discarded (re-entering the loupe starts at fit; persistence is
   for walking images INSIDE the loupe, not across grid round-trips).
+
+## Mouse & pointer contract (state machine) — user request 2026-07-26, issue #11
+
+The mouse means different things in the grid and in the loupe, and the
+difference is not a pile of `if`s scattered through the app crate: **pointer
+behavior is defined by an explicit state machine whose state is the zoom
+level**. This section is the source of truth for every mouse gesture; the
+transition table below is the specification the implementation's tests are
+written against.
+
+The driving user requirement (2026-07-26, verbatim intent): *in the
+multi-image view the wheel scrolls the grid as it does today; once a single
+image is shown the wheel stops scrolling and starts zooming; a click centers
+the clicked point; a double-click goes to 1:1 with the clicked point
+centered; click-and-drag moves the image once you are in the single-image
+view or deeper; dragging in the multi-image view is reserved for later.*
+
+### States
+
+| State | Meaning |
+|---|---|
+| `Grid { columns: N }`, `N ∈ {12, 8, 6, 4, 3, 2}` | multi-image view |
+| `Fit` | single image, zoom factor `1.0` (the whole image is on screen) |
+| `Zoomed { factor }`, `1.0 < factor ≤ max` | single image, above fit; `factor == max` is 1:1 |
+
+`N = 1` is not a grid state — one column IS the loupe, i.e. `Fit` or
+`Zoomed`. The state machine holds no other state: marks, cursor, filter and
+selection are untouched by it.
+
+### Inputs
+
+Raw Slint pointer events are normalized before they reach the machine:
+`Wheel { notches, pos }`, `CtrlWheel { notches, pos }`, `Click { pos }`,
+`DoubleClick { pos }`, `DragStart { pos }`, `Drag { dx, dy }`, `DragEnd`.
+`pos` is a point in the view area; the machine converts it to a fractional
+image coordinate via the existing `zoompan::contain_click_frac`.
+
+### Transition table (the contract)
+
+| Input | `Grid { N }` | `Fit` | `Zoomed { factor }` |
+|---|---|---|---|
+| Wheel up | scroll the view up; cursor unmoved (browsing) | **zoom in** one ladder stop → `Zoomed { 1.5 }`, anchored under the pointer | one ladder stop up, anchored under the pointer; caps exactly at 1:1 |
+| Wheel down | scroll the view down; cursor unmoved | **nothing** (clamped — user decision 2026-07-26: the wheel never falls out of the loupe; `-`/`G`/`Esc` are the exits) | one ladder stop down, anchored under the pointer; a step landing on `1.0` → `Fit` |
+| Ctrl+Wheel | grid zoom in/out (still deferred, see M2 note) | same as Wheel | same as Wheel |
+| Click | move the cursor to that cell + collapse the multi-selection (issue #7); Ctrl/Shift variants per the cursor contract | record the clicked point as the pan center; **no visible move** (the whole image is on screen) | re-center the view on the clicked point; factor unchanged |
+| Double-click | **reserved** — the first click already moved the cursor, the second repeats it harmlessly (see Open questions) | → **1:1 with the clicked point centered** | → **1:1 with the clicked point centered** (already at 1:1: re-center only) |
+| Drag | scroll the view (Flickable kinetic drag, today's behavior — **kept**); rubber-band multi-select is the reserved future gesture | **nothing** — nothing is off-screen, so there is no pan axis | **pan the image**, 1:1 with pointer motion, clamped so the image never detaches from the viewport edges |
+
+Rules that the table alone does not carry:
+
+- **Wheel anchor is the pointer, not the center** (user decision
+  2026-07-26): the image point under the cursor stays under the cursor as
+  the factor changes — you wheel toward an eye without clicking first. This
+  deliberately differs from `+`/`-`/`Z`, which keep the *view center* fixed
+  (Loupe zoom ladder above); both are correct, because a key has no
+  position and the wheel does. When the pan clamp makes the anchor
+  impossible (image edge), the clamp wins and the anchor drifts — the image
+  never detaches from an edge.
+- **One notch = one ladder stop.** The wheel walks the identical `1.5ⁿ`
+  stops as `+`/`-` (`zoompan::ladder_up`/`ladder_down`), so wheel and keys
+  can never desync. High-resolution / kinetic wheels accumulate delta and
+  emit one stop per notch-equivalent — never one stop per delta event.
+- **Click/double-click need no timer.** Slint fires `clicked` before
+  `double-clicked`, and single-click's action (center on P) is a strict
+  prefix of double-click's (center on P, then go to 1:1 at P) — so the
+  intermediate state is invisible and no click needs to be held back
+  waiting for a possible second one.
+- **Drag beats click.** A click fires only on press+release without
+  movement beyond the drag threshold; once a drag starts, the release
+  produces no click and no double-click.
+- Everything else in the loupe is unchanged: the 1:1 ceiling, the
+  center-anchored keyboard ladder, zoom/pan persistence across images, and
+  the full-res quality rule (any factor above fit renders from the top
+  rung) all apply exactly as specified above.
+
+### Implementation contract (user requirement: "managed by a state machine")
+
+- The machine lives in **`fastcull-core`** (rule 5 — the app crate is a thin
+  Slint bridge): a pure `ViewState` + `PointerInput` → `(ViewState, Action)`
+  step function with no Slint types and no I/O. Geometry (viewport size,
+  native size, fit scale, 1:1 ceiling, current pan center) is passed in per
+  call; the machine calls the existing `zoompan` math rather than
+  duplicating it.
+- The app crate's job is only to normalize Slint events into `PointerInput`
+  and to apply the returned `Action`s. **No zoom/pan branching in the app
+  crate** — a gesture whose behavior cannot be read off the table above is
+  a bug in the machine, not in the bridge.
+- Every (state, input) pair is handled explicitly. Reserved combinations
+  return an explicit "no action, reserved" variant, never a silent
+  fallthrough — that is what makes the future rubber-band select and grid
+  double-click cheap and visible.
+- Known Slint risk (same one that deferred Ctrl+scroll grid zoom in M2): the
+  loupe's `Flickable` consumes wheel events, so the loupe overlay must
+  intercept them via a `TouchArea` `scroll-event` handler returning
+  `EventResult.accept`. If that proves impossible without breaking
+  drag-pan, the wheel-zoom half of this feature is reported as blocked
+  rather than half-landed.
+
+### Open questions (deferred, need a user decision before they are built)
+
+- **Double-click on a grid cell**: currently reserved/no-op. The obvious
+  candidate is "open that image in the loupe at fit", which no gesture
+  covers today — not specified until the user says so.
+- Pinch/trackpad gestures and momentum scrolling are out of scope here;
+  they reuse the same machine when they land.
 
 ## Virtualization (the M2 prototype risk)
 
@@ -174,7 +276,10 @@ brightening during wheel scrolling (needs an activity decay timer).
 | `U` | clear mark |
 | `+` / `-` / Ctrl+scroll | zoom in/out (grid columns → loupe fit → ×1.5 ladder → 1:1, center-anchored; see Loupe zoom ladder) |
 | `Z` | from fit: jump to 1:1; from 1:1 or any intermediate factor: back to fit; from a grid zoom: jump straight to loupe 1:1 |
-| click (loupe) | center HERE: at fit/intermediate → 1:1 anchored on the clicked point; at 1:1 → re-center on the clicked point |
+| wheel | grid: scroll the view; loupe: zoom one ladder stop, anchored under the pointer (down at fit does nothing) — see Mouse & pointer contract |
+| click (loupe) | center on the clicked point (no factor change) |
+| double-click (loupe) | 1:1 with the clicked point centered |
+| drag | grid: scroll; loupe above fit: pan the image |
 | `G` or `Esc` | back to the grid at the previous grid zoom (from loupe/1:1) |
 | `I` | toggle IPTC panel |
 | `K` | focus the keyword field, opening the IPTC panel if needed (persona G3; implemented with the panel step — K is never a dead key) |
@@ -288,6 +393,13 @@ the user confirms, all cheap to change):**
       session, counts included.
 - [ ] Windowed-model tests (core side): visible-range → model-window computation,
       incl. partial rows, tiny folders, and N=1.
+- [ ] Pointer state machine (core side, issue #11): a table-driven test that
+      enumerates EVERY (state, input) pair of the Mouse & pointer contract
+      table and asserts the resulting state + action — including the
+      reserved no-ops. Plus: wheel-up at fit anchors the pointer's image
+      point (not the center), wheel notches land on the same `1.5ⁿ` stops as
+      `+`/`-`, wheel-down at fit is inert, a drag suppresses the click, and
+      pan offsets stay clamped to the image bounds at every factor.
 - [x] Slint screenshot smoke tests (`fastcull-app --screenshot <out>` +
       `tests/screenshot.rs`): grid placeholder (synthetic), loaded thumbnails
       (texture-variance asserted), failed-badge session, loupe fit
