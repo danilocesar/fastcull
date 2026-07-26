@@ -44,14 +44,30 @@ case-preservingly (first spelling wins; comparison is Unicode-casefolded).
 
 ## Apply semantics
 
-- Apply to selection: each **non-empty** template field overwrites that field on
-  every selected image; empty template fields leave existing values untouched.
+- Apply to selection — tri-state per field (user decision 2026-07-25 after
+  the Photo Mechanic research; supersedes the earlier "empty preserves"
+  rule): an **absent** field preserves existing values; a **non-empty**
+  field overwrites; an **empty string** CLEARS the field on every selected
+  image (PM's ticked-but-empty case — "cover our asses"). Clearing REMOVES
+  the XMP property, never writes an empty value (interop). The empty-string
+  encoding is the TOML wire format ONLY: in the panel UI, bare emptiness
+  always preserves, and clearing is an explicit per-field control with an
+  unmistakable visual state (persona IN-MY-WAY on making emptiness the
+  gesture). Because this flips the meaning of `field = ""` in hand-edited
+  files, template load emits a WARNING naming template and field for every
+  empty-string field it finds. Whitespace-only values count as empty
+  everywhere in this rule (validator: "   " was neither a clear nor a
+  meaningful overwrite, and the sidecar reader drops whitespace-only
+  values on round-trip — so they clear, and they warn).
 - Keyword apply is additive (union), not replacement.
 - Manual panel edit on a multi-selection behaves the same way, field-by-field.
-- Revert: the session keeps the pre-apply IPTC state of the **last** batch apply
-  and offers "Revert last apply" (single level, cleared by the next apply or
-  session close). There is no general undo stack in v1 (user decision after
-  persona review, which flagged the previous wording as a dangling promise).
+- Revert: ONE shared single-level slot (user decision 2026-07-25, persona
+  recommendation) armed by EVERY batch mutation from the panel — template
+  Apply, a manual field commit to a multi-selection, and keyword-chip
+  removal alike; the button label reflects what it will revert. Cleared by
+  the next batch mutation or session close. There is no general undo stack
+  in v1 (user decision after persona review, which flagged the previous
+  wording as a dangling promise).
 
 ## Acceptance criteria (tests)
 
@@ -59,7 +75,9 @@ case-preservingly (first spelling wins; comparison is Unicode-casefolded).
       digits), `{{`-escaping, unknown-variable error naming field+variable
       (`every_variable_expands`, `seq_pads_to_batch_width_and_explicit_n`,
       `brace_escapes_and_errors`, `bad_seq_width_gets_its_own_error`).
-- [x] Batch apply over 3 synthetic images: non-empty overwrites, empty preserves,
+- [x] Batch apply over 3 synthetic images: non-empty overwrites, absent
+      preserves, empty CLEARS (tri-state; warning test covers the load-time
+      notice),
       keywords union, deterministic `{seq}` ordered by the active sort order
       (`batch_apply_overwrites_preserves_unions_and_orders_seq`). CAVEAT
       (recorded 2026-07-25): `{seq}` order is a CALLER CONTRACT — apply takes

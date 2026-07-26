@@ -39,11 +39,14 @@ pub enum XmpError {
 }
 
 /// State FastCull understands inside a sidecar. Everything else in the file
-/// is preserved verbatim but not modeled.
+/// is preserved verbatim but not modeled. `iptc.keywords` mirrors the
+/// `dc:subject` bag; the other IPTC fields follow the xmp-sidecars.md
+/// mapping table (M5 panel).
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
 pub struct SidecarState {
     pub pick: PickState,
     pub keywords: Vec<String>,
+    pub iptc: crate::iptc::IptcData,
 }
 
 /// `DSC01234.ARW` → `DSC01234.ARW.xmp` (darktable's convention; the
@@ -84,14 +87,26 @@ pub fn read_sidecar(path: &Path) -> Result<SidecarState, XmpError> {
     let mut in_subject = false;
     let mut in_li = false;
     let mut in_rating_element = false;
+    // IPTC field currently being read (element form): set on Start of a
+    // mapped property, harvested from Text (directly or inside its
+    // Alt/Seq rdf:li), cleared on the matching End.
+    let mut in_iptc_field: Option<&'static str> = None;
     let mut buf = Vec::new();
     loop {
-        match reader.read_event_into(&mut buf)? {
-            Event::Start(e) | Event::Empty(e) => {
+        let event = reader.read_event_into(&mut buf)?;
+        match event {
+            Event::Start(ref e) | Event::Empty(ref e) => {
+                // Stateful flags arm ONLY on real Start events: an Empty
+                // (self-closed) element never produces the End that clears
+                // them (gate H1: <photoshop:City/> captured the next text
+                // node anywhere — losing element-form ratings and surfacing
+                // foreign payloads as IPTC values).
+                let is_start = matches!(event, Event::Start(_));
                 let qname = e.name();
                 let name = local_name(qname.as_ref());
-                if is_rdf_description(&e) {
-                    // xmp:Rating as attribute.
+                if is_rdf_description(e) {
+                    // xmp:Rating and simple IPTC properties as attributes
+                    // (compact XMP form, common from exiv2/Lightroom).
                     for attr in e.attributes() {
                         let attr = attr?;
                         if matches!(attr.key.as_ref(), b"xmp:Rating" | b"xap:Rating") {
@@ -100,14 +115,22 @@ pub fn read_sidecar(path: &Path) -> Result<SidecarState, XmpError> {
                                     state.pick = rating_to_pick(r);
                                 }
                             }
+                        } else if let Some(field) = iptc_field_for(local_name(attr.key.as_ref())) {
+                            if let Ok(v) = std::str::from_utf8(&attr.value) {
+                                if !v.trim().is_empty() {
+                                    set_iptc_field(&mut state.iptc, field, v.trim());
+                                }
+                            }
                         }
                     }
                 } else if name == b"subject" {
-                    in_subject = true;
+                    in_subject = is_start;
                 } else if name == b"li" && in_subject {
-                    in_li = true;
+                    in_li = is_start;
                 } else if matches!(e.name().as_ref(), b"xmp:Rating" | b"xap:Rating") {
-                    in_rating_element = true;
+                    in_rating_element = is_start;
+                } else if let Some(field) = iptc_field_for(name) {
+                    in_iptc_field = if is_start { Some(field) } else { None };
                 }
             }
             Event::End(e) => {
@@ -119,12 +142,21 @@ pub fn read_sidecar(path: &Path) -> Result<SidecarState, XmpError> {
                     in_li = false;
                 } else if matches!(e.name().as_ref(), b"xmp:Rating" | b"xap:Rating") {
                     in_rating_element = false;
+                } else if iptc_field_for(name).is_some() {
+                    in_iptc_field = None;
                 }
             }
             Event::Text(t) => {
                 let text = t.unescape()?.into_owned();
                 if in_li && in_subject && !text.trim().is_empty() {
                     state.keywords.push(text.trim().to_string());
+                } else if let (Some(field), false) = (in_iptc_field, text.trim().is_empty()) {
+                    // Element form: the text sits directly in the property
+                    // or inside its rdf:Alt/rdf:Seq li — either way the
+                    // first non-empty text wins (x-default first by
+                    // convention; multi-li creator joins are v2).
+                    set_iptc_field(&mut state.iptc, field, text.trim());
+                    in_iptc_field = None;
                 } else if in_rating_element {
                     if let Ok(r) = text.trim().parse::<i32>() {
                         state.pick = rating_to_pick(r);
@@ -136,7 +168,48 @@ pub fn read_sidecar(path: &Path) -> Result<SidecarState, XmpError> {
         }
         buf.clear();
     }
+    state.iptc.keywords = state.keywords.clone();
     Ok(state)
+}
+
+/// Map an XML local name to the IptcData field it feeds (xmp-sidecars.md
+/// table). Matching by local name accepts alias prefixes, symmetric with
+/// the keyword reader.
+fn iptc_field_for(local: &[u8]) -> Option<&'static str> {
+    Some(match local {
+        b"title" => "title",
+        b"description" => "description",
+        b"creator" => "creator",
+        b"rights" => "rights",
+        b"Headline" => "headline",
+        b"City" => "city",
+        b"Country" => "country",
+        b"Credit" => "credit",
+        b"Source" => "source",
+        b"TransmissionReference" => "job_id",
+        b"Location" => "location",
+        _ => return None,
+    })
+}
+
+fn set_iptc_field(iptc: &mut crate::iptc::IptcData, field: &str, value: &str) {
+    let slot = match field {
+        "title" => &mut iptc.title,
+        "description" => &mut iptc.description,
+        "creator" => &mut iptc.creator,
+        "rights" => &mut iptc.rights,
+        "headline" => &mut iptc.headline,
+        "city" => &mut iptc.city,
+        "country" => &mut iptc.country,
+        "credit" => &mut iptc.credit,
+        "source" => &mut iptc.source,
+        "job_id" => &mut iptc.job_id,
+        "location" => &mut iptc.location,
+        _ => return,
+    };
+    if slot.is_none() {
+        *slot = Some(value.to_string()); // first value wins
+    }
 }
 
 fn local_name(qname: &[u8]) -> &[u8] {
@@ -547,6 +620,81 @@ mod tests {
         assert!(text.contains("People/Ana"), "digiKam list preserved");
         assert!(text.contains("dt:history"), "darktable history preserved");
         assert!(text.contains("xmp:Rating=\"1\""), "rating preserved");
+        std::fs::remove_dir_all(&dir).ok();
+    }
+
+    /// IPTC field reading (M5 panel): element form (darktable-style
+    /// Alt/Seq containers) and compact attribute form (exiv2/LR-style)
+    /// both land in SidecarState.iptc per the mapping table.
+    #[test]
+    fn iptc_fields_read_element_and_attribute_forms() {
+        let dir = tmp();
+        let sc = dir.join("f.ARW.xmp");
+        std::fs::write(
+            &sc,
+            r#"<?xpacket begin="" id="W5M0MpCehiHzreSzNTczkc9d"?>
+<x:xmpmeta xmlns:x="adobe:ns:meta/">
+ <rdf:RDF xmlns:rdf="http://www.w3.org/1999/02/22-rdf-syntax-ns#">
+  <rdf:Description rdf:about="" xmlns:dc="http://purl.org/dc/elements/1.1/"
+    xmlns:photoshop="http://ns.adobe.com/photoshop/1.0/"
+    xmlns:Iptc4xmpCore="http://iptc.org/std/Iptc4xmpCore/1.0/xmlns/"
+    photoshop:City="Sintra" photoshop:TransmissionReference="JOB-7"
+    Iptc4xmpCore:Location="Palácio da Pena">
+   <dc:title><rdf:Alt><rdf:li xml:lang="x-default">Herons</rdf:li></rdf:Alt></dc:title>
+   <dc:creator><rdf:Seq><rdf:li>João Ribeiro</rdf:li></rdf:Seq></dc:creator>
+   <photoshop:Headline>Morning hunt</photoshop:Headline>
+  </rdf:Description>
+ </rdf:RDF>
+</x:xmpmeta>
+<?xpacket end="w"?>
+"#,
+        )
+        .unwrap();
+        let state = read_sidecar(&sc).unwrap();
+        assert_eq!(state.iptc.title.as_deref(), Some("Herons"));
+        assert_eq!(state.iptc.creator.as_deref(), Some("João Ribeiro"));
+        assert_eq!(state.iptc.headline.as_deref(), Some("Morning hunt"));
+        assert_eq!(state.iptc.city.as_deref(), Some("Sintra"));
+        assert_eq!(state.iptc.job_id.as_deref(), Some("JOB-7"));
+        assert_eq!(state.iptc.location.as_deref(), Some("Palácio da Pena"));
+        assert_eq!(state.iptc.description, None, "unset stays None");
+        std::fs::remove_dir_all(&dir).ok();
+    }
+
+    /// Gate H1 regression: a SELF-CLOSED mapped property must not arm the
+    /// field reader — it captured the next text node anywhere (losing
+    /// element-form ratings, surfacing darktable history as IPTC values).
+    #[test]
+    fn self_closed_mapped_element_leaks_nothing() {
+        let dir = tmp();
+        let sc = dir.join("g.ARW.xmp");
+        std::fs::write(
+            &sc,
+            r#"<?xpacket begin="" id="W5M0MpCehiHzreSzNTczkc9d"?>
+<x:xmpmeta xmlns:x="adobe:ns:meta/">
+ <rdf:RDF xmlns:rdf="http://www.w3.org/1999/02/22-rdf-syntax-ns#">
+  <rdf:Description rdf:about="" xmlns:photoshop="http://ns.adobe.com/photoshop/1.0/"
+    xmlns:xmp="http://ns.adobe.com/xap/1.0/" xmlns:dt="http://darktable.sf.net/">
+   <photoshop:City/>
+   <xmp:Rating>-1</xmp:Rating>
+   <dt:history>opaquehistoryblob</dt:history>
+   <photoshop:Country></photoshop:Country>
+  </rdf:Description>
+ </rdf:RDF>
+</x:xmpmeta>
+<?xpacket end="w"?>
+"#,
+        )
+        .unwrap();
+        let state = read_sidecar(&sc).unwrap();
+        assert_eq!(state.pick, PickState::Rejected, "rating must survive");
+        assert_eq!(state.iptc.city, None, "self-closed empty stays unset");
+        assert_eq!(state.iptc.country, None, "start+end empty stays unset");
+        let all = format!("{:?}", state.iptc);
+        assert!(
+            !all.contains("opaque"),
+            "foreign payload must not leak: {all}"
+        );
         std::fs::remove_dir_all(&dir).ok();
     }
 

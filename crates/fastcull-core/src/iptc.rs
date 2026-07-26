@@ -11,8 +11,9 @@ use std::path::{Path, PathBuf};
 use thiserror::Error;
 
 /// The IPTC fields FastCull edits (xmp-sidecars.md mapping table). All
-/// optional; `None` = "not set" (distinct from an explicit empty string
-/// only in templates, where empty/absent both mean "leave untouched").
+/// optional; `None` = "not set". In TEMPLATES the tri-state applies (user
+/// decision 2026-07-25): absent = preserve, empty-after-trim = CLEAR on
+/// apply, non-empty = overwrite.
 #[derive(Clone, Debug, Default, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
 pub struct IptcData {
     pub title: Option<String>,
@@ -278,9 +279,10 @@ macro_rules! for_each_field {
     };
 }
 
-/// Apply a template to a batch (spec semantics: non-empty template fields
-/// overwrite, empty/absent fields leave existing values untouched, keywords
-/// union additively). ALL expansions run before ANY image is mutated —
+/// Apply a template to a batch (spec tri-state, 2026-07-25: ABSENT fields
+/// preserve, fields that are EMPTY AFTER TRIMMING clear (field -> None),
+/// non-empty fields overwrite; keywords union additively). ALL expansions
+/// run before ANY image is mutated —
 /// a failing expansion on image 2 of 3 leaves the whole batch unmodified.
 /// `images` and `ctxs` are parallel slices in the ACTIVE SORT ORDER (that
 /// order defines `{seq}`). Returns the pre-apply snapshots for
@@ -293,19 +295,36 @@ pub fn apply_template(
     assert_eq!(images.len(), ctxs.len(), "parallel slices");
     let n = images.len();
 
-    // Phase 1: expand everything (all-or-nothing gate).
+    // Phase 1: expand everything (all-or-nothing gate). Tri-state per
+    // field (user decision 2026-07-25, PM-research round): absent =
+    // preserve, empty string = CLEAR (the field is REMOVED — PM's
+    // ticked-but-empty "cover our asses" case), non-empty = overwrite.
+    enum Planned {
+        Set(String),
+        Clear,
+    }
     struct Plan {
-        fields: Vec<(&'static str, String)>, // (field name, expanded value)
+        fields: Vec<(&'static str, Planned)>,
         keywords: Vec<String>,
     }
     let mut plans = Vec::with_capacity(n);
     for (i, ctx) in ctxs.iter().enumerate() {
         let seq = i + 1;
-        let mut fields: Vec<(&'static str, String)> = Vec::new();
+        let mut fields: Vec<(&'static str, Planned)> = Vec::new();
         macro_rules! plan_field {
             ($f:ident) => {
-                if let Some(raw) = tpl.$f.as_deref().filter(|s| !s.is_empty()) {
-                    fields.push((stringify!($f), expand(stringify!($f), raw, ctx, seq, n)?));
+                match tpl.$f.as_deref() {
+                    None => {}
+                    // Empty AFTER TRIMMING clears (validator M2: "   " was
+                    // neither clear nor meaningful, and the sidecar reader
+                    // drops whitespace-only values on round-trip anyway).
+                    Some(blank) if blank.trim().is_empty() => {
+                        fields.push((stringify!($f), Planned::Clear))
+                    }
+                    Some(raw) => fields.push((
+                        stringify!($f),
+                        Planned::Set(expand(stringify!($f), raw, ctx, seq, n)?),
+                    )),
                 }
             };
         }
@@ -327,7 +346,10 @@ pub fn apply_template(
             macro_rules! set_field {
                 ($f:ident) => {
                     if name == stringify!($f) {
-                        img.$f = Some(value.clone());
+                        img.$f = match &value {
+                            Planned::Set(v) => Some(v.clone()),
+                            Planned::Clear => None, // property removed
+                        };
                     }
                 };
             }
@@ -380,6 +402,11 @@ pub fn default_templates_path() -> Option<PathBuf> {
 pub struct TemplateLoad {
     pub templates: Vec<IptcTemplate>,
     pub entry_errors: Vec<String>,
+    /// Non-fatal load warnings, surfaced in the panel (user decision
+    /// 2026-07-25: an empty-string field now CLEARS on apply — existing
+    /// hand-edited files must hear about the semantics change BEFORE a
+    /// 150-pick stamp, not after).
+    pub warnings: Vec<String>,
 }
 
 /// Parse templates.toml content. Format: one `[templates.<name>]` table per
@@ -392,6 +419,7 @@ pub fn parse_templates(content: &str) -> Result<TemplateLoad, IptcError> {
     let mut load = TemplateLoad {
         templates: Vec::new(),
         entry_errors: Vec::new(),
+        warnings: Vec::new(),
     };
     let Some(tables) = root.get("templates") else {
         return Ok(load); // no templates yet: valid empty file
@@ -403,6 +431,18 @@ pub fn parse_templates(content: &str) -> Result<TemplateLoad, IptcError> {
         match value.clone().try_into::<IptcTemplate>() {
             Ok(mut tpl) => {
                 tpl.name = name.clone();
+                macro_rules! warn_empty {
+                    ($f:ident) => {
+                        if tpl.$f.as_deref().is_some_and(|v| v.trim().is_empty()) {
+                            load.warnings.push(format!(
+                                "template '{name}': empty '{}' CLEARS that field on \
+                                 every image it is applied to",
+                                stringify!($f)
+                            ));
+                        }
+                    };
+                }
+                for_each_field!(warn_empty);
                 load.templates.push(tpl);
             }
             Err(e) => load.entry_errors.push(format!("template '{name}': {e}")),
@@ -419,6 +459,7 @@ pub fn load_templates(path: &Path) -> Result<TemplateLoad, IptcError> {
         Err(e) if e.kind() == std::io::ErrorKind::NotFound => Ok(TemplateLoad {
             templates: Vec::new(),
             entry_errors: Vec::new(),
+            warnings: Vec::new(),
         }),
         Err(e) => Err(e.into()),
     }
@@ -539,6 +580,24 @@ mod tests {
         assert_eq!(c.date, "2025-07-24");
     }
 
+    /// Validator M2: whitespace-only template values are CLEAR (and warn),
+    /// never `Some("   ")` — the sidecar reader would drop that on
+    /// round-trip and the value would silently evaporate.
+    #[test]
+    fn whitespace_only_template_value_clears_and_warns() {
+        let (mut images, ctxs) = batch3();
+        images[1].country = Some("Portugal".into());
+        let tpl = IptcTemplate {
+            country: Some("   ".into()),
+            ..Default::default()
+        };
+        apply_template(&tpl, &mut images, &ctxs).unwrap();
+        assert_eq!(images[1].country, None, "whitespace-only clears");
+        let load = parse_templates("[templates.w]\ncountry = \"   \"\n").unwrap();
+        assert_eq!(load.warnings.len(), 1, "whitespace-only warns too");
+        assert!(load.warnings[0].contains("country"));
+    }
+
     #[test]
     fn bad_seq_width_gets_its_own_error() {
         let c = ctx();
@@ -570,16 +629,18 @@ mod tests {
     #[test]
     fn batch_apply_overwrites_preserves_unions_and_orders_seq() {
         let (mut images, ctxs) = batch3();
+        images[0].headline = Some("stale headline".into());
         let tpl = IptcTemplate {
             title: Some("{filename} #{seq}".into()),
             creator: Some("Ana".into()),
             city: None,                // absent: preserve
-            headline: Some("".into()), // empty: preserve
+            headline: Some("".into()), // empty: CLEAR (tri-state)
             keywords: vec!["birds".into(), "{date}".into()],
             ..Default::default()
         };
         let snaps = apply_template(&tpl, &mut images, &ctxs).unwrap();
         assert_eq!(snaps.len(), 3);
+        assert_eq!(snaps[0].headline.as_deref(), Some("stale headline"));
         assert_eq!(images[0].title.as_deref(), Some("DSC00000 #1"));
         assert_eq!(images[2].title.as_deref(), Some("DSC00002 #3"));
         assert_eq!(images[1].creator.as_deref(), Some("Ana"));
@@ -588,7 +649,8 @@ mod tests {
             Some("Old Town"),
             "absent preserves"
         );
-        assert_eq!(images[0].headline, None, "empty preserves");
+        assert_eq!(images[0].headline, None, "empty CLEARS the field");
+        assert_eq!(images[1].headline, None, "clear is a no-op on unset");
         // Union: "birds" folds into existing "Birds" (first spelling wins).
         assert_eq!(images[0].keywords, vec!["Birds", "2026-07-25"]);
         assert_eq!(images[1].keywords, vec!["birds", "2026-07-25"]);
@@ -655,6 +717,7 @@ mod tests {
         save_templates(&path, &tpls).unwrap();
         let load = load_templates(&path).unwrap();
         assert!(load.entry_errors.is_empty());
+        assert!(load.warnings.is_empty(), "no empty fields, no warnings");
         assert_eq!(load.templates.len(), 2);
         let boda = load.templates.iter().find(|t| t.name == "boda").unwrap();
         assert_eq!(boda.title.as_deref(), Some("Boda de São João {seq}"));
@@ -671,6 +734,18 @@ mod tests {
         assert_eq!(load.templates[0].name, "good");
         assert_eq!(load.entry_errors.len(), 1);
         assert!(load.entry_errors[0].contains("bad"));
+
+        // Empty-string field: loads, but with the CLEAR warning (user
+        // decision: the semantics change must be heard BEFORE a stamp).
+        std::fs::write(&path, "[templates.wipe]\ncity = \"\"\n").unwrap();
+        let load = load_templates(&path).unwrap();
+        assert_eq!(load.templates.len(), 1);
+        assert_eq!(load.warnings.len(), 1);
+        assert!(
+            load.warnings[0].contains("wipe") && load.warnings[0].contains("city"),
+            "{:?}",
+            load.warnings
+        );
 
         // Unparseable FILE: hard error.
         std::fs::write(&path, "not toml at [[[").unwrap();

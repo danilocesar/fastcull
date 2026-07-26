@@ -109,6 +109,13 @@ Recorded deviations/decisions (M2):
 - Mouse/wheel scrolling does not move the cursor in multi-column grid views —
   scrolling is browsing, the cursor stays where the user parked it (it may
   leave the viewport; the next arrow key first brings it back into view).
+- **Grid click moves the cursor (user requirement 2026-07-25, issue #7)**: a
+  plain click on a cell in ANY multi-column grid view moves the cursor to
+  that image (and claims it, per the untouched-cursor rule). Click means
+  press+release without movement — drag remains scrolling, same
+  disambiguation as the loupe. Ctrl/Shift-click gain selection semantics
+  with the IPTC panel step (Visual language section); a plain click on a
+  cell must never scroll the view as a side effect.
 - Exception at 1-column (loupe) zoom: the visible image IS the cursor — the
   cursor follows scrolling so full-res loading and marks always apply to what
   the user is looking at.
@@ -120,7 +127,7 @@ Recorded deviations/decisions (M2):
   case: name order vs capture order put it at position 795/1450). The cursor
   is CLAIMED (id-pinned from then on, all rules above apply) by: any mark,
   any navigation key, loupe scroll-follow with laid-out geometry, and any
-  loupe/fit click. NOT claiming it: zoom keys (they don't move it), filter
+  click on an image — loupe, fit, or grid cell (issue #7). NOT claiming it: zoom keys (they don't move it), filter
   and sort changes (pre-touch these snap to the new view's first image —
   overriding the nearest-survivor rule until the claim), and engine events.
   Open Folder resets to unclaimed. Pre-layout geometry (a refresh before the
@@ -236,9 +243,14 @@ he confirms, all cheap to change):**
   M rejected"), no cursor. If it happens while in loupe, the view drops
   back to the grid empty state. The cursor contract's "exactly one cell"
   rule applies only to non-empty views.
-- **Keyword commit (G4)**: Enter commits + returns focus to the grid;
-  cursor STAYS (spec letter). Commit-and-advance (Photo Mechanic style)
-  recorded as a future config option alongside auto-advance.
+- **Keyword commit (G4) — FINAL (persona verdict adopted by the user
+  2026-07-25 after PM research)**: Enter commits + returns focus to the
+  grid; cursor STAYS. PM's Save-and-advance was examined and rejected:
+  stacking advance sources breaks the K→type→Enter→Y loop (the Y would
+  mark the wrong frame), and advance is incoherent on a multi-selection.
+  The future config option is worded as commit-and-advance-AND-KEEP-FIELD-
+  FOCUS (the true PM caption loop) — advance without focus retention is
+  the version nobody wants.
 - **Template apply UI (G5)**: the IPTC panel shell includes a template
   dropdown (reading templates.toml) + Apply button + "Revert last apply"
   button — templates that cannot be applied from the UI are dead weight
