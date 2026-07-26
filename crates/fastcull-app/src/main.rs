@@ -1477,6 +1477,11 @@ fn main() {
                 if elapsed < std::time::Duration::from_millis(1500) || !one2one_ready {
                     return;
                 }
+                // The status line at shutter time, for text-level test
+                // assertions — status strings were otherwise untestable
+                // and the "(0/1)" fabrication (issue #19) survived two
+                // human reviews because nothing could assert them.
+                trace_mark(&format!("status at shutter: {}", win.get_status()));
                 match win.window().take_snapshot() {
                     Ok(buf) => {
                         let ok = write_snapshot_jpeg(&out, &buf);
@@ -2857,7 +2862,11 @@ fn refresh_inner(win: &MainWindow, state: &Rc<RefCell<AppState>>) {
                 String::new()
             },
             cursor_pos.map_or(0, |p| p + 1),
-            view_len.max(1),
+            // Honest count (issue #19): an empty view reads "(0/0)" — a
+            // fabricated "/1" made the whole counter untrustworthy ("a
+            // counter that can invent 1 can't be trusted to report
+            // 3,100" — persona).
+            view_len,
             showing,
             burst_note,
             st.thumbs_done.min(count),

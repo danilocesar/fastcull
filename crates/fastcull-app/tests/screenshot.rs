@@ -576,13 +576,25 @@ fn no_args_launch_opens_empty_window() {
     }
     let _s = serial();
     let out = out_dir().join("no-args.jpg");
-    shoot(&[], &out);
+    let stderr = shoot_env_stderr(&[], &[("FASTCULL_TRACE", "1")], &out);
     let (w, h, _) = analyze(&out);
     assert!(w >= 640 && h >= 480, "implausible snapshot size {w}x{h}");
     let var = region_variance(&out, 1.0, 1.0);
     assert!(
         var > 1.0,
         "folderless frame is uniform — no chrome/message rendered (variance {var:.2})"
+    );
+    // Issue #19: the empty view must report an HONEST count — the old
+    // "(0/1)" fabrication survived two human reviews because status
+    // strings were untestable (hence the status-at-shutter trace).
+    let status = stderr
+        .lines()
+        .rev()
+        .find_map(|l| l.split("status at shutter: ").nth(1))
+        .expect("no status trace line");
+    assert!(
+        status.contains("(0/0)"),
+        "empty view fabricates a count: {status}"
     );
 }
 
