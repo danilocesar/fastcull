@@ -95,10 +95,18 @@ selection are untouched by it.
 ### Inputs
 
 Raw Slint pointer events are normalized before they reach the machine:
-`Wheel { notches, pos }`, `CtrlWheel { notches, pos }`, `Click { pos }`,
-`DoubleClick { pos }`, `DragStart { pos }`, `Drag { dx, dy }`, `DragEnd`.
-`pos` is a point in the view area; the machine converts it to a fractional
-image coordinate via the existing `zoompan::contain_click_frac`.
+`Wheel { notches, pos }`, `Click { pos }`, `DoubleClick { pos }`,
+`DragStart { pos }`, `Drag { dx, dy }`, `DragEnd`. `pos` is a point in the
+view area; the machine converts it to a fractional image coordinate via the
+existing `zoompan::contain_click_frac`.
+
+Explicitly NOT inputs of this feature (persona review 2026-07-26, user
+decision): **Ctrl+wheel** ("no Ctrl+wheel yet" — grid Ctrl+scroll zoom stays
+the M2 deferral, and in the loupe the modifier is ignored, i.e. reserved),
+**right / middle / thumb buttons** (the user has no use for back/forward
+buttons; they get an explicit reserved no-op so nobody grows a context menu
+into the culling grid by accident). Pinch/trackpad gestures and momentum
+scrolling are out of scope; they reuse this machine when they land.
 
 ### Transition table (the contract)
 
@@ -106,13 +114,29 @@ image coordinate via the existing `zoompan::contain_click_frac`.
 |---|---|---|---|
 | Wheel up | scroll the view up; cursor unmoved (browsing) | **zoom in** one ladder stop → `Zoomed { 1.5 }`, anchored under the pointer | one ladder stop up, anchored under the pointer; caps exactly at 1:1 |
 | Wheel down | scroll the view down; cursor unmoved | **nothing** (clamped — user decision 2026-07-26: the wheel never falls out of the loupe; `-`/`G`/`Esc` are the exits) | one ladder stop down, anchored under the pointer; a step landing on `1.0` → `Fit` |
-| Ctrl+Wheel | grid zoom in/out (still deferred, see M2 note) | same as Wheel | same as Wheel |
-| Click | move the cursor to that cell + collapse the multi-selection (issue #7); Ctrl/Shift variants per the cursor contract | record the clicked point as the pan center; **no visible move** (the whole image is on screen) | re-center the view on the clicked point; factor unchanged |
-| Double-click | **reserved** — the first click already moved the cursor, the second repeats it harmlessly (see Open questions) | → **1:1 with the clicked point centered** | → **1:1 with the clicked point centered** (already at 1:1: re-center only) |
+| Ctrl+Wheel | grid zoom in/out — still the M2 deferral | **reserved**: the modifier is ignored, the plain-wheel row applies | **reserved**: the modifier is ignored, the plain-wheel row applies |
+| Click | move the cursor to that cell + collapse the multi-selection (issue #7); Ctrl/Shift variants per the cursor contract | **nothing** — the whole image is on screen, and the keyboard ladder stays center-anchored (user decision 2026-07-26, Q5) | re-center the view on the clicked point; factor unchanged |
+| Double-click | **open that image in the loupe at fit** (user decision 2026-07-26 — the first click has already moved the cursor there, so this is purely "enter the loupe"); the previous grid zoom is remembered for `G`/`Esc` | → **1:1 with the clicked point centered** | → **1:1 with the clicked point centered** (already at 1:1: re-center only) |
 | Drag | scroll the view (Flickable kinetic drag, today's behavior — **kept**); rubber-band multi-select is the reserved future gesture | **nothing** — nothing is off-screen, so there is no pan axis | **pan the image**, 1:1 with pointer motion, clamped so the image never detaches from the viewport edges |
 
 Rules that the table alone does not carry:
 
+- **The wheel no longer browses images in the loupe — knowingly** (user
+  decision 2026-07-26 after persona review). Until now, at `N = 1` the view
+  was a one-column strip and wheel-scrolling stepped to the next image with
+  the cursor following (the "cursor follows scrolling" exception in the
+  cursor contract). The user confirmed using that gesture AND chose to
+  replace it with zoom. Consequence, spelled out so nobody re-discovers it
+  as a bug: **inside the loupe, moving between images is keyboard-only** —
+  arrows / PgUp / PgDn / Home / End, `Y`/`N` auto-advance, `[`/`]`. The
+  cursor contract's 1-column exception survives only for the scrollbar-drag
+  route, and is reworded accordingly.
+- **A click at fit does not arm the next zoom** (user decision 2026-07-26,
+  Q5 — resolving a contradiction between this section and the Loupe zoom
+  ladder above). `+`/`-`/`Z` stay center-anchored at every factor,
+  including immediately after a click at fit. The click at fit therefore
+  stores nothing and does nothing; the only pointer-anchored zoom route is
+  the wheel, which uses the pointer's live position and needs no click.
 - **Wheel anchor is the pointer, not the center** (user decision
   2026-07-26): the image point under the cursor stays under the cursor as
   the factor changes — you wheel toward an eye without clicking first. This
@@ -133,6 +157,22 @@ Rules that the table alone does not carry:
 - **Drag beats click.** A click fires only on press+release without
   movement beyond the drag threshold; once a drag starts, the release
   produces no click and no double-click.
+- **A double-click needs proximity, not just timing** (persona finding —
+  scanning an intermediate factor by clicking eye, then beak, then wingtip
+  in quick succession is two independent re-centers, not a jump to 1:1):
+  the second press must land within the same small movement threshold the
+  drag/click disambiguation already uses. Farther apart = two clicks.
+- **Clicks outside the image rect are ignored** (persona finding): at fit a
+  landscape frame on a 16:9 screen has fat letterbox bars, and
+  `contain_click_frac` clamps them to the nearest image edge — so a
+  double-click on black would slam to 1:1 on a frame edge. Clicks and
+  double-clicks in the bars produce no action at all (the clamp stays for
+  the drag/pan path, where it is correct).
+- **The wheel only zooms over the image.** Wheel events over the IPTC
+  panel, the filter bar or the overlay scrollbar are not loupe input —
+  they scroll that widget or do nothing (persona finding: the pointer
+  parks over the panel while keywording; a photo that zooms under it is a
+  nightly accident).
 - Everything else in the loupe is unchanged: the 1:1 ceiling, the
   center-anchored keyboard ladder, zoom/pan persistence across images, and
   the full-res quality rule (any factor above fit renders from the top
@@ -151,23 +191,20 @@ Rules that the table alone does not carry:
   crate** — a gesture whose behavior cannot be read off the table above is
   a bug in the machine, not in the bridge.
 - Every (state, input) pair is handled explicitly. Reserved combinations
-  return an explicit "no action, reserved" variant, never a silent
-  fallthrough — that is what makes the future rubber-band select and grid
-  double-click cheap and visible.
-- Known Slint risk (same one that deferred Ctrl+scroll grid zoom in M2): the
-  loupe's `Flickable` consumes wheel events, so the loupe overlay must
-  intercept them via a `TouchArea` `scroll-event` handler returning
-  `EventResult.accept`. If that proves impossible without breaking
-  drag-pan, the wheel-zoom half of this feature is reported as blocked
-  rather than half-landed.
-
-### Open questions (deferred, need a user decision before they are built)
-
-- **Double-click on a grid cell**: currently reserved/no-op. The obvious
-  candidate is "open that image in the loupe at fit", which no gesture
-  covers today — not specified until the user says so.
-- Pinch/trackpad gestures and momentum scrolling are out of scope here;
-  they reuse the same machine when they land.
+  (grid drag → rubber-band, Ctrl+wheel in the loupe, right/middle/thumb
+  buttons) return an explicit "no action, reserved" variant, never a silent
+  fallthrough — that is what keeps the next gesture cheap and visible.
+- **Known Slint risk, sharpened by the persona review**: the zoom overlay
+  with its own `Flickable` exists only ABOVE fit (`if root.one2one` in
+  `main.slint`), so at fit the wheel has to be intercepted on the GRID
+  `Flickable`, conditioned on `columns == 1` — which is exactly what got
+  Ctrl+scroll grid zoom deferred in M2. The likely failure mode is
+  therefore not "wheel zoom is blocked" but "wheel zoom works at 1.5× and
+  above and not at fit", i.e. it lands in the state that needs it least
+  while the retired browse gesture keeps firing at fit. **That half-landing
+  must not ship silently**: if the fit-state interception cannot be made to
+  work, the feature is reported blocked and the wheel keeps today's
+  browse-at-fit behavior until the user decides otherwise.
 
 ## Virtualization (the M2 prototype risk)
 
@@ -242,7 +279,11 @@ brightening during wheel scrolling (needs an activity decay timer).
   never turn grid keys into text).
 - Exception at 1-column (loupe) zoom: the visible image IS the cursor — the
   cursor follows scrolling so full-res loading and marks always apply to what
-  the user is looking at.
+  the user is looking at. **Scope narrowed by issue #11 (2026-07-26)**: the
+  WHEEL no longer scrolls at `N = 1` (it zooms — see the Mouse & pointer
+  contract), so this rule now covers only the remaining scroll route, the
+  overlay scrollbar drag. Image-to-image movement inside the loupe is
+  keyboard-only.
 - The status bar always names the cursor image (filename, position N/M).
 - **Untouched-cursor rule (issue #4, 2026-07-25)**: from session open until the
   user's FIRST interaction, the cursor is "the first image of the view", not a
@@ -276,8 +317,9 @@ brightening during wheel scrolling (needs an activity decay timer).
 | `U` | clear mark |
 | `+` / `-` / Ctrl+scroll | zoom in/out (grid columns → loupe fit → ×1.5 ladder → 1:1, center-anchored; see Loupe zoom ladder) |
 | `Z` | from fit: jump to 1:1; from 1:1 or any intermediate factor: back to fit; from a grid zoom: jump straight to loupe 1:1 |
-| wheel | grid: scroll the view; loupe: zoom one ladder stop, anchored under the pointer (down at fit does nothing) — see Mouse & pointer contract |
-| click (loupe) | center on the clicked point (no factor change) |
+| wheel | grid: scroll the view; loupe: zoom one ladder stop, anchored under the pointer (down at fit does nothing; the wheel no longer steps between images) — see Mouse & pointer contract |
+| click (loupe) | above fit: center on the clicked point (no factor change); at fit: nothing |
+| double-click (grid) | open that image in the loupe at fit |
 | double-click (loupe) | 1:1 with the clicked point centered |
 | drag | grid: scroll; loupe above fit: pan the image |
 | `G` or `Esc` | back to the grid at the previous grid zoom (from loupe/1:1) |
@@ -398,8 +440,11 @@ the user confirms, all cheap to change):**
       table and asserts the resulting state + action — including the
       reserved no-ops. Plus: wheel-up at fit anchors the pointer's image
       point (not the center), wheel notches land on the same `1.5ⁿ` stops as
-      `+`/`-`, wheel-down at fit is inert, a drag suppresses the click, and
-      pan offsets stay clamped to the image bounds at every factor.
+      `+`/`-`, wheel-down at fit is inert, a drag suppresses the click, a
+      distant second click is two re-centers and not a double-click, clicks
+      outside the image rect do nothing, `+` after a click at fit is still
+      center-anchored, and pan offsets stay clamped to the image bounds at
+      every factor.
 - [x] Slint screenshot smoke tests (`fastcull-app --screenshot <out>` +
       `tests/screenshot.rs`): grid placeholder (synthetic), loaded thumbnails
       (texture-variance asserted), failed-badge session, loupe fit
