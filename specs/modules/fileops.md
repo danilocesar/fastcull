@@ -22,10 +22,21 @@ Destination file already exists (per-file modes): **rename (default)** / skip /
 overwrite / abort. Rename appends a numeric suffix before the extension
 (`DSC01234_2.ARW`, sidecar in lockstep) — the default because multi-camera days
 produce identical filenames landing in one flat selects folder (user decision
-after persona review). Auto-renames are listed in the plan preview.
+after persona review). Auto-renames are summarized (count) in the plan preview; a per-file
+list is v2 (persona: no 148-row table between the user and the Copy
+button).
 
 **Execute** (on a worker thread, progress events per file):
 1. Flush pending sidecar writes for all picked images (hard barrier).
+   **ORDERING CONTRACT (gate finding 2026-07-26): the flush precedes
+   PLANNING, not just execution** — plan() freezes sidecar-existence and
+   refresh-mtime answers at plan time, so a plan built before the flush
+   ships RAWs without their fresh sidecars while reporting verified. The
+   app flushes at dialog open (truthful preview) AND flushes-then-replans
+   inside Copy itself; a frozen at-open plan is never executed. Free
+   space is likewise re-checked by that final replan; an unreadable
+   statvfs reports "free space unknown" and skips the check rather than
+   inventing a number.
 2. Per image: copy RAW → fsync → copy sidecar → fsync. Sidecar is renamed in
    lockstep (`newname.ARW` ⇒ `newname.ARW.xmp`).
 3. Verify: BLAKE3 checksum of destination equals a checksum computed while
@@ -38,7 +49,14 @@ after persona review). Auto-renames are listed in the plan preview.
 5. Final report: copied / skipped / failed with reasons. Session marks copied
    images with a "copied" badge.
 
-Cancellation: between files only; already-copied files remain (report says so).
+Cancellation: between files only; already-copied files remain (report says
+so). Dropping the copy handle (quit / Open Folder mid-copy) CANCELS then
+joins: the wait is bounded by the file in flight and the temp-name
+contract leaves no partial behind.
+
+The final report's "all checksums verified" sentence appears ONLY when
+the run actually copied and verified at least one file — an all-skipped
+run verified nothing and must not print the format-the-card green light.
 
 ## Dialog + scope decisions (persona review 2026-07-26; the user CONFIRMED
 2026-07-26: "metadata is added before copying. once the copy is done,
@@ -75,8 +93,9 @@ explicitly deferred to a later discussion; modal dialog accepted)
   scope, "view order" would be ambiguous under an active filter.
 - Dialog minimums: destination picker (must allow creating a folder) with
   the remembered path displayed PROMINENTLY (yesterday's job is the
-  failure mode); template field defaults to EMPTY = keep names (remembered
-  but never silently pre-applied); live preview of the first 3 expanded
+  failure mode); template field defaults to EMPTY = keep names; the remembered
+  template is OFFERED as a one-click "Use last: …" chip, never silently
+  pre-applied (gate-enforced); live preview of the first 3 expanded
   names when a template is set; count + total size + free space up front;
   collisions summarized ("3 will be renamed") not tabulated; Enter
   triggers Copy when the plan is clean; per-file N/M progress + cancel;

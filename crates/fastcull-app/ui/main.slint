@@ -115,6 +115,7 @@ export component MainWindow inherits Window {
     in property <int> copy-state: 0;
     in property <string> copy-dest: "";
     in-out property <string> copy-template: "";
+    in property <string> copy-last-template: "";
     in property <string> copy-summary: "";
     in property <string> copy-preview: "";
     in property <string> copy-collisions: "";
@@ -780,8 +781,12 @@ export component MainWindow inherits Window {
             background: #000000aa;
             TouchArea { } // swallow clicks behind the dialog (modal)
             copy-keys := FocusScope {
-                width: 0;
-                height: 0;
+                // ANCESTOR of the whole dialog (gate finding: as a 0x0
+                // sibling, Enter/Esc died inside whichever child last
+                // held focus — key events only bubble up the focused
+                // element's ancestor chain).
+                width: 100%;
+                height: 100%;
                 key-pressed(event) => {
                     if (event.text == Key.Escape && root.copy-state != 1) {
                         root.copy-close();
@@ -799,7 +804,6 @@ export component MainWindow inherits Window {
                     }
                     reject
                 }
-            }
             Rectangle {
                 x: (parent.width - self.width) / 2;
                 y: (parent.height - self.height) / 2;
@@ -838,7 +842,10 @@ export component MainWindow inherits Window {
                         Button {
                             text: "Choose…";
                             enabled: root.copy-state == 0;
-                            clicked => { root.copy-pick-dest(); }
+                            clicked => {
+                                root.copy-pick-dest();
+                                copy-keys.focus();
+                            }
                         }
                     }
                     // Rename template: EMPTY = keep original names.
@@ -857,6 +864,22 @@ export component MainWindow inherits Window {
                             height: 28px;
                             enabled: root.copy-state == 0;
                             edited => { root.copy-replan(); }
+                            accepted(text) => {
+                                // Enter in the field: commit the replan and
+                                // hand keys back to the dialog scope so the
+                                // NEXT Enter fires Copy (gate finding).
+                                root.copy-replan();
+                                copy-keys.focus();
+                            }
+                        }
+                        if root.copy-last-template != "" && root.copy-template == "": Chip {
+                            label: "Use last: " + root.copy-last-template;
+                            active: false;
+                            clicked => {
+                                root.copy-template = root.copy-last-template;
+                                root.copy-replan();
+                                copy-keys.focus();
+                            }
                         }
                     }
                     if root.copy-preview != "": Text {
@@ -882,6 +905,7 @@ export component MainWindow inherits Window {
                             clicked => {
                                 root.copy-skip-existing = !root.copy-skip-existing;
                                 root.copy-replan();
+                                copy-keys.focus();
                             }
                         }
                     }
@@ -927,6 +951,7 @@ export component MainWindow inherits Window {
                         }
                     }
                 }
+            }
             }
             init => { copy-keys.focus(); }
         }

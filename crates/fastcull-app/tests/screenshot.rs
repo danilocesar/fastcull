@@ -286,25 +286,34 @@ fn cursor_opens_on_capture_first_image() {
     .unwrap();
     let out = out_dir().join("cursor-order.jpg");
     let bin = env!("CARGO_BIN_EXE_fastcull-app");
-    let output = std::process::Command::new(bin)
-        .arg("--start-11")
-        .arg(&dir)
-        .arg("--screenshot")
-        .arg(&out)
-        .env("FASTCULL_NO_CACHE", "1")
-        .env("FASTCULL_TRACE", "1")
-        .output()
-        .expect("run app");
-    assert!(output.status.success(), "app exited with {}", output.status);
-    let stderr = String::from_utf8_lossy(&output.stderr);
-    let line = stderr
-        .lines()
-        .rfind(|l| l.contains("loupe idx"))
-        .unwrap_or_else(|| panic!("no loupe trace line in stderr:\n{stderr}"));
-    assert!(
-        line.contains("loupe idx 1 "), // trailing space: id 1, not 10/11/…
-        "cursor must open on the capture-first image (b_early = id 1), got: {line}"
-    );
+    // Up to 3 attempts: under full-suite CPU load the snapshot's 1.5 s
+    // floor can fire BEFORE the second file's EXIF lands, and the
+    // name-order cursor is then legitimately correct for that instant.
+    // The guarded regression (corner-entry cursor stranding) is
+    // deterministic — it fails all attempts.
+    let mut last = String::new();
+    for _ in 0..3 {
+        let output = std::process::Command::new(bin)
+            .arg("--start-11")
+            .arg(&dir)
+            .arg("--screenshot")
+            .arg(&out)
+            .env("FASTCULL_NO_CACHE", "1")
+            .env("FASTCULL_TRACE", "1")
+            .output()
+            .expect("run app");
+        assert!(output.status.success(), "app exited with {}", output.status);
+        let stderr = String::from_utf8_lossy(&output.stderr);
+        last = stderr
+            .lines()
+            .rfind(|l| l.contains("loupe idx"))
+            .unwrap_or_else(|| panic!("no loupe trace line in stderr:\n{stderr}"))
+            .to_string();
+        if last.contains("loupe idx 1 ") {
+            return; // capture-first cursor confirmed
+        }
+    }
+    panic!("cursor must open on the capture-first image (b_early = id 1), got: {last}");
 }
 
 /// M5 chrome smoke (validator finding: the menu bar, filter bar and empty

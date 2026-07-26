@@ -88,7 +88,8 @@ pub struct CopyPlan {
     pub jobs: Vec<CopyJob>,
     /// Bytes execute will actually write (RAWs of Copy/CopyRenamed).
     pub total_bytes: u64,
-    pub free_bytes: u64,
+    /// None = statvfs failed ("free space unknown"), check skipped.
+    pub free_bytes: Option<u64>,
     pub renamed: usize,
     pub skipped: usize,
     pub refreshed: usize,
@@ -235,12 +236,19 @@ pub fn plan(
     }
 
     let total_bytes: u64 = jobs.iter().map(|j| j.bytes).sum();
-    let free_bytes = fs2::available_space(existing_ancestor(dest)).unwrap_or(u64::MAX);
-    if total_bytes > free_bytes {
-        return Err(PlanError::InsufficientSpace {
-            needed: total_bytes,
-            free: free_bytes,
-        });
+    // Free space is advisory-honest: an unreadable statvfs yields None
+    // ("free space unknown" in the dialog), never a fake huge number
+    // (gate finding). The check is repeated by the app right before
+    // execute (plan-to-start staleness), and per-file ENOSPC failures
+    // remain isolated regardless.
+    let free_bytes = fs2::available_space(existing_ancestor(dest)).ok();
+    if let Some(free) = free_bytes {
+        if total_bytes > free {
+            return Err(PlanError::InsufficientSpace {
+                needed: total_bytes,
+                free,
+            });
+        }
     }
 
     Ok(CopyPlan {
@@ -343,6 +351,12 @@ impl CopyHandle {
 
 impl Drop for CopyHandle {
     fn drop(&mut self) {
+        // Cancel-then-join (gate finding: quit / Open Folder mid-copy
+        // previously joined WITHOUT cancelling — an unbounded, invisible
+        // block on a big card). Cancel bounds the wait to the file in
+        // flight, and the temp-name+rename contract guarantees no partial
+        // is left behind.
+        self.cancel.store(true, Ordering::Relaxed);
         if let Some(h) = self.handle.take() {
             h.join().ok();
         }
@@ -434,6 +448,14 @@ fn copy_pair(job: &CopyJob) -> std::io::Result<()> {
 /// fsync, RE-READ the destination and compare hashes, then rename into
 /// place — a failure never leaves a partial file under the final name.
 fn copy_verified(src: &Path, dst: &Path) -> std::io::Result<()> {
+    copy_verified_with(src, dst, |_| {})
+}
+
+/// `tamper` runs on the TEMP file between fsync and the verify re-read —
+/// a test seam so the mismatch branch is actually driven (gate finding:
+/// the old corruption test asserted hash inequality of two buffers,
+/// which is vacuously true and exercised nothing).
+fn copy_verified_with(src: &Path, dst: &Path, tamper: impl FnOnce(&Path)) -> std::io::Result<()> {
     if let Some(parent) = dst.parent() {
         std::fs::create_dir_all(parent)?;
     }
@@ -455,6 +477,7 @@ fn copy_verified(src: &Path, dst: &Path) -> std::io::Result<()> {
         }
         writer.sync_all()?;
         drop(writer);
+        tamper(&tmp);
         // Verification pass: what the disk gives BACK must match what the
         // source stream said (fileops.md: a perfect-looking thumbnail
         // proves nothing — the embedded JPEG sits at the file's front).
@@ -628,6 +651,29 @@ mod tests {
         assert_eq!(p.jobs[0].action, PlanAction::Skip);
         assert_eq!(p.total_bytes, 2, "only b.ARW's bytes");
 
+        // Overwrite: the existing destination is replaced in place.
+        let p = super::plan(
+            &sources,
+            &dest,
+            None,
+            ExistsMode::Overwrite,
+            &HashSet::new(),
+        )
+        .unwrap();
+        assert_eq!(p.jobs[0].action, PlanAction::Copy);
+        assert_eq!(p.jobs[0].dst_raw.file_name().unwrap(), "a.ARW");
+        let (_h, rx) = execute(p);
+        let report = drain(rx);
+        assert_eq!(report.copied, 2);
+        assert_eq!(
+            std::fs::read(dest.join("a.ARW")).unwrap(),
+            b"aaaa",
+            "overwrite replaced the old bytes"
+        );
+        // Restore the collision fixture for the modes below.
+        std::fs::write(dest.join("a.ARW"), b"old").unwrap();
+        std::fs::remove_file(dest.join("b.ARW")).ok();
+
         // Abort: hard error naming the count.
         assert!(matches!(
             super::plan(&sources, &dest, None, ExistsMode::Abort, &HashSet::new()),
@@ -718,13 +764,26 @@ mod tests {
         // Happy path round-trips.
         copy_verified(&src, &dir.join("d.bin")).unwrap();
         assert_eq!(std::fs::read(dir.join("d.bin")).unwrap(), [3u8; 4096]);
-        // The verify helper itself is the corruption detector: hash of a
-        // tampered destination differs (unit-level truth for the spec's
-        // "deliberately corrupted destination write is detected").
-        let a = blake3::hash(&std::fs::read(&src).unwrap());
-        std::fs::write(dir.join("d.bin"), [4u8; 4096]).unwrap();
-        let b = blake3::hash(&std::fs::read(dir.join("d.bin")).unwrap());
-        assert_ne!(a, b);
+        // FAULT INJECTION (gate finding: the old assertion was vacuous):
+        // corrupt the temp file between fsync and the verify re-read —
+        // the mismatch branch must fire, clean up the temp, and leave
+        // NOTHING under the final name.
+        let dst = dir.join("d2.bin");
+        let err = copy_verified_with(&src, &dst, |tmp| {
+            use std::io::Write as _;
+            let mut f = std::fs::OpenOptions::new().append(true).open(tmp).unwrap();
+            f.write_all(b"CORRUPT").unwrap();
+            f.sync_all().unwrap();
+        })
+        .unwrap_err();
+        assert!(err.to_string().contains("BLAKE3 mismatch"), "{err}");
+        assert!(!dst.exists(), "no file under the final name");
+        let leftovers: Vec<_> = std::fs::read_dir(&dir)
+            .unwrap()
+            .filter_map(|e| e.ok())
+            .filter(|e| e.file_name().to_string_lossy().contains("partial"))
+            .collect();
+        assert!(leftovers.is_empty(), "temp cleaned after mismatch");
         std::fs::remove_dir_all(&dir).ok();
     }
 

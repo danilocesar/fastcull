@@ -831,11 +831,23 @@ fn main() {
                     win.set_copy_visible(true);
                     return;
                 }
+                // THE BARRIER, part 1 (gate HIGH finding: planning before
+                // flushing froze `sidecar exists?` answers from BEFORE
+                // the debounced write landed — a fresh first-ever pick
+                // shipped its RAW without the sidecar while reporting
+                // verified). Flush here so the PREVIEW is truthful;
+                // copy_start flushes AND replans again.
+                if let Some(writer) = &st.writer {
+                    writer.flush();
+                }
                 let (dest, template) = load_ui_prefs();
                 if st.copy_dest.is_none() {
                     st.copy_dest = dest;
                 }
-                win.set_copy_template(template.into());
+                // The remembered template is OFFERED, never pre-applied
+                // (fileops.md "never silently pre-applied"; gate finding).
+                win.set_copy_last_template(template.into());
+                win.set_copy_template("".into());
                 win.set_copy_dest(
                     st.copy_dest
                         .as_ref()
@@ -882,15 +894,17 @@ fn main() {
         window.on_copy_start(move || {
             let Some(win) = win.upgrade() else { return };
             let mut st = state.borrow_mut();
-            let Some(plan) = st.copy_plan.take() else {
-                return;
-            };
-            // THE BARRIER (fileops.md): every queued sidecar write —
-            // including a caption committed seconds ago — must be on disk
-            // before the plan's sidecar copies run.
+            // THE BARRIER, part 2: flush FIRST, then rebuild the plan
+            // fresh so sidecar existence, refresh mtimes and free space
+            // are decided AFTER every pending write landed (gate HIGH
+            // finding — a frozen at-open plan is never executed).
             if let Some(writer) = &st.writer {
                 writer.flush();
             }
+            copy_replan(&win, &mut st);
+            let Some(plan) = st.copy_plan.take() else {
+                return; // replan surfaced an error; the dialog shows it
+            };
             let (handle, rx) = fastcull_core::fileops::execute(plan);
             st.copy_handle = Some(handle);
             st.copy_rx = Some(rx);
@@ -1119,15 +1133,27 @@ fn main() {
                                 st.copy_handle = None;
                                 st.copy_rx = None;
                                 if let Some(win) = win.upgrade() {
-                                    let mut lines = vec![format!(
-                                        "{} copied{}",
-                                        report.copied,
-                                        if report.failed.is_empty() && !report.cancelled {
-                                            ", all checksums verified"
-                                        } else {
-                                            ""
-                                        }
-                                    )];
+                                    // The green light to format a card
+                                    // appears ONLY when this run actually
+                                    // verified copies (gate finding: an
+                                    // all-skipped run verified nothing).
+                                    let verified_line = report.copied > 0
+                                        && report.all_verified
+                                        && report.failed.is_empty()
+                                        && !report.cancelled;
+                                    let mut lines = vec![if report.copied == 0 {
+                                        "Nothing needed copying".to_string()
+                                    } else {
+                                        format!(
+                                            "{} copied{}",
+                                            report.copied,
+                                            if verified_line {
+                                                ", all checksums verified"
+                                            } else {
+                                                ""
+                                            }
+                                        )
+                                    }];
                                     if report.skipped > 0 {
                                         lines.push(format!("{} skipped", report.skipped));
                                     }
@@ -1382,6 +1408,15 @@ fn load_ui_prefs() -> (Option<std::path::PathBuf>, String) {
 
 fn save_ui_prefs(dest: Option<&std::path::Path>, template: &str) {
     let Some(path) = ui_prefs_path() else { return };
+    // Persist the last NON-EMPTY template (gate N1: the field now opens
+    // empty by design, so a template-less copy — or just picking a
+    // destination — must not erase yesterday's remembered template).
+    let template = if template.trim().is_empty() {
+        load_ui_prefs().1
+    } else {
+        template.to_string()
+    };
+    let template = template.as_str();
     let mut table = toml::Table::new();
     if let Some(d) = dest {
         table.insert(
@@ -1476,10 +1511,13 @@ fn copy_replan(win: &MainWindow, st: &mut AppState) {
     } else {
         ExistsMode::Rename
     };
+    // Canonicalized comparison: the same destination reached via a
+    // different path spelling must not lose the re-run skip default.
+    let dest_canon = dest.canonicalize().unwrap_or_else(|_| dest.clone());
     let already: std::collections::HashSet<usize> = st
         .copied_to
         .iter()
-        .filter(|(_, d)| **d == dest)
+        .filter(|(_, d)| d.canonicalize().unwrap_or_else(|_| (*d).clone()) == dest_canon)
         .map(|(id, _)| *id)
         .collect();
     match plan(&sources, &dest, template, mode, &already) {
@@ -1501,10 +1539,13 @@ fn copy_replan(win: &MainWindow, st: &mut AppState) {
             }
             win.set_copy_summary(
                 format!(
-                    "{} picked · {} to copy · {} free",
+                    "{} picked · {} to copy · {}",
                     sources.len(),
                     human_bytes(p.total_bytes),
-                    human_bytes(p.free_bytes)
+                    match p.free_bytes {
+                        Some(free) => format!("{} free", human_bytes(free)),
+                        None => "free space unknown".to_string(),
+                    }
                 )
                 .into(),
             );
