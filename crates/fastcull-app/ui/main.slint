@@ -147,8 +147,20 @@ export component MainWindow inherits Window {
     callback quit();
     // Click-to-zoom (ui-grid.md: a click is always "center HERE").
     // loupe-clicked: fractional image coordinates inside the zoom overlay.
-    // fit-clicked: raw coordinates in the grid area at loupe fit.
     callback loupe-clicked(float, float);
+    // Pointer state machine (issue #11, ui-grid.md Mouse & pointer
+    // contract): normalized events routed to fastcull-core::pointer.
+    // pointer-wheel(up, ctrl, x, y): one notch-equivalent, view-area
+    // coords (overlay coordinate system — content top-left).
+    callback pointer-wheel(bool, bool, length, length);
+    callback fit-clicked(length, length);
+    callback fit-double-clicked(length, length);
+    callback zoom-double-clicked(length, length);
+    callback cell-double-clicked(int);
+    // True at loupe fit (columns == 1, no zoom overlay): the fit pointer
+    // surface intercepts the wheel there (it zooms; browsing is
+    // keyboard-only — user decision, issue #11).
+    in property <bool> at-fit;
     // Cell click (issue #7 + click-to-zoom at loupe fit): image id,
     // cell-local coordinates, ctrl/shift modifiers (selection semantics).
     // Lives IN the cell so the Flickable keeps drag-scrolling (a sibling
@@ -377,6 +389,9 @@ export component MainWindow inherits Window {
                                 self.mod-ctrl, self.mod-shift);
                             keys.focus(); // clicking the grid claims the keyboard
                         }
+                        // Grid double-click opens the loupe at fit (issue
+                        // #11; the first click already moved the cursor).
+                        double-clicked => { root.cell-double-clicked(cell.id); }
                     }
                     if !cell.has-image: Text {
                         text: cell.label;
@@ -471,6 +486,55 @@ export component MainWindow inherits Window {
                 }
             }
 
+            // Fit-state pointer surface (issue #11): at loupe fit the
+            // wheel ZOOMS one ladder stop (it no longer browses images —
+            // user decision; movement inside the loupe is keyboard-only),
+            // a click does nothing but claim keyboard focus (whole image
+            // on screen, spec Q5), a double-click goes to 1:1 on the
+            // clicked point, a drag is inert (no pan axis at fit).
+            // Permanent + visibility-toggled (issue #6 rule); declared
+            // BEFORE the scrollbar so the bar stays on top and draggable.
+            fit-ta := TouchArea {
+                property <length> wheel-acc: 0;
+                visible: root.at-fit;
+                x: 0;
+                y: root.bar-h;
+                width: parent.width - root.panel-w;
+                height: parent.height - root.bar-h;
+                scroll-event(e) => {
+                    if (e.delta-y == 0) {
+                        return reject;
+                    }
+                    // One notch = one ladder stop: winit delivers 60px
+                    // per wheel notch (validated against the backend
+                    // source); subtract keeps remainders for hi-res
+                    // devices, a direction flip resets the residue.
+                    if ((e.delta-y > 0 && self.wheel-acc < 0) || (e.delta-y < 0 && self.wheel-acc > 0)) {
+                        self.wheel-acc = 0;
+                    }
+                    self.wheel-acc += e.delta-y;
+                    if (self.wheel-acc >= 60px) {
+                        self.wheel-acc -= 60px;
+                        root.pointer-wheel(true, e.modifiers.control,
+                            self.mouse-x, self.mouse-y + root.bar-h);
+                    } else if (self.wheel-acc <= -60px) {
+                        self.wheel-acc += 60px;
+                        root.pointer-wheel(false, e.modifiers.control,
+                            self.mouse-x, self.mouse-y + root.bar-h);
+                    }
+                    return accept;
+                }
+                clicked => {
+                    // Click at fit does nothing (spec Q5) — but feeds the
+                    // double-click proximity trace and claims the keyboard.
+                    root.fit-clicked(self.mouse-x, self.mouse-y + root.bar-h);
+                    keys.focus();
+                }
+                double-clicked => {
+                    root.fit-double-clicked(self.mouse-x, self.mouse-y + root.bar-h);
+                }
+            }
+
             // Modern overlay scrollbar (task #21, user request): thin and
             // dim until hovered/dragged, thumb sized by viewport/content,
             // draggable with a position hint. Never moves the cursor
@@ -484,6 +548,9 @@ export component MainWindow inherits Window {
                 sb-ta := TouchArea {
                     width: 100%;
                     height: 100%;
+                    // Wheel over the scrollbar is NOT loupe input (spec);
+                    // swallow so it can't fall through to fit-ta and zoom.
+                    scroll-event(e) => { return accept; }
                     moved => {
                         if (self.pressed) {
                             root.vp-y = -clamp(
@@ -591,6 +658,7 @@ export component MainWindow inherits Window {
                     height: root.loupe-h;
                 }
                 TouchArea {
+                    property <length> wheel-acc: 0;
                     x: zoomed-img.x;
                     y: zoomed-img.y;
                     width: zoomed-img.width;
@@ -599,6 +667,38 @@ export component MainWindow inherits Window {
                         root.loupe-clicked(
                             self.pressed-x / max(1px, self.width),
                             self.pressed-y / max(1px, self.height));
+                    }
+                    // Wheel above fit walks the zoom ladder, anchored
+                    // under the pointer (issue #11 — the wheel no longer
+                    // pans). Children see scroll before the Flickable, so
+                    // accepting here keeps drag-pan native while the
+                    // wheel zooms. Coords are converted to the overlay's
+                    // view space (viewport offsets are <= 0).
+                    scroll-event(e) => {
+                        if (e.delta-y == 0) {
+                            return reject;
+                        }
+                        if ((e.delta-y > 0 && self.wheel-acc < 0) || (e.delta-y < 0 && self.wheel-acc > 0)) {
+                            self.wheel-acc = 0;
+                        }
+                        self.wheel-acc += e.delta-y;
+                        if (self.wheel-acc >= 60px) {
+                            self.wheel-acc -= 60px;
+                            root.pointer-wheel(true, e.modifiers.control,
+                                zoomed-img.x + self.mouse-x + root.loupe-vx,
+                                zoomed-img.y + self.mouse-y + root.loupe-vy);
+                        } else if (self.wheel-acc <= -60px) {
+                            self.wheel-acc += 60px;
+                            root.pointer-wheel(false, e.modifiers.control,
+                                zoomed-img.x + self.mouse-x + root.loupe-vx,
+                                zoomed-img.y + self.mouse-y + root.loupe-vy);
+                        }
+                        return accept;
+                    }
+                    double-clicked => {
+                        root.zoom-double-clicked(
+                            zoomed-img.x + self.mouse-x + root.loupe-vx,
+                            zoomed-img.y + self.mouse-y + root.loupe-vy);
                     }
                 }
             }
@@ -632,7 +732,7 @@ export component MainWindow inherits Window {
                         font-size: 16px;
                     }
                     Text {
-                        text: "Arrows / PgUp / PgDn / Home / End   navigate\nY, P or Space   pick (take)\nN or X   reject\nU   clear mark\n+ / -   zoom in / out (grid → loupe fit → ×1.5 steps → 1:1, center held)\nCtrl+scroll   zoom (soon)\nZ   fit → 1:1; zoomed → back to fit (from grid: jump to 1:1)\nClick in loupe   center on the clicked point (fit → 1:1)\nG or Esc   back to the grid\nK   keyword field (opens the IPTC panel)\nI   IPTC panel\nShift+arrows   extend selection\nCtrl+A   select all (filtered set)\n[ / ]   previous / next burst\nCtrl+O   open folder\nCtrl+E   copy picks (M6)\nCtrl+Q   quit\n1–5, 0   reserved (star ratings, v2)";
+                        text: "Arrows / PgUp / PgDn / Home / End   navigate\nY, P or Space   pick (take)\nN or X   reject\nU   clear mark\n+ / -   zoom in / out (grid → loupe fit → ×1.5 steps → 1:1, center held)\nWheel in loupe   zoom, anchored under the pointer (grid: scroll)\nZ   fit → 1:1; zoomed → back to fit (from grid: jump to 1:1)\nClick in loupe   above fit: center on the clicked point\nDouble-click   grid: open in loupe; loupe: 1:1 on the clicked point\nG or Esc   back to the grid\nK   keyword field (opens the IPTC panel)\nI   IPTC panel\nShift+arrows   extend selection\nCtrl+A   select all (filtered set)\n[ / ]   previous / next burst\nCtrl+O   open folder\nCtrl+E   copy picks (M6)\nCtrl+Q   quit\n1–5, 0   reserved (star ratings, v2)";
                         color: #c8c8d0;
                         font-size: 13px;
                     }

@@ -94,6 +94,11 @@ struct AppState {
     /// mid-drag engine refresh must not yank the view back). None while the
     /// overlay is hidden.
     last_pan_write: Option<(f32, f32)>,
+    /// Double-click proximity bookkeeping (issue #11, spec: the second
+    /// press must land near the first or it is two independent clicks).
+    /// Image fracs of the last two loupe-surface clicks.
+    loupe_click_prev: Option<(f32, f32)>,
+    loupe_click_last: Option<(f32, f32)>,
     /// Which image the overlay last showed (trace bookkeeping only).
     last_overlay_cursor: Option<usize>,
     /// False until the user first moves the cursor or marks (issue #4):
@@ -429,6 +434,8 @@ fn main() {
         zoom_factor: if start_11 { f32::INFINITY } else { 1.0 },
         pan_center: (0.5, 0.5),
         last_pan_write: None,
+        loupe_click_prev: None,
+        loupe_click_last: None,
         last_overlay_cursor: None,
         cursor_touched: false,
         last_grid_zoom: 1,
@@ -994,10 +1001,12 @@ fn main() {
         });
     }
     {
-        // Click in the zoom overlay: "center HERE" (user decision
-        // 2026-07-25). At 1:1 it re-centers; below 1:1 it also jumps to
-        // 1:1 (persona default: below the ceiling a click means "show me
-        // pixels HERE"). Fractions arrive image-relative from Slint.
+        // Click in the zoom overlay: "center HERE", FACTOR UNCHANGED
+        // (issue #11 transition table, superseding the earlier "below the
+        // ceiling a click jumps to 1:1" default — double-click owns the
+        // 1:1 jump now). Fractions arrive image-relative from Slint, so
+        // this IS the machine's (Zoomed, Click) → Recenter row without a
+        // lossy coords round-trip.
         let state = Rc::clone(&state);
         let win = window.as_weak();
         window.on_loupe_clicked(move |fx, fy| {
@@ -1009,28 +1018,108 @@ fn main() {
                 // click (validator: a capture-key re-sort could otherwise
                 // swap the image under an active 1:1 inspection).
                 st.cursor_touched = true;
+                // Double-click proximity trace (spec): remember the last
+                // two loupe clicks.
+                st.loupe_click_prev = st.loupe_click_last;
+                st.loupe_click_last = Some((fx.clamp(0.0, 1.0), fy.clamp(0.0, 1.0)));
                 st.pan_center = (fx.clamp(0.0, 1.0), fy.clamp(0.0, 1.0));
-                let at_ceiling = max_factor(&win, &st)
-                    .is_some_and(|max| clamped_factor(&win, &st) >= max - 1e-3);
-                // Below the ceiling a click also zooms to 1:1 — unless the
-                // known ceiling is at/below fit (small file: nothing to
-                // zoom into; the desire stays at fit — validator L1).
-                if !at_ceiling && max_factor(&win, &st).is_none_or(|max| max > 1.0) {
-                    st.zoom_factor = f32::INFINITY;
-                }
             }
             refresh(&win, &state);
         });
     }
     {
-        // Click at loupe fit: land at 1:1 centered on the clicked point.
-        // Coordinates are grid-area local; map through the cell layout and
-        // the contain-fitted image rect.
+        // Pointer wheel (issue #11): one notch-equivalent = one ladder
+        // stop, anchored under the pointer. Arrives from the fit surface
+        // or the zoom overlay; the machine decides from the actual state.
         let state = Rc::clone(&state);
         let win = window.as_weak();
-        window.on_cell_clicked(move |id, lx, ly, ctrl, shift| {
+        window.on_pointer_wheel(move |up, ctrl, x, y| {
             let Some(win) = win.upgrade() else { return };
-            let (layout, _viewport_h, _scroll_y) = current_geometry(&win, &state);
+            let action = {
+                let mut st = state.borrow_mut();
+                capture_pan(&win, &mut st); // fold a pending drag first
+                let (ms, geo) = machine_ctx(&win, &st);
+                fastcull_core::pointer::step(
+                    ms,
+                    fastcull_core::pointer::PointerInput::Wheel {
+                        up,
+                        ctrl,
+                        pos: (x, y),
+                    },
+                    &geo,
+                )
+                .1
+            };
+            apply_pointer_action(&win, &state, action);
+        });
+    }
+    {
+        // Fit-surface clicks only feed the double-click proximity trace
+        // (a click at fit does nothing — spec Q5).
+        let state = Rc::clone(&state);
+        let win = window.as_weak();
+        window.on_fit_clicked(move |x, y| {
+            let Some(win) = win.upgrade() else { return };
+            let mut st = state.borrow_mut();
+            // A fit click claims the cursor like every other image click
+            // (untouched-cursor rule — validator: a capture-key re-sort
+            // must not swap the image under the user).
+            st.cursor_touched = true;
+            let (_, geo) = machine_ctx(&win, &st);
+            let frac = fastcull_core::pointer::view_to_frac(&geo, 1.0, (x, y));
+            st.loupe_click_prev = st.loupe_click_last;
+            st.loupe_click_last = Some(frac);
+        });
+    }
+    {
+        // Double-clicks in the loupe (fit or zoomed): 1:1 with the
+        // clicked point centered — IF the two presses were close (spec:
+        // farther apart = two independent clicks, already handled).
+        {
+            let state = Rc::clone(&state);
+            let win = window.as_weak();
+            window.on_fit_double_clicked(move |x, y| {
+                let Some(win) = win.upgrade() else { return };
+                handle_loupe_double_click(&win, &state, x, y);
+            });
+        }
+        let state = Rc::clone(&state);
+        let win = window.as_weak();
+        window.on_zoom_double_clicked(move |x, y| {
+            let Some(win) = win.upgrade() else { return };
+            handle_loupe_double_click(&win, &state, x, y);
+        });
+    }
+    {
+        // Grid double-click: open that image in the loupe at fit (the
+        // first click already moved and claimed the cursor).
+        let state = Rc::clone(&state);
+        let win = window.as_weak();
+        window.on_cell_double_clicked(move |_id| {
+            let Some(win) = win.upgrade() else { return };
+            let action = {
+                let st = state.borrow();
+                let (ms, geo) = machine_ctx(&win, &st);
+                fastcull_core::pointer::step(
+                    ms,
+                    fastcull_core::pointer::PointerInput::DoubleClick { pos: (0.0, 0.0) },
+                    &geo,
+                )
+                .1
+            };
+            apply_pointer_action(&win, &state, action);
+        });
+    }
+    {
+        // Grid cell click: cursor + selection semantics (issue #7). The
+        // old "at loupe fit a click zooms to the point" branch is GONE —
+        // superseded by the pointer contract (issue #11: click at fit
+        // does nothing; double-click owns 1:1), and at fit the fit-ta
+        // surface swallows presses before cells anyway.
+        let state = Rc::clone(&state);
+        let win = window.as_weak();
+        window.on_cell_clicked(move |id, _lx, _ly, ctrl, shift| {
+            let Some(win) = win.upgrade() else { return };
             {
                 let mut st = state.borrow_mut();
                 let id = id as usize;
@@ -1051,24 +1140,9 @@ fn main() {
                 } else {
                     // Plain click: collapse any selection (gate finding:
                     // after Ctrl+A there was NO deselect gesture), move
-                    // the cursor. At loupe fit it also zooms to the point.
+                    // the cursor.
                     st.selection.clear();
                     st.cursor = id;
-                    if layout.columns == 1 && st.loupe.is_some() {
-                        st.pan_center = match aspect_for(&st, id) {
-                            Some(aspect) => fastcull_core::zoompan::contain_click_frac(
-                                layout.cell_width,
-                                layout.cell_height,
-                                aspect,
-                                lx,
-                                ly,
-                            ),
-                            None => (0.5, 0.5),
-                        };
-                        if max_factor(&win, &st).is_none_or(|max| max > 1.0) {
-                            st.zoom_factor = f32::INFINITY;
-                        }
-                    }
                 }
             }
             refresh(&win, &state);
@@ -1783,6 +1857,153 @@ fn clamped_factor(win: &MainWindow, st: &AppState) -> f32 {
     }
 }
 
+/// Pointer state machine bridge (issue #11): current machine state +
+/// per-call geometry from the live window numbers. The machine itself
+/// lives in fastcull-core (rule 5) — this is pure normalization.
+fn machine_ctx(
+    win: &MainWindow,
+    st: &AppState,
+) -> (
+    fastcull_core::pointer::ViewState,
+    fastcull_core::pointer::Geometry,
+) {
+    use fastcull_core::pointer as pm;
+    let (vw, vh) = (win.get_grid_width(), win.get_loupe_area_h());
+    // Native dims from the full-res texture when present (same source as
+    // max_factor); otherwise the viewport — extents degenerate to the
+    // fit view, which is exactly what is on screen in that case.
+    // Native dims: full-res texture first; else any lower rung via
+    // aspect_for's chain (WRONG magnitude but CORRECT aspect — enough
+    // for the fit frame and letterbox rejection during decode gaps);
+    // else the viewport.
+    let sf = win.window().scale_factor();
+    let native = st
+        .fullres
+        .iter()
+        .find(|(i, _)| *i == st.cursor)
+        .map(|(_, img)| {
+            let s = img.size();
+            (s.width as f32 / sf, s.height as f32 / sf)
+        })
+        .or_else(|| aspect_for(st, st.cursor).map(|aspect| (vh * aspect, vh)))
+        .unwrap_or((vw, vh));
+    let columns = grid::ZOOM_COLUMNS[st.zoom.min(grid::ZOOM_COLUMNS.len() - 1)];
+    let state = if columns > 1 {
+        pm::ViewState::Grid {
+            columns: columns as u8,
+        }
+    } else {
+        let f = clamped_factor(win, st);
+        if f <= 1.0 {
+            pm::ViewState::Fit
+        } else {
+            pm::ViewState::Zoomed { factor: f }
+        }
+    };
+    // Where the fit view really renders: the cursor's N=1 grid cell in
+    // keys-space (validator MAJOR: the fit view is a grid strip cell,
+    // scroll-dependent — not an image centered in the viewport).
+    let fit_cell = (columns == 1).then(|| {
+        let layout = GridLayout::new(st.zoom, vw, st.view.len());
+        let pos = st.cursor_pos().unwrap_or(0);
+        let (cx, cy) = layout.position(pos);
+        let scroll_y = (-win.get_vp_y()).max(0.0);
+        let bar_h = vh - win.get_grid_height(); // filter bar height (0 when hidden)
+        (
+            cx,
+            bar_h + cy - scroll_y,
+            layout.cell_width,
+            layout.cell_height,
+        )
+    });
+    let geo = pm::Geometry {
+        viewport_w: vw,
+        viewport_h: vh,
+        native_w: native.0,
+        native_h: native.1,
+        max_factor: max_factor(win, st),
+        pan_center: st.pan_center,
+        fit_cell,
+    };
+    (state, geo)
+}
+
+/// Loupe double-click (fit or zoomed surface): route through the machine
+/// after the proximity check — the second press must land near the first
+/// or it was two independent clicks whose re-centers already happened
+/// (spec, persona finding: eye-beak-wingtip scan clicks must not slam to
+/// 1:1).
+fn handle_loupe_double_click(win: &MainWindow, state: &Rc<RefCell<AppState>>, x: f32, y: f32) {
+    use fastcull_core::pointer as pm;
+    let action = {
+        let mut st = state.borrow_mut();
+        capture_pan(win, &mut st);
+        let (ms, geo) = machine_ctx(win, &st);
+        let factor = match ms {
+            pm::ViewState::Zoomed { factor } => factor,
+            _ => 1.0,
+        };
+        if let (Some(a), Some(b)) = (st.loupe_click_prev, st.loupe_click_last) {
+            // Compare the two recorded clicks in ON-SCREEN pixels at the
+            // current extents.
+            let s = fastcull_core::zoompan::fit_scale(
+                geo.viewport_w,
+                geo.viewport_h,
+                geo.native_w,
+                geo.native_h,
+            ) * factor;
+            let d = ((a.0 - b.0) * geo.native_w * s).hypot((a.1 - b.1) * geo.native_h * s);
+            if d > 12.0 {
+                return; // two re-centers, not a double-click
+            }
+        }
+        st.cursor_touched = true;
+        pm::step(ms, pm::PointerInput::DoubleClick { pos: (x, y) }, &geo).1
+    };
+    apply_pointer_action(win, state, action);
+}
+
+/// Apply a machine action. Grid-routing actions (GridClick/GridScroll/
+/// NativeDrag) never reach this — the grid keeps its native paths; the
+/// machine covers them for the table's completeness.
+fn apply_pointer_action(
+    win: &MainWindow,
+    state: &Rc<RefCell<AppState>>,
+    action: fastcull_core::pointer::Action,
+) {
+    use fastcull_core::pointer::Action;
+    let loupe_step = grid::ZOOM_COLUMNS.len() - 1;
+    {
+        let mut st = state.borrow_mut();
+        match action {
+            Action::SetZoom { factor, center } => {
+                st.pan_center = center;
+                st.zoom_factor = factor;
+                if factor <= 1.0 {
+                    st.pan_center = (0.5, 0.5); // fit forgets the pan spot
+                }
+            }
+            Action::Recenter { center } => {
+                st.pan_center = center;
+            }
+            Action::EnterLoupe => {
+                if st.zoom < loupe_step {
+                    st.last_grid_zoom = st.zoom;
+                    st.zoom = loupe_step;
+                }
+                st.zoom_factor = 1.0;
+                st.pan_center = (0.5, 0.5);
+            }
+            Action::None
+            | Action::Reserved(_)
+            | Action::GridScroll { .. }
+            | Action::GridNativeDrag
+            | Action::GridClick => return,
+        }
+    }
+    refresh(win, state);
+}
+
 /// Fold a drag-pan back into the fractional pan center: drags move the
 /// Flickable viewport without Rust hearing about it, so every mutation
 /// path reads the offsets back before acting. Programmatic writes are
@@ -1997,6 +2218,10 @@ fn handle_nav_inner(win: &MainWindow, state: &Rc<RefCell<AppState>>, key: &str) 
             | "burst-next"
     ) {
         st.cursor_touched = true;
+        // Leaving an image invalidates the double-click proximity trace
+        // (a click on the OLD image must not veto a double-click here).
+        st.loupe_click_prev = None;
+        st.loupe_click_last = None;
     }
     let loupe_step = grid::ZOOM_COLUMNS.len() - 1;
     match key {
@@ -2385,6 +2610,9 @@ fn refresh_inner(win: &MainWindow, state: &Rc<RefCell<AppState>>) {
             st.last_overlay_cursor = None;
         }
     }
+    // Fit pointer surface (issue #11): active at 1 column with no zoom
+    // overlay up — the wheel zooms there (browsing is keyboard-only).
+    win.set_at_fit(at_loupe && !win.get_one2one() && view_len > 0);
 
     // Mutate the one bound VecModel in place (spec: reuse, don't recreate).
     let model = Rc::clone(&st.cells);

@@ -203,17 +203,43 @@ Rules that the table alone does not carry:
   (grid drag → rubber-band, Ctrl+wheel in the loupe, right/middle/thumb
   buttons) return an explicit "no action, reserved" variant, never a silent
   fallthrough — that is what keeps the next gesture cheap and visible.
-- **Known Slint risk, sharpened by the persona review**: the zoom overlay
-  with its own `Flickable` exists only ABOVE fit (`if root.one2one` in
-  `main.slint`), so at fit the wheel has to be intercepted on the GRID
-  `Flickable`, conditioned on `columns == 1` — which is exactly what got
-  Ctrl+scroll grid zoom deferred in M2. The likely failure mode is
-  therefore not "wheel zoom is blocked" but "wheel zoom works at 1.5× and
-  above and not at fit", i.e. it lands in the state that needs it least
-  while the retired browse gesture keeps firing at fit. **That half-landing
-  must not ship silently**: if the fit-state interception cannot be made to
-  work, the feature is reported blocked and the wheel keeps today's
-  browse-at-fit behavior until the user decides otherwise.
+- **Known Slint risk — RESOLVED at implementation (issue #11,
+  2026-07-26)**: the feared fit-state interception worked. Mechanism: a
+  permanent, visibility-toggled `TouchArea` (`fit-ta`) covers the grid
+  area exactly when `columns == 1` and no zoom overlay is up; its
+  `scroll-event` consumes the wheel (one ladder stop per 60px
+  notch-equivalent — exactly one winit wheel notch, verified in the
+  backend source; remainders carry over, a direction flip resets them),
+  its `clicked` claims the cursor and feeds the double-click proximity
+  trace, its `double-clicked` goes to 1:1. The machine receives the fit
+  view's REAL geometry (the N=1 grid cell rect, scroll-dependent) so
+  anchors and letterbox rejection follow what is actually on screen. Because it swallows presses wholesale it also implements
+  "click at fit does nothing" and "drag at fit does nothing" — and it
+  sits BELOW the overlay scrollbar, which keeps its drag route. Above
+  fit, the wheel is taken by a `scroll-event` on the zoom overlay's
+  image TouchArea (children see scroll before the Flickable, so drag-pan
+  stays native while the wheel zooms). The retired browse-at-fit wheel
+  gesture is gone as decided; movement inside the loupe is
+  keyboard-only. Recorded deviations/deferrals (gate 2026-07-26):
+  a pinned-unresolved 1:1 desire (INFINITY while full-res decodes) makes
+  every pointer gesture inert until the render clamp resolves it (no
+  anchor math on infinite extents); wheel over the overlay scrollbar is
+  swallowed (not loupe input, per this contract); extreme coalesced
+  wheel deltas may emit fewer stops than notches (single emit per event
+  — accepted); two-finger trackpad scroll reaches the overlay Flickable
+  as a drag (pans above fit, zooms at fit — asymmetric; trackpads are
+  declared out of scope in this contract, revisit with gesture support);
+  double-click proximity threshold is 12px vs Slint's 8px click/drag
+  threshold (immaterial, recorded); wheel in the zoom overlay's
+  letterbox BARS pans natively instead of stepping the ladder (the
+  wheel surface covers the image only — the bars exist exactly when an
+  axis has no pan range, so the miswheel is near-inert; extend the
+  surface if it ever annoys); the scrollbar's wheel swallow also
+  deadens its 18px strip in GRID view (was native scroll — tiny strip,
+  accepted); during a sub-second decode gap after a fast wheel burst,
+  anchors compute against the already-zoomed virtual viewport while the
+  screen still shows fit (optimistic-climb consequence, self-corrects
+  on texture adoption).
 
 ## Virtualization (the M2 prototype risk)
 
@@ -467,16 +493,21 @@ the user confirms, all cheap to change):**
       session, counts included.
 - [ ] Windowed-model tests (core side): visible-range → model-window computation,
       incl. partial rows, tiny folders, and N=1.
-- [ ] Pointer state machine (core side, issue #11): a table-driven test that
+- [x] Pointer state machine (core side, issue #11): a table-driven test that
       enumerates EVERY (state, input) pair of the Mouse & pointer contract
       table and asserts the resulting state + action — including the
       reserved no-ops. Plus: wheel-up at fit anchors the pointer's image
       point (not the center), wheel notches land on the same `1.5ⁿ` stops as
-      `+`/`-`, wheel-down at fit is inert, a drag suppresses the click, a
-      distant second click is two re-centers and not a double-click, clicks
-      outside the image rect do nothing, `+` after a click at fit is still
-      center-anchored, and pan offsets stay clamped to the image bounds at
-      every factor.
+      `+`/`-`, wheel-down at fit is inert, clicks outside the image rect do
+      nothing, and pan offsets stay clamped to the image bounds at every
+      factor (`fastcull-core/src/pointer.rs` tests). Covered OUTSIDE the
+      core tests, recorded honestly: "a drag suppresses the click" is
+      Slint's TouchArea click definition (press+release without movement);
+      "a distant second click is two re-centers, not a double-click" is the
+      bridge's proximity trace (`handle_loupe_double_click`, review-verified
+      — no pointer-injection harness exists); "`+` after a click at fit is
+      still center-anchored" holds by construction (the fit click stores
+      nothing but the proximity trace; the keyboard ladder never reads it).
 - [x] Slint screenshot smoke tests (`fastcull-app --screenshot <out>` +
       `tests/screenshot.rs`): grid placeholder (synthetic), loaded thumbnails
       (texture-variance asserted), failed-badge session, loupe fit

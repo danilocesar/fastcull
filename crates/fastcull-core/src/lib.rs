@@ -20,6 +20,7 @@ pub mod grid;
 pub mod iptc;
 pub mod loupe;
 pub mod pipeline;
+pub mod pointer;
 pub mod raw;
 pub mod selection;
 pub mod sidecar_writer;
