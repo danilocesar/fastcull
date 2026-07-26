@@ -234,6 +234,11 @@ export component MainWindow inherits Window {
 
     content := Rectangle {
         keys := FocusScope {
+            // Same missing-binding trap as issue #12, vertical: without an
+            // explicit y the scope centered 13px low, hiding the grid's
+            // bottom strip behind the status bar.
+            x: 0;
+            y: 0;
             width: 100%;
             height: parent.height - statusbar.height;
 
@@ -329,6 +334,10 @@ export component MainWindow inherits Window {
             }
 
             flick := Flickable {
+                // Explicit x: Slint CENTERS an element whose width is bound
+                // but whose x is not (issue #12: the panel toggle shifted
+                // the grid right by panel-w/2, half of it under the panel).
+                x: 0;
                 y: root.bar-h;
                 width: parent.width - root.panel-w;
                 height: parent.height - root.bar-h;
@@ -523,10 +532,12 @@ export component MainWindow inherits Window {
             }
 
             // Inbox-zero / empty-view state (persona G2): the payoff moment
-            // gets a face, not a blank void.
+            // gets a face, not a blank void. Centered in the GRID area,
+            // not the window (issue #12: off-centre with the panel open).
             if root.empty-message != "": Rectangle {
+                x: 0;
                 y: root.bar-h;
-                width: 100%;
+                width: parent.width - root.panel-w;
                 height: parent.height - root.bar-h;
                 background: #161618;
                 Text {
@@ -546,7 +557,14 @@ export component MainWindow inherits Window {
         // click (press+release without movement — Flickable grabs real
         // drags) re-centers on the clicked point (ui-grid.md zoom ladder).
         if root.one2one: Rectangle {
-            width: 100%;
+            // Overlay covers the GRID area, not the window: with the IPTC
+            // panel open the loupe must not extend under it (issue #12 —
+            // Rust sizes the image from grid-width, so a full-window
+            // overlay showed the same panel-w/2 gutter). x/y explicit for
+            // the missing-binding trap.
+            x: 0;
+            y: 0;
+            width: parent.width - root.panel-w;
             height: parent.height - statusbar.height;
             background: #000000;
             Flickable {
@@ -580,6 +598,7 @@ export component MainWindow inherits Window {
         // Keyboard-shortcuts popup (Help menu; Esc closes). The keyboard map
         // in ui-grid.md is the source of truth for this list.
         if root.shortcuts-visible: Rectangle {
+            y: 0; // missing-binding trap (issue #12): unset y centered the scrim 13px low
             width: 100%;
             height: parent.height - statusbar.height;
             background: #000000aa;
@@ -623,11 +642,17 @@ export component MainWindow inherits Window {
         // not reject a photo — LineEdit focus keeps events out of `keys`).
         if root.iptc-visible: Rectangle {
             x: parent.width - root.panel-w;
+            y: 0;
             width: root.panel-w;
             height: parent.height - statusbar.height;
             background: #1c1c20;
             border-width: 1px;
             border-color: #2c2c30;
+            // Click containment (issue #12): a click on panel whitespace
+            // must never reach the grid (it would move the cursor and
+            // collapse a multi-selection mid-keywording). First child =
+            // painted under the fields, so editors still get their events.
+            TouchArea { }
             VerticalLayout {
                 padding: 10px;
                 spacing: 6px;
@@ -800,6 +825,7 @@ export component MainWindow inherits Window {
         // Enter is the whole feature. The remembered destination is
         // displayed PROMINENTLY (the yesterday's-job failure mode).
         if root.copy-visible: Rectangle {
+            y: 0; // missing-binding trap (issue #12): unset y centered the scrim 13px low
             width: 100%;
             height: parent.height - statusbar.height;
             background: #000000aa;

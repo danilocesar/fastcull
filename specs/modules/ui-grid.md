@@ -235,6 +235,20 @@ Recorded deviations/decisions (M2):
   covers M2; revisit during M4 polish (needs user OK to defer past v1 if it
   stays unsolved).
 
+## Panel docking model (made explicit after issue #12)
+
+When the IPTC panel is visible it takes its 300px from the RIGHT edge and
+the grid reflows into the remaining width, pinned flush to the LEFT edge
+— never centered, never partially under the panel. Everything that
+belongs to the grid area (loupe/zoom overlay, empty-state message,
+overlay scrollbar) sizes to the grid area, not the window. Clicks inside
+the panel never reach the grid (a stray click on panel whitespace while
+keywording must not move the cursor or collapse a multi-selection).
+Slint trap recorded from the incident: an element with a bound width but
+no `x:` (or bound height but no `y:`) is CENTERED in its parent — every
+non-layout child with a computed size needs its position bound
+explicitly.
+
 ## Overlay scrollbar (task #21, user request 2026-07-25, persona-reviewed)
 
 A modern overlay scrollbar on the GRID's right edge (inside the grid area —
@@ -454,7 +468,10 @@ the user confirms, all cheap to change):**
 - [x] Slint screenshot smoke tests (`fastcull-app --screenshot <out>` +
       `tests/screenshot.rs`): grid placeholder (synthetic), loaded thumbnails
       (texture-variance asserted), failed-badge session, loupe fit
-      (`--start-loupe`) and 1:1 (`--start-11`). Recorded limitations:
+      (`--start-loupe`) and 1:1 (`--start-11`), and the IPTC-panel-open
+      docking state (issue #12 regression: left edge stays grid content,
+      right strip becomes panel; reached via the `FASTCULL_DRIVE`
+      `iptc` action). Recorded limitations:
       snapshots are always JPEG q92 regardless of extension; `--screenshot`
       forces the software renderer (take_snapshot yields black frames on the
       GPU renderer), so these tests do NOT exercise the shipping femtovg

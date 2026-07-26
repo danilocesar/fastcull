@@ -1275,6 +1275,13 @@ fn main() {
                     slint::quit_event_loop().ok();
                     return;
                 }
+                if key == "iptc" {
+                    // Panel toggle for the screenshot harness (issue #12:
+                    // the docking bug shipped because no automated run
+                    // could reach the panel-open state).
+                    win.invoke_iptc_toggle();
+                    return;
+                }
                 handle_nav(&win, &state, &key);
             });
         }

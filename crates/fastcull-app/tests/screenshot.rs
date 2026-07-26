@@ -12,14 +12,23 @@ fn has_display() -> bool {
 }
 
 fn shoot(args: &[&str], out: &Path) {
+    shoot_env(args, &[], out);
+}
+
+/// Like `shoot`, with extra env vars — and the SAME 90 s watchdog: a hung
+/// child must be killed, not block the harness forever (validator M2; the
+/// issue #12 test initially bypassed this via a bare `Command::status()`).
+fn shoot_env(args: &[&str], envs: &[(&str, &str)], out: &Path) {
     let bin = env!("CARGO_BIN_EXE_fastcull-app");
-    let mut child = std::process::Command::new(bin)
-        .args(args)
+    let mut cmd = std::process::Command::new(bin);
+    cmd.args(args)
         .arg("--screenshot")
         .arg(out)
-        .env("FASTCULL_NO_CACHE", "1") // never touch the user's real cache
-        .spawn()
-        .expect("spawn app");
+        .env("FASTCULL_NO_CACHE", "1"); // never touch the user's real cache
+    for (k, v) in envs {
+        cmd.env(k, v);
+    }
+    let mut child = cmd.spawn().expect("spawn app");
     // Strictly beyond the app's own 60 s readiness cap (measured from timer
     // start, i.e. after startup/scan): the cap must be able to fire and
     // exit(1) with its diagnostic BEFORE this harness gives up, or a slow
@@ -67,6 +76,27 @@ fn region_variance(path: &Path, frac_w: f64, frac_h: f64) -> f64 {
     }
     let mean = lumas.iter().sum::<f64>() / lumas.len() as f64;
     lumas.iter().map(|l| (l - mean).powi(2)).sum::<f64>() / lumas.len() as f64
+}
+
+/// Luma (mean, variance) of an arbitrary fractional sub-rectangle —
+/// the panel-docking test needs edge strips, not just the top-left corner.
+fn region_stats(path: &Path, fx0: f64, fy0: f64, fx1: f64, fy1: f64) -> (f64, f64) {
+    let bytes = std::fs::read(path).expect("snapshot file");
+    let mut dec = zune_jpeg::JpegDecoder::new(&bytes);
+    let px = dec.decode().expect("decode snapshot");
+    let (w, h) = dec.dimensions().expect("dims");
+    let (x0, x1) = ((w as f64 * fx0) as usize, (w as f64 * fx1) as usize);
+    let (y0, y1) = ((h as f64 * fy0) as usize, (h as f64 * fy1) as usize);
+    let mut lumas = Vec::with_capacity((x1 - x0) * (y1 - y0));
+    for y in y0..y1 {
+        for x in x0..x1 {
+            let i = (y * w + x) * 3;
+            lumas.push(0.299 * px[i] as f64 + 0.587 * px[i + 1] as f64 + 0.114 * px[i + 2] as f64);
+        }
+    }
+    let mean = lumas.iter().sum::<f64>() / lumas.len() as f64;
+    let var = lumas.iter().map(|l| (l - mean).powi(2)).sum::<f64>() / lumas.len() as f64;
+    (mean, var)
 }
 
 static SERIAL: std::sync::Mutex<()> = std::sync::Mutex::new(());
@@ -314,6 +344,94 @@ fn cursor_opens_on_capture_first_image() {
         }
     }
     panic!("cursor must open on the capture-first image (b_early = id 1), got: {last}");
+}
+
+/// Issue #12 regression: opening the IPTC panel must DOCK it — the grid
+/// stays pinned to the left edge (Slint centers an element whose width is
+/// bound but whose x is not, which shifted the grid right by panel-w/2 and
+/// slid the other half under the panel). Two shots of the same folder,
+/// panel closed vs open (via the FASTCULL_DRIVE "iptc" action added for
+/// exactly this: the bug shipped because no automated run could reach the
+/// panel-open state).
+#[test]
+fn iptc_panel_docks_without_gutter() {
+    if !has_display() {
+        eprintln!("screenshot smoke skipped: no display server");
+        return;
+    }
+    let _s = serial();
+    let raws = raws_dir();
+    let closed = out_dir().join("panel-closed.jpg");
+    let open = out_dir().join("panel-open.jpg");
+    shoot(&[raws.to_str().unwrap()], &closed);
+    shoot_env(
+        &[raws.to_str().unwrap()],
+        &[("FASTCULL_DRIVE", "600:iptc")],
+        &open,
+    );
+    // Sample the FIRST ROW of cells (the 3 A1 fixtures land in columns
+    // 1-3 of 8; lower strips are empty background in both shots). The
+    // band starts BELOW the filter-bar pills: a band overlapping them
+    // reads their bright pixels as "texture" and passes on the broken
+    // tree too (QE reproduced exactly that with 0.08; gutter strip
+    // variance is 0.0 from y >= 0.12).
+    const ROW1: (f64, f64) = (0.12, 0.20);
+    // The panel must actually have opened: the right strip (inside the
+    // 300px panel) goes from FLAT empty-grid background (the 3 photos
+    // don't reach it) to panel chrome with field labels and borders.
+    let (_, var_right_closed) = region_stats(&closed, 0.85, ROW1.0, 1.0, ROW1.1);
+    let (_, var_right_open) = region_stats(&open, 0.85, ROW1.0, 1.0, ROW1.1);
+    assert!(
+        var_right_closed < 50.0 && var_right_open > 50.0,
+        "panel never opened? right-strip variance closed {var_right_closed:.0} -> open {var_right_open:.0}"
+    );
+    // The regression itself: with the panel open, the LEFT edge must still
+    // be grid photo content — the bug left a flat window-background gutter
+    // (variance collapses to ~0) in x < panel_w/2.
+    let (_, var_left_open) = region_stats(&open, 0.0, ROW1.0, 0.08, ROW1.1);
+    assert!(
+        var_left_open > 100.0,
+        "left-edge gutter with panel open (variance {var_left_open:.1}) — grid is not left-pinned (issue #12)"
+    );
+}
+
+/// Issue #12 / spec criterion: with the panel open, the overlay scrollbar
+/// sits BETWEEN grid and panel, never buried under the panel
+/// (ui-grid.md "the bar sits between grid and panel"). A --synthetic
+/// session (overflowing grid → scrollbar instantiated) with the panel
+/// driven open: the translucent thumb (#ffffff50 over hsv-value-0.22
+/// cells ≈ luma 150) must show up in the 18px seam band left of the
+/// panel edge (grid width 1140 of 1440 logical → x ∈ [0.779, 0.792]).
+#[test]
+fn scrollbar_sits_between_grid_and_panel() {
+    if !has_display() {
+        eprintln!("screenshot smoke skipped: no display server");
+        return;
+    }
+    let _s = serial();
+    let out = out_dir().join("panel-scrollbar.jpg");
+    shoot_env(
+        &["--synthetic", "200"],
+        &[("FASTCULL_DRIVE", "600:iptc")],
+        &out,
+    );
+    let bytes = std::fs::read(&out).expect("snapshot file");
+    let mut dec = zune_jpeg::JpegDecoder::new(&bytes);
+    let px = dec.decode().expect("decode snapshot");
+    let (w, h) = dec.dimensions().expect("dims");
+    let (x0, x1) = ((w as f64 * 0.779) as usize, (w as f64 * 0.792) as usize);
+    let (y0, y1) = ((h as f64 * 0.08) as usize, (h as f64 * 0.60) as usize);
+    let bright = (y0..y1)
+        .flat_map(|y| (x0..x1).map(move |x| (y * w + x) * 3))
+        .filter(|i| {
+            0.299 * px[*i] as f64 + 0.587 * px[*i + 1] as f64 + 0.114 * px[*i + 2] as f64 > 120.0
+        })
+        .count();
+    assert!(
+        bright > 100,
+        "no scrollbar thumb in the grid/panel seam ({bright} bright px) — \
+         bar buried under the panel or not rendered (issue #12 / ui-grid.md)"
+    );
 }
 
 /// M5 chrome smoke (validator finding: the menu bar, filter bar and empty
