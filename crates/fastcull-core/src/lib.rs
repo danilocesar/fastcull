@@ -33,6 +33,17 @@ pub const VERSION: &str = env!("CARGO_PKG_VERSION");
 mod tests {
     #[test]
     fn version_is_semver_like() {
-        assert_eq!(super::VERSION.split('.').count(), 3);
+        // MAJOR.MINOR.PATCH with an optional -prerelease suffix — the
+        // old dot-count assert rejected the first RC tag ("0.1.1-rc.1").
+        let (base, pre) = super::VERSION
+            .split_once('-')
+            .unwrap_or((super::VERSION, "x"));
+        let parts: Vec<_> = base.split('.').collect();
+        assert_eq!(parts.len(), 3, "base must be MAJOR.MINOR.PATCH: {base}");
+        assert!(
+            parts.iter().all(|p| p.parse::<u32>().is_ok()),
+            "numeric base: {base}"
+        );
+        assert!(!pre.is_empty(), "prerelease suffix must be non-empty");
     }
 }
