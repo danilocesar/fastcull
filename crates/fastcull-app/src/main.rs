@@ -33,6 +33,15 @@ const ADOPTS_PER_REFRESH: usize = 2;
 /// visible-window bound (recorded decision: 4K + 6 columns worst case).
 const MIDS_CAP: usize = 64;
 
+/// Last-set IPTC panel model contents (field rows, keyword chips,
+/// template names): models rebuild ONLY when these change.
+#[derive(Default, PartialEq)]
+struct PanelCache {
+    rows: Vec<(String, String, bool)>,
+    chips: Vec<(String, String)>,
+    names: Vec<String>,
+}
+
 struct AppState {
     labels: Vec<String>,
     /// RAW paths for real sessions (empty for --synthetic).
@@ -103,6 +112,31 @@ struct AppState {
     /// EXIF capture sort keys, filled by MetadataReady events (None until
     /// metadata loads; keyless images sort after keyed ones by name).
     capture_keys: Vec<Option<String>>,
+    /// Per-image IPTC state (M5 panel): seeded from sidecars at open,
+    /// edited by the panel, persisted via SidecarWriter::iptc.
+    iptc: Vec<fastcull_core::iptc::IptcData>,
+    /// Images whose IPTC the user edited this session: a stale sidecar
+    /// read racing the debounced write must not revert fresh intent
+    /// (same guard as `touched` for picks — gate finding).
+    touched_iptc: HashSet<usize>,
+    /// Last-set panel model contents: the models are ONLY rebuilt when
+    /// these differ (gate finding: rebuilding on every engine event tore
+    /// down the field editors mid-typing).
+    panel_cache: PanelCache,
+    /// Multi-selection (Shift+arrows, Ctrl+A; batch = selection in view
+    /// order or the cursor — core model, tested).
+    selection: fastcull_core::selection::Selection,
+    /// ONE shared single-level revert slot (user decision): armed by every
+    /// batch mutation from the panel; the ids the snapshots belong to ride
+    /// alongside so revert lands on the right images even after re-sorts.
+    revert: fastcull_core::iptc::RevertSlot,
+    revert_ids: Vec<usize>,
+    revert_label: String,
+    /// Templates + load warnings (templates.toml, read at session open —
+    /// live-reload is read-on-open per spec).
+    templates: Vec<fastcull_core::iptc::IptcTemplate>,
+    template_warnings: Vec<String>,
+    iptc_visible: bool,
     filter_bar_visible: bool,
     /// Engine event receivers live in state so File > Open Folder can swap
     /// the whole session without restarting the event pump.
@@ -235,6 +269,17 @@ fn load_folder(state: &Rc<RefCell<AppState>>, folder: &std::path::Path) -> Resul
     st.mids.clear();
     st.va = fastcull_core::viewassets::ViewAssets::default();
     st.capture_keys = vec![None; count];
+    st.iptc = vec![fastcull_core::iptc::IptcData::default(); count];
+    st.touched_iptc.clear();
+    st.panel_cache = Default::default();
+    st.selection.reset();
+    st.revert = Default::default();
+    st.revert_ids.clear();
+    st.revert_label.clear();
+    // templates.toml: read at session open (spec: live-reload = re-read
+    // here and on panel toggle, no watcher). Errors/warnings surface in
+    // the panel warning strip.
+    reload_templates(&mut st);
     // A new folder starts unfiltered: a hidden active filter on a fresh
     // session would look like missing files.
     st.query = fastcull_core::filter::ViewQuery::default();
@@ -354,6 +399,16 @@ fn main() {
         query: fastcull_core::filter::ViewQuery::default(),
         view: Vec::new(),
         capture_keys: Vec::new(),
+        iptc: Vec::new(),
+        touched_iptc: HashSet::new(),
+        panel_cache: Default::default(),
+        selection: Default::default(),
+        revert: Default::default(),
+        revert_ids: Vec::new(),
+        revert_label: String::new(),
+        templates: Vec::new(),
+        template_warnings: Vec::new(),
+        iptc_visible: false,
         filter_bar_visible: true,
         pipeline_rx: None,
         loupe_rx: None,
@@ -366,6 +421,7 @@ fn main() {
             st.labels = (0..n).map(|i| format!("SYN{i:05}.ARW")).collect();
             st.picks = vec![fastcull_core::catalog::PickState::Unmarked; n];
             st.capture_keys = vec![None; n];
+            st.iptc = vec![fastcull_core::iptc::IptcData::default(); n];
             st.synthetic = true;
             recompute_view(&mut st);
         }
@@ -485,6 +541,268 @@ fn main() {
         slint::quit_event_loop().ok();
     });
     {
+        let state = Rc::clone(&state);
+        let win = window.as_weak();
+        window.on_iptc_toggle(move || {
+            let Some(win) = win.upgrade() else { return };
+            {
+                let mut st = state.borrow_mut();
+                st.iptc_visible = !st.iptc_visible;
+                if st.iptc_visible {
+                    reload_templates(&mut st); // read-on-open live-reload
+                }
+            }
+            // The dock reflows the grid: anchor on the cursor so the
+            // viewport doesn't land somewhere new (persona gap 1).
+            reveal_cursor(&win, &state);
+        });
+    }
+    {
+        // Manual field commit: same tri-state as templates, but in the
+        // PANEL bare emptiness PRESERVES (persona IN-MY-WAY rule) — an
+        // empty commit is a no-op; clearing is the explicit control.
+        let state = Rc::clone(&state);
+        let win = window.as_weak();
+        window.on_iptc_field_committed(move |i, text, return_focus| {
+            let Some(win) = win.upgrade() else { return };
+            // Sanitize at the commit boundary (NFC + control-strip + trim:
+            // raw controls make the XMP packet invalid, QE-proven).
+            let text = fastcull_core::iptc::sanitize_text(text.as_str());
+            if !text.is_empty() {
+                let mut st = state.borrow_mut();
+                let batch = st.selection.batch(&st.view, st.cursor);
+                // No-op guard (gate finding): a value-unchanged commit —
+                // Enter as "back to the grid", or the G7 click-away
+                // double-fire — must not clobber the shared revert slot
+                // or rewrite sidecars.
+                let unchanged = batch.iter().all(|id| {
+                    st.iptc
+                        .get(*id)
+                        .is_some_and(|d| iptc_field_get(d, i as usize) == Some(&text))
+                });
+                if !batch.is_empty() && !unchanged {
+                    let snaps: Vec<_> = batch
+                        .iter()
+                        .filter_map(|id| st.iptc.get(*id).cloned())
+                        .collect();
+                    for id in &batch {
+                        if let Some(d) = st.iptc.get_mut(*id) {
+                            iptc_field_set(d, i as usize, Some(text.clone()));
+                        }
+                    }
+                    let label = format!(
+                        "{} on {} image(s)",
+                        IPTC_FIELD_LABELS.get(i as usize).unwrap_or(&"field"),
+                        batch.len()
+                    );
+                    commit_batch_mutation(&mut st, &batch, snaps, &label);
+                }
+            }
+            if return_focus {
+                win.invoke_focus_grid(); // G4: cursor stays, grid gets keys
+            }
+            refresh(&win, &state);
+        });
+    }
+    {
+        let state = Rc::clone(&state);
+        let win = window.as_weak();
+        window.on_iptc_field_clear(move |i| {
+            let Some(win) = win.upgrade() else { return };
+            {
+                let mut st = state.borrow_mut();
+                let batch = st.selection.batch(&st.view, st.cursor);
+                let all_unset = batch.iter().all(|id| {
+                    st.iptc
+                        .get(*id)
+                        .is_some_and(|d| iptc_field_get(d, i as usize).is_none())
+                });
+                if !batch.is_empty() && !all_unset {
+                    let snaps: Vec<_> = batch
+                        .iter()
+                        .filter_map(|id| st.iptc.get(*id).cloned())
+                        .collect();
+                    for id in &batch {
+                        if let Some(d) = st.iptc.get_mut(*id) {
+                            iptc_field_set(d, i as usize, None);
+                        }
+                    }
+                    let label = format!(
+                        "clear {} on {} image(s)",
+                        IPTC_FIELD_LABELS.get(i as usize).unwrap_or(&"field"),
+                        batch.len()
+                    );
+                    commit_batch_mutation(&mut st, &batch, snaps, &label);
+                }
+            }
+            refresh(&win, &state);
+        });
+    }
+    {
+        let state = Rc::clone(&state);
+        let win = window.as_weak();
+        window.on_iptc_keyword_added(move |text| {
+            let Some(win) = win.upgrade() else { return };
+            let kws: Vec<String> = text
+                .split(',')
+                .map(|k| k.trim().to_string())
+                .filter(|k| !k.is_empty())
+                .collect();
+            if !kws.is_empty() {
+                let mut st = state.borrow_mut();
+                let batch = st.selection.batch(&st.view, st.cursor);
+                // No-op guard (gate N2): re-entering an already-present
+                // keyword — easy via the G7 click-away — must not clobber
+                // the shared revert slot or rewrite sidecars. Dry-run on
+                // clones; commit only when something actually changes.
+                let changed = batch.iter().any(|id| {
+                    st.iptc.get(*id).is_some_and(|d| {
+                        let mut probe = d.clone();
+                        probe.add_keywords(kws.iter().cloned());
+                        probe.keywords != d.keywords
+                    })
+                });
+                if !batch.is_empty() && changed {
+                    let snaps: Vec<_> = batch
+                        .iter()
+                        .filter_map(|id| st.iptc.get(*id).cloned())
+                        .collect();
+                    for id in &batch {
+                        if let Some(d) = st.iptc.get_mut(*id) {
+                            d.add_keywords(kws.iter().cloned());
+                        }
+                    }
+                    let label = format!("keywords on {} image(s)", batch.len());
+                    commit_batch_mutation(&mut st, &batch, snaps, &label);
+                }
+            }
+            refresh(&win, &state);
+        });
+    }
+    {
+        // Chip X: removes the keyword from EVERY batch image — revert-
+        // covered (persona: never un-revertible batch destruction).
+        let state = Rc::clone(&state);
+        let win = window.as_weak();
+        window.on_iptc_keyword_removed(move |chip_index| {
+            let Some(win) = win.upgrade() else { return };
+            {
+                let mut st = state.borrow_mut();
+                let batch = st.selection.batch(&st.view, st.cursor);
+                // Rebuild the chip order exactly as the panel shows it
+                // (first-seen across the batch in view order).
+                let mut order: Vec<String> = Vec::new();
+                for id in &batch {
+                    if let Some(d) = st.iptc.get(*id) {
+                        for kw in &d.keywords {
+                            if !order.contains(kw) {
+                                order.push(kw.clone());
+                            }
+                        }
+                    }
+                }
+                if let Some(kw) = order.get(chip_index as usize).cloned() {
+                    let snaps: Vec<_> = batch
+                        .iter()
+                        .filter_map(|id| st.iptc.get(*id).cloned())
+                        .collect();
+                    for id in &batch {
+                        if let Some(d) = st.iptc.get_mut(*id) {
+                            d.keywords.retain(|k| *k != kw);
+                        }
+                    }
+                    let label = format!("remove '{kw}' from {} image(s)", batch.len());
+                    commit_batch_mutation(&mut st, &batch, snaps, &label);
+                }
+            }
+            refresh(&win, &state);
+        });
+    }
+    {
+        let state = Rc::clone(&state);
+        let win = window.as_weak();
+        window.on_iptc_apply_template(move |tpl_index| {
+            let Some(win) = win.upgrade() else { return };
+            {
+                let mut st = state.borrow_mut();
+                let batch = st.selection.batch(&st.view, st.cursor);
+                let Some(tpl) = st.templates.get(tpl_index as usize).cloned() else {
+                    return;
+                };
+                if !batch.is_empty() {
+                    // Contexts in batch (= view) order: the {seq} contract.
+                    let ctxs: Vec<_> = batch
+                        .iter()
+                        .map(|id| {
+                            let name = st.labels.get(*id).cloned().unwrap_or_default();
+                            let mtime = st
+                                .paths
+                                .get(*id)
+                                .and_then(|p| std::fs::metadata(p).ok())
+                                .and_then(|m| m.modified().ok())
+                                .unwrap_or(std::time::UNIX_EPOCH);
+                            // Camera model is not plumbed yet: {camera}
+                            // expands empty (recorded in the spec ledger).
+                            fastcull_core::iptc::ExpandContext::from_sort_key(
+                                st.capture_keys.get(*id).and_then(|k| k.as_deref()),
+                                mtime,
+                                &name,
+                                None,
+                            )
+                        })
+                        .collect();
+                    let mut images: Vec<_> = batch
+                        .iter()
+                        .filter_map(|id| st.iptc.get(*id).cloned())
+                        .collect();
+                    match fastcull_core::iptc::apply_template(&tpl, &mut images, &ctxs) {
+                        Ok(snaps) => {
+                            for (id, data) in batch.iter().zip(images) {
+                                if let Some(slot) = st.iptc.get_mut(*id) {
+                                    *slot = data;
+                                }
+                            }
+                            let label = format!("apply '{}' to {} image(s)", tpl.name, batch.len());
+                            commit_batch_mutation(&mut st, &batch, snaps, &label);
+                        }
+                        Err(e) => {
+                            // All-or-nothing: nothing changed; surface it.
+                            st.template_warnings = vec![e.to_string()];
+                        }
+                    }
+                }
+            }
+            refresh(&win, &state);
+        });
+    }
+    {
+        let state = Rc::clone(&state);
+        let win = window.as_weak();
+        window.on_iptc_revert(move || {
+            let Some(win) = win.upgrade() else { return };
+            {
+                let mut st = state.borrow_mut();
+                let ids = std::mem::take(&mut st.revert_ids);
+                let mut images: Vec<_> = ids
+                    .iter()
+                    .filter_map(|id| st.iptc.get(*id).cloned())
+                    .collect();
+                if st.revert.revert_into(&mut images) {
+                    for (id, data) in ids.iter().zip(images) {
+                        if let Some(slot) = st.iptc.get_mut(*id) {
+                            *slot = data.clone();
+                        }
+                        if let (Some(path), Some(writer)) = (st.paths.get(*id), &st.writer) {
+                            writer.iptc(path.clone(), data);
+                        }
+                    }
+                }
+                st.revert_label.clear();
+            }
+            refresh(&win, &state);
+        });
+    }
+    {
         // Click in the zoom overlay: "center HERE" (user decision
         // 2026-07-25). At 1:1 it re-centers; below 1:1 it also jumps to
         // 1:1 (persona default: below the ceiling a click means "show me
@@ -519,37 +837,47 @@ fn main() {
         // the contain-fitted image rect.
         let state = Rc::clone(&state);
         let win = window.as_weak();
-        window.on_fit_clicked(move |cx, cy| {
+        window.on_cell_clicked(move |id, lx, ly, ctrl, shift| {
             let Some(win) = win.upgrade() else { return };
-            let (layout, _viewport_h, scroll_y) = current_geometry(&win, &state);
+            let (layout, _viewport_h, _scroll_y) = current_geometry(&win, &state);
             {
                 let mut st = state.borrow_mut();
-                if st.view.is_empty() || st.loupe.is_none() {
+                let id = id as usize;
+                if !st.view.contains(&id) {
                     return;
                 }
-                let pitch = layout.cell_height + grid::CELL_GAP;
-                let pos = (((cy + scroll_y) / pitch.max(1.0)) as usize).min(st.view.len() - 1);
-                st.cursor = st.view[pos]; // tall windows: click also selects
-                st.cursor_touched = true;
-                let (cell_x, cell_y) = layout.position(pos);
-                st.pan_center = match aspect_for(&st, st.cursor) {
-                    // Cell-local click -> image fraction (core math,
-                    // unit-tested incl. portrait cells: zoompan).
-                    Some(aspect) => fastcull_core::zoompan::contain_click_frac(
-                        layout.cell_width,
-                        layout.cell_height,
-                        aspect,
-                        cx - cell_x,
-                        cy - (cell_y - scroll_y),
-                    ),
-                    // No texture yet (placeholder): zoom to the center.
-                    None => (0.5, 0.5),
-                };
-                // Small-file guard (validator): a known ceiling at or
-                // below fit means there is nothing to zoom INTO — leaving
-                // the desire at fit keeps the next `-` meaningful.
-                if max_factor(&win, &st).is_none_or(|max| max > 1.0) {
-                    st.zoom_factor = f32::INFINITY;
+                st.cursor_touched = true; // clicks claim (untouched-cursor rule)
+                if ctrl {
+                    // Ctrl+click: toggle membership; cursor moves too.
+                    st.selection.toggle(id);
+                    st.cursor = id;
+                } else if shift {
+                    // Shift+click: span cursor..clicked (view order).
+                    let view = st.view.clone();
+                    let from = st.cursor;
+                    st.selection.extend_to(&view, from, id);
+                    st.cursor = id;
+                } else {
+                    // Plain click: collapse any selection (gate finding:
+                    // after Ctrl+A there was NO deselect gesture), move
+                    // the cursor. At loupe fit it also zooms to the point.
+                    st.selection.clear();
+                    st.cursor = id;
+                    if layout.columns == 1 && st.loupe.is_some() {
+                        st.pan_center = match aspect_for(&st, id) {
+                            Some(aspect) => fastcull_core::zoompan::contain_click_frac(
+                                layout.cell_width,
+                                layout.cell_height,
+                                aspect,
+                                lx,
+                                ly,
+                            ),
+                            None => (0.5, 0.5),
+                        };
+                        if max_factor(&win, &st).is_none_or(|max| max > 1.0) {
+                            st.zoom_factor = f32::INFINITY;
+                        }
+                    }
                 }
             }
             refresh(&win, &state);
@@ -598,13 +926,21 @@ fn main() {
                                     dirty = true;
                                 }
                             }
-                            SessionEvent::Sidecar { index, pick } => {
+                            SessionEvent::Sidecar { index, pick, iptc } => {
                                 // Picks from a previous session/tool — never
                                 // override what the user changed just now.
                                 if !st.touched.contains(&index) {
                                     if let Some(slot) = st.picks.get_mut(index) {
                                         *slot = pick;
                                         dirty = true;
+                                    }
+                                }
+                                // Same guard as picks: a sidecar read that
+                                // raced the debounced writer must not
+                                // revert a fresh panel edit (gate finding).
+                                if !st.touched_iptc.contains(&index) {
+                                    if let Some(slot) = st.iptc.get_mut(index) {
+                                        *slot = *iptc;
                                     }
                                 }
                             }
@@ -826,6 +1162,75 @@ fn reveal_cursor(win: &MainWindow, state: &Rc<RefCell<AppState>>) {
     refresh(win, state);
 }
 
+/// Re-read templates.toml (session open + panel toggle = the spec's
+/// read-on-open live-reload). Parse errors and CLEAR warnings both land in
+/// the panel warning strip.
+fn reload_templates(st: &mut AppState) {
+    st.templates.clear();
+    st.template_warnings.clear();
+    let Some(path) = fastcull_core::iptc::default_templates_path() else {
+        return;
+    };
+    match fastcull_core::iptc::load_templates(&path) {
+        Ok(load) => {
+            st.templates = load.templates;
+            st.template_warnings = load.entry_errors;
+            st.template_warnings.extend(load.warnings);
+        }
+        Err(e) => st.template_warnings.push(e.to_string()),
+    }
+}
+
+/// The 11 panel field rows, in display order. Index = callback contract
+/// with the UI (iptc-field-committed / iptc-field-clear).
+const IPTC_FIELD_LABELS: [&str; 11] = [
+    "Title",
+    "Description",
+    "Creator",
+    "Copyright",
+    "Headline",
+    "City",
+    "Country",
+    "Credit",
+    "Source",
+    "Job ID",
+    "Location",
+];
+
+fn iptc_field_get(d: &fastcull_core::iptc::IptcData, i: usize) -> Option<&String> {
+    match i {
+        0 => d.title.as_ref(),
+        1 => d.description.as_ref(),
+        2 => d.creator.as_ref(),
+        3 => d.rights.as_ref(),
+        4 => d.headline.as_ref(),
+        5 => d.city.as_ref(),
+        6 => d.country.as_ref(),
+        7 => d.credit.as_ref(),
+        8 => d.source.as_ref(),
+        9 => d.job_id.as_ref(),
+        10 => d.location.as_ref(),
+        _ => None,
+    }
+}
+
+fn iptc_field_set(d: &mut fastcull_core::iptc::IptcData, i: usize, v: Option<String>) {
+    match i {
+        0 => d.title = v,
+        1 => d.description = v,
+        2 => d.creator = v,
+        3 => d.rights = v,
+        4 => d.headline = v,
+        5 => d.city = v,
+        6 => d.country = v,
+        7 => d.credit = v,
+        8 => d.source = v,
+        9 => d.job_id = v,
+        10 => d.location = v,
+        _ => {}
+    }
+}
+
 /// Width/height aspect of the best texture held for an image (any rung —
 /// aspect is rung-invariant). None while only the placeholder exists.
 fn aspect_for(st: &AppState, index: usize) -> Option<f32> {
@@ -888,6 +1293,139 @@ fn capture_pan(win: &MainWindow, st: &mut AppState) {
         fastcull_core::zoompan::frac_at_center(win.get_loupe_area_h(), win.get_loupe_h(), vy),
     );
     st.last_pan_write = Some((vx, vy));
+}
+
+/// Populate the panel models for the current batch (selection in view
+/// order, or the cursor). Field rows get the tri-state UI mapping: common
+/// value across the batch = shown; differing values = `mixed`; unset
+/// everywhere = untouched. Keyword chips show the batch UNION with
+/// coverage counts on multi-selections (persona: an un-revertible
+/// batch-destructive X is unacceptable — removal arms the shared slot).
+fn refresh_iptc_panel(win: &MainWindow, st: &mut AppState) {
+    win.set_iptc_visible(st.iptc_visible);
+    if !st.iptc_visible {
+        return;
+    }
+    let batch = st.selection.batch(&st.view, st.cursor);
+    win.set_iptc_batch_label(
+        match batch.len() {
+            0 => "No image".to_string(),
+            1 => st.labels.get(batch[0]).cloned().unwrap_or_default(),
+            n => format!("{n} images selected"),
+        }
+        .into(),
+    );
+    win.set_iptc_warning(st.template_warnings.join("\n").into());
+    // Build plain-data snapshots first; the Slint models are rebuilt ONLY
+    // when content changed (gate finding: unconditional rebuilds tore the
+    // field editors down mid-typing on every 33 ms engine tick).
+    let rows: Vec<(String, String, bool)> = (0..IPTC_FIELD_LABELS.len())
+        .map(|i| {
+            let mut vs = batch
+                .iter()
+                .filter_map(|id| st.iptc.get(*id).map(|d| iptc_field_get(d, i).cloned()));
+            let head = vs.next().flatten();
+            let mixed = {
+                let mut vs = batch
+                    .iter()
+                    .filter_map(|id| st.iptc.get(*id).map(|d| iptc_field_get(d, i).cloned()));
+                let h = vs.next().flatten();
+                vs.any(|v| v != h)
+            };
+            (
+                IPTC_FIELD_LABELS[i].to_string(),
+                if mixed {
+                    String::new()
+                } else {
+                    head.unwrap_or_default()
+                },
+                mixed,
+            )
+        })
+        .collect();
+    let mut chip_data: Vec<(String, usize)> = Vec::new();
+    for id in &batch {
+        if let Some(d) = st.iptc.get(*id) {
+            for kw in &d.keywords {
+                match chip_data.iter_mut().find(|(t, _)| t == kw) {
+                    Some((_, n)) => *n += 1,
+                    None => chip_data.push((kw.clone(), 1)),
+                }
+            }
+        }
+    }
+    let total = batch.len();
+    let chips: Vec<(String, String)> = chip_data
+        .into_iter()
+        .map(|(text, n)| {
+            let cov = if total > 1 {
+                format!("{n}/{total}")
+            } else {
+                String::new()
+            };
+            (text, cov)
+        })
+        .collect();
+    let names: Vec<String> = st.templates.iter().map(|t| t.name.clone()).collect();
+
+    if st.panel_cache.rows != rows {
+        win.set_iptc_fields(slint::ModelRc::new(VecModel::from(
+            rows.iter()
+                .map(|(label, value, mixed)| IptcFieldRow {
+                    label: label.clone().into(),
+                    value: value.clone().into(),
+                    mixed: *mixed,
+                })
+                .collect::<Vec<_>>(),
+        )));
+        st.panel_cache.rows = rows;
+    }
+    if st.panel_cache.chips != chips {
+        win.set_iptc_keywords(slint::ModelRc::new(VecModel::from(
+            chips
+                .iter()
+                .map(|(text, cov)| KeywordChip {
+                    text: text.clone().into(),
+                    coverage: cov.clone().into(),
+                })
+                .collect::<Vec<_>>(),
+        )));
+        st.panel_cache.chips = chips;
+    }
+    if st.panel_cache.names != names {
+        win.set_iptc_templates(slint::ModelRc::new(VecModel::from(
+            names
+                .iter()
+                .map(|n| slint::SharedString::from(n.as_str()))
+                .collect::<Vec<_>>(),
+        )));
+        st.panel_cache.names = names;
+    }
+    win.set_iptc_revert_enabled(!st.revert_ids.is_empty());
+    win.set_iptc_revert_label(st.revert_label.clone().into());
+}
+
+/// Persist + arm the shared revert slot after a batch mutation (template
+/// Apply, manual field commit, keyword add/chip removal — every one, per
+/// the user decision). `snapshots` are pre-mutation states parallel to
+/// `ids`; writes go through the serialized writer thread.
+fn commit_batch_mutation(
+    st: &mut AppState,
+    ids: &[usize],
+    snapshots: Vec<fastcull_core::iptc::IptcData>,
+    label: &str,
+) {
+    st.revert.store(snapshots);
+    st.revert_ids = ids.to_vec();
+    st.revert_label = format!("Revert: {label}");
+    st.touched_iptc.extend(ids.iter().copied());
+    if let Some(writer) = &st.writer {
+        for id in ids {
+            if let (Some(path), Some(data)) = (st.paths.get(*id), st.iptc.get(*id)) {
+                writer.iptc(path.clone(), data.clone());
+            }
+        }
+    }
 }
 
 /// Switch the single-choice filter chip (spec cursor rule + persona G2).
@@ -996,6 +1534,11 @@ fn handle_nav_inner(win: &MainWindow, state: &Rc<RefCell<AppState>>, key: &str) 
             }
         }
         "grid" => {
+            if st.zoom != loupe_step && st.zoom_factor <= 1.0 {
+                // Already at a grid zoom: Esc/G collapses the selection
+                // (the deselect gesture — gate finding).
+                st.selection.clear();
+            }
             st.zoom_factor = 1.0;
             st.pan_center = (0.5, 0.5);
             if st.zoom == loupe_step {
@@ -1040,18 +1583,30 @@ fn handle_nav_inner(win: &MainWindow, state: &Rc<RefCell<AppState>>, key: &str) 
                 st.zoom = grid::zoom_step(st.zoom, -1);
             }
         }
+        "select-all" => {
+            st.cursor_touched = true;
+            let view = st.view.clone();
+            st.selection.select_all(&view);
+        }
         nav => {
-            let nav = match nav {
-                "left" => Nav::Left,
-                "right" => Nav::Right,
-                "up" => Nav::Up,
-                "down" => Nav::Down,
-                "pgup" => Nav::PageUp,
-                "pgdn" => Nav::PageDown,
-                "home" => Nav::Home,
-                "end" => Nav::End,
+            let (nav, extends) = match nav {
+                "left" => (Nav::Left, false),
+                "right" => (Nav::Right, false),
+                "up" => (Nav::Up, false),
+                "down" => (Nav::Down, false),
+                "shift-left" => (Nav::Left, true),
+                "shift-right" => (Nav::Right, true),
+                "shift-up" => (Nav::Up, true),
+                "shift-down" => (Nav::Down, true),
+                "pgup" => (Nav::PageUp, false),
+                "pgdn" => (Nav::PageDown, false),
+                "home" => (Nav::Home, false),
+                "end" => (Nav::End, false),
                 _ => return,
             };
+            if extends {
+                st.cursor_touched = true; // shift-nav claims like plain nav
+            }
             // Navigation happens over VIEW positions; the cursor stays an
             // image id (M5 filter model).
             if !st.view.is_empty() {
@@ -1060,7 +1615,16 @@ fn handle_nav_inner(win: &MainWindow, state: &Rc<RefCell<AppState>>, key: &str) 
                 let pos = st.cursor_pos().unwrap_or(0);
                 let new_pos =
                     grid::navigate(pos, st.view.len(), layout.columns, rows_per_page, nav);
+                let from = st.cursor;
                 st.cursor = st.view[new_pos];
+                if extends {
+                    // Shift+arrow: span anchor..cursor (core model).
+                    let view = st.view.clone();
+                    let to = st.cursor;
+                    st.selection.extend_to(&view, from, to);
+                } else {
+                    st.selection.reset_anchor();
+                }
             }
         }
     }
@@ -1275,9 +1839,6 @@ fn refresh_inner(win: &MainWindow, state: &Rc<RefCell<AppState>>) {
             st.last_overlay_cursor = None;
         }
     }
-    // Click-to-zoom at fit is armed only at N=1 with no overlay showing
-    // (grid clicks keep their meaning; empty views have nothing to zoom).
-    win.set_fit_click_armed(at_loupe && !win.get_one2one() && !st.view.is_empty());
 
     // Mutate the one bound VecModel in place (spec: reuse, don't recreate).
     let model = Rc::clone(&st.cells);
@@ -1312,6 +1873,8 @@ fn refresh_inner(win: &MainWindow, state: &Rc<RefCell<AppState>>) {
             failed: st.failed.contains(&index),
             label: st.labels.get(index).cloned().unwrap_or_default().into(),
             is_cursor: index == st.cursor,
+            selected: st.selection.is_selected(index),
+            id: index as i32,
             seed: if st.synthetic { index as i32 } else { -1 },
             pick: match st.picks.get(index) {
                 Some(fastcull_core::catalog::PickState::Picked) => 1,
@@ -1385,6 +1948,34 @@ fn refresh_inner(win: &MainWindow, state: &Rc<RefCell<AppState>>) {
     } else {
         format!(" — showing {view_len} of {count}")
     };
+    refresh_iptc_panel(win, &mut st);
+    win.set_scroll_hint(
+        if st.view.is_empty() {
+            String::new()
+        } else {
+            // "795 / 1450 · 15:42" — capture time appended when sorting by
+            // capture (persona: a day is navigated by light, not by frame
+            // numbers); filename sorts get numbers only.
+            let mut hint = format!("{} / {}", range.start + 1, st.view.len());
+            if st.query.sort == fastcull_core::filter::SortKey::CaptureTime {
+                if let Some(key) = st
+                    .view
+                    .get(range.start)
+                    .and_then(|id| st.capture_keys.get(*id))
+                    .and_then(|k| k.as_deref())
+                {
+                    // Sort key "YYYY:MM:DD HH:MM:SS.mmm" -> "HH:MM".
+                    if let Some(t) = key.split(' ').nth(1) {
+                        if t.len() >= 5 {
+                            hint.push_str(&format!(" · {}", &t[..5]));
+                        }
+                    }
+                }
+            }
+            hint
+        }
+        .into(),
+    );
     win.set_status(
         format!(
             "{} ({}/{}){} — {} thumbs loaded — ★{} ✕{}{} — {} column{}",

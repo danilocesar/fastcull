@@ -20,6 +20,10 @@ thiserror = "2"
 # casefolding for the keyword dedup rule ("first spelling wins").
 toml = "0.8"
 caseless = "0.2"
+# Panel input sanitization (iptc-templates.md): NFC normalization before
+# the casefolded keyword dedup, and control-character stripping (QE: exiv2
+# rejects XMP packets containing raw control chars).
+unicode-normalization = "0.1"
 zune-jpeg = "0.4"
 
 [dev-dependencies]

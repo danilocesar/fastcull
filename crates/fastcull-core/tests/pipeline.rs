@@ -272,8 +272,14 @@ fn existing_sidecars_are_reported_at_load() {
     let mut terminal = false;
     while !terminal {
         match rx.recv_timeout(Duration::from_secs(120)).expect("event") {
-            SessionEvent::Sidecar { index: 0, pick } => {
+            SessionEvent::Sidecar {
+                index: 0,
+                pick,
+                iptc,
+            } => {
                 assert_eq!(pick, fastcull_core::catalog::PickState::Rejected);
+                // M5: the event now carries the full sidecar IPTC state.
+                assert_eq!(*iptc, fastcull_core::iptc::IptcData::default());
                 got_sidecar = true;
             }
             SessionEvent::ThumbReady { .. } | SessionEvent::Failed { .. } => terminal = true,

@@ -57,6 +57,16 @@ shapes (plain, Unicode, pipe-hierarchy) land as tags. IPTC FIELD writing
 (title/creator/city/…) lands with the IPTC panel step.
 Write failures are surfaced to the UI (status-bar warning + stderr).
 
+**IPTC field WRITING (M5 panel step)**: `write_iptc` serializes the full
+IptcData (fields + both keyword bags) in one atomic rewrite: `None` fields
+REMOVE the property (tri-state clear; an empty value is never emitted),
+ownership is matched by XML local name symmetrically with the reader (a
+foreign-namespace element whose local name collides is replaced — same
+recorded trade-off as reading), foreign nodes/rating pass through, and
+identical rewrites are byte-stable (removed elements take their
+indentation text nodes with them — QE measured unbounded growth
+otherwise).
+
 **IPTC field READING (M5, 2026-07-25)**: `read_sidecar` also returns the
 mapped IPTC fields (`SidecarState.iptc`). Contract: both XMP forms are
 accepted — element form (Alt/Seq container text or direct element text) and
@@ -70,10 +80,10 @@ properties read as unset and must never affect neighboring properties
 (gate H1 regression test). KNOWN DEVIATION: inside an `rdf:Alt`, the first
 `rdf:li` wins regardless of `xml:lang` — x-default priority is not
 implemented (darktable emits x-default first; revisit if multi-language
-Lightroom sidecars surface translated values). DEFERRED to the panel-wiring
-step: `SessionEvent::Sidecar` still carries only the pick — the freshly
-read iptc/keywords are dropped at the pipeline boundary until the panel
-consumes them.
+Lightroom sidecars surface translated values). CLOSED with the panel step:
+`SessionEvent::Sidecar` carries the full IptcData; the app seeds its
+session state from it, guarded (like picks) so a stale sidecar read
+racing the debounced writer never reverts a fresh panel edit.
 
 ## Acceptance criteria (tests)
 

@@ -1,3 +1,5 @@
+import { LineEdit, ComboBox, Button } from "std-widgets.slint";
+
 // FastCull main window: virtualized zoomable grid (specs/modules/ui-grid.md).
 // The Rust side owns all layout math; `cells` contains ONLY the visible
 // window (+margin) of cells with absolute positions inside the Flickable.
@@ -14,6 +16,8 @@ export struct CellData {
     failed: bool,
     label: string,
     is-cursor: bool,
+    selected: bool,
+    id: int,
     seed: int,
     // 0 = unmarked, 1 = picked (star), 2 = rejected (X + dim)
     pick: int,
@@ -41,6 +45,22 @@ component Chip inherits Rectangle {
     }
 }
 
+// One IPTC panel field row (iptc-templates.md tri-state UI rule, v1
+// reading): bare emptiness preserves; the per-field clear control acts
+// IMMEDIATELY (revert-covered) — no pending-clear badge state. mixed =
+// selection holds differing values (typing overwrites all).
+export struct IptcFieldRow {
+    label: string,
+    value: string,
+    mixed: bool,
+}
+
+export struct KeywordChip {
+    text: string,
+    // "34/50" coverage on multi-selection, "" on single image.
+    coverage: string,
+}
+
 export component MainWindow inherits Window {
     title: "FastCull";
     preferred-width: 1440px;
@@ -65,9 +85,18 @@ export component MainWindow inherits Window {
     // finding: subtracting the statusbar here again put every anchor 13px
     // high and let bottom-edge clamps masquerade as user drags).
     out property <length> loupe-area-h: keys.height;
-    // Arm the fit-view click-to-zoom TouchArea (loupe fit only — never at
-    // grid zooms, where clicks keep their normal meaning).
-    in property <bool> fit-click-armed: false;
+    // IPTC panel (M5): visibility, field rows, keyword chips, templates.
+    in-out property <bool> iptc-visible: false;
+    in property <[IptcFieldRow]> iptc-fields: [];
+    in property <[KeywordChip]> iptc-keywords: [];
+    in property <[string]> iptc-templates: [];
+    in property <string> iptc-batch-label: "";
+    in property <string> iptc-warning: "";
+    in property <string> iptc-revert-label: "";
+    in property <bool> iptc-revert-enabled: false;
+    // Set by Rust when K should land focus in the keyword field.
+    in-out property <bool> iptc-focus-keywords: false;
+    property <length> panel-w: root.iptc-visible ? 300px : 0;
     // Filter/sort bar state (M5): counts per chip, the active single-choice
     // filter, and the sort cycle label. All owned by Rust.
     in property <int> counts-all: 0;
@@ -79,11 +108,13 @@ export component MainWindow inherits Window {
     in property <bool> filter-bar-visible: true;
     // Inbox-zero / empty-view message ("" = view has images).
     in property <string> empty-message: "";
+    // Scrollbar drag hint: "first-visible / total" (task #21).
+    in property <string> scroll-hint: "";
     in-out property <bool> shortcuts-visible: false;
     // Scroll offset (negative Flickable viewport-y); Rust reads and writes it.
     in-out property <length> vp-y: 0px;
     // Geometry the Rust layout math needs (the grid area = flickable size).
-    out property <length> grid-width: content.width;
+    out property <length> grid-width: content.width - panel-w;
     out property <length> grid-height: keys.height - bar-h;
 
     property <length> bar-h: root.filter-bar-visible ? 34px : 0px;
@@ -99,9 +130,23 @@ export component MainWindow inherits Window {
     // loupe-clicked: fractional image coordinates inside the zoom overlay.
     // fit-clicked: raw coordinates in the grid area at loupe fit.
     callback loupe-clicked(float, float);
-    callback fit-clicked(length, length);
+    // Cell click (issue #7 + click-to-zoom at loupe fit): image id,
+    // cell-local coordinates, ctrl/shift modifiers (selection semantics).
+    // Lives IN the cell so the Flickable keeps drag-scrolling (a sibling
+    // overlay TouchArea killed grid drags — gate finding).
+    callback cell-clicked(int, length, length, bool, bool);
+    // IPTC panel (M5). Field edits commit by row index; Enter returns
+    // focus to the grid and the cursor STAYS (G4 final).
+    callback iptc-toggle();
+    callback iptc-field-committed(int, string, bool);
+    callback iptc-field-clear(int);
+    callback iptc-keyword-added(string);
+    callback iptc-keyword-removed(int);
+    callback iptc-apply-template(int);
+    callback iptc-revert();
 
     changed vp-y => { root.viewport-changed(); }
+    public function focus-grid() { keys.focus(); }
     changed width => { root.viewport-changed(); }
     changed height => { root.viewport-changed(); }
 
@@ -138,6 +183,10 @@ export component MainWindow inherits Window {
                 activated => { root.nav("zoom-out"); }
             }
             MenuItem {
+                title: "IPTC Panel (I)";
+                activated => { root.iptc-toggle(); }
+            }
+            MenuItem {
                 title: "Filter Bar";
                 activated => { root.toggle-filter-bar(); }
             }
@@ -169,7 +218,22 @@ export component MainWindow inherits Window {
                 if (event.modifiers.control) {
                     if (event.text == "o" || event.text == "O") { root.open-folder(); return accept; }
                     if (event.text == "q" || event.text == "Q") { root.quit(); return accept; }
+                    if (event.text == "a" || event.text == "A") { root.nav("select-all"); return accept; }
                     return reject;
+                }
+                if (event.modifiers.shift) {
+                    if (event.text == Key.LeftArrow) { root.nav("shift-left"); return accept; }
+                    if (event.text == Key.RightArrow) { root.nav("shift-right"); return accept; }
+                    if (event.text == Key.UpArrow) { root.nav("shift-up"); return accept; }
+                    if (event.text == Key.DownArrow) { root.nav("shift-down"); return accept; }
+                }
+                if (event.text == "i" || event.text == "I") { root.iptc-toggle(); return accept; }
+                if (event.text == "k" || event.text == "K") {
+                    // K: open the panel if needed AND land in the keyword
+                    // field (persona: K must never be a dead key).
+                    root.iptc-focus-keywords = true;
+                    if (!root.iptc-visible) { root.iptc-toggle(); }
+                    return accept;
                 }
                 if (event.text == Key.LeftArrow) { root.nav("left"); return accept; }
                 if (event.text == Key.RightArrow) { root.nav("right"); return accept; }
@@ -235,9 +299,9 @@ export component MainWindow inherits Window {
 
             flick := Flickable {
                 y: root.bar-h;
-                width: 100%;
+                width: parent.width - root.panel-w;
                 height: parent.height - root.bar-h;
-                viewport-width: root.width;
+                viewport-width: self.width;
                 viewport-height: root.virtual-height;
                 viewport-y <=> root.vp-y;
 
@@ -257,6 +321,22 @@ export component MainWindow inherits Window {
                         width: 100%;
                         height: 100%;
                         image-fit: contain;
+                    }
+                    cell-ta := TouchArea {
+                        property <bool> mod-ctrl: false;
+                        property <bool> mod-shift: false;
+                        pointer-event(ev) => {
+                            if (ev.kind == PointerEventKind.down) {
+                                self.mod-ctrl = ev.modifiers.control;
+                                self.mod-shift = ev.modifiers.shift;
+                            }
+                        }
+                        clicked => {
+                            root.cell-clicked(
+                                cell.id, self.pressed-x, self.pressed-y,
+                                self.mod-ctrl, self.mod-shift);
+                            keys.focus(); // clicking the grid claims the keyboard
+                        }
                     }
                     if !cell.has-image: Text {
                         text: cell.label;
@@ -288,6 +368,13 @@ export component MainWindow inherits Window {
                         x: 8px;
                         y: 4px;
                     }
+                    // Selection outline (Visual language: accent outline;
+                    // thinner + dimmer than the cursor so both read).
+                    if cell.selected && !cell.is-cursor: Rectangle {
+                        border-width: 2px;
+                        border-color: #3a6ea5;
+                        background: transparent;
+                    }
                     // Cursor overlay: LAST child = rendered on top of the image
                     // (spec: the selector must be visible on every cell state).
                     if cell.is-cursor: Rectangle {
@@ -315,14 +402,64 @@ export component MainWindow inherits Window {
                 }
             }
 
-            // Click-to-zoom at loupe fit (armed by Rust only at N=1 with no
-            // zoom overlay): click a spot, land at 1:1 centered on it.
-            // Coordinates are grid-area local; Rust adds the scroll offset.
-            if root.fit-click-armed: TouchArea {
-                y: root.bar-h;
-                width: 100%;
-                height: parent.height - root.bar-h;
-                clicked => { root.fit-clicked(self.pressed-x, self.pressed-y); }
+            // Modern overlay scrollbar (task #21, user request): thin and
+            // dim until hovered/dragged, thumb sized by viewport/content,
+            // draggable with a position hint. Never moves the cursor
+            // (scrolling is browsing — cursor contract).
+            if root.virtual-height > flick.height && root.empty-message == "": Rectangle {
+                x: flick.x + flick.width - 18px;
+                y: flick.y;
+                width: 18px; // grab zone wider than the visual (persona)
+                height: flick.height;
+                background: transparent;
+                sb-ta := TouchArea {
+                    width: 100%;
+                    height: 100%;
+                    moved => {
+                        if (self.pressed) {
+                            root.vp-y = -clamp(
+                                (self.mouse-y - thumb.height / 2)
+                                    / max(1px, parent.height - thumb.height)
+                                    * (root.virtual-height - flick.height),
+                                0px, root.virtual-height - flick.height);
+                        }
+                    }
+                    clicked => {
+                        // Track click: jump straight to the spot.
+                        root.vp-y = -clamp(
+                            (self.mouse-y - thumb.height / 2)
+                                / max(1px, parent.height - thumb.height)
+                                * (root.virtual-height - flick.height),
+                            0px, root.virtual-height - flick.height);
+                    }
+                }
+                thumb := Rectangle {
+                    x: parent.width - self.width - 2px;
+                    width: (sb-ta.has-hover || sb-ta.pressed) ? 10px : 6px;
+                    border-radius: 5px;
+                    height: max(24px, flick.height * flick.height / max(1px, root.virtual-height));
+                    y: (-root.vp-y) / max(1px, root.virtual-height - flick.height)
+                        * (parent.height - self.height);
+                    background: (sb-ta.has-hover || sb-ta.pressed) ? #ffffffcc : #ffffff50;
+                    animate width { duration: 100ms; }
+                }
+                if sb-ta.pressed && root.scroll-hint != "": Rectangle {
+                    x: -116px;
+                    y: clamp(thumb.y, 0px, parent.height - 24px);
+                    width: 110px;
+                    height: 22px;
+                    border-radius: 4px;
+                    background: #202028ee;
+                    Text {
+                        text: root.scroll-hint;
+                        color: #ffffff;
+                        font-size: 11px;
+                        horizontal-alignment: center;
+                        vertical-alignment: center;
+                        width: 100%;
+                        height: 100%;
+                    }
+                }
             }
 
             // Inbox-zero / empty-view state (persona G2): the payoff moment
@@ -407,7 +544,7 @@ export component MainWindow inherits Window {
                         font-size: 16px;
                     }
                     Text {
-                        text: "Arrows / PgUp / PgDn / Home / End   navigate\nY, P or Space   pick (take)\nN or X   reject\nU   clear mark\n+ / -   zoom in / out (grid → loupe fit → ×1.5 steps → 1:1, center held)\nCtrl+scroll   zoom (soon)\nZ   fit → 1:1; zoomed → back to fit (from grid: jump to 1:1)\nClick in loupe   center on the clicked point (fit → 1:1)\nG or Esc   back to the grid\nK   keyword field (IPTC panel, soon)\nI   IPTC panel (soon)\nShift+arrows   extend selection (soon)\nCtrl+A   select all (soon)\nCtrl+O   open folder\nCtrl+E   copy picks (M6)\nCtrl+Q   quit\n1–5, 0   reserved (star ratings, v2)";
+                        text: "Arrows / PgUp / PgDn / Home / End   navigate\nY, P or Space   pick (take)\nN or X   reject\nU   clear mark\n+ / -   zoom in / out (grid → loupe fit → ×1.5 steps → 1:1, center held)\nCtrl+scroll   zoom (soon)\nZ   fit → 1:1; zoomed → back to fit (from grid: jump to 1:1)\nClick in loupe   center on the clicked point (fit → 1:1)\nG or Esc   back to the grid\nK   keyword field (opens the IPTC panel)\nI   IPTC panel\nShift+arrows   extend selection\nCtrl+A   select all (filtered set)\nCtrl+O   open folder\nCtrl+E   copy picks (M6)\nCtrl+Q   quit\n1–5, 0   reserved (star ratings, v2)";
                         color: #c8c8d0;
                         font-size: 13px;
                     }
@@ -417,6 +554,185 @@ export component MainWindow inherits Window {
                         font-size: 11px;
                     }
                 }
+            }
+        }
+
+        // IPTC panel (M5, iptc-templates.md + persona G3-G7): docked right,
+        // toggled by I; K focuses the keyword field. Field editors own the
+        // keyboard while focused (focus containment: typing "Xavier" must
+        // not reject a photo — LineEdit focus keeps events out of `keys`).
+        if root.iptc-visible: Rectangle {
+            x: parent.width - root.panel-w;
+            width: root.panel-w;
+            height: parent.height - statusbar.height;
+            background: #1c1c20;
+            border-width: 1px;
+            border-color: #2c2c30;
+            VerticalLayout {
+                padding: 10px;
+                spacing: 6px;
+                Text {
+                    text: root.iptc-batch-label;
+                    color: #a8a8b0;
+                    font-size: 12px;
+                }
+                if root.iptc-warning != "": Text {
+                    text: root.iptc-warning;
+                    color: #ffb84d;
+                    font-size: 11px;
+                    wrap: word-wrap;
+                }
+                // Template row (G5): dropdown + Apply + single-level revert.
+                HorizontalLayout {
+                    spacing: 6px;
+                    tplbox := ComboBox {
+                        model: root.iptc-templates;
+                        enabled: root.iptc-templates.length > 0;
+                    }
+                    Button {
+                        text: "Apply";
+                        enabled: root.iptc-templates.length > 0;
+                        clicked => {
+                            root.iptc-apply-template(max(tplbox.current-index, 0));
+                            keys.focus();
+                        }
+                    }
+                }
+                Button {
+                    text: root.iptc-revert-label == "" ? "Revert last apply" : root.iptc-revert-label;
+                    enabled: root.iptc-revert-enabled;
+                    clicked => {
+                        root.iptc-revert();
+                        keys.focus();
+                    }
+                }
+                // Field rows: LineEdit + tri-state affordance. state 0 =
+                // untouched (grayed placeholder), 1 = value, 2 = CLEAR badge.
+                Flickable {
+                    viewport-height: fields-col.preferred-height;
+                    fields-col := VerticalLayout {
+                        spacing: 4px;
+                        for row[i] in root.iptc-fields: VerticalLayout {
+                            spacing: 1px;
+                            HorizontalLayout {
+                                spacing: 4px;
+                                Text {
+                                    text: row.label;
+                                    color: #808088;
+                                    font-size: 10px;
+                                    vertical-alignment: center;
+                                }
+                                Rectangle { } // spacer
+                                TouchArea {
+                                    width: 14px;
+                                    height: 14px;
+                                    Text {
+                                        text: "⌫";
+                                        color: #707078;
+                                        font-size: 11px;
+                                    }
+                                    clicked => {
+                                        root.iptc-field-clear(i);
+                                        keys.focus();
+                                    }
+                                }
+                            }
+                            fld := LineEdit {
+                                text: row.mixed ? "" : row.value;
+                                placeholder-text: row.mixed ? "‹multiple values›" : "";
+                                font-size: 12px;
+                                height: 26px;
+                                accepted(text) => {
+                                    root.iptc-field-committed(i, text, true);
+                                    keys.focus(); // G4: Enter returns to grid, cursor stays
+                                }
+                                changed has-focus => {
+                                    // G7: click-away from a half-typed field
+                                    // COMMITS (no focus return). The Rust
+                                    // side no-ops when the value is
+                                    // unchanged, so Enter's focus hop does
+                                    // not double-commit.
+                                    if (!self.has-focus && self.text != row.value) {
+                                        root.iptc-field-committed(i, self.text, false);
+                                        // Re-sync the display: if the commit
+                                        // no-opped (emptied or padded text),
+                                        // the model kept the old value — the
+                                        // editor must not keep showing a
+                                        // value that was never stored (QE).
+                                        self.text = row.mixed ? "" : row.value;
+                                    }
+                                }
+                            }
+                        }
+                    }
+                }
+                // Keywords: chips with X (append-only entry below).
+                HorizontalLayout {
+                    spacing: 4px;
+                    alignment: start;
+                    for chip[i] in root.iptc-keywords: Rectangle {
+                        height: 20px;
+                        width: chip-t.preferred-width + 26px;
+                        border-radius: 10px;
+                        background: #2c3c50;
+                        chip-t := Text {
+                            x: 6px;
+                            text: chip.coverage == "" ? chip.text : chip.text + " " + chip.coverage;
+                            color: #c8d8e8;
+                            font-size: 11px;
+                            vertical-alignment: center;
+                            height: 100%;
+                        }
+                        TouchArea {
+                            x: parent.width - 16px;
+                            width: 14px;
+                            height: 100%;
+                            Text {
+                                text: "×";
+                                color: #8898a8;
+                                font-size: 12px;
+                                vertical-alignment: center;
+                                height: 100%;
+                            }
+                            clicked => {
+                                root.iptc-keyword-removed(i);
+                                keys.focus();
+                            }
+                        }
+                    }
+                }
+                kwedit := LineEdit {
+                    // K lands here: on panel open (init) or while already
+                    // open (the watch property observes the root flag).
+                    property <bool> want-focus: root.iptc-focus-keywords;
+                    init => {
+                        if (self.want-focus) {
+                            self.focus();
+                            root.iptc-focus-keywords = false;
+                        }
+                    }
+                    changed want-focus => {
+                        if (self.want-focus) {
+                            self.focus();
+                            root.iptc-focus-keywords = false;
+                        }
+                    }
+                    placeholder-text: "add keywords, comma-separated";
+                    font-size: 12px;
+                    height: 26px;
+                    accepted(text) => {
+                        root.iptc-keyword-added(text);
+                        self.text = "";
+                        keys.focus(); // G4: commit returns to grid
+                    }
+                    changed has-focus => {
+                        if (!self.has-focus && self.text != "") {
+                            root.iptc-keyword-added(self.text); // G7 click-away
+                            self.text = "";
+                        }
+                    }
+                }
+                Rectangle { } // bottom spacer
             }
         }
 

@@ -95,6 +95,24 @@ Recorded deviations/decisions (M2):
   covers M2; revisit during M4 polish (needs user OK to defer past v1 if it
   stays unsolved).
 
+## Overlay scrollbar (task #21, user request 2026-07-25, persona-reviewed)
+
+A modern overlay scrollbar on the GRID's right edge (inside the grid area —
+when the IPTC panel docks, the bar sits between grid and panel, never on
+the window edge): thin (6px) and faint whenever content overflows — NEVER
+fully hidden (the "where am I?" glance is the whole point) — widening to
+10px and brightening on hover/drag, with an 18px grab zone (persona: a
+tired mouse hand must not hunt a 6px strip). Thumb sized
+viewport/content, draggable; a TRACK CLICK JUMPS TO THE SPOT (persona
+IN-MY-WAY on page-jump: PgUp/PgDn already page via the cursor; the bar
+teleports). While dragging, a floating hint shows "first-visible / total"
+of the filtered view, with the first visible image's capture time
+appended ("795 / 1450 · 15:42") when sorting by capture time — numbers
+only under filename sort. Scrollbar use NEVER moves the cursor
+(scrolling is browsing); hidden under the zoom overlay and on empty
+views. Panel toggle reflows anchor on the cursor. Deferred polish:
+brightening during wheel scrolling (needs an activity decay timer).
+
 ## Cursor (the selector) — behavior contract (added after user bug report 2026-07-25)
 
 - Exactly one cell is the cursor at any time; it marks where keyboard actions
@@ -109,13 +127,17 @@ Recorded deviations/decisions (M2):
 - Mouse/wheel scrolling does not move the cursor in multi-column grid views —
   scrolling is browsing, the cursor stays where the user parked it (it may
   leave the viewport; the next arrow key first brings it back into view).
-- **Grid click moves the cursor (user requirement 2026-07-25, issue #7)**: a
-  plain click on a cell in ANY multi-column grid view moves the cursor to
-  that image (and claims it, per the untouched-cursor rule). Click means
-  press+release without movement — drag remains scrolling, same
-  disambiguation as the loupe. Ctrl/Shift-click gain selection semantics
-  with the IPTC panel step (Visual language section); a plain click on a
-  cell must never scroll the view as a side effect.
+- **Grid click moves the cursor (user requirement 2026-07-25, issue #7 —
+  IMPLEMENTED with the panel step)**: a plain click on a cell moves the
+  cursor to that image (and claims it, per the untouched-cursor rule) and
+  COLLAPSES any multi-selection (the deselect gesture; Esc/G at a grid
+  zoom also clears the selection). Ctrl+click toggles membership;
+  Shift+click spans cursor..clicked in view order. Clicks live in per-cell
+  touch areas INSIDE the Flickable, so drag remains scrolling (the
+  press+release-without-movement disambiguation comes from the Flickable's
+  drag grab); clicks never scroll the view as a side effect. Clicking the
+  grid returns keyboard focus to it (a stranded panel-field focus must
+  never turn grid keys into text).
 - Exception at 1-column (loupe) zoom: the visible image IS the cursor — the
   cursor follows scrolling so full-res loading and marks always apply to what
   the user is looking at.
@@ -155,8 +177,8 @@ Recorded deviations/decisions (M2):
 | click (loupe) | center HERE: at fit/intermediate → 1:1 anchored on the clicked point; at 1:1 → re-center on the clicked point |
 | `G` or `Esc` | back to the grid at the previous grid zoom (from loupe/1:1) |
 | `I` | toggle IPTC panel |
-| `K` | focus the keyword field of the IPTC panel (persona G3, provisional 2026-07-25 pending user confirmation — `K` is free and mnemonic) |
-| Shift+arrows | extend selection (persona G7: was only in Visual language; the map is the popup's source of truth) |
+| `K` | focus the keyword field, opening the IPTC panel if needed (persona G3; implemented with the panel step — K is never a dead key) |
+| Shift+arrows | extend selection (span anchor..cursor over view positions; a new span replaces the previous one — shrink/flip works) |
 | `Ctrl+A` | select all (filtered set) |
 | `Ctrl+O` | Open Folder… (persona accelerator gap, provisional) |
 | `Ctrl+Q` | Quit (persona accelerator gap, provisional) |
@@ -205,9 +227,8 @@ binary has no arguments; today's behavior of printing usage to a terminal
 nobody sees and exiting is a broken first run). The CLI usage error remains
 for genuinely malformed invocations (unknown flags, nonexistent folder).
 
-Chrome staging (recorded 2026-07-25, M5 step 2): the IPTC Panel menu item
-lands together with the panel itself (later M5 step), as do `I`, `K`,
-Shift+arrows and `Ctrl+A` — the popup lists them as "(soon)" until then.
+Chrome staging (updated with the panel step): IPTC Panel menu item, `I`,
+`K`, Shift+arrows and `Ctrl+A` all landed; the popup lists them live.
 "About" opens the shortcuts popup (which carries the license line) until a
 dedicated About dialog is worth its weight — deferred, not forgotten.
 

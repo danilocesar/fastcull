@@ -81,8 +81,11 @@ case-preservingly (first spelling wins; comparison is Unicode-casefolded).
       keywords union, deterministic `{seq}` ordered by the active sort order
       (`batch_apply_overwrites_preserves_unions_and_orders_seq`). CAVEAT
       (recorded 2026-07-25): `{seq}` order is a CALLER CONTRACT — apply takes
-      the batch slice in the active sort order; the wiring from filter.rs's
-      sort lands with the panel step and must be integration-tested there.
+      the batch slice in the active sort order; the wiring is covered by
+      `selection::batch` view-order tests + `ExpandContext::from_sort_key`
+      (the app builds ctxs from `Selection::batch` output directly); the
+      full click-to-apply path is headless-untestable (recorded — Wayland
+      offers no input injection) and belongs to the user's manual pass.
 - [x] Template TOML round-trip incl. Unicode; corrupt-entry resilience per the
       recorded error semantics above
       (`templates_toml_roundtrip_unicode_and_partial_corruption`).
@@ -96,10 +99,21 @@ case-preservingly (first spelling wins; comparison is Unicode-casefolded).
       is single-level: a second revert is a no-op
       (`revert_restores_exact_state_and_is_single_level`).
 
-Deferred to the panel step (recorded 2026-07-25): keyword writes routed
-through the debounced sidecar-writer thread (today `xmp::write_keywords` has
-no app caller; parallel raw calls are corruption-safe but last-writer-wins
-per property); IPTC FIELD serialization to XMP (dc:title etc.); panel input
-sanitization (control characters are invalid XML 1.0; keywords are trimmed
-on sidecar read; NFC-normalize before casefold dedup); `ExpandContext`
-wiring from exif.rs.
+Panel-step ledger (updated after the panel gate, 2026-07-25):
+- DONE: writer-thread routing (SidecarWriter::iptc; keyword-only messages
+  MERGE into a pending full write — fields never dropped); IPTC field
+  serialization (write_iptc: clear removes the property, never writes
+  empty values; rewrites are byte-stable — no whitespace accumulation);
+  input sanitization at the commit boundary (iptc::sanitize_text: NFC +
+  control-strip + trim; add_keywords sanitizes before the casefold dedup).
+- Tri-state UI, v1 reading (recorded): the per-field clear control (⌫)
+  clears IMMEDIATELY across the batch, revert-covered — there is no
+  pending-clear badge state; bare emptiness always preserves, and a
+  value-unchanged commit is a strict no-op (must not arm revert or touch
+  sidecars).
+- STILL OPEN: `{camera}` expands EMPTY from the panel (the EXIF camera
+  model is not yet plumbed into the app session — a template using
+  {camera} stamps nothing; wire ExpandContext from exif.rs in a follow-up
+  step). Esc inside a field is NOT an abandon gesture (Slint LineEdit
+  offers no Esc hook in v1) — exits are Enter (commit + focus to grid) and
+  click-away (G7 commit, focus stays where clicked); recorded deviation.

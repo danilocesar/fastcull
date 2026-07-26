@@ -9,7 +9,8 @@ use std::sync::mpsc::{Receiver, RecvTimeoutError, Sender, SyncSender};
 use std::time::{Duration, Instant};
 
 use crate::catalog::PickState;
-use crate::xmp::{write_keywords, write_pick};
+use crate::iptc::IptcData;
+use crate::xmp::{write_iptc, write_keywords, write_pick};
 
 /// Debounce window: a burst of re-marks on one image becomes one write.
 const DEBOUNCE: Duration = Duration::from_millis(700);
@@ -17,6 +18,7 @@ const DEBOUNCE: Duration = Duration::from_millis(700);
 enum Msg {
     Mark(PathBuf, PickState),
     Keywords(PathBuf, Vec<String>),
+    Iptc(PathBuf, Box<IptcData>),
     Flush(SyncSender<()>),
 }
 
@@ -69,6 +71,16 @@ impl SidecarWriter {
         }
     }
 
+    /// Queue a FULL IPTC write (fields + keywords) for `raw_path` — the
+    /// panel's only write path. Shares the debounce slot with keyword-only
+    /// writes (an IptcData carries the keyword list, so the latest of the
+    /// two is always the full truth for the bags).
+    pub fn iptc(&self, raw_path: PathBuf, iptc: IptcData) {
+        if let Some(tx) = &self.tx {
+            tx.send(Msg::Iptc(raw_path, Box::new(iptc))).ok();
+        }
+    }
+
     /// Barrier: returns once every queued write has hit disk. The copy
     /// engine calls this before planning (a pick made a moment ago must be
     /// in the copied sidecar).
@@ -95,6 +107,7 @@ impl Drop for SidecarWriter {
 enum PendingWrite {
     Pick(PickState),
     Keywords(Vec<String>),
+    Iptc(Box<IptcData>),
 }
 
 fn writer_loop(rx: Receiver<Msg>, err_tx: Sender<WriteFailure>) {
@@ -116,9 +129,25 @@ fn writer_loop(rx: Receiver<Msg>, err_tx: Sender<WriteFailure>) {
                 );
             }
             Ok(Msg::Keywords(path, kws)) => {
+                // MERGE into a pending full-IPTC write instead of replacing
+                // it (gate finding: replacement silently dropped queued
+                // FIELD changes — the keyword list updates, fields ride on).
+                let key = (path, 1);
+                let write = match pending.remove(&key) {
+                    Some((PendingWrite::Iptc(mut iptc), _)) => {
+                        iptc.keywords = kws;
+                        PendingWrite::Iptc(iptc)
+                    }
+                    _ => PendingWrite::Keywords(kws),
+                };
+                pending.insert(key, (write, Instant::now() + DEBOUNCE));
+            }
+            Ok(Msg::Iptc(path, iptc)) => {
+                // Same slot as Keywords: whichever is newest is the full
+                // truth for the keyword bags, and Iptc carries the fields.
                 pending.insert(
                     (path, 1),
-                    (PendingWrite::Keywords(kws), Instant::now() + DEBOUNCE),
+                    (PendingWrite::Iptc(iptc), Instant::now() + DEBOUNCE),
                 );
             }
             Ok(Msg::Flush(ack)) => {
@@ -154,6 +183,7 @@ fn drain(
             let result = match &write {
                 PendingWrite::Pick(pick) => write_pick(path, *pick),
                 PendingWrite::Keywords(kws) => write_keywords(path, kws),
+                PendingWrite::Iptc(iptc) => write_iptc(path, iptc),
             };
             if let Err(e) = result {
                 // A sidecar failure must never take the writer down; it is
@@ -244,6 +274,31 @@ mod tests {
         let state = read_sidecar(&sidecar_path(&raw)).unwrap();
         assert_eq!(state.pick, PickState::Rejected, "last mark wins");
         assert_eq!(state.keywords, vec!["kw49"], "last keyword list wins");
+        std::fs::remove_dir_all(&dir).ok();
+    }
+
+    /// Gate finding: keywords() arriving while a FULL iptc write is
+    /// pending must merge (update the bags), never drop queued fields.
+    #[test]
+    fn keywords_merge_into_pending_iptc_write() {
+        let dir = tmp();
+        let raw = dir.join("m.ARW");
+        let (writer, _errs) = SidecarWriter::start();
+        let full = crate::iptc::IptcData {
+            title: Some("Herons".into()),
+            keywords: vec!["old".into()],
+            ..Default::default()
+        };
+        writer.iptc(raw.clone(), full);
+        writer.keywords(raw.clone(), vec!["new".into()]);
+        writer.flush();
+        let state = read_sidecar(&sidecar_path(&raw)).unwrap();
+        assert_eq!(
+            state.iptc.title.as_deref(),
+            Some("Herons"),
+            "fields survive"
+        );
+        assert_eq!(state.keywords, vec!["new"], "bags take the newer list");
         std::fs::remove_dir_all(&dir).ok();
     }
 

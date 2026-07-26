@@ -409,11 +409,13 @@ pub enum SessionEvent {
         reason: String,
     },
     /// A pre-existing sidecar was found at load (M1-deferred criterion,
-    /// approved for M3): picks from a previous session (or another tool)
-    /// reappear. Emitted only when the sidecar file exists.
+    /// approved for M3): picks — and since M5, the full IPTC state — from a
+    /// previous session (or another tool) reappear. Emitted only when the
+    /// sidecar file exists.
     Sidecar {
         index: usize,
         pick: crate::catalog::PickState,
+        iptc: Box<crate::iptc::IptcData>,
     },
 }
 
@@ -632,6 +634,7 @@ fn process_job(shared: &Shared, cache: &mut Option<PreviewCache>, index: usize, 
             Ok(state) => send(SessionEvent::Sidecar {
                 index,
                 pick: state.pick,
+                iptc: Box::new(state.iptc),
             }),
             // A malformed sidecar must not vanish silently: the previous
             // cull is gone from view and the user deserves a trace.

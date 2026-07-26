@@ -272,22 +272,224 @@ pub fn write_keywords(raw_path: &Path, keywords: &[String]) -> Result<(), XmpErr
     atomic_write(&path, output.as_bytes())
 }
 
+/// Write the FULL IPTC state (fields + keyword bags) into the sidecar for
+/// `raw_path` (xmp-sidecars.md mapping table). Read-modify-write: every
+/// property FastCull owns is replaced wholesale — a `None` field is simply
+/// not written, which REMOVES the property (the tri-state clear; an empty
+/// value is never emitted, per interop rule). Foreign nodes, the rating,
+/// and unknown namespaces pass through unchanged. Atomic.
+///
+/// The panel routes ALL its writes here (via SidecarWriter::iptc) —
+/// `write_keywords` remains as the keywords-only primitive but must not be
+/// interleaved with this on the same path outside the writer thread.
+pub fn write_iptc(raw_path: &Path, iptc: &crate::iptc::IptcData) -> Result<(), XmpError> {
+    let path = sidecar_path(raw_path);
+    let existing = match std::fs::read(&path) {
+        Ok(bytes) => bytes,
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound => {
+            new_sidecar(PickState::Unmarked).into_bytes()
+        }
+        Err(e) => return Err(e.into()),
+    };
+    let output = rewrite_iptc(&existing, iptc)?;
+    atomic_write(&path, output.as_bytes())
+}
+
+/// Escape for XML text content AND strip control characters: raw controls
+/// are invalid XML 1.0 — exiv2 rejects the whole packet (QE-proven via a
+/// template that legally smuggled a BEL through TOML). This is the last
+/// line of defense; the model-level sanitizer runs upstream.
+fn xml_escape(s: &str) -> String {
+    s.chars()
+        .filter(|c| !c.is_control())
+        .collect::<String>()
+        .replace('&', "&amp;")
+        .replace('<', "&lt;")
+        .replace('>', "&gt;")
+}
+
+/// Serialized IPTC block for the first rdf:Description: keyword bags plus
+/// the mapped field elements. Alt/x-default for title/description/rights,
+/// Seq for creator, simple elements for the photoshop/Iptc4xmpCore set.
+fn iptc_block(iptc: &crate::iptc::IptcData) -> String {
+    let mut out = String::new();
+    if !iptc.keywords.is_empty() {
+        out.push_str(&keyword_bags_only(&iptc.keywords));
+    }
+    let alt = |name: &str, v: &str| {
+        format!(
+            "\n   <{name}>\n    <rdf:Alt>\n     <rdf:li xml:lang=\"x-default\">{}</rdf:li>\n    </rdf:Alt>\n   </{name}>",
+            xml_escape(v)
+        )
+    };
+    let seq = |name: &str, v: &str| {
+        format!(
+            "\n   <{name}>\n    <rdf:Seq>\n     <rdf:li>{}</rdf:li>\n    </rdf:Seq>\n   </{name}>",
+            xml_escape(v)
+        )
+    };
+    let simple = |name: &str, v: &str| format!("\n   <{name}>{}</{name}>", xml_escape(v));
+    if let Some(v) = iptc.title.as_deref() {
+        out.push_str(&alt("dc:title", v));
+    }
+    if let Some(v) = iptc.description.as_deref() {
+        out.push_str(&alt("dc:description", v));
+    }
+    if let Some(v) = iptc.creator.as_deref() {
+        out.push_str(&seq("dc:creator", v));
+    }
+    if let Some(v) = iptc.rights.as_deref() {
+        out.push_str(&alt("dc:rights", v));
+    }
+    if let Some(v) = iptc.headline.as_deref() {
+        out.push_str(&simple("photoshop:Headline", v));
+    }
+    if let Some(v) = iptc.city.as_deref() {
+        out.push_str(&simple("photoshop:City", v));
+    }
+    if let Some(v) = iptc.country.as_deref() {
+        out.push_str(&simple("photoshop:Country", v));
+    }
+    if let Some(v) = iptc.credit.as_deref() {
+        out.push_str(&simple("photoshop:Credit", v));
+    }
+    if let Some(v) = iptc.source.as_deref() {
+        out.push_str(&simple("photoshop:Source", v));
+    }
+    if let Some(v) = iptc.job_id.as_deref() {
+        out.push_str(&simple("photoshop:TransmissionReference", v));
+    }
+    if let Some(v) = iptc.location.as_deref() {
+        out.push_str(&simple("Iptc4xmpCore:Location", v));
+    }
+    out
+}
+
+/// Event rewrite for write_iptc: drop every owned property (element form,
+/// any Description, matched by local name) and every owned attribute
+/// (compact form), then inject the fresh block into the first Description
+/// with the needed namespaces ensured.
+fn rewrite_iptc(existing: &[u8], iptc: &crate::iptc::IptcData) -> Result<String, XmpError> {
+    if std::str::from_utf8(existing).is_err() {
+        return Err(XmpError::NotUtf8);
+    }
+    let owned = |name: &[u8]| {
+        matches!(local_name(name), b"subject" | b"hierarchicalSubject")
+            || iptc_field_for(local_name(name)).is_some()
+    };
+    let block = iptc_block(iptc);
+    let mut reader = quick_xml::Reader::from_reader(existing);
+    reader.config_mut().trim_text(false);
+    let mut writer = quick_xml::Writer::new(Vec::new());
+    let mut buf = Vec::new();
+    // Indentation text nodes of removed elements must go WITH them, or
+    // every rewrite leaves an orphaned blank line and sidecars grow
+    // without bound over a captioning session (QE-measured +19 bytes per
+    // rewrite). Whitespace-only text is held back until the next event
+    // decides its fate.
+    let mut held_ws: Option<Vec<u8>> = None;
+    let mut first_done = false;
+    let mut skip_depth = 0usize;
+    loop {
+        let event = reader.read_event_into(&mut buf)?;
+        // Flush or drop held whitespace depending on what follows it.
+        let feeds_removed = match &event {
+            Event::Start(e) | Event::Empty(e) => owned(e.name().as_ref()),
+            _ => false,
+        };
+        if let Some(ws) = held_ws.take() {
+            if !feeds_removed && skip_depth == 0 {
+                writer.get_mut().extend_from_slice(&ws);
+            }
+        }
+        if skip_depth == 0 {
+            if let Event::Text(t) = &event {
+                let raw = t.clone().into_inner().into_owned();
+                if raw.iter().all(|b| b.is_ascii_whitespace()) {
+                    held_ws = Some(raw);
+                    buf.clear();
+                    continue;
+                }
+            }
+        }
+        match event {
+            Event::Eof => break,
+            Event::Start(ref e) if owned(e.name().as_ref()) => skip_depth += 1,
+            Event::Empty(ref e) if skip_depth == 0 && owned(e.name().as_ref()) => {}
+            Event::End(ref e) if skip_depth > 0 && owned(e.name().as_ref()) => skip_depth -= 1,
+            _ if skip_depth > 0 => {}
+            Event::Start(ref e) | Event::Empty(ref e) if is_rdf_description(e) => {
+                let was_empty = matches!(event, Event::Empty(_));
+                let first = !first_done;
+                first_done = true;
+                let mut out =
+                    BytesStart::new(String::from_utf8_lossy(e.name().as_ref()).into_owned());
+                let (mut dc, mut lr, mut ps, mut core) = (false, false, false, false);
+                for attr in e.attributes() {
+                    let attr = attr?;
+                    match attr.key.as_ref() {
+                        b"xmlns:dc" => dc = true,
+                        b"xmlns:lr" => lr = true,
+                        b"xmlns:photoshop" => ps = true,
+                        b"xmlns:Iptc4xmpCore" => core = true,
+                        // Owned compact-form attributes are replaced by the
+                        // element block (or removed, when the field is None).
+                        key if iptc_field_for(local_name(key)).is_some() => continue,
+                        _ => {}
+                    }
+                    out.push_attribute(attr);
+                }
+                if first && !block.is_empty() {
+                    if !dc {
+                        out.push_attribute(("xmlns:dc", "http://purl.org/dc/elements/1.1/"));
+                    }
+                    if !lr {
+                        out.push_attribute(("xmlns:lr", "http://ns.adobe.com/lightroom/1.0/"));
+                    }
+                    if !ps {
+                        out.push_attribute((
+                            "xmlns:photoshop",
+                            "http://ns.adobe.com/photoshop/1.0/",
+                        ));
+                    }
+                    if !core {
+                        out.push_attribute((
+                            "xmlns:Iptc4xmpCore",
+                            "http://iptc.org/std/Iptc4xmpCore/1.0/xmlns/",
+                        ));
+                    }
+                }
+                writer.write_event(Event::Start(out))?;
+                if first {
+                    writer.get_mut().extend_from_slice(block.as_bytes());
+                }
+                if was_empty {
+                    writer.write_event(Event::End(quick_xml::events::BytesEnd::new(
+                        String::from_utf8_lossy(e.name().as_ref()).into_owned(),
+                    )))?;
+                }
+            }
+            other => writer.write_event(other)?,
+        }
+        buf.clear();
+    }
+    if !first_done {
+        return Err(XmpError::NoDescription);
+    }
+    Ok(String::from_utf8_lossy(&writer.into_inner()).into_owned())
+}
+
 /// XML-escaped `rdf:li` rows for a keyword bag, matching the fresh-sidecar
-/// indentation (three spaces to the bag, four to the items).
-fn keyword_bags(keywords: &[String]) -> String {
+/// indentation (three spaces to the bag, four to the items). No trailing
+/// closer-indent (iptc_block composes further; keyword_bags adds it).
+fn keyword_bags_only(keywords: &[String]) -> String {
     let lis: String = keywords
         .iter()
-        .map(|k| {
-            let esc = k
-                .replace('&', "&amp;")
-                .replace('<', "&lt;")
-                .replace('>', "&gt;");
-            format!("     <rdf:li>{esc}</rdf:li>\n")
-        })
+        .map(|k| format!("     <rdf:li>{}</rdf:li>\n", xml_escape(k)))
         .collect();
     format!(
         "\n   <dc:subject>\n    <rdf:Bag>\n{lis}    </rdf:Bag>\n   </dc:subject>\
-         \n   <lr:hierarchicalSubject>\n    <rdf:Bag>\n{lis}    </rdf:Bag>\n   </lr:hierarchicalSubject>\n  "
+         \n   <lr:hierarchicalSubject>\n    <rdf:Bag>\n{lis}    </rdf:Bag>\n   </lr:hierarchicalSubject>"
     )
 }
 
@@ -311,10 +513,36 @@ fn rewrite_keywords(existing: &[u8], keywords: &[String]) -> Result<String, XmpE
     reader.config_mut().trim_text(false);
     let mut writer = quick_xml::Writer::new(Vec::new());
     let mut buf = Vec::new();
+    // Indentation text nodes of removed elements must go WITH them, or
+    // every rewrite leaves an orphaned blank line and sidecars grow
+    // without bound over a captioning session (QE-measured +19 bytes per
+    // rewrite). Whitespace-only text is held back until the next event
+    // decides its fate.
+    let mut held_ws: Option<Vec<u8>> = None;
     let mut first_done = false;
     let mut skip_depth = 0usize; // >0: inside an old subject element
     loop {
         let event = reader.read_event_into(&mut buf)?;
+        // Flush or drop held whitespace depending on what follows it.
+        let feeds_removed = match &event {
+            Event::Start(e) | Event::Empty(e) => is_subject(e.name().as_ref()),
+            _ => false,
+        };
+        if let Some(ws) = held_ws.take() {
+            if !feeds_removed && skip_depth == 0 {
+                writer.get_mut().extend_from_slice(&ws);
+            }
+        }
+        if skip_depth == 0 {
+            if let Event::Text(t) = &event {
+                let raw = t.clone().into_inner().into_owned();
+                if raw.iter().all(|b| b.is_ascii_whitespace()) {
+                    held_ws = Some(raw);
+                    buf.clear();
+                    continue;
+                }
+            }
+        }
         match event {
             Event::Eof => break,
             Event::Start(ref e) if is_subject(e.name().as_ref()) => skip_depth += 1,
@@ -348,7 +576,7 @@ fn rewrite_keywords(existing: &[u8], keywords: &[String]) -> Result<String, XmpE
                 if !keywords.is_empty() {
                     writer
                         .get_mut()
-                        .extend_from_slice(keyword_bags(keywords).as_bytes());
+                        .extend_from_slice(keyword_bags_only(keywords).as_bytes());
                 }
                 if was_empty {
                     writer.write_event(Event::End(quick_xml::events::BytesEnd::new(
@@ -658,6 +886,102 @@ mod tests {
         assert_eq!(state.iptc.job_id.as_deref(), Some("JOB-7"));
         assert_eq!(state.iptc.location.as_deref(), Some("Palácio da Pena"));
         assert_eq!(state.iptc.description, None, "unset stays None");
+        std::fs::remove_dir_all(&dir).ok();
+    }
+
+    /// Full IPTC write -> read round-trip (M5 panel contract): every mapped
+    /// field survives, None fields REMOVE the property (tri-state clear,
+    /// never an empty value), rating and foreign nodes pass through, and
+    /// compact-form attributes from other tools are replaced not duplicated.
+    #[test]
+    fn iptc_write_read_roundtrip_clear_and_preserve() {
+        let dir = tmp();
+        let raw = dir.join("h.ARW");
+        write_pick(&raw, PickState::Picked).unwrap();
+        let mut iptc = crate::iptc::IptcData {
+            title: Some("Herons & <friends>".into()),
+            creator: Some("João Ribeiro".into()),
+            city: Some("Sintra".into()),
+            job_id: Some("JOB-7".into()),
+            location: Some("Palácio da Pena".into()),
+            keywords: vec!["owl".into(), "são joão".into()],
+            ..Default::default()
+        };
+        write_iptc(&raw, &iptc).unwrap();
+        let state = read_sidecar(&sidecar_path(&raw)).unwrap();
+        assert_eq!(state.iptc, iptc);
+        assert_eq!(state.pick, PickState::Picked, "rating preserved");
+
+        // Clear city + drop a keyword; rewrite. Property must be GONE from
+        // the file (not empty), keywords replaced wholesale.
+        iptc.city = None;
+        iptc.keywords = vec!["owl".into()];
+        write_iptc(&raw, &iptc).unwrap();
+        let text = std::fs::read_to_string(sidecar_path(&raw)).unwrap();
+        assert!(!text.contains("photoshop:City"), "clear removes property");
+        assert!(!text.contains("são joão"));
+        let state = read_sidecar(&sidecar_path(&raw)).unwrap();
+        assert_eq!(state.iptc, iptc);
+        // Idempotence.
+        write_iptc(&raw, &iptc).unwrap();
+        assert_eq!(read_sidecar(&sidecar_path(&raw)).unwrap().iptc, iptc);
+
+        // Foreign compact attribute for an owned field is replaced, foreign
+        // nodes survive, and a fully-empty IptcData removes everything.
+        let sc = sidecar_path(&raw);
+        std::fs::write(
+            &sc,
+            r#"<?xpacket begin="" id="W5M0MpCehiHzreSzNTczkc9d"?>
+<x:xmpmeta xmlns:x="adobe:ns:meta/">
+ <rdf:RDF xmlns:rdf="http://www.w3.org/1999/02/22-rdf-syntax-ns#">
+  <rdf:Description rdf:about="" xmlns:photoshop="http://ns.adobe.com/photoshop/1.0/"
+    photoshop:City="OldTown" xmlns:dt="http://darktable.sf.net/">
+   <dt:history>opaque</dt:history>
+  </rdf:Description>
+ </rdf:RDF>
+</x:xmpmeta>
+<?xpacket end="w"?>
+"#,
+        )
+        .unwrap();
+        write_iptc(&raw, &crate::iptc::IptcData::default()).unwrap();
+        let text = std::fs::read_to_string(&sc).unwrap();
+        assert!(!text.contains("OldTown"), "owned attribute removed");
+        assert!(text.contains("dt:history"), "foreign node preserved");
+        assert_eq!(
+            read_sidecar(&sc).unwrap().iptc,
+            crate::iptc::IptcData::default()
+        );
+        std::fs::remove_dir_all(&dir).ok();
+    }
+
+    /// QE finding: rewrites must not grow the file without bound (orphaned
+    /// indentation of removed elements accumulated +19 bytes per rewrite —
+    /// a long captioning session inflated sidecars forever).
+    #[test]
+    fn repeated_rewrites_do_not_grow_the_sidecar() {
+        let dir = tmp();
+        let raw = dir.join("g2.ARW");
+        let iptc = crate::iptc::IptcData {
+            title: Some("stable".into()),
+            keywords: vec!["kw".into()],
+            ..Default::default()
+        };
+        write_iptc(&raw, &iptc).unwrap();
+        let first = std::fs::metadata(sidecar_path(&raw)).unwrap().len();
+        for _ in 0..5 {
+            write_iptc(&raw, &iptc).unwrap();
+        }
+        let last = std::fs::metadata(sidecar_path(&raw)).unwrap().len();
+        assert_eq!(first, last, "identical rewrites must be byte-stable");
+        for _ in 0..3 {
+            write_keywords(&raw, &["kw".into()]).unwrap();
+        }
+        let after_kw = std::fs::metadata(sidecar_path(&raw)).unwrap().len();
+        assert!(
+            after_kw <= last + 2,
+            "keyword rewrites must not accumulate ({last} -> {after_kw})"
+        );
         std::fs::remove_dir_all(&dir).ok();
     }
 

@@ -33,13 +33,29 @@ pub struct IptcData {
     pub keywords: Vec<String>,
 }
 
+/// Sanitize user-entered text for metadata fields (iptc-templates.md panel
+/// rules): NFC-normalize (NFD and NFC spellings must be ONE keyword),
+/// strip control characters (raw controls make the XMP packet invalid --
+/// exiv2 rejects the whole sidecar, QE-proven), and trim.
+pub fn sanitize_text(s: &str) -> String {
+    use unicode_normalization::UnicodeNormalization as _;
+    s.nfc()
+        .filter(|c| !c.is_control())
+        .collect::<String>()
+        .trim()
+        .to_string()
+}
+
 impl IptcData {
     /// Additive keyword union (spec: keyword apply never replaces).
+    /// Incoming keywords are sanitized (NFC + control-strip + trim) before
+    /// the casefolded dedup, so normalization variants collapse.
     pub fn add_keywords<I>(&mut self, incoming: I)
     where
         I: IntoIterator<Item = String>,
     {
         for kw in incoming {
+            let kw = sanitize_text(&kw);
             let folded = caseless::default_case_fold_str(&kw);
             let known = self
                 .keywords
@@ -159,6 +175,23 @@ impl ExpandContext {
                 .unwrap_or_default(),
             ext_upper: ext.to_uppercase(),
         }
+    }
+}
+
+impl ExpandContext {
+    /// Build from a filter.rs SORT KEY ("YYYY:MM:DD HH:MM:SS.mmm" -- the
+    /// normalized capture key the app already holds) instead of raw EXIF:
+    /// subseconds are stripped before the EXIF-format parse. Keeps the
+    /// sort-key format coupling in ONE tested place (gate finding: the app
+    /// hand-rolled this split).
+    pub fn from_sort_key(
+        sort_key: Option<&str>,
+        mtime: std::time::SystemTime,
+        file_name: &str,
+        camera: Option<&str>,
+    ) -> Self {
+        let exif = sort_key.map(|k| k.split('.').next().unwrap_or(k).to_string());
+        Self::from_capture(exif.as_deref(), mtime, file_name, camera)
     }
 }
 
@@ -321,10 +354,18 @@ pub fn apply_template(
                     Some(blank) if blank.trim().is_empty() => {
                         fields.push((stringify!($f), Planned::Clear))
                     }
-                    Some(raw) => fields.push((
-                        stringify!($f),
-                        Planned::Set(expand(stringify!($f), raw, ctx, seq, n)?),
-                    )),
+                    Some(raw) => {
+                        // Sanitize the EXPANDED value (QE D1: a control
+                        // char legally TOML-escaped in templates.toml
+                        // corrupted every sidecar of a batch Apply);
+                        // empty-after-sanitize folds into Clear.
+                        let value = sanitize_text(&expand(stringify!($f), raw, ctx, seq, n)?);
+                        if value.is_empty() {
+                            fields.push((stringify!($f), Planned::Clear));
+                        } else {
+                            fields.push((stringify!($f), Planned::Set(value)));
+                        }
+                    }
                 }
             };
         }
@@ -596,6 +637,45 @@ mod tests {
         let load = parse_templates("[templates.w]\ncountry = \"   \"\n").unwrap();
         assert_eq!(load.warnings.len(), 1, "whitespace-only warns too");
         assert!(load.warnings[0].contains("country"));
+    }
+
+    /// Gate round 2: NFC variants collapse to one keyword; control chars
+    /// are stripped at the sanitize boundary.
+    #[test]
+    fn sanitize_normalizes_nfc_and_strips_controls() {
+        let mut d = IptcData::default();
+        d.add_keywords(["caf\u{e9}".to_string()]); // NFC
+        d.add_keywords(["cafe\u{301}".to_string()]); // NFD variant
+        assert_eq!(d.keywords.len(), 1, "NFC/NFD must dedup: {:?}", d.keywords);
+        assert_eq!(sanitize_text("bad\u{0}ctrl\u{7}title"), "badctrltitle");
+        assert_eq!(sanitize_text("  padded  "), "padded");
+        d.add_keywords(["\u{7}\u{0}".to_string()]);
+        assert_eq!(d.keywords.len(), 1, "control-only keyword vanishes");
+    }
+
+    /// QE D1 regression: a control character smuggled through
+    /// templates.toml must never reach the applied model (and the
+    /// serializer strips any that reach it another way).
+    #[test]
+    fn template_apply_sanitizes_expanded_values() {
+        let (mut images, ctxs) = batch3();
+        let tpl = IptcTemplate {
+            title: Some("bell\u{7}here {filename}".into()),
+            city: Some("\u{0}\u{7}".into()), // control-only -> Clear
+            ..Default::default()
+        };
+        images[0].city = Some("Old Town".into());
+        apply_template(&tpl, &mut images, &ctxs).unwrap();
+        assert_eq!(images[0].title.as_deref(), Some("bellhere DSC00000"));
+        assert_eq!(images[0].city, None, "control-only value clears");
+    }
+
+    #[test]
+    fn from_sort_key_strips_subseconds() {
+        let mtime = std::time::UNIX_EPOCH + std::time::Duration::from_secs(1_753_400_000);
+        let c =
+            ExpandContext::from_sort_key(Some("2021:04:05 17:41:23.570"), mtime, "DSC.ARW", None);
+        assert_eq!((c.date.as_str(), c.time.as_str()), ("2021-04-05", "174123"));
     }
 
     #[test]
