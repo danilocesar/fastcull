@@ -18,6 +18,7 @@ export struct CellData {
     is-cursor: bool,
     selected: bool,
     id: int,
+    copied: bool,
     seed: int,
     // 0 = unmarked, 1 = picked (star), 2 = rejected (X + dim)
     pick: int,
@@ -108,6 +109,21 @@ export component MainWindow inherits Window {
     in property <bool> filter-bar-visible: true;
     // Inbox-zero / empty-view message ("" = view has images).
     in property <string> empty-message: "";
+    // Copy Picks dialog (M6, fileops.md dialog minimums). copy-state:
+    // 0 = planning/preview, 1 = running, 2 = report.
+    in-out property <bool> copy-visible: false;
+    in property <int> copy-state: 0;
+    in property <string> copy-dest: "";
+    in-out property <string> copy-template: "";
+    in property <string> copy-summary: "";
+    in property <string> copy-preview: "";
+    in property <string> copy-collisions: "";
+    in property <bool> copy-show-skip-toggle: false;
+    in-out property <bool> copy-skip-existing: false;
+    in property <string> copy-error: "";
+    in property <bool> copy-ready: false;
+    in property <string> copy-progress: "";
+    in property <string> copy-report: "";
     // Scrollbar drag hint: "first-visible / total" (task #21).
     in property <string> scroll-hint: "";
     in-out property <bool> shortcuts-visible: false;
@@ -144,6 +160,15 @@ export component MainWindow inherits Window {
     callback iptc-keyword-removed(int);
     callback iptc-apply-template(int);
     callback iptc-revert();
+    // Copy Picks (M6): open plans immediately; replan fires on any input
+    // change; start runs the plan; cancel stops between files.
+    callback copy-open();
+    callback copy-pick-dest();
+    callback copy-replan();
+    callback copy-start();
+    callback copy-cancel();
+    callback copy-close();
+    callback copy-open-dest-folder();
 
     changed vp-y => { root.viewport-changed(); }
     public function focus-grid() { keys.focus(); }
@@ -160,8 +185,8 @@ export component MainWindow inherits Window {
                 activated => { root.open-folder(); }
             }
             MenuItem {
-                title: "Copy Picks… (M6)";
-                enabled: false;
+                title: "Copy Picks… (Ctrl+E)";
+                activated => { root.copy-open(); }
             }
             MenuItem {
                 title: "Settings… (soon)";
@@ -219,6 +244,7 @@ export component MainWindow inherits Window {
                     if (event.text == "o" || event.text == "O") { root.open-folder(); return accept; }
                     if (event.text == "q" || event.text == "Q") { root.quit(); return accept; }
                     if (event.text == "a" || event.text == "A") { root.nav("select-all"); return accept; }
+                    if (event.text == "e" || event.text == "E") { root.copy-open(); return accept; }
                     return reject;
                 }
                 if (event.modifiers.shift) {
@@ -374,6 +400,15 @@ export component MainWindow inherits Window {
                         border-width: 2px;
                         border-color: #3a6ea5;
                         background: transparent;
+                    }
+                    // Copied badge (M6): the session's "this one is safe
+                    // at the destination" mark.
+                    if cell.copied: Text {
+                        text: "✓";
+                        color: #6ade8a;
+                        font-size: 16px;
+                        x: 8px;
+                        y: parent.height - 24px;
                     }
                     // Cursor overlay: LAST child = rendered on top of the image
                     // (spec: the selector must be visible on every cell state).
@@ -734,6 +769,166 @@ export component MainWindow inherits Window {
                 }
                 Rectangle { } // bottom spacer
             }
+        }
+
+        // Copy Picks dialog (M6, fileops.md): modal; Ctrl+E, glance,
+        // Enter is the whole feature. The remembered destination is
+        // displayed PROMINENTLY (the yesterday's-job failure mode).
+        if root.copy-visible: Rectangle {
+            width: 100%;
+            height: parent.height - statusbar.height;
+            background: #000000aa;
+            TouchArea { } // swallow clicks behind the dialog (modal)
+            copy-keys := FocusScope {
+                width: 0;
+                height: 0;
+                key-pressed(event) => {
+                    if (event.text == Key.Escape && root.copy-state != 1) {
+                        root.copy-close();
+                        return accept;
+                    }
+                    if (event.text == Key.Return) {
+                        if (root.copy-state == 0 && root.copy-ready) {
+                            root.copy-start();
+                            return accept;
+                        }
+                        if (root.copy-state == 2) {
+                            root.copy-close();
+                            return accept;
+                        }
+                    }
+                    reject
+                }
+            }
+            Rectangle {
+                x: (parent.width - self.width) / 2;
+                y: (parent.height - self.height) / 2;
+                width: 560px;
+                height: min(480px, parent.height - 40px);
+                border-radius: 8px;
+                background: #202028;
+                border-width: 1px;
+                border-color: #3a3a44;
+                VerticalLayout {
+                    padding: 18px;
+                    spacing: 10px;
+                    Text {
+                        text: "Copy Picks";
+                        color: #ffffff;
+                        font-size: 16px;
+                    }
+                    // Destination, big and unmissable.
+                    HorizontalLayout {
+                        spacing: 8px;
+                        Rectangle {
+                            background: #16161a;
+                            border-radius: 4px;
+                            height: 34px;
+                            Text {
+                                x: 10px;
+                                text: root.copy-dest == "" ? "No destination chosen" : root.copy-dest;
+                                color: root.copy-dest == "" ? #b06060 : #e8e8f0;
+                                font-size: 14px;
+                                vertical-alignment: center;
+                                height: 100%;
+                                overflow: elide;
+                                width: parent.width - 20px;
+                            }
+                        }
+                        Button {
+                            text: "Choose…";
+                            enabled: root.copy-state == 0;
+                            clicked => { root.copy-pick-dest(); }
+                        }
+                    }
+                    // Rename template: EMPTY = keep original names.
+                    HorizontalLayout {
+                        spacing: 8px;
+                        Text {
+                            text: "Rename:";
+                            color: #808088;
+                            font-size: 12px;
+                            vertical-alignment: center;
+                        }
+                        LineEdit {
+                            text <=> root.copy-template;
+                            placeholder-text: "empty = keep original names   e.g. {date}_{seq}.{ext}";
+                            font-size: 12px;
+                            height: 28px;
+                            enabled: root.copy-state == 0;
+                            edited => { root.copy-replan(); }
+                        }
+                    }
+                    if root.copy-preview != "": Text {
+                        text: root.copy-preview;
+                        color: #9898a8;
+                        font-size: 11px;
+                    }
+                    Text {
+                        text: root.copy-summary;
+                        color: #c8c8d0;
+                        font-size: 13px;
+                    }
+                    if root.copy-collisions != "": Text {
+                        text: root.copy-collisions;
+                        color: #ffb84d;
+                        font-size: 12px;
+                    }
+                    if root.copy-show-skip-toggle: HorizontalLayout {
+                        spacing: 8px;
+                        Chip {
+                            label: root.copy-skip-existing ? "Skip existing: ON" : "Skip existing: OFF (rename)";
+                            active: root.copy-skip-existing;
+                            clicked => {
+                                root.copy-skip-existing = !root.copy-skip-existing;
+                                root.copy-replan();
+                            }
+                        }
+                    }
+                    if root.copy-error != "": Text {
+                        text: root.copy-error;
+                        color: #ff7a6a;
+                        font-size: 12px;
+                        wrap: word-wrap;
+                    }
+                    if root.copy-state == 1: Text {
+                        text: root.copy-progress;
+                        color: #c8e8c8;
+                        font-size: 13px;
+                    }
+                    if root.copy-state == 2: Text {
+                        text: root.copy-report;
+                        color: #c8e8c8;
+                        font-size: 13px;
+                        wrap: word-wrap;
+                    }
+                    Rectangle { } // spring
+                    HorizontalLayout {
+                        spacing: 8px;
+                        alignment: end;
+                        if root.copy-state == 2: Button {
+                            text: "Open destination";
+                            clicked => { root.copy-open-dest-folder(); }
+                        }
+                        if root.copy-state == 1: Button {
+                            text: "Cancel";
+                            clicked => { root.copy-cancel(); }
+                        }
+                        if root.copy-state != 1: Button {
+                            text: root.copy-state == 2 ? "Close" : "Copy";
+                            enabled: root.copy-state == 2 || root.copy-ready;
+                            clicked => {
+                                if (root.copy-state == 2) {
+                                    root.copy-close();
+                                } else {
+                                    root.copy-start();
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+            init => { copy-keys.focus(); }
         }
 
         statusbar := Rectangle {

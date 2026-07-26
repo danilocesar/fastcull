@@ -40,6 +40,52 @@ after persona review). Auto-renames are listed in the plan preview.
 
 Cancellation: between files only; already-copied files remain (report says so).
 
+## Dialog + scope decisions (persona review 2026-07-26; the user CONFIRMED
+2026-07-26: "metadata is added before copying. once the copy is done,
+it's over" — so no caption-after-copy guard is needed and the
+changed-sidecar refresh below is a belt-and-braces detail, not a
+workflow pillar; scope v1 = "everything with a star", subset copy
+explicitly deferred to a later discussion; modal dialog accepted)
+
+- **Scope: ALL picked images in the session, filter-independent** (the
+  inbox-zero loop ends with an EMPTY view — "current view's picks" would
+  copy zero files at the exact moment the feature is reached for). The
+  dialog's count line ("148 picked images") states the scope; spec text:
+  the filter bar does not affect Copy Picks. Subset copy is v2
+  (multi-selection exists but is not wired here).
+- **Re-run trap (persona IN-MY-WAY on the raw spec)**: rename-suffix is
+  the right default for multi-camera DIFFERENT-file collisions, wrong for
+  re-running into the same destination (it would duplicate every
+  already-copied file). Images copied this session to the same
+  destination default to SKIP, listed as "N already copied"; the
+  session-only copied badge is what makes that plan line glanceable.
+  Cross-session, the plan's "N exist at destination" summary + the skip
+  toggle is the safety net. When skipping an existing RAW whose SOURCE
+  sidecar changed since, the sidecar alone is re-copied ("N sidecars
+  refreshed" in the report) — the card-format caption-after-copy
+  recovery is "Ctrl+E again before quitting".
+- **Exists-handling UI**: rename default; ONE "Skip existing" toggle shown
+  only when collisions exist; overwrite is never exposed in v1 (core
+  keeps the mode; it is the one that can destroy a verified prior copy).
+- **Ctrl+E commits any in-progress panel field edit** (G7 click-away
+  semantics) BEFORE the plan and the flush barrier — a half-typed caption
+  must ship.
+- **`{seq}` for rename templates follows the SESSION SORT ORDER** (capture
+  time default) — same caller contract as IPTC apply; with all-picks
+  scope, "view order" would be ambiguous under an active filter.
+- Dialog minimums: destination picker (must allow creating a folder) with
+  the remembered path displayed PROMINENTLY (yesterday's job is the
+  failure mode); template field defaults to EMPTY = keep names (remembered
+  but never silently pre-applied); live preview of the first 3 expanded
+  names when a template is set; count + total size + free space up front;
+  collisions summarized ("3 will be renamed") not tabulated; Enter
+  triggers Copy when the plan is clean; per-file N/M progress + cancel;
+  final report says "all checksums verified" explicitly (the green light
+  to format the card) + failures with reasons + "Open destination folder";
+  Ctrl+E with zero picks opens with "No picked images", never a silent
+  no-op. Modal in v1. Cut from v1: per-file mode selectors, speed/ETA
+  displays, pause, background copy.
+
 **Rejects are not fileops' business (recorded user decision)**: after copy-picks,
 rejected and unmarked files stay untouched where they are; the user deletes them
 manually later. No move/delete-rejects operation in v1 (revisit only if asked).
@@ -51,14 +97,22 @@ BLAKE3 verification is the only truth at copy time.
 
 ## Acceptance criteria (tests)
 
-- [ ] Plan: template expansion, collision detection, dest-inside-source rejection,
+- [x] Plan: template expansion, collision detection, dest-inside-source rejection,
       exists-handling in all four modes incl. rename-suffix lockstep (tempdir
-      fixtures).
-- [ ] Execute: RAW+sidecar pairs land with correct names; checksums verified
+      fixtures) — plan_templates_seq_and_rejects_collisions,
+      plan_rejects_dest_inside_or_equal_to_source,
+      exists_modes_rename_skip_abort_and_session_skip,
+      skip_refreshes_changed_sidecar_only.
+- [x] Execute: RAW+sidecar pairs land with correct names; checksums verified
       (and a deliberately corrupted destination write is detected); a
-      read-protected source file fails alone, others complete.
-- [ ] Sidecar barrier: a pick made ≤1 s before "copy" is present in the copied
-      sidecar (regression for the debounce race).
-- [ ] No partial files after simulated failure (temp-name copy verified).
+      read-protected source file fails alone, others complete —
+      execute_copies_verifies_and_isolates_failures,
+      copy_verified_detects_corruption_and_cleans_up,
+      cancel_between_files_keeps_finished_copies.
+- [x] Sidecar barrier: a pick made ≤1 s before "copy" is present in the copied
+      sidecar (regression for the debounce race) —
+      sidecar_barrier_fresh_pick_lands_in_the_copy.
+- [x] No partial files after simulated failure (temp-name copy verified) —
+      asserted inside execute_copies_verifies_and_isolates_failures.
 - [ ] Cross-platform: paths with spaces/Unicode; Windows reserved-name rejection
       (`CON`, `NUL`, trailing dots) at plan time.

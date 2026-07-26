@@ -138,6 +138,14 @@ struct AppState {
     template_warnings: Vec<String>,
     iptc_visible: bool,
     filter_bar_visible: bool,
+    /// M6 Copy Picks: the previewed plan (rebuilt by replan), the running
+    /// worker, and which ids were copied WHERE this session (the re-run
+    /// skip default + the copied badge).
+    copy_plan: Option<fastcull_core::fileops::CopyPlan>,
+    copy_dest: Option<std::path::PathBuf>,
+    copy_handle: Option<fastcull_core::fileops::CopyHandle>,
+    copy_rx: Option<std::sync::mpsc::Receiver<fastcull_core::fileops::CopyEvent>>,
+    copied_to: HashMap<usize, std::path::PathBuf>,
     /// Engine event receivers live in state so File > Open Folder can swap
     /// the whole session without restarting the event pump.
     pipeline_rx: Option<std::sync::mpsc::Receiver<SessionEvent>>,
@@ -272,6 +280,10 @@ fn load_folder(state: &Rc<RefCell<AppState>>, folder: &std::path::Path) -> Resul
     st.iptc = vec![fastcull_core::iptc::IptcData::default(); count];
     st.touched_iptc.clear();
     st.panel_cache = Default::default();
+    st.copy_plan = None;
+    st.copy_handle = None;
+    st.copy_rx = None;
+    st.copied_to.clear();
     st.selection.reset();
     st.revert = Default::default();
     st.revert_ids.clear();
@@ -410,6 +422,11 @@ fn main() {
         template_warnings: Vec::new(),
         iptc_visible: false,
         filter_bar_visible: true,
+        copy_plan: None,
+        copy_dest: None,
+        copy_handle: None,
+        copy_rx: None,
+        copied_to: HashMap::new(),
         pipeline_rx: None,
         loupe_rx: None,
         sidecar_errs: None,
@@ -803,6 +820,123 @@ fn main() {
         });
     }
     {
+        let state = Rc::clone(&state);
+        let win = window.as_weak();
+        window.on_copy_open(move || {
+            let Some(win) = win.upgrade() else { return };
+            {
+                let mut st = state.borrow_mut();
+                if st.copy_handle.is_some() {
+                    // A copy is running: just re-show the dialog.
+                    win.set_copy_visible(true);
+                    return;
+                }
+                let (dest, template) = load_ui_prefs();
+                if st.copy_dest.is_none() {
+                    st.copy_dest = dest;
+                }
+                win.set_copy_template(template.into());
+                win.set_copy_dest(
+                    st.copy_dest
+                        .as_ref()
+                        .map(|d| d.to_string_lossy().into_owned())
+                        .unwrap_or_default()
+                        .into(),
+                );
+                win.set_copy_state(0);
+                win.set_copy_report("".into());
+                win.set_copy_visible(true);
+                copy_replan(&win, &mut st);
+            }
+        });
+    }
+    {
+        let state = Rc::clone(&state);
+        let win = window.as_weak();
+        window.on_copy_pick_dest(move || {
+            let Some(win) = win.upgrade() else { return };
+            // Blocking rfd picker (same recorded limitation as Open
+            // Folder); the native dialog allows creating a folder.
+            if let Some(dir) = rfd::FileDialog::new().pick_folder() {
+                let mut st = state.borrow_mut();
+                st.copy_dest = Some(dir.clone());
+                save_ui_prefs(Some(&dir), win.get_copy_template().as_str());
+                win.set_copy_dest(dir.to_string_lossy().into_owned().into());
+                copy_replan(&win, &mut st);
+            }
+        });
+    }
+    {
+        let state = Rc::clone(&state);
+        let win = window.as_weak();
+        window.on_copy_replan(move || {
+            let Some(win) = win.upgrade() else { return };
+            let mut st = state.borrow_mut();
+            save_ui_prefs(st.copy_dest.as_deref(), win.get_copy_template().as_str());
+            copy_replan(&win, &mut st);
+        });
+    }
+    {
+        let state = Rc::clone(&state);
+        let win = window.as_weak();
+        window.on_copy_start(move || {
+            let Some(win) = win.upgrade() else { return };
+            let mut st = state.borrow_mut();
+            let Some(plan) = st.copy_plan.take() else {
+                return;
+            };
+            // THE BARRIER (fileops.md): every queued sidecar write —
+            // including a caption committed seconds ago — must be on disk
+            // before the plan's sidecar copies run.
+            if let Some(writer) = &st.writer {
+                writer.flush();
+            }
+            let (handle, rx) = fastcull_core::fileops::execute(plan);
+            st.copy_handle = Some(handle);
+            st.copy_rx = Some(rx);
+            win.set_copy_state(1);
+            win.set_copy_progress("Starting…".into());
+        });
+    }
+    {
+        let state = Rc::clone(&state);
+        window.on_copy_cancel(move || {
+            let st = state.borrow();
+            if let Some(handle) = &st.copy_handle {
+                handle.cancel();
+            }
+        });
+    }
+    {
+        let state = Rc::clone(&state);
+        let win = window.as_weak();
+        window.on_copy_close(move || {
+            let Some(win) = win.upgrade() else { return };
+            {
+                let mut st = state.borrow_mut();
+                if st.copy_handle.is_none() {
+                    // keep plan state tidy between opens
+                    st.copy_plan = None;
+                }
+            }
+            win.set_copy_visible(false);
+            win.invoke_focus_grid();
+        });
+    }
+    {
+        let state = Rc::clone(&state);
+        window.on_copy_open_dest_folder(move || {
+            let st = state.borrow();
+            if let Some(dest) = &st.copy_dest {
+                #[cfg(target_os = "windows")]
+                let cmd = "explorer";
+                #[cfg(not(target_os = "windows"))]
+                let cmd = "xdg-open";
+                std::process::Command::new(cmd).arg(dest).spawn().ok();
+            }
+        });
+    }
+    {
         // Click in the zoom overlay: "center HERE" (user decision
         // 2026-07-25). At 1:1 it re-centers; below 1:1 it also jumps to
         // 1:1 (persona default: below the ceiling a click means "show me
@@ -958,6 +1092,63 @@ fn main() {
                         // logging here too printed every failure twice).
                         st.sidecar_failures += 1;
                         dirty = true;
+                    }
+                    // Copy Picks progress/report (M6).
+                    let copy_events: Vec<_> = st
+                        .copy_rx
+                        .as_ref()
+                        .map(|rx| rx.try_iter().collect())
+                        .unwrap_or_default();
+                    for event in copy_events {
+                        use fastcull_core::fileops::CopyEvent;
+                        match event {
+                            CopyEvent::File { index, total, name } => {
+                                if let Some(win) = win.upgrade() {
+                                    win.set_copy_progress(
+                                        format!("{index} / {total} — {name}").into(),
+                                    );
+                                }
+                            }
+                            CopyEvent::Failed { .. } => {} // in the report
+                            CopyEvent::Finished(report) => {
+                                if let Some(dest) = st.copy_dest.clone() {
+                                    for id in &report.copied_ids {
+                                        st.copied_to.insert(*id, dest.clone());
+                                    }
+                                }
+                                st.copy_handle = None;
+                                st.copy_rx = None;
+                                if let Some(win) = win.upgrade() {
+                                    let mut lines = vec![format!(
+                                        "{} copied{}",
+                                        report.copied,
+                                        if report.failed.is_empty() && !report.cancelled {
+                                            ", all checksums verified"
+                                        } else {
+                                            ""
+                                        }
+                                    )];
+                                    if report.skipped > 0 {
+                                        lines.push(format!("{} skipped", report.skipped));
+                                    }
+                                    if report.refreshed > 0 {
+                                        lines.push(format!(
+                                            "{} sidecars refreshed",
+                                            report.refreshed
+                                        ));
+                                    }
+                                    if report.cancelled {
+                                        lines.push("cancelled — finished files remain".into());
+                                    }
+                                    for (name, reason) in &report.failed {
+                                        lines.push(format!("FAILED {name}: {reason}"));
+                                    }
+                                    win.set_copy_report(lines.join("\n").into());
+                                    win.set_copy_state(2);
+                                }
+                                dirty = true; // copied badges
+                            }
+                        }
                     }
                     let loupe_events: Vec<_> = st
                         .loupe_rx
@@ -1160,6 +1351,192 @@ fn reveal_cursor(win: &MainWindow, state: &Rc<RefCell<AppState>>) {
     win.set_virtual_height(layout.total_height);
     win.set_vp_y(-new_scroll);
     refresh(win, state);
+}
+
+/// Remembered UI preferences (fileops.md: destination and rename template
+/// survive across sessions). Tiny TOML in the fastcull config dir.
+fn ui_prefs_path() -> Option<std::path::PathBuf> {
+    let dirs = directories::ProjectDirs::from("org", "fastcull", "fastcull")?;
+    Some(dirs.config_dir().join("ui.toml"))
+}
+
+fn load_ui_prefs() -> (Option<std::path::PathBuf>, String) {
+    let Some(path) = ui_prefs_path() else {
+        return (None, String::new());
+    };
+    let Ok(content) = std::fs::read_to_string(path) else {
+        return (None, String::new());
+    };
+    let table: toml::Table = content.parse().unwrap_or_default();
+    let dest = table
+        .get("copy_dest")
+        .and_then(|v| v.as_str())
+        .map(std::path::PathBuf::from);
+    let template = table
+        .get("copy_template")
+        .and_then(|v| v.as_str())
+        .unwrap_or_default()
+        .to_string();
+    (dest, template)
+}
+
+fn save_ui_prefs(dest: Option<&std::path::Path>, template: &str) {
+    let Some(path) = ui_prefs_path() else { return };
+    let mut table = toml::Table::new();
+    if let Some(d) = dest {
+        table.insert(
+            "copy_dest".into(),
+            toml::Value::String(d.to_string_lossy().into_owned()),
+        );
+    }
+    table.insert(
+        "copy_template".into(),
+        toml::Value::String(template.to_string()),
+    );
+    if let Some(parent) = path.parent() {
+        std::fs::create_dir_all(parent).ok();
+    }
+    std::fs::write(&path, toml::to_string_pretty(&table).unwrap_or_default()).ok();
+}
+
+/// Picked images in SESSION SORT ORDER (fileops.md: scope is "everything
+/// with a star", filter-independent; `{seq}` follows the session sort).
+fn plan_sources(st: &AppState) -> Vec<fastcull_core::fileops::PlanSource> {
+    let all_query = fastcull_core::filter::ViewQuery {
+        filter: fastcull_core::filter::PickFilter::All,
+        ..st.query
+    };
+    let ordered = fastcull_core::filter::view(&st.picks, &st.labels, &st.capture_keys, &all_query);
+    ordered
+        .into_iter()
+        .filter(|id| {
+            matches!(
+                st.picks.get(*id),
+                Some(fastcull_core::catalog::PickState::Picked)
+            )
+        })
+        .filter_map(|id| {
+            let path = st.paths.get(id)?.clone();
+            let meta = std::fs::metadata(&path).ok();
+            let size = meta.as_ref().map(|m| m.len()).unwrap_or(0);
+            let mtime = meta
+                .and_then(|m| m.modified().ok())
+                .unwrap_or(std::time::UNIX_EPOCH);
+            let name = st.labels.get(id).cloned().unwrap_or_default();
+            Some(fastcull_core::fileops::PlanSource {
+                id,
+                path,
+                size,
+                ctx: fastcull_core::iptc::ExpandContext::from_sort_key(
+                    st.capture_keys.get(id).and_then(|k| k.as_deref()),
+                    mtime,
+                    &name,
+                    None,
+                ),
+            })
+        })
+        .collect()
+}
+
+fn human_bytes(b: u64) -> String {
+    if b >= 1 << 30 {
+        format!("{:.1} GB", b as f64 / (1u64 << 30) as f64)
+    } else if b >= 1 << 20 {
+        format!("{:.1} MB", b as f64 / (1u64 << 20) as f64)
+    } else {
+        format!("{b} B")
+    }
+}
+
+/// Rebuild the copy plan from the dialog's current inputs and publish the
+/// preview properties (fileops.md dialog minimums).
+fn copy_replan(win: &MainWindow, st: &mut AppState) {
+    use fastcull_core::fileops::{plan, ExistsMode, PlanError};
+    let sources = plan_sources(st);
+    win.set_copy_error("".into());
+    win.set_copy_ready(false);
+    win.set_copy_preview("".into());
+    win.set_copy_collisions("".into());
+    win.set_copy_show_skip_toggle(false);
+    st.copy_plan = None;
+    if sources.is_empty() {
+        win.set_copy_summary("No picked images — nothing to copy.".into());
+        return;
+    }
+    let Some(dest) = st.copy_dest.clone() else {
+        win.set_copy_summary(
+            format!("{} picked images. Choose a destination.", sources.len()).into(),
+        );
+        return;
+    };
+    let template_raw = win.get_copy_template().to_string();
+    let template = (!template_raw.trim().is_empty()).then_some(template_raw.as_str());
+    let mode = if win.get_copy_skip_existing() {
+        ExistsMode::Skip
+    } else {
+        ExistsMode::Rename
+    };
+    let already: std::collections::HashSet<usize> = st
+        .copied_to
+        .iter()
+        .filter(|(_, d)| **d == dest)
+        .map(|(id, _)| *id)
+        .collect();
+    match plan(&sources, &dest, template, mode, &already) {
+        Ok(p) => {
+            if template.is_some() {
+                let preview: Vec<String> = p
+                    .jobs
+                    .iter()
+                    .take(3)
+                    .map(|j| {
+                        j.dst_raw
+                            .file_name()
+                            .unwrap_or_default()
+                            .to_string_lossy()
+                            .into_owned()
+                    })
+                    .collect();
+                win.set_copy_preview(format!("→ {}", preview.join(", ")).into());
+            }
+            win.set_copy_summary(
+                format!(
+                    "{} picked · {} to copy · {} free",
+                    sources.len(),
+                    human_bytes(p.total_bytes),
+                    human_bytes(p.free_bytes)
+                )
+                .into(),
+            );
+            let mut notes = Vec::new();
+            if p.renamed > 0 {
+                notes.push(format!("{} will be renamed (name collisions)", p.renamed));
+            }
+            if p.skipped > 0 {
+                notes.push(format!("{} already at destination (skipped)", p.skipped));
+            }
+            if p.refreshed > 0 {
+                notes.push(format!("{} sidecars will be refreshed", p.refreshed));
+            }
+            let collided = p.renamed > 0 || p.skipped > 0 || p.refreshed > 0;
+            win.set_copy_collisions(notes.join(" · ").into());
+            win.set_copy_show_skip_toggle(collided);
+            win.set_copy_ready(true);
+            st.copy_plan = Some(p);
+        }
+        Err(
+            e @ (PlanError::InsufficientSpace { .. }
+            | PlanError::DestEqualsSource
+            | PlanError::DestInsideSource
+            | PlanError::DestExists(_)
+            | PlanError::TemplateCollision { .. }
+            | PlanError::Template(_)
+            | PlanError::Io(_)),
+        ) => {
+            win.set_copy_summary(format!("{} picked images.", sources.len()).into());
+            win.set_copy_error(e.to_string().into());
+        }
+    }
 }
 
 /// Re-read templates.toml (session open + panel toggle = the spec's
@@ -1875,6 +2252,7 @@ fn refresh_inner(win: &MainWindow, state: &Rc<RefCell<AppState>>) {
             is_cursor: index == st.cursor,
             selected: st.selection.is_selected(index),
             id: index as i32,
+            copied: st.copied_to.contains_key(&index),
             seed: if st.synthetic { index as i32 } else { -1 },
             pick: match st.picks.get(index) {
                 Some(fastcull_core::catalog::PickState::Picked) => 1,

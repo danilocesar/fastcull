@@ -26,6 +26,10 @@ zune-jpeg = "0.4"
 # Native folder picker for File > Open Folder (M5). xdg-portal on Linux =
 # no GTK system packages; native dialogs on Windows.
 rfd = { version = "0.15", default-features = false, features = ["xdg-portal", "async-std"] }
+# Remembered copy-dialog prefs (fileops.md: destination + template survive
+# across sessions) — same conventions as the core cache/templates paths.
+directories = "6"
+toml = "0.8"
 
 [dev-dependencies]
 zune-jpeg = "0.4"

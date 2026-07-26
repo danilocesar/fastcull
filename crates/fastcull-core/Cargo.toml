@@ -24,6 +24,10 @@ caseless = "0.2"
 # the casefolded keyword dedup, and control-character stripping (QE: exiv2
 # rejects XMP packets containing raw control chars).
 unicode-normalization = "0.1"
+# Copy-picks engine (fileops.md): streaming checksums promoted to v1 (the
+# copy IS the working copy before a card format), and free-space checks.
+blake3 = "1"
+fs2 = "0.4"
 zune-jpeg = "0.4"
 
 [dev-dependencies]
