@@ -59,6 +59,13 @@ fileops plan/execute + dialog + report: rename templates, auto-rename collision
 default, BLAKE3 verification, sidecar lockstep.
 
 ## M7 — Bursts + packaging
+
+**Docs deliverable (user request 2026-07-26, issue #9)**: a `docs/` usage
+guide distilled from the specs — plain Markdown, web-readable (GitHub
+renderer; Pages-ready) — ships with the v1 release. Drafting may start any
+time after M6 (behavior M2–M6 is stable and specced); each page is
+reviewed whenever its source module spec changes.
+
 burst.rs grouping + border rendering + in-burst filter. cargo-dist packaging:
 Linux AppImage, Windows zip/MSI. DoD: full manual acceptance script in
 specs/00-overview terms: open **5,000** A1 files → cull → IPTC → copy →
