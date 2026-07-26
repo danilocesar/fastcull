@@ -333,7 +333,16 @@ brightening during wheel scrolling (needs an activity decay timer).
   WHEEL no longer scrolls at `N = 1` (it zooms — see the Mouse & pointer
   contract), so this rule now covers only the remaining scroll route, the
   overlay scrollbar drag. Image-to-image movement inside the loupe is
-  keyboard-only.
+  keyboard-only. **Relayout carve-out (issue #16, 2026-07-26)**: a
+  GEOMETRY change — panel toggle, window resize, anything that alters
+  (grid width, viewport height) between refreshes — is NEVER scrolling
+  and must NEVER claim or move the cursor; the viewport re-anchors to
+  the cursor instead (the whole point of the follow rule is that marks
+  land on what the user is looking at — a relayout claim inverted it
+  into marks landing on a photo the user already left). The dock state
+  is published to the window BEFORE any geometry read in the toggle
+  path, so reveals never compute against a stale width (that stale
+  width was also issue #17's grid-under-panel state).
 - The status bar always names the cursor image (filename, position N/M).
 - **Untouched-cursor rule (issue #4, 2026-07-25)**: from session open until the
   user's FIRST interaction, the cursor is "the first image of the view", not a
@@ -532,8 +541,11 @@ Documented because they ship in release builds (validator finding):
   stages, texture adoption) exceeding 20 ms, plus loupe-ready marks — the
   evidence channel for hang reports.
 - `FASTCULL_DRIVE="6000:one2one;9000:grid;12000:quit"`: timed injection of
-  nav actions (same names `handle_nav` takes, plus `quit`) for headless
-  reproduction and QE runs — Wayland offers no external input automation.
+  nav actions (same names `handle_nav` takes, plus `quit`, `iptc` — the
+  panel toggle, issue #12 — and `resize:WxH` in logical pixels, issue
+  #16: the wrong-photo-after-resize bug class needs real window resizes
+  drivable or it ships regression-blind) for headless reproduction and
+  QE runs — Wayland offers no external input automation.
   Malformed entries are skipped silently. Scripts may include mark actions
   (`pick`/`reject`), which write real sidecars — QE runs target throwaway
   copies of test data only.

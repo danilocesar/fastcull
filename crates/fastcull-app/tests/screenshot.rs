@@ -465,15 +465,19 @@ fn scrollbar_sits_between_grid_and_panel() {
     let bright = (y0..y1)
         .flat_map(|y| (x0..x1).map(move |x| (y * w + x) * 3))
         .filter(|i| {
-            0.299 * px[*i] as f64 + 0.587 * px[*i + 1] as f64 + 0.114 * px[*i + 2] as f64 > 120.0
+            0.299 * px[*i] as f64 + 0.587 * px[*i + 1] as f64 + 0.114 * px[*i + 2] as f64 > 75.0
         })
         .count();
-    // Threshold sized against BOTH outcomes with margin: a buried/missing
-    // thumb reads 0 bright px; a rendered thumb reads ~90 on a 1x-scale
-    // CI runner (observed) and 100+ at 1.25x locally. 40 discriminates
-    // with headroom either way (CI flaked at the old 100).
+    // HOVER-INDEPENDENT thresholds (issue #16 gate finding): the IDLE
+    // 6px #ffffff50 thumb over the reflowed dark grid edge measures max
+    // luma 96-115 — the old >120 cutoff only passed when the desktop
+    // pointer happened to hover the grab zone and brightened the thumb
+    // (and before the #17 reflow fix, via cell content leaking under the
+    // seam). Backdrop tops out ~60, idle thumb >=96: 75 discriminates
+    // with margin in both directions and in both thumb styles. A
+    // buried/missing thumb still reads 0.
     assert!(
-        bright > 40,
+        bright > 30,
         "no scrollbar thumb in the grid/panel seam ({bright} bright px) — \
          bar buried under the panel or not rendered (issue #12 / ui-grid.md)"
     );
@@ -579,5 +583,159 @@ fn no_args_launch_opens_empty_window() {
     assert!(
         var > 1.0,
         "folderless frame is uniform — no chrome/message rendered (variance {var:.2})"
+    );
+}
+
+/// Issue #16: closing the IPTC panel at 1:1 must NOT swap the displayed
+/// photo. Drive to image 5 (idx 4) at 1:1, toggle the panel open and
+/// closed: the follow-scroll claim must never fire and the last overlay
+/// trace must still be idx 4. (Pre-fix: the close direction snapped the
+/// cursor to idx 3 — the QE fuzz hunt's deterministic repro.)
+#[test]
+fn panel_toggle_at_one_to_one_keeps_the_photo() {
+    if !has_display() {
+        eprintln!("screenshot smoke skipped: no display server");
+        return;
+    }
+    let _s = serial();
+    let dir = out_dir().join("panel-cursor");
+    std::fs::create_dir_all(&dir).unwrap();
+    for i in 1..=6 {
+        std::fs::copy(
+            raws_dir().join("A1_full_compressed.ARW"),
+            dir.join(format!("a{i}.ARW")),
+        )
+        .unwrap();
+    }
+    let out = out_dir().join("panel-cursor.jpg");
+    let stderr = shoot_env_stderr(
+        &["--start-11", dir.to_str().unwrap()],
+        &[
+            ("FASTCULL_TRACE", "1"),
+            (
+                "FASTCULL_DRIVE",
+                "250:right;450:right;650:right;850:right;1100:iptc;1400:iptc",
+            ),
+        ],
+        &out,
+    );
+    assert!(
+        !stderr.contains("follow-scroll claim"),
+        "panel toggle misread as scrolling — the cursor was claimed:\n{stderr}"
+    );
+    let last_idx = stderr
+        .lines()
+        .rev()
+        .find_map(|l| {
+            l.split("loupe idx ")
+                .nth(1)
+                .and_then(|r| r.split_whitespace().next())
+                .map(String::from)
+        })
+        .expect("no loupe trace lines");
+    assert_eq!(
+        last_idx, "4",
+        "the displayed photo changed across the panel toggle:\n{stderr}"
+    );
+}
+
+/// Issue #16, the user's ORIGINAL report: open a photo, RESIZE the
+/// window — the same photo must still be shown. Uses the new
+/// FASTCULL_DRIVE resize action; the relayout re-anchor path must fire
+/// (proving the resize was seen as geometry, not scrolling).
+#[test]
+fn window_resize_keeps_the_photo() {
+    if !has_display() {
+        eprintln!("screenshot smoke skipped: no display server");
+        return;
+    }
+    let _s = serial();
+    let dir = out_dir().join("resize-cursor");
+    std::fs::create_dir_all(&dir).unwrap();
+    for i in 1..=6 {
+        std::fs::copy(
+            raws_dir().join("A1_full_compressed.ARW"),
+            dir.join(format!("a{i}.ARW")),
+        )
+        .unwrap();
+    }
+    let out = out_dir().join("resize-cursor.jpg");
+    let stderr = shoot_env_stderr(
+        &["--start-11", dir.to_str().unwrap()],
+        &[
+            ("FASTCULL_TRACE", "1"),
+            (
+                "FASTCULL_DRIVE",
+                "250:right;450:right;650:right;850:right;1100:resize:1000x700;1500:resize:1440x900",
+            ),
+        ],
+        &out,
+    );
+    assert!(
+        !stderr.contains("follow-scroll claim"),
+        "window resize misread as scrolling — the cursor was claimed:\n{stderr}"
+    );
+    // The guard must actually have run (validator: without this the test
+    // goes vacuously green if the resize stops dislodging the cursor).
+    assert!(
+        stderr.contains("relayout re-anchor"),
+        "the relayout path never fired — the resize wasn't exercised:\n{stderr}"
+    );
+    let last_idx = stderr
+        .lines()
+        .rev()
+        .find_map(|l| {
+            l.split("loupe idx ")
+                .nth(1)
+                .and_then(|r| r.split_whitespace().next())
+                .map(String::from)
+        })
+        .expect("no loupe trace lines");
+    assert_eq!(
+        last_idx, "4",
+        "the displayed photo changed across the window resize:\n{stderr}"
+    );
+}
+
+/// Issue #17: opening the panel at GRID level must reflow the grid into
+/// the remaining width with the cursor still visible — pre-fix the
+/// stale-width layout left the cursor cell (and a whole column) hidden
+/// UNDER the panel while the panel claimed to be editing it. Ground
+/// truth: the cursor's blue border pixels must exist in the visible
+/// grid area (left of the panel).
+#[test]
+fn grid_panel_open_reflows_and_keeps_cursor_visible() {
+    if !has_display() {
+        eprintln!("screenshot smoke skipped: no display server");
+        return;
+    }
+    let _s = serial();
+    let out = out_dir().join("grid-panel-open.jpg");
+    shoot_env(
+        &["--synthetic", "500"],
+        &[(
+            "FASTCULL_DRIVE",
+            "300:end;400:left;450:left;500:left;550:left;800:iptc",
+        )],
+        &out,
+    );
+    let bytes = std::fs::read(&out).expect("snapshot file");
+    let mut dec = zune_jpeg::JpegDecoder::new(&bytes);
+    let px = dec.decode().expect("decode snapshot");
+    let (w, h) = dec.dimensions().expect("dims");
+    // Cursor border is #4da3ff (JPEG-fuzzy match). Panel starts at
+    // x = 1140/1440 of the width; search only the VISIBLE grid area.
+    let x_max = (w as f64 * (1140.0 / 1440.0)) as usize;
+    let blue = (0..h)
+        .flat_map(|y| (0..x_max).map(move |x| (y * w + x) * 3))
+        .filter(|i| {
+            let (r, g, b) = (px[*i] as i32, px[*i + 1] as i32, px[*i + 2] as i32);
+            (r - 0x4d).abs() < 40 && (g - 0xa3).abs() < 40 && (b - 0xff).abs() < 40
+        })
+        .count();
+    assert!(
+        blue > 50,
+        "cursor border not visible left of the panel ({blue} blue px) — \
+         grid did not reflow on panel open (issue #17)"
     );
 }

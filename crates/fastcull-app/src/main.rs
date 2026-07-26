@@ -80,6 +80,11 @@ struct AppState {
     /// file's native size — bare JPEGs, issue #8): their small texture
     /// counts as the top rung for the zoom ceiling.
     terminal_native: HashSet<usize>,
+    /// Grid-area geometry (grid_width, viewport_h) at the last refresh:
+    /// a change means RELAYOUT (panel toggle, window resize), not user
+    /// scrolling — the loupe follow-scroll claim must not fire (issue
+    /// #16: marks landed on a photo the user already left).
+    last_view_geometry: Option<(f32, f32)>,
     /// UI-side textures for the focused image ± neighbors: sized to the
     /// prefetch ring (5) and cursor-protected on eviction (see
     /// insert_fullres); the core LRU holds the pixel data for rebuilds.
@@ -436,6 +441,7 @@ fn main() {
         cells,
         loupe: None,
         terminal_native: HashSet::new(),
+        last_view_geometry: None,
         fullres: Vec::new(),
         zoom_factor: if start_11 { f32::INFINITY } else { 1.0 },
         pan_center: (0.5, 0.5),
@@ -624,6 +630,11 @@ fn main() {
                 if st.iptc_visible {
                     reload_templates(&mut st); // read-on-open live-reload
                 }
+                // Publish the new dock state BEFORE any geometry read:
+                // grid-width is a binding on it, and revealing against
+                // the STALE width mis-anchored the viewport and let the
+                // follow-scroll claim swap the photo (issue #16).
+                win.set_iptc_visible(st.iptc_visible);
             }
             // The dock reflows the grid: anchor on the cursor so the
             // viewport doesn't land somewhere new (persona gap 1).
@@ -1394,6 +1405,19 @@ fn main() {
                     // the docking bug shipped because no automated run
                     // could reach the panel-open state).
                     win.invoke_iptc_toggle();
+                    return;
+                }
+                if let Some(dims) = key.strip_prefix("resize:") {
+                    // resize:WxH (logical px) — the user's reported bug
+                    // class (issue #16) needs REAL window resizes to be
+                    // drivable, or it ships regression-blind.
+                    if let Some((w, h)) = dims.split_once('x') {
+                        if let (Ok(w), Ok(h)) = (w.parse::<f32>(), h.parse::<f32>()) {
+                            win.window().set_size(slint::WindowSize::Logical(
+                                slint::LogicalSize::new(w, h),
+                            ));
+                        }
+                    }
                     return;
                 }
                 handle_nav(&win, &state, &key);
@@ -2458,6 +2482,12 @@ fn refresh(win: &MainWindow, state: &Rc<RefCell<AppState>>) {
 fn refresh_inner(win: &MainWindow, state: &Rc<RefCell<AppState>>) {
     let (layout, viewport_h, scroll_y) = current_geometry(win, state);
     let mut st = state.borrow_mut();
+    // Relayout detection (issue #16): a geometry change since the last
+    // refresh is chrome/window movement (panel toggle, resize), never
+    // user scrolling.
+    let geom_now = (win.get_grid_width(), viewport_h);
+    let relayout = st.last_view_geometry.is_some_and(|g| g != geom_now);
+    st.last_view_geometry = Some(geom_now);
     let view_len = st.view.len();
     // Visible VIEW positions; `ids` are the image ids shown there (the two
     // coincide only with filter=All + capture sort before keys arrive).
@@ -2515,10 +2545,36 @@ fn refresh_inner(win: &MainWindow, state: &Rc<RefCell<AppState>>) {
         // the cursor look "scrolled away", and spuriously claimed it —
         // killing the untouched-snap and leaving the final cursor racy).
         if !cur_visible && viewport_h > 0.0 {
-            let center_row =
-                ((scroll_y + viewport_h * 0.5) / (layout.cell_height + grid::CELL_GAP)) as usize;
-            st.cursor = st.view[center_row.min(view_len - 1)];
-            st.cursor_touched = true; // scrolling the loupe IS cursor movement
+            if relayout {
+                // Geometry changed under the cursor (panel toggle, window
+                // RESIZE — the user's reported bug): this is NOT
+                // scrolling. Keep the cursor, move the viewport back to
+                // it; a follow-up refresh renders the corrected window
+                // (issue #16 — the claim below used to swap the photo).
+                let corrected = layout.scroll_to_reveal(cur_pos, scroll_y, viewport_h);
+                win.set_virtual_height(layout.total_height);
+                win.set_vp_y(-corrected);
+                trace_mark(&format!(
+                    "relayout re-anchor: cursor kept at pos {cur_pos}, scroll {scroll_y:.0} -> {corrected:.0}"
+                ));
+                let win_weak = win.as_weak();
+                let state_rc = Rc::clone(state);
+                slint::Timer::single_shot(std::time::Duration::from_millis(0), move || {
+                    if let Some(win) = win_weak.upgrade() {
+                        refresh(&win, &state_rc);
+                    }
+                });
+            } else {
+                let center_row = ((scroll_y + viewport_h * 0.5)
+                    / (layout.cell_height + grid::CELL_GAP))
+                    as usize;
+                let claimed = center_row.min(view_len - 1);
+                trace_mark(&format!(
+                    "follow-scroll claim: cursor pos {cur_pos} -> {claimed}"
+                ));
+                st.cursor = st.view[claimed];
+                st.cursor_touched = true; // scrolling the loupe IS cursor movement
+            }
         }
         if let Some(loupe) = &st.loupe {
             // focus() returns the cached image on a warm hit: the rebuild
