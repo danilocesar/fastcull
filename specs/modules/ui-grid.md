@@ -361,6 +361,33 @@ brightening during wheel scrolling (needs an activity decay timer).
 
 - Pick: small star badge (top-left; user decision — "mark the ones taken with a
   little star"). Reject: red X badge + 40% dimmed thumb.
+- **Loupe state indicator (issue #20, user request 2026-07-26,
+  persona-reviewed MUST-HAVE/HIGH — not yet implemented)**: the loupe
+  (fit AND zoomed — one continuous view) shows the image's mark as a
+  badge overlaid in the image's TOP-LEFT corner (same location as the
+  grid badge): ★ for picked, ✕ for rejected, on a small dark
+  semi-transparent pill (own contrast backing — white-on-blown-sky and
+  red-on-red must stay readable). Constraints, all persona-validated:
+  an OVERLAY, never a reserved strip (the image must not reflow or
+  shrink); a left-aligned pill that can grow horizontally to hold up to
+  five stars when ratings (reserved keys 1–5) land, anchor unmoved;
+  badge only for picked/rejected — unmarked is absence, backstopped by
+  the STATUS BAR always spelling the state in words ("★ picked /
+  ✕ rejected / unmarked"); a rejected frame is NEVER dimmed in the
+  loupe (deliberate divergence from the grid's 40% dim — a reject may
+  be re-judged for rescue at full brightness); pointer-inert (no hit
+  area — the pointer state machine owns every gesture); permanent
+  element with state toggled, state swap ATOMIC with the image swap
+  (the issue #6 stale-frame class: a wrong-frame badge is a confident
+  lie, worse than none); scope-guarded to the glyph pill only — no
+  filename/metadata creep (the status bar owns those), top-right stays
+  free for a future histogram/focus indicator. Three provisional
+  defaults await the user's confirmation on the issue: corner badge
+  rather than a reserved "top panel" strip; badge-only rejects (no
+  dim); no explicit unmarked glyph.
+- **Burst context**: see burst-grouping.md — the ×N badge and "burst
+  7/23" status fragment already serve burst position; the state
+  indicator composes with them, it does not replace them.
 - Burst (M7, persona-redesigned): count badge "×N" on each group's first
   frame + optional thin two-tone bottom strip; NEVER a full-perimeter
   border (cursor/selection own borders). See burst-grouping.md UI
