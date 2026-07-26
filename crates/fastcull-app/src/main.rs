@@ -2,7 +2,8 @@
 //! (specs/modules/ui-grid.md). All layout math lives in `fastcull_core::grid`;
 //! this crate only moves data between the engine and the declarative UI.
 //!
-//! Usage: `fastcull-app <folder>` or `fastcull-app --synthetic 2000`
+//! Usage: `fastcull-app [<folder>]` or `fastcull-app --synthetic 2000` —
+//! no arguments opens the empty window (desktop-launcher start, issue #5)
 //! (colored placeholder cells, no RAW files needed — the M2 60 fps spike).
 
 use std::cell::RefCell;
@@ -67,6 +68,10 @@ struct AppState {
     /// True for --synthetic sessions: cells get distinct placeholder hues;
     /// real folders use the spec's neutral gray.
     synthetic: bool,
+    /// False until a session exists (folder opened or --synthetic). The
+    /// folderless launch (issue #5) shows "No folder open" — a different
+    /// message from "folder opened but it has no images".
+    session_open: bool,
     /// The one VecModel the window binds; refresh mutates it in place.
     cells: Rc<VecModel<CellData>>,
     /// Full-res loupe assets (real sessions only).
@@ -331,6 +336,7 @@ fn load_folder(state: &Rc<RefCell<AppState>>, folder: &std::path::Path) -> Resul
     st.loupe = Some(loupe);
     st.pipeline_rx = Some(rx);
     st.loupe_rx = Some(loupe_rx);
+    st.session_open = true;
     recompute_view(&mut st);
     Ok(())
 }
@@ -370,20 +376,25 @@ fn main() {
         .map(|i| args.remove(i))
         .is_some();
     enum Launch {
+        /// No arguments (desktop launcher / double-clicked binary, issue
+        /// #5): open the normal window in the empty state — NEVER a usage
+        /// error printed to a terminal nobody sees.
+        Empty,
         Synthetic(usize),
         Folder(std::path::PathBuf),
     }
     let launch = match args.as_slice() {
+        [] => Launch::Empty,
         [flag, n] if flag == "--synthetic" => {
             let Ok(n) = n.parse::<usize>() else {
-                eprintln!("usage: fastcull-app <folder> | --synthetic <count>");
+                eprintln!("usage: fastcull-app [<folder> | --synthetic <count>]");
                 std::process::exit(2);
             };
             Launch::Synthetic(n)
         }
         [folder] => Launch::Folder(folder.into()),
         _ => {
-            eprintln!("usage: fastcull-app <folder> | --synthetic <count>");
+            eprintln!("usage: fastcull-app [<folder> | --synthetic <count>]");
             std::process::exit(2);
         }
     };
@@ -411,6 +422,7 @@ fn main() {
         pipeline: None,
         thumbs_done: 0,
         synthetic: false,
+        session_open: false,
         cells,
         loupe: None,
         fullres: Vec::new(),
@@ -452,6 +464,13 @@ fn main() {
     }));
 
     match launch {
+        Launch::Empty => {
+            // Folderless start: the window opens with the "No folder
+            // open" empty state; the session begins when the user picks
+            // a folder (File > Open Folder — the existing session-swap
+            // path handles it).
+            recompute_view(&mut state.borrow_mut());
+        }
         Launch::Synthetic(n) => {
             let mut st = state.borrow_mut();
             st.labels = (0..n).map(|i| format!("SYN{i:05}.ARW")).collect();
@@ -463,6 +482,7 @@ fn main() {
             st.burst_pos = vec![None; n];
             st.iptc = vec![fastcull_core::iptc::IptcData::default(); n];
             st.synthetic = true;
+            st.session_open = true;
             recompute_view(&mut st);
         }
         Launch::Folder(path) => {
@@ -2449,6 +2469,10 @@ fn refresh_inner(win: &MainWindow, state: &Rc<RefCell<AppState>>) {
             counts.picked, counts.rejected, counts.unmarked, counts.all
         )
         .into()
+    } else if count == 0 && !st.session_open {
+        // Folderless launch (issue #5, ui-grid.md): distinct from a
+        // folder that opened but contained nothing.
+        "No folder open — File > Open Folder… (Ctrl+O)".into()
     } else if count == 0 {
         "No images — File > Open Folder… (Ctrl+O)".into()
     } else {

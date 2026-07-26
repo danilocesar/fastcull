@@ -457,3 +457,26 @@ fn empty_folder_renders_chrome_and_empty_state() {
         "empty-state frame is uniform — no chrome/message rendered (variance {var:.2})"
     );
 }
+
+/// Issue #5: launching with NO arguments (desktop launcher, double-clicked
+/// binary) must open the normal window in the "No folder open" empty
+/// state — never exit(2) with a usage error nobody sees. The old behavior
+/// makes `shoot` itself fail (non-zero exit), so this test IS the
+/// old-vs-new discriminator.
+#[test]
+fn no_args_launch_opens_empty_window() {
+    if !has_display() {
+        eprintln!("screenshot smoke skipped: no display server");
+        return;
+    }
+    let _s = serial();
+    let out = out_dir().join("no-args.jpg");
+    shoot(&[], &out);
+    let (w, h, _) = analyze(&out);
+    assert!(w >= 640 && h >= 480, "implausible snapshot size {w}x{h}");
+    let var = region_variance(&out, 1.0, 1.0);
+    assert!(
+        var > 1.0,
+        "folderless frame is uniform — no chrome/message rendered (variance {var:.2})"
+    );
+}

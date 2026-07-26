@@ -384,13 +384,16 @@ argument (same session path); the shortcuts popup lists every binding in this
 spec and closes with Esc. Persona (almost-human-user) reviews this section at
 M5 implementation start per the gate.
 
-**Folderless launch (user requirement 2026-07-25, issue #5)**: `fastcull-app`
-with NO arguments must open the normal window in the empty state with the
-message "No folder open — File > Open Folder… (Ctrl+O)" and a working menu
-bar — never exit with a usage error (a desktop launcher / double-clicked
-binary has no arguments; today's behavior of printing usage to a terminal
-nobody sees and exiting is a broken first run). The CLI usage error remains
-for genuinely malformed invocations (unknown flags, nonexistent folder).
+**Folderless launch (user requirement 2026-07-25, issue #5 — IMPLEMENTED
+2026-07-26)**: `fastcull-app` with NO arguments must open the normal
+window in the empty state with the message "No folder open — File > Open
+Folder… (Ctrl+O)" and a working menu bar — never exit with a usage error
+(a desktop launcher / double-clicked binary has no arguments; printing
+usage to a terminal nobody sees and exiting is a broken first run). The
+"No folder open" message is distinct from the "No images" message of a
+folder that opened empty (`session_open` flag). The CLI usage error
+remains for genuinely malformed invocations (unknown flags, nonexistent
+folder). Screenshot test: `no_args_launch_opens_empty_window`.
 
 Chrome staging (updated with the panel step): IPTC Panel menu item, `I`,
 `K`, Shift+arrows and `Ctrl+A` all landed; the popup lists them live.
