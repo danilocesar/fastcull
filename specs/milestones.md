@@ -91,6 +91,5 @@ module spec changes. DoD: a newcomer can go from "downloaded the app" to
 
 DELIVERED 2026-07-26: five pages (index, culling, metadata, copy-picks,
 faq); QE executed the full DoD path from the docs against the release
-binary. Release-note debt: both version callouts (index install note,
-culling "changed after 0.2.0") must be updated when the next release
-ships. The docs-follow-specs binding lives in CLAUDE.md.
+binary. Release-note debt RESOLVED with v0.3.0: the index install note was
+removed and the culling callout pinned to "Changed in 0.3.0". The docs-follow-specs binding lives in CLAUDE.md.

@@ -40,11 +40,10 @@ The same map lives in **Help > Keyboard Shortcuts** inside the app.
 
 ## The mouse
 
-> **Changed after 0.2.0** (first release carrying it: the next one):
-> the wheel used to step between images in the loupe. It now ZOOMS —
-> moving between images in the loupe is keyboard-only (arrows, `Y`/`N`
-> auto-advance, `[`/`]`). If your mouse "stopped working", it didn't —
-> the gesture changed.
+> **Changed in 0.3.0**: the wheel used to step between images in the
+> loupe. It now ZOOMS — moving between images in the loupe is
+> keyboard-only (arrows, `Y`/`N` auto-advance, `[`/`]`). If your mouse
+> "stopped working", it didn't — the gesture changed.
 
 - **Grid**: wheel scrolls, click selects (and moves the cursor),
   double-click opens the image in the loupe, drag scrolls.

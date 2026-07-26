@@ -12,12 +12,6 @@ FastCull ships as plain archives on the
 [Releases page](https://github.com/danilocesar/fastcull/releases) —
 no installer, nothing touches your system.
 
-> This guide tracks the latest code. Two things differ in the **0.2.0**
-> build: double-clicking the Windows exe without a folder shows a usage
-> error instead of opening the window (fixed since — pass a folder on
-> the command line as a workaround), and the loupe wheel steps between
-> images instead of zooming. Both notes disappear with the next release.
-
 **Linux**: unpack `fastcull-app-x86_64-unknown-linux-gnu.tar.xz` anywhere
 and run `fastcull-app`. The binary needs a normal desktop's runtime
 libraries: fontconfig, libxkbcommon, and Mesa OpenGL — already present
