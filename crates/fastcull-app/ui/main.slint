@@ -130,6 +130,25 @@ export component MainWindow inherits Window {
     // Scrollbar drag hint: "first-visible / total" (task #21).
     in property <string> scroll-hint: "";
     in-out property <bool> shortcuts-visible: false;
+    // About dialog (issue #23): dedicated modal; the version string is
+    // composed by the build (X.Y.Z, or X.Y.Z-devel-<hash> off-tag).
+    in-out property <bool> about-visible: false;
+    in property <string> about-version;
+    // Opening a modal steals the keyboard back to the main key scope
+    // (validator M1: a focused IPTC LineEdit is a SIBLING of `keys`, so
+    // field focus kept eating every key — including the Esc that should
+    // close the modal — while the popup covered the panel). NEVER steal
+    // from the copy dialog: its FocusScope owns the keyboard while it
+    // is up, and stealing left the main key handler LIVE behind it
+    // after the popup closed — N/Y fired real marks at the hidden grid
+    // (validator delta finding, the same blind-marks class). The known
+    // cost: with About over the copy dialog, Esc reaches the copy
+    // dialog's scope, so About closes by click-outside there.
+    public function focus-keys() {
+        if (!root.copy-visible) {
+            keys.focus();
+        }
+    }
     // Scroll offset (negative Flickable viewport-y); Rust reads and writes it.
     in-out property <length> vp-y: 0px;
     // Geometry the Rust layout math needs (the grid area = flickable size).
@@ -251,11 +270,11 @@ export component MainWindow inherits Window {
             title: "Help";
             MenuItem {
                 title: "Keyboard Shortcuts";
-                activated => { root.shortcuts-visible = true; }
+                activated => { root.shortcuts-visible = true; root.focus-keys(); }
             }
             MenuItem {
                 title: "About FastCull";
-                activated => { root.shortcuts-visible = true; }
+                activated => { root.about-visible = true; root.focus-keys(); }
             }
         }
     }
@@ -271,9 +290,19 @@ export component MainWindow inherits Window {
             height: parent.height - statusbar.height;
 
             key-pressed(event) => {
-                // Shortcuts popup swallows Esc first (spec: closes with Esc).
-                if (root.shortcuts-visible && event.text == Key.Escape) {
-                    root.shortcuts-visible = false;
+                // Modal containment (issue #23, user decision 2026-07-27:
+                // "swallow everything in that screen"): while a popup is
+                // up, Esc closes it and EVERY other key dies here — the
+                // persona found the old Esc-only guard let N/Y/arrows act
+                // on the grid under the scrim ("the popup that teaches
+                // you the keys lets you fire them blind"). A stray N
+                // while reading About must never reject a photo.
+                if (root.about-visible) {
+                    if (event.text == Key.Escape) { root.about-visible = false; }
+                    return accept;
+                }
+                if (root.shortcuts-visible) {
+                    if (event.text == Key.Escape) { root.shortcuts-visible = false; }
                     return accept;
                 }
                 if (event.modifiers.control) {
@@ -783,47 +812,6 @@ export component MainWindow inherits Window {
             }
         }
 
-        // Keyboard-shortcuts popup (Help menu; Esc closes). The keyboard map
-        // in ui-grid.md is the source of truth for this list.
-        if root.shortcuts-visible: Rectangle {
-            y: 0; // missing-binding trap (issue #12): unset y centered the scrim 13px low
-            width: 100%;
-            height: parent.height - statusbar.height;
-            background: #000000aa;
-            TouchArea {
-                clicked => { root.shortcuts-visible = false; }
-            }
-            Rectangle {
-                x: (parent.width - self.width) / 2;
-                y: (parent.height - self.height) / 2;
-                width: 480px;
-                height: min(560px, parent.height - 40px);
-                border-radius: 8px;
-                background: #202028;
-                border-width: 1px;
-                border-color: #3a3a44;
-                VerticalLayout {
-                    padding: 18px;
-                    spacing: 8px;
-                    Text {
-                        text: "Keyboard shortcuts";
-                        color: #ffffff;
-                        font-size: 16px;
-                    }
-                    Text {
-                        text: "Arrows / PgUp / PgDn / Home / End   navigate\nY, P or Space   pick (take)\nN or X   reject\nU   clear mark\n+ / -   zoom in / out (grid → loupe fit → ×1.5 steps → 1:1, center held)\nWheel in loupe   zoom, anchored under the pointer (grid: scroll)\nZ   fit → 1:1; zoomed → back to fit (from grid: jump to 1:1)\nClick in loupe   above fit: center on the clicked point\nDouble-click   grid: open in loupe; loupe: 1:1 on the clicked point\nG or Esc   back to the grid\nK   keyword field (opens the IPTC panel)\nI   IPTC panel\nShift+arrows   extend selection\nCtrl+A   select all (filtered set)\n[ / ]   previous / next burst\nCtrl+O   open folder\nCtrl+E   Copy Picks…\nCtrl+Q   quit\n1–5, 0   reserved (star ratings, v2)";
-                        color: #c8c8d0;
-                        font-size: 13px;
-                    }
-                    Text {
-                        text: "FastCull — GPL-3.0-or-later. Esc or click to close.";
-                        color: #707078;
-                        font-size: 11px;
-                    }
-                }
-            }
-        }
-
         // IPTC panel (M5, iptc-templates.md + persona G3-G7): docked right,
         // toggled by I; K focuses the keyword field. Field editors own the
         // keyboard while focused (focus containment: typing "Xavier" must
@@ -1192,6 +1180,123 @@ export component MainWindow inherits Window {
             }
             }
             init => { copy-keys.focus(); }
+        }
+
+        // MODAL POPUPS — declared AFTER the IPTC panel and the copy
+        // dialog on purpose (validator M1, issue #23): later elements
+        // render on top, and the scrims must cover EVERY layer — the
+        // old order left the panel clickable above an "open" modal.
+        // Keyboard-shortcuts popup (Help menu; Esc closes). The keyboard map
+        // in ui-grid.md is the source of truth for this list.
+        if root.shortcuts-visible: Rectangle {
+            y: 0; // missing-binding trap (issue #12): unset y centered the scrim 13px low
+            width: 100%;
+            height: parent.height - statusbar.height;
+            background: #000000aa;
+            TouchArea {
+                clicked => { root.shortcuts-visible = false; }
+                // The wheel must not scroll the grid under the scrim
+                // (validator M2 — TouchAreas pass unhandled scrolls
+                // through to the Flickable below).
+                scroll-event(e) => { return accept; }
+            }
+            Rectangle {
+                x: (parent.width - self.width) / 2;
+                y: (parent.height - self.height) / 2;
+                width: 480px;
+                height: min(560px, parent.height - 40px);
+                border-radius: 8px;
+                background: #202028;
+                border-width: 1px;
+                border-color: #3a3a44;
+                VerticalLayout {
+                    padding: 18px;
+                    spacing: 8px;
+                    Text {
+                        text: "Keyboard shortcuts";
+                        color: #ffffff;
+                        font-size: 16px;
+                    }
+                    Text {
+                        text: "Arrows / PgUp / PgDn / Home / End   navigate\nY, P or Space   pick (take)\nN or X   reject\nU   clear mark\n+ / -   zoom in / out (grid → loupe fit → ×1.5 steps → 1:1, center held)\nWheel in loupe   zoom, anchored under the pointer (grid: scroll)\nZ   fit → 1:1; zoomed → back to fit (from grid: jump to 1:1)\nClick in loupe   above fit: center on the clicked point\nDouble-click   grid: open in loupe; loupe: 1:1 on the clicked point\nG or Esc   back to the grid\nK   keyword field (opens the IPTC panel)\nI   IPTC panel\nShift+arrows   extend selection\nCtrl+A   select all (filtered set)\n[ / ]   previous / next burst\nCtrl+O   open folder\nCtrl+E   Copy Picks…\nCtrl+Q   quit\n1–5, 0   reserved (star ratings, v2)";
+                        color: #c8c8d0;
+                        font-size: 13px;
+                    }
+                    Text {
+                        // License line moved to About (issue #23 — its
+                        // intended home per the M5 deferral note).
+                        text: "Esc or click to close.";
+                        color: #707078;
+                        font-size: 11px;
+                    }
+                }
+            }
+        }
+
+        // About dialog (issue #23; replaces the About→shortcuts
+        // placeholder). Same scrim/close pattern as the shortcuts popup;
+        // fully keyboard-contained (see the key handler). The repository
+        // URL is plain retype-able text on purpose (no new dependency
+        // for a URL opener; persona: it must never wrap or ellipsize —
+        // a truncated URL you can't retype is worse than a non-clickable
+        // one you can).
+        if root.about-visible: Rectangle {
+            y: 0; // missing-binding trap (issue #12)
+            width: 100%;
+            height: parent.height - statusbar.height;
+            background: #000000aa;
+            TouchArea {
+                clicked => { root.about-visible = false; }
+                // Same wheel swallow as the shortcuts scrim (M2).
+                scroll-event(e) => { return accept; }
+            }
+            Rectangle {
+                x: (parent.width - self.width) / 2;
+                y: (parent.height - self.height) / 2;
+                width: 480px;
+                height: min(320px, parent.height - 40px);
+                border-radius: 8px;
+                background: #202028;
+                border-width: 1px;
+                border-color: #3a3a44;
+                TouchArea { } // clicks on the card never close it
+                VerticalLayout {
+                    padding: 18px;
+                    spacing: 10px;
+                    Text {
+                        text: "FastCull — version " + root.about-version;
+                        color: #ffffff;
+                        font-size: 16px;
+                    }
+                    Text {
+                        text: "A fast, keyboard-first photo culling tool: fly through a folder of RAW or JPEG photos, pick the keepers, tag them, and copy them out checksum-verified — without ever touching your originals.";
+                        color: #c8c8d0;
+                        font-size: 13px;
+                        wrap: word-wrap;
+                    }
+                    Text {
+                        text: "Main contributor: Danilo de Paula";
+                        color: #c8c8d0;
+                        font-size: 13px;
+                    }
+                    Text {
+                        text: "Repository: https://github.com/danilocesar/fastcull";
+                        color: #c8c8d0;
+                        font-size: 13px;
+                    }
+                    Text {
+                        text: "Free software, released under the GPL-3.0-or-later license.";
+                        color: #c8c8d0;
+                        font-size: 13px;
+                        wrap: word-wrap;
+                    }
+                    Text {
+                        text: "Esc or click outside to close.";
+                        color: #707078;
+                        font-size: 11px;
+                    }
+                }
+            }
         }
 
         statusbar := Rectangle {

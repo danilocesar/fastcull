@@ -438,6 +438,17 @@ fn main() {
     };
 
     let window = MainWindow::new().expect("creating window");
+    // About-dialog version (issue #23): X.Y.Z on a release-tag build,
+    // X.Y.Z-devel-<hash> otherwise (suffix composed by build.rs — a bug
+    // report from a dev build must pin the commit). Traced so headless
+    // runs can assert the composition without pixel-reading the dialog.
+    let about_version = format!(
+        "{}{}",
+        fastcull_core::VERSION,
+        env!("FASTCULL_VERSION_SUFFIX")
+    );
+    trace_mark(&format!("about version {about_version}"));
+    window.set_about_version(about_version.into());
     let cells = Rc::new(VecModel::from(Vec::<CellData>::new()));
     window.set_cells(slint::ModelRc::from(Rc::clone(&cells)));
     let start_at_loupe = start_11 || start_loupe;
@@ -1442,6 +1453,28 @@ fn main() {
                     win.invoke_iptc_toggle();
                     return;
                 }
+                if key == "about" || key == "shortcuts" {
+                    // Modal toggles for the containment tests (issue #23:
+                    // a stray N while a popup is up must never reject —
+                    // untestable headlessly without a way to open them).
+                    let visible = if key == "about" {
+                        let v = !win.get_about_visible();
+                        win.set_about_visible(v);
+                        v
+                    } else {
+                        let v = !win.get_shortcuts_visible();
+                        win.set_shortcuts_visible(v);
+                        v
+                    };
+                    if visible {
+                        // Same keyboard steal as the menu path
+                        // (validator M1: a focused panel field must not
+                        // keep the keys while the modal covers it).
+                        win.invoke_focus_keys();
+                    }
+                    trace_mark(&format!("{key} toggled to {visible}"));
+                    return;
+                }
                 if let Some(dims) = key.strip_prefix("resize:") {
                     // resize:WxH (logical px) — the user's reported bug
                     // class (issue #16) needs REAL window resizes to be
@@ -1453,6 +1486,15 @@ fn main() {
                             ));
                         }
                     }
+                    return;
+                }
+                // Modal keyboard containment, mirrored for driven keys
+                // (issue #23): a driven nav action must die exactly like
+                // a real keypress while a popup is up — the FocusScope
+                // guard only sees real keyboard events, and without this
+                // mirror the containment tests would test nothing.
+                if win.get_about_visible() || win.get_shortcuts_visible() {
+                    trace_mark(&format!("drive swallowed by modal: {key}"));
                     return;
                 }
                 handle_nav(&win, &state, &key);

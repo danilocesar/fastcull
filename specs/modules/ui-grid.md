@@ -530,8 +530,40 @@ folder). Screenshot test: `no_args_launch_opens_empty_window`.
 
 Chrome staging (updated with the panel step): IPTC Panel menu item, `I`,
 `K`, Shift+arrows and `Ctrl+A` all landed; the popup lists them live.
-"About" opens the shortcuts popup (which carries the license line) until a
-dedicated About dialog is worth its weight — deferred, not forgotten.
+
+**About dialog (issue #23, implemented 2026-07-27 — replaces the
+About→shortcuts placeholder)**: Help > About opens a dedicated modal
+(same scrim/close pattern as the shortcuts popup: Esc or click outside;
+clicks on the card never close it). Content, user-directed: "FastCull —
+version X.Y.Z", the two-sentence description, "Main contributor: Danilo
+de Paula", the repository URL as plain RETYPE-ABLE text (no URL-opener
+dependency in v1; the URL must never wrap or ellipsize), and the
+license line "GPL-3.0-or-later" — moved here from the shortcuts footer
+(its intended home per the M5 deferral). The version string is composed
+by the BUILD, never hand-maintained: `X.Y.Z` when HEAD sits exactly on
+the release tag `vX.Y.Z`, `X.Y.Z-devel-<short-hash>` otherwise (user
+decision — a bug report from a dev build must pin the commit); no git
+(tarball build) falls back to plain `X.Y.Z`. Traced at startup
+("about version ...") for headless assertions.
+
+**Modal keyboard containment (issue #23, user decision "swallow
+everything in that screen")**: while About OR the shortcuts popup is
+up, Esc closes it and EVERY other key is swallowed — the old Esc-only
+guard let N/Y/arrows act on the grid under the scrim (persona
+IN-MY-WAY: a stray N while reading About must never reject a photo;
+the shortcuts popup was the worse leak — the popup a new user has open
+while experimentally pressing keys). Driven NAV keys (`FASTCULL_DRIVE`)
+are contained identically, or the containment tests would test
+nothing. Debug facilities gained `about` and `shortcuts` toggle
+actions for those tests. Containment mechanics (validator findings on
+the first cut): the popups are declared LAST in the element tree so
+their scrims render above every layer — the old order left the IPTC
+panel clickable ON TOP of an "open" modal; opening a modal steals the
+keyboard back to the main key scope (a focused panel LineEdit is a
+sibling of that scope and would otherwise keep eating keys, including
+the closing Esc); the scrims swallow wheel events (the grid must not
+scroll under a modal). The MENU BAR stays live while a modal is up
+(File > Quit works) — standard desktop behavior, deliberate.
 
 ## Filter & sort bar (M5 decisions recorded 2026-07-25)
 
@@ -631,10 +663,15 @@ Documented because they ship in release builds (validator finding):
   evidence channel for hang reports.
 - `FASTCULL_DRIVE="6000:one2one;9000:grid;12000:quit"`: timed injection of
   nav actions (same names `handle_nav` takes, plus `quit`, `iptc` — the
-  panel toggle, issue #12 — and `resize:WxH` in logical pixels, issue
-  #16: the wrong-photo-after-resize bug class needs real window resizes
+  panel toggle, issue #12 — `about`/`shortcuts` — the modal toggles,
+  issue #23 — and `resize:WxH` in logical pixels, issue #16: the
+  wrong-photo-after-resize bug class needs real window resizes
   drivable or it ships regression-blind) for headless reproduction and
-  QE runs — Wayland offers no external input automation.
+  QE runs — Wayland offers no external input automation. Driven NAV
+  keys respect the modal containment exactly like real keypresses
+  ("drive swallowed by modal" trace); `quit`/`iptc`/`resize` and the
+  modal toggles themselves remain live harness plumbing, like the menu
+  bar.
   Malformed entries are skipped silently. Scripts may include mark actions
   (`pick`/`reject`), which write real sidecars — QE runs target throwaway
   copies of test data only.

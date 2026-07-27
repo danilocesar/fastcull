@@ -38,6 +38,13 @@ which is faster than any undo dialog.
 
 The same map lives in **Help > Keyboard Shortcuts** inside the app.
 
+**Help > About** shows the version, license, and project link. When
+filing a bug, paste the version string from there — development builds
+read `X.Y.Z-devel-<commit>`, which pins the exact code you're running.
+While About or the shortcuts popup is open, keys are swallowed (a
+stray `N` will never reject the photo underneath); `Esc` or a click
+outside closes them.
+
 ## The mouse
 
 > **Changed in 0.3.0**: the wheel used to step between images in the

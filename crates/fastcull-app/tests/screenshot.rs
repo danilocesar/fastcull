@@ -1325,3 +1325,106 @@ fn panel_toggle_at_one_to_one_reanchors_the_crop() {
         );
     }
 }
+
+/// Issue #23: the About dialog renders and the modal contains the
+/// keyboard (user decision: "swallow everything in that screen").
+/// Driven reject/pick with About open must mark NOTHING. Fails on old
+/// code: the `about` drive didn't exist (Help > About routed to the
+/// shortcuts popup), so the marks fire and the counts assert breaks.
+#[test]
+fn about_dialog_renders_and_contains_the_keyboard() {
+    if !has_display() {
+        eprintln!("screenshot smoke skipped: no display server");
+        return;
+    }
+    let _s = serial();
+    let out = out_dir().join("about-dialog.jpg");
+    let stderr = shoot_env_stderr(
+        &["--synthetic", "200"],
+        &[
+            ("FASTCULL_TRACE", "1"),
+            ("FASTCULL_DRIVE", "600:about;900:reject;1200:pick"),
+        ],
+        &out,
+    );
+    assert!(
+        stderr.contains("about toggled to true"),
+        "About never opened:\n{stderr}"
+    );
+    // The build-composed version reached the dialog property.
+    assert!(
+        stderr.contains(&format!("about version {}", fastcull_core::VERSION)),
+        "version string not composed from the crate version:\n{stderr}"
+    );
+    assert_eq!(
+        stderr.matches("drive swallowed by modal").count(),
+        2,
+        "reject/pick were not both swallowed by the modal:\n{stderr}"
+    );
+    let status = stderr
+        .lines()
+        .rev()
+        .find_map(|l| l.split("status at shutter: ").nth(1))
+        .expect("no status trace");
+    assert!(
+        status.contains("★0 ✕0"),
+        "a mark leaked through the About modal: {status}"
+    );
+    // The card's bright text over the dark backing: the synthetic grid
+    // tops out near luma 56 (hsv v=0.22) and its labels at ~130, so
+    // >150-luma pixels in the centered card region prove the dialog
+    // actually rendered (the About stays open through the shutter).
+    let bytes = std::fs::read(&out).expect("snapshot file");
+    let mut dec = zune_jpeg::JpegDecoder::new(&bytes);
+    let px = dec.decode().expect("decode snapshot");
+    let (w, h) = dec.dimensions().expect("dims");
+    let bright = (h * 35 / 100..h * 65 / 100)
+        .flat_map(|y| (w * 35 / 100..w * 65 / 100).map(move |x| (y * w + x) * 3))
+        .filter(|i| {
+            0.299 * px[*i] as f64 + 0.587 * px[*i + 1] as f64 + 0.114 * px[*i + 2] as f64 > 150.0
+        })
+        .count();
+    assert!(
+        bright > 100,
+        "no dialog text rendered in the center region ({bright} bright px)"
+    );
+}
+
+/// Issue #23's persona finding: the shortcuts popup used to swallow
+/// ONLY Esc — pressing N while reading the key list rejected the photo
+/// under the scrim. Same containment as About now. Fails on old code
+/// (no `shortcuts` drive: the popup never opens, the reject fires).
+#[test]
+fn shortcuts_popup_contains_the_keyboard() {
+    if !has_display() {
+        eprintln!("screenshot smoke skipped: no display server");
+        return;
+    }
+    let _s = serial();
+    let out = out_dir().join("shortcuts-contained.jpg");
+    let stderr = shoot_env_stderr(
+        &["--synthetic", "200"],
+        &[
+            ("FASTCULL_TRACE", "1"),
+            ("FASTCULL_DRIVE", "600:shortcuts;900:reject"),
+        ],
+        &out,
+    );
+    assert!(
+        stderr.contains("shortcuts toggled to true"),
+        "shortcuts popup never opened:\n{stderr}"
+    );
+    assert!(
+        stderr.contains("drive swallowed by modal: reject"),
+        "the reject was not swallowed:\n{stderr}"
+    );
+    let status = stderr
+        .lines()
+        .rev()
+        .find_map(|l| l.split("status at shutter: ").nth(1))
+        .expect("no status trace");
+    assert!(
+        status.contains("★0 ✕0"),
+        "a mark leaked through the shortcuts modal: {status}"
+    );
+}
