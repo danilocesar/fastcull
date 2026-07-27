@@ -42,8 +42,10 @@ ARW variants (compressed / lossless-compressed / uncompressed). Every A1 ARW emb
 | Preview | 1616×1080 | ~0.5 MB | grid thumbnails |
 | Full-res JPEG | 8640×5760 | ~10–12 MB | loupe fit + 1:1 |
 
-Other cameras: best-effort via rawler's format support and the fallback chain in
-`modules/raw-pipeline.md`.
+Other cameras: best-effort — TIFF-shaped RAWs (NEF/CR2/DNG…) read EXIF via the
+same in-tree walker as ARW; non-TIFF containers (CR3/RAF/X3F) fall back to
+rawler's parser (slower, mmap-based — acceptable for out-of-scope formats).
+Decode fallback chain in `modules/raw-pipeline.md`.
 
 ## Glossary
 

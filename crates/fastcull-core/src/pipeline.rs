@@ -6,7 +6,7 @@
 //! `promote`/`set_visible` reprioritizes queued jobs without re-enqueueing,
 //! duplicates coalesce, in-flight jobs are never cancelled (they are ≤150 ms).
 //!
-//! Per image the pipeline emits `MetadataReady` (EXIF via rawler) and
+//! Per image the pipeline emits `MetadataReady` (EXIF via the in-tree TIFF walker) and
 //! `ThumbReady` (embedded preview → decode → 320 px → JPEG q80), or `Failed`
 //! once if the thumb path is impossible — metadata failure alone does not
 //! fail an image, the thumb is the essential asset. Results are cached
@@ -242,7 +242,7 @@ impl ReadPool {
 
     /// Wait for release at `priority` (lower = more urgent). `sampled` marks
     /// a preview-read section eligible to become the probe; the EXIF section
-    /// passes false (rawler parse CPU would contaminate the sample).
+    /// passes false (EXIF/decode parse CPU would contaminate the sample).
     fn acquire(&self, priority: u8, sampled: bool) -> ReadPermit<'_> {
         let mut state = self.lock();
         let seq = state.next_ticket;
@@ -666,7 +666,7 @@ fn process_job(shared: &Shared, cache: &mut Option<PreviewCache>, index: usize, 
 
     let exif = {
         // Pool-managed but never sampled: this section mixes file reads with
-        // rawler parse CPU (spec: only the preview read feeds the controller).
+        // parse/decode CPU (spec: only the preview read feeds the controller).
         let _permit = shared.read_pool.acquire(priority, false);
         crate::exif::read_exif_summary(&spec.path).ok()
     };

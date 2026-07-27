@@ -54,7 +54,7 @@ copy picks
 
 ## Performance budgets (regression-tested)
 
-Measured baselines on the 32-thread reference machine; CI thresholds set ~2× looser
+Measured baselines on the 32-thread reference machine; CI thresholds set looser (~2× for decode-bound rows; the EXIF row has huge headroom on purpose — anything near 1 ms means a whole-file read or mmap snuck back)
 to absorb runner variance. Enforcement: `crates/fastcull-core/tests/perf_budgets.rs`
 (release-mode tests) on REFERENCE HARDWARE — they run in every local gate
 round. The CI step is advisory-only (`continue-on-error`, user decision
@@ -64,10 +64,10 @@ budgets. Skipped in debug builds where decode timing is meaningless. Numbers for
 
 | Operation | Baseline | CI threshold |
 |---|---|---|
-| open+EXIF (rawler, A1) | ~2 ms | < 10 ms |
+| open+EXIF (in-tree walker, A1) | ~5 µs | < 1 ms |
 | grid thumb: extract+decode+resize | 7–11 ms | < 25 ms |
 | full-res 8640×5760 decode | 130–150 ms | < 350 ms |
-| pipeline throughput (all cores) | ~300 files/s | > 60 files/s (4-core runner) |
+| pipeline throughput (all cores) | ~1,500 files/s (post-2026-07-27 EXIF fix; was ~300 mmap-capped) | > 60 files/s (4-core runner) |
 
 ## Shutdown policy (recorded 2026-07-25)
 

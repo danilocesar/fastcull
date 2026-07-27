@@ -59,9 +59,12 @@ fn median(mut samples: Vec<Duration>) -> Duration {
     samples[samples.len() / 2]
 }
 
-/// Budget: open + EXIF read < 10 ms per file.
+/// Budget: open + EXIF read < 1 ms per file. Tightened from 10 ms
+/// after the 2026-07-27 perf fix (in-tree walker, ~5 µs measured):
+/// anything near the old budget means a whole-file read or mmap snuck
+/// back into the metadata pass — the exact regression this pins out.
 #[test]
-fn budget_open_exif_under_10ms() {
+fn budget_open_exif_under_1ms() {
     let Some(_serial) = measure_serially() else {
         return;
     };
@@ -76,8 +79,8 @@ fn budget_open_exif_under_10ms() {
             .collect();
         let med = median(samples);
         assert!(
-            med < Duration::from_millis(10),
-            "{name}: open+EXIF median {med:?} (budget 10 ms)"
+            med < Duration::from_millis(1),
+            "{name}: open+EXIF median {med:?} (budget 1 ms)"
         );
     }
 }

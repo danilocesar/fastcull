@@ -86,7 +86,10 @@
       (< 400 ms on Windows CI — Defender scans fresh tempdir files; recorded).
 - [ ] Cache hit round-trip: store → lookup returns identical thumb bytes + EXIF;
       touching mtime invalidates.
-- [ ] Reopen-from-cache produces no `RawSource` opens (counting instrumentation).
+- [ ] Reopen-from-cache produces no RAW-file reads at all (permission-based
+      pipeline test; historically "no `RawSource` opens" — the EXIF pass moved
+      to the in-tree walker 2026-07-27, so RawSource only appears in the
+      non-TIFF fallback and full-res decode paths).
 - [ ] Eviction respects the cap; corrupt DB file self-heals.
 - [x] Sidecar-at-open: existing `.ARW.xmp` files yield Sidecar events with
       pick state (pipeline test). Keywords populate in M5 with the IPTC panel

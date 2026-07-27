@@ -1,5 +1,14 @@
-//! EXIF summary: the few metadata fields the culling workflow needs, read via
-//! rawler (`specs/modules/catalog-cache.md`).
+//! EXIF summary: the few metadata fields the culling workflow needs, read
+//! via the in-tree targeted-read TIFF walker (`raw/jpeg_exif.rs`).
+//!
+//! History (perf investigation 2026-07-27): this used to go through
+//! rawler's `RawSource`, which mmaps the ENTIRE RAW file per read. All
+//! import workers then serialize on the process-wide `mmap_lock`
+//! (measured: the EXIF pass peaked at ~500 files/s and got SLOWER with
+//! more threads — 506/s at 8 threads, 429/s at 24 — while the seek+read
+//! thumbnail path scaled to 1,557/s), and over FUSE mounts (ntfs-3g
+//! backup drives) every faulted page is a userspace round trip. The
+//! in-tree walker reads a few KB per file instead.
 //!
 //! Capture times are kept in EXIF string form (`"YYYY:MM:DD HH:MM:SS"`): the
 //! format is fixed-width and zero-padded, so lexicographic order equals
@@ -8,8 +17,6 @@
 
 use std::path::Path;
 
-use rawler::decoders::RawDecodeParams;
-use rawler::rawsource::RawSource;
 use serde::{Deserialize, Serialize};
 
 #[derive(Debug, thiserror::Error)]
@@ -58,9 +65,9 @@ impl ExifSummary {
     }
 }
 
-/// Read the EXIF summary of one RAW file (a few ms: IFD tables only) —
-/// or of a bare JPEG (issue #8: the APP1 block, via the in-tree
-/// hardened walker; rawler has no JPEG decoder).
+/// Read the EXIF summary of one RAW file (~5 µs: a few KB of targeted
+/// IFD-table reads) — or of a bare JPEG (issue #8: the APP1 block, via
+/// the same in-tree hardened walker; rawler has no JPEG decoder).
 pub fn read_exif_summary(path: &Path) -> Result<ExifSummary, ExifError> {
     let is_jpeg = path
         .extension()
@@ -80,12 +87,42 @@ pub fn read_exif_summary(path: &Path) -> Result<ExifSummary, ExifError> {
             sequence_number: None, // Sony JPEG maker notes: out of scope v1
         });
     }
-    let source = RawSource::new(path).map_err(|e| ExifError::Open(e.to_string()))?;
+    // An ARW IS a TIFF: the in-tree walker reads IFD0 + ExifIFD with a
+    // few KB of targeted reads on the ONE open handle — no mmap, no
+    // whole-file access. Every TIFF-shaped RAW (ARW/NEF/CR2/DNG…)
+    // takes this path; absent individual fields degrade to None.
+    let mut file = std::fs::File::open(path).map_err(|e| ExifError::Open(e.to_string()))?;
+    if let Some(exif) = crate::raw::jpeg_exif::read_tiff_exif(&mut file) {
+        // Maker-note pass (in-tree — same file handle): failure of any
+        // kind degrades to None; bursts fall back to the Δt-only path.
+        let sequence_number = crate::raw::sony::read_sequence(&mut file).map(|s| s.burst_seq());
+        return Ok(ExifSummary {
+            // Preserve the retired rawler path's vendor normalization
+            // ("SONY" in the IFD -> "Sony") so summaries stay
+            // byte-stable across the swap — cached rows and tests never
+            // see the raw spelling change underneath them.
+            camera_make: exif.make.map(|m| normalize_make(&m)),
+            camera_model: exif.model,
+            serial_number: exif.serial,
+            capture_time: exif.date_time_original,
+            subsec: exif.subsec_original,
+            sequence_number,
+        });
+    }
+    drop(file);
+    // Not a classic-TIFF container (CR3/RAF/X3F and friends — the
+    // "other cameras: best-effort" promise in 00-overview.md): fall
+    // back to rawler's parser so those formats keep their capture
+    // times. The mmap cost this fix removed applies only to these
+    // rare files, never to the TIFF-shaped hot path. Sony maker-note
+    // sequence is TIFF-only, hence None here (as before: read_sequence
+    // returned None for non-TIFF containers).
+    let source =
+        rawler::rawsource::RawSource::new(path).map_err(|e| ExifError::Open(e.to_string()))?;
     let decoder = rawler::get_decoder(&source).map_err(|e| ExifError::Metadata(e.to_string()))?;
     let metadata = decoder
-        .raw_metadata(&source, &RawDecodeParams::default())
+        .raw_metadata(&source, &rawler::decoders::RawDecodeParams::default())
         .map_err(|e| ExifError::Metadata(e.to_string()))?;
-
     let non_empty = |s: String| (!s.trim().is_empty()).then_some(s);
     Ok(ExifSummary {
         camera_make: non_empty(metadata.make.clone()),
@@ -97,13 +134,19 @@ pub fn read_exif_summary(path: &Path) -> Result<ExifSummary, ExifError> {
             .sub_sec_time_original
             .clone()
             .and_then(non_empty),
-        // Maker-note pass (in-tree — rawler exposes none): failure of any
-        // kind degrades to None; bursts fall back to the Δt-only path.
-        sequence_number: std::fs::File::open(path)
-            .ok()
-            .and_then(|mut f| crate::raw::sony::read_sequence(&mut f))
-            .map(|s| s.burst_seq()),
+        sequence_number: None,
     })
+}
+
+/// Vendor-name normalization matching what rawler's metadata path did
+/// for the cameras this tool supports: the all-caps IFD spelling
+/// becomes the conventional one. Unknown makes pass through untouched.
+fn normalize_make(make: &str) -> String {
+    if make.eq_ignore_ascii_case("sony") {
+        "Sony".into()
+    } else {
+        make.to_string()
+    }
 }
 
 #[cfg(test)]

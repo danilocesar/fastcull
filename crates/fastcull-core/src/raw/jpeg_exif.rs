@@ -96,6 +96,18 @@ pub fn read_jpeg_exif<R: Read + Seek>(reader: &mut R) -> Option<JpegExif> {
         base,
         len,
     };
+    read_tiff_exif(&mut tiff)
+}
+
+/// Read the same EXIF facts from a reader whose position 0 IS a TIFF
+/// header — which is exactly what an ARW file is. This replaces the
+/// rawler/mmap path for the import metadata pass (perf investigation
+/// 2026-07-27): rawler's `RawSource` mmaps the whole ~82 MB file and
+/// every worker thread serializes on the process `mmap_lock`; over a
+/// FUSE/NTFS mount each IFD page fault is a userspace round trip. This
+/// walker touches a handful of KB via targeted seek+read instead —
+/// the same discipline as `find_embedded_jpegs` and `sony.rs`.
+pub fn read_tiff_exif<R: Read + Seek>(tiff: &mut R) -> Option<JpegExif> {
     tiff.seek(SeekFrom::Start(0)).ok()?;
     let mut header = [0u8; 8];
     tiff.read_exact(&mut header).ok()?;
@@ -110,12 +122,12 @@ pub fn read_jpeg_exif<R: Read + Seek>(reader: &mut R) -> Option<JpegExif> {
     let ifd0 = u64::from(en.u32([header[4], header[5], header[6], header[7]]));
 
     let mut out = JpegExif {
-        make: ascii_value(&mut tiff, &en, ifd0, 0x010F),
-        model: ascii_value(&mut tiff, &en, ifd0, 0x0110),
+        make: ascii_value(tiff, &en, ifd0, 0x010F),
+        model: ascii_value(tiff, &en, ifd0, 0x0110),
         orientation: 1,
         ..Default::default()
     };
-    if let Some((ty, count, val)) = find_in_ifd(&mut tiff, ifd0, &en, 0x0112) {
+    if let Some((ty, count, val)) = find_in_ifd(tiff, ifd0, &en, 0x0112) {
         if ty == 3 && count >= 1 {
             let v = en.u16([val[0], val[1]]);
             if (1..=8).contains(&v) {
@@ -123,11 +135,11 @@ pub fn read_jpeg_exif<R: Read + Seek>(reader: &mut R) -> Option<JpegExif> {
             }
         }
     }
-    if let Some((_, _, exif_val)) = find_in_ifd(&mut tiff, ifd0, &en, 0x8769) {
+    if let Some((_, _, exif_val)) = find_in_ifd(tiff, ifd0, &en, 0x8769) {
         let exif_ifd = u64::from(en.u32(exif_val));
-        out.date_time_original = ascii_value(&mut tiff, &en, exif_ifd, 0x9003);
-        out.subsec_original = ascii_value(&mut tiff, &en, exif_ifd, 0x9291);
-        out.serial = ascii_value(&mut tiff, &en, exif_ifd, 0xA431);
+        out.date_time_original = ascii_value(tiff, &en, exif_ifd, 0x9003);
+        out.subsec_original = ascii_value(tiff, &en, exif_ifd, 0x9291);
+        out.serial = ascii_value(tiff, &en, exif_ifd, 0xA431);
     }
     Some(out)
 }

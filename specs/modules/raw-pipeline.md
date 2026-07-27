@@ -14,8 +14,26 @@ decoding RAW sensor data on the hot path.
 
 ## Extraction strategy (per file)
 
-1. Open with `rawler::RawSource` + `get_decoder` — never read the whole file; only
-   IFD/metadata and the byte ranges of the chosen embedded JPEG.
+1. Targeted `seek`+`read` on the TIFF-shaped hot path — never read (or
+   map) the whole file for any classic-TIFF container (every `.ARW`;
+   also NEF/CR2/DNG); only IFD/metadata tables and the byte ranges of
+   the chosen embedded JPEG. The EXIF summary uses the in-tree TIFF
+   walker (`raw/jpeg_exif.rs::read_tiff_exif` — an ARW IS a TIFF), NOT
+   rawler: rawler's `RawSource` mmaps the entire file, and the
+   per-process `mmap_lock` serialized every import worker (perf
+   investigation 2026-07-27 — the EXIF pass peaked at ~500 files/s and
+   DEGRADED with more threads while the seek+read thumb path scaled to
+   1,557/s; over FUSE mounts (ntfs-3g backup drives, card readers)
+   each mmap page fault is a userspace round trip and a real 1,450-ARW
+   folder took 99–133 s to import vs ~3 s with the walker; per-file
+   EXIF cost 1.71 ms → 5 µs). The walker preserves rawler's vendor
+   normalization ("SONY" → "Sony") so summaries are byte-stable across
+   the swap. rawler remains in exactly two roles: the RAW-decode
+   fallback, and the EXIF-metadata FALLBACK for non-classic-TIFF
+   containers (CR3/RAF/X3F — see 00-overview.md's best-effort clause):
+   a walker-rejected header falls back to rawler's parser, confining
+   the mmap cost to those rare files (and to garbage files, which pay
+   one bounded rawler attempt before erroring exactly as pre-fix).
 2. Asset sources, in order of preference:
    - **Grid thumb**: largest embedded preview ≤ ~2 MP (A1: the 1616×1080), decoded
      with zune-jpeg, SIMD-resized (`fast_image_resize`) to 320 px.
@@ -26,8 +44,10 @@ decoding RAW sensor data on the hot path.
      TIFF parser: it operates on any `Read + Seek` (enabling the counting-reader
      budget tests), reads only IFD tables and JPEG headers, and is hardened
      against hostile files (offset cycles, entry-count bombs, out-of-range
-     offsets) — properties rawler's path-based API doesn't offer. rawler remains
-     the EXIF/metadata and RAW-decode-fallback dependency. BigTIFF (magic 43)
+     offsets) — properties rawler's path-based API doesn't offer. rawler
+     remains the RAW-decode fallback and the non-classic-TIFF EXIF
+     fallback (the hot-path EXIF summary moved to the in-tree walker,
+     2026-07-27 — see step 1). BigTIFF (magic 43)
      containers are rejected as not-TIFF. Do NOT upstream anything without
      explicit user approval.
    - **Loupe asset ladder (user decision 2026-07-25, replaces the separate
