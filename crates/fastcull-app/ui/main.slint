@@ -161,6 +161,13 @@ export component MainWindow inherits Window {
     // surface intercepts the wheel there (it zooms; browsing is
     // keyboard-only — user decision, issue #11).
     in property <bool> at-fit;
+    // Set on any scrollbar interaction (drag move / track click); Rust
+    // consumes it. The loupe follow-scroll claim is POSITIVE-GATED on
+    // this (issues #16/#22 family): claim heuristics that inferred
+    // "user scrolled" from displacement alone kept misfiring on
+    // relayout/load/DPI timing windows — the scrollbar is the ONLY
+    // legitimate trigger (cursor contract), so it says so explicitly.
+    in-out property <bool> sb-activity;
     // Cell click (issue #7 + click-to-zoom at loupe fit): image id,
     // cell-local coordinates, ctrl/shift modifiers (selection semantics).
     // Lives IN the cell so the Flickable keeps drag-scrolling (a sibling
@@ -553,6 +560,7 @@ export component MainWindow inherits Window {
                     scroll-event(e) => { return accept; }
                     moved => {
                         if (self.pressed) {
+                            root.sb-activity = true;
                             root.vp-y = -clamp(
                                 (self.mouse-y - thumb.height / 2)
                                     / max(1px, parent.height - thumb.height)
@@ -562,6 +570,7 @@ export component MainWindow inherits Window {
                     }
                     clicked => {
                         // Track click: jump straight to the spot.
+                        root.sb-activity = true;
                         root.vp-y = -clamp(
                             (self.mouse-y - thumb.height / 2)
                                 / max(1px, parent.height - thumb.height)

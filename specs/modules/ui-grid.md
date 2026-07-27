@@ -341,7 +341,12 @@ brightening during wheel scrolling (needs an activity decay timer).
   a cursor displaced because the view re-sorted or changed membership
   between refreshes (capture keys streaming in during folder load, live
   filter removal) is not scrolling either — during load the claim used
-  to move the cursor with no input at all (the whole point of the follow rule is that marks
+  to move the cursor with no input at all. FINAL FORM (after a Windows
+  DPI-timing variant slipped past both guards): the claim is
+  POSITIVE-GATED on actual scrollbar activity (drag move or track
+  click sets a flag Rust consumes) — displacement alone NEVER claims,
+  because the scrollbar is the only legitimate trigger the contract
+  names and no elimination list of displacement causes stays complete (the whole point of the follow rule is that marks
   land on what the user is looking at — a relayout claim inverted it
   into marks landing on a photo the user already left). The dock state
   is published to the window BEFORE any geometry read in the toggle

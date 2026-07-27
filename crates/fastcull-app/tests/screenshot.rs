@@ -122,6 +122,18 @@ fn region_stats(path: &Path, fx0: f64, fy0: f64, fx1: f64, fy1: f64) -> (f64, f6
     (mean, var)
 }
 
+/// Link (unix) or copy (windows) a fixture RAW into a test dir: the
+/// six-copy tests leaked 1.2 GB of tmpfs per suite run and exhausted
+/// the disk quota inside the reaper's grace window — the root cause of
+/// a string of "unexplained" local one-off failures (gate finding M2).
+/// The app follows symlinks (catalog spec: a link.ARW is first-class).
+fn place_fixture(src: &Path, dst: &Path) {
+    #[cfg(unix)]
+    std::os::unix::fs::symlink(src, dst).unwrap();
+    #[cfg(not(unix))]
+    std::fs::copy(src, dst).map(|_| ()).unwrap();
+}
+
 static SERIAL: std::sync::Mutex<()> = std::sync::Mutex::new(());
 
 fn serial() -> std::sync::MutexGuard<'static, ()> {
@@ -345,16 +357,14 @@ fn cursor_opens_on_capture_first_image() {
     std::fs::create_dir_all(&dir).unwrap();
     // a_late.ARW: captured 15:29:55 (uncompressed fixture); b_early.ARW:
     // captured 15:29:13 (compressed fixture). Name-first = capture-LAST.
-    std::fs::copy(
-        raws_dir().join("A1_full_uncompressed.ARW"),
-        dir.join("a_late.ARW"),
-    )
-    .unwrap();
-    std::fs::copy(
-        raws_dir().join("A1_full_compressed.ARW"),
-        dir.join("b_early.ARW"),
-    )
-    .unwrap();
+    place_fixture(
+        &raws_dir().join("A1_full_uncompressed.ARW"),
+        &dir.join("a_late.ARW"),
+    );
+    place_fixture(
+        &raws_dir().join("A1_full_compressed.ARW"),
+        &dir.join("b_early.ARW"),
+    );
     let out = out_dir().join("cursor-order.jpg");
     let bin = env!("CARGO_BIN_EXE_fastcull-app");
     // Up to 3 attempts: under full-suite CPU load the snapshot's 1.5 s
@@ -530,7 +540,7 @@ fn rapid_nav_at_one_to_one_never_folds_a_phantom_drag() {
         ("A1_full_lossless_compressed.ARW", "b.ARW"),
         ("A1_full_uncompressed.ARW", "c.ARW"),
     ] {
-        std::fs::copy(raws_dir().join(src), dir.join(dst)).unwrap();
+        place_fixture(&raws_dir().join(src), &dir.join(dst));
     }
     let out = out_dir().join("rapid-nav.jpg");
     let stderr = shoot_env_stderr(
@@ -613,11 +623,10 @@ fn panel_toggle_at_one_to_one_keeps_the_photo() {
     let dir = out_dir().join("panel-cursor");
     std::fs::create_dir_all(&dir).unwrap();
     for i in 1..=6 {
-        std::fs::copy(
-            raws_dir().join("A1_full_compressed.ARW"),
-            dir.join(format!("a{i}.ARW")),
-        )
-        .unwrap();
+        place_fixture(
+            &raws_dir().join("A1_full_compressed.ARW"),
+            &dir.join(format!("a{i}.ARW")),
+        );
     }
     let out = out_dir().join("panel-cursor.jpg");
     let stderr = shoot_env_stderr(
@@ -665,11 +674,10 @@ fn window_resize_keeps_the_photo() {
     let dir = out_dir().join("resize-cursor");
     std::fs::create_dir_all(&dir).unwrap();
     for i in 1..=6 {
-        std::fs::copy(
-            raws_dir().join("A1_full_compressed.ARW"),
-            dir.join(format!("a{i}.ARW")),
-        )
-        .unwrap();
+        place_fixture(
+            &raws_dir().join("A1_full_compressed.ARW"),
+            &dir.join(format!("a{i}.ARW")),
+        );
     }
     let out = out_dir().join("resize-cursor.jpg");
     let stderr = shoot_env_stderr(

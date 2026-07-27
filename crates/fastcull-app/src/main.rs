@@ -2611,6 +2611,19 @@ fn refresh_inner(win: &MainWindow, state: &Rc<RefCell<AppState>>) {
         });
     }
 
+    // POSITIVE claim gate (issues #16/#22 family, final form): the
+    // follow-scroll claim fires only on actual scrollbar activity — the
+    // one gesture the cursor contract names. Inferring "scrolled" from
+    // displacement alone kept misfiring through timing windows
+    // (folder-load re-sorts, panel-toggle reflows, Windows DPI clamp
+    // races) that no elimination list closes. Consumed EVERY refresh —
+    // grid included — so it always means "since the last refresh": a
+    // flag armed by the GRID scrollbar (or a loupe drag too small to
+    // displace) must never claim minutes later (gate finding M1).
+    let scrolled = win.get_sb_activity();
+    if scrolled {
+        win.set_sb_activity(false);
+    }
     // Loupe: at 1-column zoom the visible image IS the cursor (spec, cursor
     // contract): scrolling moves the cursor, and full-res always targets
     // what the user is looking at.
@@ -2629,7 +2642,7 @@ fn refresh_inner(win: &MainWindow, state: &Rc<RefCell<AppState>>) {
         // the cursor look "scrolled away", and spuriously claimed it —
         // killing the untouched-snap and leaving the final cursor racy).
         if !cur_visible && viewport_h > 0.0 {
-            if relayout || view_mutated {
+            if !scrolled || relayout || view_mutated {
                 // Geometry changed under the cursor (panel toggle, window
                 // RESIZE — the user's reported bug): this is NOT
                 // scrolling. Keep the cursor, move the viewport back to
