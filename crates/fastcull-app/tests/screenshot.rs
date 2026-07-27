@@ -697,9 +697,16 @@ fn window_resize_keeps_the_photo() {
             ("FASTCULL_TRACE", "1"),
             // Settle-then-pin, same rationale as the panel-toggle test
             // (the load-transient sort race; see that test's comment).
+            // The two resizes sit 4 s apart: a stalled CI event loop
+            // fires overdue timers BUNCHED, and back-to-back resizes
+            // between two refreshes are a net geometry no-op — the
+            // "relayout must fire" guard then fails vacuously (Windows
+            // run 30304892053: a ~2.8 s startup stall bunched the whole
+            // schedule). Bunching this pair now needs a 4 s stall; the
+            // shutter waits for the full script, so the gap is free.
             (
                 "FASTCULL_DRIVE",
-                "1500:home;1650:right;1800:right;1950:right;2100:right;2400:resize:1000x700;2800:resize:1440x900",
+                "1500:home;1650:right;1800:right;1950:right;2100:right;2500:resize:1000x700;6500:resize:1440x900",
             ),
         ],
         &out,
