@@ -342,7 +342,19 @@ brightening during wheel scrolling (needs an activity decay timer).
   into marks landing on a photo the user already left). The dock state
   is published to the window BEFORE any geometry read in the toggle
   path, so reveals never compute against a stale width (that stale
-  width was also issue #17's grid-under-panel state).
+  width was also issue #17's grid-under-panel state). **Grid-level
+  resize anchoring (user report 2026-07-26)**: at N>1, row pitch is a
+  pure function of the grid width, so keeping the raw pixel offset
+  across a relayout lands on different content (shrink = "the list
+  scrolls up", grow = "scrolls down"). A grid relayout anchors CONTENT,
+  not pixels: the top-visible row keeps its fractional position; at the
+  bottom clamp the bottom stays the bottom (growing at End must not
+  strand the viewport mid-list); a cursor that was visible stays
+  visible (reveal semantics, same as the panel toggle); scroll 0 stays
+  0 — except that CURSOR VISIBILITY WINS: with the cursor on the last
+  visible row, a pitch-growing resize may scroll away from 0 to keep it
+  in view; the cursor itself NEVER moves. A reveal marks its geometry
+  as consumed, so anchor corrections never stack.
 - The status bar always names the cursor image (filename, position N/M).
 - **Untouched-cursor rule (issue #4, 2026-07-25)**: from session open until the
   user's FIRST interaction, the cursor is "the first image of the view", not a

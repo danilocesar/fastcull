@@ -1562,6 +1562,11 @@ fn reveal_cursor(win: &MainWindow, state: &Rc<RefCell<AppState>>) {
     let new_scroll = layout.scroll_to_reveal(pos, scroll_y, viewport_h);
     win.set_virtual_height(layout.total_height);
     win.set_vp_y(-new_scroll);
+    // This reveal IS the relayout correction for its geometry: mark it
+    // consumed so refresh doesn't re-anchor on top of an already
+    // consistent (geometry, offset) pair (the grid resize branch
+    // double-corrected panel toggles with mixed old/new frames).
+    state.borrow_mut().last_view_geometry = Some((win.get_grid_width(), viewport_h));
     refresh(win, state);
 }
 
@@ -2463,6 +2468,10 @@ fn handle_nav_inner(win: &MainWindow, state: &Rc<RefCell<AppState>>, key: &str) 
     let layout = GridLayout::new(st.zoom, win.get_grid_width(), st.view.len());
     let pos = st.cursor_pos().unwrap_or(0);
     let new_scroll = layout.scroll_to_reveal(pos, scroll_y, viewport_h);
+    // Every reveal marks its geometry as consumed (spec) — a nav key
+    // racing a resize must not let the relayout branch double-correct
+    // an already consistent (geometry, offset) pair.
+    st.last_view_geometry = Some((win.get_grid_width(), viewport_h));
     drop(st);
     win.set_virtual_height(layout.total_height);
     win.set_vp_y(-new_scroll);
@@ -2485,15 +2494,65 @@ fn refresh(win: &MainWindow, state: &Rc<RefCell<AppState>>) {
 }
 
 fn refresh_inner(win: &MainWindow, state: &Rc<RefCell<AppState>>) {
-    let (layout, viewport_h, scroll_y) = current_geometry(win, state);
+    let (layout, viewport_h, mut scroll_y) = current_geometry(win, state);
     let mut st = state.borrow_mut();
     // Relayout detection (issue #16): a geometry change since the last
     // refresh is chrome/window movement (panel toggle, resize), never
     // user scrolling.
     let geom_now = (win.get_grid_width(), viewport_h);
-    let relayout = st.last_view_geometry.is_some_and(|g| g != geom_now);
+    let prev_geom = st.last_view_geometry;
+    let relayout = prev_geom.is_some_and(|g| g != geom_now);
     st.last_view_geometry = Some(geom_now);
     let view_len = st.view.len();
+
+    // GRID-level resize anchoring (user report: shrink the window and
+    // the list "scrolls up", grow and it "scrolls down"). Row pitch is
+    // a pure function of the grid width, so keeping the raw pixel
+    // offset across a relayout lands it on DIFFERENT content. Anchor
+    // CONTENT instead: keep the top-visible row's position (fractional,
+    // so partial-row offsets survive), pin the bottom clamp to the
+    // bottom (growing at End must not strand the viewport mid-list),
+    // and keep the cursor visible if it was. The N=1 strip has its own
+    // re-anchor in the loupe block below (issue #16).
+    if relayout && layout.columns > 1 && view_len > 0 && viewport_h > 0.0 {
+        if let Some((old_width, old_viewport_h)) = prev_geom {
+            let old_layout = GridLayout::new(st.zoom, old_width, view_len);
+            let old_pitch = old_layout.cell_height + grid::CELL_GAP;
+            let new_pitch = layout.cell_height + grid::CELL_GAP;
+            let old_max = (old_layout.total_height - old_viewport_h).max(0.0);
+            let new_max = (layout.total_height - viewport_h).max(0.0);
+            let mut corrected = if old_max >= 1.0 && scroll_y >= old_max - 1.0 {
+                // At the bottom CLAMP: the bottom stays the bottom. The
+                // old_max > 0 gate keeps fits-the-viewport views (where
+                // scroll 0 is vacuously "at the clamp") pinned to the
+                // TOP instead (validator+QE D1: a fits-to-overflow grow
+                // jumped scroll 0 to new_max).
+                new_max
+            } else if old_pitch > 0.0 {
+                (scroll_y / old_pitch * new_pitch).clamp(0.0, new_max)
+            } else {
+                scroll_y
+            };
+            // Cursor visibility carries across the relayout (the panel
+            // toggle already honors this via reveal_cursor).
+            let cur_pos = st.cursor_pos().unwrap_or(0);
+            let (_, old_cur_top) = old_layout.position(cur_pos);
+            let cursor_was_visible = old_cur_top < scroll_y + old_viewport_h
+                && old_cur_top + old_layout.cell_height > scroll_y;
+            if cursor_was_visible {
+                corrected = layout.scroll_to_reveal(cur_pos, corrected, viewport_h);
+            }
+            if (corrected - scroll_y).abs() >= 0.5 {
+                trace_mark(&format!(
+                    "grid relayout re-anchor: scroll {scroll_y:.0} -> {corrected:.0} \
+                     (pitch {old_pitch:.1} -> {new_pitch:.1})"
+                ));
+            }
+            win.set_virtual_height(layout.total_height);
+            win.set_vp_y(-corrected);
+            scroll_y = corrected; // this very pass renders the anchored view
+        }
+    }
     // Visible VIEW positions; `ids` are the image ids shown there (the two
     // coincide only with filter=All + capture sort before keys arrive).
     let range = layout.visible_range(view_len, scroll_y, viewport_h, MARGIN_ROWS);

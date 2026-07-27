@@ -751,3 +751,196 @@ fn grid_panel_open_reflows_and_keeps_cursor_visible() {
          grid did not reflow on panel open (issue #17)"
     );
 }
+
+/// Grid resize anchoring (user report: shrink → "scrolls up", grow →
+/// "scrolls down"): a mid-scroll SHRINK must keep the content anchored
+/// — pre-fix the raw pixel offset landed ~4 rows deeper and the cursor
+/// (top-of-viewport before) vanished above the viewport (QE repro).
+#[test]
+fn grid_resize_shrink_keeps_content_anchored() {
+    if !has_display() {
+        eprintln!("screenshot smoke skipped: no display server");
+        return;
+    }
+    let _s = serial();
+    let out = out_dir().join("grid-resize-shrink.jpg");
+    let stderr = shoot_env_stderr(
+        &["--synthetic", "300"],
+        &[
+            ("FASTCULL_TRACE", "1"),
+            (
+                "FASTCULL_DRIVE",
+                "150:resize:1200x800;500:end;700:pgup;800:pgup;900:pgup;1000:pgup;1150:resize:900x800",
+            ),
+        ],
+        &out,
+    );
+    assert!(
+        stderr.contains("grid relayout re-anchor"),
+        "the grid anchoring path never fired:\n{stderr}"
+    );
+    // The cursor was visible (top of viewport) before the shrink and
+    // must still be visible after — pre-fix it was lost above the view.
+    let bytes = std::fs::read(&out).expect("snapshot file");
+    let mut dec = zune_jpeg::JpegDecoder::new(&bytes);
+    let px = dec.decode().expect("decode snapshot");
+    let (w, h) = dec.dimensions().expect("dims");
+    let blue = (0..h)
+        .flat_map(|y| (0..w).map(move |x| (y * w + x) * 3))
+        .filter(|i| {
+            let (r, g, b) = (px[*i] as i32, px[*i + 1] as i32, px[*i + 2] as i32);
+            (r - 0x4d).abs() < 40 && (g - 0xa3).abs() < 40 && (b - 0xff).abs() < 40
+        })
+        .count();
+    assert!(
+        blue > 50,
+        "cursor not visible after shrink ({blue} blue px) — content drifted"
+    );
+    let status = stderr
+        .lines()
+        .rev()
+        .find_map(|l| l.split("status at shutter: ").nth(1))
+        .expect("no status trace");
+    assert!(
+        status.contains("(108/300)"),
+        "cursor moved across the resize: {status}"
+    );
+}
+
+/// Growing the window at the BOTTOM clamp must keep the bottom pinned —
+/// pre-fix the stale offset stranded the viewport mid-list with the
+/// last row and cursor lost off-screen (QE edge probe P2b, the worst
+/// flavor).
+#[test]
+fn grid_resize_grow_at_bottom_stays_at_bottom() {
+    if !has_display() {
+        eprintln!("screenshot smoke skipped: no display server");
+        return;
+    }
+    let _s = serial();
+    let out = out_dir().join("grid-resize-bottom.jpg");
+    let stderr = shoot_env_stderr(
+        &["--synthetic", "300"],
+        &[
+            ("FASTCULL_TRACE", "1"),
+            (
+                "FASTCULL_DRIVE",
+                "150:resize:1200x800;500:end;1000:resize:1500x800",
+            ),
+        ],
+        &out,
+    );
+    assert!(
+        stderr.contains("grid relayout re-anchor"),
+        "the grid anchoring path never fired:\n{stderr}"
+    );
+    let bytes = std::fs::read(&out).expect("snapshot file");
+    let mut dec = zune_jpeg::JpegDecoder::new(&bytes);
+    let px = dec.decode().expect("decode snapshot");
+    let (w, h) = dec.dimensions().expect("dims");
+    let blue = (0..h)
+        .flat_map(|y| (0..w).map(move |x| (y * w + x) * 3))
+        .filter(|i| {
+            let (r, g, b) = (px[*i] as i32, px[*i + 1] as i32, px[*i + 2] as i32);
+            (r - 0x4d).abs() < 40 && (g - 0xa3).abs() < 40 && (b - 0xff).abs() < 40
+        })
+        .count();
+    assert!(
+        blue > 50,
+        "cursor (at End) not visible after grow ({blue} blue px) — viewport stranded mid-list"
+    );
+    let status = stderr
+        .lines()
+        .rev()
+        .find_map(|l| l.split("status at shutter: ").nth(1))
+        .expect("no status trace");
+    assert!(
+        status.contains("(300/300)"),
+        "cursor moved across the resize: {status}"
+    );
+}
+
+/// D1 (validator+QE): content that FIT the old viewport (old_max == 0,
+/// scroll 0) must stay at the TOP when the window grows into overflow —
+/// the bottom-pin branch used to classify "fits entirely" as "at the
+/// bottom clamp" and jump the viewport to new_max.
+#[test]
+fn grid_resize_fits_to_overflow_stays_at_top() {
+    if !has_display() {
+        eprintln!("screenshot smoke skipped: no display server");
+        return;
+    }
+    let _s = serial();
+    let out = out_dir().join("grid-resize-fits.jpg");
+    let stderr = shoot_env_stderr(
+        &["--synthetic", "64"],
+        &[
+            ("FASTCULL_TRACE", "1"),
+            (
+                "FASTCULL_DRIVE",
+                "150:resize:900x800;400:down;500:down;600:down;700:down;1000:resize:1600x800",
+            ),
+        ],
+        &out,
+    );
+    // Pre-fix trace: "grid relayout re-anchor: scroll 0 -> 385" — the
+    // fixed code writes no correction at scroll 0.
+    assert!(
+        !stderr.contains("grid relayout re-anchor"),
+        "fits-to-overflow grow wrote a scroll correction:\n{stderr}"
+    );
+    // The first row must still be at the top: SYN00000's cell content
+    // visible implies no jump; ground-truth via the cursor which the
+    // downs left mid-view and which must remain visible.
+    let bytes = std::fs::read(&out).expect("snapshot file");
+    let mut dec = zune_jpeg::JpegDecoder::new(&bytes);
+    let px = dec.decode().expect("decode snapshot");
+    let (w, h) = dec.dimensions().expect("dims");
+    let blue = (0..h)
+        .flat_map(|y| (0..w).map(move |x| (y * w + x) * 3))
+        .filter(|i| {
+            let (r, g, b) = (px[*i] as i32, px[*i + 1] as i32, px[*i + 2] as i32);
+            (r - 0x4d).abs() < 40 && (g - 0xa3).abs() < 40 && (b - 0xff).abs() < 40
+        })
+        .count();
+    assert!(
+        blue > 50,
+        "cursor lost after fits-to-overflow grow ({blue} blue px)"
+    );
+}
+
+/// Resize at scroll 0: the top of the list stays pinned, no spurious
+/// re-anchor scroll writes (QE edge probe P1).
+#[test]
+fn grid_resize_at_top_stays_at_top() {
+    if !has_display() {
+        eprintln!("screenshot smoke skipped: no display server");
+        return;
+    }
+    let _s = serial();
+    let out = out_dir().join("grid-resize-top.jpg");
+    let stderr = shoot_env_stderr(
+        &["--synthetic", "300"],
+        &[
+            ("FASTCULL_TRACE", "1"),
+            ("FASTCULL_DRIVE", "150:resize:1200x800;800:resize:900x800"),
+        ],
+        &out,
+    );
+    // Scroll 0 must stay 0: no re-anchor scroll write may fire (the
+    // trace only appears when the offset actually changes — validator:
+    // this is the assertion with discriminating power at the top).
+    assert!(
+        !stderr.contains("grid relayout re-anchor"),
+        "a top-of-list resize wrote a scroll correction:\n{stderr}"
+    );
+    let status = stderr
+        .lines()
+        .rev()
+        .find_map(|l| l.split("status at shutter: ").nth(1))
+        .expect("no status trace");
+    assert!(
+        status.contains("(1/300)"),
+        "cursor moved on a top-of-list resize: {status}"
+    );
+}
