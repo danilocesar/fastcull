@@ -84,6 +84,15 @@ struct LoupeState {
     /// evicting it after decode would strand the loupe forever (found by
     /// the tight-budget integration test).
     focused: Option<usize>,
+    /// When the focus last became NEW WORK: reset when the focused index
+    /// changes AND when the focused index's target escalates (see
+    /// note_focus) — the reserved worker's debounce clock
+    /// (FOCUS_DEBOUNCE: neither a transient transit focus nor a big
+    /// climb freshly queued for a resting frame may capture the lane).
+    focused_at: Option<std::time::Instant>,
+    /// The display target of the last focus() call for `focused` —
+    /// escalation detection for the debounce clock.
+    focused_target: u32,
 }
 
 struct Shared {
@@ -114,10 +123,20 @@ impl LoupeEngine {
             stamp: AtomicU64::new(0),
             budget: budget.max(200 * 1024 * 1024), // room for at least one A1
         });
-        let workers = (0..2)
-            .map(|_| {
+        // Two backlog workers plus ONE focus-reserved worker (see
+        // next_job/FOCUS_DEBOUNCE/note_focus): the reserved thread only
+        // commits to a focus whose pending work has HELD for the
+        // debounce, so neither transient transit focuses nor a climb
+        // freshly escalated on a resting frame capture it — the lane is
+        // free at the first settle after sub-debounce transits, and
+        // that frame's ladder starts within ~debounce even when both
+        // backlog workers are mid-flight on multi-second decodes.
+        // Worst-case transient memory grows by one concurrent decode
+        // (~150 MB for an A1 full-res) — bounded and short-lived.
+        let workers = (0..3)
+            .map(|n| {
                 let shared = Arc::clone(&shared);
-                std::thread::spawn(move || worker(&shared))
+                std::thread::spawn(move || worker(&shared, n == 2))
             })
             .collect();
         (Self { shared, workers }, rx)
@@ -135,7 +154,7 @@ impl LoupeEngine {
         }
         let stamp = self.shared.stamp.fetch_add(1, Ordering::Relaxed) + 1;
         let mut state = lock(&self.shared);
-        state.focused = Some(index);
+        note_focus(&mut state, index, display_long, std::time::Instant::now());
         // Prefetch ring: farthest neighbors first, focused index last (back
         // of the queue = popped first by workers).
         let lo = index.saturating_sub(PREFETCH);
@@ -266,7 +285,100 @@ fn revive_deferred(state: &mut LoupeState, index: usize, target: u32, stamp: u64
     true
 }
 
-fn worker(shared: &Shared) {
+/// Track the focus for the reserved worker's debounce (see
+/// FOCUS_DEBOUNCE). The clock resets when the focused INDEX changes and
+/// ALSO when the focused index's target ESCALATES: the cursor rests on
+/// the load frame long enough to pass the debounce, and when the 1:1
+/// pin then queues that frame's full-res climb, a stable-focus-only
+/// clock made the reserved worker instantly eligible — it raced the
+/// backlog workers for the entry and, on winning, was captured for a
+/// multi-second climb moments before the cursor left (QE defect: ~20%
+/// capture rate in the CI shape, restoring the starvation). New big
+/// work must survive the debounce regardless of how long the focus has
+/// rested. A same-or-smaller target (render-cadence re-focus, zoom out)
+/// never resets.
+fn note_focus(state: &mut LoupeState, index: usize, display_long: u32, now: std::time::Instant) {
+    if state.focused != Some(index) {
+        state.focused = Some(index);
+        state.focused_at = Some(now);
+        state.focused_target = display_long;
+    } else if display_long > state.focused_target {
+        state.focused_at = Some(now);
+        state.focused_target = display_long;
+    }
+}
+
+/// What a worker should do next.
+#[derive(Debug, PartialEq)]
+enum Slot {
+    /// Decode this (index, display_long).
+    Job(usize, u32),
+    /// Nothing for this worker: wait for a queue notification.
+    Wait,
+    /// The reserved worker's debounce hasn't elapsed: wait at most this
+    /// long (a timed wait — nothing will notify when time passes).
+    WaitFor(std::time::Duration),
+}
+
+/// A fresh focus must HOLD this long before the reserved worker commits
+/// to it. Without the debounce the reservation is capture-bait: the
+/// cursor legitimately rests on frame 0 during startup and touches every
+/// transit frame for ~60-150 ms, and any of those would bind the
+/// reserved lane to a multi-second climb of a frame the user already
+/// left (validator FAIL on the debounce-less version: all three workers
+/// provably committed before the cursor settled). Normal workers have no
+/// debounce, so with idle capacity a fresh focus still starts instantly
+/// — the ~300 ms sharpness-on-stop contract only meets this delay when
+/// every backlog worker is saturated, exactly when the lane matters.
+const FOCUS_DEBOUNCE: std::time::Duration = std::time::Duration::from_millis(250);
+
+/// Pick this worker's next job off the queue.
+/// A focus-reserved worker takes ONLY the focused index's entry, and
+/// only once the focus has been stable for FOCUS_DEBOUNCE: in-flight
+/// decodes cannot be preempted, so a debounced reservation is the only
+/// way the SETTLED frame's ladder is guaranteed to start promptly when
+/// the backlog workers are already committed to multi-second climbs of
+/// frames the cursor legitimately rested on moments ago (Windows CI
+/// 2026-07-27, second starvation shape: every worker was captured
+/// before the cursor settled, and the settled frame's full-res landed
+/// past the screenshot shutter's 60 s cap).
+/// Normal workers pop from the back (most urgent last).
+fn next_job(state: &mut LoupeState, focus_reserved: bool, now: std::time::Instant) -> Slot {
+    loop {
+        let pos = if focus_reserved {
+            let Some(f) = state.focused else {
+                return Slot::Wait;
+            };
+            let held = state
+                .focused_at
+                .map(|t| now.saturating_duration_since(t))
+                .unwrap_or(FOCUS_DEBOUNCE);
+            if held < FOCUS_DEBOUNCE {
+                return Slot::WaitFor(FOCUS_DEBOUNCE - held);
+            }
+            match state.queue.iter().rposition(|(q, _, _)| *q == f) {
+                Some(pos) => pos,
+                None => return Slot::Wait,
+            }
+        } else {
+            match state.queue.len().checked_sub(1) {
+                Some(pos) => pos,
+                None => return Slot::Wait,
+            }
+        };
+        let (index, display_long, _) = state.queue.remove(pos);
+        if let Some((img, _)) = state.cache.get(&index) {
+            let best = state.best_long.get(&index).copied();
+            if serves(img, display_long) || best.is_some_and(|b| img.width.max(img.height) >= b) {
+                continue; // upgraded or topped out meanwhile
+            }
+        }
+        state.in_flight.push(index);
+        return Slot::Job(index, display_long);
+    }
+}
+
+fn worker(shared: &Shared, focus_reserved: bool) {
     loop {
         let (index, display_long) = {
             let mut state = lock(shared);
@@ -274,22 +386,22 @@ fn worker(shared: &Shared) {
                 if shared.shutdown.load(Ordering::SeqCst) {
                     return;
                 }
-                if let Some((index, display_long, _)) = state.queue.pop() {
-                    if let Some((img, _)) = state.cache.get(&index) {
-                        let best = state.best_long.get(&index).copied();
-                        if serves(img, display_long)
-                            || best.is_some_and(|b| img.width.max(img.height) >= b)
-                        {
-                            continue; // upgraded or topped out meanwhile
-                        }
+                match next_job(&mut state, focus_reserved, std::time::Instant::now()) {
+                    Slot::Job(index, display_long) => break (index, display_long),
+                    Slot::Wait => {
+                        state = shared
+                            .wakeup
+                            .wait(state)
+                            .unwrap_or_else(std::sync::PoisonError::into_inner);
                     }
-                    state.in_flight.push(index);
-                    break (index, display_long);
+                    Slot::WaitFor(d) => {
+                        state = shared
+                            .wakeup
+                            .wait_timeout(state, d)
+                            .unwrap_or_else(std::sync::PoisonError::into_inner)
+                            .0;
+                    }
                 }
-                state = shared
-                    .wakeup
-                    .wait(state)
-                    .unwrap_or_else(std::sync::PoisonError::into_inner);
             }
         };
 
@@ -477,9 +589,16 @@ fn evict_to_budget(state: &mut LoupeState, budget: usize) {
 mod tests {
     use super::*;
 
-    fn state_focused_at(index: usize) -> LoupeState {
+    /// State whose focus has already HELD past the debounce (the
+    /// settled case) at a MAX target; tests for fresh/transient/
+    /// escalating focuses override `focused_at`/`focused_target`.
+    fn stable_focus_state(index: usize) -> LoupeState {
         LoupeState {
             focused: Some(index),
+            // 2x: the caller's `now` predates this call by nanoseconds —
+            // exactly one debounce would leave held marginally short.
+            focused_at: Some(std::time::Instant::now() - FOCUS_DEBOUNCE * 2),
+            focused_target: u32::MAX,
             ..Default::default()
         }
     }
@@ -491,7 +610,7 @@ mod tests {
     /// spent ~30 s (debug decode) on frames nobody was looking at.
     #[test]
     fn stale_deferred_upgrade_is_dropped_not_revived() {
-        let mut state = state_focused_at(4);
+        let mut state = stable_focus_state(4);
         assert!(
             !revive_deferred(&mut state, 0, u32::MAX, 1),
             "index 0 is outside the ring of focus 4"
@@ -507,7 +626,7 @@ mod tests {
 
     #[test]
     fn focused_deferred_upgrade_revives_at_top_priority() {
-        let mut state = state_focused_at(4);
+        let mut state = stable_focus_state(4);
         state.queue.push((6, 1000, true));
         assert!(revive_deferred(&mut state, 4, u32::MAX, 1));
         // Workers pop from the back: the focused frame goes next.
@@ -516,7 +635,7 @@ mod tests {
 
     #[test]
     fn ring_neighbor_deferred_upgrade_never_outranks_the_focused_frame() {
-        let mut state = state_focused_at(4);
+        let mut state = stable_focus_state(4);
         state.queue.push((4, u32::MAX, true)); // the cursor's own pending work
         assert!(revive_deferred(&mut state, 5, u32::MAX, 1));
         assert_eq!(
@@ -529,11 +648,11 @@ mod tests {
 
     #[test]
     fn failed_or_sufficient_deferred_upgrades_stay_dead() {
-        let mut state = state_focused_at(4);
+        let mut state = stable_focus_state(4);
         state.failed.insert(4);
         assert!(!revive_deferred(&mut state, 4, u32::MAX, 1));
         // A cached asset that already tops out (best_long known) is enough.
-        let mut state = state_focused_at(4);
+        let mut state = stable_focus_state(4);
         let img = FullImage {
             rgb: Arc::new(vec![0; 3]),
             width: 100,
@@ -542,6 +661,117 @@ mod tests {
         state.cache.insert(4, (img, 0));
         state.best_long.insert(4, 100);
         assert!(!revive_deferred(&mut state, 4, u32::MAX, 1));
+    }
+
+    /// QE defect (the settled-then-left capture, ~20% in the CI shape):
+    /// the cursor rests past the debounce on the load frame, THEN the
+    /// 1:1 pin queues that frame's full-res climb — the escalation must
+    /// re-arm the debounce, or the reserved lane races the backlog
+    /// workers for a climb the cursor is about to leave.
+    #[test]
+    fn target_escalation_rearms_the_debounce() {
+        let now = std::time::Instant::now();
+        let mut state = stable_focus_state(0);
+        state.focused_target = 1900; // resting at a fit-sized target
+        note_focus(&mut state, 0, u32::MAX, now); // the pin escalates
+        state.queue.push((0, u32::MAX, true));
+        match next_job(&mut state, true, now) {
+            Slot::WaitFor(_) => {}
+            other => panic!("escalated climb taken without debounce: {other:?}"),
+        }
+        // Render-cadence re-focus at the SAME target must not keep
+        // re-arming (the clock would never expire).
+        note_focus(
+            &mut state,
+            0,
+            u32::MAX,
+            now + std::time::Duration::from_millis(100),
+        );
+        assert_eq!(
+            next_job(&mut state, true, now + FOCUS_DEBOUNCE),
+            Slot::Job(0, u32::MAX)
+        );
+        // A smaller target (zoom out) never re-arms either.
+        let mut state = stable_focus_state(3);
+        note_focus(&mut state, 3, 1000, now);
+        state.queue.push((3, 1000, true));
+        assert_eq!(next_job(&mut state, true, now), Slot::Job(3, 1000));
+    }
+
+    /// The second starvation shape (Windows CI 2026-07-27): every
+    /// worker was captured by legitimate climbs before the cursor
+    /// settled — the reserved worker must take the STABLE focused
+    /// frame's job, and nothing else.
+    #[test]
+    fn reserved_worker_takes_only_the_stable_focused_job() {
+        let now = std::time::Instant::now();
+        let mut state = stable_focus_state(4);
+        state.queue.push((2, u32::MAX, true));
+        state.queue.push((4, u32::MAX, true));
+        state.queue.push((5, u32::MAX, true)); // more urgent than 4's entry
+        assert_eq!(next_job(&mut state, true, now), Slot::Job(4, u32::MAX));
+        assert!(state.in_flight.contains(&4));
+        // The focused entry is gone: the reserved worker now waits even
+        // though backlog remains.
+        assert_eq!(next_job(&mut state, true, now), Slot::Wait);
+        assert_eq!(
+            state.queue.len(),
+            2,
+            "backlog untouched by the reserved worker"
+        );
+        // A normal worker still pops from the back.
+        assert_eq!(next_job(&mut state, false, now), Slot::Job(5, u32::MAX));
+    }
+
+    /// The capture-bait case that FAILED validation on the debounce-less
+    /// version: a fresh focus (startup rest, transit touch) must never
+    /// bind the reserved lane to a multi-second climb.
+    #[test]
+    fn reserved_worker_debounces_a_fresh_focus() {
+        let now = std::time::Instant::now();
+        let mut state = stable_focus_state(2);
+        state.focused_at = Some(now); // focus just changed (transit touch)
+        state.queue.push((2, u32::MAX, true));
+        match next_job(&mut state, true, now) {
+            Slot::WaitFor(d) => assert!(d <= FOCUS_DEBOUNCE, "timed wait bounded"),
+            other => panic!("fresh focus must not be taken: {other:?}"),
+        }
+        assert_eq!(state.queue.len(), 1, "entry left for the backlog workers");
+        // Once the focus has held, the reserved worker commits.
+        assert_eq!(
+            next_job(&mut state, true, now + FOCUS_DEBOUNCE),
+            Slot::Job(2, u32::MAX)
+        );
+    }
+
+    #[test]
+    fn reserved_worker_waits_without_a_focus() {
+        let now = std::time::Instant::now();
+        let mut state = LoupeState::default();
+        state.queue.push((0, u32::MAX, true));
+        assert_eq!(next_job(&mut state, true, now), Slot::Wait);
+        assert_eq!(state.queue.len(), 1);
+    }
+
+    #[test]
+    fn next_job_skips_entries_already_served() {
+        let now = std::time::Instant::now();
+        let mut state = stable_focus_state(0);
+        let img = FullImage {
+            rgb: Arc::new(vec![0; 3]),
+            width: 100,
+            height: 100,
+        };
+        state.cache.insert(0, (img, 0));
+        state.best_long.insert(0, 100); // topped out
+        state.queue.push((0, u32::MAX, true));
+        assert_eq!(
+            next_job(&mut state, false, now),
+            Slot::Wait,
+            "served entry consumed, no job"
+        );
+        assert!(state.queue.is_empty());
+        assert!(state.in_flight.is_empty());
     }
 
     #[test]

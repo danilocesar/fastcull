@@ -38,7 +38,34 @@ decoding RAW sensor data on the hot path.
      covers fit view on ≲1.9k-wide viewports instantly) → 8640×5760 full
      (~140 ms, cooked in background for 1:1 and large displays; the shown
      image swaps in place when ready, never blocks). Loupe assets are served
-     by a dedicated 2-worker engine (`loupe.rs`) with its own event channel —
+     by a dedicated engine (`loupe.rs`) with its own event channel —
+     two backlog workers plus one FOCUS-RESERVED worker. The reserved
+     worker takes ONLY the focused index's job, and only after the
+     focus has represented the same PENDING WORK for a ~250 ms
+     debounce: the clock re-arms when the focused index changes AND
+     when the focused index's target escalates — above the HIGHEST
+     target seen during the current focus tenure (a full-res climb
+     freshly queued for a frame the cursor has been resting on is new
+     work — QE proved the rest-then-escalate shape re-captured the
+     lane ~20% of the time when only index changes re-armed). Ladder
+     flights are uninterruptible (mid→full in one flight, no intent
+     recheck between rungs); the cursor legitimately rests on the
+     first frame during load and touches transit frames for
+     ~60-150 ms, and without the debounce any of those would capture
+     the lane for a full multi-second debug decode. Transient focuses
+     are left to the backlog workers (no debounce there — idle
+     capacity still serves a fresh focus instantly), so the lane is
+     free at the FIRST settle after sub-debounce transits and that
+     frame's ladder starts within ~250 ms regardless of backlog
+     commitment. Residual (accepted): a SECOND settle arriving while
+     the first settle's uninterruptible flight still runs depends on
+     the backlog workers again — inherent until flights can stop at
+     rung boundaries. (Windows CI 2026-07-27: all workers were
+     provably captured before settle and the settled frame's full-res
+     landed past the screenshot shutter's cap; a debounce-less
+     reservation failed validation for the transient-capture, and an
+     index-change-only clock failed QE for the rest-then-escalate
+     capture) —
      full-res decodes must never queue behind a background thumbnail sweep.
      turbojpeg DCT scaling is a recorded FUTURE optimization only (saves
      ~35–45% on the cook; the ladder already hides that latency).
@@ -197,7 +224,8 @@ Design (validator design review 2026-07-25: ADOPT-WITH-CHANGES, incorporated):
   (lost-wakeup hazard, previously bitten).
 - **Scope**: thumbnail pipeline only. Loupe full-res reads BYPASS the pool
   on purpose (user decision 2026-07-25: "full-res should bypass it, as
-  full-res has priority") — the 2 loupe workers stay ungated; a 12 MB
+  full-res has priority") — the loupe workers (2 backlog + 1
+  focus-reserved) stay ungated; a 12 MB
   full-res read would also poison a latency-threshold controller. Risk on
   record (persona): at the floor on a dying card, an ungated loupe full-res
   read can still hit the card hard — revisit if the hang class ever
