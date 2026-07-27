@@ -58,6 +58,23 @@ The same map lives in **Help > Keyboard Shortcuts** inside the app.
   arrow through the sequence, `Y`/`N` each frame — every image shows
   the same spot at the same zoom.
 
+## Knowing where you are: marks in the loupe
+
+You never have to zoom out to check a frame's state:
+
+- A small **badge pill in the top-left corner** of the loupe (fit and
+  zoomed alike) shows **★** on a picked frame and **✕** on a rejected
+  one. An unmarked frame shows no badge — and the **status bar always
+  spells it out** (`· ★ picked / · ✕ rejected / · unmarked`), so
+  "no badge" is never ambiguous.
+- The badge always belongs to the frame on screen. Auto-advance means
+  the frame you just marked is one step behind you; when you arrow
+  back to compare candidates in a burst, the badge tells you instantly
+  which one you already took.
+- A rejected frame is **never dimmed in the loupe** (unlike its grid
+  thumbnail): if you're reconsidering a reject, you get full
+  brightness to judge it.
+
 ## Bursts
 
 Continuous-drive squeezes are detected automatically and marked where

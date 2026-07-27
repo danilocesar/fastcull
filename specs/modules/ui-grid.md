@@ -406,7 +406,7 @@ brightening during wheel scrolling (needs an activity decay timer).
 - Pick: small star badge (top-left; user decision — "mark the ones taken with a
   little star"). Reject: red X badge + 40% dimmed thumb.
 - **Loupe state indicator (issue #20, user request 2026-07-26,
-  persona-reviewed MUST-HAVE/HIGH — not yet implemented)**: the loupe
+  persona-reviewed MUST-HAVE/HIGH; implemented 2026-07-27)**: the loupe
   (fit AND zoomed — one continuous view) shows the image's mark as a
   badge overlaid in the image's TOP-LEFT corner (same location as the
   grid badge): ★ for picked, ✕ for rejected, on a small dark
@@ -430,7 +430,16 @@ brightening during wheel scrolling (needs an activity decay timer).
   (overlay, not a reserved strip); badge-only rejects at full
   brightness; no explicit unmarked glyph. Also confirmed for the
   composed issue #21 cue: same behavior at all zoom factors, loading
-  indicator acceptable.
+  indicator acceptable. Implementation notes: at N=1 the app sends
+  cells `pick = 0` — the badge pill owns state display in the loupe,
+  which is what keeps the grid's 40% reject dim (and the cell glyph)
+  out of it; the badge property is written by the same refresh pass
+  that swaps the image/cells (atomicity); the #21 loading cue stacks
+  BELOW the badge slot (14 px / 44 px) so the two pills never overlap
+  and their visibility contracts stay independent; the status bar
+  appends the cursor's mark in words (" · ★ picked / · ✕ rejected /
+  · unmarked") after the position counter whenever the cursor is in
+  view — in every view, not only the loupe.
 - **Burst context**: see burst-grouping.md — the ×N badge and "burst
   7/23" status fragment already serve burst position; the state
   indicator composes with them, it does not replace them.

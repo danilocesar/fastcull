@@ -172,6 +172,11 @@ export component MainWindow inherits Window {
     // best (issue #21: soft transit at the carried factor). Drives the
     // cue pill — "you are never SILENTLY looking at soft pixels".
     in property <bool> loupe-soft;
+    // Loupe state badge (issue #20): the cursor's mark in the loupe.
+    // 0 = unmarked (badge hidden), 1 = picked, 2 = rejected — same
+    // encoding as CellData.pick. Swapped by the same refresh pass that
+    // swaps the image (a wrong-frame badge is a confident lie).
+    in property <int> loupe-mark: 0;
     // Cell click (issue #7 + click-to-zoom at loupe fit): image id,
     // cell-local coordinates, ctrl/shift modifiers (selection semantics).
     // Lives IN the cell so the Flickable keeps drag-scrolling (a sibling
@@ -715,18 +720,20 @@ export component MainWindow inherits Window {
                     }
                 }
             }
-            // State/cue pill (issues #21 + #20): VIEWPORT-FIXED — a
+            // Loading cue pill (issue #21): VIEWPORT-FIXED — a
             // sibling of the Flickable, never inside it (validator
             // MAJOR: Flickable children live in panned content space,
             // so the pill sat thousands of px off-screen at zoom).
             // Permanent element, visibility-toggled (the issue #6/#20
-            // rule); pointer-inert (no TouchArea); top-left, dark
-            // backing, left-aligned and free to grow for the #20
-            // pick/reject glyphs and future stars.
+            // rule); pointer-inert (no TouchArea). Sits BELOW the #20
+            // state badge slot (top-left, 14px, belongs to the mark —
+            // muscle memory from the grid badge corner), stacked so
+            // the two never overlap and never entangle their
+            // visibility contracts.
             Rectangle {
                 visible: root.loupe-soft;
                 x: 14px;
-                y: 14px;
+                y: 44px;
                 width: t-cue.preferred-width + 16px;
                 height: 22px;
                 border-radius: 6px;
@@ -740,6 +747,39 @@ export component MainWindow inherits Window {
                     width: 100%;
                     height: 100%;
                 }
+            }
+        }
+
+        // Loupe state badge (issue #20, persona MUST-HAVE): the cursor's
+        // mark, visible at fit AND zoomed — one continuous loupe, the
+        // state readable without leaving it. Top-LEFT (same corner as
+        // the grid badge — muscle memory; top-right stays free for a
+        // future histogram). An OVERLAY on its own dark pill (never a
+        // reserved strip — the image must not reflow), left-aligned and
+        // free to grow to five stars when ratings land. Badge only for
+        // picked/rejected — unmarked is absence, backstopped by the
+        // status bar spelling the state in words. Pointer-inert; a
+        // permanent element, visibility-toggled (issue #6 rule). Note
+        // the loupe NEVER dims a reject (deliberate divergence from the
+        // grid's 40% dim — rescue judging needs full brightness); at
+        // N=1 Rust sends cells pick=0 so the grid dim cannot leak in.
+        // Declared after the 1:1 overlay: draws above both loupe forms.
+        Rectangle {
+            visible: (root.one2one || root.at-fit) && root.loupe-mark != 0;
+            x: 14px;
+            y: root.one2one ? 14px : root.bar-h + 14px;
+            width: t-badge.preferred-width + 16px;
+            height: 24px;
+            border-radius: 6px;
+            background: #202028cc;
+            t-badge := Text {
+                text: root.loupe-mark == 1 ? "★" : "✕";
+                color: root.loupe-mark == 1 ? #ffd24d : #ff5a5a;
+                font-size: 14px;
+                horizontal-alignment: center;
+                vertical-alignment: center;
+                width: 100%;
+                height: 100%;
             }
         }
 

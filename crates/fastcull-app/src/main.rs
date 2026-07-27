@@ -85,6 +85,10 @@ struct AppState {
     /// view carries this value — visual continuity is the whole point
     /// of issue #21 (the carried magnification, not the sentinel).
     last_resolved_factor: Option<f32>,
+    /// (cursor, mark) the loupe badge last traced — dedupes the trace
+    /// line, not the property write (issue #20; the property is set
+    /// every refresh, atomically with the image swap).
+    last_badge: Option<(usize, i32)>,
     /// Bumped on every recompute_view (membership or order change).
     view_generation: u64,
     /// The generation the last refresh saw: a mismatch means the view
@@ -319,6 +323,7 @@ fn load_folder(state: &Rc<RefCell<AppState>>, folder: &std::path::Path) -> Resul
     st.fullres.clear();
     st.terminal_native.clear();
     st.last_resolved_factor = None; // magnification never carries across sessions
+    st.last_badge = None; // indexes mean a different image now
     st.zoom_factor = 1.0;
     st.pan_center = (0.5, 0.5);
     st.mids.clear();
@@ -462,6 +467,7 @@ fn main() {
         view_generation: 0,
         last_view_generation: 0,
         last_resolved_factor: None,
+        last_badge: None,
         last_view_geometry: None,
         fullres: Vec::new(),
         zoom_factor: if start_11 { f32::INFINITY } else { 1.0 },
@@ -2871,6 +2877,35 @@ fn refresh_inner(win: &MainWindow, state: &Rc<RefCell<AppState>>) {
     // overlay up — the wheel zooms there (browsing is keyboard-only).
     win.set_at_fit(at_loupe && !win.get_one2one() && view_len > 0);
 
+    // Loupe state badge (issue #20): the cursor's mark, written in the
+    // same refresh pass that swaps the image/cells — never a frame where
+    // the badge belongs to the previous photo (the issue #6 stale class).
+    let cursor_mark = match st.picks.get(cursor) {
+        Some(fastcull_core::catalog::PickState::Picked) => 1,
+        Some(fastcull_core::catalog::PickState::Rejected) => 2,
+        _ => 0,
+    };
+    win.set_loupe_mark(cursor_mark);
+    if at_loupe && view_len > 0 {
+        if st.last_badge != Some((cursor, cursor_mark)) {
+            trace_mark(&format!(
+                "loupe badge idx {cursor} mark {}",
+                match cursor_mark {
+                    1 => "picked",
+                    2 => "rejected",
+                    _ => "none",
+                }
+            ));
+            st.last_badge = Some((cursor, cursor_mark));
+        }
+    } else {
+        // Reset on leaving the loupe so RE-ENTERING traces a fresh line
+        // even on an unchanged (cursor, mark) — trace forensics must
+        // show what the badge said each time the loupe came up
+        // (validator m3).
+        st.last_badge = None;
+    }
+
     // Mutate the one bound VecModel in place (spec: reuse, don't recreate).
     let model = Rc::clone(&st.cells);
     let mut row = 0usize;
@@ -2909,10 +2944,18 @@ fn refresh_inner(win: &MainWindow, state: &Rc<RefCell<AppState>>) {
             copied: st.copied_to.contains_key(&index),
             burst_count: st.burst_badge.get(index).copied().unwrap_or(0) as i32,
             seed: if st.synthetic { index as i32 } else { -1 },
-            pick: match st.picks.get(index) {
-                Some(fastcull_core::catalog::PickState::Picked) => 1,
-                Some(fastcull_core::catalog::PickState::Rejected) => 2,
-                _ => 0,
+            // At the loupe (N=1) the #20 badge pill owns state display:
+            // bare cells keep the grid's 40% reject dim out of the loupe
+            // (a reject may be re-judged for rescue at full brightness)
+            // and stop the cell glyph double-rendering under the pill.
+            pick: if at_loupe {
+                0
+            } else {
+                match st.picks.get(index) {
+                    Some(fastcull_core::catalog::PickState::Picked) => 1,
+                    Some(fastcull_core::catalog::PickState::Rejected) => 2,
+                    _ => 0,
+                }
             },
         };
         if row < model.row_count() {
@@ -3021,9 +3064,21 @@ fn refresh_inner(win: &MainWindow, state: &Rc<RefCell<AppState>>) {
         .flatten()
         .map(|(p, n)| format!(" · burst {p}/{n}"))
         .unwrap_or_default();
+    // Issue #20 backstop: the status bar always spells the cursor's mark
+    // in words — in the loupe "no badge" needs a textual "unmarked", and
+    // the words disambiguate the glyph everywhere else.
+    let mark_words = if cursor_in_view {
+        match cursor_mark {
+            1 => " · ★ picked",
+            2 => " · ✕ rejected",
+            _ => " · unmarked",
+        }
+    } else {
+        ""
+    };
     win.set_status(
         format!(
-            "{} ({}/{}){}{} — {} thumbs loaded — ★{} ✕{}{} — {} column{}",
+            "{} ({}/{}){}{}{} — {} thumbs loaded — ★{} ✕{}{} — {} column{}",
             if cursor_in_view {
                 st.labels.get(cursor).cloned().unwrap_or_default()
             } else {
@@ -3035,6 +3090,7 @@ fn refresh_inner(win: &MainWindow, state: &Rc<RefCell<AppState>>) {
             // counter that can invent 1 can't be trusted to report
             // 3,100" — persona).
             view_len,
+            mark_words,
             showing,
             burst_note,
             st.thumbs_done.min(count),

@@ -1035,3 +1035,174 @@ fn transit_at_zoom_stays_soft_never_drops_to_fit() {
         "the landing frame never swapped in sharp:\n{stderr}"
     );
 }
+
+/// Issue #20: the loupe state badge — the cursor's mark must be readable
+/// in the loupe itself, and it must always be the CURRENT frame's mark
+/// (auto-advance makes memory of "the frame I marked" one frame stale by
+/// construction; the walk-back to compare candidates is the exact case).
+/// Pre-#20 neither the badge traces nor the status-bar mark words exist.
+#[test]
+fn loupe_badge_tracks_marks_across_auto_advance() {
+    if !has_display() {
+        eprintln!("screenshot smoke skipped: no display server");
+        return;
+    }
+    let _s = serial();
+    let out = out_dir().join("loupe-badge-marks.jpg");
+    let stderr = shoot_env_stderr(
+        &["--synthetic", "300", "--start-loupe"],
+        &[
+            ("FASTCULL_TRACE", "1"),
+            ("FASTCULL_DRIVE", "400:pick;700:reject;1000:left;1300:left"),
+        ],
+        &out,
+    );
+    // Y/N auto-advance (net movement one image): pick lands on idx 0 →
+    // cursor 1; reject lands on 1 → cursor 2; two lefts walk back across
+    // the marked frames. Each arrival must trace that frame's OWN mark.
+    let rejected_at = stderr.find("loupe badge idx 1 mark rejected");
+    let picked_at = stderr.find("loupe badge idx 0 mark picked");
+    assert!(
+        rejected_at.is_some(),
+        "walk-back onto the rejected frame never showed its badge:\n{stderr}"
+    );
+    assert!(
+        picked_at.is_some(),
+        "walk-back onto the picked frame never showed its badge:\n{stderr}"
+    );
+    assert!(
+        rejected_at < picked_at,
+        "badge states arrived out of walk-back order:\n{stderr}"
+    );
+    // Status-bar backstop: the state spelled in words at the shutter
+    // (cursor rests on the picked frame).
+    let status = stderr
+        .lines()
+        .rev()
+        .find_map(|l| l.split("status at shutter: ").nth(1))
+        .expect("no status trace");
+    assert!(
+        status.contains("★ picked"),
+        "status bar does not spell the mark: {status}"
+    );
+}
+
+/// Issue #20 (persona-validated divergence from the grid): a rejected
+/// frame is NEVER dimmed in the loupe — you may be re-judging a reject
+/// for rescue and need full brightness. Pre-#20 the fit loupe was a
+/// grid cell, so the grid's 40% reject dim leaked in (this compare
+/// fails on old code).
+#[test]
+fn loupe_never_dims_a_rejected_frame() {
+    if !has_display() {
+        eprintln!("screenshot smoke skipped: no display server");
+        return;
+    }
+    let _s = serial();
+    // Control: the same frame at fit, unmarked.
+    let control_out = out_dir().join("loupe-reject-dim-control.jpg");
+    shoot_env(&["--synthetic", "300", "--start-loupe"], &[], &control_out);
+    let (_, _, control_luma) = analyze(&control_out);
+    // Reject idx 0 (auto-advance to 1), walk back onto the reject.
+    let out = out_dir().join("loupe-reject-dim.jpg");
+    let stderr = shoot_env_stderr(
+        &["--synthetic", "300", "--start-loupe"],
+        &[
+            ("FASTCULL_TRACE", "1"),
+            ("FASTCULL_DRIVE", "400:reject;800:left"),
+        ],
+        &out,
+    );
+    let status = stderr
+        .lines()
+        .rev()
+        .find_map(|l| l.split("status at shutter: ").nth(1))
+        .expect("no status trace");
+    assert!(
+        status.contains("✕ rejected"),
+        "cursor is not on the rejected frame at the shutter: {status}"
+    );
+    let (_, _, luma) = analyze(&out);
+    assert!(
+        luma > control_luma * 0.85,
+        "rejected frame is dimmed in the loupe (mean luma {luma:.1} vs \
+         unmarked control {control_luma:.1}) — rescue judging needs full \
+         brightness:\n{stderr}"
+    );
+}
+
+/// Issue #20 at 1:1: the badge renders IN PIXELS over the zoomed view
+/// (the fit tests above prove state tracking; this proves the zoomed
+/// loupe shows it too — the exact view the user culls in). The star
+/// glyph is #ffd24d on a dark #202028 pill in the top-left corner.
+/// Fixtures are SYMLINKED into a temp dir — driving `pick` writes a
+/// real sidecar next to the file, and it must never land in the shared
+/// testdata/raws (validator M1: a fixture picked once is picked in
+/// every later run — order-dependent state).
+#[test]
+fn loupe_badge_star_renders_at_one_to_one() {
+    if !has_display() {
+        eprintln!("screenshot smoke skipped: no display server");
+        return;
+    }
+    let _s = serial();
+    let dir = out_dir().join("badge-11");
+    std::fs::create_dir_all(&dir).unwrap();
+    let src = raws_dir().join("A1_full_compressed.ARW");
+    place_fixture(&src, &dir.join("badge_a.ARW"));
+    place_fixture(&src, &dir.join("badge_b.ARW"));
+    let out = out_dir().join("loupe-badge-11.jpg");
+    let stderr = shoot_env_stderr(
+        &["--start-11", dir.to_str().unwrap()],
+        &[
+            ("FASTCULL_TRACE", "1"),
+            ("FASTCULL_DRIVE", "600:pick;1000:left"),
+        ],
+        &out,
+    );
+    // pick marks idx 0 and advances; left returns to the picked frame.
+    // The shutter's sharp gate then waits for idx 0's full-res.
+    assert!(
+        stderr.contains("loupe badge idx 0 mark picked"),
+        "the walk-back never traced the picked badge:\n{stderr}"
+    );
+    let bytes = std::fs::read(&out).expect("snapshot file");
+    let mut dec = zune_jpeg::JpegDecoder::new(&bytes);
+    let px = dec.decode().expect("decode snapshot");
+    let (w, h) = dec.dimensions().expect("dims");
+    // A bare w/8 x h/8 corner sweep scored 58 "yellow" px on a
+    // badge-less shot of this RAW's foliage (QE D1: vacuous pass), and
+    // the pill's exact position shifts with menu-bar height and DPI.
+    // So: a yellow pixel only counts when its ±6 px neighborhood holds
+    // dark near-neutral PILL BACKING pixels (#202028cc over a photo) —
+    // foliage yellow sits in foliage, never on the pill.
+    let is_pill = |x: usize, y: usize| {
+        let i = (y * w + x) * 3;
+        let (r, g, b) = (px[i] as i32, px[i + 1] as i32, px[i + 2] as i32);
+        r < 0x48 && g < 0x48 && b < 0x50 && (r - g).abs() < 24 && (b - g).abs() < 32
+    };
+    let (xr, yr) = (w / 6, h / 6);
+    let mut on_pill_yellow = 0usize;
+    for y in 6..yr {
+        for x in 6..xr {
+            let i = (y * w + x) * 3;
+            let (r, g, b) = (px[i] as i32, px[i + 1] as i32, px[i + 2] as i32);
+            let yellowish = (r - 0xff).abs() < 48 && (g - 0xd2).abs() < 48 && (b - 0x4d).abs() < 64;
+            if !yellowish {
+                continue;
+            }
+            let dark_neighbors = (y - 6..y + 6)
+                .flat_map(|ny| (x - 6..x + 6).map(move |nx| (nx, ny)))
+                .filter(|(nx, ny)| is_pill(*nx, *ny))
+                .count();
+            if dark_neighbors >= 8 {
+                on_pill_yellow += 1;
+            }
+        }
+    }
+    assert!(
+        on_pill_yellow > 6,
+        "no star-on-pill in the top-left region at 1:1 \
+         ({on_pill_yellow} on-pill yellow px):\n{stderr}"
+    );
+}
