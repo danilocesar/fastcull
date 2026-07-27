@@ -397,10 +397,12 @@ brightening during wheel scrolling (needs an activity decay timer).
   (the issue #6 stale-frame class: a wrong-frame badge is a confident
   lie, worse than none); scope-guarded to the glyph pill only — no
   filename/metadata creep (the status bar owns those), top-right stays
-  free for a future histogram/focus indicator. Three provisional
-  defaults await the user's confirmation on the issue: corner badge
-  rather than a reserved "top panel" strip; badge-only rejects (no
-  dim); no explicit unmarked glyph.
+  free for a future histogram/focus indicator. All three design choices
+  CONFIRMED by the user (2026-07-27): badge at the top of the image
+  (overlay, not a reserved strip); badge-only rejects at full
+  brightness; no explicit unmarked glyph. Also confirmed for the
+  composed issue #21 cue: same behavior at all zoom factors, loading
+  indicator acceptable.
 - **Burst context**: see burst-grouping.md — the ×N badge and "burst
   7/23" status fragment already serve burst position; the state
   indicator composes with them, it does not replace them.
