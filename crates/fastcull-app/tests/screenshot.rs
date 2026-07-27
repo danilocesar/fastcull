@@ -1219,3 +1219,109 @@ fn loupe_badge_star_renders_at_one_to_one() {
          ({on_pill_yellow} on-pill yellow px):\n{stderr}"
     );
 }
+
+/// Issue #18: the 1:1 anchor recomputes across a panel toggle. OPEN
+/// must re-center the crop for the docked width (the original drift
+/// kept the stale full-width anchor indefinitely); CLOSE must restore
+/// the full-width anchor with no stale frame (the one-frame zoom-pop).
+/// Sharp-path anchor values (`loupe idx ... off X,Y`) only exist while
+/// full-res is up: in release the sharp view is up before the toggles
+/// and the full contract is asserted; in debug the toggles happen in
+/// the soft regime, so only the post-toggle stability half applies —
+/// the release assertions are the regression teeth (fails on pre-#16
+/// code: no docked line ever appeared after open, and close popped a
+/// stale docked frame).
+#[test]
+fn panel_toggle_at_one_to_one_reanchors_the_crop() {
+    if !has_display() {
+        eprintln!("screenshot smoke skipped: no display server");
+        return;
+    }
+    let _s = serial();
+    let dir = out_dir().join("panel-reanchor");
+    std::fs::create_dir_all(&dir).unwrap();
+    for i in 1..=3 {
+        place_fixture(
+            &raws_dir().join("A1_full_compressed.ARW"),
+            &dir.join(format!("a{i}.ARW")),
+        );
+    }
+    let out = out_dir().join("panel-reanchor.jpg");
+    let stderr = shoot_env_stderr(
+        &["--start-11", dir.to_str().unwrap()],
+        &[
+            ("FASTCULL_TRACE", "1"),
+            ("FASTCULL_DRIVE", "1500:home;2000:iptc;2600:iptc"),
+        ],
+        &out,
+    );
+    assert!(
+        !stderr.contains("follow-scroll claim"),
+        "panel toggle misread as scrolling:\n{stderr}"
+    );
+    // Wrong-frame guard: a toggle is GEOMETRY, never navigation.
+    let off_x = |line: &str| -> Option<i64> {
+        line.split(" off ")
+            .nth(1)?
+            .split(',')
+            .next()?
+            .trim()
+            .parse()
+            .ok()
+    };
+    let lines: Vec<&str> = stderr.lines().collect();
+    let open_at = lines
+        .iter()
+        .position(|l| l.contains("drive: iptc"))
+        .expect("open toggle missing");
+    let close_at = lines
+        .iter()
+        .rposition(|l| l.contains("drive: iptc"))
+        .expect("close toggle missing");
+    assert!(close_at > open_at, "both toggles must have fired");
+    let sharp_offs = |range: std::ops::Range<usize>| -> Vec<i64> {
+        lines[range]
+            .iter()
+            .filter(|l| l.contains("loupe idx "))
+            .filter_map(|l| off_x(l))
+            .collect()
+    };
+    // Both profiles: everything after CLOSE is one stable anchor.
+    let after = sharp_offs(close_at..lines.len());
+    assert!(
+        !after.is_empty(),
+        "no sharp anchor line after the close toggle:\n{stderr}"
+    );
+    assert!(
+        after.windows(2).all(|w| w[0] == w[1]),
+        "anchor unstable after panel close (drift or pop): {after:?}\n{stderr}"
+    );
+    // Release-strength half: sharp view was up before the toggles.
+    // CI runs the screenshot suite in RELEASE on both platforms, so
+    // these are the teeth that actually run there — the debug half
+    // above cannot detect a stable-but-WRONG anchor (validator note:
+    // don't drop the release CI run thinking debug covers this). In
+    // release the teeth may never silently skip: a runner too slow to
+    // have the sharp view up before the 2000 ms toggle must FAIL
+    // loudly here, not pass vacuously forever.
+    let before = sharp_offs(0..open_at);
+    #[cfg(not(debug_assertions))]
+    assert!(
+        !before.is_empty(),
+        "release run reached the open toggle without a sharp baseline — \
+         the regression teeth would be skipped:\n{stderr}"
+    );
+    if let Some(&baseline) = before.last() {
+        let docked = sharp_offs(open_at..close_at);
+        assert!(
+            docked.iter().any(|o| *o != baseline),
+            "panel OPEN never re-anchored the crop for the docked width \
+             (issue #18 drift): baseline {baseline}, open-window {docked:?}\n{stderr}"
+        );
+        assert!(
+            after.iter().all(|o| *o == baseline),
+            "panel CLOSE did not restore the full-width anchor (stale \
+             pop frame): baseline {baseline}, after {after:?}\n{stderr}"
+        );
+    }
+}

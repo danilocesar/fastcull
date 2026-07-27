@@ -306,6 +306,13 @@ Slint trap recorded from the incident: an element with a bound width but
 no `x:` (or bound height but no `y:`) is CENTERED in its parent — every
 non-layout child with a computed size needs its position bound
 explicitly.
+The 1:1 anchor RECOMPUTES across a panel toggle (issue #18, verified
+resolved 2026-07-27 by the issue #16 early-dock-publish fix): on OPEN
+the crop re-centers for the docked width in the next frame ("I zoomed
+on the eye; the eye stays put when chrome docks"); on CLOSE it
+restores the full-width anchor with NO stale intermediate frame (the
+one-frame zoom-pop sub-symptom is gone — 12/12 clean transitions in
+the re-baseline). Pinned by the reanchor screenshot regression test.
 
 ## Overlay scrollbar (task #21, user request 2026-07-25, persona-reviewed)
 
