@@ -93,3 +93,20 @@ DELIVERED 2026-07-26: five pages (index, culling, metadata, copy-picks,
 faq); QE executed the full DoD path from the docs against the release
 binary. Release-note debt RESOLVED with v0.3.0: the index install note was
 removed and the culling callout pinned to "Changed in 0.3.0". The docs-follow-specs binding lives in CLAUDE.md.
+
+## v0.4.0 (released 2026-07-27)
+
+Everything since v0.3.0: the import-performance overhaul (EXIF summaries
+via the in-tree TIFF walker — the rawler whole-file mmap serialized all
+import workers on mmap_lock; a real 1,450-ARW folder on an ntfs-3g
+backup drive went from 99–133 s to ~1–3 s, local NVMe 5k from ~14.5 s to
+~3.1 s, per-file EXIF 1.71 ms → 5 µs), the loupe soft-transit contract
+(#21 — the view never strobes to fit during held-arrow transit) with the
+loupe-engine scheduling fixes it exposed (ring-gated deferred revival +
+the debounced focus-reserved worker), the loupe state badge (#20 — mark
+visible without leaving the loupe; rejects no longer dimmed at fit), the
+About dialog (#23 — build-composed version string, X.Y.Z-devel-<hash>
+off-tag) with full modal keyboard containment for both popups, the #18
+anchor closure (verified fixed by the #16 relayout work, regression-
+pinned), and the drive/shutter harness determinism work. No docs
+release-note debt: culling.md gained its sections with the features.
