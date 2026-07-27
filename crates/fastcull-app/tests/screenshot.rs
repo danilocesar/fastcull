@@ -763,6 +763,30 @@ fn grid_resize_shrink_keeps_content_anchored() {
         return;
     }
     let _s = serial();
+    // Control run (same script, no final resize): the landing position
+    // depends on rows-per-page and thus the runner's window geometry —
+    // Windows CI landed on (76/300) where local runs land (108/300).
+    // The invariant is "the cursor does not move ACROSS THE RESIZE",
+    // asserted by comparing against this control, never a hardcoded
+    // position.
+    let control_out = out_dir().join("grid-resize-shrink-control.jpg");
+    let control = shoot_env_stderr(
+        &["--synthetic", "300"],
+        &[
+            ("FASTCULL_TRACE", "1"),
+            (
+                "FASTCULL_DRIVE",
+                "150:resize:1200x800;500:end;700:pgup;800:pgup;900:pgup;1000:pgup",
+            ),
+        ],
+        &control_out,
+    );
+    let control_status = control
+        .lines()
+        .rev()
+        .find_map(|l| l.split("status at shutter: ").nth(1))
+        .expect("no control status trace")
+        .to_string();
     let out = out_dir().join("grid-resize-shrink.jpg");
     let stderr = shoot_env_stderr(
         &["--synthetic", "300"],
@@ -801,9 +825,9 @@ fn grid_resize_shrink_keeps_content_anchored() {
         .rev()
         .find_map(|l| l.split("status at shutter: ").nth(1))
         .expect("no status trace");
-    assert!(
-        status.contains("(108/300)"),
-        "cursor moved across the resize: {status}"
+    assert_eq!(
+        status, control_status,
+        "cursor moved across the resize (control vs resize run)"
     );
 }
 
