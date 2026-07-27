@@ -67,9 +67,12 @@ decoding RAW sensor data on the hot path.
      target seen during the current focus tenure (a full-res climb
      freshly queued for a frame the cursor has been resting on is new
      work — QE proved the rest-then-escalate shape re-captured the
-     lane ~20% of the time when only index changes re-armed). Ladder
-     flights are uninterruptible (mid→full in one flight, no intent
-     recheck between rungs); the cursor legitimately rests on the
+     lane ~20% of the time when only index changes re-armed). BACKLOG
+     ladder flights are uninterruptible (mid→full in one flight, no
+     intent recheck between rungs — their in-flight neighbors are
+     legitimate prefetch); only the RESERVED lane rechecks between
+     rungs and abandons when its index stopped being the focus (see
+     below); the cursor legitimately rests on the
      first frame during load and touches transit frames for
      ~60-150 ms, and without the debounce any of those would capture
      the lane for a full multi-second debug decode. Transient focuses
@@ -77,15 +80,23 @@ decoding RAW sensor data on the hot path.
      capacity still serves a fresh focus instantly), so the lane is
      free at the FIRST settle after sub-debounce transits and that
      frame's ladder starts within ~250 ms regardless of backlog
-     commitment. Residual (accepted): a SECOND settle arriving while
-     the first settle's uninterruptible flight still runs depends on
-     the backlog workers again — inherent until flights can stop at
-     rung boundaries. (Windows CI 2026-07-27: all workers were
-     provably captured before settle and the settled frame's full-res
-     landed past the screenshot shutter's cap; a debounce-less
-     reservation failed validation for the transient-capture, and an
-     index-change-only clock failed QE for the rest-then-escalate
-     capture) —
+     commitment. The reserved lane's own flights ABANDON at rung
+     boundaries when their index is no longer the focus (the lane
+     serves the focus, only ever the focus; backlog workers never
+     abandon — their neighbors are legitimate prefetch): without this,
+     a stall-stretched transient hold that passed the debounce
+     committed the lane to a full multi-second climb of a frame the
+     user left — the double-settle residual, which fired for real on
+     the v0.4.0 release-commit Windows run (bunched drive timers held
+     an intermediate frame ~2 s; the settled frame then missed the
+     60 s shutter cap). Remaining residual (accepted): the lane checks
+     only BETWEEN rungs, so a focus change during a single rung's
+     decode waits out that one rung (~30 s worst case in debug, ~140 ms
+     release) — decode itself stays uninterruptible. (History: a
+     debounce-less reservation failed validation for the
+     transient-capture; an index-change-only clock failed QE for the
+     rest-then-escalate capture; a boundary-check-less lane failed on
+     the release-commit CI run for the double-settle) —
      full-res decodes must never queue behind a background thumbnail sweep.
      turbojpeg DCT scaling is a recorded FUTURE optimization only (saves
      ~35–45% on the cook; the ladder already hides that latency).

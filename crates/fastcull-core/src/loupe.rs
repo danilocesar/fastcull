@@ -418,7 +418,7 @@ fn worker(shared: &Shared, focus_reserved: bool) {
                 .unwrap_or(0)
         };
         let outcome = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
-            decode_ladder(shared, index, display_long, current_long)
+            decode_ladder(shared, index, display_long, current_long, focus_reserved)
         }))
         .unwrap_or_else(|_| Err("internal error (panic) decoding image".into()));
 
@@ -449,11 +449,24 @@ fn worker(shared: &Shared, focus_reserved: bool) {
 
 /// Decode rungs for `index` until one serves `display_long`, publishing each
 /// improvement over `current_long` to the cache + event channel.
+/// `reserved_lane`: this flight runs on the focus-reserved worker, which
+/// exists ONLY to serve the focused frame — at every rung boundary it
+/// re-checks that its index is still THE focus and abandons otherwise
+/// (no note_best: the ladder didn't top out; the backlog workers own
+/// the frame from then on, and focus() re-requests on return). This
+/// closes the double-settle residual the reservation had accepted: a
+/// stall-stretched transient hold can pass the debounce and commit the
+/// lane to a frame the user leaves moments later — on the Windows CI
+/// release-commit run, bunched drive timers held frame 3 for ~2 s, the
+/// lane spent a ~30 s debug climb on it, and the settled frame 4
+/// missed the shutter's 60 s cap. Backlog workers never abandon:
+/// their in-flight neighbors are legitimate prefetch.
 fn decode_ladder(
     shared: &Shared,
     index: usize,
     display_long: u32,
     current_long: u32,
+    reserved_lane: bool,
 ) -> Result<(), String> {
     let path = &shared.paths[index];
     let mut file = std::fs::File::open(path).map_err(|e| format!("open: {e}"))?;
@@ -482,6 +495,15 @@ fn decode_ladder(
         let rung_long = rung.width.max(rung.height);
         if rung_long <= achieved {
             continue; // already have this rung or better
+        }
+        if reserved_lane && lock(shared).focused != Some(index) {
+            // The focus moved: free the lane at the rung boundary (see
+            // the fn doc — the reserved worker serves the focus, only
+            // ever the focus). Logged so the next stall-shaped CI
+            // failure is diagnosable in one read (validator finding:
+            // silent abandons force timing inference).
+            eprintln!("fastcull: loupe lane abandoned idx {index} at {achieved} (focus moved)");
+            return Ok(());
         }
         match decode_jpeg_rung(&mut file, rung, orientation) {
             Ok(image) => {
