@@ -242,6 +242,30 @@ fn sufficient_cached(state: &mut LoupeState, index: usize, display_long: u32, st
     }
 }
 
+/// Land-time revival of a deferred upgrade (an in-flight index whose wanted
+/// rung grew mid-decode). Revived ONLY while the index is still inside the
+/// focused prefetch ring: a stale upgrade — the cursor moved on while the
+/// flight decoded — re-queued at top priority captured BOTH workers for
+/// multi-second full-res decodes and starved the current frame's ladder
+/// (Windows CI 2026-07-27: three screenshot tests hit the 60 s shutter cap
+/// exactly this way). Dropping a stale upgrade loses nothing: focus()
+/// re-requests it the moment the user returns. The focused index re-queues
+/// at the back (popped next); a ring neighbor goes to the front so it can
+/// never outrank the focused frame's own pending work.
+fn revive_deferred(state: &mut LoupeState, index: usize, target: u32, stamp: u64) -> bool {
+    let in_ring = state.focused.is_some_and(|f| index.abs_diff(f) <= PREFETCH);
+    if !in_ring || state.failed.contains(&index) || sufficient_cached(state, index, target, stamp) {
+        return false;
+    }
+    state.queue.retain(|(q, _, _)| *q != index);
+    if state.focused == Some(index) {
+        state.queue.push((index, target, true));
+    } else {
+        state.queue.insert(0, (index, target, true));
+    }
+    true
+}
+
 fn worker(shared: &Shared) {
     loop {
         let (index, display_long) = {
@@ -297,11 +321,7 @@ fn worker(shared: &Shared) {
         }
         if let Some(target) = state.deferred.remove(&index) {
             let stamp = shared.stamp.load(Ordering::Relaxed);
-            if !state.failed.contains(&index)
-                && !sufficient_cached(&mut state, index, target, stamp)
-            {
-                state.queue.retain(|(q, _, _)| *q != index);
-                state.queue.push((index, target, true));
+            if revive_deferred(&mut state, index, target, stamp) {
                 shared.wakeup.notify_all();
             }
         }
@@ -456,6 +476,73 @@ fn evict_to_budget(state: &mut LoupeState, budget: usize) {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    fn state_focused_at(index: usize) -> LoupeState {
+        LoupeState {
+            focused: Some(index),
+            ..Default::default()
+        }
+    }
+
+    /// The Windows CI starvation (2026-07-27): indexes 0/1 were in flight
+    /// at the mid rung when the 1:1 pin upgraded their deferred target to
+    /// full-res; by the time those flights landed the cursor was at 4 —
+    /// yet the old code re-queued them at TOP priority and both workers
+    /// spent ~30 s (debug decode) on frames nobody was looking at.
+    #[test]
+    fn stale_deferred_upgrade_is_dropped_not_revived() {
+        let mut state = state_focused_at(4);
+        assert!(
+            !revive_deferred(&mut state, 0, u32::MAX, 1),
+            "index 0 is outside the ring of focus 4"
+        );
+        assert!(state.queue.is_empty(), "nothing may be re-queued");
+        // Exact ring boundary: distance PREFETCH is IN, one past is OUT.
+        assert!(revive_deferred(&mut state, 4 - PREFETCH, u32::MAX, 1));
+        assert!(!revive_deferred(&mut state, 4 - PREFETCH - 1, u32::MAX, 1));
+        // No focus at all (loupe never opened): equally dropped.
+        state.focused = None;
+        assert!(!revive_deferred(&mut state, 0, u32::MAX, 2));
+    }
+
+    #[test]
+    fn focused_deferred_upgrade_revives_at_top_priority() {
+        let mut state = state_focused_at(4);
+        state.queue.push((6, 1000, true));
+        assert!(revive_deferred(&mut state, 4, u32::MAX, 1));
+        // Workers pop from the back: the focused frame goes next.
+        assert_eq!(state.queue.last(), Some(&(4, u32::MAX, true)));
+    }
+
+    #[test]
+    fn ring_neighbor_deferred_upgrade_never_outranks_the_focused_frame() {
+        let mut state = state_focused_at(4);
+        state.queue.push((4, u32::MAX, true)); // the cursor's own pending work
+        assert!(revive_deferred(&mut state, 5, u32::MAX, 1));
+        assert_eq!(
+            state.queue.last(),
+            Some(&(4, u32::MAX, true)),
+            "the focused frame stays first in line"
+        );
+        assert_eq!(state.queue.first(), Some(&(5, u32::MAX, true)));
+    }
+
+    #[test]
+    fn failed_or_sufficient_deferred_upgrades_stay_dead() {
+        let mut state = state_focused_at(4);
+        state.failed.insert(4);
+        assert!(!revive_deferred(&mut state, 4, u32::MAX, 1));
+        // A cached asset that already tops out (best_long known) is enough.
+        let mut state = state_focused_at(4);
+        let img = FullImage {
+            rgb: Arc::new(vec![0; 3]),
+            width: 100,
+            height: 100,
+        };
+        state.cache.insert(4, (img, 0));
+        state.best_long.insert(4, 100);
+        assert!(!revive_deferred(&mut state, 4, u32::MAX, 1));
+    }
 
     #[test]
     fn eviction_keeps_newest_and_at_least_one() {

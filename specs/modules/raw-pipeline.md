@@ -46,7 +46,16 @@ decoding RAW sensor data on the hot path.
      the mid rung UPSCALED at the carried factor with a visible cue —
      see ui-grid.md's revised quality rule; the ladder itself is
      unchanged (the landing frame's focus() preempts transit backlog,
-     want-culling drops scrolled-past requests).
+     want-culling drops scrolled-past requests). Deferred upgrades (an
+     in-flight index whose wanted rung grew mid-decode) are revived at
+     land time ONLY while the index is still inside the focused
+     prefetch ring, and a ring neighbor never outranks the focused
+     frame's own pending work — a stale revival at top priority
+     captured both loupe workers for full decodes of frames the cursor
+     had left and starved the current frame past the screenshot
+     shutter's 60 s cap (Windows CI, 2026-07-27). A dropped upgrade
+     loses nothing: the next refresh re-requests it if still needed —
+     focus() at the loupe, want()/ensure() for grid cells.
      The ladder applies to GRID CELLS too (user bug 2026-07-25): any cell
      wider than 320 × 1.25 physical px is served by the mid rung via
      `LoupeEngine::want(range, cell_width)`; UI-side bookkeeping lives in
