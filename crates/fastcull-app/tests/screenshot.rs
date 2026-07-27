@@ -51,6 +51,10 @@ fn shoot_env_stderr(args: &[&str], envs: &[(&str, &str)], out: &Path) -> String 
     // start, i.e. after startup/scan): the cap must be able to fire and
     // exit(1) with its diagnostic BEFORE this harness gives up, or a slow
     // runner reports a generic timeout and leaks the child (validator M2).
+    // NOTE: the shutter (and thus the 60 s cap) is deferred while a
+    // FASTCULL_DRIVE script has unfired actions — a script scheduling
+    // past ~90 s on a never-ready input would hit THIS deadline instead
+    // of the app's own diagnostic (loud either way; keep scripts short).
     let deadline = Instant::now() + Duration::from_secs(90);
     loop {
         if let Some(status) = child.try_wait().expect("wait") {
@@ -633,9 +637,16 @@ fn panel_toggle_at_one_to_one_keeps_the_photo() {
         &["--start-11", dir.to_str().unwrap()],
         &[
             ("FASTCULL_TRACE", "1"),
+            // Let the metadata stream SETTLE before driving, then pin
+            // with `home` (Windows CI 2026-07-27: six same-timestamp
+            // fixtures re-sort as EXIF lands — keyed files sort before
+            // keyless — and a right at 250 ms rode a transient order,
+            // landing the cursor one frame off; the #20 badge traces
+            // exposed the churn). `home` touches the cursor on the
+            // SETTLED view, making every later step deterministic.
             (
                 "FASTCULL_DRIVE",
-                "250:right;450:right;650:right;850:right;1100:iptc;1400:iptc",
+                "1500:home;1650:right;1800:right;1950:right;2100:right;2400:iptc;2700:iptc",
             ),
         ],
         &out,
@@ -684,9 +695,11 @@ fn window_resize_keeps_the_photo() {
         &["--start-11", dir.to_str().unwrap()],
         &[
             ("FASTCULL_TRACE", "1"),
+            // Settle-then-pin, same rationale as the panel-toggle test
+            // (the load-transient sort race; see that test's comment).
             (
                 "FASTCULL_DRIVE",
-                "250:right;450:right;650:right;850:right;1100:resize:1000x700;1500:resize:1440x900",
+                "1500:home;1650:right;1800:right;1950:right;2100:right;2400:resize:1000x700;2800:resize:1440x900",
             ),
         ],
         &out,

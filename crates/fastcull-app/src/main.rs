@@ -1408,7 +1408,12 @@ fn main() {
 
     // FASTCULL_DRIVE="6000:one2one;12000:grid;15000:quit": timed nav
     // injection for headless hang debugging (companion to FASTCULL_TRACE —
-    // no display-automation tooling needed on Wayland).
+    // no display-automation tooling needed on Wayland). The screenshot
+    // shutter WAITS for the whole script (drives_pending below): on a
+    // fast release build the readiness gate can otherwise open before
+    // late-scheduled actions fire, capturing a half-driven state — the
+    // same script must mean the same shot in every profile.
+    let drives_pending = Rc::new(std::cell::Cell::new(0usize));
     if let Ok(script) = std::env::var("FASTCULL_DRIVE") {
         for step in script.split(';') {
             let Some((ms, key)) = step.split_once(':') else {
@@ -1420,7 +1425,10 @@ fn main() {
             let key = key.trim().to_string();
             let win = window.as_weak();
             let state = Rc::clone(&state);
+            drives_pending.set(drives_pending.get() + 1);
+            let pending = Rc::clone(&drives_pending);
             slint::Timer::single_shot(std::time::Duration::from_millis(ms), move || {
+                pending.set(pending.get().saturating_sub(1));
                 let Some(win) = win.upgrade() else { return };
                 trace_mark(&format!("drive: {key}"));
                 if key == "quit" {
@@ -1473,12 +1481,20 @@ fn main() {
         let state_rc = Rc::clone(&state);
         let shot_written = Rc::clone(&shot_written);
         let started = std::time::Instant::now();
+        let drives_pending = Rc::clone(&drives_pending);
         shot_timer.start(
             slint::TimerMode::Repeated,
             std::time::Duration::from_millis(250),
             move || {
                 let Some(win) = win.upgrade() else { return };
                 let elapsed = started.elapsed();
+                // The DRIVE script must have fully executed: a fast
+                // release build reaches readiness before late-scheduled
+                // actions fire, and capturing a half-driven state makes
+                // the same test mean different things per profile.
+                if drives_pending.get() > 0 {
+                    return;
+                }
                 let one2one_ready = {
                     let st = state_rc.borrow();
                     st.zoom_factor <= 1.0

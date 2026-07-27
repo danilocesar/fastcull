@@ -631,3 +631,9 @@ Documented because they ship in release builds (validator finding):
   Malformed entries are skipped silently. Scripts may include mark actions
   (`pick`/`reject`), which write real sidecars — QE runs target throwaway
   copies of test data only.
+  The `--screenshot` shutter WAITS for the whole drive script to have
+  executed before it may fire (in addition to its readiness gates): a
+  fast release build otherwise reaches readiness before late-scheduled
+  actions run and captures a half-driven state — the same script must
+  mean the same shot in every profile (found 2026-07-27 when
+  settle-then-pin drive schedules moved past the 1.5 s floor).
