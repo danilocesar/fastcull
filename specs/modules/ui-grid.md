@@ -52,6 +52,9 @@ where it is."
   for differing dimensions/orientations (lock 1:1 on the eye, arrow through
   the burst, Y/N each frame). Returning to fit forgets the pan spot — a
   fresh zoom-in re-centers (a stale pan from three images ago is a trap).
+  During held-arrow transit the carried factor/pan render from whatever
+  rung exists (quality rule below) — the persistence promise holds
+  visually across EVERY frame, not just the decoded ones (issue #21).
   Implementation rule (issue #6): the zoom overlay is a PERMANENT element
   whose visibility is toggled — never a conditional (`if`) element. A
   conditional is re-created on every texture gap during held-arrow
@@ -61,14 +64,34 @@ where it is."
   never folded into the pan center (`capture_pan` folds only when the
   overlay still belongs to the cursor's image — the hand is on the arrow
   key, not the mouse).
-- **Quality rule**: intermediate factors are rendered from the **full-res
-  rung** once cached (GPU-downscaled): ANY factor above fit requests the
-  top rung outright (`display_long = u32::MAX` — a proportional request
-  could legitimately resolve to the mid rung under the 25% ladder rule,
-  which the next sentence forbids). NEVER upscale the mid rung for a
-  sharpness-critical view — a soft 2× makes the user reject sharp frames.
-  While full-res is still decoding, the existing swap-in-place behavior
-  applies (same as 1:1 today).
+- **Quality rule (revised by issue #21, user-approved 2026-07-27)**:
+  intermediate factors are rendered from the **full-res rung** once
+  cached (GPU-downscaled): ANY factor above fit requests the top rung
+  outright (`display_long = u32::MAX`). While the top rung is still
+  decoding, the view stays at the CARRIED factor and pan center,
+  rendered from the mid rung upscaled — soft but positionally
+  continuous (the old drop-to-fit strobed the whole burst-transit
+  loop and trained the user to tap instead of hold). The rule is now:
+  **never show upscaled pixels UNFLAGGED, and never leave a frame at
+  rest unsharp without the cue** — any above-fit view rendered from
+  below the top rung shows the top-left cue pill ("you are never
+  silently looking at soft pixels"), removed atomically when the sharp
+  texture swaps in place. Identity is sacred: the soft pixels are
+  always the CURRENT image's own mid rung; if even that is missing the
+  view drops to fit (honest degradation) — never the previous frame.
+  An INFINITY-pinned desire (Z) during transit renders at the last
+  RESOLVED factor (the carried magnification, not the sentinel); a
+  VIRGIN pin (nothing resolved yet this session) renders the mid at its
+  own native resolution, floored at fit — the most zoom the data
+  truthfully supports at that instant (QE finding: the earlier
+  undefined case left fit showing with a usable mid in hand). The soft
+  source is the cursor's own mid rung or a warm sub-top texture the
+  engine re-announced (revisits beyond the retained window). The
+  magnification never carries across sessions. Same
+  behavior at all factors (user decision — no special 1.5-2.25x
+  handling). The landing frame's full-res preempts transit backlog via
+  the existing focus/want-culling priority; sharpness-on-stop within
+  ~300ms is the contract.
 - `G`/Esc from an intermediate factor → grid at the previous grid zoom, the
   factor is discarded (re-entering the loupe starts at fit; persistence is
   for walking images INSIDE the loupe, not across grid round-trips).

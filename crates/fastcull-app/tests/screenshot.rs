@@ -976,3 +976,62 @@ fn grid_resize_at_top_stays_at_top() {
         "cursor moved on a top-of-list resize: {status}"
     );
 }
+
+/// Issue #21 (user-approved): during held-arrow transit at zoom, the
+/// view must stay at the carried factor rendered SOFT from the mid
+/// rung (flagged), never drop to fit — and the landing frame must end
+/// sharp. The transit naturally outruns the full-res ladder in both
+/// profiles (release ~140ms cooks vs 60ms key spacing; debug ~12s
+/// cooks with the virgin-pin rule rendering soft on mid adoption).
+#[test]
+fn transit_at_zoom_stays_soft_never_drops_to_fit() {
+    if !has_display() {
+        eprintln!("screenshot smoke skipped: no display server");
+        return;
+    }
+    let _s = serial();
+    let dir = out_dir().join("soft-transit");
+    std::fs::create_dir_all(&dir).unwrap();
+    for i in 1..=6 {
+        place_fixture(
+            &raws_dir().join("A1_full_compressed.ARW"),
+            &dir.join(format!("a{i}.ARW")),
+        );
+    }
+    let out = out_dir().join("soft-transit.jpg");
+    // No starvation knob: FASTCULL_MAX_READERS governs the thumbnail
+    // pipeline, NOT the loupe ladder (gate finding — it was a no-op
+    // here). The race is real in both profiles: release full-res cooks
+    // ~140ms against 60ms key spacing; debug cooks ~12s, and the
+    // virgin-pin rule renders soft the moment the landing mid adopts,
+    // long before the shutter's sharp gate opens.
+    let stderr = shoot_env_stderr(
+        &["--start-11", dir.to_str().unwrap()],
+        &[
+            ("FASTCULL_TRACE", "1"),
+            (
+                "FASTCULL_DRIVE",
+                "700:right;760:right;820:right;880:right;940:right",
+            ),
+        ],
+        &out,
+    );
+    // The transit rendered SOFT at least once (pre-#21: the string does
+    // not exist — the view dropped to fit instead).
+    assert!(
+        stderr.contains("loupe soft idx"),
+        "no soft transit render occurred:\n{stderr}"
+    );
+    // And the landing frame ended SHARP (a plain sharp loupe line for
+    // the final cursor appears after the last soft one).
+    let last_soft = stderr.rfind("loupe soft idx").unwrap();
+    let sharp_after = stderr[last_soft..].contains("\n")
+        && stderr[last_soft..]
+            .lines()
+            .skip(1)
+            .any(|l| l.contains("loupe idx ") && !l.contains("loupe soft"));
+    assert!(
+        sharp_after,
+        "the landing frame never swapped in sharp:\n{stderr}"
+    );
+}

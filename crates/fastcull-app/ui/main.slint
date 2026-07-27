@@ -168,6 +168,10 @@ export component MainWindow inherits Window {
     // relayout/load/DPI timing windows — the scrollbar is the ONLY
     // legitimate trigger (cursor contract), so it says so explicitly.
     in-out property <bool> sb-activity;
+    // True while the zoom overlay renders from a rung BELOW the file's
+    // best (issue #21: soft transit at the carried factor). Drives the
+    // cue pill — "you are never SILENTLY looking at soft pixels".
+    in property <bool> loupe-soft;
     // Cell click (issue #7 + click-to-zoom at loupe fit): image id,
     // cell-local coordinates, ctrl/shift modifiers (selection semantics).
     // Lives IN the cell so the Flickable keeps drag-scrolling (a sibling
@@ -709,6 +713,32 @@ export component MainWindow inherits Window {
                             zoomed-img.x + self.mouse-x + root.loupe-vx,
                             zoomed-img.y + self.mouse-y + root.loupe-vy);
                     }
+                }
+            }
+            // State/cue pill (issues #21 + #20): VIEWPORT-FIXED — a
+            // sibling of the Flickable, never inside it (validator
+            // MAJOR: Flickable children live in panned content space,
+            // so the pill sat thousands of px off-screen at zoom).
+            // Permanent element, visibility-toggled (the issue #6/#20
+            // rule); pointer-inert (no TouchArea); top-left, dark
+            // backing, left-aligned and free to grow for the #20
+            // pick/reject glyphs and future stars.
+            Rectangle {
+                visible: root.loupe-soft;
+                x: 14px;
+                y: 14px;
+                width: t-cue.preferred-width + 16px;
+                height: 22px;
+                border-radius: 6px;
+                background: #202028cc;
+                t-cue := Text {
+                    text: "◌ loading";
+                    color: #b8b8c0;
+                    font-size: 11px;
+                    horizontal-alignment: center;
+                    vertical-alignment: center;
+                    width: 100%;
+                    height: 100%;
                 }
             }
         }

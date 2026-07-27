@@ -42,6 +42,11 @@ decoding RAW sensor data on the hot path.
      full-res decodes must never queue behind a background thumbnail sweep.
      turbojpeg DCT scaling is a recorded FUTURE optimization only (saves
      ~35–45% on the cook; the ladder already hides that latency).
+     Issue #21 (2026-07-27): while the top rung cooks, the loupe renders
+     the mid rung UPSCALED at the carried factor with a visible cue —
+     see ui-grid.md's revised quality rule; the ladder itself is
+     unchanged (the landing frame's focus() preempts transit backlog,
+     want-culling drops scrolled-past requests).
      The ladder applies to GRID CELLS too (user bug 2026-07-25): any cell
      wider than 320 × 1.25 physical px is served by the mid rung via
      `LoupeEngine::want(range, cell_width)`; UI-side bookkeeping lives in

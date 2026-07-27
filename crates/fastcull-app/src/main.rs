@@ -80,6 +80,11 @@ struct AppState {
     /// file's native size — bare JPEGs, issue #8): their small texture
     /// counts as the top rung for the zoom ceiling.
     terminal_native: HashSet<usize>,
+    /// The last FINITE factor the sharp overlay rendered at: during a
+    /// transit whose desired factor is the INFINITY pin (Z), the soft
+    /// view carries this value — visual continuity is the whole point
+    /// of issue #21 (the carried magnification, not the sentinel).
+    last_resolved_factor: Option<f32>,
     /// Bumped on every recompute_view (membership or order change).
     view_generation: u64,
     /// The generation the last refresh saw: a mismatch means the view
@@ -313,6 +318,7 @@ fn load_folder(state: &Rc<RefCell<AppState>>, folder: &std::path::Path) -> Resul
     st.synthetic = false;
     st.fullres.clear();
     st.terminal_native.clear();
+    st.last_resolved_factor = None; // magnification never carries across sessions
     st.zoom_factor = 1.0;
     st.pan_center = (0.5, 0.5);
     st.mids.clear();
@@ -455,6 +461,7 @@ fn main() {
         terminal_native: HashSet::new(),
         view_generation: 0,
         last_view_generation: 0,
+        last_resolved_factor: None,
         last_view_geometry: None,
         fullres: Vec::new(),
         zoom_factor: if start_11 { f32::INFINITY } else { 1.0 },
@@ -2679,8 +2686,10 @@ fn refresh_inner(win: &MainWindow, state: &Rc<RefCell<AppState>>) {
             // backwards previously degraded to the thumb forever).
             let focus_index = st.cursor;
             // Ladder target: fit view needs the viewport in physical pixels;
-            // any factor above fit demands the top rung (quality rule:
-            // intermediate zooms render from full-res, never upscaled mid).
+            // any factor above fit demands the top rung (quality rule as
+            // revised by #21: the top rung is still ALWAYS requested;
+            // until it lands the view renders soft-flagged, never
+            // unflagged).
             let display_long = if st.zoom_factor > 1.0 {
                 u32::MAX
             } else {
@@ -2740,21 +2749,53 @@ fn refresh_inner(win: &MainWindow, state: &Rc<RefCell<AppState>>) {
             .map(|(_, img)| img.clone())
     };
     // Zoom overlay (any factor above fit, capped at 1:1): only shown when
-    // the CURSOR's texture exists (a stale previous image must never pose
-    // as the current one), sized as fit-extent × factor in logical pixels
-    // so the capped factor means device pixels on HiDPI (validator
-    // finding — sharpness judging must not upsample). Every factor above
-    // fit requires the TOP rung (ui-grid.md quality rule: never upscale
-    // the mid rung for a sharpness-critical view) — hold the fit view
-    // until the full-res texture lands.
+    // a texture of the CURSOR's own exists (a stale previous image must
+    // never pose as the current one), sized as fit-extent × factor in
+    // logical pixels so the capped factor means device pixels on HiDPI.
+    // Quality rule as revised by issue #21: the top rung renders sharp;
+    // below it the view stays at the carried factor rendered SOFT from
+    // the cursor's mid rung, FLAGGED by the cue pill — never unflagged
+    // upscaling, and fit only when even the mid is missing.
     capture_pan(win, &mut st); // drag since last render wins over pan_center
     let factor = clamped_factor(win, &st);
     let overlay = factor > 1.0 && at_loupe;
-    match fullres_for(&st, cursor).filter(|img| {
+    // Issue #21 (user-approved contract): above fit, always show the
+    // CURRENT image at the carried factor and pan center — rung QUALITY
+    // may degrade (mid rung upscaled, flagged by the cue pill), position
+    // and identity may not. The stale-image prohibition is untouched:
+    // the soft texture is always the cursor's own mid rung; if even
+    // that is missing, drop to fit (honest degradation).
+    let sharp = fullres_for(&st, cursor).filter(|img| {
         img.size().width.max(img.size().height) > fastcull_core::loupe::MID_RUNG_MAX_LONG
             || st.terminal_native.contains(&cursor)
-    }) {
-        Some(img) if overlay => {
+    });
+    let soft = if sharp.is_none() && overlay {
+        // The cursor's own mid — or a warm sub-top texture the engine
+        // re-announced into the fullres slot (the pruned-and-revisited
+        // path: validator M3, held-left beyond the mids window used to
+        // re-strobe fit with the pixels literally in hand).
+        st.mids
+            .get(&cursor)
+            .cloned()
+            .or_else(|| fullres_for(&st, cursor))
+    } else {
+        None
+    };
+    // The soft view needs a FINITE factor: an INFINITY pin (Z) resolves
+    // against native dims we don't have yet — carry the last resolved
+    // magnification (visual continuity across the transit). A VIRGIN
+    // pin (nothing ever resolved this session) renders the mid at its
+    // own native size: the most zoom the data truthfully supports right
+    // now, flagged soft; the sharp landing then resolves the real 1:1
+    // (QE D2: the old None-guard left FIT showing for 11 debug-seconds
+    // with a usable mid in hand).
+    let soft_factor = if factor.is_finite() {
+        Some(factor)
+    } else {
+        st.last_resolved_factor
+    };
+    match (sharp, soft) {
+        (Some(img), _) if overlay => {
             let size = img.size();
             let sf = win.window().scale_factor();
             let (nw, nh) = (size.width as f32 / sf, size.height as f32 / sf);
@@ -2773,6 +2814,7 @@ fn refresh_inner(win: &MainWindow, state: &Rc<RefCell<AppState>>) {
             // same-size persistence made cross-image forensics blind).
             if st.last_pan_write != Some((ox, oy))
                 || !win.get_one2one()
+                || win.get_loupe_soft()
                 || st.last_overlay_cursor != Some(cursor)
             {
                 trace_mark(&format!(
@@ -2781,12 +2823,46 @@ fn refresh_inner(win: &MainWindow, state: &Rc<RefCell<AppState>>) {
                     st.pan_center.0, st.pan_center.1
                 ));
             }
+            st.last_resolved_factor = Some(factor);
             st.last_pan_write = Some((ox, oy));
             st.last_overlay_cursor = Some(cursor);
+            win.set_loupe_soft(false);
+            win.set_one2one(true);
+        }
+        (None, Some(img)) if overlay => {
+            // SOFT transit render: the mid rung upscaled to the carried
+            // factor. Same extent math — only the aspect matters at a
+            // given factor (dims x fit_scale = the fit extent regardless
+            // of rung resolution).
+            let size = img.size();
+            let sf = win.window().scale_factor();
+            let (mw, mh) = (size.width as f32 / sf, size.height as f32 / sf);
+            let (vw, vh) = (win.get_grid_width(), win.get_loupe_area_h());
+            let s = fastcull_core::zoompan::fit_scale(vw, vh, mw, mh);
+            // Virgin pin: the mid at its native resolution (factor 1/s),
+            // floored at fit.
+            let f = soft_factor.unwrap_or_else(|| (1.0 / s.max(1e-6)).max(1.0));
+            let (ew, eh) = (mw * s * f, mh * s * f);
+            let ox = fastcull_core::zoompan::offset_centering(vw, ew, st.pan_center.0);
+            let oy = fastcull_core::zoompan::offset_centering(vh, eh, st.pan_center.1);
+            win.set_loupe_w(ew);
+            win.set_loupe_h(eh);
+            win.set_loupe_image(img);
+            win.set_loupe_vx(ox);
+            win.set_loupe_vy(oy);
+            if st.last_overlay_cursor != Some(cursor) || !win.get_one2one() {
+                trace_mark(&format!(
+                    "loupe soft idx {cursor} factor {f:.3} extent {ew:.0}x{eh:.0}"
+                ));
+            }
+            st.last_pan_write = Some((ox, oy));
+            st.last_overlay_cursor = Some(cursor);
+            win.set_loupe_soft(true);
             win.set_one2one(true);
         }
         _ => {
             win.set_one2one(false);
+            win.set_loupe_soft(false);
             st.last_pan_write = None;
             st.last_overlay_cursor = None;
         }
