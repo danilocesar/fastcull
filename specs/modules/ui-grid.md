@@ -333,11 +333,15 @@ brightening during wheel scrolling (needs an activity decay timer).
   WHEEL no longer scrolls at `N = 1` (it zooms — see the Mouse & pointer
   contract), so this rule now covers only the remaining scroll route, the
   overlay scrollbar drag. Image-to-image movement inside the loupe is
-  keyboard-only. **Relayout carve-out (issue #16, 2026-07-26)**: a
+  keyboard-only. **Relayout carve-out (issue #16, 2026-07-26; extended by issue #22)**: a
   GEOMETRY change — panel toggle, window resize, anything that alters
   (grid width, viewport height) between refreshes — is NEVER scrolling
   and must NEVER claim or move the cursor; the viewport re-anchors to
-  the cursor instead (the whole point of the follow rule is that marks
+  the cursor instead. The same rule covers a VIEW MUTATION (issue #22):
+  a cursor displaced because the view re-sorted or changed membership
+  between refreshes (capture keys streaming in during folder load, live
+  filter removal) is not scrolling either — during load the claim used
+  to move the cursor with no input at all (the whole point of the follow rule is that marks
   land on what the user is looking at — a relayout claim inverted it
   into marks landing on a photo the user already left). The dock state
   is published to the window BEFORE any geometry read in the toggle

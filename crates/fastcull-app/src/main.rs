@@ -80,6 +80,12 @@ struct AppState {
     /// file's native size — bare JPEGs, issue #8): their small texture
     /// counts as the top rung for the zoom ceiling.
     terminal_native: HashSet<usize>,
+    /// Bumped on every recompute_view (membership or order change).
+    view_generation: u64,
+    /// The generation the last refresh saw: a mismatch means the view
+    /// mutated under the cursor — re-sorts are never scrolling (issue
+    /// #22).
+    last_view_generation: u64,
     /// Grid-area geometry (grid_width, viewport_h) at the last refresh:
     /// a change means RELAYOUT (panel toggle, window resize), not user
     /// scrolling — the loupe follow-scroll claim must not fire (issue
@@ -226,6 +232,12 @@ impl AppState {
 
 fn recompute_view(st: &mut AppState) {
     st.view = fastcull_core::filter::view(&st.picks, &st.labels, &st.capture_keys, &st.query);
+    // Every membership/order change bumps the generation: a cursor
+    // displaced by a view RE-SORT (capture keys streaming in during
+    // load) is not scrolling, and the follow-scroll claim must not
+    // fire on it (issue #22 — the cursor moved during folder load with
+    // no input, and the load-race flaked CI).
+    st.view_generation = st.view_generation.wrapping_add(1);
 }
 
 /// Recompute the view AND re-apply the cursor rules. Every membership
@@ -441,6 +453,8 @@ fn main() {
         cells,
         loupe: None,
         terminal_native: HashSet::new(),
+        view_generation: 0,
+        last_view_generation: 0,
         last_view_geometry: None,
         fullres: Vec::new(),
         zoom_factor: if start_11 { f32::INFINITY } else { 1.0 },
@@ -2503,6 +2517,12 @@ fn refresh_inner(win: &MainWindow, state: &Rc<RefCell<AppState>>) {
     let prev_geom = st.last_view_geometry;
     let relayout = prev_geom.is_some_and(|g| g != geom_now);
     st.last_view_geometry = Some(geom_now);
+    // A view that mutated since the last refresh (metadata re-sort
+    // during load, live filter removal) displaces the cursor without
+    // any scrolling — the follow-scroll claim must re-anchor instead
+    // (issue #22).
+    let view_mutated = st.last_view_generation != st.view_generation;
+    st.last_view_generation = st.view_generation;
     let view_len = st.view.len();
 
     // GRID-level resize anchoring (user report: shrink the window and
@@ -2609,7 +2629,7 @@ fn refresh_inner(win: &MainWindow, state: &Rc<RefCell<AppState>>) {
         // the cursor look "scrolled away", and spuriously claimed it —
         // killing the untouched-snap and leaving the final cursor racy).
         if !cur_visible && viewport_h > 0.0 {
-            if relayout {
+            if relayout || view_mutated {
                 // Geometry changed under the cursor (panel toggle, window
                 // RESIZE — the user's reported bug): this is NOT
                 // scrolling. Keep the cursor, move the viewport back to
