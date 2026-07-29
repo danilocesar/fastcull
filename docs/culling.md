@@ -65,6 +65,37 @@ outside closes them.
   arrow through the sequence, `Y`/`N` each frame — every image shows
   the same spot at the same zoom.
 
+## Working on several photos at once: the selection
+
+Shift+arrows, Shift+click, Ctrl+click and `Ctrl+A` build a **selection** of
+several photos. The selection is what the **IPTC panel** writes to: commit a
+field, add or remove a keyword, or apply a template, and it lands on every
+selected photo at once. That's how you caption a whole run of frames in one
+go.
+
+- Selected photos are **tinted blue** in the grid, so a selection reads
+  at a glance across the whole page even at 12 columns.
+- The status bar shows **`· N selected`** whenever a selection exists —
+  including selected photos that have scrolled off-screen, which the
+  tint alone can't show you.
+- The **cursor keeps its bright outline** on top of the tint, so you can
+  always see where the keyboard is pointing inside a selection.
+- The tint is **grid-only**. In the loupe your photo is never recolored:
+  there you're judging pixels, so what you see is the real image.
+- A photo you selected but then **filtered out of view** is not stamped,
+  and is not counted — what you see is what you stamp.
+
+**Marks are not batched.** `Y`, `N` and `U` always act on the single photo
+under the cursor, even with fifty photos selected — one keystroke, one
+photo (`Y`/`N` then advance; `U` stays put, as everywhere else). That's
+deliberate: marking is a one-at-a-time rhythm, and there is no sensible
+place to advance to after marking fifty frames at once.
+
+A plain click **clears** the selection outright — the tint disappears and
+the `· N selected` counter goes with it, leaving you on the photo you
+clicked. `Esc` or `G` clears it too. Note that plain arrow navigation does
+*not* clear a selection: it stays live, and stays lit, until you clear it.
+
 ## Knowing where you are: marks in the loupe
 
 You never have to zoom out to check a frame's state:

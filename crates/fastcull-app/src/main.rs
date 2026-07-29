@@ -34,6 +34,31 @@ const ADOPTS_PER_REFRESH: usize = 2;
 /// visible-window bound (recorded decision: 4K + 6 columns worst case).
 const MIDS_CAP: usize = 64;
 
+/// Selection wash hue: the SAME accent blue as the cursor outline, so the two
+/// indicators stay one visual family — filled means selected, bright border
+/// means cursor, and the two compose instead of competing.
+const SELECTION_WASH_RGB: [u8; 3] = [0x4d, 0xa3, 0xff];
+
+/// Selection wash strength (user decision 2026-07-28, chosen by eye on his own
+/// A1 frames against 12% and 18% renders). Held here rather than inlined in
+/// the UI because the user's stated plan is to promote it to a user setting —
+/// a settings pane then writes the `selection-wash-opacity` property and no
+/// other code changes. The `.slint` literals are inert fallbacks: Rust
+/// overwrites both properties at construction, so THIS is the one default.
+const SELECTION_WASH_OPACITY: f32 = 0.25;
+
+/// Clamp for whatever eventually writes the wash strength. `with-alpha` has no
+/// defined behavior outside 0..=1, and the stated plan is to expose this to a
+/// settings pane — a stray 5.0 or -1 must not reach the renderer. Applied at
+/// the single write site so a future settings path inherits it for free.
+fn clamp_wash_opacity(v: f32) -> f32 {
+    if v.is_finite() {
+        v.clamp(0.0, 1.0)
+    } else {
+        SELECTION_WASH_OPACITY
+    }
+}
+
 /// Last-set IPTC panel model contents (field rows, keyword chips,
 /// template names): models rebuild ONLY when these change.
 #[derive(Default, PartialEq)]
@@ -449,6 +474,14 @@ fn main() {
     );
     trace_mark(&format!("about version {about_version}"));
     window.set_about_version(about_version.into());
+    // Selection wash defaults. The UI only ever READS these two properties,
+    // so promoting the strength to a user setting later is a write here.
+    window.set_selection_wash(slint::Color::from_rgb_u8(
+        SELECTION_WASH_RGB[0],
+        SELECTION_WASH_RGB[1],
+        SELECTION_WASH_RGB[2],
+    ));
+    window.set_selection_wash_opacity(clamp_wash_opacity(SELECTION_WASH_OPACITY));
     let cells = Rc::new(VecModel::from(Vec::<CellData>::new()));
     window.set_cells(slint::ModelRc::from(Rc::clone(&cells)));
     let start_at_loupe = start_11 || start_loupe;
@@ -3122,6 +3155,17 @@ fn refresh_inner(win: &MainWindow, state: &Rc<RefCell<AppState>>) {
         .flatten()
         .map(|(p, n)| format!(" · burst {p}/{n}"))
         .unwrap_or_default();
+    // Selection size (persona MUST-HAVE alongside the wash): the wash shows
+    // WHICH images the IPTC batch covers, but a selection can scroll
+    // off-screen — only a number tells the whole truth. Counted in core by
+    // `count_in_view` so it can never drift from `Selection::batch` (rule 5:
+    // the semantics live in fastcull-core, the app only renders them). An
+    // empty selection stays silent: the batch is then just the cursor, and
+    // "1 selected" on every image would be noise.
+    let sel_note = match st.selection.count_in_view(&st.view) {
+        0 => String::new(),
+        n => format!(" · {n} selected"),
+    };
     // Issue #20 backstop: the status bar always spells the cursor's mark
     // in words — in the loupe "no badge" needs a textual "unmarked", and
     // the words disambiguate the glyph everywhere else.
@@ -3136,7 +3180,7 @@ fn refresh_inner(win: &MainWindow, state: &Rc<RefCell<AppState>>) {
     };
     win.set_status(
         format!(
-            "{} ({}/{}){}{}{} — {} thumbs loaded — ★{} ✕{}{} — {} column{}",
+            "{} ({}/{}){}{}{}{} — {} thumbs loaded — ★{} ✕{}{} — {} column{}",
             if cursor_in_view {
                 st.labels.get(cursor).cloned().unwrap_or_default()
             } else {
@@ -3151,6 +3195,7 @@ fn refresh_inner(win: &MainWindow, state: &Rc<RefCell<AppState>>) {
             mark_words,
             showing,
             burst_note,
+            sel_note,
             st.thumbs_done.min(count),
             counts.picked,
             counts.rejected,

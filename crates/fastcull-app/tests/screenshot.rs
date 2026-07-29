@@ -1435,3 +1435,294 @@ fn shortcuts_popup_contains_the_keyboard() {
         "a mark leaked through the shortcuts modal: {status}"
     );
 }
+
+/// Mean (B − R) over a fractional sub-rectangle. The selection wash is a BLUE
+/// tint, and blue-minus-red isolates it from plain brightness changes: a
+/// merely brighter cell lifts every channel equally and moves this number
+/// very little, while the wash lifts B and pulls R down.
+fn region_blue_bias(path: &Path, fx0: f64, fy0: f64, fx1: f64, fy1: f64) -> f64 {
+    let bytes = std::fs::read(path).expect("snapshot file");
+    let mut dec = zune_jpeg::JpegDecoder::new(&bytes);
+    let px = dec.decode().expect("decode snapshot");
+    let (w, h) = dec.dimensions().expect("dims");
+    let (x0, x1) = ((w as f64 * fx0) as usize, (w as f64 * fx1) as usize);
+    let (y0, y1) = ((h as f64 * fy0) as usize, (h as f64 * fy1) as usize);
+    let (mut acc, mut n) = (0.0f64, 0.0f64);
+    for y in y0..y1 {
+        for x in x0..x1 {
+            let i = (y * w + x) * 3;
+            acc += px[i + 2] as f64 - px[i] as f64;
+            n += 1.0;
+        }
+    }
+    acc / n
+}
+
+/// Three fixtures with DISTINCT capture times, so view order is deterministic
+/// and the same photo lands in cell 1 on every run — the wash assertions
+/// compare the same region across two processes.
+fn place_three_distinct(dir: &Path) {
+    for (name, src) in [
+        ("a.ARW", "A1_full_compressed.ARW"),
+        ("b.ARW", "A1_full_lossless_compressed.ARW"),
+        ("c.ARW", "A1_full_uncompressed.ARW"),
+    ] {
+        place_fixture(&raws_dir().join(src), &dir.join(name));
+    }
+}
+
+/// Selection wash (ui-grid.md "Selection", user request 2026-07-28): a
+/// selected grid cell carries a translucent accent-blue tint, and the status
+/// bar states the blast radius. Both halves are load-bearing — the wash says
+/// WHICH images the next batch key hits, the count says HOW MANY (a selection
+/// can scroll off-screen, where no tint can help).
+#[test]
+fn selection_wash_tints_the_grid_and_status_counts() {
+    if !has_display() {
+        eprintln!("screenshot smoke skipped: no display server");
+        return;
+    }
+    let _s = serial();
+    let dir = out_dir().join("sel-wash-grid");
+    std::fs::create_dir_all(&dir).unwrap();
+    place_three_distinct(&dir);
+    let folder = dir.to_str().unwrap();
+    // Cell 1's interior at 8 columns. Both runs `home` first so the cursor is
+    // pinned on the SETTLED view before anything is selected (the capture-sort
+    // churn that bit the #20 badge tests lands well before 700 ms).
+    let (fx0, fy0, fx1, fy1) = (0.02, 0.11, 0.10, 0.20);
+
+    let plain = out_dir().join("sel-wash-none.jpg");
+    let plain_err = shoot_env_stderr(
+        &[folder],
+        &[("FASTCULL_TRACE", "1"), ("FASTCULL_DRIVE", "700:home")],
+        &plain,
+    );
+    let sel = out_dir().join("sel-wash-some.jpg");
+    let sel_err = shoot_env_stderr(
+        &[folder],
+        &[
+            ("FASTCULL_TRACE", "1"),
+            (
+                "FASTCULL_DRIVE",
+                "700:home;900:shift-right;1000:shift-right",
+            ),
+        ],
+        &sel,
+    );
+    let status_of = |s: &str| {
+        s.lines()
+            .rev()
+            .find_map(|l| l.split("status at shutter: ").nth(1))
+            .expect("no status trace line")
+            .to_string()
+    };
+    let (plain_status, sel_status) = (status_of(&plain_err), status_of(&sel_err));
+
+    // An empty selection is SILENT: the batch is then just the cursor, and
+    // "1 selected" on every unmarked image would be noise.
+    assert!(
+        !plain_status.contains("selected"),
+        "empty selection must not report a count: {plain_status}"
+    );
+    // Shift+Right twice = a 3-image span (anchor included).
+    assert!(
+        sel_status.contains("· 3 selected"),
+        "status must state the blast radius: {sel_status}"
+    );
+    let (plain_bias, sel_bias) = (
+        region_blue_bias(&plain, fx0, fy0, fx1, fy1),
+        region_blue_bias(&sel, fx0, fy0, fx1, fy1),
+    );
+    assert!(
+        sel_bias - plain_bias > 8.0,
+        "selected cell is not visibly tinted: blue bias {plain_bias:.1} -> {sel_bias:.1}"
+    );
+    // Spec acceptance criterion: the wash renders on the CURSOR cell too.
+    // `home;shift-right;shift-right` parks the cursor on view index 2 — the
+    // third cell — so sampling cell 1 alone would leave the pre-wash
+    // `&& !cell.is-cursor` exclusion (the exact bug this criterion was
+    // written against) passing the suite. QE proved that mutation survived
+    // before this block existed.
+    let (cx0, cy0, cx1, cy1) = (0.28, 0.11, 0.35, 0.20);
+    let (plain_cursor, sel_cursor) = (
+        region_blue_bias(&plain, cx0, cy0, cx1, cy1),
+        region_blue_bias(&sel, cx0, cy0, cx1, cy1),
+    );
+    assert!(
+        sel_cursor - plain_cursor > 8.0,
+        "the CURSOR cell is not tinted — selection state hidden on the one \
+         cell whose batch membership is ambiguous: {plain_cursor:.1} -> {sel_cursor:.1}"
+    );
+}
+
+/// Mean blue of the glyph pixels inside a region — "glyph" being the pick
+/// star's yellow. Measured as mean **R − B** ("yellowness") over the glyph
+/// pixels, which is what makes this a z-order assertion rather than a
+/// brightness one: the photo behind the badge legitimately shifts blue under
+/// the wash, the badge must not.
+///
+/// The selection threshold is deliberately FAR below the value a washed glyph
+/// still has (a 25% blend of the star with the accent blue lands near R−B≈100,
+/// well above the ≥60 cutoff), so the filter can never truncate the effect
+/// being measured. An earlier version of this helper filtered on `b <= 160`
+/// and thereby discarded exactly the pixels the wash pushes past that bound —
+/// it passed on the very mutation it claimed to catch (validator finding).
+fn region_glyph_yellowness(path: &Path, fx0: f64, fy0: f64, fx1: f64, fy1: f64) -> Option<f64> {
+    let bytes = std::fs::read(path).expect("snapshot file");
+    let mut dec = zune_jpeg::JpegDecoder::new(&bytes);
+    let px = dec.decode().expect("decode snapshot");
+    let (w, h) = dec.dimensions().expect("dims");
+    let (x0, x1) = ((w as f64 * fx0) as usize, (w as f64 * fx1) as usize);
+    let (y0, y1) = ((h as f64 * fy0) as usize, (h as f64 * fy1) as usize);
+    let (mut acc, mut n) = (0.0f64, 0.0f64);
+    for y in y0..y1 {
+        for x in x0..x1 {
+            let i = (y * w + x) * 3;
+            let (r, b) = (px[i] as i32, px[i + 2] as i32);
+            if r >= 180 && r - b >= 60 {
+                acc += (r - b) as f64;
+                n += 1.0;
+            }
+        }
+    }
+    (n > 20.0).then(|| acc / n)
+}
+
+/// Spec acceptance criterion: the wash is painted BELOW the badges, so
+/// ★ / ✕ / ×N / ✓ / ! stay legible on a selected cell. Without this, moving
+/// the wash Rectangle to the end of the cell's child list — an easy accident
+/// for the next person adding an overlay — washes the badges out and the
+/// suite stays green (QE mutation M7).
+#[test]
+fn selection_wash_stays_below_the_pick_badge() {
+    if !has_display() {
+        eprintln!("screenshot smoke skipped: no display server");
+        return;
+    }
+    let _s = serial();
+    let dir = out_dir().join("sel-wash-badge");
+    std::fs::create_dir_all(&dir).unwrap();
+    place_three_distinct(&dir);
+    let folder = dir.to_str().unwrap();
+    // The star sits at 8px/4px inside cell 1 at 20px — a small box in the
+    // cell's top-left corner.
+    let (gx0, gy0, gx1, gy1) = (0.004, 0.088, 0.026, 0.125);
+
+    // Picked but NOT selected: `pick` marks the cursor image and advances.
+    let picked = out_dir().join("sel-badge-plain.jpg");
+    shoot_env_stderr(
+        &[folder],
+        &[
+            ("FASTCULL_TRACE", "1"),
+            ("FASTCULL_DRIVE", "700:home;900:pick"),
+        ],
+        &picked,
+    );
+    // Picked AND selected: mark, return home, then span the first two cells.
+    let both = out_dir().join("sel-badge-washed.jpg");
+    let both_err = shoot_env_stderr(
+        &[folder],
+        &[
+            ("FASTCULL_TRACE", "1"),
+            (
+                "FASTCULL_DRIVE",
+                "700:home;900:pick;1100:home;1300:shift-right",
+            ),
+        ],
+        &both,
+    );
+    // Anti-vacuity: the second frame really is a selected, picked cell.
+    let status = both_err
+        .lines()
+        .rev()
+        .find_map(|l| l.split("status at shutter: ").nth(1))
+        .expect("no status trace line");
+    assert!(
+        status.contains("· 2 selected") && status.contains("★1"),
+        "fixture state wrong — test would be vacuous: {status}"
+    );
+    let star_plain = region_glyph_yellowness(&picked, gx0, gy0, gx1, gy1)
+        .expect("no pick star found in the unselected frame");
+    let star_washed = region_glyph_yellowness(&both, gx0, gy0, gx1, gy1)
+        .expect("no pick star found in the selected frame — badge washed away?");
+    // Below the badge: the glyph is untouched, so yellowness barely moves.
+    // Above it: a 25% blue blend drains it by ~90 (mutation-verified — the
+    // wash-over-badges build must FAIL this assertion, not merely pass it).
+    assert!(
+        star_plain - star_washed < 40.0,
+        "the wash is painted OVER the pick badge: star yellowness \
+         {star_plain:.1} -> {star_washed:.1}"
+    );
+}
+
+/// The wash is GRID ONLY — it must never reach the loupe, where the user is
+/// judging pixels (persona, pre-implementation review). The loupe fit view is
+/// the grid rendered at ONE column, so this is a real gating risk, not a
+/// theoretical one: an ungated `cell.selected` tint would recolor the photo
+/// being evaluated.
+#[test]
+fn selection_wash_never_reaches_the_loupe() {
+    if !has_display() {
+        eprintln!("screenshot smoke skipped: no display server");
+        return;
+    }
+    let _s = serial();
+    let dir = out_dir().join("sel-wash-loupe");
+    std::fs::create_dir_all(&dir).unwrap();
+    place_three_distinct(&dir);
+    let folder = dir.to_str().unwrap();
+
+    let plain = out_dir().join("sel-loupe-none.jpg");
+    shoot_env_stderr(
+        &["--start-loupe", folder],
+        &[("FASTCULL_TRACE", "1"), ("FASTCULL_DRIVE", "700:home")],
+        &plain,
+    );
+    let sel = out_dir().join("sel-loupe-all.jpg");
+    let sel_err = shoot_env_stderr(
+        &["--start-loupe", folder],
+        &[
+            ("FASTCULL_TRACE", "1"),
+            ("FASTCULL_DRIVE", "700:home;900:select-all"),
+        ],
+        &sel,
+    );
+    // Anti-vacuity guard: prove the selection was actually ACTIVE in the
+    // second run. Without this the test passes trivially if `select-all`
+    // silently does nothing, which is exactly how a no-op regression test
+    // ships (see the window-resize vacuous-pair fix).
+    let sel_status = sel_err
+        .lines()
+        .rev()
+        .find_map(|l| l.split("status at shutter: ").nth(1))
+        .expect("no status trace line");
+    assert!(
+        sel_status.contains("· 3 selected"),
+        "select-all did not select in the loupe — test would be vacuous: {sel_status}"
+    );
+    // Second anti-vacuity guard: a photo must actually be ON SCREEN. If the
+    // loupe ever failed to render, both frames would be flat and the
+    // "unchanged" assertion below would pass trivially — proving nothing
+    // (validator finding; the suite's own convention for "real pixels, not a
+    // gray box" is region_variance, which measures ~3300 here).
+    for frame in [&plain, &sel] {
+        let var = region_variance(frame, 0.8, 0.8);
+        assert!(
+            var > 100.0,
+            "loupe frame has no photo in it (variance {var:.1}) — the \
+             comparison below would be vacuous"
+        );
+    }
+    // The photo area must be unchanged. Compared as blue bias rather than a
+    // whole-frame diff so the status bar's own "· 3 selected" text (which
+    // legitimately differs) cannot mask or fake the result.
+    let (plain_bias, sel_bias) = (
+        region_blue_bias(&plain, 0.2, 0.2, 0.8, 0.8),
+        region_blue_bias(&sel, 0.2, 0.2, 0.8, 0.8),
+    );
+    assert!(
+        (sel_bias - plain_bias).abs() < 2.0,
+        "the wash leaked into the loupe: blue bias {plain_bias:.1} -> {sel_bias:.1}"
+    );
+}

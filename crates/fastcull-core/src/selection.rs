@@ -107,6 +107,23 @@ impl Selection {
         }
     }
 
+    /// How many images the selection covers WITHIN the view — the number the
+    /// status bar reports (ui-grid.md "Selection count in the status bar").
+    /// Lives here next to `batch` so the two can never drift: whenever the
+    /// selection is non-empty this is exactly `batch(view, _).len()`, which a
+    /// unit test pins. Returns 0 for an empty selection — where `batch` falls
+    /// back to the cursor alone — because a bare cursor is not a selection and
+    /// the status bar must stay silent for it.
+    pub fn count_in_view(&self, view: &[usize]) -> usize {
+        // O(1) short-circuit before touching the view: "nothing selected" is
+        // the common state, and rescanning a 50k-image view on every refresh
+        // just to prove 0 is pure waste on the UI's hot path.
+        if self.is_empty() {
+            return 0;
+        }
+        view.iter().filter(|id| self.is_selected(**id)).count()
+    }
+
     /// Session swap / folder change: stale ids must never leak.
     pub fn reset(&mut self) {
         self.clear();
@@ -183,5 +200,31 @@ mod tests {
         assert!(sel.is_empty());
         assert_eq!(sel.len(), 0);
         assert_eq!(sel.batch(&[1, 2, 3], 2), vec![2]);
+    }
+
+    /// The status-bar count and the panel's batch must never disagree — the
+    /// spec claims they "match `batch()` exactly", so pin it rather than
+    /// trusting two copies of the same filter to stay in step.
+    #[test]
+    fn count_in_view_agrees_with_batch() {
+        let view: Vec<usize> = (0..10).collect();
+        let mut sel = Selection::default();
+        // Empty selection: the count is silent-0 even though `batch` falls
+        // back to the cursor alone. This asymmetry is deliberate.
+        assert_eq!(sel.count_in_view(&view), 0);
+        assert_eq!(sel.batch(&view, 3), vec![3]);
+        // Non-empty: exactly the batch length, INCLUDING when a selected id
+        // is filtered out of the view (99 below) — what you see is what you
+        // stamp, and what the status bar counts.
+        sel.toggle(2);
+        sel.toggle(5);
+        sel.toggle(99);
+        assert_eq!(sel.count_in_view(&view), 2);
+        assert_eq!(sel.count_in_view(&view), sel.batch(&view, 3).len());
+        // A span counts too, not just committed toggles.
+        sel.clear();
+        sel.extend_to(&view, 1, 4);
+        assert_eq!(sel.count_in_view(&view), sel.batch(&view, 1).len());
+        assert!(sel.count_in_view(&view) >= 4);
     }
 }

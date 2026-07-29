@@ -277,6 +277,9 @@ before their thumb arrives.
 >0 only on a group's first frame — the "×N" badge; 0 = no badge),
 failed flag, copied flag, selected flag. (Fields arrive with their milestones:
 M2 ships texture/failed/cursor; pick badge M3, copied M6, burst M7.)
+The `selected` flag drives BOTH the outline and the wash; the window carries
+`selection-wash` (color) and `selection-wash-opacity` (float) so the tint is
+settable from outside the UI without touching the cell model.
 
 Recorded deviations/decisions (M2):
 - Thumb JPEG→texture decode happens on the UI thread, bounded to ~32 decodes
@@ -454,7 +457,53 @@ brightening during wheel scrolling (needs an activity decay timer).
   frame + optional thin two-tone bottom strip; NEVER a full-perimeter
   border (cursor/selection own borders). See burst-grouping.md UI
   contract.
-- Selection: accent outline; multi-select via Ctrl/Shift-click and Shift+arrows.
+- Selection (wash added 2026-07-28 on user request, persona-reviewed
+  MUST-HAVE): a translucent **accent-blue wash over the whole cell**, plus
+  the existing accent outline; multi-select via Ctrl/Shift-click and
+  Shift+arrows. Rationale — the selection is what the **IPTC panel** stamps
+  (`Selection::batch()`; field commit/clear, keyword add/remove, template
+  apply), so it can write metadata across hundreds of images at once, and
+  the 2px outline alone was unreadable at 8–12 columns, leaving that reach
+  invisible. **Marks (`Y`/`N`/`U`) are deliberately NOT batch operations** —
+  they act on the cursor image only, per the marking rules' "net cursor
+  movement per mark is exactly one image, always" (the same incoherence of
+  advancing after a multi-image action is recorded separately for keyword
+  commit, decision G4); do not let the wash's presence suggest otherwise.
+  A filled area is
+  the only selection indicator whose legibility does not shrink with the
+  cell. The wash also makes selection and cursor ORTHOGONAL channels —
+  filled = selected, bright border = cursor, both compose on one cell —
+  replacing the old "two blue borders differing only in width" language.
+  Acceptance criteria:
+  - The wash renders on **every** selected cell **including the cursor
+    cell**. (The pre-wash rule was `selected && !is-cursor`, which hid the
+    selection state of the one cell whose batch membership is genuinely
+    ambiguous: per `batch()`, with a non-empty selection the cursor is in
+    the batch only if it is itself selected.)
+  - **GRID ONLY — never in the loupe**, at fit or above ("in the loupe I am
+    judging pixels"). Note the loupe fit view IS the grid at one column, so
+    this requires an explicit gate on `at-fit`/`one2one`, not just placement.
+  - Painted above the image and above the 40% reject dim, but BELOW the
+    badges, so ★ / ✕ / ×N / ✓ / ! stay legible on a selected cell.
+  - Hue and strength are **properties, not literals** (`selection-wash`,
+    `selection-wash-opacity`; Rust owns the defaults). User decision
+    2026-07-28: strength is 25%, chosen by eye against 12% and 18% renders,
+    and is destined to become a user setting — a settings pane writes the
+    property and no rendering code changes. Recorded persona caveat: above
+    ~15% the tint is strong enough to shift colour judgement on a final
+    pre-`N` scan; the user accepted this trade knowingly, and the variable
+    is what makes it revisable.
+- Selection count in the status bar (persona MUST-HAVE companion to the
+  wash): `· N selected` whenever the selection is non-empty, counted over
+  the view so it matches `Selection::batch()` exactly — computed by
+  `Selection::count_in_view()` in fastcull-core (rule 5: the semantics live
+  in core, the app only renders them), with a unit test pinning the two
+  together. An empty selection is silent — the batch is then just the
+  cursor, and "1 selected" on every image would be noise. The wash says
+  WHICH images the IPTC batch covers; the count says HOW MANY, including
+  selected images scrolled off-screen, which no on-cell indicator can
+  convey. Images selected but filtered OUT of the view are excluded from
+  both, matching "what you see is what you stamp".
 - Failed file: warning badge + tooltip with reason.
 
 ## Keyboard map (keyboard-first is a feature)
