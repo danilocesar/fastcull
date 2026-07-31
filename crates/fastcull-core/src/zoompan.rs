@@ -44,6 +44,15 @@ pub fn ladder_down(factor: f32) -> f32 {
 /// smaller than the viewport centers (offset 0 — the Image element centers
 /// itself within the viewport).
 pub fn offset_centering(viewport: f32, extent: f32, frac: f32) -> f32 {
+    // Totality guard (QE finding D3, 2026-07-30): `f32::clamp` PANICS when
+    // its bounds are NaN or inverted, and a non-finite extent produces
+    // exactly that. Nothing reachable feeds one today, but this module is
+    // documented as pure math over caller-supplied geometry and the repo
+    // forbids panicking paths in core — a degenerate number must degrade to
+    // "centered", never take the process down.
+    if !viewport.is_finite() || !extent.is_finite() || !frac.is_finite() {
+        return 0.0;
+    }
     if extent <= viewport {
         return 0.0;
     }
@@ -54,6 +63,9 @@ pub fn offset_centering(viewport: f32, extent: f32, frac: f32) -> f32 {
 /// viewport center for the current offset. Extents at or below the
 /// viewport are centered by construction.
 pub fn frac_at_center(viewport: f32, extent: f32, offset: f32) -> f32 {
+    if !viewport.is_finite() || !extent.is_finite() || !offset.is_finite() {
+        return 0.5; // see offset_centering: degenerate geometry centers
+    }
     if extent <= 0.0 || extent <= viewport {
         return 0.5;
     }
@@ -65,7 +77,10 @@ pub fn frac_at_center(viewport: f32, extent: f32, offset: f32) -> f32 {
 /// passed to [`ladder_up`] is `1.0 / fit_scale` (device pixels on screen).
 /// Degenerate sizes yield a scale of 1 (callers never divide by zero).
 pub fn fit_scale(viewport_w: f32, viewport_h: f32, native_w: f32, native_h: f32) -> f32 {
-    if native_w <= 0.0 || native_h <= 0.0 || viewport_w <= 0.0 || viewport_h <= 0.0 {
+    let all_finite = [viewport_w, viewport_h, native_w, native_h]
+        .iter()
+        .all(|v| v.is_finite());
+    if !all_finite || native_w <= 0.0 || native_h <= 0.0 || viewport_w <= 0.0 || viewport_h <= 0.0 {
         return 1.0;
     }
     (viewport_w / native_w).min(viewport_h / native_h)
@@ -173,6 +188,37 @@ mod tests {
         // Degenerate inputs never NaN.
         assert_eq!(contain_click_frac(0.0, 808.0, 1.5, 1.0, 1.0), (0.5, 0.5));
         assert_eq!(contain_click_frac(100.0, 100.0, 0.0, 1.0, 1.0), (0.5, 0.5));
+    }
+
+    /// Degenerate geometry must DEGRADE, never panic: `f32::clamp` asserts
+    /// when its bounds are NaN or inverted, which a non-finite extent
+    /// produces. QE's sweep over `pointer::step` found 7,992,116 panicking
+    /// combinations before these guards and 0 after — but deleting any one
+    /// of the three left every core target green (finding G1), so each is
+    /// pinned here individually.
+    #[test]
+    fn non_finite_geometry_degrades_instead_of_panicking() {
+        let bad = [f32::NAN, f32::INFINITY, f32::NEG_INFINITY];
+        for v in bad {
+            // offset_centering: any non-finite argument centers.
+            assert_eq!(offset_centering(v, 3000.0, 0.5), 0.0);
+            assert_eq!(offset_centering(1000.0, v, 0.5), 0.0);
+            assert_eq!(offset_centering(1000.0, 3000.0, v), 0.0);
+            // frac_at_center: any non-finite argument is the image center.
+            assert_eq!(frac_at_center(v, 3000.0, -500.0), 0.5);
+            assert_eq!(frac_at_center(1000.0, v, -500.0), 0.5);
+            assert_eq!(frac_at_center(1000.0, 3000.0, v), 0.5);
+            // fit_scale: unusable numbers yield the identity scale, and
+            // NEVER a NaN that would poison every extent downstream.
+            for s in [
+                fit_scale(v, 800.0, 4000.0, 3200.0),
+                fit_scale(1000.0, v, 4000.0, 3200.0),
+                fit_scale(1000.0, 800.0, v, 3200.0),
+                fit_scale(1000.0, 800.0, 4000.0, v),
+            ] {
+                assert_eq!(s, 1.0, "fit_scale({v}) must degrade to 1.0");
+            }
+        }
     }
 
     #[test]

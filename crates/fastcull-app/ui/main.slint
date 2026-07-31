@@ -180,7 +180,9 @@ export component MainWindow inherits Window {
     // pointer-wheel(up, ctrl, x, y): one notch-equivalent, view-area
     // coords (overlay coordinate system — content top-left).
     callback pointer-wheel(bool, bool, length, length);
-    callback fit-clicked(length, length);
+    // fit-clicked: a click at fit changes nothing (spec Q5) — it only
+    // claims the cursor, so it carries no coordinates.
+    callback fit-clicked();
     callback fit-double-clicked(length, length);
     callback zoom-double-clicked(length, length);
     callback cell-double-clicked(int);
@@ -596,9 +598,9 @@ export component MainWindow inherits Window {
                     return accept;
                 }
                 clicked => {
-                    // Click at fit does nothing (spec Q5) — but feeds the
-                    // double-click proximity trace and claims the keyboard.
-                    root.fit-clicked(self.mouse-x, self.mouse-y + root.bar-h);
+                    // Click at fit does nothing to the view (spec Q5) — it
+                    // only claims the cursor and the keyboard.
+                    root.fit-clicked();
                     keys.focus();
                 }
                 double-clicked => {

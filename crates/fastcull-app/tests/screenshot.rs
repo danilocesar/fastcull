@@ -260,6 +260,212 @@ fn mean_abs_diff(a: &Path, b: &Path) -> f64 {
     sum as f64 / pa.len() as f64
 }
 
+/// On-screen bounding box of the PHOTO in a snapshot, as (x0, y0, x1, y1).
+///
+/// Chrome (menu bar, filter bar, status bar) and the pillarbox bars are
+/// flat; photo pixels are not. Rows are found in a narrow band of middle
+/// COLUMNS (where every chrome strip is empty — its text sits on the left),
+/// then columns are found within those rows.
+fn photo_rect(path: &Path) -> (usize, usize, usize, usize) {
+    let bytes = std::fs::read(path).expect("snapshot file");
+    let mut dec = zune_jpeg::JpegDecoder::new(&bytes);
+    let px = dec.decode().expect("decode snapshot");
+    let (w, h) = dec.dimensions().expect("dims");
+    let luma = |x: usize, y: usize| {
+        let i = (y * w + x) * 3;
+        0.299 * px[i] as f64 + 0.587 * px[i + 1] as f64 + 0.114 * px[i + 2] as f64
+    };
+    let variance = |vals: &[f64]| {
+        let mean = vals.iter().sum::<f64>() / vals.len() as f64;
+        vals.iter().map(|v| (v - mean).powi(2)).sum::<f64>() / vals.len() as f64
+    };
+    const TEXTURE: f64 = 40.0; // flat chrome/bars sit far below this
+                               // Tolerate a flat band inside the photo, but stay BELOW `CELL_GAP` (6)
+                               // so the run cannot walk across the gap between two cells: at N=1 a
+                               // mis-anchored strip shows the bottom of one frame above the top of the
+                               // next, and a wider tolerance measures the pair as one tall "photo"
+                               // whose aspect looks perfectly healthy (validator finding C3).
+    const GAP: usize = 4;
+    // Contiguous run through the centre, NOT first-to-last: the overlay
+    // scrollbar's thumb is a detached high-variance strip near the right
+    // edge and would otherwise be counted as part of the photo.
+    let run = |is_photo: &dyn Fn(usize) -> bool, centre: usize, limit: usize| {
+        // lo/hi stay on the outermost line that really IS photo.
+        let (mut lo, mut i, mut miss) = (centre, centre, 0);
+        while i > 0 && miss < GAP {
+            i -= 1;
+            if is_photo(i) {
+                lo = i;
+                miss = 0;
+            } else {
+                miss += 1;
+            }
+        }
+        let (mut hi, mut j, mut miss) = (centre, centre, 0);
+        while j + 1 < limit && miss < GAP {
+            j += 1;
+            if is_photo(j) {
+                hi = j;
+                miss = 0;
+            } else {
+                miss += 1;
+            }
+        }
+        (lo, hi)
+    };
+    let mid: Vec<usize> = (w * 45 / 100..w * 55 / 100).step_by(3).collect();
+    let row_is_photo = |y: usize| {
+        let v: Vec<f64> = mid.iter().map(|&x| luma(x, y)).collect();
+        variance(&v) > TEXTURE
+    };
+    assert!(
+        row_is_photo(h / 2),
+        "no textured photo row at the vertical centre of {path:?} — either \
+         nothing rendered, or the fixture is too flat for this measurement"
+    );
+    let (y0, y1) = run(&row_is_photo, h / 2, h);
+    let band: Vec<usize> = (y0..=y1).step_by(5).collect();
+    let col_is_photo = |x: usize| {
+        let v: Vec<f64> = band.iter().map(|&y| luma(x, y)).collect();
+        variance(&v) > TEXTURE
+    };
+    let (x0, x1) = run(&col_is_photo, w / 2, w);
+    (x0, y0, x1, y1)
+}
+
+/// The loupe fit view shows the WHOLE frame (`ui-grid.md`: `Fit` = "the
+/// whole image is on screen"; the pointer contract's drag row is justified
+/// by "nothing is off-screen").
+///
+/// This is the regression the 29 shipped screenshot tests could not see:
+/// the N=1 grid cell was a 3:2 box of the full grid width — taller than the
+/// viewport — so a 3:2 frame rendered edge-to-edge at ~1.80 aspect with its
+/// bottom 17-23% below the fold, and every existing assertion (mean luma,
+/// centre-region variance) passed exactly as happily as it does now. The
+/// aspect of the rendered photo is what tells the two apart.
+#[test]
+fn loupe_fit_shows_the_whole_frame_not_a_crop() {
+    if !has_display() {
+        eprintln!("screenshot smoke skipped: no display server");
+        return;
+    }
+    let _s = serial();
+    let out = out_dir().join("loupe-fit-whole.jpg");
+    shoot(&[raws_dir().to_str().unwrap(), "--start-loupe"], &out);
+    let (x0, y0, x1, y1) = photo_rect(&out);
+    let (pw, ph) = ((x1 - x0 + 1) as f64, (y1 - y0 + 1) as f64);
+    let aspect = pw / ph;
+    // The A1 fixtures are 3:2 (the mid rung is 1616x1080 = 1.4963).
+    assert!(
+        (1.40..=1.60).contains(&aspect),
+        "loupe fit renders the frame at aspect {aspect:.3} ({pw}x{ph}) — a 3:2 \
+         frame drawn at ~1.8 means the cell overflows the viewport and the \
+         bottom of every photo is cropped"
+    );
+    // ...and the width that a true fit gives up must show as BLACK BARS,
+    // not as a wider crop: on any window wider than 1.5x the grid height
+    // there is a bar on each side.
+    let (w, _, _) = analyze(&out);
+    assert!(
+        x0 > 20 && x1 < w - 20,
+        "no pillarbox bars (photo spans x {x0}..{x1} of {w}) — the frame is \
+         filling the width, which it can only do by cropping"
+    );
+}
+
+/// A VERTICAL resize in the loupe must leave one whole frame on screen.
+///
+/// Bounding the N=1 cell to the viewport made its height depend on the
+/// viewport height for the first time, so a height-only resize reflows the
+/// strip. Keeping the raw pixel offset then lands mid-strip: the loupe shows
+/// the bottom of one photo with the top of the next below it — strictly
+/// worse than the crop the bound was added to fix (validator FAIL-1,
+/// 2026-07-30). The re-anchor must fire when the cell is not WHOLLY
+/// visible, not only when it has left the viewport entirely.
+#[test]
+fn loupe_survives_a_vertical_resize_with_one_whole_frame() {
+    if !has_display() {
+        eprintln!("screenshot smoke skipped: no display server");
+        return;
+    }
+    let _s = serial();
+    let out = out_dir().join("loupe-resize.jpg");
+    // Land on an image the strip has to scroll to (pos 1), THEN shrink the
+    // window vertically: position 0 is anchored at scroll 0 and cannot show
+    // the defect.
+    shoot_env(
+        &[raws_dir().to_str().unwrap(), "--start-loupe"],
+        &[(
+            "FASTCULL_DRIVE",
+            "1500:home;1800:right;3000:resize:1440x700",
+        )],
+        &out,
+    );
+    let (x0, y0, x1, y1) = photo_rect(&out);
+    let (pw, ph) = ((x1 - x0 + 1) as f64, (y1 - y0 + 1) as f64);
+    let aspect = pw / ph;
+    assert!(
+        (1.40..=1.60).contains(&aspect),
+        "after a vertical resize the loupe renders {pw}x{ph} (aspect \
+         {aspect:.3}) — not one whole 3:2 frame"
+    );
+    // A stitched pair reads as ONE run only if the measurement walks the
+    // inter-cell gap; `photo_rect`'s tolerance is below CELL_GAP so it
+    // cannot. Belt and braces: the frame must start below the filter bar
+    // rather than being clipped by it.
+    assert!(y0 > 40, "frame starts at y {y0} — clipped at the top");
+    let (_, h, _) = analyze(&out);
+    assert!(
+        y1 < h - 20,
+        "frame runs to y {y1} of {h} — clipped at the bottom"
+    );
+}
+
+/// Double-click must reach 1:1 from ABOVE fit, not only from fit.
+///
+/// This is the gesture issue #11 was built around, and it shipped dead: the
+/// bridge's own proximity guard compared the two clicks as image fractions
+/// taken either side of the first click's re-centre, so the "distance" it
+/// measured was the recentre displacement and every double-click above fit
+/// was vetoed. From fit it worked (a click there re-centres nothing), which
+/// is exactly why two review gates passed it.
+#[test]
+fn loupe_double_click_above_fit_reaches_one_to_one() {
+    if !has_display() {
+        eprintln!("screenshot smoke skipped: no display server");
+        return;
+    }
+    let _s = serial();
+    let out = out_dir().join("loupe-dblclick.jpg");
+    // Zoom one rung above fit, let it settle, then double-click off-centre —
+    // the case the guard rejected. The trace names the resulting factor.
+    let stderr = shoot_env_stderr(
+        &[raws_dir().to_str().unwrap(), "--start-loupe"],
+        &[
+            ("FASTCULL_TRACE", "1"),
+            ("FASTCULL_DRIVE", "1500:zoom-in;3000:dblclick:1000,300"),
+        ],
+        &out,
+    );
+    let factors: Vec<f32> = stderr
+        .lines()
+        .filter_map(|l| l.split("factor ").nth(1))
+        .filter_map(|rest| rest.split_whitespace().next())
+        .filter_map(|f| f.parse::<f32>().ok())
+        .collect();
+    assert!(
+        !factors.is_empty(),
+        "no loupe factor traced — the drive script never reached the overlay\n{stderr}"
+    );
+    let peak = factors.iter().cloned().fold(f32::MIN, f32::max);
+    // One rung above fit is 1.5x; 1:1 on an A1 frame in this window is ~6.9.
+    assert!(
+        peak > 3.0,
+        "double-click above fit peaked at {peak:.3}x — it never reached 1:1 \
+         (a stuck 1.5 means the gesture was vetoed, the shipped defect)\n{stderr}"
+    );
+}
+
 #[test]
 fn failed_badge_state_renders() {
     if !has_display() {

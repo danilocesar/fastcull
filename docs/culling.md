@@ -65,6 +65,23 @@ outside closes them.
   arrow through the sequence, `Y`/`N` each frame — every image shows
   the same spot at the same zoom.
 
+> **Fixed in 0.5.0**: double-click did not actually reach 1:1 once you
+> were zoomed in — it just re-centered twice. It works now, from fit and
+> from any zoom step.
+
+## Fit shows the whole frame
+
+At the loupe's first stop the **entire photograph is on screen**. On a
+16:9 or 16:10 screen a 3:2 frame therefore sits between black bars at
+the left and right — that's the frame fitting, not something missing.
+
+> **Fixed in 0.5.0**: the loupe used to fill the width instead, which
+> cut off the bottom of every frame — about 17% of the image height in a
+> window, 23% fullscreen on a 1080p screen — with nothing on screen to
+> say so. If you culled with an earlier version, frames you judged at
+> fit had an edge you never saw. Sharpness and expression are still the
+> job of `+`/`Z` and 1:1; fit is the view that has to be complete.
+
 ## Working on several photos at once: the selection
 
 Shift+arrows, Shift+click, Ctrl+click and `Ctrl+A` build a **selection** of

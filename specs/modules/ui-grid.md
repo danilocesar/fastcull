@@ -11,11 +11,62 @@ burst badges, and the IPTC side panel shell.
 Zoom levels: column count `N ∈ {12, 8, 6, 4, 3, 2, 1}` (Ctrl+scroll / `+`/`-`
 step through; pinch later). At `N = 1` the view is the **loupe**:
 - First stop: fit-to-screen (full-res asset GPU-scaled — see the recorded
-  FitPreview fold in raw-pipeline.md).
+  FitPreview fold in raw-pipeline.md). **Fit means the WHOLE frame is on
+  screen** — the requirement, not an aspiration: see *One-column cell
+  bounding* below.
 - Further zoom-in: the ×1.5 ladder below, capped at 1:1 (FullRes asset as GPU
   texture, panning with drag; arrows NAVIGATE at every zoom level — they are
   never repurposed for panning, the burst focus-check loop depends on it).
 - Zooming out from loupe returns to the grid **centered on the current image**.
+
+### One-column cell bounding (bug found 2026-07-30, user-approved fix)
+
+The loupe IS the grid at one column, so the fit view is an `N = 1` grid
+cell. Cells are 3:2 (`CELL_ASPECT`) and span the grid width, which makes the
+one-column cell TALLER than the viewport on any window wider than 1.5× the
+grid area's height — i.e. every normal window. `scroll_to_reveal` top-aligns
+a cell it cannot fit, so the bottom of every frame sat below the fold:
+**measured 16.6 % hidden on a 1440×900 window, 23.4 % fullscreen on 1080p**,
+with nothing on screen to say so. The shipped `docs/assets/fastcull-loupe.jpg`
+shows it.
+
+That silently contradicted this section ("fit-to-screen"), the pointer
+contract's `Fit` state ("the whole image is on screen") and its drag row
+("nothing is off-screen, so there is no pan axis"). Worse, issue #11 gave
+the wheel to zoom and made drag inert at fit, so after it the hidden band
+was unreachable by **any** input — a culling tool cannot show you 80 % of a
+photograph and let you decide its fate.
+
+Requirement: **at one column the cell is bounded by the grid viewport**
+(`cell_height = min(cell_width / CELL_ASPECT, viewport_height - 2·CELL_GAP)`,
+`GridLayout::new`), so the image contain-fits inside it with pillarbox bars
+and the whole frame is on screen. Consequences, all intended:
+
+- The photo renders ~17-23 % smaller in each dimension than the old
+  fill-width crop. Persona verdict: pay it happily — completeness is what
+  fit is *for*; sharpness is what the ×1.5 ladder and 1:1 are for.
+- **Multi-column grids are NOT bounded.** Their cells are far shorter than
+  the viewport anyway, and capping `N = 2` would shrink the side-by-side
+  comparison pair for nothing (persona review).
+- The bars stay pure black — no filmstrip, no histogram, no info panel
+  (persona: an instant IN-MY-WAY).
+- The `✓ copied` and `×N burst` cell badges, anchored to the cell bottom,
+  become visible in the loupe again; they had been rendering below the fold
+  while the app deliberately populated them at `N = 1`. **This is the
+  intended loupe badge policy, not an accident of the new geometry**: the
+  MARK is suppressed at `N = 1` (`pick: 0`) because the issue #20 pill owns
+  state display and the grid's 40% reject dim must stay out of the loupe,
+  while "already copied" and "burst of N" have no pill and are exactly what
+  a last pass before bed wants to see on the full-screen frame (persona).
+  One channel per fact: pill for the mark, cell badges for the rest.
+- Pre-layout refreshes (issue #4) see a zero/negative viewport height; the
+  bound is skipped there rather than collapsing the cell.
+- Residual, accepted: the zoom OVERLAY covers the filter bar while the fit
+  view does not, so the overlay's factor-1.0 extent is ~6 % larger than the
+  rendered fit cell and the first ladder rung magnifies ~1.59× rather than
+  exactly 1.5×. That is a size-only discontinuity; the *positional* lurch
+  (the old fit was vertically off-centre by the crop) is gone. Making the
+  ladder's 1.0 the fit cell itself is the follow-up if it ever shows.
 
 ### Loupe zoom ladder (user decisions 2026-07-25, persona-validated)
 
@@ -185,21 +236,41 @@ Rules that the table alone does not carry:
   `double-clicked`, and single-click's action (center on P) is a strict
   prefix of double-click's (center on P, then go to 1:1 at P) — so the
   intermediate state is invisible and no click needs to be held back
-  waiting for a possible second one.
+  waiting for a possible second one. **Why the target point survives the
+  prefix** (recorded 2026-07-30 — it is a cancellation, not an accident
+  anyone should have to re-derive): the two `clicked` calls re-centre the
+  view and `refresh()` rewrites `loupe-vx/vy` SYNCHRONOUSLY, so by the time
+  `double-clicked` evaluates `zoomed-img.x + mouse-x + loupe-vx` its frozen
+  `mouse-x` and the new offset cancel exactly and the machine recovers the
+  point actually pressed. This holds only while that refresh is
+  synchronous — if the pan write is ever deferred to a timer or animated,
+  the 1:1 landing point silently moves by roughly `max/factor ×` the click
+  offset (most of the viewport on an A1 frame).
 - **Drag beats click.** A click fires only on press+release without
   movement beyond the drag threshold; once a drag starts, the release
   produces no click and no double-click.
 - **A double-click needs proximity, not just timing** (persona finding —
   scanning an intermediate factor by clicking eye, then beak, then wingtip
   in quick succession is two independent re-centers, not a jump to 1:1):
-  the second press must land within the same small movement threshold the
-  drag/click disambiguation already uses. Farther apart = two clicks.
+  the second press must land near the first. **Slint enforces this itself**
+  and the app must NOT re-implement it: `check_repeat` restarts the click
+  count unless the second press is within 10 logical px of the first
+  (`i-slint-core`, `square_length() < 100`), so `double-clicked` cannot fire
+  for distant presses at all. A bridge-level re-check is not merely
+  redundant — the one shipped with #11 VETOED the gesture it guarded, see
+  the deviations list below.
 - **Clicks outside the image rect are ignored** (persona finding): at fit a
-  landscape frame on a 16:9 screen has fat letterbox bars, and
+  landscape frame on a 16:9 screen has fat pillarbox bars, and
   `contain_click_frac` clamps them to the nearest image edge — so a
   double-click on black would slam to 1:1 on a frame edge. Clicks and
   double-clicks in the bars produce no action at all (the clamp stays for
-  the drag/pan path, where it is correct).
+  the drag/pan path, where it is correct). **The WHEEL is deliberately not
+  bar-rejected** (recorded 2026-07-30): a wheel notch over a bar still steps
+  the ladder, anchored at the nearest frame edge by the ordinary pan clamp.
+  A key has no position and a wheel does, but "zoom in" is unambiguous
+  wherever the pointer sits, whereas "1:1 centred HERE" is not. Note this
+  became routine rather than unreachable when *One-column cell bounding*
+  gave a 3:2 frame real bars (~255 px per side on a 1440-wide window).
 - **The wheel only zooms over the image.** Wheel events over the IPTC
   panel, the filter bar or the overlay scrollbar are not loupe input —
   they scroll that widget or do nothing (persona finding: the pointer
@@ -233,8 +304,8 @@ Rules that the table alone does not carry:
   `scroll-event` consumes the wheel (one ladder stop per 60px
   notch-equivalent — exactly one winit wheel notch, verified in the
   backend source; remainders carry over, a direction flip resets them),
-  its `clicked` claims the cursor and feeds the double-click proximity
-  trace, its `double-clicked` goes to 1:1. The machine receives the fit
+  its `clicked` only claims the cursor, its `double-clicked` goes to 1:1.
+  The machine receives the fit
   view's REAL geometry (the N=1 grid cell rect, scroll-dependent) so
   anchors and letterbox rejection follow what is actually on screen. Because it swallows presses wholesale it also implements
   "click at fit does nothing" and "drag at fit does nothing" — and it
@@ -243,26 +314,76 @@ Rules that the table alone does not carry:
   image TouchArea (children see scroll before the Flickable, so drag-pan
   stays native while the wheel zooms). The retired browse-at-fit wheel
   gesture is gone as decided; movement inside the loupe is
-  keyboard-only. Recorded deviations/deferrals (gate 2026-07-26):
+  keyboard-only.
+
+  **Defect fixed 2026-07-30 (validator FAIL-1 / QE D1) — the bridge vetoed
+  its own headline gesture.** `handle_loupe_double_click` re-checked
+  double-click proximity by comparing the last two clicks as FRACTIONAL
+  IMAGE coordinates. But Slint fires `clicked` before `double-clicked`, and
+  the first click's handler re-centers the view and refreshes — moving the
+  image under a stationary pointer. The second press therefore landed on
+  the same screen pixel but a different image fraction, so the measured
+  "distance" was really the recenter displacement — which is exactly the
+  click's own offset from the view centre. QE replayed the verbatim guard:
+  a double-click 13 px off-centre measured 13 px and was vetoed, 200 px
+  off-centre measured 200 px and was vetoed; only within ~12 px of the
+  centre did it survive. **Above fit, double-click never reached 1:1**;
+  only from
+  fit (where a click re-centers nothing) did it work, which is why it
+  passed review and shipped. The check is now DELETED, not repaired —
+  Slint's own 10 px repeat gate already implements the rule (see the
+  proximity bullet above), so any bridge-level re-check can only contribute
+  false negatives.
+
+  Recorded deviations/deferrals (gate 2026-07-26, revised 2026-07-30):
   a pinned-unresolved 1:1 desire (INFINITY while full-res decodes) makes
-  every pointer gesture inert until the render clamp resolves it (no
-  anchor math on infinite extents); wheel over the overlay scrollbar is
-  swallowed (not loupe input, per this contract); extreme coalesced
-  wheel deltas may emit fewer stops than notches (single emit per event
-  — accepted); two-finger trackpad scroll reaches the overlay Flickable
-  as a drag (pans above fit, zooms at fit — asymmetric; trackpads are
-  declared out of scope in this contract, revisit with gesture support);
-  double-click proximity threshold is 12px vs Slint's 8px click/drag
-  threshold (immaterial, recorded); wheel in the zoom overlay's
-  letterbox BARS pans natively instead of stepping the ladder (the
-  wheel surface covers the image only — the bars exist exactly when an
-  axis has no pan range, so the miswheel is near-inert; extend the
-  surface if it ever annoys); the scrollbar's wheel swallow also
+  every pointer gesture that goes THROUGH THE MACHINE inert until the
+  render clamp resolves it (no anchor math on infinite extents); a click
+  in the zoom overlay is the exception — it is applied by the bridge
+  directly and still re-centers, harmlessly, since its fraction comes from
+  Slint rather than from anchor math. While the ceiling is unknown the
+  wheel climbs optimistically but is CAPPED (`pointer::OPTIMISTIC_MAX`):
+  an unbounded ladder reached ~1e38 in ~223 notches and produced a NaN pan
+  centre that persisted across images (QE D4). Wheel over the overlay
+  scrollbar is swallowed (not loupe input, per this contract); extreme
+  coalesced wheel deltas may emit fewer stops than notches (single emit per
+  event — accepted), and the two surfaces keep separate accumulators whose
+  residue carries over until a direction flip resets it; two-finger
+  trackpad scroll reaches the overlay Flickable as a drag (pans above fit,
+  zooms at fit — asymmetric; trackpads are declared out of scope in this
+  contract, revisit with gesture support); wheel in the zoom overlay's
+  letterbox BARS is not loupe input and falls through to the Flickable —
+  and when that axis has no pan range the Flickable ignores it too, so the
+  event reaches the GRID Flickable behind the overlay and scrolls the strip
+  invisibly (reachable only for very wide frames; the cursor re-anchor
+  corrects it once the cell leaves the viewport — extend the wheel surface
+  over the bars if it ever shows); the scrollbar's wheel swallow also
   deadens its 18px strip in GRID view (was native scroll — tiny strip,
-  accepted); during a sub-second decode gap after a fast wheel burst,
-  anchors compute against the already-zoomed virtual viewport while the
-  screen still shows fit (optimistic-climb consequence, self-corrects
-  on texture adoption).
+  accepted).
+
+  **Two table cells are implemented OUTSIDE the machine** (recorded
+  2026-07-30 rather than left silent, since this section demands "no
+  zoom/pan branching in the app crate"): `Zoomed` × Drag is the overlay
+  Flickable's native kinetic pan folded back by `capture_pan`, and `Zoomed`
+  × Click is applied directly by `on_loupe_clicked` — both because Slint
+  already delivers image-relative fractions there, so routing them through
+  `step()` would add a lossy coordinate round-trip for no behavioural gain.
+  Consequences to know: `PointerInput::Drag` and the `Zoomed`+`Click` arm
+  are exercised only by their unit tests, so a future change to them
+  silently changes nothing in the app; and the enum carries a single `Drag`
+  input rather than the `DragStart`/`Drag`/`DragEnd` triple listed under
+  *Inputs* above.
+
+  **The machine's state is the DESIRED factor, which the screen may not be
+  showing yet.** `machine_ctx` derives `Fit`/`Zoomed` from the clamped
+  desired factor while the overlay only rises once a texture of the cursor
+  image exists. In that window (a decode gap after a fast wheel burst, and
+  also the longer honest-degradation case where neither the full-res nor
+  the mid rung is in hand) anchors compute against the already-zoomed
+  virtual viewport while the screen still shows fit: a double-click is
+  interpreted against the virtual extents rather than the visible frame, a
+  click does nothing though the machine says `Recenter`, and wheel-down
+  needs a few visually inert notches. Self-corrects on texture adoption.
 
 ## Virtualization (the M2 prototype risk)
 
@@ -672,6 +793,17 @@ the user confirms, all cheap to change):**
       session, counts included.
 - [ ] Windowed-model tests (core side): visible-range → model-window computation,
       incl. partial rows, tiny folders, and N=1.
+- [x] **The loupe fit view shows the WHOLE frame** (One-column cell bounding):
+      `grid.rs` units pin that the N=1 cell never exceeds the viewport and
+      that revealing it leaves nothing below the fold, while multi-column
+      cells keep their 3:2 aspect; the end-to-end pin is the screenshot test
+      `loupe_fit_shows_the_whole_frame_not_a_crop`, which measures the
+      RENDERED photo's aspect (a 3:2 frame drawn at ~1.8 is a crop) and
+      requires pillarbox bars on both sides. Both were verified BY MUTATION,
+      not by passing: disabling the bound yields "aspect 1.807 (1429x791)"
+      and FAILS. The 29 pre-existing screenshot tests all passed on both
+      sides of this change — mean luma and centre-region variance cannot see
+      a crop, which is how it shipped unnoticed since M2.
 - [x] Pointer state machine (core side, issue #11): a table-driven test that
       enumerates EVERY (state, input) pair of the Mouse & pointer contract
       table and asserts the resulting state + action — including the
@@ -679,14 +811,31 @@ the user confirms, all cheap to change):**
       point (not the center), wheel notches land on the same `1.5ⁿ` stops as
       `+`/`-`, wheel-down at fit is inert, clicks outside the image rect do
       nothing, and pan offsets stay clamped to the image bounds at every
-      factor (`fastcull-core/src/pointer.rs` tests). Covered OUTSIDE the
-      core tests, recorded honestly: "a drag suppresses the click" is
-      Slint's TouchArea click definition (press+release without movement);
-      "a distant second click is two re-centers, not a double-click" is the
-      bridge's proximity trace (`handle_loupe_double_click`, review-verified
-      — no pointer-injection harness exists); "`+` after a click at fit is
-      still center-anchored" holds by construction (the fit click stores
-      nothing but the proximity trace; the keyboard ladder never reads it).
+      factor (`fastcull-core/src/pointer.rs` tests). The anchor assertions
+      use an OFF-CENTRE pan and pointer: with everything at `(0.5, 0.5)` the
+      pointer anchor and the centre anchor coincide, and QE proved by
+      mutation (2026-07-30) that three criteria were consequently vacuous —
+      the zoomed wheel anchor, "wheel-down landing on fit forgets the pan",
+      and the drag's vertical axis all survived being deleted. Covered
+      OUTSIDE the core tests, recorded honestly: "a drag suppresses the
+      click" is Slint's TouchArea click definition (press+release without
+      movement); "a distant second click is two re-centers, not a
+      double-click" is enforced by SLINT, whose `check_repeat` restarts the
+      click count beyond 10 logical px — the app deliberately holds no
+      proximity state of its own (see the deviations above for the guard
+      that was deleted); "`+` after a click at fit is still center-anchored"
+      holds by construction (a fit click stores nothing at all — it only
+      claims the cursor — and the keyboard ladder reads no pointer state).
+- [x] **Double-click reaches 1:1 from ABOVE fit**, not only from fit
+      (`loupe_double_click_above_fit_reaches_one_to_one`). This is the
+      gesture that shipped broken through both gates, and it broke in the
+      bridge, where no core test could see it: the `FASTCULL_DRIVE`
+      `dblclick:x,y` action replays Slint's real ordering (a `clicked` that
+      re-centers, then `double-clicked` on the same release) so the class of
+      defect is reachable from a test at all. It does NOT make the pointer
+      ROUTING testable — which Slint surface receives a physical wheel or
+      press is still review-verified only, and remains the case for the
+      pointer-injection harness (issue #13).
 - [x] Slint screenshot smoke tests (`fastcull-app --screenshot <out>` +
       `tests/screenshot.rs`): grid placeholder (synthetic), loaded thumbnails
       (texture-variance asserted), failed-badge session, loupe fit
@@ -699,6 +848,19 @@ the user confirms, all cheap to change):**
       GPU renderer), so these tests do NOT exercise the shipping femtovg
       renderer — GPU-specific visual regressions need eyes or a future
       GPU-capture harness. Tests set FASTCULL_NO_CACHE for hermeticity.
+      **A far-panned 1:1 view snapshots BLACK** (QE finding F1, 2026-07-30):
+      Slint's software renderer stores the source offset as `Fixed<u16, 4>`
+      (`i-slint-renderer-software`, `scene.rs`), so beyond ~4096 px of pan on
+      either axis the frame renders empty — bracketed at −4080 px (renders)
+      vs −4160 px (black). A pixel assertion on a far-panned 1:1 view would
+      therefore pass vacuously on black; assert on the TRACE instead, as
+      `loupe_double_click_above_fit_reaches_one_to_one` does. Believed
+      renderer-local (the shipping femtovg path is unaffected), but that is
+      unproven — no window capture was available to check it.
+      Also not drivable headlessly: the `✓ copied` badge, because Copy Picks
+      opens a native folder dialog and `FASTCULL_DRIVE` has no copy action
+      (QE G2). It is covered only by sharing the bottom-anchored band with
+      the `×N` burst badge, which IS rendered on screen by a real fixture.
 - [ ] Manual acceptance (per release): 5,000-file A1 folder (a bad evening, per
       persona review) scrolls at 60 fps after thumbs load; pick→auto-advance→pick
       loop in loupe has no perceived latency.

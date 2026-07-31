@@ -29,12 +29,44 @@ pub struct GridLayout {
 }
 
 impl GridLayout {
-    /// Layout for a zoom step within a viewport of `viewport_width`.
-    pub fn new(zoom_step: usize, viewport_width: f32, item_count: usize) -> Self {
+    /// Layout for a zoom step within a viewport of `viewport_width` x
+    /// `viewport_height` (the GRID area — below the filter bar, left of the
+    /// IPTC panel).
+    ///
+    /// The height only ever matters at ONE COLUMN, where the cell is the
+    /// loupe's fit view: a 3:2 cell of the full grid width is taller than
+    /// any normal viewport (1428x952 in a 794 px-high area on a 1440x900
+    /// window), and `scroll_to_reveal` top-aligns what it cannot fit, so
+    /// the bottom 17-23% of every frame was simply not on screen — with
+    /// nothing to say so. That contradicts the two things the zoom model
+    /// and the pointer contract assert about `Fit`: "the whole image is on
+    /// screen" and "nothing is off-screen, so there is no pan axis"
+    /// (ui-grid.md). Since issue #11 gave the wheel to zoom and made drag
+    /// inert at fit, the hidden band was not reachable by any input either.
+    ///
+    /// So at one column the cell is bounded by the viewport and the image
+    /// contain-fits inside it with pillarbox bars — a real fit. Multi-column
+    /// grids are untouched: their cells are far shorter than the viewport,
+    /// and bounding them would shrink the comparison pair at N=2 for
+    /// nothing (persona review 2026-07-30).
+    pub fn new(
+        zoom_step: usize,
+        viewport_width: f32,
+        viewport_height: f32,
+        item_count: usize,
+    ) -> Self {
         let columns = ZOOM_COLUMNS[zoom_step.min(ZOOM_COLUMNS.len() - 1)];
         let cell_width = (viewport_width - CELL_GAP * (columns as f32 + 1.0)) / columns as f32;
         let cell_width = cell_width.max(1.0);
-        let cell_height = cell_width / CELL_ASPECT;
+        let mut cell_height = cell_width / CELL_ASPECT;
+        if columns == 1 {
+            // A pre-layout refresh sees a zero or negative height (issue #4):
+            // leave the cell alone there rather than collapsing it to 1 px.
+            let avail = viewport_height - 2.0 * CELL_GAP;
+            if avail > 1.0 {
+                cell_height = cell_height.min(avail);
+            }
+        }
         let rows = item_count.div_ceil(columns.max(1));
         let total_height = rows as f32 * (cell_height + CELL_GAP) + CELL_GAP;
         Self {
@@ -165,7 +197,7 @@ mod tests {
 
     #[test]
     fn layout_fills_viewport_width() {
-        let l = GridLayout::new(1, 1600.0, 100); // 8 columns
+        let l = GridLayout::new(1, 1600.0, 900.0, 100); // 8 columns
         assert_eq!(l.columns, 8);
         let expected = (1600.0 - CELL_GAP * 9.0) / 8.0;
         assert!((l.cell_width - expected).abs() < 0.01);
@@ -174,21 +206,76 @@ mod tests {
 
     #[test]
     fn single_column_is_loupe_sized() {
-        let l = GridLayout::new(6, 1600.0, 10);
+        let l = GridLayout::new(6, 1600.0, 900.0, 10);
         assert_eq!(l.columns, 1);
         assert!(l.cell_width > 1500.0);
     }
 
+    /// The loupe fit view shows the WHOLE frame (ui-grid.md: `Fit` = "the
+    /// whole image is on screen"). Before this, the N=1 cell was a 3:2 box
+    /// of the full grid width — taller than any normal viewport — and
+    /// `scroll_to_reveal` top-aligned it, hiding the bottom 17-23% of every
+    /// photograph with no way to reach it after issue #11 took the wheel
+    /// and the drag.
+    #[test]
+    fn single_column_cell_never_exceeds_the_viewport() {
+        // Real geometry: 1440x900 window leaves a 1440x794 grid area.
+        let l = GridLayout::new(6, 1440.0, 794.0, 3);
+        assert_eq!(l.columns, 1);
+        assert_eq!(l.cell_width, 1428.0, "still full width");
+        assert!(
+            l.cell_height <= 794.0 - 2.0 * CELL_GAP,
+            "cell must fit the viewport, got {}",
+            l.cell_height
+        );
+        // The whole cell is reachable: revealing it leaves nothing below
+        // the fold, at any index.
+        for idx in 0..3 {
+            let scroll = l.scroll_to_reveal(idx, 0.0, 794.0);
+            let (_, top) = l.position(idx);
+            assert!(
+                top + l.cell_height <= scroll + 794.0 + 0.01,
+                "cell {idx} bottom below the fold"
+            );
+        }
+        // A 3:2 frame therefore contain-fits with PILLARBOX bars, and the
+        // full image height is on screen.
+        let image_h = (l.cell_width / CELL_ASPECT).min(l.cell_height);
+        assert!((image_h - l.cell_height).abs() < 0.01, "height-limited");
+        let image_w = image_h * CELL_ASPECT;
+        assert!(image_w < l.cell_width, "bars at the sides, not a crop");
+
+        // Fullscreen 1080p, where the old crop was worst (23.4%).
+        let l = GridLayout::new(6, 1920.0, 974.0, 3);
+        assert!(l.cell_height <= 974.0 - 2.0 * CELL_GAP);
+    }
+
+    /// Multi-column grids are deliberately NOT viewport-bounded: their
+    /// cells are far shorter than the viewport anyway, and capping N=2
+    /// would shrink the side-by-side comparison pair for nothing.
+    #[test]
+    fn multi_column_cells_keep_the_3_2_aspect() {
+        for step in 0..=5 {
+            let l = GridLayout::new(step, 1440.0, 200.0, 100);
+            assert!(l.columns > 1);
+            assert!(
+                (l.cell_height - l.cell_width / CELL_ASPECT).abs() < 0.01,
+                "{} columns must stay 3:2 even in a short viewport",
+                l.columns
+            );
+        }
+    }
+
     #[test]
     fn total_height_counts_partial_rows() {
-        let l = GridLayout::new(1, 1600.0, 9); // 8 cols -> 2 rows (8 + 1)
+        let l = GridLayout::new(1, 1600.0, 900.0, 9); // 8 cols -> 2 rows (8 + 1)
         let row_pitch = l.cell_height + CELL_GAP;
         assert!((l.total_height - (2.0 * row_pitch + CELL_GAP)).abs() < 0.01);
     }
 
     #[test]
     fn visible_range_windows_with_margin() {
-        let l = GridLayout::new(1, 1600.0, 2000); // 8 columns
+        let l = GridLayout::new(1, 1600.0, 900.0, 2000); // 8 columns
         let row_pitch = l.cell_height + CELL_GAP;
         // Viewport showing rows ~4..8
         let range = l.visible_range(2000, 4.0 * row_pitch, 4.0 * row_pitch, 1);
@@ -199,7 +286,7 @@ mod tests {
 
     #[test]
     fn visible_range_edges() {
-        let l = GridLayout::new(0, 1200.0, 5); // 12 columns, 5 items: 1 row
+        let l = GridLayout::new(0, 1200.0, 800.0, 5); // 12 columns, 5 items: 1 row
         assert_eq!(l.visible_range(5, 0.0, 800.0, 2), 0..5);
         assert_eq!(l.visible_range(0, 0.0, 800.0, 2), 0..0);
         // Scrolled far past the end clamps to item count.
@@ -242,7 +329,9 @@ mod tests {
     /// top-align and stay put on repeated reveals, never oscillate.
     #[test]
     fn reveal_of_oversized_cell_is_stable() {
-        let l = GridLayout::new(6, 1920.0, 50); // 1 column, cell_h ~1272
+        // Pre-layout height (issue #4): the N=1 cap is skipped, so the
+        // cell is the full 3:2 height and still overflows the viewport.
+        let l = GridLayout::new(6, 1920.0, 0.0, 50); // 1 column, cell_h ~1272
         let viewport = 1020.0;
         assert!(l.cell_height > viewport);
         let s1 = l.scroll_to_reveal(5, 0.0, viewport);
@@ -257,7 +346,7 @@ mod tests {
     /// N=1 (loupe) windowing: exactly the on-screen image ± margin exists.
     #[test]
     fn visible_range_at_single_column() {
-        let l = GridLayout::new(6, 1920.0, 100);
+        let l = GridLayout::new(6, 1920.0, 1020.0, 100);
         let row_pitch = l.cell_height + CELL_GAP;
         let r = l.visible_range(100, 10.0 * row_pitch, row_pitch, 1);
         assert!(r.contains(&10));
@@ -267,7 +356,7 @@ mod tests {
 
     #[test]
     fn scroll_to_reveal_moves_minimally() {
-        let l = GridLayout::new(1, 1600.0, 2000);
+        let l = GridLayout::new(1, 1600.0, 900.0, 2000);
         let row_pitch = l.cell_height + CELL_GAP;
         let viewport = 3.0 * row_pitch;
         // Cell below the viewport: scroll down just enough.

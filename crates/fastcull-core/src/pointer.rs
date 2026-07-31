@@ -181,9 +181,19 @@ fn anchor_center(geo: &Geometry, from_factor: f32, to_factor: f32, pos: (f32, f3
     )
 }
 
+/// Ceiling used while the real 1:1 ceiling is still unknown (the full-res
+/// rung is decoding). The wheel climbs OPTIMISTICALLY there, matching the
+/// keyboard `+` — but not without bound: an unbounded ladder reaches ~1e38
+/// in about 223 notches, at which point [`extents`] overflows to INFINITY
+/// and the anchor math yields a NaN pan centre that then persists across
+/// images (QE finding D4, 2026-07-30). Nothing real comes near this — a
+/// 50 MP A1 frame on a 1440-wide viewport has a ceiling of 6.9 — so the cap
+/// is invisible in practice and the render clamp still lands the view on the
+/// true ceiling as soon as it is known.
+const OPTIMISTIC_MAX: f32 = 64.0;
+
 /// View-area position → fractional image coordinate at `factor` (both
-/// axes). Public for the bridge's click bookkeeping (double-click
-/// proximity: the second press must land near the first — spec).
+/// axes).
 pub fn view_to_frac(geo: &Geometry, factor: f32, pos: (f32, f32)) -> (f32, f32) {
     if factor <= 1.0 {
         // At fit the image renders in the fit frame (N=1 grid cell).
@@ -230,7 +240,7 @@ pub fn step(state: ViewState, input: PointerInput, geo: &Geometry) -> (ViewState
             // the plain-wheel row applies). An UNKNOWN ceiling climbs
             // optimistically — identical to the keyboard `+` (the render
             // clamp lands it at 1:1 when the ceiling becomes known).
-            let max = geo.max_factor.unwrap_or(f32::INFINITY);
+            let max = geo.max_factor.unwrap_or(OPTIMISTIC_MAX);
             let f = zoompan::ladder_up(1.0, max);
             if f <= 1.0 {
                 return (state, Action::None); // small file: pinned to fit
@@ -238,9 +248,7 @@ pub fn step(state: ViewState, input: PointerInput, geo: &Geometry) -> (ViewState
             // Anchor: image frac from the RENDERED fit frame (the N=1
             // grid cell), projected so that point stays under the
             // pointer at the new (overlay) extents.
-            let (fx0, fy0, fw, fh) = fit_frame(geo);
-            let fx = ((pos.0 - fx0) / fw.max(1.0)).clamp(0.0, 1.0);
-            let fy = ((pos.1 - fy0) / fh.max(1.0)).clamp(0.0, 1.0);
+            let (fx, fy) = view_to_frac(geo, 1.0, pos);
             let (ew2, eh2) = extents(geo, f);
             let center = (
                 (fx + (geo.viewport_w / 2.0 - pos.0) / ew2.max(1.0)).clamp(0.0, 1.0),
@@ -266,8 +274,7 @@ pub fn step(state: ViewState, input: PointerInput, geo: &Geometry) -> (ViewState
             if pos.0 < fx0 || pos.0 > fx0 + fw || pos.1 < fy0 || pos.1 > fy0 + fh {
                 return (state, Action::None); // letterbox bars: dead
             }
-            let fx = ((pos.0 - fx0) / fw.max(1.0)).clamp(0.0, 1.0);
-            let fy = ((pos.1 - fy0) / fh.max(1.0)).clamp(0.0, 1.0);
+            let (fx, fy) = view_to_frac(geo, 1.0, pos);
             (
                 ViewState::Zoomed { factor: max },
                 Action::SetZoom {
@@ -280,7 +287,7 @@ pub fn step(state: ViewState, input: PointerInput, geo: &Geometry) -> (ViewState
 
         // ------ Zoomed: wheel walks the ladder, click re-centers, drag pans ------
         (ViewState::Zoomed { factor }, Wheel { up: true, pos, .. }) => {
-            let max = geo.max_factor.unwrap_or(f32::INFINITY);
+            let max = geo.max_factor.unwrap_or(OPTIMISTIC_MAX);
             let f = zoompan::ladder_up(factor, max);
             if (f - factor).abs() < 1e-6 {
                 return (state, Action::None); // capped exactly at 1:1
@@ -697,8 +704,143 @@ mod tests {
         assert!(matches!(action, Action::SetZoom { factor, .. } if factor.is_infinite()));
     }
 
-    /// view_to_frac: the bridge's proximity bookkeeping helper matches
-    /// the machine's own conversion.
+    /// Everything above uses `pan_center = (0.5, 0.5)` and `pos = CENTER`,
+    /// where the pointer anchor and the CENTRE anchor coincide — so those
+    /// assertions cannot tell the two apart. QE proved it by mutation
+    /// (2026-07-30): making `anchor_center` return `geo.pan_center`
+    /// unchanged, making a wheel-down landing on fit KEEP the pan, and
+    /// making the drag ignore `dy` all left the suite green. These three
+    /// use an off-centre pan and an off-centre pointer, where the mutants
+    /// and the truth diverge.
+    #[test]
+    fn zoomed_wheel_anchors_the_pointer_off_centre() {
+        let g = Geometry {
+            pan_center: (0.30, 0.70),
+            ..geo()
+        };
+        let from = 1.5;
+        let pos = (200.0, 150.0);
+        let (state, action) = step(
+            ViewState::Zoomed { factor: from },
+            PointerInput::Wheel {
+                up: true,
+                ctrl: false,
+                pos,
+            },
+            &g,
+        );
+        assert_eq!(state, ViewState::Zoomed { factor: 2.25 });
+        let Action::SetZoom { factor, center } = action else {
+            panic!("must zoom")
+        };
+        // The mutant returns the input pan center untouched.
+        assert!(
+            (center.0 - g.pan_center.0).abs() > 1e-3 || (center.1 - g.pan_center.1).abs() > 1e-3,
+            "anchor must depend on the pointer, got {center:?}"
+        );
+        // And it is the POINTER anchor: the image point under the cursor
+        // before the step is still under the cursor after it.
+        let (ew0, eh0) = extents(&g, from);
+        let fx = frac_under(g.viewport_w, ew0, g.pan_center.0, pos.0);
+        let fy = frac_under(g.viewport_h, eh0, g.pan_center.1, pos.1);
+        let (ew1, eh1) = extents(&g, factor);
+        let back_x = zoompan::offset_centering(g.viewport_w, ew1, center.0) + fx * ew1;
+        let back_y = zoompan::offset_centering(g.viewport_h, eh1, center.1) + fy * eh1;
+        assert!(
+            (back_x - pos.0).abs() < 0.5,
+            "x anchor: {back_x} vs {}",
+            pos.0
+        );
+        assert!(
+            (back_y - pos.1).abs() < 0.5,
+            "y anchor: {back_y} vs {}",
+            pos.1
+        );
+    }
+
+    /// Wheel-down landing on fit FORGETS the pan spot — asserted from an
+    /// off-centre pan, so `(0.5, 0.5)` is a real reset and not an echo of
+    /// the input (spec: a stale pan from three images ago is a trap).
+    #[test]
+    fn wheel_down_to_fit_forgets_an_off_centre_pan() {
+        let g = Geometry {
+            pan_center: (0.30, 0.70),
+            ..geo()
+        };
+        let (state, action) = step(
+            ViewState::Zoomed { factor: 1.5 },
+            PointerInput::Wheel {
+                up: false,
+                ctrl: false,
+                pos: (900.0, 100.0),
+            },
+            &g,
+        );
+        assert_eq!(state, ViewState::Fit);
+        assert_eq!(
+            action,
+            Action::SetZoom {
+                factor: 1.0,
+                center: (0.5, 0.5)
+            },
+            "the carried pan must be discarded, not carried to fit"
+        );
+    }
+
+    /// The drag pans on BOTH axes: a vertical-only drag must move the
+    /// vertical centre (and only it).
+    #[test]
+    fn drag_pans_the_vertical_axis_too() {
+        let g = geo();
+        let z = ViewState::Zoomed { factor: 4.0 }; // extent 4000x3200
+        let (_, action) = step(z, PointerInput::Drag { dx: 0.0, dy: 160.0 }, &g);
+        let Action::Recenter { center } = action else {
+            panic!("drag must recenter")
+        };
+        // offset_y = 400 - 0.5*3200 = -1200; +160 -> -1040;
+        // frac = (400 + 1040) / 3200 = 0.45.
+        assert!(
+            (center.1 - 0.45).abs() < 1e-4,
+            "dy must pan vertically, got {}",
+            center.1
+        );
+        assert!((center.0 - 0.5).abs() < 1e-4, "dx=0 leaves x alone");
+    }
+
+    /// An unknown 1:1 ceiling climbs optimistically but NOT without bound:
+    /// an uncapped ladder overflows `extents` and poisons the pan centre
+    /// with NaN, which then persists across images (QE D4).
+    #[test]
+    fn optimistic_climb_is_bounded_and_never_nans() {
+        let g = Geometry {
+            max_factor: None,
+            ..geo()
+        };
+        let up = PointerInput::Wheel {
+            up: true,
+            ctrl: false,
+            pos: (742.0, 311.0),
+        };
+        let mut state = ViewState::Fit;
+        for _ in 0..400 {
+            let (next, action) = step(state, up, &g);
+            state = next;
+            if let Action::SetZoom { factor, center } = action {
+                assert!(factor.is_finite(), "factor went non-finite");
+                assert!(
+                    center.0.is_finite() && center.1.is_finite(),
+                    "NaN pan center at factor {factor}"
+                );
+                assert!((0.0..=1.0).contains(&center.0) && (0.0..=1.0).contains(&center.1));
+            }
+        }
+        let ViewState::Zoomed { factor } = state else {
+            panic!("must have climbed")
+        };
+        assert_eq!(factor, OPTIMISTIC_MAX, "climb is capped while unknown");
+    }
+
+    /// view_to_frac matches the machine's own conversion.
     #[test]
     fn view_to_frac_matches_the_machine() {
         let g = geo();

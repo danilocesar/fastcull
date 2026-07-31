@@ -143,11 +143,6 @@ struct AppState {
     /// mid-drag engine refresh must not yank the view back). None while the
     /// overlay is hidden.
     last_pan_write: Option<(f32, f32)>,
-    /// Double-click proximity bookkeeping (issue #11, spec: the second
-    /// press must land near the first or it is two independent clicks).
-    /// Image fracs of the last two loupe-surface clicks.
-    loupe_click_prev: Option<(f32, f32)>,
-    loupe_click_last: Option<(f32, f32)>,
     /// Which image the overlay last showed (trace bookkeeping only).
     last_overlay_cursor: Option<usize>,
     /// False until the user first moves the cursor or marks (issue #4):
@@ -517,8 +512,6 @@ fn main() {
         zoom_factor: if start_11 { f32::INFINITY } else { 1.0 },
         pan_center: (0.5, 0.5),
         last_pan_write: None,
-        loupe_click_prev: None,
-        loupe_click_last: None,
         last_overlay_cursor: None,
         cursor_touched: false,
         last_grid_zoom: 1,
@@ -1106,10 +1099,6 @@ fn main() {
                 // click (validator: a capture-key re-sort could otherwise
                 // swap the image under an active 1:1 inspection).
                 st.cursor_touched = true;
-                // Double-click proximity trace (spec): remember the last
-                // two loupe clicks.
-                st.loupe_click_prev = st.loupe_click_last;
-                st.loupe_click_last = Some((fx.clamp(0.0, 1.0), fy.clamp(0.0, 1.0)));
                 st.pan_center = (fx.clamp(0.0, 1.0), fy.clamp(0.0, 1.0));
             }
             refresh(&win, &state);
@@ -1142,21 +1131,15 @@ fn main() {
         });
     }
     {
-        // Fit-surface clicks only feed the double-click proximity trace
-        // (a click at fit does nothing — spec Q5).
+        // A click at fit does nothing to the view (spec Q5) — it only
+        // claims the cursor, like every other click on an image
+        // (untouched-cursor rule: a capture-key re-sort must not swap the
+        // image under the user). It used to also feed a double-click
+        // proximity trace; that guard is gone — Slint's own 10 px repeat
+        // gate enforces the rule, see `handle_loupe_double_click`.
         let state = Rc::clone(&state);
-        let win = window.as_weak();
-        window.on_fit_clicked(move |x, y| {
-            let Some(win) = win.upgrade() else { return };
-            let mut st = state.borrow_mut();
-            // A fit click claims the cursor like every other image click
-            // (untouched-cursor rule — validator: a capture-key re-sort
-            // must not swap the image under the user).
-            st.cursor_touched = true;
-            let (_, geo) = machine_ctx(&win, &st);
-            let frac = fastcull_core::pointer::view_to_frac(&geo, 1.0, (x, y));
-            st.loupe_click_prev = st.loupe_click_last;
-            st.loupe_click_last = Some(frac);
+        window.on_fit_clicked(move || {
+            state.borrow_mut().cursor_touched = true;
         });
     }
     {
@@ -1506,6 +1489,53 @@ fn main() {
                         win.invoke_focus_keys();
                     }
                     trace_mark(&format!("{key} toggled to {visible}"));
+                    return;
+                }
+                if let Some(at) = key.strip_prefix("dblclick:") {
+                    // dblclick:X,Y (view-area logical px) — replays Slint's
+                    // REAL dispatch order for a double-click above fit: a
+                    // `clicked` that re-centers, then `double-clicked` on
+                    // the SAME release. That ordering is the whole bug
+                    // class — the shipped proximity guard compared two
+                    // image fractions taken either side of the recenter and
+                    // silently vetoed every double-click above fit
+                    // (validator FAIL-1 / QE D1, 2026-07-30). No core test
+                    // could see it: the machine was always right, the
+                    // bridge was not. This does NOT inject real pointer
+                    // events — which Slint surface receives a press is
+                    // still review-verified only (issue #13).
+                    if let Some((x, y)) = at.split_once(',') {
+                        if let (Ok(x), Ok(y)) = (x.parse::<f32>(), y.parse::<f32>()) {
+                            if win.get_one2one() {
+                                // BOTH releases fire `clicked` (Slint calls
+                                // it per release and adds `double_clicked`
+                                // when click_count is odd), and the second
+                                // press is the SAME physical screen point —
+                                // which by then maps to a different image
+                                // fraction, because the first click already
+                                // re-centred and refreshed. Replaying only
+                                // one click leaves the trap unarmed and the
+                                // test vacuous (caught by mutation).
+                                let frac = |w: &MainWindow| {
+                                    let (lw, lh) = (w.get_loupe_w(), w.get_loupe_h());
+                                    let (ox, oy) = (w.get_loupe_vx(), w.get_loupe_vy());
+                                    (
+                                        ((x - ox) / lw.max(1.0)).clamp(0.0, 1.0),
+                                        ((y - oy) / lh.max(1.0)).clamp(0.0, 1.0),
+                                    )
+                                };
+                                let (fx, fy) = frac(&win);
+                                win.invoke_loupe_clicked(fx, fy);
+                                let (fx2, fy2) = frac(&win); // AFTER the recentre
+                                win.invoke_loupe_clicked(fx2, fy2);
+                                win.invoke_zoom_double_clicked(x, y);
+                            } else {
+                                win.invoke_fit_clicked();
+                                win.invoke_fit_clicked();
+                                win.invoke_fit_double_clicked(x, y);
+                            }
+                        }
+                    }
                     return;
                 }
                 if let Some(dims) = key.strip_prefix("resize:") {
@@ -2083,7 +2113,10 @@ fn machine_ctx(
     // keys-space (validator MAJOR: the fit view is a grid strip cell,
     // scroll-dependent — not an image centered in the viewport).
     let fit_cell = (columns == 1).then(|| {
-        let layout = GridLayout::new(st.zoom, vw, st.view.len());
+        // The layout is bounded by the GRID area's height (below the filter
+        // bar), not by `vh`/`loupe_area_h` — the zoom overlay covers the bar
+        // but the fit view does not.
+        let layout = GridLayout::new(st.zoom, vw, win.get_grid_height(), st.view.len());
         let pos = st.cursor_pos().unwrap_or(0);
         let (cx, cy) = layout.position(pos);
         let scroll_y = (-win.get_vp_y()).max(0.0);
@@ -2107,35 +2140,33 @@ fn machine_ctx(
     (state, geo)
 }
 
-/// Loupe double-click (fit or zoomed surface): route through the machine
-/// after the proximity check — the second press must land near the first
-/// or it was two independent clicks whose re-centers already happened
-/// (spec, persona finding: eye-beak-wingtip scan clicks must not slam to
-/// 1:1).
+/// Loupe double-click (fit or zoomed surface): straight to the machine.
+///
+/// There is deliberately NO app-level proximity check here. The persona
+/// rule it was meant to serve — scanning eye, then beak, then wingtip in
+/// quick succession is three independent re-centers, never a jump to 1:1 —
+/// is already enforced by Slint itself: `check_repeat` restarts the click
+/// count unless the second press lands within 10 logical px of the first
+/// (`i-slint-core-1.17.1/input.rs`, `square_length() < 100`), so
+/// `double-clicked` cannot fire for distant presses at all.
+///
+/// The check that used to live here was not merely redundant, it VETOED
+/// the gesture it guarded (validator FAIL-1 / QE D1, 2026-07-30). It
+/// compared the two clicks as FRACTIONAL IMAGE coordinates — but Slint
+/// fires `clicked` before `double-clicked`, and the first click's handler
+/// (`on_loupe_clicked`) re-centers the view and refreshes, moving the image
+/// under a stationary pointer. The second press therefore lands on the same
+/// screen pixel but a DIFFERENT image fraction, so the measured "distance"
+/// was really the recenter displacement: at 1:1 on a 1440x900 window a
+/// double-click 200 px right of centre measured 520 px and was rejected.
+/// Above fit the gesture never reached 1:1 at all; only from fit (where a
+/// click re-centers nothing) did it work — which is why it passed review.
 fn handle_loupe_double_click(win: &MainWindow, state: &Rc<RefCell<AppState>>, x: f32, y: f32) {
     use fastcull_core::pointer as pm;
     let action = {
         let mut st = state.borrow_mut();
         capture_pan(win, &mut st);
         let (ms, geo) = machine_ctx(win, &st);
-        let factor = match ms {
-            pm::ViewState::Zoomed { factor } => factor,
-            _ => 1.0,
-        };
-        if let (Some(a), Some(b)) = (st.loupe_click_prev, st.loupe_click_last) {
-            // Compare the two recorded clicks in ON-SCREEN pixels at the
-            // current extents.
-            let s = fastcull_core::zoompan::fit_scale(
-                geo.viewport_w,
-                geo.viewport_h,
-                geo.native_w,
-                geo.native_h,
-            ) * factor;
-            let d = ((a.0 - b.0) * geo.native_w * s).hypot((a.1 - b.1) * geo.native_h * s);
-            if d > 12.0 {
-                return; // two re-centers, not a double-click
-            }
-        }
         st.cursor_touched = true;
         pm::step(ms, pm::PointerInput::DoubleClick { pos: (x, y) }, &geo).1
     };
@@ -2397,10 +2428,6 @@ fn handle_nav_inner(win: &MainWindow, state: &Rc<RefCell<AppState>>, key: &str) 
             | "burst-next"
     ) {
         st.cursor_touched = true;
-        // Leaving an image invalidates the double-click proximity trace
-        // (a click on the OLD image must not veto a double-click here).
-        st.loupe_click_prev = None;
-        st.loupe_click_last = None;
     }
     let loupe_step = grid::ZOOM_COLUMNS.len() - 1;
     match key {
@@ -2583,7 +2610,7 @@ fn handle_nav_inner(win: &MainWindow, state: &Rc<RefCell<AppState>>, key: &str) 
     // CURRENT viewport-height, so the new virtual height must land first or
     // the reveal gets clamped against stale bounds and the cursor scrolls
     // out of view.
-    let layout = GridLayout::new(st.zoom, win.get_grid_width(), st.view.len());
+    let layout = GridLayout::new(st.zoom, win.get_grid_width(), viewport_h, st.view.len());
     let pos = st.cursor_pos().unwrap_or(0);
     let new_scroll = layout.scroll_to_reveal(pos, scroll_y, viewport_h);
     // Every reveal marks its geometry as consumed (spec) — a nav key
@@ -2598,8 +2625,8 @@ fn handle_nav_inner(win: &MainWindow, state: &Rc<RefCell<AppState>>, key: &str) 
 
 fn current_geometry(win: &MainWindow, state: &Rc<RefCell<AppState>>) -> (GridLayout, f32, f32) {
     let st = state.borrow();
-    let layout = GridLayout::new(st.zoom, win.get_grid_width(), st.view.len());
     let viewport_h = win.get_grid_height();
+    let layout = GridLayout::new(st.zoom, win.get_grid_width(), viewport_h, st.view.len());
     let scroll_y = (-win.get_vp_y()).max(0.0);
     (layout, viewport_h, scroll_y)
 }
@@ -2640,7 +2667,7 @@ fn refresh_inner(win: &MainWindow, state: &Rc<RefCell<AppState>>) {
     // re-anchor in the loupe block below (issue #16).
     if relayout && layout.columns > 1 && view_len > 0 && viewport_h > 0.0 {
         if let Some((old_width, old_viewport_h)) = prev_geom {
-            let old_layout = GridLayout::new(st.zoom, old_width, view_len);
+            let old_layout = GridLayout::new(st.zoom, old_width, old_viewport_h, view_len);
             let old_pitch = old_layout.cell_height + grid::CELL_GAP;
             let new_pitch = layout.cell_height + grid::CELL_GAP;
             let old_max = (old_layout.total_height - old_viewport_h).max(0.0);
@@ -2741,17 +2768,40 @@ fn refresh_inner(win: &MainWindow, state: &Rc<RefCell<AppState>>) {
         let (_, cur_top) = layout.position(cur_pos);
         let cur_visible =
             cur_top < scroll_y + viewport_h && cur_top + layout.cell_height > scroll_y;
+        // PARTLY visible is not good enough at one column (validator
+        // 2026-07-30). Now that the N=1 cell is bounded by the viewport
+        // HEIGHT, a vertical resize changes the row pitch — so keeping the
+        // raw pixel offset lands mid-strip and the loupe shows the bottom
+        // of one photo with the top of the next below it. That is strictly
+        // worse than the crop this bound was added to fix, so a geometry or
+        // view change re-anchors whenever the cell is not WHOLLY on screen,
+        // not only when it has left entirely. (Plain scrolling is left
+        // alone: a scrollbar drag legitimately parks a cell half-way, and
+        // re-anchoring there would fight the user's hand.)
+        let fully_visible = cur_top - grid::CELL_GAP >= scroll_y - 0.5
+            && cur_top + layout.cell_height + grid::CELL_GAP <= scroll_y + viewport_h + 0.5;
+        let geometry_moved = relayout || view_mutated;
         // Guard against pre-layout geometry (issue #4 debugging: refreshes
         // before the window lays out see a NEGATIVE viewport height, made
         // the cursor look "scrolled away", and spuriously claimed it —
         // killing the untouched-snap and leaving the final cursor racy).
-        if !cur_visible && viewport_h > 0.0 {
-            if !scrolled || relayout || view_mutated {
+        if viewport_h > 0.0 && (!cur_visible || (geometry_moved && !fully_visible)) {
+            if !cur_visible && scrolled && !geometry_moved {
+                let center_row = ((scroll_y + viewport_h * 0.5)
+                    / (layout.cell_height + grid::CELL_GAP))
+                    as usize;
+                let claimed = center_row.min(view_len - 1);
+                trace_mark(&format!(
+                    "follow-scroll claim: cursor pos {cur_pos} -> {claimed}"
+                ));
+                st.cursor = st.view[claimed];
+                st.cursor_touched = true; // scrolling the loupe IS cursor movement
+            } else {
                 // Geometry changed under the cursor (panel toggle, window
                 // RESIZE — the user's reported bug): this is NOT
                 // scrolling. Keep the cursor, move the viewport back to
                 // it; a follow-up refresh renders the corrected window
-                // (issue #16 — the claim below used to swap the photo).
+                // (issue #16 — the claim above used to swap the photo).
                 let corrected = layout.scroll_to_reveal(cur_pos, scroll_y, viewport_h);
                 win.set_virtual_height(layout.total_height);
                 win.set_vp_y(-corrected);
@@ -2765,16 +2815,6 @@ fn refresh_inner(win: &MainWindow, state: &Rc<RefCell<AppState>>) {
                         refresh(&win, &state_rc);
                     }
                 });
-            } else {
-                let center_row = ((scroll_y + viewport_h * 0.5)
-                    / (layout.cell_height + grid::CELL_GAP))
-                    as usize;
-                let claimed = center_row.min(view_len - 1);
-                trace_mark(&format!(
-                    "follow-scroll claim: cursor pos {cur_pos} -> {claimed}"
-                ));
-                st.cursor = st.view[claimed];
-                st.cursor_touched = true; // scrolling the loupe IS cursor movement
             }
         }
         if let Some(loupe) = &st.loupe {
