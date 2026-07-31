@@ -94,6 +94,41 @@ faq); QE executed the full DoD path from the docs against the release
 binary. Release-note debt RESOLVED with v0.3.0: the index install note was
 removed and the culling callout pinned to "Changed in 0.3.0". The docs-follow-specs binding lives in CLAUDE.md.
 
+## v0.5.0 (released 2026-07-30)
+
+Everything since v0.4.0. The selection wash (a multi-selection is
+readable at a glance, and the status bar states its size — the IPTC
+panel stamps that selection, so its reach had to be visible), and the
+issue #11 closure, which turned out to be two real defects rather than
+a sign-off:
+
+- **Double-click never reached 1:1 above fit** — the headline gesture of
+  the pointer contract, dead since it shipped. The bridge's proximity
+  guard compared two clicks as image fractions taken either side of the
+  first click's re-centre, so the "distance" it measured was the click's
+  own offset from the view centre; anything beyond ~12 px was vetoed. It
+  worked from fit (where a click re-centres nothing), which is why two
+  gates passed it. The guard is deleted — Slint's own 10 px repeat gate
+  already enforces the rule it was written for.
+- **The loupe "fit" view was a crop.** The one-column grid cell is 3:2 and
+  spans the grid width, so it was taller than the viewport on every normal
+  window: 16.6 % of the frame height hidden at 1440×900, 23.4 % fullscreen
+  on 1080p, with nothing on screen to say so — and after #11 gave the wheel
+  to zoom and made drag inert, unreachable by any input. The cell is now
+  bounded by the viewport at N=1 (persona MUST-HAVE, user-approved); the
+  photo renders ~20 % smaller with pillarbox bars, and the whole frame is
+  there. The `✓ copied` and `×N burst` badges, anchored below the fold,
+  came back with it.
+
+Also: an unbounded optimistic zoom climb that reached 1e38 and poisoned
+the pan centre with NaN; three `zoompan` functions that could panic on
+non-finite geometry (7,992,116 panicking combinations in a 108.8 M-case
+sweep, now zero); and four acceptance criteria that had no real test —
+every pointer assertion sat at dead centre, where the pointer anchor and
+the centre anchor coincide. A `FASTCULL_DRIVE dblclick:X,Y` action makes
+bridge-level pointer defects reachable from a test for the first time;
+pointer ROUTING remains review-verified only (issue #13).
+
 ## v0.4.0 (released 2026-07-27)
 
 Everything since v0.3.0: the import-performance overhaul (EXIF summaries
