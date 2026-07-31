@@ -5,7 +5,8 @@ The whole idea: your right hand stays on the arrow keys, your left on
 
 ## The loop
 
-1. Open the folder. The grid sorts by capture time.
+1. Open the folder. The grid sorts by capture time — see *While the folder
+   is still loading* below for the one exception.
 2. Click the **Unmarked** filter chip (or leave **All** on).
 3. Walk with the arrows. `Y` picks, `N` rejects — both auto-advance to
    the next frame. `U` clears a mark (and doesn't advance).
@@ -68,6 +69,42 @@ outside closes them.
 > **Fixed in 0.5.0**: double-click did not actually reach 1:1 once you
 > were zoomed in — it just re-centered twice. It works now, from fit and
 > from any zoom step.
+
+## While the folder is still loading
+
+You can start culling immediately — that's the point of the tool — but a
+big folder takes a while to read every file's capture time, and until it
+has, **the grid is ordered by filename**. The status bar says so:
+
+    1847/3100 loaded · sorting by name until loaded
+
+When the last file lands, the grid sorts by capture time once. Your cursor
+stays on **your** photo, and if it was on screen the view scrolls to keep
+it in front of you. If you'd scrolled off browsing, your place is left
+alone — scrolling is browsing, and the next arrow key brings the cursor
+back as usual. (Your scroll *position* is kept, not the photos under it:
+the grid has re-sorted, so you'll be looking at a different stretch of the
+shoot.)
+
+This holds even if you haven't touched anything yet: the photo the cursor
+is on when the load finishes is the photo it stays on. On a folder where
+filename order and capture order disagree, that means you may find
+yourself part-way down the shoot rather than at its start — the frame you
+were looking at is worth more than the position number.
+
+One thing that does **not** change during the load: the sort chip still
+shows your chosen sort (say "Capture ↑") even while the grid is ordered by
+name. The status bar is the one that tells you the truth.
+
+For a single card shot in one run, filename order and capture order are
+the same thing, so you'll never see the difference. You'll see it when one
+folder holds two cards or two bodies, or when the camera's counter rolled
+over from 9999 mid-event.
+
+> **Fixed after 0.5.0**: the grid used to re-sort continuously while loading,
+> as each file's capture time arrived. Marking during that window could
+> land `Y` or `N` on a frame other than the one you were looking at,
+> because the first cell kept changing identity underneath you.
 
 ## Fit shows the whole frame
 

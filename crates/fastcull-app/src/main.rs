@@ -120,6 +120,19 @@ struct AppState {
     /// mutated under the cursor — re-sorts are never scrolling (issue
     /// #22).
     last_view_generation: u64,
+    /// Whether the cursor's cell was ON SCREEN at the end of the previous
+    /// refresh. The load-settled re-anchor consults it so that it restores a
+    /// cursor the user was looking at, and leaves a BROWSING user's scroll
+    /// alone — "scrolling is browsing, the cursor stays where the user
+    /// parked it; it may leave the viewport" (cursor contract). Computed on
+    /// the previous pass because the flip changes the cursor's POSITION, so
+    /// asking after the re-sort answers a different question.
+    last_cursor_visible: bool,
+    /// Whether the previous refresh saw a fully loaded session (issue #25).
+    /// The false->true edge is the ONE moment the view re-sorts from the
+    /// provisional filename order into the user's chosen sort, and it is
+    /// the only view mutation that reorders the WHOLE grid at once.
+    last_metadata_complete: bool,
     /// Grid-area geometry (grid_width, viewport_h) at the last refresh:
     /// a change means RELAYOUT (panel toggle, window resize), not user
     /// scrolling — the loupe follow-scroll claim must not fire (issue
@@ -257,10 +270,31 @@ impl AppState {
     fn cursor_pos(&self) -> Option<usize> {
         self.view.iter().position(|id| *id == self.cursor)
     }
+
+    /// Has every image's metadata job finished? (Issue #25: until it has,
+    /// the view is ordered by filename — see `filter::view`.)
+    ///
+    /// `thumbs_done` counts BOTH `ThumbReady` and `Failed`, so it is the
+    /// count of finished jobs, and EXIF is read inside that same job. A file
+    /// that fails to READ therefore cannot strand the session in the
+    /// provisional order — which counting `MetadataReady` alone would do,
+    /// since the pipeline emits it only when the EXIF read succeeds.
+    ///
+    /// A read that never RETURNS still can: one worker wedged on a dying
+    /// card or a stalled network mount leaves this one short forever, and
+    /// the whole session stays in filename order with no way to force the
+    /// sort. Accepted for now and recorded in ui-grid.md — the fix is a
+    /// per-file give-up or a "sort anyway" affordance, not a smaller
+    /// predicate.
+    fn metadata_complete(&self) -> bool {
+        self.thumbs_done >= self.labels.len()
+    }
 }
 
 fn recompute_view(st: &mut AppState) {
-    st.view = fastcull_core::filter::view(&st.picks, &st.labels, &st.capture_keys, &st.query);
+    let complete = st.metadata_complete();
+    st.view =
+        fastcull_core::filter::view(&st.picks, &st.labels, &st.capture_keys, &st.query, complete);
     // Every membership/order change bumps the generation: a cursor
     // displaced by a view RE-SORT (capture keys streaming in during
     // load) is not scrolling, and the follow-scroll claim must not
@@ -275,20 +309,27 @@ fn recompute_view(st: &mut AppState) {
 /// the cursor on a view member (nearest survivor), and an emptied view has
 /// no loupe to be in (persona G2). Validator finding: the pump previously
 /// recomputed membership alone, leaving a cursor no cell owned.
-fn recompute_view_keep_cursor(st: &mut AppState) {
+///
+/// `user_changed_query` distinguishes the USER asking for a different view
+/// (a filter chip, the sort control) from the ENGINE talking (streaming
+/// metadata, the load-settled re-sort, a decode landing, a sidecar
+/// arriving). Pre-touch the first still snaps to the new view's head per
+/// issue #4; the second must stop moving the photograph once the folder has
+/// loaded (user decision 2026-07-31). The semantics live in
+/// `filter::cursor_after_recompute` — see it for why this is a state and not
+/// an edge.
+fn recompute_view_keep_cursor(st: &mut AppState, user_changed_query: bool) {
     let old_view = std::mem::take(&mut st.view);
     let old_cursor = old_view.contains(&st.cursor).then_some(st.cursor);
     recompute_view(st);
-    if !st.cursor_touched {
-        // Issue #4: before the first user interaction the cursor is "the
-        // first image", not a pinned id — capture keys stream in and
-        // re-sort the view under it.
-        if let Some(first) = st.view.first() {
-            st.cursor = *first;
-        }
-    } else if let Some(id) =
-        fastcull_core::filter::cursor_after_filter_change(&old_view, old_cursor, &st.view)
-    {
+    if let Some(id) = fastcull_core::filter::cursor_after_recompute(
+        &old_view,
+        old_cursor,
+        &st.view,
+        st.cursor_touched,
+        st.metadata_complete(),
+        user_changed_query,
+    ) {
         st.cursor = id;
     }
     let loupe_step = grid::ZOOM_COLUMNS.len() - 1;
@@ -339,6 +380,13 @@ fn load_folder(state: &Rc<RefCell<AppState>>, folder: &std::path::Path) -> Resul
     st.images.clear();
     st.failed.clear();
     st.thumbs_done = 0;
+    // Re-arm issue #25's one-shot re-sort edge for the new session. It
+    // happens to re-arm anyway because every open path refreshes
+    // synchronously before the pump can deliver an event, but that is an
+    // implicit invariant one reordered call away from a second folder
+    // silently losing its re-anchor (validator concern, 2026-07-31).
+    st.last_metadata_complete = false;
+    st.last_cursor_visible = true;
     st.synthetic = false;
     st.fullres.clear();
     st.terminal_native.clear();
@@ -505,6 +553,8 @@ fn main() {
         terminal_native: HashSet::new(),
         view_generation: 0,
         last_view_generation: 0,
+        last_cursor_visible: true,
+        last_metadata_complete: false,
         last_resolved_factor: None,
         last_badge: None,
         last_view_geometry: None,
@@ -566,6 +616,11 @@ fn main() {
             st.iptc = vec![fastcull_core::iptc::IptcData::default(); n];
             st.synthetic = true;
             st.session_open = true;
+            // No pipeline runs in synthetic mode, so no job ever completes:
+            // without this the session is permanently "still loading" and
+            // the status bar would claim "0/N loaded - sorting by name"
+            // forever, on the very frames the screenshot suite captures.
+            st.thumbs_done = n;
             recompute_view(&mut st);
         }
         Launch::Folder(path) => {
@@ -630,7 +685,7 @@ fn main() {
                 // Through the cursor-aware recompute (validator: plain
                 // recompute here skipped the pre-touch snap, making the
                 // cursor after a sort click timing-dependent again).
-                recompute_view_keep_cursor(&mut st);
+                recompute_view_keep_cursor(&mut st, true); // the USER re-sorted
             }
             reveal_cursor(&win, &state);
         });
@@ -1415,7 +1470,9 @@ fn main() {
                     }
                     if dirty {
                         // Picks/keys may have changed membership or order.
-                        recompute_view_keep_cursor(&mut st);
+                        // ENGINE-driven: must not move an untouched cursor
+                        // once the folder has loaded (issue #25).
+                        recompute_view_keep_cursor(&mut st, false);
                     }
                     if st.burst_dirty {
                         st.burst_dirty = false;
@@ -1535,6 +1592,20 @@ fn main() {
                                 win.invoke_fit_double_clicked(x, y);
                             }
                         }
+                    }
+                    return;
+                }
+                if let Some(px) = key.strip_prefix("scroll:") {
+                    // scroll:N — browse the grid to offset N logical px
+                    // WITHOUT claiming the cursor, i.e. what the wheel does
+                    // (the Flickable handles it natively, so Rust never
+                    // hears about it and `cursor_touched` stays false).
+                    // Added 2026-07-31: the harness had no scroll-without-
+                    // claim action, which is exactly why a re-anchor that
+                    // yanked a browsing user's viewport got through review.
+                    if let Ok(y) = px.parse::<f32>() {
+                        win.set_vp_y(-y.max(0.0));
+                        refresh(&win, &state);
                     }
                     return;
                 }
@@ -1806,7 +1877,12 @@ fn plan_sources(st: &AppState) -> Vec<fastcull_core::fileops::PlanSource> {
         filter: fastcull_core::filter::PickFilter::All,
         ..st.query
     };
-    let ordered = fastcull_core::filter::view(&st.picks, &st.labels, &st.capture_keys, &all_query);
+    // `{seq}` is baked into PERMANENT FILENAMES on disk — the one
+    // irreversible artifact this app produces — and both fileops.md and
+    // docs/copy-picks.md promise it follows the session sort, so a copy
+    // started mid-load must not encode a transient view state forever.
+    let ordered =
+        fastcull_core::filter::view_true_sort(&st.picks, &st.labels, &st.capture_keys, &all_query);
     ordered
         .into_iter()
         .filter(|id| {
@@ -1955,8 +2031,16 @@ fn recompute_bursts(st: &mut AppState) {
         sort: fastcull_core::filter::SortKey::CaptureTime,
         ascending: true,
     };
-    let order =
-        fastcull_core::filter::view(&st.picks, &st.labels, &st.capture_keys, &capture_query);
+    // A burst is a fact about capture times, so grouping over issue #25's
+    // provisional filename order would invent groups. Grouping over
+    // partly-loaded keys is already approximate and is redone as metadata
+    // streams (burst_dirty).
+    let order = fastcull_core::filter::view_true_sort(
+        &st.picks,
+        &st.labels,
+        &st.capture_keys,
+        &capture_query,
+    );
     let frames: Vec<fastcull_core::burst::FrameMeta> = order
         .iter()
         .map(|id| st.frame_meta.get(*id).cloned().unwrap_or_default())
@@ -2418,7 +2502,7 @@ fn apply_filter_change(
     {
         let mut st = state.borrow_mut();
         st.query.filter = filter;
-        recompute_view_keep_cursor(&mut st);
+        recompute_view_keep_cursor(&mut st, true); // the USER re-filtered
     }
     reveal_cursor(win, state);
 }
@@ -2681,6 +2765,26 @@ fn refresh_inner(win: &MainWindow, state: &Rc<RefCell<AppState>>) {
     let view_mutated = st.last_view_generation != st.view_generation;
     st.last_view_generation = st.view_generation;
     let view_len = st.view.len();
+    // Issue #25's one re-sort: the instant the last metadata job lands, the
+    // WHOLE grid reorders from the provisional filename order into the
+    // user's sort. Every other view mutation moves a few cells; this one
+    // moves all of them, so keeping the raw scroll offset lands the
+    // viewport on unrelated content and can leave the cursor cell
+    // off-screen entirely — the next arrow key then teleports the view.
+    // The N=1 strip re-anchors through its own block below; the multi-
+    // column grid had no path for it, because the relayout branch is gated
+    // on GEOMETRY changes and this is a content change (validator FAIL,
+    // 2026-07-30). Reveal once, on the edge only — not on every mutation,
+    // which would fight live filter removal and per-mark recomputes.
+    // The edge is consumed only when this refresh can actually act on it: a
+    // pre-layout pass (no height yet, minimized window) would otherwise
+    // swallow it and the re-sort would silently never re-anchor for the rest
+    // of the session (validator concern, 2026-07-31).
+    let can_anchor = viewport_h > 0.0 && view_len > 0;
+    let load_settled = st.metadata_complete() && !st.last_metadata_complete && can_anchor;
+    if can_anchor {
+        st.last_metadata_complete = st.metadata_complete();
+    }
 
     // GRID-level resize anchoring (user report: shrink the window and
     // the list "scrolls up", grow and it "scrolls down"). Row pitch is
@@ -2691,6 +2795,45 @@ fn refresh_inner(win: &MainWindow, state: &Rc<RefCell<AppState>>) {
     // bottom (growing at End must not strand the viewport mid-list),
     // and keep the cursor visible if it was. The N=1 strip has its own
     // re-anchor in the loupe block below (issue #16).
+    // The load-settled re-sort (issue #25) at MULTI-COLUMN zoom: content,
+    // not geometry, so the relayout branch below cannot see it. Put the
+    // cursor's cell back on screen and let the scroll follow it.
+    // ...but only for a cursor the user was actually looking at. Wheel and
+    // scrollbar browsing do NOT claim the cursor, and the cursor contract
+    // says an off-screen cursor stays off-screen until the next arrow key —
+    // so yanking the viewport back would be the very "it moved with no
+    // input" defect this change exists to remove, and would regress a
+    // browsing user against the old behaviour (validator FAIL, 2026-07-31).
+    // Same guard the relayout branch below already applies.
+    if load_settled && layout.columns > 1 {
+        let cur_pos = st.cursor_pos().unwrap_or(0);
+        // The guard itself lives in core (rule 5) and is unit-tested there:
+        // grid::scroll_after_resort. It shipped into review MISSING from the
+        // app-level version, so it does not belong in the app.
+        let corrected = grid::scroll_after_resort(
+            &layout,
+            cur_pos,
+            scroll_y,
+            viewport_h,
+            st.last_cursor_visible,
+        );
+        // Unconditional marker: a test must be able to see that the flip
+        // HAPPENED, not only that it moved something (validator: the old
+        // trace fired solely inside the >=0.5px branch, so a run where the
+        // re-sort never occurred was indistinguishable from one where it
+        // occurred and correctly changed nothing).
+        trace_mark(&format!(
+            "load settled: cursor pos {cur_pos}, scroll {scroll_y:.0} -> {corrected:.0}  (cursor was {})",
+            if st.last_cursor_visible {
+                "visible"
+            } else {
+                "off-screen; offset kept"
+            }
+        ));
+        win.set_virtual_height(layout.total_height);
+        win.set_vp_y(-corrected);
+        scroll_y = corrected;
+    }
     if relayout && layout.columns > 1 && view_len > 0 && viewport_h > 0.0 {
         if let Some((old_width, old_viewport_h)) = prev_geom {
             let old_layout = GridLayout::new(st.zoom, old_width, old_viewport_h, view_len);
@@ -2729,6 +2872,17 @@ fn refresh_inner(win: &MainWindow, state: &Rc<RefCell<AppState>>) {
             win.set_vp_y(-corrected);
             scroll_y = corrected; // this very pass renders the anchored view
         }
+    }
+    // The scroll offset is final for this pass: record whether the cursor is
+    // on screen, for the next refresh's load-settled decision (above).
+    // NOTE: this is after both multi-column writes to `vp_y`, but BEFORE the
+    // loupe block's own write and follow-scroll claim — so on the N=1 path
+    // the recorded value is one pass stale. Harmless only because the
+    // consumer is gated on `columns > 1`; revisit if that gate is relaxed.
+    if can_anchor {
+        st.last_cursor_visible = st
+            .cursor_pos()
+            .is_some_and(|p| layout.is_visible(p, scroll_y, viewport_h));
     }
     // Visible VIEW positions; `ids` are the image ids shown there (the two
     // coincide only with filter=All + capture sort before keys arrive).
@@ -2792,8 +2946,7 @@ fn refresh_inner(win: &MainWindow, state: &Rc<RefCell<AppState>>) {
         // finding — move, no scroll needed, snap-back to center).
         let cur_pos = st.cursor_pos().unwrap_or(0);
         let (_, cur_top) = layout.position(cur_pos);
-        let cur_visible =
-            cur_top < scroll_y + viewport_h && cur_top + layout.cell_height > scroll_y;
+        let cur_visible = layout.is_visible(cur_pos, scroll_y, viewport_h);
         // PARTLY visible is not good enough at one column (validator
         // 2026-07-30). Now that the N=1 cell is bounded by the viewport
         // HEIGHT, a vertical resize changes the row pitch — so keeping the
@@ -3244,9 +3397,19 @@ fn refresh_inner(win: &MainWindow, state: &Rc<RefCell<AppState>>) {
     } else {
         ""
     };
+    // Load progress (persona ask, issue #25): a bare "1847 thumbs loaded"
+    // makes you hunt for the total to know whether to start now or get a
+    // beer, and while the order is provisional the status bar is the only
+    // honest place to say so — the grid looks identical either way.
+    let loaded = st.thumbs_done.min(count);
+    let load_note = if st.metadata_complete() {
+        format!("{loaded} thumbs loaded")
+    } else {
+        format!("{loaded}/{count} loaded · sorting by name until loaded")
+    };
     win.set_status(
         format!(
-            "{} ({}/{}){}{}{}{} — {} thumbs loaded — ★{} ✕{}{} — {} column{}",
+            "{} ({}/{}){}{}{}{} — {} — ★{} ✕{}{} — {} column{}",
             if cursor_in_view {
                 st.labels.get(cursor).cloned().unwrap_or_default()
             } else {
@@ -3262,7 +3425,7 @@ fn refresh_inner(win: &MainWindow, state: &Rc<RefCell<AppState>>) {
             showing,
             burst_note,
             sel_note,
-            st.thumbs_done.min(count),
+            load_note,
             counts.picked,
             counts.rejected,
             if st.sidecar_failures > 0 {

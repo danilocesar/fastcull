@@ -89,6 +89,14 @@ explicitly deferred to a later discussion; modal dialog accepted)
   semantics) BEFORE the plan and the flush barrier — a half-typed caption
   must ship.
 - **`{seq}` for rename templates follows the SESSION SORT ORDER** (capture
+  While a folder is still LOADING that order is deliberately not what the
+  grid shows: issue #25 holds the view in filename order until every
+  metadata job finishes, but `{seq}` keeps following the true sort, because
+  it is baked into permanent filenames and must not encode a transient view
+  state. Consequence, recorded: a copy started mid-load numbers files in an
+  order matching neither the screen nor the same copy run a few seconds
+  later — the capture sort is only partial until the load ends. See
+  ui-grid.md, *Provisional order while loading*.
   time default) — same caller contract as IPTC apply; with all-picks
   scope, "view order" would be ambiguous under an active filter.
 - Dialog minimums: destination picker (must allow creating a folder) with

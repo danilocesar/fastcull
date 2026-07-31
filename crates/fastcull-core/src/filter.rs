@@ -85,16 +85,44 @@ pub fn counts(picks: &[PickState]) -> Counts {
 /// `sort`/`ascending`. `capture_keys[i]` is `ExifSummary::sort_key()` (None
 /// until metadata loads or when absent); `names[i]` breaks ties and orders
 /// keyless images.
+///
+/// `metadata_complete` says whether every image's metadata job has finished.
+/// **While it is false the view is ordered by FILENAME regardless of
+/// `query.sort`** (issue #25). The capture sort puts keyed images before
+/// still-keyless ones, so applying it mid-load makes the order churn on
+/// every arrival — and EXIF is read inside the per-file thumbnail job, so
+/// "mid-load" is the WHOLE load (measured: ~15 s for 3,000 files locally,
+/// longer off a card), not a startup blink. Two things rode that churn:
+/// navigation resolved against an order that no longer existed a frame
+/// later (a single `right` landed 870 frames from the intended second
+/// image), and — worse — the untouched cursor is re-pinned to the view HEAD
+/// on every refresh while marks write to that same cursor, so the head
+/// changing identity between a photographer's decision and their keypress
+/// lands `Y`/`N` on a frame they never looked at. Reproduced with no input
+/// at all: the cursor moved from image 0 to image 2000 mid-load.
+///
+/// Filename order is available from the directory scan (~13 ms for 3,000
+/// files), is stable under the user's hands, and for a single card in
+/// shooting order IS capture order — so the eventual re-sort is invisible
+/// in the common case. When the last job lands, the real sort applies once;
+/// a claimed cursor keeps its image and the viewport re-anchors on it.
 pub fn view(
     picks: &[PickState],
     names: &[String],
     capture_keys: &[Option<String>],
     query: &ViewQuery,
+    metadata_complete: bool,
 ) -> Vec<usize> {
     let mut ids: Vec<usize> = (0..picks.len())
         .filter(|i| query.filter.matches(picks[*i]))
         .collect();
-    match query.sort {
+    // Provisional order while the metadata is still streaming (see above).
+    let sort = if metadata_complete {
+        query.sort
+    } else {
+        SortKey::Filename
+    };
+    match sort {
         SortKey::Filename => ids.sort_by(|a, b| names[*a].cmp(&names[*b])),
         SortKey::CaptureTime => ids.sort_by(|a, b| match (&capture_keys[*a], &capture_keys[*b]) {
             (Some(ka), Some(kb)) => ka.cmp(kb).then_with(|| names[*a].cmp(&names[*b])),
@@ -107,6 +135,27 @@ pub fn view(
         ids.reverse();
     }
     ids
+}
+
+/// The view in the user's TRUE sort, never issue #25's provisional filename
+/// order — for the two consumers that must not see it:
+///
+/// - **burst grouping**, because a burst is a fact about capture times and
+///   grouping by filename would invent groups;
+/// - **Copy Picks**, because `{seq}` is baked into permanent filenames, the
+///   one irreversible artifact this app produces.
+///
+/// A named function rather than a bare `true` at the call sites: that flag
+/// reads as "metadata is complete", which is exactly what it is NOT where
+/// these two call it — they are asserting "ignore the provisional rule".
+/// Two mutation survivors (QE G3, G4) lived in that ambiguity.
+pub fn view_true_sort(
+    picks: &[PickState],
+    names: &[String],
+    capture_keys: &[Option<String>],
+    query: &ViewQuery,
+) -> Vec<usize> {
+    view(picks, names, capture_keys, query, true)
 }
 
 /// Cursor rule for LIVE removal (spec, blocking gap closed pre-M5): after
@@ -138,6 +187,56 @@ pub fn cursor_after_mark(
         Some(pos) if auto_advance => Some(new_view[(pos + 1).min(new_view.len() - 1)]),
         Some(pos) => Some(new_view[pos]),
     }
+}
+
+/// Cursor after ANY view recompute: the one place the untouched-cursor rule
+/// and issue #25's load-settled re-sort are reconciled.
+///
+/// Issue #4 says that before the user's first interaction the cursor is "the
+/// first image of the view", not a pinned id — so a filter change, a sort
+/// change or streaming membership updates snap it to the new head, and a
+/// folder never opens with the cursor stranded mid-grid.
+///
+/// **Once the folder has finished loading, ENGINE events stop moving it**
+/// (user decision 2026-07-31: "during the loading phase, whatever is
+/// currently selected stays selected, and stays visible on the screen").
+///
+/// The rule is deliberately a STATE, not an edge. A first attempt made the
+/// keep fire only on the load-settled transition, which held the cursor for
+/// exactly one refresh: `cursor_touched` was still false afterwards, so the
+/// next background decode or sidecar write re-applied the head-follow rule
+/// and snapped the photograph away again — with no input, after loading,
+/// which is the whole defect class issue #25 exists to remove (validator
+/// FAIL, 2026-07-31, reproduced live). So the discriminator is not "is this
+/// the flip" but **"did the USER ask for a different view?"**:
+///
+/// - `user_changed_query` — a filter chip or the sort control. Pre-touch
+///   these still snap to the new view's first image, exactly as issue #4
+///   specifies; the user asked to see a different set, so showing them the
+///   start of it is right.
+/// - Everything else is the ENGINE talking: streaming metadata, the
+///   load-settled re-sort, a decode landing, a sidecar arriving. While the
+///   folder is still loading these keep the head (the order is provisional
+///   and stable, so the head IS the cursor); once it has loaded they must
+///   leave the photograph alone.
+///
+/// The cost is accepted knowingly: on a folder whose filename order runs
+/// contrary to capture order, an untouched cursor that started at the top
+/// ends up mid-grid once the real order lands — the stranding issue #4 was
+/// written to prevent — and the viewport scrolls to keep it in view.
+pub fn cursor_after_recompute(
+    old_view: &[usize],
+    old_cursor: Option<usize>,
+    new_view: &[usize],
+    cursor_touched: bool,
+    metadata_complete: bool,
+    user_changed_query: bool,
+) -> Option<usize> {
+    let follow_head = !cursor_touched && (user_changed_query || !metadata_complete);
+    if follow_head {
+        return new_view.first().copied();
+    }
+    cursor_after_filter_change(old_view, old_cursor, new_view)
 }
 
 /// Cursor rule for a FILTER change (spec): keep the cursor image if it
@@ -219,7 +318,7 @@ mod tests {
                         sort,
                         ascending,
                     };
-                    let v = view(&picks, &names, &keys, &q);
+                    let v = view(&picks, &names, &keys, &q, true);
                     let mut sorted_ids = v.clone();
                     sorted_ids.sort_unstable();
                     assert_eq!(sorted_ids, expected_ids, "{q:?} membership");
@@ -231,6 +330,7 @@ mod tests {
                             ascending: !ascending,
                             ..q
                         },
+                        true,
                     );
                     rev.reverse();
                     assert_eq!(v, rev, "{q:?} descending is exact reverse");
@@ -240,13 +340,193 @@ mod tests {
         // Capture-time order: keyed images chronologically, keyless after,
         // by name.
         let q = ViewQuery::default();
-        assert_eq!(view(&picks, &names, &keys, &q), vec![3, 0, 1, 4, 5, 2]);
+        assert_eq!(
+            view(&picks, &names, &keys, &q, true),
+            vec![3, 0, 1, 4, 5, 2]
+        );
         // Filename order.
         let q = ViewQuery {
             sort: SortKey::Filename,
             ..q
         };
-        assert_eq!(view(&picks, &names, &keys, &q), vec![5, 4, 3, 2, 1, 0]);
+        assert_eq!(
+            view(&picks, &names, &keys, &q, true),
+            vec![5, 4, 3, 2, 1, 0]
+        );
+    }
+
+    /// Issue #25: while metadata streams, the order must not move under the
+    /// user's hands. Feed the capture keys in one at a time and assert the
+    /// view is IDENTICAL at every step — then that the real sort applies
+    /// once, when the last job lands.
+    ///
+    /// Before this, each arrival re-sorted: a keyed image jumps ahead of
+    /// every still-keyless one, so the HEAD changes identity repeatedly for
+    /// the whole load. Navigation resolved against an order that no longer
+    /// existed a frame later, and marks — which write to the untouched
+    /// cursor, itself re-pinned to that head — could land on a frame the
+    /// photographer never looked at.
+    #[test]
+    fn provisional_order_is_stable_while_metadata_streams() {
+        let (picks, names, keys) = fixture();
+        let q = ViewQuery::default(); // CaptureTime — the default sort
+        let unknown: Vec<Option<String>> = vec![None; keys.len()];
+
+        // Nothing known yet: filename order, despite the capture-time query.
+        let baseline = view(&picks, &names, &unknown, &q, false);
+        let by_name = view(
+            &picks,
+            &names,
+            &unknown,
+            &ViewQuery {
+                sort: SortKey::Filename,
+                ..q
+            },
+            true,
+        );
+        assert_eq!(baseline, by_name, "provisional order must be by filename");
+
+        // Keys landing one at a time must not reorder anything.
+        let mut streaming = unknown.clone();
+        for (i, key) in keys.iter().enumerate() {
+            streaming[i] = key.clone();
+            assert_eq!(
+                view(&picks, &names, &streaming, &q, false),
+                baseline,
+                "the view moved while metadata was still streaming (after key {i})"
+            );
+        }
+
+        // The last job lands: the real sort applies, exactly once.
+        let settled = view(&picks, &names, &keys, &q, true);
+        assert_eq!(settled, vec![3, 0, 1, 4, 5, 2], "capture order at the end");
+        assert_ne!(
+            settled, baseline,
+            "fixture must actually reorder, or the stability check above is vacuous"
+        );
+    }
+
+    /// The load-settled re-sort must not move the user's photograph, even
+    /// before their first keypress (user decision 2026-07-31). Every OTHER
+    /// recompute keeps issue #4's rule that an untouched cursor is "the
+    /// first image of the view".
+    #[test]
+    fn engine_events_stop_moving_an_untouched_cursor_once_loaded() {
+        // Provisional (filename) order, then the settled capture order.
+        let loading = vec![0, 1, 2, 3, 4, 5];
+        let settled = vec![3, 0, 1, 4, 5, 2];
+        let cursor = Some(0); // the head of the provisional order
+                              // (old_view, old_cursor, new_view, touched, complete, user_query)
+        let after = |touched, complete, user_query| {
+            cursor_after_recompute(&loading, cursor, &settled, touched, complete, user_query)
+        };
+
+        // THE FLIP, and EVERY engine recompute after it: the image is kept,
+        // never re-pinned to the new head (image 3). This must be a STATE,
+        // not a one-shot edge — the edge version held for a single refresh
+        // and the next decode event snapped the photograph away.
+        assert_eq!(
+            after(false, true, false),
+            Some(0),
+            "an engine event after loading must not move the photograph"
+        );
+        // A touched cursor is kept too, as it always was.
+        assert_eq!(after(true, true, false), Some(0));
+
+        // WHILE LOADING an engine recompute still follows the head — the
+        // provisional order is stable, so the head IS the cursor, and a
+        // folder opens at its first image (issue #4).
+        assert_eq!(after(false, false, false), Some(3));
+
+        // The USER asking for a different view still snaps pre-touch, loaded
+        // or not: they asked to see a different set, so show them its start.
+        assert_eq!(after(false, true, true), Some(3), "filter/sort chip");
+        assert_eq!(after(false, false, true), Some(3));
+        // ...but never once they have claimed the cursor.
+        assert_eq!(after(true, true, true), Some(0));
+
+        // An empty result is honest in every combination.
+        for touched in [true, false] {
+            for complete in [true, false] {
+                for user_query in [true, false] {
+                    assert_eq!(
+                        cursor_after_recompute(
+                            &loading,
+                            cursor,
+                            &[],
+                            touched,
+                            complete,
+                            user_query
+                        ),
+                        None
+                    );
+                }
+            }
+        }
+        // A cursor that did not survive falls back rather than pointing at
+        // an image no longer in the view.
+        let without = vec![3, 1, 4, 5, 2];
+        assert_eq!(
+            cursor_after_recompute(&loading, cursor, &without, false, true, false),
+            Some(1),
+            "nearest survivor, not a dangling id"
+        );
+    }
+
+    /// `view_true_sort` ignores the provisional order even mid-load — the
+    /// property burst grouping and Copy Picks depend on.
+    #[test]
+    fn view_true_sort_never_uses_the_provisional_order() {
+        let (picks, names, keys) = fixture();
+        let q = ViewQuery::default(); // CaptureTime
+        assert_eq!(
+            view_true_sort(&picks, &names, &keys, &q),
+            view(&picks, &names, &keys, &q, true),
+            "must equal the settled order"
+        );
+        assert_ne!(
+            view_true_sort(&picks, &names, &keys, &q),
+            view(&picks, &names, &keys, &q, false),
+            "must DIFFER from the provisional order, or this proves nothing"
+        );
+    }
+
+    /// The provisional order overrides the SORT only — never membership.
+    /// A filter chip must keep filtering while the folder loads.
+    #[test]
+    fn provisional_order_still_respects_the_filter_and_direction() {
+        let (picks, names, keys) = fixture();
+        for filter in [
+            PickFilter::All,
+            PickFilter::Picked,
+            PickFilter::Rejected,
+            PickFilter::Unmarked,
+        ] {
+            let q = ViewQuery {
+                filter,
+                ..Default::default()
+            };
+            let loading = view(&picks, &names, &keys, &q, false);
+            let mut members = loading.clone();
+            members.sort_unstable();
+            let mut expected = view(&picks, &names, &keys, &q, true);
+            expected.sort_unstable();
+            assert_eq!(members, expected, "{filter:?} membership must not change");
+            // Descending still reverses the provisional order.
+            let desc = view(
+                &picks,
+                &names,
+                &keys,
+                &ViewQuery {
+                    ascending: false,
+                    ..q
+                },
+                false,
+            );
+            let mut rev = loading.clone();
+            rev.reverse();
+            assert_eq!(desc, rev, "{filter:?} descending while loading");
+        }
     }
 
     /// The inbox-zero loop: filter Unmarked, mark everything, view empties,
@@ -258,14 +538,14 @@ mod tests {
             filter: PickFilter::Unmarked,
             ..Default::default()
         };
-        let mut v = view(&picks, &names, &keys, &q);
+        let mut v = view(&picks, &names, &keys, &q, true);
         assert_eq!(v, vec![4, 2]); // capture order: b.ARW then keyless d.ARW
         let mut cursor = Some(v[0]);
 
         // Mark image 4 as picked: it leaves the view; cursor slides to 2.
         picks[4] = Picked;
         let old_pos = v.iter().position(|i| Some(*i) == cursor).unwrap();
-        v = view(&picks, &names, &keys, &q);
+        v = view(&picks, &names, &keys, &q, true);
         cursor = cursor_after_removal(&v, old_pos);
         assert_eq!(v, vec![2]);
         assert_eq!(cursor, Some(2));
@@ -273,7 +553,7 @@ mod tests {
         // Mark image 2 rejected: view empties, cursor none — inbox zero.
         picks[2] = Rejected;
         let old_pos = v.iter().position(|i| Some(*i) == cursor).unwrap();
-        v = view(&picks, &names, &keys, &q);
+        v = view(&picks, &names, &keys, &q, true);
         cursor = cursor_after_removal(&v, old_pos);
         assert!(v.is_empty());
         assert_eq!(cursor, None);

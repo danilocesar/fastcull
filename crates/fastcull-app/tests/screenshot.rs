@@ -362,8 +362,21 @@ fn loupe_survives_a_vertical_resize_with_one_whole_frame() {
         &[
             ("FASTCULL_TRACE", "1"),
             (
+                // The trailing pair is a SETTLE step, not decoration. The
+                // relayout re-anchor corrects the offset and then schedules
+                // a 0 ms follow-up refresh to render it; with the resize as
+                // the last drive action the shutter can fire in that same
+                // tick and capture the pre-correction offset. Measured
+                // flake before this step: 4/20 on HEAD, 3/20 here — it is
+                // not a regression, it is a test that was always racing.
+                // The settle must NOT itself re-anchor, or it repairs the
+                // very state under test: a panel-toggle pair was tried and
+                // made this test vacuous (the mutant passed), because the
+                // toggle changes grid width and triggers its own relayout
+                // correction. The About modal changes no grid geometry, so
+                // it holds the shutter and nothing else.
                 "FASTCULL_DRIVE",
-                "1500:home;1800:right;3000:resize:1440x700",
+                "1500:home;1800:right;3000:resize:1440x700;3600:about;4000:about",
             ),
         ],
         &out,
@@ -547,14 +560,33 @@ fn one_to_one_entry_is_center_anchored() {
     );
 }
 
-/// Issue #4 regression: opening a folder where NAME order diverges from
-/// CAPTURE order must land the cursor on the capture-first image (view
-/// position 0), not the name-first one (image id 0) — a real 1,450-file
-/// folder opened with the cursor stranded at position 795. Crafted
-/// fixture: the LATEST capture gets the name that sorts first. Asserted
-/// via the 1:1 overlay trace (loupe idx = settled cursor id).
+/// Issue #25 / user decision 2026-07-31: "during the loading phase,
+/// whatever is currently selected stays selected, and stays visible in the
+/// screen" — and it must STAY selected, not for one frame.
+///
+/// This INVERTS what the fixture used to assert. It was an issue #4
+/// regression ("a folder must open on the capture-first image, not the
+/// name-first one"), and the same two files now pin the opposite: the view
+/// is filename-ordered while loading, so the cursor starts on `a_late`, and
+/// the settling re-sort must LEAVE IT THERE even though `b_early` becomes
+/// the head. The user was shown this exact cost — an untouched cursor that
+/// started at the top ends up mid-grid — and chose it, because the frame
+/// you are looking at is worth more than its position number.
+///
+/// The zoom steps matter: they fire background decodes AFTER the load has
+/// settled. A first implementation kept the cursor only on the load-settled
+/// EDGE, so the next engine event re-applied the head-follow rule and
+/// snapped the photograph away — invisible to any assertion taken at the
+/// flip alone (validator FAIL, 2026-07-31).
+///
+/// Asserted on the STATUS BAR, not on the 1:1 overlay trace. The overlay
+/// line is emitted only by the sharp full-res branch, so in the debug
+/// profile — which is how CI runs `cargo test --workspace`, on Windows too
+/// — the 50 MP decode never lands inside the drive window and the line
+/// simply does not exist. The status bar needs no decode, and it carries
+/// BOTH facts this test needs in one string.
 #[test]
-fn cursor_opens_on_capture_first_image() {
+fn engine_events_after_loading_never_move_an_untouched_cursor() {
     if !has_display() {
         eprintln!("screenshot smoke skipped: no display server");
         return;
@@ -573,35 +605,39 @@ fn cursor_opens_on_capture_first_image() {
         &dir.join("b_early.ARW"),
     );
     let out = out_dir().join("cursor-order.jpg");
-    let bin = env!("CARGO_BIN_EXE_fastcull-app");
-    // Up to 3 attempts: under full-suite CPU load the snapshot's 1.5 s
-    // floor can fire BEFORE the second file's EXIF lands, and the
-    // name-order cursor is then legitimately correct for that instant.
-    // The guarded regression (corner-entry cursor stranding) is
-    // deterministic — it fails all attempts.
-    let mut last = String::new();
-    for _ in 0..3 {
-        let output = std::process::Command::new(bin)
-            .arg("--start-11")
-            .arg(&dir)
-            .arg("--screenshot")
-            .arg(&out)
-            .env("FASTCULL_NO_CACHE", "1")
-            .env("FASTCULL_TRACE", "1")
-            .output()
-            .expect("run app");
-        assert!(output.status.success(), "app exited with {}", output.status);
-        let stderr = String::from_utf8_lossy(&output.stderr);
-        last = stderr
-            .lines()
-            .rfind(|l| l.contains("loupe idx"))
-            .unwrap_or_else(|| panic!("no loupe trace line in stderr:\n{stderr}"))
-            .to_string();
-        if last.contains("loupe idx 1 ") {
-            return; // capture-first cursor confirmed
-        }
-    }
-    panic!("cursor must open on the capture-first image (b_early = id 1), got: {last}");
+    let stderr = shoot_env_stderr(
+        &[dir.to_str().unwrap(), "--start-11"],
+        &[
+            ("FASTCULL_TRACE", "1"),
+            // Settle, then keep the engine busy well past the flip.
+            ("FASTCULL_DRIVE", "3000:zoom-out;4000:one2one;5000:zoom-out"),
+        ],
+        &out,
+    );
+    let status = stderr
+        .lines()
+        .rev()
+        .find_map(|l| l.split("status at shutter: ").nth(1))
+        .unwrap_or_else(|| panic!("no status trace in stderr:\n{stderr}"))
+        .to_string();
+    // Anti-vacuity, both halves in one line:
+    //   "2 thumbs loaded" — the load really finished, so the re-sort really
+    //   happened and there was something to resist;
+    //   "(2/2)"           — a_late really sorted LAST by capture time, so
+    //   filename order and capture order really disagree. Were they to
+    //   agree, a_late would read (1/2) and the cursor assertion below would
+    //   be true for the wrong reason.
+    assert!(
+        status.contains("2 thumbs loaded"),
+        "fixture never finished loading, so nothing re-sorted: {status}"
+    );
+    assert!(
+        status.starts_with("a_late.ARW (2/2)"),
+        "the cursor moved off the photograph it opened on — an untouched \
+         cursor must survive the load-settled re-sort AND every engine event \
+         after it. Expected `a_late.ARW (2/2)` (kept its image; capture time \
+         put it last), got: {status}"
+    );
 }
 
 /// Issue #12 regression: opening the IPTC panel must DOCK it — the grid
@@ -845,8 +881,11 @@ fn panel_toggle_at_one_to_one_keeps_the_photo() {
             // fixtures re-sort as EXIF lands — keyed files sort before
             // keyless — and a right at 250 ms rode a transient order,
             // landing the cursor one frame off; the #20 badge traces
-            // exposed the churn). `home` touches the cursor on the
-            // SETTLED view, making every later step deterministic.
+            // exposed the churn). That churn is what issue #25 fixed —
+            // the view now holds filename order until the load finishes —
+            // but the settle-then-pin schedule stays: it makes the step
+            // deterministic regardless, and `home` touches the cursor on
+            // the settled view.
             (
                 "FASTCULL_DRIVE",
                 "1500:home;1650:right;1800:right;1950:right;2100:right;2400:iptc;2700:iptc",

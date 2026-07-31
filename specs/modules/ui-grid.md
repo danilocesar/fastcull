@@ -519,11 +519,17 @@ brightening during wheel scrolling (needs an activity decay timer).
   in view; the cursor itself NEVER moves. A reveal marks its geometry
   as consumed, so anchor corrections never stack.
 - The status bar always names the cursor image (filename, position N/M).
-- **Untouched-cursor rule (issue #4, 2026-07-25)**: from session open until the
+- **Untouched-cursor rule (issue #4, 2026-07-25; NARROWED 2026-07-31 — see
+  *Provisional order while loading* below: once a folder has finished
+  loading, ENGINE recomputes no longer move an untouched cursor, only a
+  USER-requested view change does)**: from session open until the
   user's FIRST interaction, the cursor is "the first image of the view", not a
-  pinned id — capture keys stream in progressively and re-sort the view under
-  it, and a folder must never open with the cursor stranded mid-grid (real
-  case: name order vs capture order put it at position 795/1450). The cursor
+  pinned id, and a folder must never open with the cursor stranded mid-grid
+  (real case: name order vs capture order put it at position 795/1450).
+  The original rationale — "capture keys stream in progressively and re-sort
+  the view under it" — no longer describes the code: the view now holds a
+  stable filename order until the load completes, which is what made the
+  narrowing possible. The cursor
   is CLAIMED (id-pinned from then on, all rules above apply) by: any mark,
   any navigation key, loupe scroll-follow with laid-out geometry, and any
   click on an image — loupe, fit, or grid cell (issue #7). NOT claiming it: zoom keys (they don't move it), filter
@@ -531,6 +537,133 @@ brightening during wheel scrolling (needs an activity decay timer).
   overriding the nearest-survivor rule until the claim), and engine events.
   Open Folder resets to unclaimed. Pre-layout geometry (a refresh before the
   window has a real height) must never claim or move the cursor.
+- **Provisional order while loading (issue #25, 2026-07-30)**: the sentence
+  above — "capture keys stream in progressively and re-sort the view under
+  it" — described a real hazard, not just a quirk, and the rule that fixed
+  issue #4 is what created it. **The view is now ordered by FILENAME until
+  every image's metadata job has finished**, then sorted once by the user's
+  sort key (`filter::view`'s `metadata_complete`). Rationale, measured:
+  - EXIF is read INSIDE the per-file thumbnail job (`pipeline.rs`, its only
+    production caller), so "still loading" is the WHOLE load — measured
+    ~15 s for 3,000 files on the 8-core development laptop with a warm page
+    cache (the 32-thread reference machine of 01-architecture.md would do
+    it in ~2 s; a card reader, much slower) — not a blink.
+  - The capture sort puts keyed images ahead of still-keyless ones, so when
+    filename order runs contrary to capture order (two bodies or two cards
+    in one folder, a counter rollover mid-event) the HEAD changes identity
+    over and over for that entire window.
+  - Navigation rode it: one `right` at open landed 870 frames from the
+    intended second image on a 3,000-file fixture.
+  - **Marks rode it too, and that is the serious half**: `Y`/`N`/`U` write
+    to the cursor, and an unclaimed cursor is re-pinned to that moving head
+    on every refresh, so a head change inside a photographer's reaction time
+    lands the mark on a frame they never looked at — silently, and invisibly
+    under an Unmarked-only filter. Reproduced with NO input at all: the
+    cursor moved from image 0 to image 2000 mid-load.
+  Filename order comes free from the directory scan (~13 ms for 3,000
+  files) and for a single card in shooting order IS capture order, so the
+  eventual re-sort is invisible in the common case. Rejected alternatives
+  (persona review 2026-07-30): deferring or queueing input until the load
+  finishes — IN-MY-WAY, "an app that is dead for 11 seconds after opening a
+  folder is an app I'd stop using", and the user types ahead by design;
+  and accepting it with documentation — fine for navigation, not for a
+  silent wrong mark. Consequences, accepted: the one re-sort can happen
+  after culling has begun, so a claimed cursor keeps its image while the
+  frames around it move once. **The viewport follows it — but only if the
+  user was looking at it**: this is the only view mutation that reorders the
+  WHOLE grid at once, so the scroll offset is meaningless afterwards and the
+  cursor cell can be left off-screen entirely. At `N = 1` the loupe's own
+  re-anchor covers it; at multi-column zoom a dedicated one-shot reveal
+  does, fired on the false→true edge of completion only — the relayout
+  branch cannot see it, being gated on GEOMETRY changes while this is a
+  CONTENT change (validator FAIL, 2026-07-30). Not fired on every view
+  mutation, which would fight live filter removal and per-mark recomputes.
+  **And gated on the cursor cell having been ON SCREEN at the previous
+  refresh** (`grid::scroll_after_resort` — the decision lives in core and is
+  unit-tested both ways, because the app-level version shipped into review
+  with this guard missing): wheel and scrollbar browsing do not claim the
+  cursor, and this contract already says an off-screen cursor stays
+  off-screen until the next arrow key, so restoring it under a browsing
+  user's mouse would be the same "moved with no input" defect in a new place
+  (validator FAIL, 2026-07-31: without the guard a user browsed to 20,000 px
+  was snapped to 0). Visibility is sampled on the PREVIOUS pass on purpose —
+  the flip changes the cursor's position, so asking afterwards answers a
+  different question. What that browsing user keeps is their OFFSET, not
+  their content: the grid beneath has re-sorted, so they see a different
+  stretch of the shoot at the same scroll position. Accepted trade — a
+  viewport that stays put is recoverable by looking, one that teleports is
+  not. The edge is consumed only on a refresh that can act on it, so a
+  pre-layout or minimized pass cannot swallow it for the session. Note this
+  is looser than it sounds: `view_len > 0` is part of the condition, so a
+  load that completes while an EMPTY filter is showing defers the edge until
+  some later refresh with a non-empty view — carrying a visibility sample
+  from before the view emptied. Benign today because a filter change reveals
+  the cursor anyway. Accepted
+  residual: if completion lands on the same tick as a resize or panel
+  toggle, the relayout branch rescales an offset this branch already
+  corrected — rare, self-heals on the next key, and the price of a third
+  `vp_y` writer in one pass; one anchoring pass is the real fix.
+  Burst grouping always uses the TRUE capture order, never the provisional
+  one, because a burst is a fact about capture times. **Copy Picks likewise
+  always uses the true sort**: `{seq}` is baked into permanent filenames —
+  the one irreversible artifact this app produces — and fileops.md promises
+  the session sort, so a copy started mid-load must not encode a transient
+  view state forever.
+  **The UNCLAIMED cursor keeps its image too** (user decision 2026-07-31,
+  narrowing issue #4 — his words: "during the loading
+  phase, whatever is currently selected stays selected, and stays visible
+  on the screen"). Earlier drafts re-pinned it to the new head, so a folder
+  opened with no input still moved the photograph under the user once.
+  It no longer does — and the rule is a STATE, not an edge: once the folder
+  has loaded, ENGINE recomputes (the re-sort itself, a decode landing, a
+  sidecar arriving) leave the photograph alone, while the USER asking for a
+  different view — a filter chip, the sort control — still snaps pre-touch
+  to the new head exactly as issue #4 specifies. An earlier edge-shaped
+  attempt held the cursor for a single refresh and the next background
+  decode snapped it away again (validator FAIL, 2026-07-31, reproduced
+  live). `filter::cursor_after_recompute` is the one place the two rules
+  meet.
+  Accepted cost, chosen knowingly: on a folder whose filename order runs
+  contrary to capture order, an untouched cursor that started at the top
+  ends up mid-grid once the real order lands — the stranding issue #4 was
+  written to prevent (measured: image 1 of 3,000 becomes 2001/3000) — and
+  the viewport scrolls to keep it in view. The flip is the app finishing a
+  job, not the user asking to see something else, and that is the
+  distinction that decides it.
+- **Load progress in the status bar** (persona ask, same review): WHILE
+  loading the counter reads `LOADED/TOTAL loaded · sorting by name until
+  loaded` — a number with no denominator makes the user hunt for the total
+  to know whether to start now, and the grid looks identical in either
+  order, so the status bar is the only honest place to say which one is on
+  screen. Once complete it returns to the plain `N thumbs loaded`; the
+  cursor's own `(N/M)` carries the total from then on.
+- **Known divergences while the order is provisional** (recorded 2026-07-31
+  rather than left to a commit message, since specs/ is the source of
+  truth): the SORT CHIP still reads the user's chosen key — "Capture ↑"
+  over a name-ordered grid — and clicking it mid-load reverses the grid
+  without changing the key, because the ascending flag is applied after the
+  override; and the scrollbar's drag hint still appends capture times,
+  which therefore run non-monotonically over a name-ordered view. Both read
+  `query.sort` directly, which is no longer a truthful description of what
+  is on screen. `[`/`]` burst jumps resolve over VIEW positions while groups
+  are computed in true capture order, so they walk oddly over a name-ordered
+  view for the same window. The status bar is the compensating control. Closing this
+  properly means an `effective_sort(query, complete)` in core that every
+  consumer reads — deferred, not accepted as correct.
+- **No fallback if a job never finishes** (recorded): completion is
+  all-or-nothing, so one worker wedged in uninterruptible I/O (a dying
+  card, a stalled network mount — the case 01-architecture.md's shutdown
+  policy already names) leaves the session in filename order permanently,
+  with the status bar stuck one short and no way to force the sort. Before
+  this change a wedged file cost only its own position. The fix is a
+  per-file give-up or a "sort anyway" affordance; neither is in this step.
+- **Copy Picks mid-load** (recorded): `{seq}` deliberately follows the TRUE
+  sort, never the provisional one, because it is baked into permanent
+  filenames. With keys still streaming that sort is partial — unkeyed
+  images sort to the tail — so a copy started mid-load numbers files in an
+  order matching neither the grid on screen nor the same button pressed ten
+  seconds later. Unchanged from before this step, but newly reachable now
+  that the status bar invites working during the load.
 
 ## Visual language
 
@@ -793,6 +926,59 @@ the user confirms, all cheap to change):**
       session, counts included.
 - [ ] Windowed-model tests (core side): visible-range → model-window computation,
       incl. partial rows, tiny folders, and N=1.
+- [x] **Provisional order while loading** (issue #25):
+      `filter::provisional_order_is_stable_while_metadata_streams` feeds the
+      capture keys in one at a time and asserts the view is IDENTICAL at
+      every step, then that the real sort applies once — mutation-verified
+      (ignoring `metadata_complete` fails it at the first key), and
+      non-vacuous by construction (it asserts the settled order actually
+      differs from the provisional one).
+      `filter::provisional_order_still_respects_the_filter_and_direction`
+      pins that the override touches the SORT only, never membership or
+      direction. The RE-ANCHOR's rule is pinned by
+      `grid::resort_reveals_a_watched_cursor_and_spares_a_browsing_one`,
+      also mutation-verified, and the user's cursor rule by
+      `filter::engine_events_stop_moving_an_untouched_cursor_once_loaded`.
+      End-to-end, the two-file `cursor-order` fixture pins it through the
+      flip AND through later engine events
+      (`engine_events_after_loading_never_move_an_untouched_cursor`) — that
+      fixture used to assert the OPPOSITE (issue #4's capture-first open)
+      and was inverted by the user's decision. Recorded gap: the completion
+      predicate and the mark path still have no automated test — an
+      end-to-end one must catch the app mid-load, and a screenshot test that
+      tries dies in the profile CI actually runs it in: a 400-file attempt
+      passed in DEBUG having never finished loading, and `place_fixture`
+      COPIES on Windows, so it would have written ~33 GB per run (validator,
+      2026-07-31). Verified manually against 3,000-file fixtures instead;
+      making the load's completion point injectable is the way in.
+      QE enumerated the surviving mutations (2026-07-31); two were closed
+      structurally rather than merely tested — burst grouping and Copy Picks
+      now call `filter::view_true_sort`, a named function whose own test
+      pins that it ignores the provisional order, instead of passing a bare
+      `true` that reads as "metadata is complete" at the two places where it
+      emphatically is not. **Four survive and are accepted, not fixed**:
+      - `AppState::metadata_complete()` forced to `true` — i.e. the whole
+        feature off — leaves the suite green. The end-to-end test cannot see
+        it: with the flag true from the first refresh the cursor never
+        follows the head at all, so it reaches the same end state by a
+        different route. Catching it needs an assertion on the LOADING
+        status string, which needs a fixture still loading at shutter —
+        several hundred real RAWs, which `place_fixture` COPIES on Windows.
+      - counting only `MetadataReady` instead of finished jobs (a file whose
+        EXIF read fails would then strand the session forever).
+      - `user_changed_query` forced to `false` at both user call sites: the
+        issue #4 exception has no end-to-end coverage, because the filter
+        chips and sort control are click-only in Slint with no drive action.
+      - `last_cursor_visible` forced either way: the app-side sampling that
+        decides reveal-vs-spare is untested, which is exactly where the
+        guard was missing on the first cut.
+      The status bar's LOADING form is likewise unasserted (only the
+      completed form appears, as an anti-vacuity check).
+      `FASTCULL_DRIVE scroll:N` exists for the manual and QE verification of
+      the browsing case and is deliberately kept despite having no test
+      caller — it is the one gesture the harness could not otherwise
+      express. The way to close all of these at once is an injectable
+      load-completion point, not more screenshot fixtures.
 - [x] **The loupe fit view shows the WHOLE frame** (One-column cell bounding):
       `grid.rs` units pin that the N=1 cell never exceeds the viewport and
       that revealing it leaves nothing below the fold, while multi-column
@@ -883,6 +1069,10 @@ Documented because they ship in release builds (validator finding):
   ("drive swallowed by modal" trace); `quit`/`iptc`/`resize` and the
   modal toggles themselves remain live harness plumbing, like the menu
   bar.
+  `scroll:N` browses the grid to offset N logical px WITHOUT claiming the
+  cursor — what the wheel does natively, and the one gesture the harness
+  could not express, which is why a re-anchor that hauled a browsing user's
+  viewport back reached review unnoticed (2026-07-31).
   Malformed entries are skipped silently. Scripts may include mark actions
   (`pick`/`reject`), which write real sidecars — QE runs target throwaway
   copies of test data only.

@@ -58,6 +58,17 @@ The developer specs in [`specs/`](../specs/) are the source of truth —
 [`specs/modules/`](../specs/modules/). This guide is deliberately the
 short version.
 
+
+**The status bar says "sorting by name until loaded" and never stops.**
+While a folder loads, FastCull orders the grid by filename and switches to
+capture time once every file has been read. If it never switches, one file
+is not coming back — a dying card, a disconnected network share, a drive
+that stopped responding mid-read — and the counter sits a file or two short
+of the total. Nothing is lost, your marks are already written, but the grid
+stays in filename order for that session. Close the folder and reopen it;
+if it happens again, the file the counter is stuck on is the one to look
+at.
+
 ---
 
 Back to: [Getting started](index.md) ·

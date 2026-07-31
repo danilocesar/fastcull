@@ -133,6 +133,50 @@ impl GridLayout {
             scroll_y
         }
     }
+
+    /// Is `index`'s cell showing any part of itself in the viewport
+    /// `[scroll_y, scroll_y + viewport_height)`?
+    ///
+    /// One definition, because three copies of it had accumulated in the app
+    /// crate and it is not glue: it decides whether the load-settled re-sort
+    /// restores a cursor the user was watching or leaves a browsing user's
+    /// scroll alone (`scroll_after_resort`), and whether a relayout re-anchors
+    /// (rule 5 — the semantics live in core).
+    pub fn is_visible(&self, index: usize, scroll_y: f32, viewport_height: f32) -> bool {
+        let (_, top) = self.position(index);
+        top < scroll_y + viewport_height && top + self.cell_height > scroll_y
+    }
+}
+
+/// Scroll offset after the ONE-SHOT re-sort that fires when a folder finishes
+/// loading (issue #25): the view flips from the provisional filename order
+/// into the user's sort, which is the only mutation that reorders every cell
+/// at once, so the old pixel offset points at unrelated content.
+///
+/// `cursor_was_visible` must describe the cell BEFORE the flip — the flip
+/// changes the cursor's position, so asking afterwards answers a different
+/// question. When it is false the offset is returned untouched: wheel and
+/// scrollbar browsing do not claim the cursor, and the cursor contract says
+/// an off-screen cursor stays off-screen until the next arrow key, so hauling
+/// the viewport back would be the very "the view moved with no input" defect
+/// the provisional order exists to remove (validator FAIL, 2026-07-31 — the
+/// unguarded version snapped a user browsing at 20,000 px to 0).
+///
+/// Pixels are preserved for that browsing user, not content: the grid under
+/// the viewport has re-sorted, so they are looking at a different set of
+/// photographs at the same offset. That is the accepted trade — a viewport
+/// that stays put is recoverable by looking, one that teleports is not.
+pub fn scroll_after_resort(
+    layout: &GridLayout,
+    cursor_pos: usize,
+    scroll_y: f32,
+    viewport_height: f32,
+    cursor_was_visible: bool,
+) -> f32 {
+    if !cursor_was_visible {
+        return scroll_y;
+    }
+    layout.scroll_to_reveal(cursor_pos, scroll_y, viewport_height)
 }
 
 /// Cursor movement over the item list in grid terms.
@@ -248,6 +292,67 @@ mod tests {
         // Fullscreen 1080p, where the old crop was worst (23.4%).
         let l = GridLayout::new(6, 1920.0, 974.0, 3);
         assert!(l.cell_height <= 974.0 - 2.0 * CELL_GAP);
+    }
+
+    /// Issue #25's load-settled re-sort: the viewport follows a cursor the
+    /// user was LOOKING at, and leaves a browsing user's offset alone.
+    ///
+    /// This lives in core precisely because the app-level version of it
+    /// shipped into review with the guard missing, and the only evidence
+    /// offered was a screenshot test that could not run the mid-load window
+    /// in the debug profile CI uses (validator, 2026-07-31). The decision is
+    /// pure arithmetic; it does not need a 400-file folder to check.
+    #[test]
+    fn resort_reveals_a_watched_cursor_and_spares_a_browsing_one() {
+        // 1440-wide grid, 800 tall, 8 columns, 400 items.
+        let l = GridLayout::new(1, 1440.0, 800.0, 400);
+        assert_eq!(l.columns, 8);
+        let pitch = l.cell_height + CELL_GAP;
+        let far = 40.0 * pitch; // browsed a long way down
+
+        // Cursor off-screen because the user scrolled past it: untouched.
+        assert_eq!(
+            scroll_after_resort(&l, 0, far, 800.0, false),
+            far,
+            "a browsing user's viewport must not be hauled back"
+        );
+        // ...at every offset, and for any cursor position.
+        for scroll in [0.0, 1.0, 250.0, far, 1e6] {
+            for pos in [0, 7, 199, 399] {
+                assert_eq!(scroll_after_resort(&l, pos, scroll, 800.0, false), scroll);
+            }
+        }
+
+        // Cursor the user WAS looking at: revealed, moving as little as
+        // possible (identical to scroll_to_reveal by construction).
+        let watched = scroll_after_resort(&l, 300, far, 800.0, true);
+        assert_eq!(watched, l.scroll_to_reveal(300, far, 800.0));
+        let (_, top) = l.position(300);
+        assert!(
+            top >= watched - 0.01 && top + l.cell_height <= watched + 800.0 + 0.01,
+            "cursor cell must end up fully on screen: top {top}, scroll {watched}"
+        );
+        // A cursor already in view moves nothing.
+        assert_eq!(scroll_after_resort(&l, 0, 0.0, 800.0, true), 0.0);
+    }
+
+    /// `is_visible` is the single definition the re-anchor decisions consult.
+    #[test]
+    fn is_visible_covers_partial_overlap_and_both_edges() {
+        let l = GridLayout::new(1, 1440.0, 800.0, 400); // 8 columns
+        let pitch = l.cell_height + CELL_GAP;
+        // Row 0 at scroll 0: plainly visible.
+        assert!(l.is_visible(0, 0.0, 800.0));
+        // Scrolled just past its bottom edge: gone.
+        let (_, top0) = l.position(0);
+        assert!(!l.is_visible(0, top0 + l.cell_height, 800.0));
+        // Straddling the fold counts as visible — a partly-shown cell is a
+        // cell the user can see, which is what the re-anchor cares about.
+        assert!(l.is_visible(0, top0 + l.cell_height - 1.0, 800.0));
+        // A row far below the viewport is not.
+        assert!(!l.is_visible(8 * 40, 0.0, 800.0));
+        // ...and becomes visible once scrolled to.
+        assert!(l.is_visible(8 * 40, 40.0 * pitch, 800.0));
     }
 
     /// Multi-column grids are deliberately NOT viewport-bounded: their

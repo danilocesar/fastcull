@@ -50,6 +50,13 @@ gives `2026-07-25_osprey_001.ARW`, `..._002.ARW`, … numbered in your
 session's sort order (capture time unless you switched the sort). The dialog remembers your last destination and
 offers last session's template as a one-click chip.
 
+> While a folder is **still loading**, hold off on a copy that uses
+> `{seq}`. Sequence numbers follow capture time, and capture times aren't
+> all known until the load finishes — so numbers assigned mid-load match
+> neither the grid you're looking at (ordered by filename until then) nor
+> the same copy run a few seconds later. The status bar tells you when
+> loading is done.
+
 ---
 
 Next: [FAQ & troubleshooting](faq.md)
