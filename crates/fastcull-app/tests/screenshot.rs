@@ -260,79 +260,6 @@ fn mean_abs_diff(a: &Path, b: &Path) -> f64 {
     sum as f64 / pa.len() as f64
 }
 
-/// On-screen bounding box of the PHOTO in a snapshot, as (x0, y0, x1, y1).
-///
-/// Chrome (menu bar, filter bar, status bar) and the pillarbox bars are
-/// flat; photo pixels are not. Rows are found in a narrow band of middle
-/// COLUMNS (where every chrome strip is empty — its text sits on the left),
-/// then columns are found within those rows.
-fn photo_rect(path: &Path) -> (usize, usize, usize, usize) {
-    let bytes = std::fs::read(path).expect("snapshot file");
-    let mut dec = zune_jpeg::JpegDecoder::new(&bytes);
-    let px = dec.decode().expect("decode snapshot");
-    let (w, h) = dec.dimensions().expect("dims");
-    let luma = |x: usize, y: usize| {
-        let i = (y * w + x) * 3;
-        0.299 * px[i] as f64 + 0.587 * px[i + 1] as f64 + 0.114 * px[i + 2] as f64
-    };
-    let variance = |vals: &[f64]| {
-        let mean = vals.iter().sum::<f64>() / vals.len() as f64;
-        vals.iter().map(|v| (v - mean).powi(2)).sum::<f64>() / vals.len() as f64
-    };
-    const TEXTURE: f64 = 40.0; // flat chrome/bars sit far below this
-                               // Tolerate a flat band inside the photo, but stay BELOW `CELL_GAP` (6)
-                               // so the run cannot walk across the gap between two cells: at N=1 a
-                               // mis-anchored strip shows the bottom of one frame above the top of the
-                               // next, and a wider tolerance measures the pair as one tall "photo"
-                               // whose aspect looks perfectly healthy (validator finding C3).
-    const GAP: usize = 4;
-    // Contiguous run through the centre, NOT first-to-last: the overlay
-    // scrollbar's thumb is a detached high-variance strip near the right
-    // edge and would otherwise be counted as part of the photo.
-    let run = |is_photo: &dyn Fn(usize) -> bool, centre: usize, limit: usize| {
-        // lo/hi stay on the outermost line that really IS photo.
-        let (mut lo, mut i, mut miss) = (centre, centre, 0);
-        while i > 0 && miss < GAP {
-            i -= 1;
-            if is_photo(i) {
-                lo = i;
-                miss = 0;
-            } else {
-                miss += 1;
-            }
-        }
-        let (mut hi, mut j, mut miss) = (centre, centre, 0);
-        while j + 1 < limit && miss < GAP {
-            j += 1;
-            if is_photo(j) {
-                hi = j;
-                miss = 0;
-            } else {
-                miss += 1;
-            }
-        }
-        (lo, hi)
-    };
-    let mid: Vec<usize> = (w * 45 / 100..w * 55 / 100).step_by(3).collect();
-    let row_is_photo = |y: usize| {
-        let v: Vec<f64> = mid.iter().map(|&x| luma(x, y)).collect();
-        variance(&v) > TEXTURE
-    };
-    assert!(
-        row_is_photo(h / 2),
-        "no textured photo row at the vertical centre of {path:?} — either \
-         nothing rendered, or the fixture is too flat for this measurement"
-    );
-    let (y0, y1) = run(&row_is_photo, h / 2, h);
-    let band: Vec<usize> = (y0..=y1).step_by(5).collect();
-    let col_is_photo = |x: usize| {
-        let v: Vec<f64> = band.iter().map(|&y| luma(x, y)).collect();
-        variance(&v) > TEXTURE
-    };
-    let (x0, x1) = run(&col_is_photo, w / 2, w);
-    (x0, y0, x1, y1)
-}
-
 /// The loupe fit view shows the WHOLE frame (`ui-grid.md`: `Fit` = "the
 /// whole image is on screen"; the pointer contract's drag row is justified
 /// by "nothing is off-screen").
@@ -351,26 +278,63 @@ fn loupe_fit_shows_the_whole_frame_not_a_crop() {
     }
     let _s = serial();
     let out = out_dir().join("loupe-fit-whole.jpg");
-    shoot(&[raws_dir().to_str().unwrap(), "--start-loupe"], &out);
-    let (x0, y0, x1, y1) = photo_rect(&out);
-    let (pw, ph) = ((x1 - x0 + 1) as f64, (y1 - y0 + 1) as f64);
-    let aspect = pw / ph;
-    // The A1 fixtures are 3:2 (the mid rung is 1616x1080 = 1.4963).
-    assert!(
-        (1.40..=1.60).contains(&aspect),
-        "loupe fit renders the frame at aspect {aspect:.3} ({pw}x{ph}) — a 3:2 \
-         frame drawn at ~1.8 means the cell overflows the viewport and the \
-         bottom of every photo is cropped"
+    let stderr = shoot_env_stderr(
+        &[raws_dir().to_str().unwrap(), "--start-loupe"],
+        &[("FASTCULL_TRACE", "1")],
+        &out,
     );
-    // ...and the width that a true fit gives up must show as BLACK BARS,
-    // not as a wider crop: on any window wider than 1.5x the grid height
-    // there is a bar on each side.
-    let (w, _, _) = analyze(&out);
+    // PRIMARY assertion, on the app's own logical-pixel numbers: whatever
+    // the runner's resolution or DPI, the one-column cell must fit the grid
+    // area, because that is what "the whole image is on screen" means.
+    let (cell_h, grid_h, _, _) = shutter_geometry(&stderr);
     assert!(
-        x0 > 20 && x1 < w - 20,
-        "no pillarbox bars (photo spans x {x0}..{x1} of {w}) — the frame is \
-         filling the width, which it can only do by cropping"
+        cell_h + 12.0 <= grid_h + 0.5,
+        "the loupe cell is {cell_h} tall in a {grid_h} grid area — it \
+         overflows, so the bottom of every frame is below the fold"
     );
+    // SECONDARY, on pixels: the width a true fit gives up must show as black
+    // pillarbox bars. Measured on one scanline through the middle of the
+    // grid area — no texture assumptions, so a smooth patch cannot break it
+    // the way a contiguous-texture walk did on the Windows runner.
+    let (w, h, _) = analyze(&out);
+    let bars = black_bars_on_scanline(&out, h / 2);
+    assert!(
+        bars.0 > 40 && bars.1 > 40,
+        "no pillarbox bars (left {} px, right {} px of {w}) — the frame is \
+         filling the width, which it can only do by cropping",
+        bars.0,
+        bars.1
+    );
+}
+
+/// Width of the leading and trailing near-black runs on one scanline,
+/// skipping the 12 px that the cursor border occupies at each edge.
+fn black_bars_on_scanline(path: &Path, y: usize) -> (usize, usize) {
+    let bytes = std::fs::read(path).expect("snapshot file");
+    let mut dec = zune_jpeg::JpegDecoder::new(&bytes);
+    let px = dec.decode().expect("decode snapshot");
+    let (w, _) = dec.dimensions().expect("dims");
+    let dark = |x: usize| {
+        let i = (y * w + x) * 3;
+        (px[i] as u32 + px[i + 1] as u32 + px[i + 2] as u32) / 3 < 14
+    };
+    let mut left = 0;
+    for x in 12..w {
+        if dark(x) {
+            left += 1;
+        } else {
+            break;
+        }
+    }
+    let mut right = 0;
+    for x in (0..w - 12).rev() {
+        if dark(x) {
+            right += 1;
+        } else {
+            break;
+        }
+    }
+    (left, right)
 }
 
 /// A VERTICAL resize in the loupe must leave one whole frame on screen.
@@ -393,32 +357,65 @@ fn loupe_survives_a_vertical_resize_with_one_whole_frame() {
     // Land on an image the strip has to scroll to (pos 1), THEN shrink the
     // window vertically: position 0 is anchored at scroll 0 and cannot show
     // the defect.
-    shoot_env(
+    let stderr = shoot_env_stderr(
         &[raws_dir().to_str().unwrap(), "--start-loupe"],
-        &[(
-            "FASTCULL_DRIVE",
-            "1500:home;1800:right;3000:resize:1440x700",
-        )],
+        &[
+            ("FASTCULL_TRACE", "1"),
+            (
+                "FASTCULL_DRIVE",
+                "1500:home;1800:right;3000:resize:1440x700",
+            ),
+        ],
         &out,
     );
-    let (x0, y0, x1, y1) = photo_rect(&out);
-    let (pw, ph) = ((x1 - x0 + 1) as f64, (y1 - y0 + 1) as f64);
-    let aspect = pw / ph;
+    let (cell_h, grid_h, scroll, cursor_top) = shutter_geometry(&stderr);
+    // The cursor's WHOLE cell must lie inside the scrolled viewport. When
+    // the re-anchor fired only for a wholly off-screen cell, a height
+    // resize left it straddling the fold — the bottom of one photo above
+    // the top of the next.
     assert!(
-        (1.40..=1.60).contains(&aspect),
-        "after a vertical resize the loupe renders {pw}x{ph} (aspect \
-         {aspect:.3}) — not one whole 3:2 frame"
+        cursor_top >= scroll - 0.5,
+        "cursor cell top {cursor_top} is above the scroll offset {scroll}"
     );
-    // A stitched pair reads as ONE run only if the measurement walks the
-    // inter-cell gap; `photo_rect`'s tolerance is below CELL_GAP so it
-    // cannot. Belt and braces: the frame must start below the filter bar
-    // rather than being clipped by it.
-    assert!(y0 > 40, "frame starts at y {y0} — clipped at the top");
-    let (_, h, _) = analyze(&out);
     assert!(
-        y1 < h - 20,
-        "frame runs to y {y1} of {h} — clipped at the bottom"
+        cursor_top + cell_h <= scroll + grid_h + 0.5,
+        "cursor cell ends at {} but the viewport ends at {} — the frame is \
+         split across the fold",
+        cursor_top + cell_h,
+        scroll + grid_h
     );
+}
+
+/// `(cell_height, grid_height, scroll, cursor_top)` in LOGICAL px from the
+/// app's `geometry at shutter` trace. Pixel measurements of the rendered
+/// frame are resolution- and DPI-dependent and broke twice on the Windows
+/// runner while the app behaved correctly; these requirements are
+/// statements about numbers, so assert the numbers.
+fn shutter_geometry(stderr: &str) -> (f64, f64, f64, f64) {
+    let geom = stderr
+        .lines()
+        .rev()
+        .find_map(|l| l.split("geometry at shutter: ").nth(1))
+        .unwrap_or_else(|| panic!("no geometry trace in stderr:\n{stderr}"))
+        .to_string();
+    let field = |after: &str, idx: usize| -> f64 {
+        geom.split(after)
+            .nth(1)
+            .unwrap_or_else(|| panic!("field {after:?} missing: {geom}"))
+            .trim()
+            .split(['x', ' '])
+            .nth(idx)
+            .unwrap_or_else(|| panic!("component {idx} of {after:?}: {geom}"))
+            .parse()
+            .unwrap_or_else(|e| panic!("{after:?} not a number ({e}): {geom}"))
+    };
+    assert_eq!(field("columns ", 0), 1.0, "not at the loupe: {geom}");
+    (
+        field("cell ", 1),
+        field("grid ", 1),
+        field("scroll ", 0),
+        field("cursor-top ", 0),
+    )
 }
 
 /// Double-click must reach 1:1 from ABOVE fit, not only from fit.
@@ -1774,6 +1771,31 @@ fn selection_wash_tints_the_grid_and_status_counts() {
 /// being measured. An earlier version of this helper filtered on `b <= 160`
 /// and thereby discarded exactly the pixels the wash pushes past that bound —
 /// it passed on the very mutation it claimed to catch (validator finding).
+/// Strongest glyph yellowness found by sliding the sample box over a
+/// generous search area — the star badge sits at a fixed LOGICAL offset in
+/// the cell, so its fractional position moves with the runner's window size
+/// and DPI. A single hardcoded box found the star on the dev machine and
+/// missed it entirely on the Windows runner (CI, 2026-07-31).
+fn best_glyph_yellowness(
+    path: &Path,
+    (fx0, fy0, fx1, fy1): (f64, f64, f64, f64),
+    (bw, bh): (f64, f64),
+) -> Option<f64> {
+    let mut best: Option<f64> = None;
+    let (mut y, step) = (fy0, 0.004);
+    while y + bh <= fy1 {
+        let mut x = fx0;
+        while x + bw <= fx1 {
+            if let Some(v) = region_glyph_yellowness(path, x, y, x + bw, y + bh) {
+                best = Some(best.map_or(v, |b: f64| b.max(v)));
+            }
+            x += step;
+        }
+        y += step;
+    }
+    best
+}
+
 fn region_glyph_yellowness(path: &Path, fx0: f64, fy0: f64, fx1: f64, fy1: f64) -> Option<f64> {
     let bytes = std::fs::read(path).expect("snapshot file");
     let mut dec = zune_jpeg::JpegDecoder::new(&bytes);
@@ -1811,9 +1833,12 @@ fn selection_wash_stays_below_the_pick_badge() {
     std::fs::create_dir_all(&dir).unwrap();
     place_three_distinct(&dir);
     let folder = dir.to_str().unwrap();
-    // The star sits at 8px/4px inside cell 1 at 20px — a small box in the
-    // cell's top-left corner.
-    let (gx0, gy0, gx1, gy1) = (0.004, 0.088, 0.026, 0.125);
+    // The star sits at a fixed LOGICAL offset (8px/4px, 20px tall) inside
+    // cell 1 — but its FRACTIONAL position depends on the window size and
+    // DPI, so search the cell's top-left corner rather than one fixed box
+    // (the hardcoded box missed the star entirely on the Windows runner).
+    let search = (0.0, 0.06, 0.09, 0.20);
+    let box_size = (0.022, 0.037);
 
     // Picked but NOT selected: `pick` marks the cursor image and advances.
     let picked = out_dir().join("sel-badge-plain.jpg");
@@ -1848,9 +1873,9 @@ fn selection_wash_stays_below_the_pick_badge() {
         status.contains("· 2 selected") && status.contains("★1"),
         "fixture state wrong — test would be vacuous: {status}"
     );
-    let star_plain = region_glyph_yellowness(&picked, gx0, gy0, gx1, gy1)
+    let star_plain = best_glyph_yellowness(&picked, search, box_size)
         .expect("no pick star found in the unselected frame");
-    let star_washed = region_glyph_yellowness(&both, gx0, gy0, gx1, gy1)
+    let star_washed = best_glyph_yellowness(&both, search, box_size)
         .expect("no pick star found in the selected frame — badge washed away?");
     // Below the badge: the glyph is untouched, so yellowness barely moves.
     // Above it: a 25% blue blend drains it by ~90 (mutation-verified — the

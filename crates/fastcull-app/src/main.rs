@@ -1630,6 +1630,32 @@ fn main() {
                 // and the "(0/1)" fabrication (issue #19) survived two
                 // human reviews because nothing could assert them.
                 trace_mark(&format!("status at shutter: {}", win.get_status()));
+                // Geometry at shutter, in LOGICAL px. Pixel measurements of
+                // the rendered frame are resolution- and DPI-dependent and
+                // have twice broken on the Windows runner while the app was
+                // behaving correctly; the "whole frame is on screen"
+                // requirement is a statement about numbers, so state the
+                // numbers and let tests assert them.
+                {
+                    let st = state_rc.borrow();
+                    let layout = GridLayout::new(
+                        st.zoom,
+                        win.get_grid_width(),
+                        win.get_grid_height(),
+                        st.view.len(),
+                    );
+                    let scroll = (-win.get_vp_y()).max(0.0);
+                    let cursor_top = st.cursor_pos().map(|p| layout.position(p).1).unwrap_or(0.0);
+                    trace_mark(&format!(
+                        "geometry at shutter: columns {} cell {:.0}x{:.0} grid {:.0}x{:.0} \
+                         scroll {scroll:.0} cursor-top {cursor_top:.0}",
+                        layout.columns,
+                        layout.cell_width,
+                        layout.cell_height,
+                        win.get_grid_width(),
+                        win.get_grid_height(),
+                    ));
+                }
                 match win.window().take_snapshot() {
                     Ok(buf) => {
                         let ok = write_snapshot_jpeg(&out, &buf);
