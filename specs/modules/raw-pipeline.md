@@ -57,12 +57,25 @@ decoding RAW sensor data on the hot path.
      Rungs for the A1: 320 px thumb → 1616×1080 mid preview (~5 ms decode —
      covers fit view on ≲1.9k-wide viewports instantly) → 8640×5760 full
      (~140 ms, cooked in background for 1:1 and large displays; the shown
-     image swaps in place when ready, never blocks). Loupe assets are served
+     image swaps in place when ready, never blocks). Note that "the ring" is no longer one width: `focus` prefetches
+     ±`PREFETCH` (2) when settled but `TRANSIT_BEHIND`/`TRANSIT_AHEAD`
+     (2/8, oriented by travel) while moving, whereas `revive_deferred`
+     still gates revival on ±`PREFETCH`. A deferred upgrade for a frame
+     between 3 and 8 away is therefore dropped rather than revived —
+     harmless today (transit never escalates a target, so those entries
+     are already sufficient) but a trap for any future widening.
+     Loupe assets are served
      by a dedicated engine (`loupe.rs`) with its own event channel —
      two backlog workers plus one FOCUS-RESERVED worker. The reserved
-     worker takes ONLY the focused index's job, and only after the
-     focus has represented the same PENDING WORK for a ~250 ms
-     debounce: the clock re-arms when the focused index changes AND
+     worker takes ONLY the focused index's job — or, since the
+     transit/settled change (ui-grid.md, 2026-08-01), MANUFACTURES
+     that job: while travelling, requests are capped at the mid rung,
+     so once the user stops there is no full-res request anywhere in
+     the system and this lane is the only thing that wakes on a timer
+     to issue one. It does so only when the focused frame is short of
+     the app's real target, is not already in flight, and has not
+     failed. It acts only after the focus has represented the same
+     PENDING WORK for a ~250 ms debounce: the clock re-arms when the focused index changes AND
      when the focused index's target escalates — above the HIGHEST
      target seen during the current focus tenure (a full-res climb
      freshly queued for a frame the cursor has been resting on is new

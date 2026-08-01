@@ -116,7 +116,7 @@ as fast as the key repeats, like scrubbing a video. It does that by showing
 a smaller version while you travel, and it reads ahead in the direction
 you're going so the next frames are ready before you reach them.
 
-**Stop, and it sharpens.** About a sixth of a second after your last
+**Stop, and it sharpens.** About a quarter of a second after your last
 keystroke the app fetches full quality for the frame you landed on. You
 don't press anything; just stop.
 
@@ -130,8 +130,12 @@ Two things worth knowing:
   evaluating, not travelling. The app tells the two apart by your speed:
   faster than about four frames a second is travelling.
 
-Frames you've already visited stay in memory, so arrowing *back* over a
-burst you just flew through shows them at full quality straight away.
+**Frames you flew past are held at the smaller size**, and they sharpen
+when you come back to them rather than being ready in advance. Step back a
+few frames from where you stopped and they're already done — the app keeps
+working outward from your resting place while you look. Go deep back into a
+long run and you'll see the smaller version for a moment before it catches
+up. That's the trade for keeping up with your finger in the first place.
 
 Sharpening after you stop takes about a second for a full-resolution A1
 frame on a modest laptop — that's the decode itself, and a faster machine

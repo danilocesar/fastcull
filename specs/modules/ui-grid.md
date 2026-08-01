@@ -115,106 +115,148 @@ where it is."
   never folded into the pan center (`capture_pan` folds only when the
   overlay still belongs to the cursor's image — the hand is on the arrow
   key, not the mouse).
-- **Transit vs settled (user requirement 2026-08-01)**: his words — *"while
-  I'm holding a key and rapidly moving between shots I don't need the image
-  to be as good as possible, I need it to move fast, feeling almost like a
-  video. But when I release the key, then I want quality to be high."*
+- **Transit vs settled (user requirement 2026-08-01)**: the user's words —
+  *"while I'm holding a key and rapidly moving between shots I don't need
+  the image to be as good as possibile, I need it to move fast. feeling
+  almost like a video. But when I release the key, then I want quality to
+  be high."*
   The loupe therefore has three request states. They govern **what is
   ASKED of the decoder, never what is DISPLAYED** — the renderer always
-  shows the best rung in cache, so flying back over frames whose full-res
-  is still resident shows them sharp (persona: a rule that rendered the mid
-  with a sharp texture in hand would be worse than the bug it fixes).
+  shows the best rung in cache.
 
   | state | trigger | request |
   |---|---|---|
   | TRANSIT | frame changes < `TRANSIT_GAP` (250 ms) apart | mid rung ONLY, wide ring biased in the direction of travel |
-  | SETTLED | `SETTLE_DEBOUNCE` (150 ms) of quiet | the app's real target for the focused frame |
+  | SETTLED | the user stops (see the timing note below) | the app's real target for the focused frame |
   | SETTLED-AND-IDLE | after that lands | full-res look-ahead on the ±`PREFETCH` neighbours |
 
-  - **The geometry never changes.** Transit keeps the carried factor and pan
-    centre; it does NOT drop to fit. The spec already learned this once —
-    "the old drop-to-fit strobed the whole burst-transit loop and trained
-    the user to tap instead of hold" — and zoom/pan persistence is what
-    makes 1:1 burst comparison work at all.
+  - **The geometry never changes.** Transit keeps the carried factor and
+    pan centre; it does NOT drop to fit. The spec already learned this
+    once — "the old drop-to-fit strobed the whole burst-transit loop and
+    trained the user to tap instead of hold" — and zoom/pan persistence is
+    what makes 1:1 burst comparison work at all.
   - **SETTLED-AND-IDLE is not optional.** Requesting only the focused frame
     on settle would make tap-stepping through a burst at 1:1 pay a full
-    decode on every frame, forever; the ±2 full-res ring is what makes that
-    workflow tolerable (persona MUST-HAVE, and the omission was caught in
-    review). It needs no new code — it is the pre-existing behaviour, which
-    is precisely the SETTLED behaviour.
-  - **Same rule at every factor above fit**, no threshold to learn,
-    consistent with the "no special 1.5-2.25x handling" decision above.
-  - **No soft cue during transit.** The pill stays settle-only: an 8 Hz
-    flicker in peripheral vision tells the user nothing the motion has not
-    already told them (persona IN-MY-WAY). "Never leave a frame at rest
-    unsharp without the cue" is still honoured; motion is its own flag.
-  - `SETTLE_DEBOUNCE` is deliberately shorter than `FOCUS_DEBOUNCE`: it is
-    paid on every stop, and 250 ms here would stack with the reserved
-    lane's own debounce into most of a second before the sharp decode even
-    began.
-  - **The settle guarantee lives in the reserved lane, not in the app.**
-    Transit asks only for the mid, so something must ask for the real
-    target once the user stops — and it cannot be the app, whose refresh
-    loop goes quiet exactly when nothing is decoding. The reserved worker
-    already wakes on a timer, so it queues the focused frame's real target
-    when settled and short.
+    decode on every frame, forever. It needs no new code — it is the
+    pre-existing behaviour, which is precisely the SETTLED behaviour.
+  - **Same rule at every factor above fit**, no threshold to learn.
+    Holding at fit is unchanged: a fit-sized display already asks for less
+    than the mid, so `transit_request` is a no-op there (QE measured the
+    trace at fit as byte-identical to the old behaviour).
+  - **Direction is latched at the index change**, never re-derived per
+    call. The app re-focuses the SAME index on every `refresh()`, and
+    `refresh()` runs on every decode landing — of which transit produces
+    one per ring member per frame. `index >= prev` is trivially true for
+    all of those, so deriving direction per call flipped the ring forward
+    within milliseconds of every backward step: a backward hold prefetched
+    the frames the user was moving AWAY from, an effectively 21-wide ring
+    doing half its work behind the user. Found by the gate, not by the
+    tests, which is why `a_backward_hold_keeps_leaning_backward_across_refocus`
+    now drives the real engine through `focus()` and simulates that
+    re-focus storm.
   - **The transit request must be a rung the mid actually SERVES.**
     `serves` allows a 1.25x upscale, so a 1616 mid covers 2020 px:
     requesting `MID_RUNG_MAX_LONG` (2048) is 28 px too high and silently
     sends every transit frame up the ladder to full-res anyway. The first
     implementation did exactly that and measured as no improvement at all.
-    `transit_request_is_served_by_the_mid_rung` pins it, and asserts the
-    old value still fails.
+  - **The settle guarantee lives in the reserved lane, not in the app.**
+    Transit asks only for the mid, so something must ask for the real
+    target once the user stops — and the app cannot, because its refresh
+    loop goes quiet exactly when nothing is decoding. The reserved worker
+    already wakes on a timer. Its `in_flight` and sufficiency guards are
+    both load-bearing: without the first, releasing the key while the
+    transit mid is still decoding queues a duplicate full-res job (a
+    worker and ~149 MB of transient); without the second, the lane spins
+    push/pop forever **while holding the state mutex**, freezing all three
+    workers.
 
-  Measured on the 8-core development laptop: 306 portrait A1 frames,
-  cold cache, 20 held right-arrows at 1:1, three runs, median. Frames are
-  counted as DISTINCT images that reached the screen while the key was
-  still down — the number that decides whether it feels like video.
+  **Timing note — the settle is ~250 ms, not `SETTLE_DEBOUNCE`.**
+  `SETTLE_DEBOUNCE` (150 ms) is what `in_transit` decays on, but it is not
+  what the user feels. The settle guarantee runs in the reserved lane,
+  which is gated first by `FOCUS_DEBOUNCE` (250 ms) on `focused_at` — and
+  `note_focus` resets `focused_at` and `last_index_change` from the same
+  index change, so the lane cannot act before 250 ms and the `settled`
+  check inside it is always true when reached. It is kept as an explicit
+  belt-and-braces statement of intent, not as live logic. QE measured the
+  overhead at ~215 ms over a bare decode, and confirmed by injecting a
+  poke at T+150 ms that the engine had NOT yet acted.
+  An earlier draft of this section claimed the two debounces would
+  otherwise "stack into most of a second"; that is arithmetically wrong —
+  both are measured from the same origin, so they do not add.
 
-  At a **40 ms repeat, what a held arrow on Linux actually does**:
+  **The pill is shown throughout a hold.** An earlier draft claimed the
+  soft-cue pill stays settle-only, on the reasoning that an 8 Hz flicker
+  in peripheral vision would be worse than nothing. Nothing in the app is
+  transit-aware, so that was never true: every transit frame renders
+  through the soft branch and the "◌ loading" pill is up for the whole
+  hold. Measured over a 24 s hold: on for 784 of 787 rendered frames, with
+  **one** state change — so it is a steady pill, not a flicker, and the
+  feared failure mode does not occur. Accepted as-is; "never leave a frame
+  at rest unsharp without the cue" is still honoured.
 
-  | | before | after |
-  |---|---|---|
-  | frames shown during the hold | 3 of 20 | **19 of 20** |
-  | full-res on the frame stopped on | 1033 ms | **951 ms** |
+  **Measured** on the 8-core development laptop, real A1 frames, cold
+  cache, at 1:1. "On screen" counts distinct frames whose pixels actually
+  reached the display while the key was down — not decode landings, which
+  include the look-ahead frames the cursor never reaches (an earlier draft
+  of this table conflated the two and overstated the short-burst figures).
 
-  At a **120 ms repeat** (a slow hold, closer to tapping):
+  | held arrow | | before | after |
+  |---|---|---|---|
+  | 150 keys @ 40 ms | frames on screen | 12 of 150 | **139 of 150** |
+  | | key→pixels, median | 119 ms | **2 ms** |
+  | | key→pixels, p90 | 9.3 s | **3 ms** |
+  | 800 keys @ 30 ms | frames on screen | — | **787 of 800** |
+  | | full-res decodes during the hold | 182 | **2** |
+  | 20 keys @ 120 ms | frames on screen | 9 | **18** |
+  | | full-res on the frame stopped on | 988 ms | 1027 ms |
 
-  | | before | after |
-  |---|---|---|
-  | frames shown during the hold | 7 of 20 | **19 of 20** |
-  | full-res on the frame stopped on | 916 ms | 1024 ms |
+  The win is in **steady travel**, and it is large: a held arrow tracks the
+  key frame-for-frame instead of showing one frame in twelve with a p90 of
+  over nine seconds. Two honest limits:
 
-  So the faster the user travels, the more this wins — which is the right
-  direction, because the faster they travel the more the old behaviour
-  broke down. At 40 ms the old build was so far behind that its own
-  stop-to-sharp suffered too: it had queued twenty full-res decodes it
-  could not retire, and the frame the user actually stopped on waited
-  behind the stale ones. Transit queues only cheap mids, so the workers
-  are free the moment the user stops.
-
-  The 120 ms row is the honest cost: ~110 ms slower to sharpen, which is
-  the settle debounce, paid on every stop. Accepted — the user's priority
-  was explicit and motion-first, and both figures are under a second.
+  - **A short burst barely benefits.** Over only 20 keys at 40 ms the
+    figure is 3-4 → 8 of 20, because the first ~340 ms of a hold from a
+    cold loupe stalls identically on both sides, and that is most of an
+    800 ms burst. Stop-to-sharp at that rate is a wash (829-890 ms before,
+    801-935 ms after).
+  - **Stop-to-sharp is ~40 ms slower at 120 ms repeats** — the settle,
+    paid on every stop. Accepted: the user's priority was explicit and
+    motion-first, and both figures are under a second.
 
   **Measured and rejected — an adaptive settle.** Since the debounce is
   pure stop latency, it was made to learn the user's repeat rate and wait
-  1.25x the observed gap (60 ms floor) instead of a fixed 150 ms. It did
-  sharpen sooner and far more consistently (749 ms, spread 705-754) but
-  cost five frames of smoothness (14 of 20): a 60 ms threshold is fragile
-  to repeat jitter, and one long gap settles mid-hold and fires a full-res
-  decode that blocks the workers for the frames behind it. A middle
-  setting (2x, 100 ms floor) was worse on both axes and swung 8-18 frames
-  across three runs. Dropped: it loses on the axis the user named first,
-  and the tuning was not supported by the spread in the data. The fixed
-  150 ms is one constant with no learned state and beats the old behaviour
-  on both axes at a realistic repeat rate.
+  1.25x the observed gap (60 ms floor). It sharpened 200 ms sooner and far
+  more consistently (749 ms, spread 705-754) but cost five frames of
+  smoothness: a 60 ms threshold is fragile to repeat jitter, and one long
+  gap settles mid-hold and fires a full-res decode that blocks the frames
+  behind it. A middle setting (2x, 100 ms floor) was worse on both axes and
+  swung 8-18 frames across three runs. Dropped rather than tuned on that
+  spread.
 
-  Recorded gap: ~950 ms stop-to-sharp is well short of the ~300 ms a
-  sharpness-on-stop promise would want, and it is decode-bound — the
-  full-res decode alone medians 614 ms here (`budget_fullres_decode_under_350ms`
-  fails on `main` for the same reason; issue #27). Scheduling cannot close
-  it; a faster decode or buffer pooling would.
+  Recorded gap: stop-to-sharp is decode-bound — the full-res decode alone
+  medians 614 ms here, and `budget_fullres_decode_under_350ms` fails on
+  `main` for the same reason (issue #27). Scheduling cannot close it.
+
+  **Known and deferred** (recorded per the CLAUDE.md gate; none is a spec
+  acceptance criterion, and all predate or are unchanged by this change):
+
+  - A `Y`/`N` cull chain faster than 4 marks/second is classified as
+    travelling, so those frames are judged from the mid. Marking is a
+    judgment workflow, not a travel one. **Needs the user's call** before
+    it is either excluded from transit or documented as intended.
+  - No hysteresis on `moving`: a single stretched gap > `TRANSIT_GAP`
+    mid-hold drops back to SETTLED and fires a full-res ring that is never
+    cancelled, precisely when the machine is already behind. Same mechanism
+    on `main`; transit simply does not help across a hiccup.
+  - The first focus of a hold is never transit, so entering one commits up
+    to two uninterruptible full-res decodes (~600 ms each) at the moment
+    the hold starts. This is what makes short bursts benefit least.
+  - Transit queues with `focus_origin = true`, which `want()`'s cull
+    deliberately spares, so leaving the loupe mid-hold leaves up to 11
+    stale entries ahead of visible grid cells.
+  - The settle guarantee's `Slot::Wait` when the frame is in flight is an
+    untimed wait; today the app's refresh loop re-drives it, but a
+    core-only consumer that calls `focus()` once has no such rescue.
 
 - **Quality rule (revised by issue #21, user-approved 2026-07-27)**:
   intermediate factors are rendered from the **full-res rung** once
@@ -1084,6 +1126,25 @@ the user confirms, all cheap to change):**
       session, counts included.
 - [ ] Windowed-model tests (core side): visible-range → model-window computation,
       incl. partial rows, tiny folders, and N=1.
+- [x] **Transit vs settled** (user requirement 2026-08-01): a held key is
+      distinguished from deliberate taps and decays on release
+      (`transit_tracks_held_keys_and_decays_on_release`); the request while
+      moving is a rung the mid actually serves, and the old 2048 value still
+      fails (`transit_request_is_served_by_the_mid_rung`); the ring leans the
+      way the user travels and clamps at both folder edges
+      (`transit_ring_leans_in_the_direction_of_travel`); a settled frame
+      climbs even though transit only asked for the mid, without duplicating
+      an in-flight job and without spinning
+      (`a_settled_frame_climbs_even_though_transit_only_asked_for_the_mid`);
+      the settle poll does not disturb LRU order
+      (`the_settle_guarantee_does_not_disturb_the_lru_order`). Through the
+      PUBLIC api, so that disabling transit at the call site fails:
+      `a_held_key_reaches_transit_through_the_public_api` and
+      `a_backward_hold_keeps_leaning_backward_across_refocus`, the latter
+      simulating the app's same-index re-focus storm.
+      NOT covered by a test: the measured performance figures themselves —
+      nothing turns red if the frames-on-screen or stop-to-sharp numbers
+      regress (see issue #27 on the perf-budget rule).
 - [x] **Provisional order while loading** (issue #25):
       `filter::provisional_order_is_stable_while_metadata_streams` feeds the
       capture keys in one at a time and asserts the view is IDENTICAL at

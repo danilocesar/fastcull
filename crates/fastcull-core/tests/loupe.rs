@@ -203,3 +203,117 @@ fn terminal_flag_marks_a_files_best_rung() {
     drop(engine);
     std::fs::remove_dir_all(&dir).ok();
 }
+
+/// A 24-slot folder made of the three real A1 files, so ring arithmetic
+/// has room to be wrong in (`TRANSIT_AHEAD` is 8; `PREFETCH` is 2).
+fn a1_cycled(n: usize) -> Vec<PathBuf> {
+    let base = a1_paths();
+    (0..n).map(|i| base[i % base.len()].clone()).collect()
+}
+
+/// Drain events for up to `secs`, recording the best rung seen per index.
+fn collect(
+    rx: &std::sync::mpsc::Receiver<LoupeEvent>,
+    secs: u64,
+    stop: impl Fn(&std::collections::HashMap<usize, u32>) -> bool,
+) -> std::collections::HashMap<usize, u32> {
+    let mut best = std::collections::HashMap::new();
+    let deadline = std::time::Instant::now() + Duration::from_secs(secs);
+    while std::time::Instant::now() < deadline {
+        let left = deadline.saturating_duration_since(std::time::Instant::now());
+        match rx.recv_timeout(left) {
+            Ok(LoupeEvent::Ready { index, image, .. }) => {
+                let long = image.width.max(image.height);
+                let e = best.entry(index).or_insert(0);
+                *e = (*e).max(long);
+                if stop(&best) {
+                    break;
+                }
+            }
+            Ok(LoupeEvent::Failed { index, reason }) => panic!("{index} failed: {reason}"),
+            Err(_) => break,
+        }
+    }
+    best
+}
+
+/// TRANSIT through the PUBLIC api (user requirement 2026-08-01).
+///
+/// Every other transit test calls the pure helpers directly, so the wiring
+/// inside `focus` itself was unpinned: both `let transit = false` and
+/// re-deriving the travel direction from the previous focus survived the
+/// entire suite (validator + QE, 2026-08-01). This drives the engine the
+/// way the app does and fails if transit is not actually reaching it.
+///
+/// Uses the ring WIDTH as the observable, not the decode: a frame 4+ away
+/// is outside `PREFETCH` entirely, so its mere appearance proves the wide
+/// transit ring — and mid rungs are cheap enough to assert on in a debug
+/// build, which full-res decodes are not.
+#[test]
+fn a_held_key_reaches_transit_through_the_public_api() {
+    let _serial = SERIAL
+        .lock()
+        .unwrap_or_else(std::sync::PoisonError::into_inner);
+    let (engine, rx) = LoupeEngine::start(a1_cycled(24), DEFAULT_BUDGET_BYTES);
+    // Two focuses in immediate succession: a held key, by definition.
+    engine.focus(0, u32::MAX);
+    engine.focus(1, u32::MAX);
+    let best = collect(&rx, 120, |b| b.keys().any(|&i| i >= 5));
+    let far: Vec<_> = best.keys().copied().filter(|&i| i >= 5).collect();
+    assert!(
+        !far.is_empty(),
+        "nothing beyond PREFETCH was even requested, so the wide transit \
+         ring never engaged: saw {:?}",
+        {
+            let mut k: Vec<_> = best.keys().copied().collect();
+            k.sort_unstable();
+            k
+        }
+    );
+    // And what transit asks for is the MID, never the top rung.
+    for i in &far {
+        assert!(
+            best[i] <= 2020,
+            "idx {i} is a look-ahead frame the user has not reached, yet it \
+             was decoded at {} px — transit must cap look-ahead at the mid",
+            best[i]
+        );
+    }
+}
+
+/// The ring must not re-lean forward when the app re-focuses the SAME index.
+///
+/// `refresh()` calls `focus(cursor, ..)` on every decode landing, and
+/// transit produces one landing per ring member per frame. Deriving the
+/// direction from `index >= prev` makes every one of those re-focuses look
+/// forward, so a backward hold prefetched the frames the user was moving
+/// away from — measured as an effectively 21-wide ring doing half its work
+/// behind the user (validator, 2026-08-01). Direction is latched at the
+/// real index change instead.
+#[test]
+fn a_backward_hold_keeps_leaning_backward_across_refocus() {
+    let _serial = SERIAL
+        .lock()
+        .unwrap_or_else(std::sync::PoisonError::into_inner);
+    let (engine, rx) = LoupeEngine::start(a1_cycled(24), DEFAULT_BUDGET_BYTES);
+    // Travel backward: 12 -> 11, then the app's own re-focus storm on 11.
+    engine.focus(12, u32::MAX);
+    engine.focus(11, u32::MAX);
+    for _ in 0..8 {
+        engine.focus(11, u32::MAX);
+    }
+    let best = collect(&rx, 120, |b| b.keys().any(|&i| i <= 6));
+    let mut seen: Vec<_> = best.keys().copied().collect();
+    seen.sort_unstable();
+    assert!(
+        seen.iter().any(|&i| i <= 6),
+        "a backward hold never reached behind the cursor: saw {seen:?}"
+    );
+    // 11 + TRANSIT_BEHIND is 13; anything at 14+ can only come from a ring
+    // that flipped forward, which is the bug.
+    assert!(
+        !seen.iter().any(|&i| i >= 14),
+        "the ring leaned FORWARD during a backward hold — the app's \
+         same-index re-focus flipped it: saw {seen:?}"
+    );
+}
