@@ -109,6 +109,34 @@ over from 9999 mid-event.
 > land `Y` or `N` on a frame other than the one you were looking at,
 > because the first cell kept changing identity underneath you.
 
+## Holding the arrow: fast now, sharp when you stop
+
+Hold `→` at 1:1 and the loupe **keeps up with your finger** — frames go by
+as fast as the key repeats, like scrubbing a video. It does that by showing
+a smaller version while you travel, and it reads ahead in the direction
+you're going so the next frames are ready before you reach them.
+
+**Stop, and it sharpens.** About a sixth of a second after your last
+keystroke the app fetches full quality for the frame you landed on. You
+don't press anything; just stop.
+
+Two things worth knowing:
+
+- **The framing never moves.** Locked to 1:1 on someone's eye, you stay at
+  1:1 on that eye the whole way through — travelling never zooms you out
+  and never re-centers you.
+- **Tapping is not holding.** Step frame by frame — a tap, a look, a tap —
+  and every frame goes to full quality immediately, because you're
+  evaluating, not travelling. The app tells the two apart by your speed:
+  faster than about four frames a second is travelling.
+
+Frames you've already visited stay in memory, so arrowing *back* over a
+burst you just flew through shows them at full quality straight away.
+
+On this laptop a full-resolution A1 frame takes about half a second to
+sharpen after you stop; a faster machine does it in about a third of that.
+Travelling is smooth on both.
+
 ## Fit shows the whole frame
 
 At the loupe's first stop the **entire photograph is on screen**. On a

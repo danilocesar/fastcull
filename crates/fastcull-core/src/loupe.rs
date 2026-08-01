@@ -93,6 +93,17 @@ struct LoupeState {
     /// The display target of the last focus() call for `focused` —
     /// escalation detection for the debounce clock.
     focused_target: u32,
+    /// When the focused INDEX last changed. Unlike `focused_at`, a target
+    /// escalation does not reset it — this is the TRANSIT clock.
+    last_index_change: Option<std::time::Instant>,
+    /// True when the last index change followed the previous one closely
+    /// enough to be a held key rather than a deliberate tap. Decays via
+    /// `in_transit`.
+    moving: bool,
+    /// What the APP asked for, before transit capping. Transit downgrades
+    /// the REQUEST, so the settle must remember the real intent or a frame
+    /// would stay soft forever once the user stops.
+    desired_long: u32,
 }
 
 struct Shared {
@@ -153,24 +164,31 @@ impl LoupeEngine {
             return None;
         }
         let stamp = self.shared.stamp.fetch_add(1, Ordering::Relaxed) + 1;
+        let now = std::time::Instant::now();
         let mut state = lock(&self.shared);
-        note_focus(&mut state, index, display_long, std::time::Instant::now());
+        let prev = state.focused;
+        note_focus(&mut state, index, display_long, now);
+        let transit = in_transit(&state, now);
+        // TRANSIT vs SETTLED (user requirement 2026-08-01). Moving: ask only
+        // for the mid rung, across a wide ring leaning the way we travel —
+        // ~5 MB and ~5 ms each, so the workers keep up with a held key.
+        // Stopped: ask for what the app actually wants, over the tight ring,
+        // which is the pre-existing behaviour and is what keeps tap-stepping
+        // through a burst sharp.
+        let (request, lo, hi) = focus_plan(transit, prev, index, display_long, count);
         // Prefetch ring: farthest neighbors first, focused index last (back
         // of the queue = popped first by workers).
-        let lo = index.saturating_sub(PREFETCH);
-        let hi = (index + PREFETCH).min(count - 1);
         let mut wanted: Vec<usize> = (lo..=hi).filter(|i| *i != index).collect();
         wanted.sort_by_key(|i| std::cmp::Reverse(i.abs_diff(index)));
         wanted.push(index);
         for i in wanted {
-            if !sufficient_cached(&mut state, i, display_long, stamp) && !state.failed.contains(&i)
-            {
+            if !sufficient_cached(&mut state, i, request, stamp) && !state.failed.contains(&i) {
                 if state.in_flight.contains(&i) {
                     let e = state.deferred.entry(i).or_insert(0);
-                    *e = (*e).max(display_long);
+                    *e = (*e).max(request);
                 } else {
                     state.queue.retain(|(q, _, _)| *q != i);
-                    state.queue.push((i, display_long, true));
+                    state.queue.push((i, request, true));
                 }
             }
         }
@@ -261,6 +279,22 @@ fn sufficient_cached(state: &mut LoupeState, index: usize, display_long: u32, st
     }
 }
 
+/// `sufficient_cached` without the LRU write — for callers that are only
+/// ASKING, not using the frame.
+///
+/// `sufficient_cached` refreshes the stamp because its callers (`focus`,
+/// `want`) are declaring live interest. The settle guarantee is not: it
+/// polls on a timer, and stamping there would mark the frame the user just
+/// settled on as the OLDEST in the cache, making it the first eviction
+/// victim the moment they arrow away — exactly backwards for arrowing back
+/// to compare two frames of a burst.
+fn cached_serves(state: &LoupeState, index: usize, display_long: u32) -> bool {
+    let best = state.best_long.get(&index).copied();
+    state.cache.get(&index).is_some_and(|(img, _)| {
+        serves(img, display_long) || best.is_some_and(|b| img.width.max(img.height) >= b)
+    })
+}
+
 /// Land-time revival of a deferred upgrade (an in-flight index whose wanted
 /// rung grew mid-decode). Revived ONLY while the index is still inside the
 /// focused prefetch ring: a stale upgrade — the cursor moved on while the
@@ -298,6 +332,16 @@ fn revive_deferred(state: &mut LoupeState, index: usize, target: u32, stamp: u64
 /// rested. A same-or-smaller target (render-cadence re-focus, zoom out)
 /// never resets.
 fn note_focus(state: &mut LoupeState, index: usize, display_long: u32, now: std::time::Instant) {
+    // The app's real intent, before any transit capping, so the settle
+    // knows what to climb to.
+    state.desired_long = display_long;
+    if state.focused != Some(index) {
+        // A change hard on the heels of the previous one is a held key.
+        state.moving = state
+            .last_index_change
+            .is_some_and(|t| now.saturating_duration_since(t) <= TRANSIT_GAP);
+        state.last_index_change = Some(now);
+    }
     if state.focused != Some(index) {
         state.focused = Some(index);
         state.focused_at = Some(now);
@@ -332,6 +376,104 @@ enum Slot {
 /// every backlog worker is saturated, exactly when the lane matters.
 const FOCUS_DEBOUNCE: std::time::Duration = std::time::Duration::from_millis(250);
 
+/// Two successive frame changes closer together than this are a HELD key,
+/// not deliberate taps. Measured against real hands: key autorepeat lands
+/// around 120 ms, while tap-stepping through a burst to compare frames is
+/// 350 ms to 2 s apart (persona, 2026-08-01). The two populations are far
+/// apart, so the exact value is not delicate.
+const TRANSIT_GAP: std::time::Duration = std::time::Duration::from_millis(250);
+
+/// Quiet for this long after the last frame change means the user has
+/// STOPPED, and quality becomes the goal again. Deliberately shorter than
+/// FOCUS_DEBOUNCE: it is paid on every stop, so it is the floor of the
+/// sharpness-on-stop promise, and 250 ms here would stack with the
+/// reserved lane's own debounce into most of a second before the sharp
+/// decode even began (persona: IN-MY-WAY at 250 ms).
+const SETTLE_DEBOUNCE: std::time::Duration = std::time::Duration::from_millis(150);
+
+/// Transit prefetch is DIRECTIONAL: reading ten frames behind while the
+/// user flies forward is waste, so the ring leans the way they travel and
+/// flips when they reverse. Wide is affordable only because transit asks
+/// for the ~5 MB mid rung — the whole ring costs less than ONE 149 MB
+/// full-res frame.
+const TRANSIT_AHEAD: usize = 8;
+const TRANSIT_BEHIND: usize = 2;
+
+/// Is the user MOVING between frames (held key, `[`/`]`, a Y/N
+/// auto-advance chain) rather than looking at one?
+///
+/// While true the engine asks only for the mid rung, however far above fit
+/// the view is (user requirement 2026-08-01: "while I'm holding a key I
+/// don't need the image to be as good as possible, I need it to move fast;
+/// when I release the key, then I want quality to be high").
+///
+/// This governs what is REQUESTED, never what is DISPLAYED. The renderer
+/// always shows the best rung in cache, so flying back over frames whose
+/// full-res is still resident shows them sharp — a rule that rendered the
+/// mid with a sharp texture in hand would be worse than the bug it fixes
+/// (persona).
+/// What `focus` should ask for, and over which ring: the TRANSIT vs
+/// SETTLED decision (user requirement 2026-08-01), pure so it can be
+/// tested without workers.
+///
+/// Moving: the mid rung only, over a wide ring leaning the way we travel
+/// — ~5 MB and ~5 ms each, so the workers keep up with a held key, and
+/// the lean is what puts frames in cache BEFORE the finger reaches them.
+/// Stopped: what the app actually wants over the tight ring, which is the
+/// pre-existing behaviour and is what keeps tap-stepping through a burst
+/// sharp.
+///
+/// Returns `(request, lo, hi)` with `lo..=hi` already clamped to `count`.
+fn focus_plan(
+    transit: bool,
+    prev: Option<usize>,
+    index: usize,
+    display_long: u32,
+    count: usize,
+) -> (u32, usize, usize) {
+    if transit {
+        // A reversal must re-lean immediately: arrowing back through a
+        // burst you just flew over is the commonest correction there is,
+        // and a ring still leaning forward would prefetch behind you.
+        let forward = prev.is_none_or(|p| index >= p);
+        let (back, ahead) = if forward {
+            (TRANSIT_BEHIND, TRANSIT_AHEAD)
+        } else {
+            (TRANSIT_AHEAD, TRANSIT_BEHIND)
+        };
+        (
+            transit_request(display_long),
+            index.saturating_sub(back),
+            (index + ahead).min(count - 1),
+        )
+    } else {
+        (
+            display_long,
+            index.saturating_sub(PREFETCH),
+            (index + PREFETCH).min(count - 1),
+        )
+    }
+}
+
+/// What a moving frame asks the decoder for.
+///
+/// `MID_RUNG_TARGET`, not `MID_RUNG_MAX_LONG`: the latter (2048) is the
+/// ceiling of what COUNTS as mid class, but `serves` allows only a 1.25x
+/// upscale, so a 1616 mid covers 2020 px — 28 short of 2048. Asking for
+/// 2048 quietly sent every transit frame up to full-res anyway, and the
+/// whole change measured as no improvement at all until the arithmetic was
+/// checked. `transit_request_is_served_by_the_mid_rung` pins both halves.
+fn transit_request(display_long: u32) -> u32 {
+    display_long.min(MID_RUNG_TARGET)
+}
+
+fn in_transit(state: &LoupeState, now: std::time::Instant) -> bool {
+    state.moving
+        && state
+            .last_index_change
+            .is_some_and(|t| now.saturating_duration_since(t) < SETTLE_DEBOUNCE)
+}
+
 /// Pick this worker's next job off the queue.
 /// A focus-reserved worker takes ONLY the focused index's entry, and
 /// only once the focus has been stable for FOCUS_DEBOUNCE: in-flight
@@ -358,7 +500,31 @@ fn next_job(state: &mut LoupeState, focus_reserved: bool, now: std::time::Instan
             }
             match state.queue.iter().rposition(|(q, _, _)| *q == f) {
                 Some(pos) => pos,
-                None => return Slot::Wait,
+                None => {
+                    // SETTLE GUARANTEE. Transit deliberately asked only for
+                    // the mid, so once the user stops, SOMETHING has to ask
+                    // for the real target — and it cannot be the app, whose
+                    // refresh loop goes quiet exactly when nothing is
+                    // decoding. This lane already wakes on a timer, so it is
+                    // the one place that can promise it: settled, focused
+                    // frame short of what the app wants, nothing queued for
+                    // it -> queue it here.
+                    let settled = state
+                        .last_index_change
+                        .is_some_and(|t| now.saturating_duration_since(t) >= SETTLE_DEBOUNCE);
+                    let want = state.desired_long;
+                    if settled
+                        && want > 0
+                        && !state.failed.contains(&f)
+                        && !state.in_flight.contains(&f)
+                        && !cached_serves(state, f, want)
+                    {
+                        state.queue.push((f, want, true));
+                        state.queue.len() - 1
+                    } else {
+                        return Slot::Wait;
+                    }
+                }
             }
         } else {
             match state.queue.len().checked_sub(1) {
@@ -614,6 +780,256 @@ mod tests {
     /// State whose focus has already HELD past the debounce (the
     /// settled case) at a MAX target; tests for fresh/transient/
     /// escalating focuses override `focused_at`/`focused_target`.
+    /// TRANSIT vs SETTLED (user requirement 2026-08-01). Held keys must be
+    /// distinguished from deliberate taps, and the distinction must decay
+    /// once the user stops.
+    #[test]
+    fn transit_tracks_held_keys_and_decays_on_release() {
+        use std::time::{Duration, Instant};
+        let t0 = Instant::now();
+        let mut st = LoupeState::default();
+
+        // First ever focus is NOT transit: there is no previous change to
+        // be close to. A folder must not open in scrub mode.
+        note_focus(&mut st, 0, u32::MAX, t0);
+        assert!(!in_transit(&st, t0), "the first focus is never transit");
+
+        // Held key: changes one repeat interval apart.
+        let mut t = t0;
+        for i in 1..=5 {
+            t += Duration::from_millis(120);
+            note_focus(&mut st, i, u32::MAX, t);
+            assert!(in_transit(&st, t), "a held key at 120 ms must be transit");
+        }
+        // ...and it decays once the key is released.
+        assert!(
+            in_transit(&st, t + SETTLE_DEBOUNCE - Duration::from_millis(1)),
+            "still transit just before the settle"
+        );
+        assert!(
+            !in_transit(&st, t + SETTLE_DEBOUNCE),
+            "settled once the debounce elapses"
+        );
+        // Those two are written in terms of the constant, so they hold for
+        // ANY value of it — including 5 s, which would strand the user on a
+        // mid rung long after they stopped. Pin the value itself in absolute
+        // terms, from both sides:
+        assert!(
+            in_transit(&st, t + Duration::from_millis(100)),
+            "100 ms after the last key is still mid-hold at any normal repeat \
+             rate; settling that eagerly would fire a sharp decode between \
+             every two frames of a held arrow"
+        );
+        assert!(
+            !in_transit(&st, t + Duration::from_millis(200)),
+            "200 ms after release the user has stopped and is WAITING — the \
+             settle is paid on every stop and is pure latency before the \
+             sharp decode even starts"
+        );
+
+        // Deliberate tap-stepping through a burst is NOT transit, so each
+        // tap asks for the sharp rung immediately.
+        let mut st = LoupeState::default();
+        let mut t = t0;
+        note_focus(&mut st, 0, u32::MAX, t);
+        for i in 1..=4 {
+            t += Duration::from_millis(400);
+            note_focus(&mut st, i, u32::MAX, t);
+            assert!(!in_transit(&st, t), "a 400 ms tap must not be transit");
+        }
+    }
+
+    /// SETTLE GUARANTEE: after a transit, something must ask for the
+    /// sharp rung — and it can only be this lane.
+    ///
+    /// Transit deliberately caps every request at the mid, so when the user
+    /// stops there is no full-res request anywhere in the system. The app
+    /// cannot issue one: its refresh loop is event-driven and goes quiet
+    /// exactly when nothing is decoding. Without this branch the user holds
+    /// an arrow, stops, and the frame stays soft forever — a strictly worse
+    /// bug than the slow transit this whole change exists to fix.
+    #[test]
+    fn a_settled_frame_climbs_even_though_transit_only_asked_for_the_mid() {
+        let now = std::time::Instant::now();
+        // Transit left index 4 at the mid, and nothing queued for it.
+        let mut state = stable_focus_state(4);
+        state.desired_long = 8640;
+        state.last_index_change = Some(now - SETTLE_DEBOUNCE);
+        state.cache.insert(
+            4,
+            (
+                FullImage {
+                    rgb: std::sync::Arc::new(vec![0u8; 3]),
+                    width: MID_RUNG_TARGET,
+                    height: 1080,
+                },
+                0,
+            ),
+        );
+        assert!(state.queue.is_empty(), "transit queued nothing sharp");
+        assert_eq!(
+            next_job(&mut state, true, now),
+            Slot::Job(4, 8640),
+            "a settled frame short of the app's target must climb"
+        );
+
+        // Still MOVING: the guarantee must not fire mid-hold, or every
+        // frame of a held arrow starts a full-res decode and transit is
+        // pointless.
+        let mut state = stable_focus_state(4);
+        state.desired_long = 8640;
+        state.last_index_change = Some(now);
+        state.cache.insert(
+            4,
+            (
+                FullImage {
+                    rgb: std::sync::Arc::new(vec![0u8; 3]),
+                    width: MID_RUNG_TARGET,
+                    height: 1080,
+                },
+                0,
+            ),
+        );
+        assert_eq!(
+            next_job(&mut state, true, now),
+            Slot::Wait,
+            "no sharp decode while the user is still moving"
+        );
+
+        // Already sharp: the lane must not re-queue it forever (a spin).
+        let mut state = stable_focus_state(4);
+        state.desired_long = 8640;
+        state.last_index_change = Some(now - SETTLE_DEBOUNCE);
+        state.cache.insert(
+            4,
+            (
+                FullImage {
+                    rgb: std::sync::Arc::new(vec![0u8; 3]),
+                    width: 8640,
+                    height: 5760,
+                },
+                0,
+            ),
+        );
+        assert_eq!(
+            next_job(&mut state, true, now),
+            Slot::Wait,
+            "a frame that already serves the target must not be re-queued"
+        );
+    }
+
+    /// The settle guarantee POLLS; it must not touch the LRU order.
+    ///
+    /// It runs on the reserved lane's timer, so it fires repeatedly while
+    /// the user simply looks at a photo. Refreshing the stamp there (the
+    /// first version passed `stamp: 0` to `sufficient_cached`, which
+    /// WRITES) marked the settled frame as the oldest entry in the cache —
+    /// so the frame the user had just been studying became the first thing
+    /// evicted the moment they arrowed away, which is the exact opposite of
+    /// what arrowing back to compare a burst needs.
+    #[test]
+    fn the_settle_guarantee_does_not_disturb_the_lru_order() {
+        let now = std::time::Instant::now();
+        let mut state = stable_focus_state(4);
+        state.desired_long = 8640;
+        state.last_index_change = Some(now - SETTLE_DEBOUNCE);
+        state.cache.insert(
+            4,
+            (
+                FullImage {
+                    rgb: std::sync::Arc::new(vec![0u8; 3]),
+                    width: 8640,
+                    height: 5760,
+                },
+                77,
+            ),
+        );
+        // Already sharp: the guarantee looks, decides there is nothing to
+        // do, and must leave the stamp exactly as it found it.
+        assert_eq!(next_job(&mut state, true, now), Slot::Wait);
+        assert_eq!(
+            state.cache.get(&4).map(|(_, s)| *s),
+            Some(77),
+            "the settle poll must not restamp the frame it merely inspected"
+        );
+    }
+
+    /// The transit ring leans the way the user is travelling, and a
+    /// reversal re-leans it on the very next frame.
+    ///
+    /// Untested, a symmetric ring survives every other assertion here: it
+    /// still requests the mid, still keeps up on the frame you are ON. What
+    /// it loses is the whole point of the look-ahead — the frames arriving
+    /// BEFORE the finger gets to them.
+    #[test]
+    fn transit_ring_leans_in_the_direction_of_travel() {
+        let count = 1000;
+        // Moving forward: far more ahead than behind.
+        let (_, lo, hi) = focus_plan(true, Some(499), 500, u32::MAX, count);
+        assert_eq!(
+            (hi - 500, 500 - lo),
+            (TRANSIT_AHEAD, TRANSIT_BEHIND),
+            "a forward ring must lean forward"
+        );
+        assert!(
+            hi - 500 > 500 - lo,
+            "a symmetric transit ring prefetches frames the user is moving \
+             AWAY from: ahead {} vs behind {}",
+            hi - 500,
+            500 - lo
+        );
+        // Reversed on the very next frame: the lean flips with it.
+        let (_, lo, hi) = focus_plan(true, Some(500), 499, u32::MAX, count);
+        assert_eq!(
+            (499 - lo, hi - 499),
+            (TRANSIT_AHEAD, TRANSIT_BEHIND),
+            "arrowing back must re-lean backward immediately"
+        );
+        // Settled: the tight symmetric ring, and the app's REAL target.
+        let (req, lo, hi) = focus_plan(false, Some(499), 500, 8640, count);
+        assert_eq!((500 - lo, hi - 500), (PREFETCH, PREFETCH));
+        assert_eq!(req, 8640, "a settled frame must ask for full quality");
+        assert!(
+            focus_plan(true, Some(499), 500, 8640, count).0 < req,
+            "transit must ask for LESS than settled, or it is not transit"
+        );
+        // Edges clamp rather than wrap or panic.
+        let (_, lo, hi) = focus_plan(true, None, 0, u32::MAX, 3);
+        assert_eq!((lo, hi), (0, 2), "ring clamps at the start of the folder");
+        let (_, lo, hi) = focus_plan(true, Some(1), 2, u32::MAX, 3);
+        assert_eq!((lo, hi), (0, 2), "ring clamps at the end of the folder");
+    }
+
+    /// The transit request must be a rung the MID actually serves.
+    ///
+    /// This is the bug the first implementation shipped with: it asked for
+    /// `MID_RUNG_MAX_LONG` (2048), but `serves` allows only a 1.25x upscale,
+    /// so a 1616 mid covers 2020 px — 28 short. Every transit frame quietly
+    /// climbed to full-res anyway, and the change measured as no improvement
+    /// at all until the arithmetic was checked.
+    #[test]
+    fn transit_request_is_served_by_the_mid_rung() {
+        let mid = FullImage {
+            rgb: std::sync::Arc::new(vec![0u8; 3]),
+            width: 1616,
+            height: 1080,
+        };
+        // What focus() asks for while moving, at any factor above fit.
+        // What focus() asks for while moving, at 1:1 on a full A1 frame.
+        let request = transit_request(8640);
+        assert!(
+            serves(&mid, request),
+            "the mid rung must satisfy the transit request, or transit still \
+             climbs to full-res: mid 1616 covers {} px, asked for {request}",
+            (1616.0 * UPSCALE_THRESHOLD) as u32
+        );
+        // The old value is exactly the trap: keep it documented as failing.
+        assert!(
+            !serves(&mid, MID_RUNG_MAX_LONG),
+            "MID_RUNG_MAX_LONG is NOT served by a 1616 mid — that was the bug"
+        );
+    }
+
     fn stable_focus_state(index: usize) -> LoupeState {
         LoupeState {
             focused: Some(index),
