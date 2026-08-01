@@ -140,8 +140,8 @@ backup drive went from 99–133 s to ~1–3 s, local NVMe 5k from ~14.5 s to
 loupe-engine scheduling fixes it exposed (ring-gated deferred revival +
 the debounced focus-reserved worker), the loupe state badge (#20 — mark
 visible without leaving the loupe; rejects no longer dimmed at fit), the
-About dialog (#23 — build-composed version string, X.Y.Z-devel-<hash>
-off-tag) with full modal keyboard containment for both popups, the #18
+About dialog (#23 — build-composed version string,
+X.Y.Z-devel-<hash> off-tag; the commit DATE joined it in #26) with full modal keyboard containment for both popups, the #18
 anchor closure (verified fixed by the #16 relayout work, regression-
 pinned), and the drive/shutter harness determinism work. No docs
 release-note debt: culling.md gained its sections with the features.

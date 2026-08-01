@@ -837,17 +837,74 @@ Chrome staging (updated with the panel step): IPTC Panel menu item, `I`,
 **About dialog (issue #23, implemented 2026-07-27 — replaces the
 About→shortcuts placeholder)**: Help > About opens a dedicated modal
 (same scrim/close pattern as the shortcuts popup: Esc or click outside;
-clicks on the card never close it). Content, user-directed: "FastCull —
-version X.Y.Z", the two-sentence description, "Main contributor: Danilo
-de Paula", the repository URL as plain RETYPE-ABLE text (no URL-opener
-dependency in v1; the URL must never wrap or ellipsize), and the
+clicks on the card never close it). Content, user-directed: "FastCull"
+with the version on its own line beneath it, the two-sentence
+description, "Main contributor: Danilo de Paula", the repository URL as
+plain RETYPE-ABLE text (no URL-opener dependency in v1; the URL must
+never wrap or ellipsize), and the
 license line "GPL-3.0-or-later" — moved here from the shortcuts footer
 (its intended home per the M5 deferral). The version string is composed
 by the BUILD, never hand-maintained: `X.Y.Z` when HEAD sits exactly on
-the release tag `vX.Y.Z`, `X.Y.Z-devel-<short-hash>` otherwise (user
-decision — a bug report from a dev build must pin the commit); no git
+the release tag `vX.Y.Z`, **`X.Y.Z-devel-YYYYMMDD-<short-hash>`**
+otherwise (a bug report from a dev build must pin the commit); no git
 (tarball build) falls back to plain `X.Y.Z`. Traced at startup
-("about version ...") for headless assertions.
+("about version ...") for headless assertions, and asserted by
+`about_dialog_renders_and_contains_the_keyboard` as a SHAPE: off a release
+tag a `-devel-` suffix is MANDATORY (CI checks out shallow with no tags,
+so it is always off-tag — without this the suffix could vanish entirely
+and the test would still pass), the date must be 8 digits when present,
+and the dateless fallback must still be a bare hex hash.
+Recorded gaps, mutation-measured: the test proves a date is present and
+well-shaped but not WHICH date — swapping the committer date for the
+author date ships a string wrong by years and stays green; the dateless
+fallback and the two-line split are likewise unpinned. Killing the first
+wants a fixture repo with divergent author/committer dates, which is
+heavier than the defect.
+
+**Date in the devel suffix (issue #26, user decision 2026-07-31)**: the
+hash says WHICH code is running, the date says HOW OLD it is — without
+anyone having to look the hash up, which is the point of a string people
+paste into bug reports. Date before hash so builds from one branch sort
+chronologically, and compact `YYYYMMDD` because dashes inside the date
+would stop reading as separators.
+- It is the COMMIT date, not the build date: reproducible — the same
+  commit always yields the same string, and two people on that commit
+  report the same version. QE confirmed the reproducibility claim is
+  timezone- and locale-independent (git renders the commit's own recorded
+  offset), and that the date and the hash always move together, since both
+  come from one build-script run against one HEAD.
+  Precisely: the date does not go stale in any case the HASH would not.
+  When `build.rs` does not re-run, the binary reports the previous
+  commit's date AND hash — self-consistent, but describing code that is
+  not running. `build.rs` therefore also watches the TAG refs, because
+  `git tag vX.Y.Z && cargo build` used to leave a `-devel-` string in a
+  release binary (it did, at 0.5.0). Remaining hole, recorded: a developer
+  who sets a global `CARGO_TARGET_DIR` shared between two checkouts of the
+  same version gets whichever build-script result cargo cached; `cargo
+  clean -p fastcull-app` fixes it. Pre-existing since #23 and identical
+  for the hash alone.
+- Specifically the COMMITTER date (`%cd`), not the author date: a
+  rebased or cherry-picked commit keeps its original author date, which
+  would describe when the code was first written rather than when the
+  commit being run came into existence.
+- A hash with no usable date still yields `X.Y.Z-devel-<hash>`; the date
+  is additive and never costs the hash.
+- **The title line is split in two** ("FastCull", then "version …" at
+  13 px with `wrap`). That Text had no `wrap:` while its neighbours did,
+  and Slint clips an unwrapped Text from the RIGHT — precisely where the
+  commit hash sits, the one part of the string a bug report cannot afford
+  to lose (persona review). Measured honestly: today's string occupies
+  ~365 px of the 444 px content box, so it would NOT have clipped yet —
+  the split is precaution against the next thing that lengthens the
+  suffix, not a fix for an observed truncation. `wrap` does not by itself
+  prevent a mid-token break (Unicode line breaking allows one after a
+  hyphen); the width margin is what does.
+  The card grew to 348 px with tighter padding to hold the extra line. QE
+  verified the version renders complete at every size down to 480x320,
+  including with `core.abbrev=20`. Accepted below ~360 px window height:
+  the redundant "Esc or click outside to close" hint spills outside the
+  card. That is narrower than the About card's own content and far below
+  any usable culling window; the version string itself never clips.
 
 **Modal keyboard containment (issue #23, user decision "swallow
 everything in that screen")**: while About OR the shortcuts popup is

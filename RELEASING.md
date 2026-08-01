@@ -60,6 +60,21 @@ git tag v0.1.1
 git push && git push --tags
 ```
 
+**Build the tag, not the commit before it.** `build.rs` composes the
+version string, and cargo only re-runs it when a watched path changes. It
+watches `HEAD`, the branch ref and (since #26) the tag refs — but if you
+have already built at this commit and then tag it, verify before shipping
+anything you built locally:
+
+```sh
+./target/release/fastcull-app --version   # or Help > About
+```
+
+A release build must print plain `X.Y.Z`. If it still shows
+`X.Y.Z-devel-…`, the script did not re-run: `cargo clean -p fastcull-app`
+and build again. This bit v0.5.0. CI is unaffected — it builds from a
+fresh checkout — so this only matters for locally produced binaries.
+
 Pushing the tag starts `release.yml`, which builds on a Linux and a Windows
 runner, uploads `fastcull-app-<target>` and `fastcull-cli-<target>` archives plus
 SHA-256 checksums, and creates the GitHub Release. It also attaches a

@@ -139,7 +139,8 @@ export component MainWindow inherits Window {
     in property <string> scroll-hint: "";
     in-out property <bool> shortcuts-visible: false;
     // About dialog (issue #23): dedicated modal; the version string is
-    // composed by the build (X.Y.Z, or X.Y.Z-devel-<hash> off-tag).
+    // composed by the build (X.Y.Z on a release tag, otherwise
+    // X.Y.Z-devel-YYYYMMDD-<hash> — issue #26).
     in-out property <bool> about-visible: false;
     in property <string> about-version;
     // Opening a modal steals the keyboard back to the main key scope
@@ -1282,19 +1283,47 @@ export component MainWindow inherits Window {
                 x: (parent.width - self.width) / 2;
                 y: (parent.height - self.height) / 2;
                 width: 480px;
-                height: min(320px, parent.height - 40px);
+                // 348px, not 320: issue #26 split the title into two lines,
+                // and at the old height the closing hint was pushed outside
+                // the rounded rect (QE D2 — a real before/after regression,
+                // reproducible at 480x320). The `min` still yields to a
+                // short window; the spacing below was tightened so the card
+                // needs no more room than it did before the split.
+                height: min(348px, parent.height - 40px);
                 border-radius: 8px;
                 background: #202028;
                 border-width: 1px;
                 border-color: #3a3a44;
                 TouchArea { } // clicks on the card never close it
                 VerticalLayout {
-                    padding: 18px;
-                    spacing: 10px;
+                    padding: 16px;
+                    spacing: 8px;
+                    // Two lines, not one. A dev build's version is now
+                    // `X.Y.Z-devel-YYYYMMDD-<hash>` (issue #26), and this
+                    // Text had no `wrap:` while its neighbours do — Slint
+                    // clips an unwrapped Text from the RIGHT, which is
+                    // exactly where the commit hash lives — and that is the
+                    // one part of the string a bug report cannot lose
+                    // (persona review 2026-07-31). Measured, today's string
+                    // occupies ~365px of the 444px content box, so it would
+                    // NOT have clipped yet; the split is precaution against
+                    // the next thing that lengthens it, not a fix for an
+                    // observed truncation. `wrap` is belt-and-braces and
+                    // does not guarantee against a mid-token break: Unicode
+                    // line breaking permits one after a hyphen, so the real
+                    // safety is the width margin. (The version is displayed
+                    // text, not selectable — a Slint Text cannot be copied;
+                    // the docs therefore say "include", not "paste".)
                     Text {
-                        text: "FastCull — version " + root.about-version;
+                        text: "FastCull";
                         color: #ffffff;
                         font-size: 16px;
+                    }
+                    Text {
+                        text: "version " + root.about-version;
+                        color: #c8c8d0;
+                        font-size: 13px;
+                        wrap: word-wrap;
                     }
                     Text {
                         text: "A fast, keyboard-first photo culling tool: fly through a folder of RAW or JPEG photos, pick the keepers, tag them, and copy them out checksum-verified — without ever touching your originals.";

@@ -507,7 +507,7 @@ fn main() {
 
     let window = MainWindow::new().expect("creating window");
     // About-dialog version (issue #23): X.Y.Z on a release-tag build,
-    // X.Y.Z-devel-<hash> otherwise (suffix composed by build.rs — a bug
+    // X.Y.Z-devel-YYYYMMDD-<hash> otherwise (suffix composed by build.rs — a bug
     // report from a dev build must pin the commit). Traced so headless
     // runs can assert the composition without pixel-reading the dialog.
     let about_version = format!(

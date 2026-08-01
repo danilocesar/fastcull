@@ -40,8 +40,11 @@ which is faster than any undo dialog.
 The same map lives in **Help > Keyboard Shortcuts** inside the app.
 
 **Help > About** shows the version, license, and project link. When
-filing a bug, paste the version string from there — development builds
-read `X.Y.Z-devel-<commit>`, which pins the exact code you're running.
+filing a bug, include the version string from there. Development builds
+read `X.Y.Z-devel-<date>-<commit>` — the date is when that commit was
+made, not when the build was compiled, so the same code always reports
+the same version. Together they say exactly which code you were running
+and how old it is. A tagged release just reads `X.Y.Z`.
 While About or the shortcuts popup is open, keys are swallowed (a
 stray `N` will never reject the photo underneath); `Esc` or a click
 outside closes them.

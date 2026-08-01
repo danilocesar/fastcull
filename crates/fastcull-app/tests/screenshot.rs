@@ -1605,6 +1605,69 @@ fn about_dialog_renders_and_contains_the_keyboard() {
         stderr.contains(&format!("about version {}", fastcull_core::VERSION)),
         "version string not composed from the crate version:\n{stderr}"
     );
+    // Issue #26: off a release tag the suffix carries the COMMIT DATE as
+    // well as the hash — `X.Y.Z-devel-YYYYMMDD-<hash>`. Asserted as a shape,
+    // not a literal, because both halves legitimately vary: a build from a
+    // tagged commit is plain `X.Y.Z`, and a build with no git (a tarball) is
+    // too. Only the devel form is constrained.
+    let version = stderr
+        .lines()
+        .find_map(|l| l.split("about version ").nth(1))
+        .expect("no about-version trace")
+        .trim()
+        .to_string();
+    // Whether this build SHOULD carry a suffix is decided by git, not by
+    // hope: CI checks out shallow with no tags, so it is always off-tag and
+    // the devel form is mandatory there. Without this the suffix could
+    // vanish entirely and the weaker branch below would pass green — the
+    // exact regression class issue #23 introduced the suffix to prevent.
+    let on_release_tag = std::process::Command::new("git")
+        .args(["describe", "--tags", "--exact-match", "HEAD"])
+        .current_dir(env!("CARGO_MANIFEST_DIR"))
+        .output()
+        .ok()
+        .filter(|o| o.status.success())
+        .map(|o| String::from_utf8_lossy(&o.stdout).trim().to_string())
+        .is_some_and(|t| t == format!("v{}", fastcull_core::VERSION));
+    match version.strip_prefix(&format!("{}-devel-", fastcull_core::VERSION)) {
+        Some(suffix) => {
+            // `YYYYMMDD-<hash>`, or bare `<hash>` when git could not give a
+            // usable date. The dateless form is SPEC-SANCTIONED (ui-grid.md:
+            // "the date is additive and never costs the hash") and really
+            // happens — `log.showsignature=true` puts gpg output on stdout,
+            // and git before `--date=format:` cannot produce it at all. QE
+            // reproduced both; rejecting it would fail the suite on a
+            // correctly-behaving build.
+            match suffix.split_once('-') {
+                Some((date, hash)) => {
+                    assert!(
+                        date.len() == 8 && date.bytes().all(|b| b.is_ascii_digit()),
+                        "devel date is not YYYYMMDD: {version:?}"
+                    );
+                    assert!(
+                        !hash.is_empty() && hash.bytes().all(|b| b.is_ascii_hexdigit()),
+                        "devel hash is not hex: {version:?}"
+                    );
+                }
+                None => assert!(
+                    !suffix.is_empty() && suffix.bytes().all(|b| b.is_ascii_hexdigit()),
+                    "dateless devel suffix must still be a bare hex hash: {version:?}"
+                ),
+            }
+        }
+        None => {
+            assert_eq!(
+                version,
+                fastcull_core::VERSION,
+                "a build without `-devel-` must be the bare release version"
+            );
+            assert!(
+                on_release_tag,
+                "off a release tag the version MUST carry a -devel- suffix, \
+                 got the bare {version:?} — the suffix has gone missing"
+            );
+        }
+    }
     assert_eq!(
         stderr.matches("drive swallowed by modal").count(),
         2,
