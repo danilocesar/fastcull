@@ -94,6 +94,36 @@ faq); QE executed the full DoD path from the docs against the release
 binary. Release-note debt RESOLVED with v0.3.0: the index install note was
 removed and the culling callout pinned to "Changed in 0.3.0". The docs-follow-specs binding lives in CLAUDE.md.
 
+## v0.6.0 (released 2026-07-31)
+
+Everything since v0.5.0 — two issues, both of which turned out to be
+bigger than their titles.
+
+- **#25: the load stops moving the photo under your hands.** EXIF is read
+  inside the per-file THUMBNAIL job, so the metadata sweep runs for the
+  whole load (~15 s for 3,000 files locally, far longer off a card), and
+  for all of it the capture sort put keyed images ahead of keyless ones —
+  so the view order, and the head with it, changed on almost every
+  arrival whenever filename order ran contrary to capture order. The
+  issue called this "cursor lands off-by-N". Measured, one `right` at
+  1 ms landed 870 frames away; worse, MARKS write to the cursor, and a
+  `Y` typed 4 s after opening wrote the sidecar for a file the user had
+  never seen. The view now holds FILENAME order until every job finishes,
+  then sorts once. Per the user's decision, whatever is selected stays
+  selected through that flip and every engine event after it — which
+  narrows issue #4 knowingly: an untouched cursor can end up mid-grid
+  rather than at the start of the shoot.
+- **#26: a dev build's version says how old it is.**
+  `X.Y.Z-devel-YYYYMMDD-<hash>`, using the commit date so the string is
+  reproducible. The fix that matters most is smaller than the feature:
+  `build.rs` did not watch tag refs, so `git tag && cargo build` left a
+  `-devel-` string inside a release binary — which happened at 0.5.0 and
+  made every version string suspect.
+
+Also: `loupe_survives_a_vertical_resize` was flaking 4-in-20 on main and
+is fixed; the About card holds its extra line; and a `rerun-if-changed`
+path that did not exist was costing ~4.7 s on every no-op build.
+
 ## v0.5.0 (released 2026-07-30)
 
 Everything since v0.4.0. The selection wash (a multi-selection is
