@@ -1671,9 +1671,9 @@ fn main() {
                 if drives_pending.get() > 0 {
                     return;
                 }
-                let one2one_ready = {
+                let (one2one_ready, fit_ready) = {
                     let st = state_rc.borrow();
-                    st.zoom_factor <= 1.0
+                    let one2one = st.zoom_factor <= 1.0
                         || st.fullres.iter().any(|(i, img)| {
                             *i == st.cursor
                                 && (img.size().width.max(img.size().height)
@@ -1683,17 +1683,43 @@ fn main() {
                                     // the 60s refusal hit every small-JPEG
                                     // --start-11 run).
                                     || st.terminal_native.contains(&st.cursor))
-                        })
+                        });
+                    // At LOUPE FIT the old gate was vacuous (zoom_factor is
+                    // 1.0), so the shutter fired on the bare 1.5 s floor —
+                    // racing the first mid decode. A Windows CI runner ~60%
+                    // slower than usual lost that race (PR #29, 2026-08-01):
+                    // the snapshot caught the PLACEHOLDER, and the fit test
+                    // failed with "no pillarbox bars" on an app behaving
+                    // correctly. Wait for a real texture on the cursor.
+                    // Scoped: synthetic sessions never produce textures, a
+                    // failed cursor never will, and an empty view has no
+                    // cursor — all must keep the old behaviour or they hang
+                    // into the 60 s cap.
+                    let at_loupe = st.zoom == grid::ZOOM_COLUMNS.len() - 1;
+                    let fit = !at_loupe
+                        || st.synthetic
+                        || st.view.is_empty()
+                        || st.failed.contains(&st.cursor)
+                        || st.fullres.iter().any(|(i, _)| *i == st.cursor)
+                        || st.mids.contains_key(&st.cursor)
+                        || st.images.contains_key(&st.cursor);
+                    (one2one, fit)
                 };
-                if !one2one_ready && elapsed > std::time::Duration::from_secs(60) {
+                let ready = one2one_ready && fit_ready;
+                if !ready && elapsed > std::time::Duration::from_secs(60) {
                     eprintln!(
-                        "screenshot: full-res texture never adopted for the 1:1 \
-                         frame within 60 s — refusing to capture the wrong state"
+                        "screenshot: the loupe frame's texture never arrived \
+                         within 60 s ({}) — refusing to capture the wrong state",
+                        if one2one_ready {
+                            "fit view still on the placeholder"
+                        } else {
+                            "full-res never adopted for the 1:1 frame"
+                        }
                     );
                     slint::quit_event_loop().ok();
                     std::process::exit(1);
                 }
-                if elapsed < std::time::Duration::from_millis(1500) || !one2one_ready {
+                if elapsed < std::time::Duration::from_millis(1500) || !ready {
                     return;
                 }
                 // The status line at shutter time, for text-level test
