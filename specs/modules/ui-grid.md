@@ -166,23 +166,55 @@ where it is."
     `transit_request_is_served_by_the_mid_rung` pins it, and asserts the
     old value still fails.
 
-  Measured on the 8-core development laptop, 20 frames at a 120 ms repeat,
-  portrait A1 frames at 1:1 — before/after on the same drive script:
+  Measured on the 8-core development laptop: 306 portrait A1 frames,
+  cold cache, 20 held right-arrows at 1:1, three runs, median. Frames are
+  counted as DISTINCT images that reached the screen while the key was
+  still down — the number that decides whether it feels like video.
+
+  At a **40 ms repeat, what a held arrow on Linux actually does**:
 
   | | before | after |
   |---|---|---|
-  | frames shown while holding | 9 of 20 | **20 of 20** |
-  | worst stall while holding | 646 ms | **129 ms** |
-  | sharp on the frame stopped on | 746 ms | **578 ms** |
+  | frames shown during the hold | 3 of 20 | **19 of 20** |
+  | full-res on the frame stopped on | 1033 ms | **951 ms** |
 
-  Median gap during the hold is 120 ms — the key-repeat interval exactly,
-  i.e. the display tracks the key frame for frame. Note the settle also got
-  FASTER despite transit no longer pre-decoding full-res: the old build's
-  quicker-looking first sharp event belonged to a frame the user had
-  already left, not the one they stopped on.
-  Recorded gap: 578 ms is short of the ~300 ms sharpness-on-stop promise
-  and is decode-bound (150 ms settle + ~390 ms decode). Buffer pooling
-  would put it near 478 ms; the 32-thread reference machine would meet it.
+  At a **120 ms repeat** (a slow hold, closer to tapping):
+
+  | | before | after |
+  |---|---|---|
+  | frames shown during the hold | 7 of 20 | **19 of 20** |
+  | full-res on the frame stopped on | 916 ms | 1024 ms |
+
+  So the faster the user travels, the more this wins — which is the right
+  direction, because the faster they travel the more the old behaviour
+  broke down. At 40 ms the old build was so far behind that its own
+  stop-to-sharp suffered too: it had queued twenty full-res decodes it
+  could not retire, and the frame the user actually stopped on waited
+  behind the stale ones. Transit queues only cheap mids, so the workers
+  are free the moment the user stops.
+
+  The 120 ms row is the honest cost: ~110 ms slower to sharpen, which is
+  the settle debounce, paid on every stop. Accepted — the user's priority
+  was explicit and motion-first, and both figures are under a second.
+
+  **Measured and rejected — an adaptive settle.** Since the debounce is
+  pure stop latency, it was made to learn the user's repeat rate and wait
+  1.25x the observed gap (60 ms floor) instead of a fixed 150 ms. It did
+  sharpen sooner and far more consistently (749 ms, spread 705-754) but
+  cost five frames of smoothness (14 of 20): a 60 ms threshold is fragile
+  to repeat jitter, and one long gap settles mid-hold and fires a full-res
+  decode that blocks the workers for the frames behind it. A middle
+  setting (2x, 100 ms floor) was worse on both axes and swung 8-18 frames
+  across three runs. Dropped: it loses on the axis the user named first,
+  and the tuning was not supported by the spread in the data. The fixed
+  150 ms is one constant with no learned state and beats the old behaviour
+  on both axes at a realistic repeat rate.
+
+  Recorded gap: ~950 ms stop-to-sharp is well short of the ~300 ms a
+  sharpness-on-stop promise would want, and it is decode-bound — the
+  full-res decode alone medians 614 ms here (`budget_fullres_decode_under_350ms`
+  fails on `main` for the same reason; issue #27). Scheduling cannot close
+  it; a faster decode or buffer pooling would.
 
 - **Quality rule (revised by issue #21, user-approved 2026-07-27)**:
   intermediate factors are rendered from the **full-res rung** once
