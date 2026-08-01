@@ -1686,23 +1686,29 @@ fn main() {
                         });
                     // At LOUPE FIT the old gate was vacuous (zoom_factor is
                     // 1.0), so the shutter fired on the bare 1.5 s floor —
-                    // racing the first mid decode. A Windows CI runner ~60%
-                    // slower than usual lost that race (PR #29, 2026-08-01):
-                    // the snapshot caught the PLACEHOLDER, and the fit test
-                    // failed with "no pillarbox bars" on an app behaving
-                    // correctly. Wait for a real texture on the cursor.
-                    // Scoped: synthetic sessions never produce textures, a
-                    // failed cursor never will, and an empty view has no
-                    // cursor — all must keep the old behaviour or they hang
-                    // into the 60 s cap.
+                    // racing the loupe decodes. Two consecutive Windows CI
+                    // runs ~60% slower than usual lost that race two
+                    // DIFFERENT ways (PR #29, 2026-08-01): one snapshot
+                    // caught the PLACEHOLDER ("no pillarbox bars"), the
+                    // rerun caught a blurry UPSCALED THUMB (photo variance
+                    // 99.2 against the suite's 100 floor, ~3300 normal). So
+                    // the gate waits for the MID-or-better tier — the
+                    // texture fit actually settles on — not merely any
+                    // texture; a thumb stretched across the loupe is still
+                    // the wrong state to photograph. Scoped: synthetic
+                    // sessions never produce textures, a failed cursor
+                    // never will (the loupe's Failed event fills
+                    // `st.failed`), a terminal small file's whole-file rung
+                    // is adopted into the fullres slot (issue #8), and an
+                    // empty view has no cursor — all keep the old
+                    // behaviour or they would hang into the 60 s cap.
                     let at_loupe = st.zoom == grid::ZOOM_COLUMNS.len() - 1;
                     let fit = !at_loupe
                         || st.synthetic
                         || st.view.is_empty()
                         || st.failed.contains(&st.cursor)
                         || st.fullres.iter().any(|(i, _)| *i == st.cursor)
-                        || st.mids.contains_key(&st.cursor)
-                        || st.images.contains_key(&st.cursor);
+                        || st.mids.contains_key(&st.cursor);
                     (one2one, fit)
                 };
                 let ready = one2one_ready && fit_ready;
