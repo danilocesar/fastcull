@@ -139,10 +139,20 @@ where it is."
     on settle would make tap-stepping through a burst at 1:1 pay a full
     decode on every frame, forever. It needs no new code — it is the
     pre-existing behaviour, which is precisely the SETTLED behaviour.
-  - **Same rule at every factor above fit**, no threshold to learn.
-    Holding at fit is unchanged: a fit-sized display already asks for less
-    than the mid, so `transit_request` is a no-op there (QE measured the
-    trace at fit as byte-identical to the old behaviour).
+  - **Same rule at every factor, fit included**, no threshold to learn.
+    On displays up to ~2 K wide, holding at fit is unchanged: fit asks for
+    less than the mid, so `transit_request` is a no-op and QE measured the
+    trace as byte-identical to the old behaviour. **On wider displays (QHD,
+    4K) transit DOES engage at fit** — fit there is 2560/3840 px, above
+    what the mid serves — so a hold shows mids upscaled ~1.6–2.4× until
+    release (QE 2026-08-01: 6/30 frames at full during a hold vs main's
+    30/30, which cost main 7.2 s of CPU for frames never seen). This is the
+    designed trade applied consistently, not an exemption failing: an
+    earlier revision of this bullet claimed fit was ALWAYS a no-op, which
+    was only true on the ≤2 K displays it had been measured on. The visible
+    softness of an upscaled mid on a 4K monitor during a hold has not been
+    eyeballed by the user — worth one look before anyone tunes constants
+    around it.
   - **Direction is latched at the index change**, never re-derived per
     call. The app re-focuses the SAME index on every `refresh()`, and
     `refresh()` runs on every decode landing — of which transit produces
@@ -244,6 +254,26 @@ where it is."
     travelling, so those frames are judged from the mid. Marking is a
     judgment workflow, not a travel one. **Needs the user's call** before
     it is either excluded from transit or documented as intended.
+    **Measured for that call** (QE 2026-08-01): at the actual 4/s cadence
+    (250 ms gaps, exactly `TRANSIT_GAP`) BOTH sides judge every frame at
+    full-res — nothing changes. The mid-judging regime begins only above
+    ~4.2/s, where main is strictly worse: at 6.2–8/s the branch judges
+    17/20 at mid with zero blanks, while main leaves 2–5 of 20 frames with
+    NOTHING decoded at all. So the trade only exists at cadences where the
+    old code showed blank frames; the knife-edge at exactly `TRANSIT_GAP`
+    is the part worth a deliberate decision.
+  - Wraparound direction latch: if the app ever wraps cursor 0 → count−1
+    on backward travel, `index >= prev` in `note_focus` reads that one
+    step as "forward" and leans the ring the wrong way for one refocus
+    cycle. Self-corrects at the next step; no main-relative regression
+    (main has no lean at all); recorded so a future wraparound feature
+    knows to fix the latch with it.
+  - Sharpness-on-stop variance: at the ENGINE level stop-to-sharp is
+    371–408 ms with ±20 ms spread across hold lengths 4–64 (QE
+    2026-08-01) — extremely consistent. The wider swings observed at the
+    APP level (721–1047 ms across whole-app runs) are compositor/refresh
+    overhead on top, not engine scheduling; measure at the right layer
+    before tuning any constant against that number.
   - No hysteresis on `moving`: a single stretched gap > `TRANSIT_GAP`
     mid-hold drops back to SETTLED and fires a full-res ring that is never
     cancelled, precisely when the machine is already behind. Same mechanism
