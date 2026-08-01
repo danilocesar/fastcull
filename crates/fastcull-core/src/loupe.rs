@@ -96,6 +96,16 @@ struct LoupeState {
     /// When the focused INDEX last changed. Unlike `focused_at`, a target
     /// escalation does not reset it — this is the TRANSIT clock.
     last_index_change: Option<std::time::Instant>,
+    /// Direction of travel, latched at the last real index CHANGE.
+    ///
+    /// It cannot be re-derived per call from the previous focus: the app
+    /// re-focuses the SAME index on every refresh, and refresh runs on
+    /// every decode landing — of which transit produces one per ring
+    /// member per frame. `index >= prev` is trivially true for those, so
+    /// deriving it per call flipped the ring forward within milliseconds
+    /// of every backward step, and a backward hold prefetched the frames
+    /// the user was moving away from (validator + QE, 2026-08-01).
+    travel_forward: bool,
     /// True when the last index change followed the previous one closely
     /// enough to be a held key rather than a deliberate tap. Decays via
     /// `in_transit`.
@@ -166,7 +176,6 @@ impl LoupeEngine {
         let stamp = self.shared.stamp.fetch_add(1, Ordering::Relaxed) + 1;
         let now = std::time::Instant::now();
         let mut state = lock(&self.shared);
-        let prev = state.focused;
         note_focus(&mut state, index, display_long, now);
         let transit = in_transit(&state, now);
         // TRANSIT vs SETTLED (user requirement 2026-08-01). Moving: ask only
@@ -175,7 +184,8 @@ impl LoupeEngine {
         // Stopped: ask for what the app actually wants, over the tight ring,
         // which is the pre-existing behaviour and is what keeps tap-stepping
         // through a burst sharp.
-        let (request, lo, hi) = focus_plan(transit, prev, index, display_long, count);
+        let (request, lo, hi) =
+            focus_plan(transit, state.travel_forward, index, display_long, count);
         // Prefetch ring: farthest neighbors first, focused index last (back
         // of the queue = popped first by workers).
         let mut wanted: Vec<usize> = (lo..=hi).filter(|i| *i != index).collect();
@@ -341,6 +351,8 @@ fn note_focus(state: &mut LoupeState, index: usize, display_long: u32, now: std:
             .last_index_change
             .is_some_and(|t| now.saturating_duration_since(t) <= TRANSIT_GAP);
         state.last_index_change = Some(now);
+        // Latch direction HERE, where a real change proves it.
+        state.travel_forward = state.focused.is_none_or(|p| index >= p);
     }
     if state.focused != Some(index) {
         state.focused = Some(index);
@@ -384,11 +396,22 @@ const FOCUS_DEBOUNCE: std::time::Duration = std::time::Duration::from_millis(250
 const TRANSIT_GAP: std::time::Duration = std::time::Duration::from_millis(250);
 
 /// Quiet for this long after the last frame change means the user has
-/// STOPPED, and quality becomes the goal again. Deliberately shorter than
-/// FOCUS_DEBOUNCE: it is paid on every stop, so it is the floor of the
-/// sharpness-on-stop promise, and 250 ms here would stack with the
-/// reserved lane's own debounce into most of a second before the sharp
-/// decode even began (persona: IN-MY-WAY at 250 ms).
+/// STOPPED, and quality becomes the goal again — this is what `in_transit`
+/// decays on.
+///
+/// It is NOT, however, what the user feels. The settle guarantee runs in
+/// the reserved lane, which `FOCUS_DEBOUNCE` (250 ms) gates first, and
+/// `note_focus` sets `focused_at` and `last_index_change` from the same
+/// index change — so the lane cannot act before 250 ms and its `settled`
+/// check is always true by the time it is reached. QE measured ~215 ms of
+/// overhead over a bare decode and confirmed, by poking a focus in at
+/// T+150 ms and getting a FASTER result, that the engine had not yet acted.
+/// The check stays as an explicit statement of intent, not as live logic.
+///
+/// An earlier version of this comment claimed 250 ms here would "stack
+/// with the reserved lane's own debounce into most of a second". That is
+/// wrong: both debounces are measured from the same origin, so they do not
+/// add. The real floor is 250 ms, not ~500 ms.
 const SETTLE_DEBOUNCE: std::time::Duration = std::time::Duration::from_millis(150);
 
 /// Transit prefetch is DIRECTIONAL: reading ten frames behind while the
@@ -426,7 +449,7 @@ const TRANSIT_BEHIND: usize = 2;
 /// Returns `(request, lo, hi)` with `lo..=hi` already clamped to `count`.
 fn focus_plan(
     transit: bool,
-    prev: Option<usize>,
+    forward: bool,
     index: usize,
     display_long: u32,
     count: usize,
@@ -435,7 +458,6 @@ fn focus_plan(
         // A reversal must re-lean immediately: arrowing back through a
         // burst you just flew over is the commonest correction there is,
         // and a ring still leaning forward would prefetch behind you.
-        let forward = prev.is_none_or(|p| index >= p);
         let (back, ahead) = if forward {
             (TRANSIT_BEHIND, TRANSIT_AHEAD)
         } else {
@@ -896,6 +918,25 @@ mod tests {
             "no sharp decode while the user is still moving"
         );
 
+        // Already IN FLIGHT: releasing the key while the transit mid is
+        // still decoding is the common case, and queueing the sharp job
+        // anyway burns a second worker on a duplicate and ~149 MB of
+        // transient for an A1 (QE finding, 2026-08-01).
+        let mut state = stable_focus_state(4);
+        state.desired_long = 8640;
+        state.last_index_change = Some(now - SETTLE_DEBOUNCE);
+        state.in_flight.push(4);
+        assert_eq!(
+            next_job(&mut state, true, now),
+            Slot::Wait,
+            "the settle must not duplicate a job already in flight"
+        );
+        assert!(
+            state.queue.is_empty(),
+            "and must not leave a duplicate queued either: {:?}",
+            state.queue
+        );
+
         // Already sharp: the lane must not re-queue it forever (a spin).
         let mut state = stable_focus_state(4);
         state.desired_long = 8640;
@@ -965,7 +1006,7 @@ mod tests {
     fn transit_ring_leans_in_the_direction_of_travel() {
         let count = 1000;
         // Moving forward: far more ahead than behind.
-        let (_, lo, hi) = focus_plan(true, Some(499), 500, u32::MAX, count);
+        let (_, lo, hi) = focus_plan(true, true, 500, u32::MAX, count);
         assert_eq!(
             (hi - 500, 500 - lo),
             (TRANSIT_AHEAD, TRANSIT_BEHIND),
@@ -979,24 +1020,24 @@ mod tests {
             500 - lo
         );
         // Reversed on the very next frame: the lean flips with it.
-        let (_, lo, hi) = focus_plan(true, Some(500), 499, u32::MAX, count);
+        let (_, lo, hi) = focus_plan(true, false, 499, u32::MAX, count);
         assert_eq!(
             (499 - lo, hi - 499),
             (TRANSIT_AHEAD, TRANSIT_BEHIND),
             "arrowing back must re-lean backward immediately"
         );
         // Settled: the tight symmetric ring, and the app's REAL target.
-        let (req, lo, hi) = focus_plan(false, Some(499), 500, 8640, count);
+        let (req, lo, hi) = focus_plan(false, true, 500, 8640, count);
         assert_eq!((500 - lo, hi - 500), (PREFETCH, PREFETCH));
         assert_eq!(req, 8640, "a settled frame must ask for full quality");
         assert!(
-            focus_plan(true, Some(499), 500, 8640, count).0 < req,
+            focus_plan(true, true, 500, 8640, count).0 < req,
             "transit must ask for LESS than settled, or it is not transit"
         );
         // Edges clamp rather than wrap or panic.
-        let (_, lo, hi) = focus_plan(true, None, 0, u32::MAX, 3);
+        let (_, lo, hi) = focus_plan(true, true, 0, u32::MAX, 3);
         assert_eq!((lo, hi), (0, 2), "ring clamps at the start of the folder");
-        let (_, lo, hi) = focus_plan(true, Some(1), 2, u32::MAX, 3);
+        let (_, lo, hi) = focus_plan(true, true, 2, u32::MAX, 3);
         assert_eq!((lo, hi), (0, 2), "ring clamps at the end of the folder");
     }
 
@@ -1014,7 +1055,6 @@ mod tests {
             width: 1616,
             height: 1080,
         };
-        // What focus() asks for while moving, at any factor above fit.
         // What focus() asks for while moving, at 1:1 on a full A1 frame.
         let request = transit_request(8640);
         assert!(

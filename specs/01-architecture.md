@@ -44,8 +44,9 @@ copy picks
 
 - **Main/UI thread**: Slint event loop only. Never blocks on I/O or decode.
 - **Pipeline pool**: rayon pool (num_cpus) executing decode jobs from a priority
-  queue. Priorities: (1) visible cells, (2) loupe neighbors ±2, (3) sequential
-  background fill. Reprioritization on scroll/zoom is O(changed cells).
+  queue. Priorities: (1) visible cells, (2) loupe neighbors — ±2 at rest, and
+  ±2/±8 oriented by travel while the user holds a key (ui-grid.md transit
+  contract), (3) sequential background fill. Reprioritization on scroll/zoom is O(changed cells).
 - **Sidecar writer**: single dedicated thread, debounced queue — sidecar writes are
   ordered and never lost (flush on session close, panic-safe via Drop).
 - Core ↔ UI communication: core exposes a `SessionEvent` stream (thumb ready,
