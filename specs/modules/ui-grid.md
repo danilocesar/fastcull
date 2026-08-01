@@ -115,6 +115,75 @@ where it is."
   never folded into the pan center (`capture_pan` folds only when the
   overlay still belongs to the cursor's image — the hand is on the arrow
   key, not the mouse).
+- **Transit vs settled (user requirement 2026-08-01)**: his words — *"while
+  I'm holding a key and rapidly moving between shots I don't need the image
+  to be as good as possible, I need it to move fast, feeling almost like a
+  video. But when I release the key, then I want quality to be high."*
+  The loupe therefore has three request states. They govern **what is
+  ASKED of the decoder, never what is DISPLAYED** — the renderer always
+  shows the best rung in cache, so flying back over frames whose full-res
+  is still resident shows them sharp (persona: a rule that rendered the mid
+  with a sharp texture in hand would be worse than the bug it fixes).
+
+  | state | trigger | request |
+  |---|---|---|
+  | TRANSIT | frame changes < `TRANSIT_GAP` (250 ms) apart | mid rung ONLY, wide ring biased in the direction of travel |
+  | SETTLED | `SETTLE_DEBOUNCE` (150 ms) of quiet | the app's real target for the focused frame |
+  | SETTLED-AND-IDLE | after that lands | full-res look-ahead on the ±`PREFETCH` neighbours |
+
+  - **The geometry never changes.** Transit keeps the carried factor and pan
+    centre; it does NOT drop to fit. The spec already learned this once —
+    "the old drop-to-fit strobed the whole burst-transit loop and trained
+    the user to tap instead of hold" — and zoom/pan persistence is what
+    makes 1:1 burst comparison work at all.
+  - **SETTLED-AND-IDLE is not optional.** Requesting only the focused frame
+    on settle would make tap-stepping through a burst at 1:1 pay a full
+    decode on every frame, forever; the ±2 full-res ring is what makes that
+    workflow tolerable (persona MUST-HAVE, and the omission was caught in
+    review). It needs no new code — it is the pre-existing behaviour, which
+    is precisely the SETTLED behaviour.
+  - **Same rule at every factor above fit**, no threshold to learn,
+    consistent with the "no special 1.5-2.25x handling" decision above.
+  - **No soft cue during transit.** The pill stays settle-only: an 8 Hz
+    flicker in peripheral vision tells the user nothing the motion has not
+    already told them (persona IN-MY-WAY). "Never leave a frame at rest
+    unsharp without the cue" is still honoured; motion is its own flag.
+  - `SETTLE_DEBOUNCE` is deliberately shorter than `FOCUS_DEBOUNCE`: it is
+    paid on every stop, and 250 ms here would stack with the reserved
+    lane's own debounce into most of a second before the sharp decode even
+    began.
+  - **The settle guarantee lives in the reserved lane, not in the app.**
+    Transit asks only for the mid, so something must ask for the real
+    target once the user stops — and it cannot be the app, whose refresh
+    loop goes quiet exactly when nothing is decoding. The reserved worker
+    already wakes on a timer, so it queues the focused frame's real target
+    when settled and short.
+  - **The transit request must be a rung the mid actually SERVES.**
+    `serves` allows a 1.25x upscale, so a 1616 mid covers 2020 px:
+    requesting `MID_RUNG_MAX_LONG` (2048) is 28 px too high and silently
+    sends every transit frame up the ladder to full-res anyway. The first
+    implementation did exactly that and measured as no improvement at all.
+    `transit_request_is_served_by_the_mid_rung` pins it, and asserts the
+    old value still fails.
+
+  Measured on the 8-core development laptop, 20 frames at a 120 ms repeat,
+  portrait A1 frames at 1:1 — before/after on the same drive script:
+
+  | | before | after |
+  |---|---|---|
+  | frames shown while holding | 9 of 20 | **20 of 20** |
+  | worst stall while holding | 646 ms | **129 ms** |
+  | sharp on the frame stopped on | 746 ms | **578 ms** |
+
+  Median gap during the hold is 120 ms — the key-repeat interval exactly,
+  i.e. the display tracks the key frame for frame. Note the settle also got
+  FASTER despite transit no longer pre-decoding full-res: the old build's
+  quicker-looking first sharp event belonged to a frame the user had
+  already left, not the one they stopped on.
+  Recorded gap: 578 ms is short of the ~300 ms sharpness-on-stop promise
+  and is decode-bound (150 ms settle + ~390 ms decode). Buffer pooling
+  would put it near 478 ms; the 32-thread reference machine would meet it.
+
 - **Quality rule (revised by issue #21, user-approved 2026-07-27)**:
   intermediate factors are rendered from the **full-res rung** once
   cached (GPU-downscaled): ANY factor above fit requests the top rung
