@@ -133,9 +133,9 @@ Two things worth knowing:
 Frames you've already visited stay in memory, so arrowing *back* over a
 burst you just flew through shows them at full quality straight away.
 
-On this laptop a full-resolution A1 frame takes about half a second to
-sharpen after you stop; a faster machine does it in about a third of that.
-Travelling is smooth on both.
+Sharpening after you stop takes about a second for a full-resolution A1
+frame on a modest laptop — that's the decode itself, and a faster machine
+does it in well under half that. Travelling is smooth on both.
 
 ## Fit shows the whole frame
 
