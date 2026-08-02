@@ -13,9 +13,9 @@ darktable, which must see every pick/reject and IPTC field FastCull wrote.
 ## The one architectural idea
 
 Never decode RAW sensor data on the interactive path. Cameras embed camera-rendered
-JPEG previews inside every RAW file; FastCull reads only those bytes. Measured on the
-reference machine (32-thread Ryzen AI MAX+ 395, real Sony A1 files — see
-`adr/0003-embedded-jpeg-strategy.md`): grid pipeline ~300 files/sec vs 0.6–1.2 s per
+JPEG previews inside every RAW file; FastCull reads only those bytes. Measured on a
+32-thread Ryzen AI MAX+ 395 (since retired; real Sony A1 files — see
+`adr/0001-embedded-jpeg-strategy.md`): grid pipeline ~300 files/sec vs 0.6–1.2 s per
 file for full RAW decode.
 
 ## Non-goals (v1)
