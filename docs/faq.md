@@ -51,6 +51,16 @@ Set `FASTCULL_MAX_READERS=4` (or 2) in the environment. It caps how
 many files are read at once — slow media thrashes when too many reads
 compete.
 
+**A frame shows a warning ("Failed") badge instead of the photo.**
+The file's embedded preview couldn't be decoded — typically a file cut
+off mid-write: a dying card, an interrupted copy, a full disk. FastCull
+checks that the image data is actually complete before decoding, so a
+truncated file is flagged honestly instead of being shown as a
+half-blank frame (and a corrupt file claiming absurd dimensions is
+rejected outright instead of eating gigabytes of memory). Your original
+file is never touched — try re-copying it from the card; if the badge
+persists, the file really is damaged.
+
 **Something misbehaves — what should I attach to a bug report?**
 Run with `FASTCULL_TRACE=1` from a terminal and attach the output: it
 timestamps every slow UI phase and loupe state change. If the issue

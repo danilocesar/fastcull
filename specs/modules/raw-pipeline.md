@@ -203,6 +203,51 @@ this gets under the budget without it. Also measured and rejected:
 zune-jpeg 0.5.15 (267-279 ms vs 0.4.21's 247-252 — a regression on this
 workload).
 
+## Hostile-input bounds (issue #31, 2026-08-02)
+
+Decode buffers are sized from HEADER claims before one byte of scan data is
+validated, and in a crafted file every claim is attacker-controlled. Both
+sides of the decode are therefore capped, and stream completeness is checked
+before allocation:
+
+- **Input side**: `MAX_EMBEDDED_JPEG_LEN` (256 MB, `raw/mod.rs`) caps what
+  `read_jpeg` will allocate for a declared payload length.
+- **Output side**: `MAX_DECODED_PIXELS` (500,000,000, `raw/mod.rs`) caps
+  what SOF dimensions may size — checked in `loupe::decode_oriented` right
+  after `decode_headers`, before the decode buffer, the prefault pass, or
+  the transpose `Scratch` exist. 500 MP is ~10x the A1's 49.8 MP and ~3x
+  the largest shipping sensor (150 MP medium format), with room for
+  stitched panoramas served as bare JPEGs; the JPEG format ceiling
+  (65535x65535 = 4.29 GP) would commit ~12.9 GB of RGB per buffer, and a
+  sub-KB stream claiming 30000x30000 measured 5.29 GB RSS on the pre-fix
+  path. The thumb/mid pipeline decode keeps zune's default 16384-per-side
+  limit (268 MP — already stricter than this cap), so the pixel cap lives
+  on the loupe path, the only one that lifts the per-side limits (it must
+  accept panorama-wide bare JPEGs).
+- **Truncation**: zune-jpeg 0.4 zero-fills missing scan data and reports a
+  truncated stream as SUCCESS — its overread counter stops growing at the
+  first zero-fill refill, so even strict mode's premature-end check can
+  never fire — and it exposes no bytes-consumed accessor; 0.5.15 would not
+  help and is a measured perf regression (above). Completeness is instead
+  checked on the raw bytes (`raw/jpeg.rs::scan_is_terminated`): inside
+  entropy-coded data every 0xFF is either stuffed (FF 00) or a real
+  marker, so a genuine FF D9 pair at or after the first SOS is an EOI.
+  The search runs backwards from the tail — intact camera files end with
+  EOI, so the hot path pays effectively nothing. Pre-SOS APP1 segments
+  (EXIF thumbnails are whole JPEGs, EOI included) never vouch for the
+  main scan. Applied in `decode_oriented` AND the grid-thumb decode
+  (this spec's truncated-preview-yields-Failed criterion).
+- **Residual gap (accepted, recorded on issue #31)**: a crafted stream
+  carrying plausible dimensions, a valid EOI, and too-little entropy data
+  still decodes as a mostly-blank "success" — detecting that requires
+  decoder cooperation (bytes consumed vs. expected) that zune 0.4 does
+  not offer. The caps bound its allocation; real-world corruption
+  (cut-off files) is caught by the termination check.
+
+All rejections flow through the existing error paths — `LoupeEvent::Failed`
+/ `SessionEvent::Failed` — so the UI shows the Failed badge (ui-grid.md),
+and subsequent jobs are unaffected.
+
 ## Adaptive read pool (user requirement 2026-07-25, replaces the fixed 4-permit gate)
 
 History: 32 simultaneous readers drove a microSD into minute-long kernel I/O
@@ -359,6 +404,11 @@ from the fixed-gate era.
       grid path (instrument with a counting reader).
 - [ ] A file with a truncated/garbage preview yields `Failed` and does not poison
       the pipeline (subsequent jobs complete).
+- [ ] Hostile decode dimensions (issue #31): a sub-KB stream whose SOF claims
+      30000x30000 is rejected before any pixel allocation (unit-tested on
+      `decode_oriented`, both orientation paths), and a scan cut off before
+      EOI yields `Failed` — never a blank "success" — on both the loupe and
+      grid-thumb decode paths.
 - [ ] `set_visible` promotion: with a saturated queue, a newly visible image's thumb
       arrives before ≥90% of background items (deterministic test with a fake
       2-thread pool and instrumented job order).
