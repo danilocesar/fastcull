@@ -259,6 +259,17 @@ fn lock<T>(m: &Mutex<T>) -> std::sync::MutexGuard<'_, T> {
     m.lock().unwrap_or_else(std::sync::PoisonError::into_inner)
 }
 
+/// Which queued job to cook next: Full (latest first — the focused
+/// frame's sharp swap) > Wrap (transit mid swaps) > Thumb (oldest first —
+/// visibility order) > Mid. Pure so the priority contract is unit-tested.
+fn pick(q: &[(u64, Job)]) -> Option<usize> {
+    q.iter()
+        .rposition(|(_, j)| matches!(j, Job::Full { .. }))
+        .or_else(|| q.iter().position(|(_, j)| matches!(j, Job::Wrap { .. })))
+        .or_else(|| q.iter().position(|(_, j)| matches!(j, Job::Thumb { .. })))
+        .or_else(|| q.iter().position(|(_, j)| matches!(j, Job::Mid { .. })))
+}
+
 fn worker(shared: &Shared) {
     loop {
         let (generation, job) = {
@@ -270,14 +281,17 @@ fn worker(shared: &Shared) {
                 // Priority pop: Full (the sharpness-on-stop tail, latest
                 // wins) > Wrap (the transit hold's mid swaps) > Thumb
                 // (oldest first — visibility order) > Mid.
-                if let Some(pos) = q
-                    .iter()
-                    .rposition(|(_, j)| matches!(j, Job::Full { .. }))
-                    .or_else(|| q.iter().position(|(_, j)| matches!(j, Job::Wrap { .. })))
-                    .or_else(|| q.iter().position(|(_, j)| matches!(j, Job::Thumb { .. })))
-                    .or_else(|| q.iter().position(|(_, j)| matches!(j, Job::Mid { .. })))
-                {
-                    break q.remove(pos);
+                if let Some(pos) = pick(&q) {
+                    let picked = q.remove(pos);
+                    // in_flight is written while the queue lock is still
+                    // held, so `pending()` can never observe the gap
+                    // between pop and cook (validator finding: a resubmit
+                    // slipped through it and duplicated a 149 MB cook).
+                    // Nested-lock safety: pending() takes the two locks
+                    // SEQUENTIALLY, never both at once.
+                    let (k, i) = kind_of(&picked.1);
+                    *lock(&shared.in_flight) = Some((picked.0, k, i));
+                    break picked;
                 }
                 q = shared
                     .wake
@@ -297,10 +311,6 @@ fn worker(shared: &Shared) {
                 }
             );
         }
-        *lock(&shared.in_flight) = Some({
-            let (k, i) = kind_of(&job);
-            (generation, k, i)
-        });
         let done = cook(job);
         *lock(&shared.in_flight) = None;
         if let Some(done) = done {
@@ -362,8 +372,13 @@ fn cook(job: Job) -> Option<Done> {
     }
 }
 
-/// Full-res → mid-rung buffer (the old UI-side `adopt_texture`, verbatim
+/// Full-res → mid-rung buffer (the old UI-side `adopt_texture`'s sizing
 /// math). Sources at or below mid size are copied as-is.
+///
+/// The reported long edge is WHAT THE BUFFER HOLDS, not the source's —
+/// `ViewAssets::note_held`'s contract compares the ×1.25 ladder against
+/// the held rung, and reporting the 8640 source for a 1616 downscale
+/// silently disabled upgrades (validator finding, 2026-08-02).
 fn downscale_to_mid(
     image: &FullImage,
 ) -> Option<(slint::SharedPixelBuffer<slint::Rgb8Pixel>, u32)> {
@@ -405,5 +420,209 @@ fn downscale_to_mid(
         .ok()?;
     let buf =
         slint::SharedPixelBuffer::<slint::Rgb8Pixel>::clone_from_slice(dst.buffer(), dst_w, dst_h);
-    Some((buf, long))
+    Some((buf, dst_w.max(dst_h)))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::sync::Arc;
+
+    fn img(w: u32, h: u32, seed: u8) -> FullImage {
+        FullImage {
+            rgb: Arc::new(
+                (0..w as usize * h as usize * 3)
+                    .map(|i| seed.wrapping_add(i as u8))
+                    .collect(),
+            ),
+            width: w,
+            height: h,
+        }
+    }
+
+    /// The priority contract: Full (latest) > Wrap > Thumb (oldest) > Mid.
+    /// This ordering is what keeps the sharpness-on-stop tail ahead of a
+    /// page of thumbnails — pure function so it cannot rot untested.
+    #[test]
+    fn pick_orders_full_wrap_thumb_mid() {
+        let mut q: Vec<(u64, Job)> = vec![
+            (
+                0,
+                Job::Mid {
+                    index: 1,
+                    image: img(1, 1, 0),
+                },
+            ),
+            (
+                0,
+                Job::Thumb {
+                    index: 2,
+                    jpeg: vec![],
+                },
+            ),
+            (
+                0,
+                Job::Thumb {
+                    index: 3,
+                    jpeg: vec![],
+                },
+            ),
+            (
+                0,
+                Job::Full {
+                    index: 4,
+                    image: img(1, 1, 0),
+                },
+            ),
+            (
+                0,
+                Job::Wrap {
+                    index: 5,
+                    image: img(1, 1, 0),
+                    terminal: false,
+                },
+            ),
+            (
+                0,
+                Job::Full {
+                    index: 6,
+                    image: img(1, 1, 0),
+                },
+            ),
+        ];
+        // Full first, LATEST first (idx 6 before idx 4).
+        let p = pick(&q).unwrap();
+        assert!(matches!(q[p].1, Job::Full { index: 6, .. }));
+        q.remove(p);
+        let p = pick(&q).unwrap();
+        assert!(matches!(q[p].1, Job::Full { index: 4, .. }));
+        q.remove(p);
+        // Then Wrap, then thumbs OLDEST first, then Mid.
+        let p = pick(&q).unwrap();
+        assert!(matches!(q[p].1, Job::Wrap { index: 5, .. }));
+        q.remove(p);
+        let p = pick(&q).unwrap();
+        assert!(matches!(q[p].1, Job::Thumb { index: 2, .. }));
+        q.remove(p);
+        let p = pick(&q).unwrap();
+        assert!(matches!(q[p].1, Job::Thumb { index: 3, .. }));
+        q.remove(p);
+        let p = pick(&q).unwrap();
+        assert!(matches!(q[p].1, Job::Mid { index: 1, .. }));
+        q.remove(p);
+        assert!(pick(&q).is_none());
+    }
+
+    /// End-to-end through a live worker: a Wrap job produces a buffer with
+    /// the source's exact dimensions and bytes.
+    #[test]
+    fn wrap_cooks_byte_identical() {
+        let k = Kitchen::start(Box::new(|| {}));
+        let source = img(3, 2, 7);
+        k.submit_wrap(9, source.clone(), false);
+        let deadline = std::time::Instant::now() + std::time::Duration::from_secs(5);
+        loop {
+            let done = k.drain();
+            if let Some(Done::Wrap { index, buf, .. }) = done.into_iter().next() {
+                assert_eq!(index, 9);
+                assert_eq!((buf.width(), buf.height()), (3, 2));
+                let bytes: &[u8] = buf.as_bytes();
+                assert_eq!(bytes, source.rgb.as_slice());
+                break;
+            }
+            assert!(std::time::Instant::now() < deadline, "wrap never cooked");
+            std::thread::sleep(std::time::Duration::from_millis(5));
+        }
+    }
+
+    /// A downscaled mid reports the long edge of what the BUFFER holds,
+    /// never the source's (the ladder-upgrade check compares against the
+    /// held rung — validator finding).
+    #[test]
+    fn mid_reports_held_long_not_source_long() {
+        let k = Kitchen::start(Box::new(|| {}));
+        // 3232x2154 source: above MID_RUNG_TARGET, downscales to 1616-long.
+        k.submit_mid(4, img(3232, 2154, 3));
+        let deadline = std::time::Instant::now() + std::time::Duration::from_secs(10);
+        loop {
+            if let Some(Done::Mid { held_long, buf, .. }) = k.drain().into_iter().next() {
+                assert_eq!(buf.width().max(buf.height()), held_long);
+                assert!(held_long <= fastcull_core::loupe::MID_RUNG_TARGET);
+                break;
+            }
+            assert!(std::time::Instant::now() < deadline, "mid never cooked");
+            std::thread::sleep(std::time::Duration::from_millis(5));
+        }
+    }
+
+    /// retarget() orphans everything: queued jobs are dropped and even a
+    /// completion racing the bump dies at drain (generation filter). A
+    /// dead session's indexes must never reach the new session's maps.
+    #[test]
+    fn retarget_orphans_queued_and_racing_work() {
+        let k = Kitchen::start(Box::new(|| {}));
+        for i in 0..64 {
+            k.submit_wrap(i, img(16, 16, i as u8), false);
+        }
+        k.retarget();
+        let deadline = std::time::Instant::now() + std::time::Duration::from_millis(400);
+        while std::time::Instant::now() < deadline {
+            assert!(
+                k.drain().is_empty(),
+                "a dead session's texture crossed the generation fence"
+            );
+            std::thread::sleep(std::time::Duration::from_millis(10));
+        }
+        // And the new session works: fresh submissions still cook.
+        k.submit_wrap(0, img(2, 2, 1), false);
+        let deadline = std::time::Instant::now() + std::time::Duration::from_secs(5);
+        loop {
+            if !k.drain().is_empty() {
+                break;
+            }
+            assert!(std::time::Instant::now() < deadline, "new generation dead");
+            std::thread::sleep(std::time::Duration::from_millis(5));
+        }
+    }
+
+    /// cull_mids drops only invisible MID jobs — Full/Wrap/Thumb are never
+    /// culled (their sources were moved or the work is wanted regardless).
+    #[test]
+    fn cull_mids_is_mid_only_and_visibility_scoped() {
+        // No worker racing us: fill the queue while holding it hostage is
+        // not possible from outside, so use a paused shared directly.
+        let shared = Arc::new(Shared {
+            queue: Mutex::new(Vec::new()),
+            in_flight: Mutex::new(None),
+            done: Mutex::new(Vec::new()),
+            wake: Condvar::new(),
+            shutdown: AtomicBool::new(false),
+            generation: AtomicU64::new(0),
+            notify: Box::new(|| {}),
+        });
+        let k = Kitchen {
+            shared: Arc::clone(&shared),
+            worker: None,
+        };
+        k.submit_mid(1, img(1, 1, 0));
+        k.submit_mid(2, img(1, 1, 0));
+        k.submit_thumb(3, vec![1, 2, 3]);
+        k.submit_wrap(4, img(1, 1, 0), false);
+        k.cull_mids(&[2]);
+        let q = lock(&shared.queue);
+        assert_eq!(q.len(), 3, "mid 1 culled; mid 2, thumb 3, wrap 4 stay");
+        assert!(q
+            .iter()
+            .any(|(_, j)| matches!(j, Job::Mid { index: 2, .. })));
+        assert!(q
+            .iter()
+            .any(|(_, j)| matches!(j, Job::Thumb { index: 3, .. })));
+        assert!(q
+            .iter()
+            .any(|(_, j)| matches!(j, Job::Wrap { index: 4, .. })));
+        drop(q);
+        // Dedupe: resubmitting a queued index is a no-op.
+        k.submit_mid(2, img(1, 1, 0));
+        assert_eq!(lock(&shared.queue).len(), 3);
+    }
 }

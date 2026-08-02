@@ -590,11 +590,20 @@ Recorded deviations/decisions (M2, REVISED 2026-08-02 — user decision:
   UI thread's only texture duty is wrapping a finished SharedPixelBuffer
   into a `slint::Image` (O(1); `Image` is not `Send`, the buffer is).
   Consequence, accepted: a texture becomes visible one pump tick after its
-  pixels are ready rather than within the same refresh — a placeholder can
-  therefore show for one extra tick on a cold cell. Stale-request rule:
-  prep requests for cells scrolled out of view are culled at submission,
-  and a landed texture for a no-longer-visible cell is still adopted into
-  the cache (it was paid for; the pruned-and-revisited rule applies).
+  pixels are ready rather than within the same refresh in the WORST case —
+  the kitchen's completion nudge (`invoke_from_event_loop`) makes the
+  typical added latency milliseconds, and adoption is UNBUDGETED so a
+  stopped fling fills the whole viewport in one tick, never a trickle
+  (persona conditions, both honored). Stale-request rules, stated
+  precisely (an earlier draft overclaimed): only MID-downscale requests
+  are culled to the visible set at submission waves; Thumb jobs are never
+  culled because their encoded bytes were MOVED into the job, and
+  Full/Wrap jobs serve the loupe, which already governs its own requests.
+  A landed thumb for a scrolled-away cell is adopted into `st.images`
+  (paid-for work; the pruned-and-revisited rule); a landed MID for an
+  invisible cell is adopted and then dropped by the visible-set retain on
+  the next refresh — the adopt is cheap, the retain is the existing
+  memory policy, and re-scrolling re-requests it.
 - Ctrl+scroll zoom is deferred: Slint's Flickable consumes wheel events and
   an overlay TouchArea would steal the drag/click gestures. Keyboard `+`/`-`
   covers M2; revisit during M4 polish (needs user OK to defer past v1 if it
