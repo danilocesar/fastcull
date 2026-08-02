@@ -317,3 +317,46 @@ fn a_backward_hold_keeps_leaning_backward_across_refocus() {
          same-index re-focus flipped it: saw {seen:?}"
     );
 }
+
+/// `decode_oriented` must actually APPLY the orientation it is given —
+/// the wiring, not the kernel. QE proved this seam unpinned (2026-08-02):
+/// deleting the `apply_orientation_with` call from `decode_oriented` left
+/// the ENTIRE fastcull-core suite green, because every fixture is
+/// orientation 1 and the rotation kernel's own tests exercise the kernel
+/// directly rather than the shipped decode path that calls it.
+#[test]
+fn decode_oriented_actually_rotates() {
+    let path = &a1_paths()[0];
+    let mut f = std::fs::File::open(path).unwrap();
+    let previews = fastcull_core::raw::find_embedded_jpegs(&mut f).unwrap();
+    // The mid preview keeps this test at ~5 ms of decode, not ~250.
+    let mid = previews
+        .grid_source()
+        .expect("A1 exposes a mid preview")
+        .clone();
+    let bytes = fastcull_core::raw::read_jpeg(&mut f, &mid).unwrap();
+
+    // Reference: plain decode, then the (independently pinned) kernel.
+    let (plain, w, h) = fastcull_core::loupe::decode_oriented(&bytes, 1).unwrap();
+    assert!(
+        w > h,
+        "fixture must be landscape for the swap to mean anything"
+    );
+    let reference = fastcull_core::raw::apply_orientation(plain.clone(), w, h, 6);
+
+    // The shipped path with orientation 6 (rotate 90 CW): dims must swap —
+    // this alone kills the skip-the-rotate mutant — and the bytes must be
+    // the kernel's, not the unrotated originals with swapped metadata.
+    let (rot, rw, rh) = fastcull_core::loupe::decode_oriented(&bytes, 6).unwrap();
+    assert_eq!((rw, rh), (h, w), "orientation 6 must swap the dimensions");
+    assert_eq!(rot.len(), reference.0.len());
+    assert!(
+        rot == reference.0,
+        "decode_oriented(o=6) differs from decode + apply_orientation"
+    );
+
+    // And orientation 1 is a true no-op relative to the raw decode.
+    let (again, aw, ah) = fastcull_core::loupe::decode_oriented(&bytes, 1).unwrap();
+    assert_eq!((aw, ah), (w, h));
+    assert!(again == plain, "orientation 1 must not alter pixels");
+}
