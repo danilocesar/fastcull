@@ -227,11 +227,16 @@ before allocation:
 - **Truncation**: zune-jpeg 0.4 zero-fills missing scan data and reports a
   truncated stream as SUCCESS — its overread counter stops growing at the
   first zero-fill refill, so even strict mode's premature-end check can
-  never fire — and it exposes no bytes-consumed accessor; 0.5.15 would not
-  help and is a measured perf regression (above). Completeness is instead
-  checked on the raw bytes (`raw/jpeg.rs::scan_is_terminated`): inside
-  entropy-coded data every 0xFF is either stuffed (FF 00) or a real
-  marker, so a genuine FF D9 pair at or after the first SOS is an EOI.
+  never fire — and it exposes no bytes-consumed accessor. For the record
+  (gate measurement, 2026-08-02): 0.5.15 in strict mode DOES reject the
+  plain no-EOI truncation ("premature end of buffer") but does NOT catch
+  the EOI-appended residual shape below, and it remains a measured perf
+  regression on this workload (above) — staying on 0.4 keeps the perf,
+  and the byte-level check below covers the same truncation class the
+  upgrade would have. Completeness is checked on the raw bytes
+  (`raw/jpeg.rs::scan_is_terminated`): inside entropy-coded data proper,
+  every 0xFF is either stuffed (FF 00) or a real marker, so a genuine
+  FF D9 pair at or after the first SOS is an EOI.
   The search runs backwards from the tail — intact camera files end with
   EOI, so the hot path pays effectively nothing. Pre-SOS APP1 segments
   (EXIF thumbnails are whole JPEGs, EOI included) never vouch for the
@@ -240,9 +245,14 @@ before allocation:
 - **Residual gap (accepted, recorded on issue #31)**: a crafted stream
   carrying plausible dimensions, a valid EOI, and too-little entropy data
   still decodes as a mostly-blank "success" — detecting that requires
-  decoder cooperation (bytes consumed vs. expected) that zune 0.4 does
-  not offer. The caps bound its allocation; real-world corruption
-  (cut-off files) is caught by the termination check.
+  decoder cooperation (bytes consumed vs. expected) that neither zune 0.4
+  nor 0.5 offers. Same class, second shape: in MULTI-SCAN (progressive)
+  streams, post-SOS table segments between scans (DHT etc.) are not
+  entropy-coded and may legitimately contain a literal FF D9 pair, so a
+  truncated progressive stream can pass the completeness check. Both
+  shapes are bounded blank-successes, never a giant allocation: the caps
+  bound the memory; real-world corruption (cut-off baseline camera files)
+  is caught by the termination check.
 
 All rejections flow through the existing error paths — `LoupeEvent::Failed`
 / `SessionEvent::Failed` — so the UI shows the Failed badge (ui-grid.md),
