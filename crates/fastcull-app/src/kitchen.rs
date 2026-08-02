@@ -561,9 +561,13 @@ mod tests {
     #[test]
     fn retarget_orphans_queued_and_racing_work() {
         let k = Kitchen::start(Box::new(|| {}));
-        for i in 0..64 {
-            k.submit_wrap(i, img(16, 16, i as u8), false);
+        // Jobs big enough that cooking OUTLASTS the retarget below — QE
+        // proved the original 16x16 wraps cooked before the fence was
+        // tested, so deleting the generation filter stayed green (F1).
+        for i in 0..24 {
+            k.submit_full(i, img(2000, 1400, i as u8));
         }
+        std::thread::sleep(std::time::Duration::from_millis(5));
         k.retarget();
         let deadline = std::time::Instant::now() + std::time::Duration::from_millis(400);
         while std::time::Instant::now() < deadline {
@@ -583,6 +587,79 @@ mod tests {
             assert!(std::time::Instant::now() < deadline, "new generation dead");
             std::thread::sleep(std::time::Duration::from_millis(5));
         }
+    }
+
+    /// Adoption is UNBUDGETED (persona condition): drain returns EVERY
+    /// finished texture in one call — a future "optimization" rationing
+    /// it would turn one-tick-later into a visible trickle-in, and QE
+    /// proved the whole screenshot suite cannot see that mutation (F2).
+    #[test]
+    fn drain_returns_everything_at_once() {
+        let shared = Arc::new(Shared {
+            queue: Mutex::new(Vec::new()),
+            in_flight: Mutex::new(None),
+            done: Mutex::new(Vec::new()),
+            wake: Condvar::new(),
+            shutdown: AtomicBool::new(false),
+            generation: AtomicU64::new(0),
+            notify: Box::new(|| {}),
+        });
+        let k = Kitchen {
+            shared: Arc::clone(&shared),
+            worker: None,
+        };
+        for i in 0..40 {
+            lock(&shared.done).push((
+                0,
+                Done::Thumb {
+                    index: i,
+                    buf: slint::SharedPixelBuffer::new(1, 1),
+                },
+            ));
+        }
+        assert_eq!(k.drain().len(), 40, "drain must never ration adoption");
+        assert!(k.drain().is_empty());
+    }
+
+    /// Full jobs dedupe per index and NEVER cancel a neighbour. The
+    /// original replace-latest design cancelled a ring member's queued
+    /// fill when both full-res events shared a pump drain — the flaky
+    /// 60 s shutter refusals — and QE proved no surviving test enforces
+    /// the fixed contract (F3).
+    #[test]
+    fn full_jobs_coexist_per_index_and_dedupe() {
+        let shared = Arc::new(Shared {
+            queue: Mutex::new(Vec::new()),
+            in_flight: Mutex::new(None),
+            done: Mutex::new(Vec::new()),
+            wake: Condvar::new(),
+            shutdown: AtomicBool::new(false),
+            generation: AtomicU64::new(0),
+            notify: Box::new(|| {}),
+        });
+        let k = Kitchen {
+            shared: Arc::clone(&shared),
+            worker: None,
+        };
+        k.submit_full(0, img(1, 1, 0));
+        k.submit_full(1, img(1, 1, 1));
+        {
+            let q = lock(&shared.queue);
+            assert_eq!(q.len(), 2, "a second Full must not cancel the first");
+            assert!(q
+                .iter()
+                .any(|(_, j)| matches!(j, Job::Full { index: 0, .. })));
+            assert!(q
+                .iter()
+                .any(|(_, j)| matches!(j, Job::Full { index: 1, .. })));
+        }
+        // Same index again: deduped, not duplicated.
+        k.submit_full(1, img(1, 1, 1));
+        assert_eq!(lock(&shared.queue).len(), 2);
+        // Latest-first pop still favours the newest Full.
+        let q = lock(&shared.queue);
+        let p = pick(&q).unwrap();
+        assert!(matches!(q[p].1, Job::Full { index: 1, .. }));
     }
 
     /// cull_mids drops only invisible MID jobs — Full/Wrap/Thumb are never
