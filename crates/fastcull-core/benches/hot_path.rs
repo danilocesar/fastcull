@@ -63,7 +63,14 @@ fn bench_hot_path(c: &mut Criterion) {
         (px, w as u32, h as u32)
     };
     group.bench_function("rotate_o8_8640x5760", |b| {
-        b.iter(|| fastcull_core::raw::apply_orientation(decoded.0.clone(), decoded.1, decoded.2, 8))
+        // iter_batched keeps the 149 MB input clone OUT of the measured
+        // region (validator nit: the clone is ~10 ms of memcpy, a third
+        // of the kernel's own cost).
+        b.iter_batched(
+            || decoded.0.clone(),
+            |px| fastcull_core::raw::apply_orientation(px, decoded.1, decoded.2, 8),
+            criterion::BatchSize::LargeInput,
+        )
     });
     group.bench_function("decode_oriented_o8", |b| {
         b.iter(|| fastcull_core::loupe::decode_oriented(&fullres_bytes, 8).unwrap())
