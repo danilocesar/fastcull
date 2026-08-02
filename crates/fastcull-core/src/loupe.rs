@@ -760,22 +760,72 @@ fn decode_jpeg_rung(
     orientation: u16,
 ) -> Result<FullImage, String> {
     let bytes = read_jpeg(file, rung).map_err(|e| format!("read: {e}"))?;
-    let options = zune_jpeg::zune_core::options::DecoderOptions::default()
-        .jpeg_set_out_colorspace(zune_jpeg::zune_core::colorspace::ColorSpace::RGB)
-        .set_max_width(usize::MAX)
-        .set_max_height(usize::MAX);
-    let mut decoder = zune_jpeg::JpegDecoder::new_with_options(&bytes, options);
-    let rgb = decoder.decode().map_err(|e| format!("decode: {e}"))?;
-    let (w, h) = decoder.dimensions().ok_or("no dimensions")?;
-    let w = u32::try_from(w).map_err(|_| "width overflow")?;
-    let h = u32::try_from(h).map_err(|_| "height overflow")?;
-    // Soft-rotate to display orientation (spec: every rung).
-    let (rgb, w, h) = crate::raw::apply_orientation(rgb, w, h, orientation);
+    let (rgb, w, h) = decode_oriented(&bytes, orientation)?;
     Ok(FullImage {
         rgb: Arc::new(rgb),
         width: w,
         height: h,
     })
+}
+
+/// Decode a JPEG stream and apply its EXIF orientation — THE full-res hot
+/// path, public so `perf_budgets` measures the code that actually ships
+/// instead of a re-implementation of it (the old test replicated
+/// `decode()` + rotate and therefore could not see pipeline-level wins or
+/// regressions in this path).
+pub fn decode_oriented(bytes: &[u8], orientation: u16) -> Result<(Vec<u8>, u32, u32), String> {
+    let options = zune_jpeg::zune_core::options::DecoderOptions::default()
+        .jpeg_set_out_colorspace(zune_jpeg::zune_core::colorspace::ColorSpace::RGB)
+        .set_max_width(usize::MAX)
+        .set_max_height(usize::MAX);
+    let mut decoder = zune_jpeg::JpegDecoder::new_with_options(bytes, options);
+    // The A1 full-res JPEG is baseline with ZERO restart markers (verified
+    // by parsing them — probe 2026-08-02), so the Huffman decode is
+    // strictly serial: one core for ~220 ms while the rest idle. Two
+    // things reclaim that dead time on a 50 MP frame (measured, medians):
+    //
+    // - `decode_into` a pre-faulted buffer instead of `decode()`:
+    //   247-252 ms → 215-227 ms. `decode()` allocates internally and
+    //   pays ~40 ms of first-touch page faults inside the decode.
+    // - The transpose's 149 MB output buffer is allocated AND pre-faulted
+    //   on a spare thread WHILE the decode runs, so the rotate that
+    //   follows starts with hot pages ([`crate::raw::Scratch`]).
+    //
+    // Neither changes peak memory: the same two buffers exist either way;
+    // only WHEN the page faults are paid moves — off the critical path.
+    decoder
+        .decode_headers()
+        .map_err(|e| format!("decode: {e}"))?;
+    let (w, h) = decoder.dimensions().ok_or("no dimensions")?;
+    let n = w
+        .checked_mul(h)
+        .and_then(|px| px.checked_mul(3))
+        .ok_or("dimension overflow")?;
+    let w = u32::try_from(w).map_err(|_| "width overflow")?;
+    let h = u32::try_from(h).map_err(|_| "height overflow")?;
+    let needs_transpose = matches!(orientation, 5..=8);
+    let (rgb, scratch) = std::thread::scope(|scope| {
+        let scratch = needs_transpose.then(|| {
+            // Output dims are swapped, but the byte count is what matters
+            // and it is identical; build it while the decode runs.
+            scope.spawn(|| crate::raw::Scratch::prefaulted(h, w))
+        });
+        let mut rgb = vec![0u8; n];
+        crate::raw::orient::prefault_parallel(&mut rgb);
+        let decoded = decoder
+            .decode_into(&mut rgb)
+            .map_err(|e| format!("decode: {e}"));
+        let scratch = scratch.map(|j| j.join().expect("prefault thread"));
+        decoded.map(|()| (rgb, scratch))
+    })?;
+    // Soft-rotate to display orientation (spec: every rung).
+    Ok(crate::raw::apply_orientation_with(
+        rgb,
+        w,
+        h,
+        orientation,
+        scratch,
+    ))
 }
 
 fn evict_to_budget(state: &mut LoupeState, budget: usize) {
