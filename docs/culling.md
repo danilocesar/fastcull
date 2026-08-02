@@ -128,7 +128,12 @@ Two things worth knowing:
 - **Tapping is not holding.** Step frame by frame — a tap, a look, a tap —
   and every frame goes to full quality immediately, because you're
   evaluating, not travelling. The app tells the two apart by your speed:
-  faster than about four frames a second is travelling.
+  faster than about four frames a second is travelling. That includes a
+  `Y`/`N` chain — rattle through rejects faster than four a second and
+  those frames are judged at the travelling quality, deliberately: at that
+  speed the old behaviour didn't show you a softer frame, it showed you
+  **no frame at all**. At four a second and below, every marked frame is
+  full quality, same as ever.
 
 **Frames you flew past are held at the smaller size**, and they sharpen
 when you come back to them rather than being ready in advance. Step back a

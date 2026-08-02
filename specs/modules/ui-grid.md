@@ -252,9 +252,14 @@ where it is."
 
   - A `Y`/`N` cull chain faster than 4 marks/second is classified as
     travelling, so those frames are judged from the mid. Marking is a
-    judgment workflow, not a travel one. **Needs the user's call** before
-    it is either excluded from transit or documented as intended.
-    **Measured for that call** (QE 2026-08-01): at the actual 4/s cadence
+    judgment workflow, not a travel one — but **DOCUMENTED AS INTENDED,
+    user decision 2026-08-01**, closing the deferral: the measurement
+    below shows the trade only exists at cadences where the old code
+    showed BLANK frames, so excluding marking from transit would trade a
+    soft-but-present frame for a missing one. If a rating-speed workflow
+    ever makes this bite, the recorded fix is an exclusion keyed on the
+    mark keys, not a wider `TRANSIT_GAP`.
+    **The measurement** (QE 2026-08-01): at the actual 4/s cadence
     (250 ms gaps, exactly `TRANSIT_GAP`) BOTH sides judge every frame at
     full-res — nothing changes. The mid-judging regime begins only above
     ~4.2/s, where main is strictly worse: at 6.2–8/s the branch judges
