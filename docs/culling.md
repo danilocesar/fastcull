@@ -3,6 +3,10 @@
 The whole idea: your right hand stays on the arrow keys, your left on
 `Y`/`N`, and you never wait for the tool.
 
+The UI is **dark-only, by design** — there is no light mode and no theme
+toggle, and your system theme does not change it (see the FAQ if an old
+build's menu bar ever looks empty on a light desktop).
+
 ## The loop
 
 1. Open the folder. The grid sorts by capture time — see *While the folder

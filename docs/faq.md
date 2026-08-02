@@ -1,5 +1,12 @@
 # FAQ & troubleshooting
 
+**The menu bar looks empty / the app ignores my light system theme.**
+FastCull is dark-only, by design — there is no light mode and no theme
+toggle, and releases after 0.6.0 pin the palette so your system theme
+cannot half-apply. (Older builds let the menu bar's text follow a
+light-mode desktop, which made the labels invisible against the dark
+bar — the menus still worked when clicked. If you see that, update.)
+
 **My picks don't show up in darktable.**
 Check the sidecar exists next to the RAW (`DSC01234.ARW.xmp`). If the
 folder was already imported in darktable before you culled, darktable

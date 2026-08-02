@@ -845,6 +845,30 @@ brightening during wheel scrolling (needs an activity decay timer).
 
 ## Visual language
 
+- **FastCull is DARK-ONLY, and the palette is PINNED to say so** (user bug
+  + decision 2026-08-02, verbatim: "I don't want a light mode. I don't
+  want a toggle. Keep the design as is"). Every surface in `main.slint` is
+  a hand-picked dark colour, but native `std-widgets` (MenuBar, LineEdit,
+  ComboBox, Button) take their colours from the style palette, which
+  follows the PLATFORM colour scheme — the winit backend reads the
+  xdg-desktop-portal `color-scheme` key and live-updates it. On a
+  light-mode desktop the fluent MenuBar therefore drew its labels in
+  90%-alpha black over the app's `#161618` bar: invisible yet clickable,
+  while the OPENED menus stayed readable because a popup draws its own
+  palette background (the bar is the only palette-text-over-app-surface
+  in the tree; QE's inventory found the other std-widgets draw their own
+  palette surfaces and merely clashed in light mode). An unreachable
+  portal resolves the scheme to Unknown, and fluent's Unknown fallback is
+  ALSO light — which is what every headless/CI run gets, so the suite had
+  been capturing light-palette chrome on some days and dark on others,
+  green either way; the uncontrolled scheme, not the untested GPU
+  renderer, was the real screenshot blind spot. The fix:
+  `Palette.color-scheme = ColorScheme.dark` at the root window's `init`
+  — one declaration, and every palette-derived colour follows the app's
+  one design regardless of desktop theme, portal reachability, or
+  anything added from `std-widgets` later. A future light mode, should it
+  ever be wanted, is a deliberate feature (every hardcoded surface needs
+  a light twin), never an inherited default.
 - Pick: small star badge (top-left; user decision — "mark the ones taken with a
   little star"). Reject: red X badge + 40% dimmed thumb.
 - **Loupe state indicator (issue #20, user request 2026-07-26,
@@ -1161,6 +1185,16 @@ the user confirms, all cheap to change):**
       session, counts included.
 - [ ] Windowed-model tests (core side): visible-range → model-window computation,
       incl. partial rows, tiny folders, and N=1.
+- [x] **Menu bar readable under any desktop colour scheme** (dark-only
+      palette pin): `menu_bar_labels_survive_a_light_scheme_desktop` forces
+      the failing scheme-resolution branch deterministically (an
+      unreachable session bus → portal unreadable → Unknown → fluent picks
+      the LIGHT palette) and asserts light glyph pixels over the dark bar,
+      with an anti-vacuity check that the bar itself is still the app's
+      dark chrome. Mutation-verified: removing the `Palette.color-scheme`
+      pin yields "only 0 bright pixels" and FAILS. NOT `dbus-run-session`
+      — an isolated bus auto-starts a fresh portal that re-reads the real
+      desktop setting and passes vacuously (QE 2026-08-02).
 - [x] **Transit vs settled** (user requirement 2026-08-01): a held key is
       distinguished from deliberate taps and decays on release
       (`transit_tracks_held_keys_and_decays_on_release`); the request while

@@ -1,4 +1,4 @@
-import { LineEdit, ComboBox, Button } from "std-widgets.slint";
+import { LineEdit, ComboBox, Button, Palette } from "std-widgets.slint";
 
 // FastCull main window: virtualized zoomable grid (specs/modules/ui-grid.md).
 // The Rust side owns all layout math; `cells` contains ONLY the visible
@@ -69,6 +69,19 @@ export component MainWindow inherits Window {
     preferred-width: 1440px;
     preferred-height: 900px;
     background: #161618;
+
+    // FastCull is DARK-ONLY, by decision, and the palette must say so
+    // (user bug 2026-08-02, decision "I don't want a light mode. I don't
+    // want a toggle. Keep the design as is"). Every surface in this file
+    // is a hand-picked dark colour — but native widgets (MenuBar, the
+    // panel's LineEdits) take their text colours from the style palette,
+    // which follows the PLATFORM colour scheme. On a light-mode desktop
+    // that made the menu bar's labels near-black on our near-black bar:
+    // invisible, yet clickable, while the OPENED menus stayed readable
+    // because a popup draws its own palette background. Pinning the
+    // scheme here makes every palette-derived colour consistent with the
+    // one design this app actually has.
+    init => { Palette.color-scheme = ColorScheme.dark; }
 
     in property <[CellData]> cells: [];
     in property <length> virtual-height: 0px;

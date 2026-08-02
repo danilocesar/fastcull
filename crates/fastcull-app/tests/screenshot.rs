@@ -476,6 +476,74 @@ fn loupe_double_click_above_fit_reaches_one_to_one() {
     );
 }
 
+/// The menu bar must be READABLE regardless of the desktop's colour
+/// scheme (user bug 2026-08-02: on a light-mode desktop the bar looked
+/// empty, yet clicking it opened fully readable menus).
+///
+/// Mechanism: FastCull hand-draws a dark UI, but the fluent MenuBar's
+/// label colour follows the PLATFORM scheme — light mode makes the labels
+/// 90%-alpha black over the app's hardcoded #161618, i.e. invisible. The
+/// fix pins `Palette.color-scheme` to dark at the root window. This test
+/// forces the scheme-resolution to the failing branch DETERMINISTICALLY
+/// by pointing the session bus at a nonexistent socket: the winit backend
+/// then cannot reach the xdg-desktop-portal, the scheme resolves Unknown,
+/// and fluent's fallback picks the LIGHT palette — the exact failing
+/// state, without touching the real desktop's setting. (This also means
+/// the suite's OTHER screenshots inherited whatever scheme the ambient
+/// desktop had on the day — the archived July shots contain both — which
+/// is why 32 tests never caught chrome going invisible: none asserted on
+/// the strip, and the input was uncontrolled. The pin makes the scheme a
+/// constant; this assertion keeps anyone from removing it.)
+#[test]
+fn menu_bar_labels_survive_a_light_scheme_desktop() {
+    if !has_display() {
+        eprintln!("screenshot smoke skipped: no display server");
+        return;
+    }
+    let _s = serial();
+    let out = out_dir().join("menu-light-scheme.jpg");
+    shoot_env(
+        &[raws_dir().to_str().unwrap()],
+        // An unreachable bus, NOT dbus-run-session: an isolated session
+        // bus auto-starts a fresh portal that re-reads the real desktop
+        // setting (QE measured dark text under it — a vacuous pass).
+        &[("DBUS_SESSION_BUS_ADDRESS", "unix:path=/nonexistent")],
+        &out,
+    );
+    let bytes = std::fs::read(&out).expect("snapshot file");
+    let mut dec = zune_jpeg::JpegDecoder::new(&bytes);
+    let px = dec.decode().expect("decode snapshot");
+    let (w, _) = dec.dimensions().expect("dims");
+    // Menu strip: the top 40 rows. Luma per pixel, then median.
+    let mut lumas: Vec<f64> = (0..40)
+        .flat_map(|y| (0..w).map(move |x| (y, x)))
+        .map(|(y, x)| {
+            let i = (y * w + x) * 3;
+            0.299 * px[i] as f64 + 0.587 * px[i + 1] as f64 + 0.114 * px[i + 2] as f64
+        })
+        .collect();
+    let mut sorted = lumas.clone();
+    sorted.sort_by(|a, b| a.partial_cmp(b).unwrap());
+    let median = sorted[sorted.len() / 2];
+    // Anti-vacuity: the bar itself must still be the app's DARK surface.
+    // If this fails, the whole window went light and the test is
+    // measuring a different design, not label visibility.
+    assert!(
+        median < 60.0,
+        "menu strip median luma {median:.1} — the bar is no longer the \
+         app's dark chrome, so the label assertion below is meaningless"
+    );
+    // The labels: pixels far ABOVE the median are light glyphs. QE's
+    // calibration: pinned build = 260-372 bright px here; the unpinned
+    // build under this env = 0 (labels drawn in near-black, max luma 29).
+    let bright = lumas.drain(..).filter(|l| l - median > 60.0).count();
+    assert!(
+        bright >= 100,
+        "only {bright} bright pixels in the menu strip — the menu labels \
+         are invisible against the dark bar (light-scheme palette leak)"
+    );
+}
+
 #[test]
 fn failed_badge_state_renders() {
     if !has_display() {
