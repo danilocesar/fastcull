@@ -105,6 +105,71 @@ pub(crate) fn app1_tiff_bounds<R: Read + Seek>(
     }
 }
 
+/// True when the JPEG stream's entropy-coded scan reaches a terminating
+/// EOI marker — i.e. the stream was written to completion.
+///
+/// Issue #31: zune-jpeg 0.4 zero-fills missing scan data and reports a
+/// truncated stream as a SUCCESSFUL decode (`bitstream.rs` stops counting
+/// `overread_by` once it starts zero-filling, so even strict mode's
+/// "premature end of buffer" check can never fire), which turned cut-off
+/// files into giant mostly-blank frames instead of a Failed badge. The
+/// decoder offers no bytes-consumed accessor at 0.4.21 (and 0.5.15 is a
+/// measured performance regression — raw-pipeline.md), so completeness is
+/// checked on the raw bytes instead: within the entropy-coded data every
+/// 0xFF is either stuffed (FF 00) or a real marker, so a genuine FF D9
+/// pair at or after the first SOS is an end-of-image marker. The search
+/// runs BACKWARDS from the tail because intact camera files end with EOI
+/// (plus at most a little padding) — the hit is immediate; only an
+/// actually-truncated stream pays a full reverse scan before rejection.
+/// Scanning from SOS, not from 0: pre-SOS APP1 segments legitimately
+/// embed a whole thumbnail JPEG including its own EOI, which must not
+/// vouch for the main scan.
+pub(crate) fn scan_is_terminated(data: &[u8]) -> bool {
+    let Some(scan_start) = first_sos_end(data) else {
+        return false; // no SOS: nothing decodable was ever written
+    };
+    data[scan_start..]
+        .windows(2)
+        .rev()
+        .any(|w| w == [0xFF, 0xD9])
+}
+
+/// Offset of the first byte after the first SOS segment header (where
+/// entropy-coded data begins), or `None` if the stream has no SOS.
+fn first_sos_end(data: &[u8]) -> Option<usize> {
+    if data.len() < 4 || data[0] != 0xFF || data[1] != 0xD8 {
+        return None;
+    }
+    let mut pos = 2;
+    loop {
+        if pos + 4 > data.len() {
+            return None;
+        }
+        if data[pos] != 0xFF {
+            return None; // desynchronized
+        }
+        let marker = data[pos + 1];
+        pos += 2;
+        match marker {
+            0xFF => {
+                pos -= 1; // fill byte, resync on next 0xFF
+                continue;
+            }
+            0xD8 | 0x01 | 0xD0..=0xD7 => continue, // no payload
+            0xD9 => return None,                   // EOI before any SOS
+            _ => {}
+        }
+        let seg_len = usize::from(u16::from_be_bytes([data[pos], data[pos + 1]]));
+        if seg_len < 2 || pos + seg_len > data.len() {
+            return None;
+        }
+        if marker == 0xDA {
+            return Some(pos + seg_len);
+        }
+        pos += seg_len;
+    }
+}
+
 /// Scan JPEG segments for SOF0–SOF15 (excluding DHT/JPG/DAC markers) and
 /// return (width, height).
 fn parse_sof(data: &[u8]) -> Option<(u32, u32)> {
@@ -145,6 +210,75 @@ fn parse_sof(data: &[u8]) -> Option<(u32, u32)> {
             return (width > 0 && height > 0).then_some((width, height));
         }
         pos += seg_len;
+    }
+}
+
+/// Test-only builders for hostile JPEG streams (issue #31): real encoded
+/// streams whose SOF dimension claim is patched and/or whose entropy-coded
+/// scan is cut off — the crafted-stream shape from the issue's repro.
+/// Committed fixtures must be tiny and synthetic (CLAUDE.md), so these are
+/// built in memory from `jpeg_encoder` output, never from real RAWs.
+#[cfg(test)]
+pub(crate) mod hostile {
+    /// A real, decodable baseline JPEG (mid-gray) of the given size.
+    pub(crate) fn encoded(w: u16, h: u16) -> Vec<u8> {
+        let mut out = Vec::new();
+        jpeg_encoder::Encoder::new(&mut out, 90)
+            .encode(
+                &vec![128u8; usize::from(w) * usize::from(h) * 3],
+                w,
+                h,
+                jpeg_encoder::ColorType::Rgb,
+            )
+            .expect("test JPEG encodes");
+        out
+    }
+
+    /// Overwrite the SOF height/width fields in place (the hostile header
+    /// claim). Panics if the stream has no SOF — test-only.
+    pub(crate) fn patch_sof_dims(jpeg: &mut [u8], w: u16, h: u16) {
+        let pos = sof_payload_offset(jpeg).expect("stream has a SOF segment");
+        // Payload layout: len(2) precision(1) height(2) width(2).
+        jpeg[pos + 3..pos + 5].copy_from_slice(&h.to_be_bytes());
+        jpeg[pos + 5..pos + 7].copy_from_slice(&w.to_be_bytes());
+    }
+
+    /// Cut the stream `keep` bytes into the entropy-coded scan: everything
+    /// after that point — including the EOI — is dropped, exactly what a
+    /// half-written file on a dying card looks like.
+    pub(crate) fn truncate_scan(jpeg: &[u8], keep: usize) -> Vec<u8> {
+        let scan = super::first_sos_end(jpeg).expect("stream has a SOS segment");
+        jpeg[..(scan + keep).min(jpeg.len().saturating_sub(2))].to_vec()
+    }
+
+    /// Offset of the first SOF segment's payload (its length bytes).
+    fn sof_payload_offset(data: &[u8]) -> Option<usize> {
+        let mut pos = 2;
+        loop {
+            if pos + 4 > data.len() || data[pos] != 0xFF {
+                return None;
+            }
+            let marker = data[pos + 1];
+            pos += 2;
+            match marker {
+                0xFF => {
+                    pos -= 1;
+                    continue;
+                }
+                0xD8 | 0x01 | 0xD0..=0xD7 => continue,
+                0xD9 | 0xDA => return None,
+                _ => {}
+            }
+            let is_sof = matches!(marker, 0xC0..=0xCF) && !matches!(marker, 0xC4 | 0xC8 | 0xCC);
+            if is_sof {
+                return Some(pos);
+            }
+            let seg_len = usize::from(u16::from_be_bytes([data[pos], data[pos + 1]]));
+            if seg_len < 2 {
+                return None;
+            }
+            pos += seg_len;
+        }
     }
 }
 
@@ -207,5 +341,48 @@ mod tests {
         // DHT (0xC4) followed by EOI — must not be parsed as SOF.
         let j = [0xFF, 0xD8, 0xFF, 0xC4, 0x00, 0x04, 0x00, 0x00, 0xFF, 0xD9];
         assert_eq!(parse_sof(&j), None);
+    }
+
+    /// Issue #31: a complete stream's scan ends in EOI; a truncated one
+    /// never reaches a terminating marker and must be detected from the
+    /// bytes alone (zune-jpeg 0.4 decodes it as "success").
+    #[test]
+    fn scan_termination_detects_truncation() {
+        let intact = hostile::encoded(64, 64);
+        assert!(scan_is_terminated(&intact), "an intact stream terminates");
+        let truncated = hostile::truncate_scan(&intact, 16);
+        assert!(
+            !scan_is_terminated(&truncated),
+            "a scan cut off before EOI must be flagged"
+        );
+        // Truncated to exactly zero scan bytes (cut right after SOS).
+        assert!(!scan_is_terminated(&hostile::truncate_scan(&intact, 0)));
+        // Not even headers.
+        assert!(!scan_is_terminated(&[]));
+        assert!(!scan_is_terminated(&[0xFF, 0xD8]));
+        // SOI+SOF+EOI but no SOS ever written: nothing decodable exists.
+        let mut no_sos = vec![0xFF, 0xD8, 0xFF, 0xC0, 0x00, 0x0B, 0x08];
+        no_sos.extend_from_slice(&64u16.to_be_bytes());
+        no_sos.extend_from_slice(&64u16.to_be_bytes());
+        no_sos.extend_from_slice(&[0x01, 0x11, 0x00, 0xFF, 0xD9]);
+        assert!(!scan_is_terminated(&no_sos));
+    }
+
+    /// An EOI that lives inside a pre-SOS APP1 segment (EXIF thumbnails
+    /// are whole JPEGs, EOI included) must NOT vouch for a truncated main
+    /// scan — the search space starts at the first SOS.
+    #[test]
+    fn app1_thumbnail_eoi_does_not_mask_a_truncated_scan() {
+        let intact = hostile::encoded(64, 64);
+        // SOI, then an APP1 whose payload contains a full EOI pair.
+        let mut with_app1 = vec![0xFF, 0xD8];
+        with_app1.extend_from_slice(&[0xFF, 0xE1, 0x00, 0x06, 0xFF, 0xD8, 0xFF, 0xD9]);
+        with_app1.extend_from_slice(&intact[2..]); // rest of the real stream
+        assert!(scan_is_terminated(&with_app1), "still intact overall");
+        let truncated = hostile::truncate_scan(&with_app1, 16);
+        assert!(
+            !scan_is_terminated(&truncated),
+            "the APP1 thumbnail's EOI must not count for the main scan"
+        );
     }
 }

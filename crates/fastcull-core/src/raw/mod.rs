@@ -12,6 +12,9 @@
 //! tags); raw sensor data lives in a SubIFD with no JPEG pointer tags.
 
 mod jpeg;
+#[cfg(test)]
+pub(crate) use jpeg::hostile as jpeg_hostile;
+pub(crate) use jpeg::scan_is_terminated;
 pub mod jpeg_exif;
 pub(crate) mod orient;
 pub mod sony;
@@ -187,6 +190,22 @@ pub fn find_embedded_jpegs<R: Read + Seek>(reader: &mut R) -> Result<EmbeddedPre
 /// allocation.
 const MAX_EMBEDDED_JPEG_LEN: u64 = 256 * 1024 * 1024;
 
+/// Output-side twin of [`MAX_EMBEDDED_JPEG_LEN`] (issue #31): decode buffers
+/// are sized from SOF header dimensions BEFORE any scan data is validated, so
+/// a sub-KB stream claiming huge dimensions must be rejected here, not
+/// trusted. 500 MP is ~10x the Sony A1's 8640x5760 (49.8 MP) and ~3x the
+/// largest shipping sensor (Phase One IQ4, 150 MP), with room for stitched
+/// panoramas — while the JPEG format ceiling (65535x65535 = 4.29 GP) would
+/// commit ~12.9 GB of RGB per buffer. At this cap a hostile stream costs at
+/// most ~1.5 GB per decode buffer instead.
+pub(crate) const MAX_DECODED_PIXELS: u64 = 500_000_000;
+
+/// True when SOF-declared dimensions are small enough to size decode/rotate
+/// buffers from (see [`MAX_DECODED_PIXELS`]).
+pub(crate) fn plausible_decoded_dims(width: usize, height: usize) -> bool {
+    (width as u64).saturating_mul(height as u64) <= MAX_DECODED_PIXELS
+}
+
 /// Read one embedded JPEG's bytes.
 pub fn read_jpeg<R: Read + Seek>(
     reader: &mut R,
@@ -318,6 +337,25 @@ mod tests {
         b.set_ifd0(ifd0);
         let previews = find_embedded_jpegs(&mut b.cursor()).unwrap();
         assert_eq!(previews.candidates.len(), 1);
+    }
+
+    /// Issue #31 boundary: the pixel cap admits everything up to and
+    /// including MAX_DECODED_PIXELS and nothing beyond — including the
+    /// 30000x30000 hostile claim and overflow-shaped values.
+    #[test]
+    fn decoded_pixel_cap_boundaries() {
+        assert!(plausible_decoded_dims(8640, 5760), "the A1 full-res");
+        assert!(plausible_decoded_dims(25000, 20000), "exactly at the cap");
+        assert!(!plausible_decoded_dims(25001, 20000), "one row over");
+        assert!(
+            !plausible_decoded_dims(30000, 30000),
+            "the issue's repro claim"
+        );
+        assert!(!plausible_decoded_dims(65535, 65535), "the format ceiling");
+        assert!(
+            !plausible_decoded_dims(usize::MAX, usize::MAX),
+            "overflow-safe"
+        );
     }
 
     #[test]

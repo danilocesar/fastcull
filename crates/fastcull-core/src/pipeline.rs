@@ -734,6 +734,15 @@ fn make_grid_thumb_gated(
         (previews, bytes)
     };
 
+    // Issue #31: zune-jpeg 0.4 zero-fills a truncated scan and reports
+    // success — a cut-off preview must become Failed (spec acceptance
+    // criterion), not a mostly-blank thumb. Dimension claims on this path
+    // are already bounded by zune's default 16384-per-side limit (268 MP,
+    // stricter than raw::MAX_DECODED_PIXELS), so only stream completeness
+    // needs checking here.
+    if !crate::raw::scan_is_terminated(&jpeg_bytes) {
+        return Err("truncated JPEG preview (scan reaches no end-of-image marker)".into());
+    }
     // Force RGB output so grayscale/CMYK previews also become valid thumbs.
     let options = zune_jpeg::zune_core::options::DecoderOptions::default()
         .jpeg_set_out_colorspace(zune_jpeg::zune_core::colorspace::ColorSpace::RGB);
@@ -812,6 +821,36 @@ mod tests {
         assert_eq!(fit_long_edge(1080, 1616, 320), (213, 320));
         assert_eq!(fit_long_edge(100, 50, 320), (100, 50)); // never upscale
         assert_eq!(fit_long_edge(8640, 2, 320), (320, 1)); // extreme aspect
+    }
+
+    /// Issue #31: a bare JPEG session file whose scan was cut off (dying
+    /// card, interrupted copy) must yield Failed — not the mostly-blank
+    /// thumb zune-jpeg 0.4's zero-fill "success" produced. FAILS ON
+    /// PRE-FIX CODE (make_grid_thumb returned Ok there).
+    #[test]
+    fn truncated_bare_jpeg_yields_failed_not_a_blank_thumb() {
+        let dir = std::env::temp_dir().join(format!("fastcull-hostile31-{}", std::process::id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let intact = crate::raw::jpeg_hostile::encoded(320, 200);
+        let path = dir.join("truncated.jpg");
+        std::fs::write(&path, crate::raw::jpeg_hostile::truncate_scan(&intact, 64)).unwrap();
+        let spec = JobSpec {
+            path: path.clone(),
+            size: 0,
+            mtime: None,
+        };
+        let err = make_grid_thumb(&spec).expect_err("truncated scan must fail the thumb");
+        assert!(err.contains("truncated"), "reason names the cause: {err}");
+        // And the intact twin still thumbs fine through the same path.
+        let ok_path = dir.join("intact.jpg");
+        std::fs::write(&ok_path, &intact).unwrap();
+        let spec = JobSpec {
+            path: ok_path,
+            size: 0,
+            mtime: None,
+        };
+        make_grid_thumb(&spec).expect("intact stream still thumbs");
+        std::fs::remove_dir_all(&dir).ok();
     }
 
     /// The queue contract, tested deterministically without threads: pop

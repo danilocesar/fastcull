@@ -774,6 +774,10 @@ fn decode_jpeg_rung(
 /// `decode()` + rotate and therefore could not see pipeline-level wins or
 /// regressions in this path).
 pub fn decode_oriented(bytes: &[u8], orientation: u16) -> Result<(Vec<u8>, u32, u32), String> {
+    // Per-side limits are lifted (the default is 16384, which would reject
+    // legitimate stitched panoramas served as bare JPEGs); SOF sides are u16
+    // so the real bound is the PIXEL-COUNT cap below (issue #31), checked
+    // before anything is allocated from the header's claim.
     let options = zune_jpeg::zune_core::options::DecoderOptions::default()
         .jpeg_set_out_colorspace(zune_jpeg::zune_core::colorspace::ColorSpace::RGB)
         .set_max_width(usize::MAX)
@@ -797,6 +801,20 @@ pub fn decode_oriented(bytes: &[u8], orientation: u16) -> Result<(Vec<u8>, u32, 
         .decode_headers()
         .map_err(|e| format!("decode: {e}"))?;
     let (w, h) = decoder.dimensions().ok_or("no dimensions")?;
+    // Issue #31: the header's dimension claim sizes the decode buffer, the
+    // prefault pass, and the transpose Scratch below — all BEFORE zune sees
+    // one byte of scan data, and a truncated scan decodes as "success"
+    // (zero-filled). Reject implausible claims and unterminated streams
+    // here, while nothing has been allocated from them.
+    if !crate::raw::plausible_decoded_dims(w, h) {
+        return Err(format!(
+            "implausible JPEG dimensions {w}x{h} (over {} pixels)",
+            crate::raw::MAX_DECODED_PIXELS
+        ));
+    }
+    if !crate::raw::scan_is_terminated(bytes) {
+        return Err("truncated JPEG stream (scan reaches no end-of-image marker)".into());
+    }
     let n = w
         .checked_mul(h)
         .and_then(|px| px.checked_mul(3))
@@ -1300,6 +1318,63 @@ mod tests {
         );
         assert!(state.queue.is_empty());
         assert!(state.in_flight.is_empty());
+    }
+
+    /// Issue #31, half one: `decode_oriented` sizes its decode buffer, the
+    /// prefault pass, and the transpose Scratch from the HEADER's dimension
+    /// claim before any scan data is validated. A sub-KB hostile stream
+    /// (real headers, SOF patched to 30000x30000, truncated after SOS —
+    /// the issue's 653-byte repro shape) committed 5.29 GB on the old
+    /// code and "decoded" successfully. It must be rejected before any
+    /// allocation. THIS TEST FAILS ON PRE-FIX CODE (it returns Ok there).
+    #[test]
+    fn decode_oriented_rejects_implausible_header_dimensions() {
+        let mut jpeg = crate::raw::jpeg_hostile::encoded(64, 64);
+        crate::raw::jpeg_hostile::patch_sof_dims(&mut jpeg, 30000, 30000);
+        let hostile = crate::raw::jpeg_hostile::truncate_scan(&jpeg, 16);
+        assert!(hostile.len() < 1024, "the attack fits in under a KB");
+        for orientation in [1u16, 6] {
+            // 6 = transpose: the Scratch prefault thread must not run either.
+            let err = decode_oriented(&hostile, orientation)
+                .expect_err("a 900 MP header claim must never allocate");
+            assert!(
+                err.contains("implausible"),
+                "the reason must name the cause: {err}"
+            );
+        }
+        // The same claim with an intact EOI is still implausible: the cap,
+        // not the truncation check, is what bounds the allocation.
+        let mut with_eoi = crate::raw::jpeg_hostile::encoded(64, 64);
+        crate::raw::jpeg_hostile::patch_sof_dims(&mut with_eoi, 30000, 30000);
+        assert!(decode_oriented(&with_eoi, 1)
+            .expect_err("hostile dims with a valid EOI")
+            .contains("implausible"));
+    }
+
+    /// Issue #31, half two: zune-jpeg 0.4 zero-fills a truncated scan and
+    /// reports SUCCESS (its overread counter stops growing once it starts
+    /// zero-filling, so even strict mode cannot see it) — the loupe showed
+    /// a blank frame instead of the Failed badge. THIS TEST FAILS ON
+    /// PRE-FIX CODE (it returns Ok there).
+    #[test]
+    fn decode_oriented_rejects_a_truncated_scan() {
+        let intact = crate::raw::jpeg_hostile::encoded(64, 64);
+        let truncated = crate::raw::jpeg_hostile::truncate_scan(&intact, 16);
+        let err = decode_oriented(&truncated, 1).expect_err("truncated scan must fail");
+        assert!(err.contains("truncated"), "reason names the cause: {err}");
+    }
+
+    /// The checks must not reject what they exist to protect: an intact
+    /// stream decodes exactly as before, on both the plain and the
+    /// transpose orientation path.
+    #[test]
+    fn decode_oriented_still_accepts_intact_streams() {
+        let jpeg = crate::raw::jpeg_hostile::encoded(64, 48);
+        let (rgb, w, h) = decode_oriented(&jpeg, 1).expect("intact stream decodes");
+        assert_eq!((w, h), (64, 48));
+        assert_eq!(rgb.len(), 64 * 48 * 3);
+        let (_, w, h) = decode_oriented(&jpeg, 6).expect("transpose path decodes");
+        assert_eq!((w, h), (48, 64), "orientation 6 swaps the sides");
     }
 
     #[test]
