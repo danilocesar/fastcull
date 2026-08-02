@@ -445,6 +445,31 @@ fn load_folder(state: &Rc<RefCell<AppState>>, folder: &std::path::Path) -> Resul
     Ok(())
 }
 
+/// The Open Folder ACTION — everything the menu entry does after the native
+/// dialog has produced a path: session swap via [`load_folder`], fresh grid
+/// zoom, viewport at the top, error surfaced in the status bar. Shared by
+/// the menu callback and the `open:PATH` drive token (issue #34) so the
+/// scripted swap exercises the exact code path a real Open Folder takes —
+/// a parallel test-only path would bypass the very wiring under test.
+fn open_folder_at(win: &MainWindow, state: &Rc<RefCell<AppState>>, folder: &std::path::Path) {
+    match load_folder(state, folder) {
+        Ok(()) => {
+            // Menu-open behaves like the CLI argument (spec): fresh
+            // grid zoom, cursor at the first image.
+            let mut st = state.borrow_mut();
+            st.zoom = 1;
+            st.last_grid_zoom = 1;
+            drop(st);
+            win.set_vp_y(0.0);
+            refresh(win, state);
+        }
+        Err(e) => {
+            eprintln!("fastcull: {e}");
+            win.set_status(format!("Open folder failed: {e}").into());
+        }
+    }
+}
+
 fn main() {
     let mut args: Vec<String> = std::env::args().skip(1).collect();
     // --screenshot <out.png>: render, snapshot after a settle delay, save,
@@ -732,22 +757,7 @@ fn main() {
             let Some(folder) = rfd::FileDialog::new().pick_folder() else {
                 return; // user cancelled
             };
-            match load_folder(&state, &folder) {
-                Ok(()) => {
-                    // Menu-open behaves like the CLI argument (spec): fresh
-                    // grid zoom, cursor at the first image.
-                    let mut st = state.borrow_mut();
-                    st.zoom = 1;
-                    st.last_grid_zoom = 1;
-                    drop(st);
-                    win.set_vp_y(0.0);
-                    refresh(&win, &state);
-                }
-                Err(e) => {
-                    eprintln!("fastcull: {e}");
-                    win.set_status(format!("Open folder failed: {e}").into());
-                }
-            }
+            open_folder_at(&win, &state, &folder);
         });
     }
     window.on_quit(|| {
@@ -1635,6 +1645,22 @@ fn main() {
                         win.set_vp_y(-y.max(0.0));
                         refresh(&win, &state);
                     }
+                    return;
+                }
+                if let Some(path) = key.strip_prefix("open:") {
+                    // open:PATH — the Open Folder menu action minus the
+                    // native rfd dialog (issue #34: an app-level session
+                    // swap mid-operation was untestable headlessly — the
+                    // kitchen's generation fence, the pipeline/loupe
+                    // restart and the marks flush were unit- or
+                    // review-verified only). Same shared function as the
+                    // menu path, so this drives the REAL swap, and like
+                    // the menu bar it stays live while a modal is up
+                    // (harness plumbing, not a nav key). The path is
+                    // everything after the first colon, so drive scripts
+                    // cannot open a path containing `;` — fine for a test
+                    // harness, recorded in ui-grid.md.
+                    open_folder_at(&win, &state, std::path::Path::new(path));
                     return;
                 }
                 if let Some(dims) = key.strip_prefix("resize:") {

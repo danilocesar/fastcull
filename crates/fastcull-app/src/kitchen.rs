@@ -230,8 +230,25 @@ impl Kitchen {
     /// carry the old generation and die at drain.
     pub fn retarget(&self) {
         self.shared.generation.fetch_add(1, Ordering::SeqCst);
-        lock(&self.shared.queue).clear();
-        lock(&self.shared.done).clear();
+        let dropped_queued = {
+            let mut q = lock(&self.shared.queue);
+            let n = q.len();
+            q.clear();
+            n
+        };
+        let dropped_done = {
+            let mut d = lock(&self.shared.done);
+            let n = d.len();
+            d.clear();
+            n
+        };
+        // Evidence channel for the session-swap drive test (issue #34): a
+        // dropped-queued count > 0 is the proof the swap really happened
+        // MID-FLIGHT — without it the test cannot tell "the fence held"
+        // from "there was nothing to fence" (the vacuous-test trap).
+        if std::env::var_os("FASTCULL_TRACE").is_some() {
+            eprintln!("kitchen: retarget dropped {dropped_queued} queued, {dropped_done} done");
+        }
     }
 
     /// Everything finished since the last drain, current session only.
@@ -310,6 +327,24 @@ fn worker(shared: &Shared) {
                     Kind::Wrap => "wrap",
                 }
             );
+        }
+        // FASTCULL_KITCHEN_COOK_MS=N: hold every cook for N ms first — a
+        // harness pacing knob (ui-grid.md debug facilities, issue #34; same
+        // family as FASTCULL_MAX_READERS). The session-swap drive test needs
+        // the queue to still be mid-flight at a SCRIPTED moment in both
+        // build profiles; a release build otherwise drains a screenful of
+        // thumbs in tens of milliseconds and the swap becomes timing
+        // roulette. The job still flows queue → cook → done → drain
+        // unchanged — the knob slows the real path, it does not fork it.
+        static COOK_HOLD: std::sync::OnceLock<u64> = std::sync::OnceLock::new();
+        let hold = *COOK_HOLD.get_or_init(|| {
+            std::env::var("FASTCULL_KITCHEN_COOK_MS")
+                .ok()
+                .and_then(|v| v.parse().ok())
+                .unwrap_or(0)
+        });
+        if hold > 0 {
+            std::thread::sleep(std::time::Duration::from_millis(hold));
         }
         let done = cook(job);
         *lock(&shared.in_flight) = None;

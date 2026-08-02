@@ -2127,3 +2127,286 @@ fn selection_wash_never_reaches_the_loupe() {
         "the wash leaked into the loupe: blue bias {plain_bias:.1} -> {sel_bias:.1}"
     );
 }
+
+/// Issue #34, target 1: an app-level session swap MID-FLIGHT. Open folder B
+/// (one corrupt file) while folder A (six real RAWs) is still cooking in the
+/// texture kitchen, via the `open:PATH` drive token — the Open Folder menu
+/// action minus the native dialog, same shared code path. The kitchen's
+/// generation fence is unit-verified; what was review-verified only is the
+/// WIRING — `load_folder` retargeting the kitchen and restarting the
+/// pipeline while work is genuinely in flight.
+///
+/// FASTCULL_KITCHEN_COOK_MS holds every cook for 1.5 s, so the six thumb
+/// jobs span ~9 s of kitchen time and the 6 s swap provably lands
+/// mid-queue in BOTH profiles (without it, release drains a screenful of
+/// thumbs in tens of milliseconds and the test is timing roulette). The
+/// dropped-queued count in the retarget trace is the anti-vacuity guard:
+/// zero would mean there was nothing to fence and every assertion below
+/// passes for the wrong reason — so zero FAILS, loudly, and means the
+/// schedule needs retuning, not that the fence broke.
+///
+/// The trailing `grid` action holds the shutter (and thus the app) open
+/// past the point where the swap-orphaned work would land if it were going
+/// to: the in-flight cook finishes ~1.5 s after the swap and must die at
+/// the drain's generation filter, and under the no-retarget mutation the
+/// leftover queue keeps cooking for ~6 s — both need the app still alive
+/// to be observable at all.
+#[test]
+fn open_folder_mid_flight_swaps_sessions_without_stale_kitchen_work() {
+    if !has_display() {
+        eprintln!("screenshot smoke skipped: no display server");
+        return;
+    }
+    let _s = serial();
+    let dir_a = out_dir().join("swap-a");
+    std::fs::create_dir_all(&dir_a).unwrap();
+    for i in 1..=6 {
+        place_fixture(
+            &raws_dir().join("A1_full_compressed.ARW"),
+            &dir_a.join(format!("a{i}.ARW")),
+        );
+    }
+    let dir_b = out_dir().join("swap-b");
+    std::fs::create_dir_all(&dir_b).unwrap();
+    std::fs::write(dir_b.join("broken.ARW"), vec![0xAB; 2048]).unwrap();
+    let out = out_dir().join("swap-mid-flight.jpg");
+    let script = format!("6000:open:{};12500:grid", dir_b.display());
+    let stderr = shoot_env_stderr(
+        &[dir_a.to_str().unwrap()],
+        &[
+            ("FASTCULL_TRACE", "1"),
+            ("FASTCULL_KITCHEN_COOK_MS", "1500"),
+            ("FASTCULL_DRIVE", &script),
+        ],
+        &out,
+    );
+    let open_pos = stderr
+        .find("drive: open:")
+        .unwrap_or_else(|| panic!("the open drive never fired:\n{stderr}"));
+    // The swap retargeted the kitchen (the startup load also traces a
+    // retarget, with nothing to drop — only the post-open one counts) …
+    let after_open = &stderr[open_pos..];
+    let dropped: usize = after_open
+        .lines()
+        .find_map(|l| l.split("kitchen: retarget dropped ").nth(1))
+        .unwrap_or_else(|| {
+            panic!("no kitchen retarget on the driven open — load_folder no longer fences the kitchen:\n{stderr}")
+        })
+        .split_whitespace()
+        .next()
+        .unwrap()
+        .parse()
+        .expect("unparseable dropped-queued count");
+    // … and it did so MID-FLIGHT. Zero dropped means the queue had already
+    // drained and nothing below can distinguish "fence held" from "nothing
+    // to fence" — fail loudly and retune the schedule (more cook hold or a
+    // later swap), the same policy as the nav-barrage test.
+    assert!(
+        dropped >= 1,
+        "the swap did not land mid-flight ({dropped} queued jobs dropped) — \
+         the no-stale-work assertions below would be vacuous:\n{stderr}"
+    );
+    // After the retarget: session A's queue is gone, session B (one corrupt
+    // file) submits nothing, so the kitchen must never cook again. The
+    // no-retarget mutation keeps ~4 queued cooks running for ~6 s past the
+    // swap and fails here.
+    let retarget_pos = open_pos + after_open.find("kitchen: retarget dropped").unwrap();
+    let tail = &stderr[retarget_pos..];
+    assert!(
+        !tail.contains("kitchen: cooking"),
+        "the kitchen kept cooking dead-session work after the swap:\n{stderr}"
+    );
+    // The cook in flight AT the swap finishes ~1.5 s later, into session B's
+    // lifetime — its completion carries the dead generation and must die at
+    // drain, never adopt. (Session B legitimately adopts nothing: its only
+    // file fails to decode.) Deleting the drain's generation filter fails
+    // here.
+    assert!(
+        !tail.contains("kitchen: adopting"),
+        "a dead-session texture was adopted after the swap — the generation \
+         fence did not hold at the app level:\n{stderr}"
+    );
+    // Coherent post-swap state: the status bar names folder B's file with
+    // honest counts, and its pipeline really ran (a failed decode still
+    // counts as a finished job — without this line session B never loaded
+    // and the silence above proves nothing).
+    let status = stderr
+        .lines()
+        .rev()
+        .find_map(|l| l.split("status at shutter: ").nth(1))
+        .unwrap_or_else(|| panic!("no status trace in stderr:\n{stderr}"));
+    assert!(
+        status.starts_with("broken.ARW (1/1)"),
+        "post-swap session is incoherent — expected folder B's file at \
+         (1/1), got: {status}"
+    );
+    assert!(
+        status.contains("1 thumbs loaded"),
+        "folder B's pipeline never ran to completion after the swap: {status}"
+    );
+}
+
+/// Issue #34, target 2: marks pending in the debounce window (700 ms) are
+/// FLUSHED to sidecars by the session swap (xmp-sidecars.md: "flushed on
+/// session close"). The schedule marks a1 and swaps 300 ms later — inside
+/// the debounce window — so the swap CLOSES the old writer with that write
+/// still pending, and the exit-time flush only drains the NEW session's
+/// writer: a session close that drops pending marks instead of draining
+/// them loses this one forever, which is what the file-exists assertion
+/// distinguishes (mutation-verified: skipping the writer's shutdown drain
+/// turns this red). Precision about what it does NOT pin: a writer merely
+/// LEAKED alive at swap would still write ~700 ms later on its own
+/// debounce timer, indistinguishably from the flush — the on-disk-BEFORE-
+/// the-new-session-starts ordering half of the barrier has no cheap
+/// black-box observable and stays covered by the core writer units.
+///
+/// The first `open:` targets a nonexistent path: the error branch of the
+/// real Open Folder action must leave the running session intact (status
+/// error, no session teardown) — proven by the pick that follows still
+/// landing on folder A's first image.
+#[test]
+fn session_swap_flushes_pending_marks_to_sidecars() {
+    if !has_display() {
+        eprintln!("screenshot smoke skipped: no display server");
+        return;
+    }
+    let _s = serial();
+    let dir_a = out_dir().join("flush-a");
+    std::fs::create_dir_all(&dir_a).unwrap();
+    for name in ["a1.ARW", "a2.ARW"] {
+        place_fixture(
+            &raws_dir().join("A1_full_compressed.ARW"),
+            &dir_a.join(name),
+        );
+    }
+    // Stale sidecars from a previous run would make the flush assertion
+    // vacuous (validator M1 class: a fixture picked once is picked forever).
+    // The dir is fresh per run (pid-named out_dir), but be explicit anyway.
+    assert!(
+        !dir_a.join("a1.ARW.xmp").exists(),
+        "fixture dir not clean before the run"
+    );
+    let dir_b = out_dir().join("flush-b-empty");
+    std::fs::create_dir_all(&dir_b).unwrap();
+    let out = out_dir().join("swap-flush.jpg");
+    let script = format!(
+        "800:open:{};1200:pick;1500:open:{}",
+        dir_b.join("does-not-exist").display(),
+        dir_b.display()
+    );
+    let stderr = shoot_env_stderr(
+        &[dir_a.to_str().unwrap()],
+        &[("FASTCULL_TRACE", "1"), ("FASTCULL_DRIVE", &script)],
+        &out,
+    );
+    // The failed open surfaced its error and left session A running (the
+    // cursor still on a1, or the pick below could not have landed).
+    assert!(
+        stderr.lines().any(|l| l.starts_with("fastcull: ")),
+        "the failed open never reported its error:\n{stderr}"
+    );
+    // THE flush assertion: a1's mark, still inside the 700 ms debounce at
+    // swap time, is on disk — written by the swap, since its writer no
+    // longer exists to be flushed at exit.
+    let sidecar = dir_a.join("a1.ARW.xmp");
+    assert!(
+        sidecar.exists(),
+        "the pending mark was LOST by the session swap — no sidecar at {}:\n{stderr}",
+        sidecar.display()
+    );
+    let xmp = std::fs::read_to_string(&sidecar).expect("read sidecar");
+    assert!(
+        xmp.contains("xmp:Rating=\"1\""),
+        "sidecar exists but does not carry the picked rating:\n{xmp}"
+    );
+    // No spurious writes: the unmarked neighbour has no sidecar.
+    assert!(
+        !dir_a.join("a2.ARW.xmp").exists(),
+        "an unmarked image grew a sidecar across the swap"
+    );
+    // And the swap itself landed: the empty folder B session reports an
+    // honest empty view (issue #19's "(0/0)", never a fabricated count).
+    let status = stderr
+        .lines()
+        .rev()
+        .find_map(|l| l.split("status at shutter: ").nth(1))
+        .unwrap_or_else(|| panic!("no status trace in stderr:\n{stderr}"));
+    assert!(
+        status.contains("(0/0)"),
+        "the swap to the empty folder never landed: {status}"
+    );
+}
+
+/// Issue #34, target 3 (#25 across sessions): the provisional-order flip —
+/// filename order while loading, ONE re-sort at completion, an untouched
+/// cursor keeping its photograph — must re-arm for a session opened by the
+/// in-app swap, not only for the process's first folder. Session A has its
+/// cursor CLAIMED (a nav key) before the swap; session B must open with a
+/// fresh, unclaimed cursor on ITS name-first image and hold it through B's
+/// own settle re-sort. A leaked cursor index from session A (the reset in
+/// `load_folder` gone missing) parks the cursor on b_early instead and
+/// fails the status assertion; same two-fixture trick as
+/// `engine_events_after_loading_never_move_an_untouched_cursor`, one
+/// session later.
+#[test]
+fn provisional_order_flip_rearms_after_an_in_app_swap() {
+    if !has_display() {
+        eprintln!("screenshot smoke skipped: no display server");
+        return;
+    }
+    let _s = serial();
+    let dir_a = out_dir().join("rearm-a");
+    std::fs::create_dir_all(&dir_a).unwrap();
+    for name in ["a.ARW", "b.ARW"] {
+        place_fixture(
+            &raws_dir().join("A1_full_compressed.ARW"),
+            &dir_a.join(name),
+        );
+    }
+    // a_late: captured 15:29:55; b_early: 15:29:13 — name-first is
+    // capture-LAST, so B's flip really moves the head (the anti-vacuity
+    // both assertions below rest on, same fixtures as the #25 test).
+    let dir_b = out_dir().join("rearm-b");
+    std::fs::create_dir_all(&dir_b).unwrap();
+    place_fixture(
+        &raws_dir().join("A1_full_uncompressed.ARW"),
+        &dir_b.join("a_late.ARW"),
+    );
+    place_fixture(
+        &raws_dir().join("A1_full_compressed.ARW"),
+        &dir_b.join("b_early.ARW"),
+    );
+    let out = out_dir().join("swap-rearm.jpg");
+    // `right` claims session A's cursor on index 1 — both leak flavours
+    // (index and claim) now point AWAY from B's expected outcome. The
+    // trailing `grid` holds the shutter until B's two files have loaded
+    // and re-sorted (zoom keys never claim the cursor).
+    let script = format!("1000:right;2000:open:{};8500:grid", dir_b.display());
+    let stderr = shoot_env_stderr(
+        &[dir_a.to_str().unwrap()],
+        &[("FASTCULL_TRACE", "1"), ("FASTCULL_DRIVE", &script)],
+        &out,
+    );
+    assert!(
+        stderr.contains("drive: right"),
+        "session A's cursor was never claimed — the reset would be untested:\n{stderr}"
+    );
+    let status = stderr
+        .lines()
+        .rev()
+        .find_map(|l| l.split("status at shutter: ").nth(1))
+        .unwrap_or_else(|| panic!("no status trace in stderr:\n{stderr}"));
+    // Both halves in one line, exactly as the single-session test pins them:
+    // "2 thumbs loaded" — B's load finished, so B's re-sort really happened;
+    // "a_late.ARW (2/2)" — the cursor opened on B's name-first image and
+    // kept it through the flip (capture time sorts it last).
+    assert!(
+        status.contains("2 thumbs loaded"),
+        "session B never finished loading, so its re-sort never happened: {status}"
+    );
+    assert!(
+        status.starts_with("a_late.ARW (2/2)"),
+        "the provisional-order contract did not re-arm across the swap — \
+         expected `a_late.ARW (2/2)`, got: {status}"
+    );
+}
