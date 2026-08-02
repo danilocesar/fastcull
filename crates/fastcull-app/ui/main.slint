@@ -228,6 +228,10 @@ export component MainWindow inherits Window {
     // IPTC panel (M5). Field edits commit by row index; Enter returns
     // focus to the grid and the cursor STAYS (G4 final).
     callback iptc-toggle();
+    // kitchen-ready: the texture worker finished something; Rust drains
+    // and adopts. Pure plumbing — the UI declares it so the worker can
+    // wake the event loop through invoke_from_event_loop.
+    callback kitchen-ready();
     callback iptc-field-committed(int, string, bool);
     callback iptc-field-clear(int);
     callback iptc-keyword-added(string);

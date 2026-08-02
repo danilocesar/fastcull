@@ -10,6 +10,8 @@ use std::cell::RefCell;
 use std::collections::{HashMap, HashSet};
 use std::rc::Rc;
 
+mod kitchen;
+
 use fastcull_core::catalog::Session;
 use fastcull_core::grid::{self, GridLayout, Nav};
 use fastcull_core::pipeline::{JobSpec, Pipeline, SessionEvent};
@@ -19,16 +21,6 @@ slint::include_modules!();
 
 /// Rows kept alive around the viewport in the windowed model.
 const MARGIN_ROWS: usize = 1;
-
-/// UI-thread decode budget per refresh (~0.5 ms per 320 px thumb): bounds the
-/// stall of a Home/End jump into a fully-thumbed region; the remainder is
-/// decoded on follow-up refreshes (deviation from the never-decode-on-UI
-/// rule recorded in ui-grid.md — slint::Image itself is not Send).
-const DECODES_PER_REFRESH: usize = 32;
-
-/// Full-res→mid adoptions per refresh (~35 ms each): bounds the stall when
-/// leaving 1:1 after a burst walk (validator finding); leftovers follow up.
-const ADOPTS_PER_REFRESH: usize = 2;
 
 /// Belt-and-braces cap on mid textures (~5 MB each) beyond the prune-to-
 /// visible-window bound (recorded decision: 4K + 6 columns worst case).
@@ -156,6 +148,9 @@ struct AppState {
     /// mid-drag engine refresh must not yank the view back). None while the
     /// overlay is hidden.
     last_pan_write: Option<(f32, f32)>,
+    /// The texture kitchen: every pixels->texture conversion happens on
+    /// its worker (01-architecture.md: the UI thread never decodes).
+    kitchen: kitchen::Kitchen,
     /// Which image the overlay last showed (trace bookkeeping only).
     last_overlay_cursor: Option<usize>,
     /// False until the user first moves the cursor or marks (issue #4):
@@ -380,6 +375,9 @@ fn load_folder(state: &Rc<RefCell<AppState>>, folder: &std::path::Path) -> Resul
     st.images.clear();
     st.failed.clear();
     st.thumbs_done = 0;
+    // New session: drop queued kitchen work and orphan late completions
+    // (their generation dies with the old session).
+    st.kitchen.retarget();
     // Re-arm issue #25's one-shot re-sort edge for the new session. It
     // happens to re-arm anyway because every open path refreshes
     // synchronously before the pump can deliver an event, but that is an
@@ -562,6 +560,23 @@ fn main() {
         zoom_factor: if start_11 { f32::INFINITY } else { 1.0 },
         pan_center: (0.5, 0.5),
         last_pan_write: None,
+        kitchen: {
+            // Completion nudge: the worker pokes the event loop so a
+            // finished texture is adopted as soon as the UI is idle —
+            // the 33 ms pump is the fallback, not the design point
+            // (persona condition: the one-tick cost must not be a
+            // trickle-in).
+            let win = window.as_weak();
+            kitchen::Kitchen::start(Box::new(move || {
+                let win = win.clone();
+                slint::invoke_from_event_loop(move || {
+                    if let Some(win) = win.upgrade() {
+                        win.invoke_kitchen_ready();
+                    }
+                })
+                .ok();
+            }))
+        },
         last_overlay_cursor: None,
         cursor_touched: false,
         last_grid_zoom: 1,
@@ -1160,6 +1175,18 @@ fn main() {
         });
     }
     {
+        // Kitchen completions: adopt immediately (the worker's nudge), so
+        // a finished texture never waits for the 33 ms pump.
+        let state = Rc::clone(&state);
+        let win = window.as_weak();
+        window.on_kitchen_ready(move || {
+            let Some(win) = win.upgrade() else { return };
+            if drain_kitchen(&win, &state) {
+                refresh(&win, &state);
+            }
+        });
+    }
+    {
         // Pointer wheel (issue #11): one notch-equivalent = one ladder
         // stop, anchored under the pointer. Arrives from the fit surface
         // or the zoom overlay; the machine decides from the actual state.
@@ -1438,27 +1465,20 @@ fn main() {
                                 let long = image.width.max(image.height);
                                 trace_mark(&format!("loupe ready idx {index} long {long}"));
                                 if long <= fastcull_core::loupe::MID_RUNG_MAX_LONG {
-                                    // Mid rung (~5 MB copy): grid-cell quality
-                                    // for intermediate zooms; cheap, always keep.
+                                    // Mid rung: kitchen copies it off-thread
+                                    // (Wrap = native size, never downscaled —
+                                    // a terminal small file's native size IS
+                                    // its zoom ceiling, issue #8).
                                     if terminal {
-                                        // The file's BEST rung (bare JPEG,
-                                        // issue #8): this IS native — keep it
-                                        // as the top rung so the zoom ceiling
-                                        // is knowable (validator MAJOR: small
-                                        // JPEGs dead-ended the zoom path).
+                                        // Metadata now; the texture follows
+                                        // when the kitchen serves it.
                                         st.terminal_native.insert(index);
-                                        let texture = fullres_texture(&image);
-                                        insert_fullres(&mut st, index, texture);
                                     }
-                                    if st.mids.len() < MIDS_CAP || st.mids.contains_key(&index) {
-                                        st.mids.insert(index, fullres_texture(&image));
-                                        st.va.note_held(index, long);
-                                    }
+                                    st.kitchen.submit_wrap(index, image.clone(), terminal);
                                 } else if at_loupe {
-                                    // Full rung: 150 MB copy only while the
-                                    // loupe can use it; core LRU keeps pixels.
-                                    let texture = fullres_texture(&image);
-                                    insert_fullres(&mut st, index, texture);
+                                    // Full rung: 150 MB fill on the kitchen
+                                    // worker; core LRU keeps the pixels.
+                                    st.kitchen.submit_full(index, image.clone());
                                 }
                                 dirty = true;
                             }
@@ -1474,12 +1494,20 @@ fn main() {
                         // once the folder has loaded (issue #25).
                         recompute_view_keep_cursor(&mut st, false);
                     }
+
                     if st.burst_dirty {
                         st.burst_dirty = false;
                         recompute_bursts(&mut st);
                     }
                 }
-                if dirty {
+                // Kitchen fallback drain: the worker's event-loop nudge is
+                // the fast path; this tick-time drain catches completions
+                // whose nudge raced a busy loop iteration.
+                let kitchen_dirty = win
+                    .upgrade()
+                    .map(|win| drain_kitchen(&win, &state))
+                    .unwrap_or(false);
+                if dirty || kitchen_dirty {
                     if let Some(win) = win.upgrade() {
                         refresh(&win, &state);
                     }
@@ -2765,6 +2793,69 @@ fn handle_nav_inner(win: &MainWindow, state: &Rc<RefCell<AppState>>, key: &str) 
     refresh(win, state);
 }
 
+/// Adopt every texture the kitchen has finished — UNBUDGETED, per the
+/// persona condition: the wrap is O(1), so rationing adoption would turn
+/// "one tick later" into a visible trickle-in. Returns whether anything
+/// was adopted (callers refresh on true).
+fn drain_kitchen(win: &MainWindow, state: &Rc<RefCell<AppState>>) -> bool {
+    use fastcull_core::loupe::MID_RUNG_MAX_LONG;
+    let mut st = state.borrow_mut();
+    let at_loupe = st.zoom == grid::ZOOM_COLUMNS.len() - 1;
+    let done = st.kitchen.drain();
+    if done.is_empty() {
+        return false;
+    }
+    trace_mark(&format!("kitchen: adopting {} done", done.len()));
+    for d in done {
+        match d {
+            kitchen::Done::Thumb { index, buf } => {
+                st.images.insert(index, slint::Image::from_rgb8(buf));
+            }
+            kitchen::Done::Full { index, buf } => {
+                // The 150 MB texture is only held while the loupe can use
+                // it (same gate as the old event-time adoption, re-checked
+                // NOW because the user may have left the loupe while it
+                // cooked); the core LRU keeps the pixels either way.
+                if at_loupe {
+                    let texture = slint::Image::from_rgb8(buf);
+                    insert_fullres(&mut st, index, texture);
+                }
+            }
+            kitchen::Done::Wrap {
+                index,
+                buf,
+                terminal,
+            } => {
+                let long = buf.width().max(buf.height());
+                let texture = slint::Image::from_rgb8(buf);
+                if terminal {
+                    // The file's best rung IS this texture (issue #8).
+                    insert_fullres(&mut st, index, texture.clone());
+                }
+                if long <= MID_RUNG_MAX_LONG
+                    && (st.mids.len() < MIDS_CAP || st.mids.contains_key(&index))
+                {
+                    st.mids.insert(index, texture);
+                    st.va.note_held(index, long);
+                }
+            }
+            kitchen::Done::Mid {
+                index,
+                buf,
+                held_long,
+            } => {
+                if st.mids.len() < MIDS_CAP || st.mids.contains_key(&index) {
+                    st.mids.insert(index, slint::Image::from_rgb8(buf));
+                    st.va.note_held(index, held_long);
+                }
+            }
+        }
+    }
+    drop(st);
+    let _ = win;
+    true
+}
+
 fn current_geometry(win: &MainWindow, state: &Rc<RefCell<AppState>>) -> (GridLayout, f32, f32) {
     let st = state.borrow();
     let viewport_h = win.get_grid_height();
@@ -2929,29 +3020,22 @@ fn refresh_inner(win: &MainWindow, state: &Rc<RefCell<AppState>>) {
         );
     }
 
-    // Decode encoded thumbs entering the window, bounded per refresh so a
-    // page jump never stalls a frame; leftovers get a follow-up refresh.
-    let to_decode: Vec<usize> = ids
+    // Thumbs entering the window go to the texture kitchen — the UI
+    // thread never decodes (01-architecture.md). No budget and no
+    // follow-up timer: submission is O(pending) and the kitchen's
+    // completion nudge drives adoption. Encoded bytes are MOVED into the
+    // job (the SQLite cache keeps the encoded copy); a submitted index
+    // vanishes from `thumb_jpegs`, which is what makes this loop
+    // naturally idempotent across refreshes.
+    let to_prep: Vec<usize> = ids
         .iter()
         .copied()
         .filter(|i| st.thumb_jpegs.contains_key(i) && !st.images.contains_key(i))
         .collect();
-    let leftovers = to_decode.len() > DECODES_PER_REFRESH;
-    for index in to_decode.into_iter().take(DECODES_PER_REFRESH) {
-        // Encoded bytes are dropped after decode: the SQLite cache keeps
-        // the encoded copy, no need for a third one in RAM.
-        if let Some(image) = st.thumb_jpegs.remove(&index).and_then(|b| decode_image(&b)) {
-            st.images.insert(index, image);
+    for index in to_prep {
+        if let Some(jpeg) = st.thumb_jpegs.remove(&index) {
+            st.kitchen.submit_thumb(index, jpeg);
         }
-    }
-    if leftovers {
-        let win_weak = win.as_weak();
-        let state_rc = Rc::clone(state);
-        slint::Timer::single_shot(std::time::Duration::from_millis(16), move || {
-            if let Some(win) = win_weak.upgrade() {
-                refresh(&win, &state_rc);
-            }
-        });
     }
 
     // POSITIVE claim gate (issues #16/#22 family, final form): the
@@ -3046,10 +3130,10 @@ fn refresh_inner(win: &MainWindow, state: &Rc<RefCell<AppState>>) {
             let hit = loupe.focus(focus_index, display_long);
             let missing = !st.fullres.iter().any(|(i, _)| *i == focus_index);
             if let (Some(image), true) = (hit, missing) {
-                let t1 = trace_enabled().then(std::time::Instant::now);
-                let texture = fullres_texture(&image);
-                insert_fullres(&mut st, focus_index, texture);
-                trace_slow("refresh: fullres_texture copy", t1);
+                // Kitchen fills the buffer off-thread; the pending guard
+                // inside submit_full absorbs the refresh loop re-asking
+                // every frame while it cooks.
+                st.kitchen.submit_full(focus_index, image);
             }
         }
     }
@@ -3062,27 +3146,16 @@ fn refresh_inner(win: &MainWindow, state: &Rc<RefCell<AppState>>) {
         let stx = &mut *st;
         if let Some(loupe) = &stx.loupe {
             // ensure() also returns cached images no event will announce
-            // (the zoom-walk bug: pruned-and-revisited cells stayed thumbs).
-            let adopts = stx.va.ensure(&ids, cell_phys as u32, loupe);
-            let leftover = adopts.len() > ADOPTS_PER_REFRESH;
-            for (index, image) in adopts.into_iter().take(ADOPTS_PER_REFRESH) {
+            // (the zoom-walk bug: pruned-and-revisited cells stayed
+            // thumbs). Downscales cook on the kitchen worker; stale ones
+            // for scrolled-away cells are culled here, at the submission
+            // wave (spec rule) — landed ones are still adopted.
+            stx.kitchen.cull_mids(&ids);
+            for (index, image) in stx.va.ensure(&ids, cell_phys as u32, loupe) {
                 if stx.mids.len() >= MIDS_CAP && !stx.mids.contains_key(&index) {
                     break;
                 }
-                let t1 = trace_enabled().then(std::time::Instant::now);
-                let (held_long, texture) = adopt_texture(&image);
-                stx.va.note_held(index, held_long);
-                stx.mids.insert(index, texture);
-                trace_slow("refresh: mid-rung adopt/downscale", t1);
-            }
-            if leftover {
-                let win_weak = win.as_weak();
-                let state_rc = Rc::clone(state);
-                slint::Timer::single_shot(std::time::Duration::from_millis(16), move || {
-                    if let Some(win) = win_weak.upgrade() {
-                        refresh(&win, &state_rc);
-                    }
-                });
+                stx.kitchen.submit_mid(index, image);
             }
         }
     }
@@ -3488,66 +3561,4 @@ fn insert_fullres(st: &mut AppState, index: usize, texture: slint::Image) {
             .unwrap_or(0);
         st.fullres.remove(victim);
     }
-}
-
-/// Adopt an engine-cached image as a grid-cell texture: mid rungs directly,
-/// full-res downscaled to mid size first (rare, ~30 ms — only for images
-/// visited at 1:1 and then viewed at an intermediate zoom) so the mids layer
-/// stays ~5 MB per texture.
-fn adopt_texture(image: &fastcull_core::loupe::FullImage) -> (u32, slint::Image) {
-    use fastcull_core::loupe::{MID_RUNG_MAX_LONG, MID_RUNG_TARGET};
-    let long = image.width.max(image.height);
-    if long <= MID_RUNG_MAX_LONG {
-        return (long, fullres_texture(image));
-    }
-    let t = u64::from(MID_RUNG_TARGET);
-    let (dst_w, dst_h) = if image.width >= image.height {
-        (
-            MID_RUNG_TARGET,
-            (u64::from(image.height) * t / u64::from(image.width)).max(1) as u32,
-        )
-    } else {
-        (
-            (u64::from(image.width) * t / u64::from(image.height)).max(1) as u32,
-            MID_RUNG_TARGET,
-        )
-    };
-    // Borrowed source: no 150 MB clone of the full-res pixels (validator).
-    let src = fast_image_resize::images::ImageRef::new(
-        image.width,
-        image.height,
-        image.rgb.as_ref(),
-        fast_image_resize::PixelType::U8x3,
-    )
-    .expect("valid source image");
-    let mut dst =
-        fast_image_resize::images::Image::new(dst_w, dst_h, fast_image_resize::PixelType::U8x3);
-    fast_image_resize::Resizer::new()
-        .resize(&src, &mut dst, None)
-        .expect("resize");
-    let buffer =
-        slint::SharedPixelBuffer::<slint::Rgb8Pixel>::clone_from_slice(dst.buffer(), dst_w, dst_h);
-    (dst_w.max(dst_h), slint::Image::from_rgb8(buffer))
-}
-
-/// Build a slint texture from a decoded full-res image (one 150 MB copy —
-/// slint owns its pixel buffers; the core LRU keeps the original).
-fn fullres_texture(image: &fastcull_core::loupe::FullImage) -> slint::Image {
-    let buffer = slint::SharedPixelBuffer::<slint::Rgb8Pixel>::clone_from_slice(
-        &image.rgb,
-        image.width,
-        image.height,
-    );
-    slint::Image::from_rgb8(buffer)
-}
-
-fn decode_image(jpeg: &[u8]) -> Option<slint::Image> {
-    let options = zune_jpeg::zune_core::options::DecoderOptions::default()
-        .jpeg_set_out_colorspace(zune_jpeg::zune_core::colorspace::ColorSpace::RGB);
-    let mut decoder = zune_jpeg::JpegDecoder::new_with_options(jpeg, options);
-    let pixels = decoder.decode().ok()?;
-    let (w, h) = decoder.dimensions()?;
-    let buffer =
-        slint::SharedPixelBuffer::<slint::Rgb8Pixel>::clone_from_slice(&pixels, w as u32, h as u32);
-    Some(slint::Image::from_rgb8(buffer))
 }

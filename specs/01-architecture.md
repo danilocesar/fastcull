@@ -42,7 +42,26 @@ copy picks
 
 ## Threading model
 
-- **Main/UI thread**: Slint event loop only. Never blocks on I/O or decode.
+- **Main/UI thread**: Slint event loop only. Never blocks on I/O or decode —
+  and as of the user decision 2026-08-02, **"decode" includes ALL pixel
+  work**: JPEG decoding, full-frame copies into texture buffers, and
+  downscaling. The M2-era deviations that budgeted such work per refresh
+  (~32 thumb decodes, 2 full-res adoptions) are retired, not grandfathered:
+  every texture is PREPARED on the texture-preparation worker below, and
+  the UI thread only wraps a finished `SharedPixelBuffer` into a
+  `slint::Image` (O(1)) and renders it. Measured motivation: a full-res
+  adoption copied 149 MB on the UI thread (15-25 ms spikes at 1:1 walking,
+  right at the 16.6 ms frame budget), and a 5k import spent ~0.93 s of UI
+  time decoding thumbnails (perf investigation 2026-07-27; issue #30).
+- **Texture-preparation worker** (app crate — presentation plumbing, not
+  business logic, so rule 5 keeps it out of core): a dedicated thread
+  owning every pixels→texture conversion (thumb JPEG decode, full-res
+  SharedPixelBuffer fill, full→mid downscale). Input: prep requests from
+  the pump; output: finished `SharedPixelBuffer`s polled by the pump
+  (`SharedPixelBuffer` is atomically refcounted and `Send`; `slint::Image`
+  is not, so the final wrap stays on the UI thread). Requests for cells
+  scrolled out of view are culled on each submission, mirroring the loupe
+  engine's want-culling.
 - **Pipeline pool**: rayon pool (num_cpus) executing decode jobs from a priority
   queue. Priorities: (1) visible cells, (2) loupe neighbors — ±2 at rest, and
   ±2/±8 oriented by travel while the user holds a key (ui-grid.md transit
