@@ -124,6 +124,47 @@ Also: `loupe_survives_a_vertical_resize` was flaking 4-in-20 on main and
 is fixed; the About card holds its extra line; and a `rerun-if-changed`
 path that did not exist was costing ~4.7 s on every no-op build.
 
+## v0.7.0 (released 2026-08-02)
+
+Everything since v0.6.0. The headline is the **transit quality model** —
+the user's requirement verbatim: "I don't need the image to be as good
+as possible, I need it to move fast, feeling almost like a video. But
+when I release the key, then I want quality to be high." The loupe used
+to request the full-res rung for every frame even under a held key
+(~390 ms decode vs ~120 ms repeat: two of three frames never seen).
+Three request states now govern what is ASKED of the decoder, never
+what is displayed: TRANSIT (frame changes < 250 ms apart — mid rung
+only, over a wide ring leaning the direction of travel), SETTLED
+(150 ms of quiet — the real target), then the pre-existing full-res
+look-ahead. Measured on the 8-core dev machine, interleaved A/B vs the
+old code: frames reaching the screen during a 20-key hold 14 → 37; CPU
+during a 30 s hold 59.9 s → 3.1 s; grid thumbnails after exiting a hold
+mid-flight 3.5–4.1 s → 15 ms; 3-minute-marathon peak RSS 2.37 GB →
+517 MB; fast-cull chains stop producing BLANK frames (the old code left
+2–5 of 20 undecoded above ~6 marks/s). Accepted cost, chosen
+motion-first: sharpness-on-stop 710 → 840 ms median. The gate caught a
+real bug before merge (the prefetch ring leaned FORWARD during a
+backward hold — the app's same-index re-focus storm re-derived the
+direction every call; now latched at the real index change) and two
+review rounds re-measured every published number. The fast-Y/N
+deferral is closed as intended, with data: at 4 marks/s nothing
+changes; only above ~4.2/s do frames get judged from the mid — where
+the old code judged them from nothing.
+
+Also: **dark-only means dark-only** — on a light-mode desktop the
+menu bar's labels were invisible (native fluent MenuBar text follows
+the platform colour scheme; the app's surfaces are hand-picked dark).
+As old as the menu bar itself, surfaced by the user's desktop theme.
+The palette is now pinned dark at the root window (user decision: "I
+don't want a light mode. I don't want a toggle. Keep the design as
+is"), with a deterministic regression test that forces the failing
+scheme via an unreachable session bus — QE proved the pin holds even
+across a LIVE mid-session theme flip, and that the screenshot suite
+had been silently capturing whichever scheme the desktop happened to
+be in (the real blind spot behind two different one-off Windows CI
+reds, both also fixed: the loupe-fit shutter now waits for the
+mid-or-better texture instead of a 1.5 s clock).
+
 ## v0.5.0 (released 2026-07-30)
 
 Everything since v0.4.0. The selection wash (a multi-selection is
