@@ -1387,7 +1387,13 @@ Documented because they ship in release builds (validator finding):
   only. Like the menu bar it stays live while a modal is up (harness
   plumbing, not a nav key). The path is everything after the first colon,
   so a folder whose path contains `;` cannot be scripted (recorded
-  limitation of the `;`-separated script format).
+  limitation of the `;`-separated script format). Caveat for script
+  authors (QE G2, 2026-08-02): the `--screenshot` readiness gates do not
+  re-arm for the swapped-in session — a shutter that was already
+  satisfied can fire while the new folder is still loading — so a script
+  that needs the post-swap session settled must hold the shutter with a
+  late trailing action (the drives-pending wait), as the issue #34 tests
+  do.
   Malformed entries are skipped silently. Scripts may include mark actions
   (`pick`/`reject`), which write real sidecars — QE runs target throwaway
   copies of test data only.
@@ -1406,4 +1412,9 @@ Documented because they ship in release builds (validator finding):
   queue → cook → done → drain unchanged; with FASTCULL_TRACE the retarget
   reports how many queued jobs it dropped, which is the test's proof that
   the swap really happened mid-flight (a dropped count of zero would make
-  the no-stale-adoption assertion vacuously green). Default 0 (off).
+  the no-stale-adoption assertion vacuously green). Default 0 (off). When
+  set, the app announces it once on stderr unconditionally
+  (`fastcull: FASTCULL_KITCHEN_COOK_MS=N — every texture cook is held`):
+  the knob ships in release builds, and a value leaked into some
+  environment makes the whole app mysteriously slow — a bug report's
+  stderr must say why (validator risk note, 2026-08-02).
