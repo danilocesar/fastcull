@@ -2137,13 +2137,17 @@ fn selection_wash_never_reaches_the_loupe() {
 /// pipeline while work is genuinely in flight.
 ///
 /// FASTCULL_KITCHEN_COOK_MS holds every cook for 1.5 s, so the six thumb
-/// jobs span ~9 s of kitchen time and the 6 s swap provably lands
+/// jobs span ~9 s of kitchen time and the 6.7 s swap provably lands
 /// mid-queue in BOTH profiles (without it, release drains a screenful of
-/// thumbs in tens of milliseconds and the test is timing roulette). The
-/// dropped-queued count in the retarget trace is the anti-vacuity guard:
-/// zero would mean there was nothing to fence and every assertion below
-/// passes for the wrong reason — so zero FAILS, loudly, and means the
-/// schedule needs retuning, not that the fence broke.
+/// thumbs in tens of milliseconds and the test is timing roulette). 6.7 s
+/// sits mid-hold, hundreds of ms from every cook boundary — in release
+/// the boundaries land near 1.5/3.0/4.5/6.0/7.5 s, and a swap scheduled
+/// ON a boundary races the worker's pop against the retarget (validator
+/// F3). The dropped-queued count in the retarget trace is the
+/// anti-vacuity guard: zero would mean there was nothing to fence and
+/// every assertion below passes for the wrong reason — so zero FAILS,
+/// loudly, and means the schedule needs retuning, not that the fence
+/// broke.
 ///
 /// The trailing `grid` action holds the shutter (and thus the app) open
 /// past the point where the swap-orphaned work would land if it were going
@@ -2170,7 +2174,7 @@ fn open_folder_mid_flight_swaps_sessions_without_stale_kitchen_work() {
     std::fs::create_dir_all(&dir_b).unwrap();
     std::fs::write(dir_b.join("broken.ARW"), vec![0xAB; 2048]).unwrap();
     let out = out_dir().join("swap-mid-flight.jpg");
-    let script = format!("6000:open:{};12500:grid", dir_b.display());
+    let script = format!("6700:open:{};12500:grid", dir_b.display());
     let stderr = shoot_env_stderr(
         &[dir_a.to_str().unwrap()],
         &[
@@ -2208,8 +2212,10 @@ fn open_folder_mid_flight_swaps_sessions_without_stale_kitchen_work() {
     );
     // After the retarget: session A's queue is gone, session B (one corrupt
     // file) submits nothing, so the kitchen must never cook again. The
-    // no-retarget mutation keeps ~4 queued cooks running for ~6 s past the
-    // swap and fails here.
+    // no-retarget mutation keeps the leftover queue cooking for seconds
+    // past the swap and fails here. (The `cooking` trace is printed while
+    // the queue lock is held, so it can never interleave AFTER the
+    // retarget line unless the pop really followed the retarget.)
     let retarget_pos = open_pos + after_open.find("kitchen: retarget dropped").unwrap();
     let tail = &stderr[retarget_pos..];
     assert!(
@@ -2258,7 +2264,10 @@ fn open_folder_mid_flight_swaps_sessions_without_stale_kitchen_work() {
 /// LEAKED alive at swap would still write ~700 ms later on its own
 /// debounce timer, indistinguishably from the flush — the on-disk-BEFORE-
 /// the-new-session-starts ordering half of the barrier has no cheap
-/// black-box observable and stays covered by the core writer units.
+/// black-box observable and stays covered by the core writer units. A
+/// schedule that SLIPS past the debounce (Slint timers fire late under a
+/// stalled loop) would be the same vacuity by another route; the
+/// trace-clock guard below fails loud on it instead (validator F2).
 ///
 /// The first `open:` targets a nonexistent path: the error branch of the
 /// real Open Folder action must leave the running session intact (status
@@ -2299,11 +2308,40 @@ fn session_swap_flushes_pending_marks_to_sidecars() {
         &[("FASTCULL_TRACE", "1"), ("FASTCULL_DRIVE", &script)],
         &out,
     );
-    // The failed open surfaced its error and left session A running (the
-    // cursor still on a1, or the pick below could not have landed).
+    // The failed open surfaced its OWN error — matched on the catalog's
+    // actual message, because a bare `fastcull: ` prefix also matches the
+    // read pool's unconditional resize line and the assertion would hold
+    // with the error branch deleted (validator F1, the vacuous-match trap).
+    // Session A surviving the failure is proven by the sidecar below.
     assert!(
-        stderr.lines().any(|l| l.starts_with("fastcull: ")),
+        stderr
+            .lines()
+            .any(|l| l.starts_with("fastcull: ") && l.contains("not a directory")),
         "the failed open never reported its error:\n{stderr}"
+    );
+    // The swap must have landed INSIDE the debounce window, or the writer's
+    // own timer wrote the sidecar before the swap and the flush assertion
+    // below is testing nothing (validator F2: Slint timers fire late under
+    // a stalled loop — Windows CI has measured ~60% slower runs). Loud
+    // retune signal, same policy as the mid-flight guard in the swap test.
+    // LAST match for the open: the 800 ms bogus-path open also traces
+    // `drive: open:` — the swap under test is the second one.
+    let drive_ms = |needle: &str| -> u64 {
+        stderr
+            .lines()
+            .rev()
+            .find(|l| l.contains(needle))
+            .and_then(|l| l.split('[').nth(1))
+            .and_then(|r| r.split(']').next())
+            .and_then(|n| n.trim().parse().ok())
+            .unwrap_or_else(|| panic!("no trace clock for {needle:?}:\n{stderr}"))
+    };
+    let gap = drive_ms("drive: open:").saturating_sub(drive_ms("drive: pick"));
+    assert!(
+        gap < 700,
+        "the swap fired {gap} ms after the pick — outside the 700 ms \
+         debounce, so the flush assertion below would be vacuous; retune \
+         the schedule:\n{stderr}"
     );
     // THE flush assertion: a1's mark, still inside the 700 ms debounce at
     // swap time, is on disk — written by the swap, since its writer no
@@ -2387,9 +2425,16 @@ fn provisional_order_flip_rearms_after_an_in_app_swap() {
         &[("FASTCULL_TRACE", "1"), ("FASTCULL_DRIVE", &script)],
         &out,
     );
+    // Schedule guard, stated precisely (validator F4): this proves the
+    // `right` FIRED before the swap, not that it claimed the cursor —
+    // the trace prints before dispatch. That `right` claims is
+    // handle_nav's own claim list (its removal is the accepted residual
+    // here); what THIS test pins by mutation is load_folder's cursor
+    // reset, which needs the right to have fired at all.
     assert!(
         stderr.contains("drive: right"),
-        "session A's cursor was never claimed — the reset would be untested:\n{stderr}"
+        "session A's `right` never fired — the cursor reset under test \
+         was never armed:\n{stderr}"
     );
     let status = stderr
         .lines()

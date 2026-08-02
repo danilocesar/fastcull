@@ -308,6 +308,25 @@ fn worker(shared: &Shared) {
                     // SEQUENTIALLY, never both at once.
                     let (k, i) = kind_of(&picked.1);
                     *lock(&shared.in_flight) = Some((picked.0, k, i));
+                    // Traced while the queue lock is STILL HELD, so a
+                    // `cooking` line can never appear after a `retarget`
+                    // line in stderr unless the pop really followed the
+                    // retarget: retarget clears the queue under this same
+                    // lock, and the swap test's no-cooking-after-retarget
+                    // assertion depends on that ordering (validator F3 —
+                    // printed after unlock, a descheduled worker could
+                    // interleave the two lines and fail the test falsely).
+                    if std::env::var_os("FASTCULL_TRACE").is_some() {
+                        eprintln!(
+                            "kitchen: cooking {:?} idx {i}",
+                            match k {
+                                Kind::Thumb => "thumb",
+                                Kind::Full => "full",
+                                Kind::Mid => "mid",
+                                Kind::Wrap => "wrap",
+                            }
+                        );
+                    }
                     break picked;
                 }
                 q = shared
@@ -316,18 +335,6 @@ fn worker(shared: &Shared) {
                     .unwrap_or_else(std::sync::PoisonError::into_inner);
             }
         };
-        if std::env::var_os("FASTCULL_TRACE").is_some() {
-            let (k, i) = kind_of(&job);
-            eprintln!(
-                "kitchen: cooking {:?} idx {i}",
-                match k {
-                    Kind::Thumb => "thumb",
-                    Kind::Full => "full",
-                    Kind::Mid => "mid",
-                    Kind::Wrap => "wrap",
-                }
-            );
-        }
         // FASTCULL_KITCHEN_COOK_MS=N: hold every cook for N ms first — a
         // harness pacing knob (ui-grid.md debug facilities, issue #34; same
         // family as FASTCULL_MAX_READERS). The session-swap drive test needs
@@ -338,10 +345,18 @@ fn worker(shared: &Shared) {
         // unchanged — the knob slows the real path, it does not fork it.
         static COOK_HOLD: std::sync::OnceLock<u64> = std::sync::OnceLock::new();
         let hold = *COOK_HOLD.get_or_init(|| {
-            std::env::var("FASTCULL_KITCHEN_COOK_MS")
+            let ms = std::env::var("FASTCULL_KITCHEN_COOK_MS")
                 .ok()
                 .and_then(|v| v.parse().ok())
-                .unwrap_or(0)
+                .unwrap_or(0);
+            if ms > 0 {
+                // Said out loud, unconditionally: a leftover value in some
+                // environment makes the whole app mysteriously slow, and a
+                // knob that ships in release builds must be diagnosable
+                // from a bug report's stderr (validator risk note).
+                eprintln!("fastcull: FASTCULL_KITCHEN_COOK_MS={ms} — every texture cook is held");
+            }
+            ms
         });
         if hold > 0 {
             std::thread::sleep(std::time::Duration::from_millis(hold));
