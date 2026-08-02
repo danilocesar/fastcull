@@ -1379,6 +1379,15 @@ Documented because they ship in release builds (validator finding):
   cursor — what the wheel does natively, and the one gesture the harness
   could not express, which is why a re-anchor that hauled a browsing user's
   viewport back reached review unnoticed (2026-07-31).
+  `open:PATH` (issue #34) is the Open Folder menu action minus the native
+  rfd dialog: it calls the same shared function the menu callback calls
+  (session swap, kitchen retarget, pipeline/loupe restart, marks flush,
+  fresh grid zoom), so a script can drive an app-level session swap
+  mid-operation — the path the texture-kitchen gate found review-verified
+  only. Like the menu bar it stays live while a modal is up (harness
+  plumbing, not a nav key). The path is everything after the first colon,
+  so a folder whose path contains `;` cannot be scripted (recorded
+  limitation of the `;`-separated script format).
   Malformed entries are skipped silently. Scripts may include mark actions
   (`pick`/`reject`), which write real sidecars — QE runs target throwaway
   copies of test data only.
@@ -1388,3 +1397,13 @@ Documented because they ship in release builds (validator finding):
   actions run and captures a half-driven state — the same script must
   mean the same shot in every profile (found 2026-07-27 when
   settle-then-pin drive schedules moved past the 1.5 s floor).
+- `FASTCULL_KITCHEN_COOK_MS=N`: hold every kitchen cook for N ms before the
+  pixel work (issue #34; same family as `FASTCULL_MAX_READERS`). Pacing
+  knob for the `open:PATH` session-swap test, which must catch the kitchen
+  queue provably mid-flight at a scripted swap in BOTH build profiles — a
+  release build otherwise drains a screenful of thumbs in tens of
+  milliseconds and the test becomes timing roulette. The job still flows
+  queue → cook → done → drain unchanged; with FASTCULL_TRACE the retarget
+  reports how many queued jobs it dropped, which is the test's proof that
+  the swap really happened mid-flight (a dropped count of zero would make
+  the no-stale-adoption assertion vacuously green). Default 0 (off).
