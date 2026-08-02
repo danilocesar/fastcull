@@ -3130,10 +3130,30 @@ fn refresh_inner(win: &MainWindow, state: &Rc<RefCell<AppState>>) {
             let hit = loupe.focus(focus_index, display_long);
             let missing = !st.fullres.iter().any(|(i, _)| *i == focus_index);
             if let (Some(image), true) = (hit, missing) {
-                // Kitchen fills the buffer off-thread; the pending guard
-                // inside submit_full absorbs the refresh loop re-asking
-                // every frame while it cooks.
-                st.kitchen.submit_full(focus_index, image);
+                // Kitchen fills the buffer off-thread; the pending guards
+                // absorb the refresh loop re-asking every frame while it
+                // cooks. Route by RUNG (validator finding, 2026-08-02):
+                // only a real top rung is a Full — the old code parked
+                // warm MIDS in the fullres slot too, which burned the
+                // top-priority lane on a texture the sharp filter can
+                // never accept. A warm sub-top hit (the pruned-and-
+                // revisited path: the engine re-announces a cached mid
+                // beyond the retained window) goes through Wrap into
+                // st.mids instead — which is where the soft-transit
+                // renderer looks FIRST, so the revisit soft source that
+                // mid-in-fullres used to provide is preserved.
+                let long = image.width.max(image.height);
+                if long > fastcull_core::loupe::MID_RUNG_MAX_LONG
+                    || st.terminal_native.contains(&focus_index)
+                {
+                    st.kitchen.submit_full(focus_index, image);
+                } else if !st.mids.contains_key(&focus_index) {
+                    st.kitchen.submit_wrap(
+                        focus_index,
+                        image,
+                        st.terminal_native.contains(&focus_index),
+                    );
+                }
             }
         }
     }

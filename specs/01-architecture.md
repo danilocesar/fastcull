@@ -53,15 +53,26 @@ copy picks
   adoption copied 149 MB on the UI thread (15-25 ms spikes at 1:1 walking,
   right at the 16.6 ms frame budget), and a 5k import spent ~0.93 s of UI
   time decoding thumbnails (perf investigation 2026-07-27; issue #30).
-- **Texture-preparation worker** (app crate — presentation plumbing, not
-  business logic, so rule 5 keeps it out of core): a dedicated thread
-  owning every pixels→texture conversion (thumb JPEG decode, full-res
-  SharedPixelBuffer fill, full→mid downscale). Input: prep requests from
-  the pump; output: finished `SharedPixelBuffer`s polled by the pump
-  (`SharedPixelBuffer` is atomically refcounted and `Send`; `slint::Image`
-  is not, so the final wrap stays on the UI thread). Requests for cells
-  scrolled out of view are culled on each submission, mirroring the loupe
-  engine's want-culling.
+- **Texture-preparation worker** ("the kitchen"; app crate — presentation
+  plumbing, not business logic, so rule 5 keeps it out of core): ONE
+  dedicated thread owning every pixels→texture conversion — thumb JPEG
+  decode, the full-res SharedPixelBuffer fill, native-size wraps of the
+  engine's mid rung, and full→mid downscales. Priority Full > Wrap >
+  Thumb > Mid (the full-res fill is the sharpness-on-stop tail; Wrap
+  feeds the transit hold). Completions NUDGE the event loop
+  (`invoke_from_event_loop` → a window callback), so adoption happens as
+  soon as the UI is idle; the 33 ms pump drain is the fallback, and
+  adoption is UNBUDGETED (rationing O(1) wraps would turn "one tick
+  later" into a visible trickle-in — persona condition).
+  `SharedPixelBuffer` is atomically refcounted and `Send`; `slint::Image`
+  is not, so the final wrap is the one step that stays on the UI thread.
+  Staleness: MID requests are culled to the visible set at each
+  submission wave; Thumb/Wrap/Full requests are deliberately NOT culled —
+  thumb bytes are MOVED into their jobs (completing them preserves the
+  work), and Full/Wrap serve the loupe, whose own focus/want logic
+  already decides what is asked for. One worker BY DESIGN: a second
+  would take a core from the decode pool that gates stop-to-sharp
+  (persona IN-MY-WAY on two).
 - **Pipeline pool**: rayon pool (num_cpus) executing decode jobs from a priority
   queue. Priorities: (1) visible cells, (2) loupe neighbors — ±2 at rest, and
   ±2/±8 oriented by travel while the user holds a key (ui-grid.md transit
