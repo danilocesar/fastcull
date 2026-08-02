@@ -1364,6 +1364,74 @@ mod tests {
         assert!(err.contains("truncated"), "reason names the cause: {err}");
     }
 
+    /// Issue #31 gate finding: the commonest field corruption is a
+    /// partially copied RAW — the mid preview sits early in the file and
+    /// survives, the full-res is cut off. The ladder must show the good
+    /// mid and must NOT fail the image (decode_ladder's achieved>0
+    /// branch): a Failed badge next to a visibly displayed image is the
+    /// exact contradiction the validator flagged when this branch was
+    /// first added.
+    #[test]
+    fn truncated_full_rung_keeps_the_good_mid_and_no_failed_badge() {
+        // A TIFF container holding an intact mid-class preview and a
+        // truncated full-res rung (SOF headers intact, scan cut off).
+        let mid = crate::raw::jpeg_hostile::encoded(640, 400);
+        let full_intact = crate::raw::jpeg_hostile::encoded(2000, 1500);
+        let full = crate::raw::jpeg_hostile::truncate_scan(&full_intact, 64);
+        let mut b = crate::raw::tiff_testutil::TiffBuilder::new(true);
+        let mid_off = b.add_blob(&mid);
+        let full_off = b.add_blob(&full);
+        let second = b.add_ifd(
+            &[(0x0201, 4, 1, full_off), (0x0202, 4, 1, full.len() as u32)],
+            0,
+        );
+        let ifd0 = b.add_ifd(
+            &[(0x0201, 4, 1, mid_off), (0x0202, 4, 1, mid.len() as u32)],
+            second,
+        );
+        b.set_ifd0(ifd0);
+        let dir = std::env::temp_dir().join(format!("fastcull-ladder31-{}", std::process::id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let path = dir.join("mid_ok_full_cut.arw");
+        std::fs::write(&path, &b.bytes).unwrap();
+
+        let (tx, rx) = std::sync::mpsc::channel();
+        let shared = Shared {
+            state: Mutex::new(LoupeState::default()),
+            wakeup: Condvar::new(),
+            paths: vec![path],
+            events: tx,
+            shutdown: AtomicBool::new(false),
+            stamp: AtomicU64::new(0),
+            budget: DEFAULT_BUDGET_BYTES,
+        };
+        // Ask for far more than the mid can serve, so the ladder MUST try
+        // the truncated full rung.
+        let outcome = decode_ladder(&shared, 0, 8640, 0, false);
+        assert_eq!(
+            outcome,
+            Ok(()),
+            "a good mid must survive a truncated full rung — Ok means the \
+             worker emits no Failed event"
+        );
+        match rx.try_recv() {
+            Ok(LoupeEvent::Ready { image, .. }) => {
+                assert_eq!((image.width, image.height), (640, 400), "the mid is shown");
+            }
+            other => panic!("expected the mid rung's Ready event, got {other:?}"),
+        }
+        assert!(
+            rx.try_recv().is_err(),
+            "no second event: no Failed, no phantom rung"
+        );
+        assert_eq!(
+            lock(&shared).best_long.get(&0).copied(),
+            Some(640),
+            "the ladder memoizes the achieved rung so it quiesces"
+        );
+        std::fs::remove_dir_all(&dir).ok();
+    }
+
     /// The checks must not reject what they exist to protect: an intact
     /// stream decodes exactly as before, on both the plain and the
     /// transpose orientation path.
