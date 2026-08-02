@@ -580,16 +580,21 @@ The `selected` flag drives BOTH the outline and the wash; the window carries
 `selection-wash` (color) and `selection-wash-opacity` (float) so the tint is
 settable from outside the UI without touching the cell model.
 
-Recorded deviations/decisions (M2):
-- Thumb JPEG→texture decode happens on the UI thread, bounded to ~32 decodes
-  per refresh with leftovers deferred to a follow-up tick (≈16 ms worst-case
-  stall on a page jump). `slint::Image` is not `Send`, so some UI-side
-  conversion is unavoidable; moving the JPEG decode itself off-thread is an
-  M4 follow-up together with the asset LRU.
-- Grid cells above 320×1.25 physical px display the mid rung (raw-pipeline.md
-  ladder); full-res images adopted for grid cells are downscaled to mid size
-  on the UI thread, bounded to 2 adoptions per refresh with follow-up ticks
-  (same budget philosophy as thumb decodes above).
+Recorded deviations/decisions (M2, REVISED 2026-08-02 — user decision:
+"no decoding should be done on the UI thread"):
+- ~~Thumb JPEG→texture decode on the UI thread (~32/refresh)~~ and
+  ~~full-res→mid downscale on the UI thread (2 adoptions/refresh)~~ are
+  RETIRED. All pixel work — thumb JPEG decode, the full-res 149 MB
+  SharedPixelBuffer fill, and full→mid downscales — moves to the
+  texture-preparation worker (01-architecture.md § Threading model). The
+  UI thread's only texture duty is wrapping a finished SharedPixelBuffer
+  into a `slint::Image` (O(1); `Image` is not `Send`, the buffer is).
+  Consequence, accepted: a texture becomes visible one pump tick after its
+  pixels are ready rather than within the same refresh — a placeholder can
+  therefore show for one extra tick on a cold cell. Stale-request rule:
+  prep requests for cells scrolled out of view are culled at submission,
+  and a landed texture for a no-longer-visible cell is still adopted into
+  the cache (it was paid for; the pruned-and-revisited rule applies).
 - Ctrl+scroll zoom is deferred: Slint's Flickable consumes wheel events and
   an overlay TouchArea would steal the drag/click gestures. Keyboard `+`/`-`
   covers M2; revisit during M4 polish (needs user OK to defer past v1 if it
