@@ -59,8 +59,9 @@ jobs:
         run: cargo test --release -p fastcull-app --test screenshot
 
       # Advisory only (user decision 2026-07-25): shared virtualized runners
-      # cannot gate wall-clock budgets; enforcement happens on reference
-      # hardware in every gate round (specs/01-architecture.md).
+      # cannot gate wall-clock budgets; enforcement happens on an idle run
+      # of the development machine in every gate round (issue #27 decision,
+      # specs/01-architecture.md).
       - name: Performance budgets (release, advisory)
         continue-on-error: true
         run: cargo test --release -p fastcull-core --test perf_budgets

@@ -243,9 +243,12 @@ where it is."
   swung 8-18 frames across three runs. Dropped rather than tuned on that
   spread.
 
-  Recorded gap: stop-to-sharp is decode-bound — the full-res decode alone
-  medians 614 ms here, and `budget_fullres_decode_under_350ms` fails on
-  `main` for the same reason (issue #27). Scheduling cannot close it.
+  Recorded gap (historical — closed 2026-08-02): at the time of this
+  experiment stop-to-sharp was decode-bound — the full-res decode alone
+  medianed 614 ms under the transit workload, and
+  `budget_fullres_decode_under_350ms` failed on the `main` of that day
+  (issue #27). Scheduling could not close it; the PR #32 orientation
+  rework did (raw-pipeline.md — the budget now passes idle with headroom).
 
   **Known and deferred** (recorded per the CLAUDE.md gate; none is a spec
   acceptance criterion, and all predate or are unchanged by this change):
@@ -737,9 +740,10 @@ brightening during wheel scrolling (needs an activity decay timer).
   sort key (`filter::view`'s `metadata_complete`). Rationale, measured:
   - EXIF is read INSIDE the per-file thumbnail job (`pipeline.rs`, its only
     production caller), so "still loading" is the WHOLE load — measured
-    ~15 s for 3,000 files on the 8-core development laptop with a warm page
-    cache (the 32-thread reference machine of 01-architecture.md would do
-    it in ~2 s; a card reader, much slower) — not a blink.
+    ~15 s for 3,000 files on the development laptop with a warm page
+    cache (the 32-thread machine retired 2026-07-28 — see
+    01-architecture.md — would do it in ~2 s; a card reader, much
+    slower) — not a blink.
   - The capture sort puts keyed images ahead of still-keyless ones, so when
     filename order runs contrary to capture order (two bodies or two cards
     in one folder, a counter rollover mid-event) the HEAD changes identity

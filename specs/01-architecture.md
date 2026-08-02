@@ -89,11 +89,13 @@ Enforcement: `crates/fastcull-core/tests/perf_budgets.rs` (release-mode
 tests), run in every local gate round **on an idle development machine** —
 that is the machine class the thresholds bind on (issue #27 decision,
 2026-08-02). They are wall-clock numbers, so a loaded machine fails them
-without any regression existing: measured on the 8-core dev laptop
-(2026-08-02), the full-res row is still green with 2 of 8 cores busy
-(~326 ms) and red with 4 busy (~528 ms). A red under load is a
-measurement, not a verdict — re-run idle before treating it as a failing
-change. The CI step is advisory-only (`continue-on-error`, user decision
+without any regression existing: measured on the dev laptop (i7-8665U,
+4 cores / 8 threads, 2026-08-02), the full-res row is still green with
+2 of 8 logical CPUs busy (~326 ms) and red with 4 busy (~528 ms).
+Thermal state shifts the same bands: immediately after a long release
+build the 2-busy case measured red (~411 ms), and green again (~313 ms)
+after cooldown. A red under load is a measurement, not a verdict —
+re-run idle before treating it as a failing change. The CI step is advisory-only (`continue-on-error`, user decision
 2026-07-25): shared virtualized runners cannot meaningfully gate
 wall-clock budgets. Skipped in debug builds where decode timing is
 meaningless. Numbers for humans: criterion benches in
@@ -103,20 +105,21 @@ Thresholds were set ~2× looser than the decode-bound baselines to absorb
 variance (the EXIF row has huge headroom on purpose — anything near 1 ms
 means a whole-file read or mmap snuck back). The original baselines were
 measured on a 32-thread machine retired 2026-07-28; since then the
-development machine is an 8-core i7-8665U laptop. Both columns are kept:
-the historical baseline for provenance, the laptop idle medians as the
-numbers a gate round actually compares against today. The thresholds
-themselves are unchanged since 2026-07-25 — the laptop meets them with
-headroom since the issue-#27 orientation rework (PR #32), whose spec
+development machine is an i7-8665U laptop (4 cores / 8 threads). Both
+columns are kept: the historical baseline for provenance, the laptop idle
+medians as the numbers a gate round actually compares against today. The
+thresholds themselves are untouched by this rewrite (the last one to
+change was the EXIF row, tightened 10 ms → 1 ms on 2026-07-27, after the
+in-tree-walker fix) — the laptop meets them with headroom since the issue-#27 orientation rework (PR #32), whose spec
 record lives in `modules/raw-pipeline.md`. Note the full-res row now
 includes the orientation-8 rotate (the shipped `loupe::decode_oriented`
 path); the 130–150 ms baseline predates that and timed the decode alone.
 
-| Operation | 32-thread baseline (retired 2026-07-28) | 8-core laptop, idle (2026-08-02) | Threshold (enforced) |
+| Operation | 32-thread baseline (retired 2026-07-28) | i7-8665U laptop, idle (2026-08-02) | Threshold (enforced) |
 |---|---|---|---|
 | open+EXIF (in-tree walker, A1) | ~5 µs | ~12 µs | < 1 ms |
 | grid thumb: extract+decode+resize | 7–11 ms | 12–14 ms | < 25 ms |
-| full-res 8640×5760 decode+rotate | 130–150 ms (decode only) | 263–279 ms | < 350 ms |
+| full-res 8640×5760 decode+rotate | 130–150 ms (decode only) | 250–280 ms | < 350 ms |
 | pipeline throughput (all cores) | ~1,500 files/s (post-2026-07-27 EXIF fix; was ~300 mmap-capped) | ~265 files/s | > 60 files/s (4-core runner) |
 
 ## Shutdown policy (recorded 2026-07-25)
