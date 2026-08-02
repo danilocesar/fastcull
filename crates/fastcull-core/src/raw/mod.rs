@@ -13,7 +13,7 @@
 
 mod jpeg;
 pub mod jpeg_exif;
-pub mod orient;
+pub(crate) mod orient;
 pub mod sony;
 pub use orient::{apply_orientation, apply_orientation_with, Scratch};
 mod tiff;

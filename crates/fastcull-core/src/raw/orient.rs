@@ -56,6 +56,12 @@ const TILE: usize = 64;
 /// Thread cap for the transpose (sweep above: 4 ≈ 8, both >> 2).
 const MAX_THREADS: usize = 8;
 
+/// Below this many source bytes the transpose stays single-threaded (see
+/// the threads note in `transpose_rotate`): mid-rung class images gain
+/// nothing from the fan-out, and portrait thumbs rotate inside already-
+/// parallel pipeline workers.
+const PARALLEL_THRESHOLD_BYTES: usize = 32 * 1024 * 1024;
+
 /// Apply an EXIF orientation (1-8) to decoded RGB pixels, returning the
 /// display-oriented buffer and its (possibly swapped) dimensions. Soft
 /// rotation only — sources are never modified (Photo Mechanic behavior).
@@ -84,7 +90,7 @@ impl Scratch {
 /// kernel maps the pages before a hot loop needs them (~6 ms for 149 MB
 /// vs ~40 ms serially, measured). Public because the loupe decode path
 /// prepares its `decode_into` buffer the same way.
-pub fn prefault_parallel(buf: &mut [u8]) {
+pub(crate) fn prefault_parallel(buf: &mut [u8]) {
     let chunk = buf.len().div_ceil(MAX_THREADS).max(1);
     std::thread::scope(|scope| {
         for c in buf.chunks_mut(chunk) {
@@ -109,7 +115,17 @@ pub fn apply_orientation_with(
     orientation: u16,
     scratch: Option<Scratch>,
 ) -> (Vec<u8>, u32, u32) {
-    if orientation <= 1 || orientation > 8 || rgb.len() != (w as usize * h as usize * 3) {
+    // Zero-area images pass through like every other degenerate input.
+    // Without this, `w == 0 || h == 0` with a transposing orientation
+    // satisfied the length check (0 == 0) and panicked in `chunks_mut(0)`
+    // downstream — a behavioral regression from the pre-rework code, which
+    // returned the buffer untouched (validator finding, 2026-08-02).
+    if orientation <= 1
+        || orientation > 8
+        || w == 0
+        || h == 0
+        || rgb.len() != (w as usize * h as usize * 3)
+    {
         return (rgb, w, h);
     }
     let (wu, hu) = (w as usize, h as usize);
@@ -177,9 +193,23 @@ fn transpose_rotate(
             vec![0u8; src.len()]
         }
     };
-    let threads = std::thread::available_parallelism()
-        .map_or(1, |n| n.get())
-        .clamp(1, MAX_THREADS);
+    // Small images run single-threaded. Honest trade, measured on the mid
+    // rung (1080x1616 portrait): on an IDLE machine threads do win there —
+    // ~4.4 ms single vs ~1.5 ms with 8 — but this path also serves every
+    // PORTRAIT GRID THUMB via the pipeline, whose workers are already
+    // parallel one-per-core, and 8 workers each spawning 8 scoped threads
+    // is 64-way oversubscription during exactly the import bursts the
+    // pipeline exists to keep fast. ~3 ms of idle-case mid latency is
+    // beneath notice; multiplying threads under full pipeline load is not
+    // (validator risk item, 2026-08-02). Full-res frames (149 MB) stay
+    // well above the threshold and keep the fan-out.
+    let threads = if src.len() < PARALLEL_THRESHOLD_BYTES {
+        1
+    } else {
+        std::thread::available_parallelism()
+            .map_or(1, |n| n.get())
+            .clamp(1, MAX_THREADS)
+    };
     let rows_per = oh.div_ceil(threads);
     std::thread::scope(|scope| {
         for (t, band) in out.chunks_mut(rows_per * ow * 3).enumerate() {
@@ -310,6 +340,12 @@ mod tests {
     }
 
     /// Degenerate inputs pass through untouched (same contract as always).
+    /// Zero-area dims are part of this contract: the first cut of this
+    /// module panicked in `chunks_mut(0)` for them under a transposing
+    /// orientation, where the pre-rework code passed them through
+    /// (validator finding, 2026-08-02) — dims come back UNCHANGED, which
+    /// is why these live here and not in the reference matrix (a real
+    /// transpose of a 0x5 would swap the dims; a pass-through must not).
     #[test]
     fn invalid_inputs_pass_through() {
         let rgb = vec![1u8, 2, 3];
@@ -320,10 +356,24 @@ mod tests {
         // Length mismatch: refuse to touch.
         let (out, ..) = apply_orientation(rgb.clone(), 5, 5, 6);
         assert_eq!(out, rgb);
+        // Zero-area, every orientation incl. the transposes that panicked.
+        for (w, h) in [(0u32, 0u32), (0, 5), (5, 0)] {
+            for o in 0..=9u16 {
+                let (out, ow, oh) = apply_orientation(Vec::new(), w, h, o);
+                assert!(out.is_empty());
+                assert_eq!((ow, oh), (w, h), "zero-area dims must pass through");
+            }
+        }
     }
 
     /// A wrong-size Scratch is ignored, never trusted (release builds fall
     /// back to a fresh allocation; correctness holds either way).
+    ///
+    /// Release-only because the debug build's `debug_assert` makes the
+    /// same call panic by design. CI runs lib unit tests in DEBUG only, so
+    /// this is exercised by the local release gate rounds, not CI — a
+    /// recorded decision (validator 2026-08-02), revisit if CI ever grows
+    /// a release unit-test leg.
     #[test]
     #[cfg(not(debug_assertions))]
     fn wrong_size_scratch_falls_back() {

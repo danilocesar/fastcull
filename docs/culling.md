@@ -146,9 +146,10 @@ working outward from your resting place while you look. Go deep back into a
 long run and you'll see the smaller version for a moment before it catches
 up. That's the trade for keeping up with your finger in the first place.
 
-Sharpening after you stop takes about a second for a full-resolution A1
-frame on a modest laptop — that's the decode itself, and a faster machine
-does it in well under half that. Travelling is smooth on both.
+Sharpening after you stop takes around a third of a second for a
+full-resolution A1 frame, even on a modest laptop — most of that is the
+JPEG decode itself, which cannot be split across cores. Travelling stays
+smooth regardless.
 
 ## Fit shows the whole frame
 
