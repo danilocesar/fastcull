@@ -53,6 +53,21 @@ fn bench_hot_path(c: &mut Criterion) {
             d.decode().unwrap()
         })
     });
+    // The numbers behind the #27 rework live here for humans (the budget
+    // test enforces; this reports): the rotate kernel alone, and the whole
+    // shipped hot path (decode_into pre-faulted + overlap + rotate).
+    let decoded = {
+        let mut d = zune_jpeg::JpegDecoder::new(&fullres_bytes);
+        let px = d.decode().unwrap();
+        let (w, h) = d.dimensions().unwrap();
+        (px, w as u32, h as u32)
+    };
+    group.bench_function("rotate_o8_8640x5760", |b| {
+        b.iter(|| fastcull_core::raw::apply_orientation(decoded.0.clone(), decoded.1, decoded.2, 8))
+    });
+    group.bench_function("decode_oriented_o8", |b| {
+        b.iter(|| fastcull_core::loupe::decode_oriented(&fullres_bytes, 8).unwrap())
+    });
     group.finish();
 }
 

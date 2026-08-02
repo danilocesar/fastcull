@@ -13,7 +13,9 @@
 
 mod jpeg;
 pub mod jpeg_exif;
+pub mod orient;
 pub mod sony;
+pub use orient::{apply_orientation, apply_orientation_with, Scratch};
 mod tiff;
 
 use std::io::{Read, Seek, SeekFrom};
@@ -178,38 +180,6 @@ pub fn find_embedded_jpegs<R: Read + Seek>(reader: &mut R) -> Result<EmbeddedPre
         whole_file: false,
         orientation: walk.orientation,
     })
-}
-
-/// Apply an EXIF orientation (1–8) to decoded RGB pixels, returning the
-/// display-oriented buffer and its (possibly swapped) dimensions. Soft
-/// rotation only — sources are never modified (Photo Mechanic behavior).
-pub fn apply_orientation(rgb: Vec<u8>, w: u32, h: u32, orientation: u16) -> (Vec<u8>, u32, u32) {
-    if orientation <= 1 || orientation > 8 || rgb.len() != (w as usize * h as usize * 3) {
-        return (rgb, w, h);
-    }
-    let (wu, hu) = (w as usize, h as usize);
-    let swap = matches!(orientation, 5..=8);
-    let (ow, oh) = if swap { (hu, wu) } else { (wu, hu) };
-    let mut out = vec![0u8; rgb.len()];
-    for y in 0..hu {
-        for x in 0..wu {
-            // Destination coordinates per EXIF orientation semantics.
-            let (dx, dy) = match orientation {
-                2 => (wu - 1 - x, y),          // mirror horizontal
-                3 => (wu - 1 - x, hu - 1 - y), // rotate 180
-                4 => (x, hu - 1 - y),          // mirror vertical
-                5 => (y, x),                   // transpose
-                6 => (hu - 1 - y, x),          // rotate 90 CW
-                7 => (hu - 1 - y, wu - 1 - x), // transverse
-                8 => (y, wu - 1 - x),          // rotate 270 CW
-                _ => (x, y),
-            };
-            let src = (y * wu + x) * 3;
-            let dst = (dy * ow + dx) * 3;
-            out[dst..dst + 3].copy_from_slice(&rgb[src..src + 3]);
-        }
-    }
-    (out, ow as u32, oh as u32)
 }
 
 /// No camera embeds previews anywhere near this size; a larger `len` means a

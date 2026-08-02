@@ -171,6 +171,38 @@ handled (rotations + mirrored forms). Cache note: the thumb cache stores
 post-rotation pixels, so introducing this bumped the cache schema version
 (pre-orientation thumbs invalidate wholesale).
 
+**The rotate is a hot loop and is engineered as one** (`raw/orient.rs`,
+issue #27 rework 2026-08-02; every constant pinned by a measured sweep on
+real 8640×5760 pixels, recorded in the module header). Mirrors/180°
+(orientations 2-4) run IN PLACE — no second 149 MB buffer. Transposes
+(5-8) walk 64 px cache tiles under scoped threads capped at 8, with
+bounds-check-free writes via `chunks_exact_mut`: 236 ms → **28-31 ms** on
+the 8-core dev laptop, byte-identical output pinned against a reference
+implementation for all 8 orientations at sizes exercising partial tiles
+and partial thread bands. An `unsafe` pointer kernel measured 25 ms and
+was REJECTED: ~4 ms is not worth the crate's first `unsafe` block.
+
+**The full-res decode path pays its page faults off the critical path**
+(`loupe::decode_oriented`, THE hot path — public so `perf_budgets`
+measures the shipped code rather than a re-implementation): the A1
+full-res JPEG is baseline with ZERO restart markers (verified by parsing
+— the Huffman decode is strictly serial, so parallel decode is
+impossible), meaning seven cores idle for ~220 ms while it runs. The
+decode goes `decode_into` a pre-faulted buffer (saves ~30 ms vs
+`decode()`'s internal allocation), and the transpose's output buffer is
+allocated and pre-faulted on a spare thread DURING the decode
+(`raw::Scratch`). Peak memory is unchanged — the same two buffers exist
+either way; only WHEN their page faults are paid moves. Measured
+end-to-end on the budget test, interleaved, medians of 5 rounds:
+untouched 518 ms / cache-tiled-only (the superseded PR #28 approach)
+309 ms / **this design 277 ms** — inside the 350 ms budget with headroom,
+on the very laptop where issue #27 declared it unpassable. Buffer POOLING
+(288 ms measured by the PR #28 research) remains deliberately excluded:
+three workers × 149 MB of resident pool is a real memory decision, and
+this gets under the budget without it. Also measured and rejected:
+zune-jpeg 0.5.15 (267-279 ms vs 0.4.21's 247-252 — a regression on this
+workload).
+
 ## Adaptive read pool (user requirement 2026-07-25, replaces the fixed 4-permit gate)
 
 History: 32 simultaneous readers drove a microSD into minute-long kernel I/O

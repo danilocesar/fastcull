@@ -123,19 +123,23 @@ fn budget_fullres_decode_under_350ms() {
     let samples: Vec<Duration> = (0..5)
         .map(|_| {
             let t = Instant::now();
-            let mut d = zune_jpeg::JpegDecoder::new(&bytes);
-            let px = d.decode().unwrap();
+            // THE code path the loupe actually runs (decode_into a
+            // pre-faulted buffer; transpose scratch prepared on spare
+            // cores while the serial Huffman decode runs) — the old test
+            // replicated `decode()` + rotate here and so measured a path
+            // the app does not ship. Fresh buffers every iteration, same
+            // as the app: no pooling is being smuggled into the number.
             // Portrait frames pay the soft-rotation too (validator M-2:
-            // orientation cost must live inside the budget, and portrait is
-            // the COMMON case for a pro shooter). Fixtures are landscape,
-            // so force the rotate path explicitly.
-            let (w, h) = d.dimensions().unwrap();
-            let rotated = fastcull_core::raw::apply_orientation(px, w as u32, h as u32, 8);
+            // orientation cost must live inside the budget, and portrait
+            // is the COMMON case for a pro shooter). Fixtures are
+            // landscape, so force the rotate path explicitly.
+            let rotated = fastcull_core::loupe::decode_oriented(&bytes, 8).unwrap();
             std::hint::black_box(rotated);
             t.elapsed()
         })
         .collect();
     let med = median(samples);
+    eprintln!("BUDGET-MEDIAN {}", med.as_secs_f64() * 1000.0);
     assert!(
         med < Duration::from_millis(350),
         "full-res decode+rotate median {med:?} (budget 350 ms)"
