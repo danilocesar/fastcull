@@ -3,8 +3,9 @@
 //! These run ONLY in release mode (`cargo test --release`): debug-build
 //! decode speed is meaningless for the budgets, so under debug_assertions
 //! every test prints a skip note and passes. CI runs them in a dedicated
-//! release step. Thresholds are the CI column of the spec table (~2x looser
-//! than the reference-machine baselines to absorb runner variance).
+//! advisory release step. Thresholds are the enforced column of the spec
+//! table; they bind on an idle run of the development machine (issue #27),
+//! and were set ~2x looser than the original baselines to absorb variance.
 
 use std::path::PathBuf;
 use std::time::{Duration, Instant};
