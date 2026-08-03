@@ -31,6 +31,14 @@ rfd = { version = "0.15", default-features = false, features = ["xdg-portal", "a
 directories = "6"
 toml = "0.8"
 
+# AttachConsole(ATTACH_PARENT_PROCESS) at startup (issue #40): the crate is
+# GUI-subsystem on Windows (see main.rs), and this keeps FASTCULL_TRACE and
+# error output visible when the exe is launched from a terminal. Already in
+# Cargo.lock many times over transitively; only the console namespace is
+# enabled.
+[target.'cfg(windows)'.dependencies]
+windows-sys = { version = "0.61", features = ["Win32_System_Console"] }
+
 [dev-dependencies]
 zune-jpeg = "0.4"
 

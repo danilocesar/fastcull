@@ -140,7 +140,16 @@ jobs:
       # The README and BUILD-INFO.txt promise "no Visual C++ Redistributable
       # needed". Check it instead of trusting it: a statically linked binary
       # has no VCRUNTIME140 import, and the .exe must actually start.
-      - name: Verify Windows artifact (static CRT + starts)
+      #
+      # PE subsystem (issue #40): fastcull-app must be a GUI-subsystem
+      # executable (double-click opens no console; closing a console cannot
+      # kill it) while fastcull-cli must STAY console-subsystem (a terminal
+      # tool that prints to the shell that ran it). The Subsystem field is a
+      # u16 in the PE optional header: e_lfanew (u32 at 0x3C) + 4-byte
+      # "PE\0\0" + 20-byte COFF header + offset 68. 2 = WINDOWS_GUI,
+      # 3 = WINDOWS_CUI. v0.8.0 shipped both as 3 -- that regression is what
+      # this assertion pins.
+      - name: Verify Windows artifact (static CRT + subsystems + starts)
         if: runner.os == 'Windows'
         shell: bash
         run: |
@@ -151,6 +160,27 @@ jobs:
               exit 1
             fi
           done
+          python - <<'EOF'
+          import struct, sys
+
+          def subsystem(path):
+              with open(path, "rb") as f:
+                  head = f.read(0x2000)
+              pe = struct.unpack_from("<I", head, 0x3C)[0]
+              assert head[pe:pe + 4] == b"PE\0\0", f"{path}: no PE signature"
+              return struct.unpack_from("<H", head, pe + 4 + 20 + 68)[0]
+
+          want = {"artifact/fastcull-app.exe": 2, "artifact/fastcull-cli.exe": 3}
+          bad = False
+          for exe, expected in want.items():
+              got = subsystem(exe)
+              print(f"{exe}: subsystem={got} (want {expected})")
+              if got != expected:
+                  print(f"::error::{exe} has PE subsystem {got}, expected {expected} "
+                        "(2=GUI, 3=console; see issue #40)")
+                  bad = True
+          sys.exit(1 if bad else 0)
+          EOF
           ./artifact/fastcull-cli.exe --version
 
       - name: Upload Windows test binaries

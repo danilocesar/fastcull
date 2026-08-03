@@ -63,7 +63,17 @@ persists, the file really is damaged.
 
 **Something misbehaves — what should I attach to a bug report?**
 Run with `FASTCULL_TRACE=1` from a terminal and attach the output: it
-timestamps every slow UI phase and loupe state change. If the issue
+timestamps every slow UI phase and loupe state change. This works on
+Windows too (cmd or PowerShell): the app attaches to the terminal it was
+started from, though the prompt returns immediately and the trace lines
+interleave with it — that is normal for a windowed app. One consequence:
+a FastCull started from a terminal is tied to that terminal — closing
+the terminal window (or pressing Ctrl+C in it) also closes FastCull, so
+keep the terminal open while you reproduce the problem. Started by
+double-click, the app has no terminal and nothing else can close it. To capture the
+trace to a file instead, redirect stderr — from cmd:
+`fastcull-app.exe 2> trace.txt` (PowerShell's `2>` reformats the
+lines; cmd captures them as-is). If the issue
 looks cache-related, try once with `FASTCULL_NO_CACHE=1` to rule it in
 or out. (You may also see `FASTCULL_DRIVE` mentioned in the source —
 it's a test-automation hook that can mark real files; not for everyday

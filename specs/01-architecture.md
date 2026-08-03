@@ -12,6 +12,28 @@ Rule: if a piece of code can live in `fastcull-core`, it must. The app crate con
 no business logic, no file I/O, no metadata knowledge — only model bridging and
 `.slint` UI definitions. Reviewers reject logic in the app crate.
 
+**Windows subsystems (issue #40, 2026-08-03)**: `fastcull-app` is built with
+`#![windows_subsystem = "windows"]` — a console-subsystem exe double-clicked
+in Explorer gets a console window allocated next to the app window, and
+closing that console kills the process (`CTRL_CLOSE_EVENT`). To keep terminal
+diagnostics working (`FASTCULL_TRACE=1`, usage errors, the drive harness —
+docs/faq.md tells bug reporters to run from a terminal), `main()` first calls
+`AttachConsole(ATTACH_PARENT_PROCESS)`: Windows then replaces NULL std
+handles with the parent console's (GetStdHandle "Attach/detach behavior"),
+and Rust's std re-queries the handle per write, so `eprintln!` reaches the
+console with no further rebinding. Explicitly redirected/piped handles
+(`2> trace.txt`, the screenshot tests' `Stdio::piped()`) are passed via
+`STARTF_USESTDHANDLES` and honored regardless of subsystem — attach never
+clobbers them. Accepted trade-off: a successful attach ties that launch to
+the terminal's lifetime — closing the terminal (CTRL_CLOSE_EVENT) or a
+Ctrl+C typed at its prompt terminates the app, which is standard for
+console-attached processes and fine for a diagnostics run (documented in
+docs/faq.md; a Ctrl+C handler is considered with the panic-visibility work,
+issue #44). A double-click launch attaches to nothing and has no such
+coupling. `fastcull-cli` deliberately stays console-subsystem: it is a
+terminal tool. CI asserts both PE subsystem fields on every Windows build
+(ci.yml "Verify Windows artifact": app = 2/GUI, cli = 3/console).
+
 ## Core modules (one spec each in `modules/`)
 
 | Module | File | Responsibility |
