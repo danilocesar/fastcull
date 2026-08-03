@@ -117,8 +117,10 @@ Panel-step ledger (updated after the panel gate, 2026-07-25):
   step). Esc inside a field is NOT an abandon gesture (Slint LineEdit
   offers no Esc hook in v1) — the exits are: Enter (commit + focus to
   grid), click-away (G7 commit, focus stays where clicked), a covering
-  modal (commits like click-away; the modal's scope takes the keyboard —
-  issue #41), and destruction — panel close or session swap — which
+  surface — a Help modal or the copy dialog — which commits like
+  click-away (preserving the shipped G7 semantics; the covering scope
+  takes the keyboard — issue #41), and destruction — panel close or
+  session swap — which
   DISCARDS the un-committed text (issue #41, user decision 2026-08-03:
   no commit-on-destroy; a swap also generation-stamps edits so the old
   session's text can never land on the new session's images). Focus

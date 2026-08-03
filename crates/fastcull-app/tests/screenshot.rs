@@ -2700,14 +2700,24 @@ fn session_swap_mid_field_edit_discards_and_keeps_the_keyboard() {
     // resize first: the Title field is clicked at fixed coordinates
     // inside the right-docked panel, so the window size must be pinned.
     let drive = format!(
-        "150:resize:1200x800;2500:key:i;3000:click.1050,177;3400:key:w;3500:key:i;\
-         3600:key:p;4000:open:{};5200:dump.swapped;5400:key:+;5800:dump.end",
+        "150:resize:1200x800;2500:key:i;3000:click.1050,177;3200:dump.focused;\
+         3400:key:w;3500:key:i;3600:key:p;4000:open:{};5200:dump.swapped;\
+         5400:key:+;5800:dump.end",
         dir_b.display()
     );
     let stderr = shoot_env_stderr(
         &[dir_a.to_str().unwrap()],
         &[("FASTCULL_TRACE", "1"), ("FASTCULL_DRIVE", &drive)],
         &out,
+    );
+    // The Title-field click really took focus (anti-vacuity, gate
+    // finding: a missed click would type the `p` as a real grid PICK
+    // and fail this test later with a false "committed the abandoned
+    // text" diagnosis — a miss must be loud and unambiguous).
+    let focused = qedump(&stderr, "focused");
+    assert!(
+        focused.contains("keysfocus=false"),
+        "the Title-field click missed — the field never took focus: {focused}"
     );
     // The swap really happened (anti-vacuity).
     let swapped = qedump(&stderr, "swapped");
@@ -3134,5 +3144,78 @@ fn filter_bar_toggle_mid_edit_commits_and_keeps_the_field_coherent() {
     assert!(
         qedump(&stderr, "end").contains("zoom=2"),
         "the `+` after the toggle was dead:\n{stderr}"
+    );
+}
+
+/// Gate finding on the fix's first cut: File > Copy Picks opened from
+/// the menu while a panel field owns the keyboard (QE RUN14) was still
+/// held together by init-timing luck — the dialog's own init claim
+/// happening to run after the menu's focus restore, with no deferred
+/// claim behind it. This is a GUARD, green before and after the ordering
+/// hardened (the luck holds today): the dialog's scope must own the
+/// keyboard, blind typing must not reach the hidden field or the
+/// metadata path, and Esc must close the dialog and hand the keys back.
+#[test]
+fn copy_picks_from_the_menu_over_a_focused_field_owns_the_keyboard() {
+    if !has_display() || !menu_clicks_are_calibrated() {
+        eprintln!("skipped: no display or uncalibrated menu geometry");
+        return;
+    }
+    let _s = serial();
+    let dir = out_dir().join("focus-run14");
+    std::fs::create_dir_all(&dir).unwrap();
+    place_fixture(
+        &raws_dir().join("A1_full_compressed.ARW"),
+        &dir.join("one.ARW"),
+    );
+    let out = out_dir().join("focus-run14.jpg");
+    let stderr = shoot_env_stderr(
+        &[dir.to_str().unwrap()],
+        &[
+            ("FASTCULL_TRACE", "1"),
+            (
+                "FASTCULL_DRIVE",
+                "2500:key:k;3000:click.22,19;3400:click.80,93;3800:dump.opened;\
+                 4000:key:x;4300:key:escape;4700:dump.closed;4900:key:+;\
+                 5200:dump.end",
+            ),
+        ],
+        &out,
+    );
+    // The dialog opened via the real menu and its scope owns the keys.
+    let opened = qedump(&stderr, "opened");
+    assert!(
+        opened.contains("copy=true"),
+        "the File > Copy Picks click missed (dialog never opened): {opened}"
+    );
+    assert!(
+        opened.contains("keysfocus=false"),
+        "the main key scope holds the keys behind the copy dialog — N/Y \
+         would fire at the hidden grid: {opened}"
+    );
+    // Esc closed the dialog and the keyboard returned…
+    let closed = qedump(&stderr, "closed");
+    assert!(
+        closed.contains("copy=false") && closed.contains("keysfocus=true"),
+        "Esc did not close the dialog and restore the keyboard: {closed}"
+    );
+    // …the blind `x` never became metadata…
+    assert!(
+        closed.contains("revert=\"\""),
+        "blind typing behind the copy dialog reached the metadata path: {closed}"
+    );
+    let sidecars: Vec<_> = std::fs::read_dir(&dir)
+        .unwrap()
+        .flatten()
+        .filter(|e| e.path().extension().is_some_and(|x| x == "xmp"))
+        .collect();
+    assert!(
+        sidecars.is_empty(),
+        "blind typing behind the copy dialog produced a sidecar: {sidecars:?}"
+    );
+    // …and the next keystroke works.
+    assert!(
+        qedump(&stderr, "end").contains("zoom=2"),
+        "the `+` after the dialog closed was dead:\n{stderr}"
     );
 }

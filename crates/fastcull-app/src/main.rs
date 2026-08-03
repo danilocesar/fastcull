@@ -1099,6 +1099,12 @@ fn main() {
         let win = window.as_weak();
         window.on_copy_open(move || {
             let Some(win) = win.upgrade() else { return };
+            // Opening the dialog COVERS any focused panel field — the same
+            // focus-continuity rule as the Help modals (issue #41, gate
+            // finding: this menu route survived only by init-timing luck,
+            // the RUN14 note; the deferred claim routes to the dialog's
+            // own scope via focus-keys once copy-visible is set below).
+            refocus_topmost_deferred(&win);
             {
                 let mut st = state.borrow_mut();
                 if st.copy_handle.is_some() {

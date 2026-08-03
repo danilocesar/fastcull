@@ -1175,20 +1175,32 @@ restore — see Focus continuity in the Filter & sort bar section.
   The inbox-zero loop (filter Unmarked, Y/N until empty) must work exactly.
 - **Focus containment (blocking spec gap closed pre-M5)**: while ANY text
   field has focus, no single-key shortcut fires — typing "Xavier" must not
-  reject a photo. Enter commits the field and returns focus to the grid;
-  Esc in a field abandons the edit (second Esc acts on the panel/view).
-- **Focus continuity (issues #41/#42, user decisions 2026-08-03)**: the
-  inverse guarantee — whenever the focused editor is DESTROYED (panel
-  close via any route, session swap) or COVERED (a modal opening over
-  the panel or the copy dialog), keyboard focus deterministically
+  reject a photo. Enter commits the field and returns focus to the grid.
+  (The original wording here promised "Esc in a field abandons the edit;
+  second Esc acts on the panel/view" — that never shipped: Slint's
+  LineEdit offers no Esc hook in v1, so Esc in a field is a no-op. The
+  recorded deviation lives in iptc-templates.md's panel-step ledger; the
+  field exits that DO exist are listed there and in Focus continuity
+  below. Corrected 2026-08-03, gate finding — the stale promise
+  contradicted the ledger and docs/metadata.md.)
+- **Focus continuity (issues #41/#42)**: the inverse guarantee —
+  whenever the focused editor is DESTROYED (panel close via any route,
+  session swap) or COVERED (About/shortcuts opening over the panel or
+  over the copy dialog, and the copy dialog itself opening over a
+  focused panel field via File > Copy Picks — the strand RUN14 showed
+  held only by init-timing luck), keyboard focus deterministically
   returns to the topmost surface's key scope. Never a dead keyboard,
   never keys eaten by an invisible editor: pre-fix, closing the panel
   from the menu left focus on NO element (at 1:1 with no discoverable
   recovery), and a modal opened over a focused field was un-dismissable
   while every keystroke landed invisibly in the field — committable as
-  metadata. Text disposition: a COVERED editor exits like click-away
-  (G7 — the text commits); a DESTROYED editor DISCARDS its un-committed
-  text (user decision: no commit-on-destroy). A session swap
+  metadata. Text disposition: a DESTROYED editor DISCARDS its
+  un-committed text (user decision 2026-08-03: no commit-on-destroy); a
+  COVERED editor exits like click-away — the text commits. The covered
+  case is NOT a new decision: it preserves the G7 semantics that
+  already shipped (opening a menu blurred the field and committed
+  exactly this way pre-fix — RUN17), stated here so the asymmetry with
+  destroy is deliberate and on the record. A session swap
   additionally invalidates every in-flight edit by generation stamp
   (editors stamp the session generation on focus gain; a blur commit
   from a stale stamp discards), so the old session's half-typed text can
@@ -1414,8 +1426,12 @@ the user confirms, all cheap to change):**
       focused, the G4 Enter commit (which also pins the edit-generation
       stamping — an init-time focus gain fires no `changed has-focus`,
       and an unstamped editor once silently discarded committable text),
-      the copy-dialog Esc lifecycle, and the filter-bar toggle mid-edit
-      (menu-open is a G7 click-away exit: the text commits). Recorded
+      the copy-dialog Esc lifecycle, the filter-bar toggle mid-edit
+      (menu-open is a G7 click-away exit: the text commits), and File >
+      Copy Picks over a focused field — the RUN14 luck strand, now
+      backed by the same deferred claim as the modals
+      (`copy_picks_from_the_menu_over_a_focused_field_owns_the_
+      keyboard`; a guard, green on both sides of the hardening). Recorded
       limitation: the menu-click tests are calibrated for the Linux
       runners' font metrics and SKIP on Windows — the focus machinery is
       platform-independent Slint core, and every non-menu strand still
@@ -1489,8 +1505,8 @@ Documented because they ship in release builds (validator finding):
   `dump.<label>` traces the focus/surface state for test assertions:
   `keysfocus` (the main key scope's real `has-focus`, via the
   `dbg-keys-focus` debug property), loupe/zoom state, panel and modal
-  visibility, the copy dialog's visibility and summary, the revert-slot
-  label, and the status line. Keyboard focus was otherwise INVISIBLE to
+  visibility, the copy dialog's visibility, plan summary and rename
+  template, the revert-slot label, and the status line. Keyboard focus was otherwise INVISIBLE to
   every headless run — a stranded keyboard could not even be asserted.
 - `FASTCULL_NO_CONFIG=1`: makes `ui.toml` (the remembered copy
   destination/template) unreachable for both load and save — what
