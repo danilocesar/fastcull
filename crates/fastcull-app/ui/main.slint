@@ -120,6 +120,15 @@ export component MainWindow inherits Window {
     in property <bool> iptc-revert-enabled: false;
     // Set by Rust when K should land focus in the keyword field.
     in-out property <bool> iptc-focus-keywords: false;
+    // Session generation, bumped by Rust on every folder swap (#41 D3):
+    // editors stamp the generation when they GAIN focus, and a blur
+    // commit from a stale generation DISCARDS instead (user decision:
+    // swapping folders mid-edit discards the un-committed text). This is
+    // structural, not timing-based — without it the focus-return steal
+    // blurred a still-alive keyword editor AFTER the swap and the G7
+    // click-away rule committed the OLD session's half-typed text
+    // against the NEW session's image (found while verifying the fix).
+    in property <int> session-gen: 0;
     property <length> panel-w: root.iptc-visible ? 300px : 0;
     // Filter/sort bar state (M5): counts per chip, the active single-choice
     // filter, and the sort cycle label. All owned by Rust.
@@ -156,21 +165,39 @@ export component MainWindow inherits Window {
     // X.Y.Z-devel-YYYYMMDD-<hash> — issue #26).
     in-out property <bool> about-visible: false;
     in property <string> about-version;
-    // Opening a modal steals the keyboard back to the main key scope
-    // (validator M1: a focused IPTC LineEdit is a SIBLING of `keys`, so
-    // field focus kept eating every key — including the Esc that should
-    // close the modal — while the popup covered the panel). NEVER steal
-    // from the copy dialog: its FocusScope owns the keyboard while it
-    // is up, and stealing left the main key handler LIVE behind it
-    // after the popup closed — N/Y fired real marks at the hidden grid
-    // (validator delta finding, the same blind-marks class). The known
-    // cost: with About over the copy dialog, Esc reaches the copy
-    // dialog's scope, so About closes by click-outside there.
+    // FOCUS CONTINUITY (issues #41/#42): keyboard focus must always live
+    // in the TOPMOST surface's key scope — whenever the focused editor is
+    // destroyed (panel close, session swap) or covered (a modal opens),
+    // focus deterministically returns there. focus-keys() is the routing
+    // primitive: the copy dialog's own scope while the dialog is up (via
+    // copy-claim-focus — the scope is a conditional child this function
+    // cannot name; and routing to `keys` instead left the main key
+    // handler LIVE behind the dialog, where N/Y fired real marks at the
+    // hidden grid — validator delta finding), else the main `keys`
+    // scope. BOTH scopes contain the About/shortcuts modals: Esc closes
+    // the topmost modal only, every other key is swallowed — so with
+    // About over the copy dialog the first Esc closes About and the
+    // dialog's plan state survives (issue #42; the old behavior let Esc
+    // act on the HIDDEN dialog and threw its state away).
+    // The menu-path caveat (issue #41 D2): Slint's MenuBar restores
+    // focus to the previously-focused element AFTER the item activation
+    // runs, so a synchronous focus-keys() inside an activation is
+    // overridden. The Rust side therefore re-invokes this function
+    // QUEUED behind the current event dispatch (refocus_topmost_deferred)
+    // after every such transition, and the panel/copy editors bounce a
+    // focus gain that arrives while a modal covers them (see the
+    // changed has-focus handlers) — belt and braces, both deterministic.
     public function focus-keys() {
-        if (!root.copy-visible) {
+        if (root.copy-visible) {
+            root.copy-claim-focus = true;
+        } else {
             keys.focus();
         }
     }
+    // The copy dialog watches this flag and claims its scope (same
+    // pattern as iptc-focus-keywords: a root flag observed by a
+    // conditional child).
+    in-out property <bool> copy-claim-focus: false;
     // Debug facility (issue #41, documented in ui-grid.md): the main key
     // scope's REAL focus state, readable from the drive harness (`dump.`
     // token). Keyboard focus was otherwise invisible to headless runs —
@@ -254,7 +281,12 @@ export component MainWindow inherits Window {
     callback copy-open-dest-folder();
 
     changed vp-y => { root.viewport-changed(); }
-    public function focus-grid() { keys.focus(); }
+    // Alias kept for the Rust G4 paths; routes like focus-keys so no
+    // caller can steal from the copy dialog's scope by accident.
+    public function focus-grid() { root.focus-keys(); }
+    // Fired by the Help menu items: the Rust side answers with the
+    // deferred re-focus that survives the menu's focus restore (#41 D2).
+    callback modal-opened();
     changed width => { root.viewport-changed(); }
     changed height => { root.viewport-changed(); }
 
@@ -303,11 +335,15 @@ export component MainWindow inherits Window {
             title: "Help";
             MenuItem {
                 title: "Keyboard Shortcuts";
-                activated => { root.shortcuts-visible = true; root.focus-keys(); }
+                // modal-opened, not a bare focus-keys(): the menu restores
+                // focus AFTER activation, overriding any steal made here
+                // (issue #41 D2 — the un-dismissable modal + blind typing
+                // into the field hidden behind the scrim).
+                activated => { root.shortcuts-visible = true; root.modal-opened(); }
             }
             MenuItem {
                 title: "About FastCull";
-                activated => { root.about-visible = true; root.focus-keys(); }
+                activated => { root.about-visible = true; root.modal-opened(); }
             }
         }
     }
@@ -765,6 +801,13 @@ export component MainWindow inherits Window {
                         root.loupe-clicked(
                             self.pressed-x / max(1px, self.width),
                             self.pressed-y / max(1px, self.height));
+                        // Focus claim, same as the grid-cell and fit
+                        // surfaces (issue #41 defense in depth): at 1:1
+                        // this was the ONE click surface that did not
+                        // claim the keyboard, so a stranded keyboard had
+                        // no discoverable recovery in the loupe. Additive
+                        // — the click still re-centers exactly as before.
+                        keys.focus();
                     }
                     // Wheel above fit walks the zoom ladder, anchored
                     // under the pointer (issue #11 — the wheel no longer
@@ -958,19 +1001,58 @@ export component MainWindow inherits Window {
                                     root.iptc-field-committed(i, text, true);
                                     keys.focus(); // G4: Enter returns to grid, cursor stays
                                 }
+                                property <int> edit-gen: -1;
+                                // Session swap: in-flight text belongs to
+                                // the OLD session — re-sync to the (new)
+                                // stored value immediately (#41 D3),
+                                // independent of when the blur lands.
+                                property <int> seen-gen: root.session-gen;
+                                changed seen-gen => {
+                                    self.text = row.mixed ? "" : row.value;
+                                }
                                 changed has-focus => {
-                                    // G7: click-away from a half-typed field
-                                    // COMMITS (no focus return). The Rust
-                                    // side no-ops when the value is
-                                    // unchanged, so Enter's focus hop does
-                                    // not double-commit.
-                                    if (!self.has-focus && self.text != row.value) {
+                                    if (self.has-focus) {
+                                        // Stamp the session this edit
+                                        // belongs to (#41 D3, see
+                                        // session-gen).
+                                        self.edit-gen = root.session-gen;
+                                        if (root.about-visible || root.shortcuts-visible) {
+                                            // Focus continuity (#41 D2):
+                                            // an editor must never hold
+                                            // the keyboard behind a
+                                            // modal's scrim — the menu's
+                                            // post-activation focus
+                                            // restore lands here, and
+                                            // this bounce hands it
+                                            // straight to the modal's
+                                            // scope, synchronously.
+                                            keys.focus();
+                                        }
+                                    } else if (root.iptc-visible && self.edit-gen == root.session-gen && self.text != row.value) {
+                                        // G7: click-away from a half-typed
+                                        // field COMMITS (no focus return);
+                                        // a modal covering the field exits
+                                        // it the same way. The Rust side
+                                        // no-ops when the value is
+                                        // unchanged, so Enter's focus hop
+                                        // does not double-commit. Gated on
+                                        // iptc-visible AND the session
+                                        // stamp: focus lost because the
+                                        // panel is being destroyed OR the
+                                        // session was swapped DISCARDS the
+                                        // un-committed text (#41 D1/D3,
+                                        // user decision — no
+                                        // commit-on-destroy).
                                         root.iptc-field-committed(i, self.text, false);
                                         // Re-sync the display: if the commit
                                         // no-opped (emptied or padded text),
                                         // the model kept the old value — the
                                         // editor must not keep showing a
                                         // value that was never stored (QE).
+                                        self.text = row.mixed ? "" : row.value;
+                                    } else {
+                                        // Discarded exit: show the stored
+                                        // value, never the abandoned text.
                                         self.text = row.mixed ? "" : row.value;
                                     }
                                 }
@@ -1016,19 +1098,32 @@ export component MainWindow inherits Window {
                 kwedit := LineEdit {
                     // K lands here: on panel open (init) or while already
                     // open (the watch property observes the root flag).
+                    // Each programmatic gain stamps edit-gen ITSELF:
+                    // `changed has-focus` does not fire for a focus gain
+                    // made during init, so relying on it alone left the
+                    // stamp stale and the blur path silently DISCARDED
+                    // committable text (found while verifying #41).
                     property <bool> want-focus: root.iptc-focus-keywords;
                     init => {
                         if (self.want-focus) {
                             self.focus();
+                            self.edit-gen = root.session-gen;
                             root.iptc-focus-keywords = false;
                         }
                     }
                     changed want-focus => {
                         if (self.want-focus) {
                             self.focus();
+                            self.edit-gen = root.session-gen;
                             root.iptc-focus-keywords = false;
                         }
                     }
+                    // Session swap while this editor holds text: the text
+                    // belongs to the OLD session — discard it immediately
+                    // (#41 D3, user decision), independent of when the
+                    // blur lands.
+                    property <int> seen-gen: root.session-gen;
+                    changed seen-gen => { self.text = ""; }
                     placeholder-text: "add keywords, comma-separated";
                     font-size: 12px;
                     height: 26px;
@@ -1037,10 +1132,26 @@ export component MainWindow inherits Window {
                         self.text = "";
                         keys.focus(); // G4: commit returns to grid
                     }
+                    property <int> edit-gen: -1;
                     changed has-focus => {
-                        if (!self.has-focus && self.text != "") {
-                            root.iptc-keyword-added(self.text); // G7 click-away
+                        if (self.has-focus) {
+                            // Session stamp (#41 D3, see session-gen).
+                            self.edit-gen = root.session-gen;
+                            if (root.about-visible || root.shortcuts-visible) {
+                                // Focus continuity (#41 D2): bounce a
+                                // focus gain that arrives behind a
+                                // modal's scrim — same rule as the field
+                                // rows above.
+                                keys.focus();
+                            }
+                        } else if (root.iptc-visible && self.edit-gen == root.session-gen && self.text != "") {
+                            // G7 click-away commits; panel destruction or
+                            // a session swap DISCARDS (#41 D1/D3 — the
+                            // iptc-visible gate and the session stamp).
+                            root.iptc-keyword-added(self.text);
                             self.text = "";
+                        } else {
+                            self.text = ""; // discarded exit
                         }
                     }
                 }
@@ -1065,6 +1176,25 @@ export component MainWindow inherits Window {
                 width: 100%;
                 height: 100%;
                 key-pressed(event) => {
+                    // Modal containment, topmost-first (issue #42): About
+                    // or the shortcuts popup can open OVER this dialog
+                    // (the menu bar stays live), and focus lives in THIS
+                    // scope then. Esc must close the popup on top — the
+                    // old code let it act on the hidden dialog underneath,
+                    // discarding the destination/plan state while About
+                    // stayed up. Every other key is swallowed (the same
+                    // "swallow everything in that screen" rule as `keys`),
+                    // which also keeps N-containment intact here.
+                    if (root.about-visible || root.shortcuts-visible) {
+                        if (event.text == Key.Escape) {
+                            if (root.about-visible) {
+                                root.about-visible = false;
+                            } else {
+                                root.shortcuts-visible = false;
+                            }
+                        }
+                        return accept;
+                    }
                     if (event.text == Key.Escape && root.copy-state != 1) {
                         root.copy-close();
                         return accept;
@@ -1140,6 +1270,17 @@ export component MainWindow inherits Window {
                             font-size: 12px;
                             height: 28px;
                             enabled: root.copy-state == 0;
+                            changed has-focus => {
+                                // Focus continuity (#41 D2 class): if a
+                                // modal opens over the dialog while this
+                                // field is focused, the field must not
+                                // keep eating keys behind the scrim —
+                                // bounce to the dialog's scope, whose
+                                // containment branch handles the modal.
+                                if (self.has-focus && (root.about-visible || root.shortcuts-visible)) {
+                                    copy-keys.focus();
+                                }
+                            }
                             edited => { root.copy-replan(); }
                             accepted(text) => {
                                 // Enter in the field: commit the replan and
@@ -1230,7 +1371,23 @@ export component MainWindow inherits Window {
                 }
             }
             }
-            init => { copy-keys.focus(); }
+            // The init claim also clears any claim flag left from a
+            // previous dialog instance, so the watch below can always
+            // observe a fresh false→true edge.
+            init => { copy-keys.focus(); root.copy-claim-focus = false; }
+            // Focus routing (issue #41): focus-keys() cannot name a
+            // conditional child, so it raises this root flag and the
+            // dialog claims its own scope — the same watch pattern as
+            // iptc-focus-keywords. This replaces the init-timing LUCK
+            // that RUN14 documented (the dialog's init happening to run
+            // after the menu's focus restore) with an explicit claim.
+            property <bool> claim-focus: root.copy-claim-focus;
+            changed claim-focus => {
+                if (self.claim-focus) {
+                    copy-keys.focus();
+                    root.copy-claim-focus = false;
+                }
+            }
         }
 
         // MODAL POPUPS — declared AFTER the IPTC panel and the copy

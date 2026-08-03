@@ -1144,6 +1144,18 @@ sibling of that scope and would otherwise keep eating keys, including
 the closing Esc); the scrims swallow wheel events (the grid must not
 scroll under a modal). The MENU BAR stays live while a modal is up
 (File > Quit works) — standard desktop behavior, deliberate.
+**Esc closes the TOPMOST modal only (issue #42)**: with About or the
+shortcuts popup opened over the live copy dialog (the live menu makes
+that reachable), keyboard focus stays in the dialog's scope, whose own
+containment branch closes the popup on top first — the dialog and its
+destination/plan state survive, and the next Esc closes the dialog;
+marks stay contained throughout. The previously recorded "known cost"
+here — that Esc would reach the copy dialog's scope so About closes by
+click-outside — understated reality: Esc actively closed the HIDDEN
+dialog and threw its plan state away. Both key scopes now contain
+modals identically. Opening a modal over a FOCUSED panel field steals
+the keyboard in a way that survives the menu's post-activation focus
+restore — see Focus continuity in the Filter & sort bar section.
 
 ## Filter & sort bar (M5 decisions recorded 2026-07-25)
 
@@ -1165,6 +1177,35 @@ scroll under a modal). The MENU BAR stays live while a modal is up
   field has focus, no single-key shortcut fires — typing "Xavier" must not
   reject a photo. Enter commits the field and returns focus to the grid;
   Esc in a field abandons the edit (second Esc acts on the panel/view).
+- **Focus continuity (issues #41/#42, user decisions 2026-08-03)**: the
+  inverse guarantee — whenever the focused editor is DESTROYED (panel
+  close via any route, session swap) or COVERED (a modal opening over
+  the panel or the copy dialog), keyboard focus deterministically
+  returns to the topmost surface's key scope. Never a dead keyboard,
+  never keys eaten by an invisible editor: pre-fix, closing the panel
+  from the menu left focus on NO element (at 1:1 with no discoverable
+  recovery), and a modal opened over a focused field was un-dismissable
+  while every keystroke landed invisibly in the field — committable as
+  metadata. Text disposition: a COVERED editor exits like click-away
+  (G7 — the text commits); a DESTROYED editor DISCARDS its un-committed
+  text (user decision: no commit-on-destroy). A session swap
+  additionally invalidates every in-flight edit by generation stamp
+  (editors stamp the session generation on focus gain; a blur commit
+  from a stale stamp discards), so the old session's half-typed text can
+  never be committed against the new session's images — the stamp, not
+  timing, is the guarantee, because the swap leaves the keyword editor
+  alive and the focus steal blurs it after the swap. Mechanics (the
+  menu is the hard case): Slint's MenuBar restores focus to the
+  previously-focused element AFTER the item activation runs, so a
+  synchronous steal inside an activation is overridden — the app
+  re-claims focus QUEUED behind the current event dispatch (a
+  zero-length timer cannot fire until the dispatch containing the
+  menu's restore has unwound), and the panel/copy editors additionally
+  BOUNCE any focus gain arriving while a modal covers them (belt and
+  braces, both deterministic). The 1:1 loupe click surface claims the
+  keyboard like every other click surface (defense in depth; the click
+  still re-centers — grid and loupe click semantics are unchanged, by
+  user decision).
 - Per-image keywording is a same-evening flow (user decision): a focus-jump
   key into the keyword field, comma-separated entry, Enter commits + returns
   to the grid. Batch-apply perf target: picks-scale (hundreds), not
@@ -1353,6 +1394,34 @@ the user confirms, all cheap to change):**
       opens a native folder dialog and `FASTCULL_DRIVE` has no copy action
       (QE G2). It is covered only by sharing the bottom-anchored band with
       the `×N` burst badge, which IS rendered on screen by a real fixture.
+- [x] **Focus continuity (issues #41/#42)**: driven through REAL key and
+      pointer dispatch (`key:`/`click.` — the nav tokens bypass focus and
+      cannot see this class), every bug-strand test red-run-verified
+      against the pre-fix build. Panel close from the menu keeps the
+      keyboard at 1:1 (`panel_close_from_the_menu_at_one_to_one_keeps_
+      the_keyboard` — the user's live hit) and in the grid; a modal over
+      a focused field owns the keyboard and writes NOTHING — no sidecar
+      on disk, revert never armed (`modal_over_a_focused_field_owns_the_
+      keyboard_and_writes_nothing`); a session swap mid-edit discards
+      and keeps the keyboard, both for a destroyed field editor and for
+      the surviving keyword editor — the latter pins the cross-session
+      write the fix's first cut produced (`session_swap_mid_keyword_
+      edit_never_writes_into_the_new_session`); Esc over stacked modals
+      closes the topmost first with the copy dialog's plan surviving
+      verbatim (`esc_over_stacked_modals_closes_the_topmost_first`); a
+      1:1 loupe click claims the keyboard (`one_to_one_click_claims_the_
+      keyboard`). Clean paths guarded: menu activation with keys
+      focused, the G4 Enter commit (which also pins the edit-generation
+      stamping — an init-time focus gain fires no `changed has-focus`,
+      and an unstamped editor once silently discarded committable text),
+      the copy-dialog Esc lifecycle, and the filter-bar toggle mid-edit
+      (menu-open is a G7 click-away exit: the text commits). Recorded
+      limitation: the menu-click tests are calibrated for the Linux
+      runners' font metrics and SKIP on Windows — the focus machinery is
+      platform-independent Slint core, and every non-menu strand still
+      runs there; each menu test asserts an intermediate state that
+      fails loudly if a click misses, so font drift cannot make one pass
+      vacuously.
 - [ ] Manual acceptance (per release): 5,000-file A1 folder (a bad evening, per
       persona review) scrolls at 60 fps after thumbs load; pick→auto-advance→pick
       loop in loupe has no perceived latency.

@@ -2459,3 +2459,680 @@ fn provisional_order_flip_rearms_after_an_in_app_swap() {
          expected `a_late.ARW (2/2)`, got: {status}"
     );
 }
+
+// ---------------------------------------------------------------------------
+// Focus continuity (issues #41/#42): when the focused editor is destroyed
+// or covered, the keyboard must deterministically return to the topmost
+// key scope. These tests drive REAL key and pointer events through the
+// Slint focus system (`key:` / `click.` tokens) — the nav tokens bypass
+// focus entirely and provably cannot see this bug class. Every red-run
+// claim below was verified by running the test against the pre-fix build
+// (the drive-harness commit without the fix).
+// ---------------------------------------------------------------------------
+
+/// The QEDUMP trace line for a `dump.<label>` drive action.
+fn qedump<'a>(stderr: &'a str, label: &str) -> &'a str {
+    let tag = format!("QEDUMP {label} ");
+    stderr
+        .lines()
+        .find(|l| l.contains(&tag))
+        .unwrap_or_else(|| panic!("no `dump.{label}` trace in stderr:\n{stderr}"))
+}
+
+/// The menu-path tests click the in-window MenuBar at fixed logical
+/// coordinates (File 22, View 72, Help 115 in the bar; items on a 32 px
+/// grid from y=61). Item geometry follows the platform's font metrics;
+/// these coordinates are calibrated for the Linux runners (DejaVu Sans).
+/// The focus machinery under test is platform-independent Slint core, and
+/// every non-menu strand still runs on Windows. Each menu test asserts an
+/// intermediate state that FAILS LOUDLY if a click missed its target, so
+/// a font drift can never make one pass vacuously.
+fn menu_clicks_are_calibrated() -> bool {
+    !cfg!(windows)
+}
+
+/// Issue #41 D1, the user's live hit, at 1:1 (priority repro — RUN12):
+/// with the keyword field focused (K), closing the IPTC panel via
+/// View > IPTC Panel destroys the focused editor; the menu's own focus
+/// restore then targets a dead element and the keyboard is stranded with
+/// NO discoverable recovery at 1:1. RED pre-fix: keysfocus=false after
+/// the close, and the `-` that should drop 1:1 back to fit is dead.
+#[test]
+fn panel_close_from_the_menu_at_one_to_one_keeps_the_keyboard() {
+    if !has_display() || !menu_clicks_are_calibrated() {
+        eprintln!("skipped: no display or uncalibrated menu geometry");
+        return;
+    }
+    let _s = serial();
+    let dir = out_dir().join("focus-d1-11");
+    std::fs::create_dir_all(&dir).unwrap();
+    place_fixture(
+        &raws_dir().join("A1_full_compressed.ARW"),
+        &dir.join("one.ARW"),
+    );
+    let out = out_dir().join("focus-d1-11.jpg");
+    let stderr = shoot_env_stderr(
+        &[dir.to_str().unwrap(), "--start-11"],
+        &[
+            ("FASTCULL_TRACE", "1"),
+            (
+                "FASTCULL_DRIVE",
+                "3500:key:k;4000:dump.k;4400:click.72,19;4800:click.128,125;\
+                 5200:dump.closed;5400:key:g;5800:dump.end",
+            ),
+        ],
+        &out,
+    );
+    // The K really landed in the field (anti-vacuity: panel open and the
+    // keyboard NOT on the main scope — the dangerous state is armed).
+    let k = qedump(&stderr, "k");
+    assert!(
+        k.contains("iptc=true") && k.contains("keysfocus=false") && k.contains("one2one=true"),
+        "K did not open the panel and focus the keyword field at 1:1: {k}"
+    );
+    // The menu clicks really closed the panel (a missed click cannot pass).
+    let closed = qedump(&stderr, "closed");
+    assert!(
+        closed.contains("iptc=false"),
+        "the View > IPTC Panel click missed (panel still open): {closed}"
+    );
+    // THE fix: focus returned to the main key scope…
+    assert!(
+        closed.contains("keysfocus=true"),
+        "keyboard stranded after panel close from the menu (issue #41 D1): {closed}"
+    );
+    // …and the next keystroke works: `G` left the loupe for the grid.
+    // G, not `-`: a `-` from 1:1 legitimately lands on an intermediate
+    // ladder rung once the full-res factor is resolved (release builds
+    // resolve it before the key fires; debug builds may not), so its
+    // outcome is profile-dependent — G exits to the grid in every state.
+    let end = qedump(&stderr, "end");
+    assert!(
+        end.contains("one2one=false") && end.contains("zoom=1"),
+        "the `G` after the panel close was dead — still stuck in the loupe: {end}"
+    );
+}
+
+/// Issue #41 D1, grid variant (RUN6): same close-from-menu strand at grid
+/// zoom. RED pre-fix: keysfocus=false and the `+` is dead (zoom stays 1).
+#[test]
+fn panel_close_from_the_menu_keeps_the_keyboard_in_the_grid() {
+    if !has_display() || !menu_clicks_are_calibrated() {
+        eprintln!("skipped: no display or uncalibrated menu geometry");
+        return;
+    }
+    let _s = serial();
+    let out = out_dir().join("focus-d1-grid.jpg");
+    let stderr = shoot_env_stderr(
+        &["--synthetic", "24"],
+        &[
+            ("FASTCULL_TRACE", "1"),
+            (
+                "FASTCULL_DRIVE",
+                "1600:key:k;2000:dump.k;2400:click.72,19;2800:click.128,125;\
+                 3200:dump.closed;3400:key:+;3700:dump.end",
+            ),
+        ],
+        &out,
+    );
+    let k = qedump(&stderr, "k");
+    assert!(
+        k.contains("iptc=true") && k.contains("keysfocus=false"),
+        "K did not open the panel and focus the keyword field: {k}"
+    );
+    let closed = qedump(&stderr, "closed");
+    assert!(
+        closed.contains("iptc=false"),
+        "the View > IPTC Panel click missed (panel still open): {closed}"
+    );
+    assert!(
+        closed.contains("keysfocus=true"),
+        "keyboard stranded after panel close from the menu (issue #41 D1): {closed}"
+    );
+    let end = qedump(&stderr, "end");
+    assert!(
+        end.contains("zoom=2"),
+        "the `+` after the panel close was dead — zoom never moved: {end}"
+    );
+}
+
+/// Issue #41 D2, the payload strand (RUN11): opening Help > About while a
+/// field owns the keyboard used to leave the modal un-dismissable (the
+/// menu's focus restore overrode the modal's keyboard steal), with every
+/// keystroke landing invisibly in the field behind the scrim — and
+/// committable as metadata. RED pre-fix: keysfocus=false with About up,
+/// and the Esc never closes it. The metadata assertion is on DISK: the
+/// blind-typed text must not become a keyword — no sidecar may exist at
+/// exit, and the revert slot must never arm.
+#[test]
+fn modal_over_a_focused_field_owns_the_keyboard_and_writes_nothing() {
+    if !has_display() || !menu_clicks_are_calibrated() {
+        eprintln!("skipped: no display or uncalibrated menu geometry");
+        return;
+    }
+    let _s = serial();
+    let dir = out_dir().join("focus-d2");
+    std::fs::create_dir_all(&dir).unwrap();
+    place_fixture(
+        &raws_dir().join("A1_full_compressed.ARW"),
+        &dir.join("one.ARW"),
+    );
+    let out = out_dir().join("focus-d2.jpg");
+    let stderr = shoot_env_stderr(
+        &[dir.to_str().unwrap()],
+        &[
+            ("FASTCULL_TRACE", "1"),
+            (
+                "FASTCULL_DRIVE",
+                "2500:key:k;3000:click.115,19;3400:click.180,93;3800:dump.about;\
+                 4000:key:b;4100:key:a;4200:key:d;4400:key:escape;4800:dump.esc;\
+                 5000:key:+;5300:dump.end",
+            ),
+        ],
+        &out,
+    );
+    let about = qedump(&stderr, "about");
+    assert!(
+        about.contains("about=true"),
+        "the Help > About click missed (dialog never opened): {about}"
+    );
+    // THE fix: the modal's keyboard steal survived the menu focus restore.
+    assert!(
+        about.contains("keysfocus=true"),
+        "a hidden field still owns the keyboard behind the About scrim \
+         (issue #41 D2): {about}"
+    );
+    // Esc closed the modal (pre-fix it was un-dismissable)…
+    let esc = qedump(&stderr, "esc");
+    assert!(
+        esc.contains("about=false"),
+        "Esc did not close About — the modal was stuck (issue #41 D2): {esc}"
+    );
+    // …the keyboard lives…
+    let end = qedump(&stderr, "end");
+    assert!(
+        end.contains("zoom=2"),
+        "the `+` after the modal closed was dead: {end}"
+    );
+    // …and NOTHING was written: the blind-typed \"bad\" never became
+    // metadata. Revert never armed, and no sidecar exists on disk.
+    assert!(
+        end.contains("revert=\"\""),
+        "a batch mutation armed the revert slot — blind typing reached \
+         the metadata path: {end}"
+    );
+    let sidecars: Vec<_> = std::fs::read_dir(&dir)
+        .unwrap()
+        .flatten()
+        .filter(|e| e.path().extension().is_some_and(|x| x == "xmp"))
+        .collect();
+    assert!(
+        sidecars.is_empty(),
+        "blind typing behind the About scrim produced a sidecar write: {sidecars:?}"
+    );
+}
+
+/// Issue #41 D3 (RUN8): a session swap while a panel FIELD owns the
+/// keyboard rebuilds the field rows, destroying the focused editor. RED
+/// pre-fix: the keyboard is dead on the fresh session (keysfocus=false,
+/// `+` inert). The mid-edit text is DISCARDED (user decision: no
+/// commit-on-destroy) — asserted on disk: no sidecar in either folder.
+#[test]
+fn session_swap_mid_field_edit_discards_and_keeps_the_keyboard() {
+    if !has_display() {
+        eprintln!("screenshot smoke skipped: no display server");
+        return;
+    }
+    let _s = serial();
+    let dir_a = out_dir().join("focus-d3-a");
+    let dir_b = out_dir().join("focus-d3-b");
+    std::fs::create_dir_all(&dir_a).unwrap();
+    std::fs::create_dir_all(&dir_b).unwrap();
+    place_fixture(
+        &raws_dir().join("A1_full_compressed.ARW"),
+        &dir_a.join("one.ARW"),
+    );
+    place_fixture(
+        &raws_dir().join("A1_full_compressed.ARW"),
+        &dir_b.join("two.ARW"),
+    );
+    let out = out_dir().join("focus-d3.jpg");
+    // resize first: the Title field is clicked at fixed coordinates
+    // inside the right-docked panel, so the window size must be pinned.
+    let drive = format!(
+        "150:resize:1200x800;2500:key:i;3000:click.1050,177;3400:key:w;3500:key:i;\
+         3600:key:p;4000:open:{};5200:dump.swapped;5400:key:+;5800:dump.end",
+        dir_b.display()
+    );
+    let stderr = shoot_env_stderr(
+        &[dir_a.to_str().unwrap()],
+        &[("FASTCULL_TRACE", "1"), ("FASTCULL_DRIVE", &drive)],
+        &out,
+    );
+    // The swap really happened (anti-vacuity).
+    let swapped = qedump(&stderr, "swapped");
+    assert!(
+        swapped.contains("two.ARW"),
+        "the open: swap never landed: {swapped}"
+    );
+    // THE fix: the first keystroke on the fresh session is alive.
+    assert!(
+        swapped.contains("keysfocus=true"),
+        "keyboard stranded after a session swap mid-edit (issue #41 D3): {swapped}"
+    );
+    let end = qedump(&stderr, "end");
+    assert!(
+        end.contains("zoom=2"),
+        "the `+` after the swap was dead: {end}"
+    );
+    // Discard-on-destroy: the half-typed \"wip\" went NOWHERE.
+    for dir in [&dir_a, &dir_b] {
+        let sidecars: Vec<_> = std::fs::read_dir(dir)
+            .unwrap()
+            .flatten()
+            .filter(|e| e.path().extension().is_some_and(|x| x == "xmp"))
+            .collect();
+        assert!(
+            sidecars.is_empty(),
+            "a swap mid-edit committed the abandoned text (issue #41 D3 \
+             discard rule): {sidecars:?}"
+        );
+    }
+    assert!(
+        end.contains("revert=\"\""),
+        "a swap mid-edit armed the revert slot — the abandoned text was \
+         committed somewhere: {end}"
+    );
+}
+
+/// Issue #41 D3, keyword-editor variant: the keyword field SURVIVES a
+/// swap (it is not a per-row conditional), so the focus steal that
+/// returns the keyboard blurs a still-alive editor holding the OLD
+/// session's text. The session-generation stamp must discard it — the
+/// first fix cut committed \"wip\" against the NEW session's image (a
+/// sidecar appeared in folder B), which is the exact cross-session write
+/// this test pins. RED pre-fix: keysfocus=false after the swap.
+#[test]
+fn session_swap_mid_keyword_edit_never_writes_into_the_new_session() {
+    if !has_display() {
+        eprintln!("screenshot smoke skipped: no display server");
+        return;
+    }
+    let _s = serial();
+    let dir_a = out_dir().join("focus-d3kw-a");
+    let dir_b = out_dir().join("focus-d3kw-b");
+    std::fs::create_dir_all(&dir_a).unwrap();
+    std::fs::create_dir_all(&dir_b).unwrap();
+    place_fixture(
+        &raws_dir().join("A1_full_compressed.ARW"),
+        &dir_a.join("one.ARW"),
+    );
+    place_fixture(
+        &raws_dir().join("A1_full_compressed.ARW"),
+        &dir_b.join("two.ARW"),
+    );
+    let out = out_dir().join("focus-d3kw.jpg");
+    let drive = format!(
+        "2500:key:k;3000:key:w;3100:key:i;3200:key:p;4000:open:{};\
+         5200:dump.swapped;5400:key:+;5800:dump.end",
+        dir_b.display()
+    );
+    let stderr = shoot_env_stderr(
+        &[dir_a.to_str().unwrap()],
+        &[("FASTCULL_TRACE", "1"), ("FASTCULL_DRIVE", &drive)],
+        &out,
+    );
+    let swapped = qedump(&stderr, "swapped");
+    assert!(
+        swapped.contains("two.ARW"),
+        "the open: swap never landed: {swapped}"
+    );
+    assert!(
+        swapped.contains("keysfocus=true"),
+        "keyboard stranded after a swap mid-keyword-edit (issue #41 D3): {swapped}"
+    );
+    assert!(
+        qedump(&stderr, "end").contains("zoom=2"),
+        "the `+` after the swap was dead:\n{stderr}"
+    );
+    // The old session's half-typed keyword must not land ANYWHERE —
+    // most of all not on the new session's images.
+    for (dir, side) in [(&dir_a, "old"), (&dir_b, "NEW")] {
+        let sidecars: Vec<_> = std::fs::read_dir(dir)
+            .unwrap()
+            .flatten()
+            .filter(|e| e.path().extension().is_some_and(|x| x == "xmp"))
+            .collect();
+        assert!(
+            sidecars.is_empty(),
+            "the abandoned keyword text was committed into the {side} \
+             session (issue #41 D3 discard rule): {sidecars:?}"
+        );
+    }
+}
+
+/// Issue #42: Esc over stacked modals must close the TOPMOST one. With
+/// About opened over the live Copy Picks dialog, the first Esc used to
+/// act on the HIDDEN dialog — discarding its plan state while About
+/// stayed up. RED pre-fix: after the first Esc, copy=false + about=true.
+/// Post-fix: About closes first, the dialog and its plan survive
+/// untouched, the second Esc closes the dialog, and marks stay contained
+/// throughout (the driven N never rejects). Uses the `about` toggle (the
+/// shipped modal-open path) rather than menu clicks, so it runs on both
+/// platforms; the menu-restore machinery has its own tests above.
+#[test]
+fn esc_over_stacked_modals_closes_the_topmost_first() {
+    if !has_display() {
+        eprintln!("screenshot smoke skipped: no display server");
+        return;
+    }
+    let _s = serial();
+    let out = out_dir().join("esc-topmost.jpg");
+    let stderr = shoot_env_stderr(
+        &["--synthetic", "24"],
+        &[
+            ("FASTCULL_TRACE", "1"),
+            (
+                "FASTCULL_DRIVE",
+                "1600:key:y;2000:key:ctrl+e;2400:dump.opened;2700:about;\
+                 3100:key:n;3400:key:escape;3800:dump.esc1;4000:key:escape;\
+                 4400:dump.esc2;4600:key:+;4900:dump.end",
+            ),
+        ],
+        &out,
+    );
+    // The dialog opened with a real Ctrl+E and owns the keyboard.
+    let opened = qedump(&stderr, "opened");
+    assert!(
+        opened.contains("copy=true") && opened.contains("keysfocus=false"),
+        "Ctrl+E did not open the copy dialog with its own key scope: {opened}"
+    );
+    // The plan summary as it stood when the dialog opened ("N picked
+    // images…"), to be compared verbatim after the first Esc.
+    fn summary_of(dump: &str) -> &str {
+        dump.split(" summary=")
+            .nth(1)
+            .and_then(|s| s.split(" template=").next())
+            .expect("no summary field in dump")
+    }
+    let plan = summary_of(opened).to_string();
+    assert!(
+        plan.contains("picked"),
+        "the dialog opened without a plan summary: {opened}"
+    );
+    // First Esc: About (topmost) closes, the dialog SURVIVES with its
+    // plan intact, and the N pressed while both were up marked nothing.
+    let esc1 = qedump(&stderr, "esc1");
+    assert!(
+        esc1.contains("about=false"),
+        "the first Esc did not close About: {esc1}"
+    );
+    assert!(
+        esc1.contains("copy=true"),
+        "the first Esc closed the HIDDEN copy dialog under About \
+         (issue #42): {esc1}"
+    );
+    assert_eq!(
+        summary_of(esc1),
+        plan,
+        "the copy dialog's plan state did not survive the first Esc: {esc1}"
+    );
+    assert!(
+        esc1.contains("★1 ✕0"),
+        "a driven N leaked through the stacked modals and marked a photo: {esc1}"
+    );
+    // Second Esc: the dialog itself closes and the keyboard returns.
+    let esc2 = qedump(&stderr, "esc2");
+    assert!(
+        esc2.contains("copy=false") && esc2.contains("keysfocus=true"),
+        "the second Esc did not close the copy dialog and restore the \
+         keyboard: {esc2}"
+    );
+    assert!(
+        qedump(&stderr, "end").contains("zoom=2"),
+        "the `+` after the dialogs closed was dead:\n{stderr}"
+    );
+}
+
+/// Issue #41 defense in depth: at 1:1 the zoomed-loupe click surface now
+/// claims the keyboard exactly like the grid-cell and fit surfaces — it
+/// was the ONE click surface that did not, which is why the stranded
+/// keyboard had no discoverable recovery at 1:1. RED pre-fix:
+/// keysfocus=false after the click. Additive: the click still re-centers
+/// (user decision — click semantics unchanged).
+#[test]
+fn one_to_one_click_claims_the_keyboard() {
+    if !has_display() {
+        eprintln!("screenshot smoke skipped: no display server");
+        return;
+    }
+    let _s = serial();
+    let dir = out_dir().join("focus-loupeclick");
+    std::fs::create_dir_all(&dir).unwrap();
+    place_fixture(
+        &raws_dir().join("A1_full_compressed.ARW"),
+        &dir.join("one.ARW"),
+    );
+    let out = out_dir().join("focus-loupeclick.jpg");
+    let stderr = shoot_env_stderr(
+        &[dir.to_str().unwrap(), "--start-11"],
+        &[
+            ("FASTCULL_TRACE", "1"),
+            (
+                "FASTCULL_DRIVE",
+                "3500:key:k;4000:dump.k;4400:click.400,400;4800:dump.clicked;\
+                 5000:key:g;5400:dump.end",
+            ),
+        ],
+        &out,
+    );
+    // K parked the keyboard in the keyword field (the stranded-adjacent
+    // state), all at 1:1.
+    let k = qedump(&stderr, "k");
+    assert!(
+        k.contains("keysfocus=false") && k.contains("one2one=true") && k.contains("iptc=true"),
+        "K did not focus the keyword field at 1:1: {k}"
+    );
+    // The click on the zoomed image claimed the keyboard back…
+    let clicked = qedump(&stderr, "clicked");
+    assert!(
+        clicked.contains("keysfocus=true") && clicked.contains("one2one=true"),
+        "a 1:1 loupe click did not claim the keyboard (issue #41 defense \
+         in depth): {clicked}"
+    );
+    // …and the next keystroke works: `G` exits to the grid (G, not `-`,
+    // for the profile-independence reason in the panel-close 1:1 test).
+    let end = qedump(&stderr, "end");
+    assert!(
+        end.contains("one2one=false") && end.contains("zoom=1"),
+        "the `G` after the loupe click was dead: {end}"
+    );
+}
+
+/// Clean-path guard (RUN4/5): menu activation with the main key scope
+/// focused must keep working exactly as before the focus-continuity fix
+/// — the menu's own restore hands the keyboard back and the action fires.
+#[test]
+fn menu_activation_with_keys_focused_stays_clean() {
+    if !has_display() || !menu_clicks_are_calibrated() {
+        eprintln!("skipped: no display or uncalibrated menu geometry");
+        return;
+    }
+    let _s = serial();
+    let out = out_dir().join("focus-menu-clean.jpg");
+    let stderr = shoot_env_stderr(
+        &["--synthetic", "24"],
+        &[
+            ("FASTCULL_TRACE", "1"),
+            (
+                "FASTCULL_DRIVE",
+                "1600:click.72,19;2000:click.128,61;2400:dump.zoomed;\
+                 2600:key:+;2900:dump.end",
+            ),
+        ],
+        &out,
+    );
+    let zoomed = qedump(&stderr, "zoomed");
+    assert!(
+        zoomed.contains("zoom=2"),
+        "View > Zoom In via the menu did not fire (missed click?): {zoomed}"
+    );
+    assert!(
+        zoomed.contains("keysfocus=true"),
+        "menu activation stole the keyboard from the main scope: {zoomed}"
+    );
+    assert!(
+        qedump(&stderr, "end").contains("zoom=3"),
+        "the `+` after the menu action was dead:\n{stderr}"
+    );
+}
+
+/// Clean-path guard (G4 / RUN16a): K → type → Enter still commits the
+/// keyword, arms revert, writes the sidecar, and returns the keyboard to
+/// the grid. This also pins the edit-generation stamping: the first fix
+/// cut silently DISCARDED text whose editor was focused via the panel's
+/// init path (the `changed has-focus` callback does not fire for an
+/// init-time gain), which turned this commit into a no-op.
+#[test]
+fn keyword_enter_commit_still_writes_and_returns_focus() {
+    if !has_display() {
+        eprintln!("screenshot smoke skipped: no display server");
+        return;
+    }
+    let _s = serial();
+    let dir = out_dir().join("focus-g4");
+    std::fs::create_dir_all(&dir).unwrap();
+    place_fixture(
+        &raws_dir().join("A1_full_compressed.ARW"),
+        &dir.join("one.ARW"),
+    );
+    let out = out_dir().join("focus-g4.jpg");
+    let stderr = shoot_env_stderr(
+        &[dir.to_str().unwrap()],
+        &[
+            ("FASTCULL_TRACE", "1"),
+            (
+                "FASTCULL_DRIVE",
+                "2500:key:k;3000:key:o;3100:key:k;3300:key:return;\
+                 3700:dump.committed;3900:key:+;4200:dump.end",
+            ),
+        ],
+        &out,
+    );
+    let committed = qedump(&stderr, "committed");
+    assert!(
+        committed.contains("keysfocus=true"),
+        "Enter did not return the keyboard to the grid (G4): {committed}"
+    );
+    assert!(
+        committed.contains("revert=\"Revert: keywords on 1 image(s)\""),
+        "the keyword commit never armed the revert slot — the typed text \
+         was lost (G4): {committed}"
+    );
+    assert!(
+        qedump(&stderr, "end").contains("zoom=2"),
+        "the `+` after the commit was dead:\n{stderr}"
+    );
+    let sidecar = dir.join("one.ARW.xmp");
+    let xmp = std::fs::read_to_string(&sidecar)
+        .unwrap_or_else(|e| panic!("no sidecar written for the committed keyword: {e}"));
+    assert!(
+        xmp.contains(">ok<"),
+        "the sidecar does not contain the committed keyword: {xmp}"
+    );
+}
+
+/// Clean-path guard (RUN9): the copy dialog lifecycle — a real Ctrl+E
+/// opens it with its own key scope, a real Esc closes it and the
+/// keyboard returns to the grid.
+#[test]
+fn copy_dialog_esc_returns_the_keyboard() {
+    if !has_display() {
+        eprintln!("screenshot smoke skipped: no display server");
+        return;
+    }
+    let _s = serial();
+    let out = out_dir().join("focus-copy-esc.jpg");
+    let stderr = shoot_env_stderr(
+        &["--synthetic", "24"],
+        &[
+            ("FASTCULL_TRACE", "1"),
+            (
+                "FASTCULL_DRIVE",
+                "1600:key:ctrl+e;2000:dump.opened;2200:key:escape;\
+                 2600:dump.closed;2800:key:+;3100:dump.end",
+            ),
+        ],
+        &out,
+    );
+    let opened = qedump(&stderr, "opened");
+    assert!(
+        opened.contains("copy=true") && opened.contains("keysfocus=false"),
+        "Ctrl+E did not open the copy dialog with its own key scope: {opened}"
+    );
+    let closed = qedump(&stderr, "closed");
+    assert!(
+        closed.contains("copy=false") && closed.contains("keysfocus=true"),
+        "Esc did not close the dialog and hand the keyboard back: {closed}"
+    );
+    assert!(
+        qedump(&stderr, "end").contains("zoom=2"),
+        "the `+` after the dialog closed was dead:\n{stderr}"
+    );
+}
+
+/// Clean-path guard (RUN17): toggling the filter bar from the menu while
+/// the keyword field holds half-typed text. Opening the menu is a G7
+/// click-away exit — the text commits (revert arms) — and the menu's
+/// restore puts the keyboard back in the field; Enter then no-ops and
+/// returns to the grid. This is the guard that catches a discard rule
+/// grown too greedy (the fix must never eat a same-session commit).
+#[test]
+fn filter_bar_toggle_mid_edit_commits_and_keeps_the_field_coherent() {
+    if !has_display() || !menu_clicks_are_calibrated() {
+        eprintln!("skipped: no display or uncalibrated menu geometry");
+        return;
+    }
+    let _s = serial();
+    let dir = out_dir().join("focus-run17");
+    std::fs::create_dir_all(&dir).unwrap();
+    place_fixture(
+        &raws_dir().join("A1_full_compressed.ARW"),
+        &dir.join("one.ARW"),
+    );
+    let out = out_dir().join("focus-run17.jpg");
+    let stderr = shoot_env_stderr(
+        &[dir.to_str().unwrap()],
+        &[
+            ("FASTCULL_TRACE", "1"),
+            (
+                "FASTCULL_DRIVE",
+                "2500:key:k;3000:key:w;3300:click.72,19;3700:click.128,157;\
+                 4100:dump.toggled;4300:key:return;4700:dump.after;\
+                 4900:key:+;5200:dump.end",
+            ),
+        ],
+        &out,
+    );
+    let toggled = qedump(&stderr, "toggled");
+    // The half-typed keyword committed on the menu-open exit (G7), so
+    // the revert slot is armed — NOT discarded, NOT lost.
+    assert!(
+        toggled.contains("revert=\"Revert: keywords on 1 image(s)\""),
+        "the mid-edit keyword was lost instead of committing on the \
+         menu-open exit (G7): {toggled}"
+    );
+    // The menu restore put the keyboard back in the still-alive field.
+    assert!(
+        toggled.contains("keysfocus=false"),
+        "the field lost the keyboard across the filter-bar toggle: {toggled}"
+    );
+    assert!(
+        qedump(&stderr, "after").contains("keysfocus=true"),
+        "Enter did not return the keyboard to the grid:\n{stderr}"
+    );
+    assert!(
+        qedump(&stderr, "end").contains("zoom=2"),
+        "the `+` after the toggle was dead:\n{stderr}"
+    );
+}

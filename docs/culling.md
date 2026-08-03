@@ -51,7 +51,13 @@ the same version. Together they say exactly which code you were running
 and how old it is. A tagged release just reads `X.Y.Z`.
 While About or the shortcuts popup is open, keys are swallowed (a
 stray `N` will never reject the photo underneath); `Esc` or a click
-outside closes them.
+outside closes them. `Esc` always closes the thing on top: if a popup
+is open over the Copy Picks dialog, the first `Esc` closes the popup
+and the dialog — destination, plan and all — survives underneath.
+The keyboard itself never dies: closing the IPTC panel, opening one of
+these popups, or switching folders while you are typing in a panel
+field always hands the keys back — to the popup while it is up, to the
+grid once everything is closed.
 
 ## The mouse
 
