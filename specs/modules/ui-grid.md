@@ -1403,6 +1403,32 @@ Documented because they ship in release builds (validator finding):
   actions run and captures a half-driven state — the same script must
   mean the same shot in every profile (found 2026-07-27 when
   settle-then-pin drive schedules moved past the 1.5 s floor).
+  `key:<k>` / `key:ctrl+<k>` (issue #41 sweep, promoted from QE
+  instrumentation) dispatches a REAL key press+release through
+  `slint::Window::dispatch_event` — through the true focus system, which
+  the nav tokens bypass (they call `handle_nav` directly, so they are
+  blind to the whole stranded-keyboard class: only a dispatched event can
+  land on no element). Named keys: `escape`, `return`, `tab`,
+  `left`/`right`/`up`/`down`; anything else is sent as literal text
+  (`key:k` types k). `ctrl+` synthesizes a held Control around the press.
+  `click.X,Y` dispatches a real pointer move+press+release at
+  window-logical coordinates, hit-tested by Slint — this makes the
+  in-window menu bar drivable headlessly, including the menu's own focus
+  save/restore machinery, plus panel fields and modal scrims. (Spelled
+  with a dot: the visual break from the step's `MS:ACTION` colon keeps
+  scripts readable.)
+  `dump.<label>` traces the focus/surface state for test assertions:
+  `keysfocus` (the main key scope's real `has-focus`, via the
+  `dbg-keys-focus` debug property), loupe/zoom state, panel and modal
+  visibility, the copy dialog's visibility and summary, the revert-slot
+  label, and the status line. Keyboard focus was otherwise INVISIBLE to
+  every headless run — a stranded keyboard could not even be asserted.
+- `FASTCULL_NO_CONFIG=1`: makes `ui.toml` (the remembered copy
+  destination/template) unreachable for both load and save — what
+  `FASTCULL_NO_CACHE` does for the cache (issue #13 gap, surfaced by the
+  issue #41 sweep: a driven copy dialog displayed the user's real
+  remembered destination). The screenshot test harness sets both
+  unconditionally.
 - `FASTCULL_KITCHEN_COOK_MS=N`: hold every kitchen cook for N ms before the
   pixel work (issue #34; same family as `FASTCULL_MAX_READERS`). Pacing
   knob for the `open:PATH` session-swap test, which must catch the kitchen

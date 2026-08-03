@@ -171,6 +171,11 @@ export component MainWindow inherits Window {
             keys.focus();
         }
     }
+    // Debug facility (issue #41, documented in ui-grid.md): the main key
+    // scope's REAL focus state, readable from the drive harness (`dump.`
+    // token). Keyboard focus was otherwise invisible to headless runs —
+    // a stranded keyboard could not be asserted, so it shipped.
+    out property <bool> dbg-keys-focus: keys.has-focus;
     // Scroll offset (negative Flickable viewport-y); Rust reads and writes it.
     in-out property <length> vp-y: 0px;
     // Geometry the Rust layout math needs (the grid area = flickable size).
