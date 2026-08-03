@@ -1,3 +1,9 @@
+// GUI subsystem on Windows (issue #40, specs/01-architecture.md): without
+// this, a double-clicked fastcull-app.exe drags a console window along, and
+// closing that console kills the app (CTRL_CLOSE_EVENT). No-op on Linux.
+// fastcull-cli deliberately stays a console-subsystem terminal tool.
+#![windows_subsystem = "windows"]
+
 //! FastCull desktop application: thin Slint bridge over `fastcull-core`
 //! (specs/modules/ui-grid.md). All layout math lives in `fastcull_core::grid`;
 //! this crate only moves data between the engine and the declarative UI.
@@ -509,7 +515,33 @@ fn open_folder_at(win: &MainWindow, state: &Rc<RefCell<AppState>>, folder: &std:
     }
 }
 
+/// Reconnect stderr/stdout to the parent's console (issue #40). A GUI-
+/// subsystem process launched from cmd/PowerShell WITHOUT redirection starts
+/// with NULL std handles, so every `eprintln!` — the FASTCULL_TRACE marks the
+/// FAQ tells bug reporters to capture, usage errors, the drive harness —
+/// would silently vanish. Attaching to the parent's console makes Windows
+/// replace NULL std handles with console handles (GetStdHandle docs,
+/// "Attach/detach behavior"), and Rust's std re-queries the handle on every
+/// write rather than caching it, so no further rebinding is needed.
+/// Redirected handles (`2> trace.txt`, test pipes) arrive via
+/// STARTF_USESTDHANDLES and are never replaced. Failure (no parent console —
+/// the Explorer double-click) is the normal GUI launch: ignore it.
+#[cfg(windows)]
+fn attach_parent_console() {
+    use windows_sys::Win32::System::Console::{AttachConsole, ATTACH_PARENT_PROCESS};
+    // SAFETY: no pointers, no preconditions; the call either attaches the
+    // process to its parent's console or fails harmlessly.
+    unsafe {
+        AttachConsole(ATTACH_PARENT_PROCESS);
+    }
+}
+
 fn main() {
+    // Must run before ANY output so the first trace/usage line already has a
+    // console to land on.
+    #[cfg(windows)]
+    attach_parent_console();
+
     let mut args: Vec<String> = std::env::args().skip(1).collect();
     // --screenshot <out.png>: render, snapshot after a settle delay, save,
     // exit 0. The screenshot smoke-test hook (ui-grid.md acceptance).

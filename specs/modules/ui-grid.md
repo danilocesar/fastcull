@@ -1049,7 +1049,12 @@ usage to a terminal nobody sees and exiting is a broken first run). The
 "No folder open" message is distinct from the "No images" message of a
 folder that opened empty (`session_open` flag). The CLI usage error
 remains for genuinely malformed invocations (unknown flags, nonexistent
-folder). Screenshot test: `no_args_launch_opens_empty_window`.
+folder). Screenshot test: `no_args_launch_opens_empty_window`. On Windows
+the app is a GUI-subsystem exe (issue #40, 01-architecture.md), so those
+usage errors are by design invisible on a double-click launch — which is
+exactly why the no-argument path must open a window instead of printing;
+launched from a terminal, the errors still print via the parent-console
+attach.
 
 Chrome staging (updated with the panel step): IPTC Panel menu item, `I`,
 `K`, Shift+arrows and `Ctrl+A` all landed; the popup lists them live.

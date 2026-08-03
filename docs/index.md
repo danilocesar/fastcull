@@ -24,6 +24,9 @@ double-click `fastcull-app.exe`. The first launch shows a blue
 **"Windows protected your PC"** dialog — that is SmartScreen reacting to
 an unsigned executable, not a virus warning. Click **More info**, then
 **Run anyway**; Windows remembers the choice for that copy of the file.
+Double-clicking opens just the FastCull window — no console window
+appears alongside it (releases up to 0.8.0 dragged one along, and
+closing it killed the app).
 
 ## Can I trust it with my photos?
 
