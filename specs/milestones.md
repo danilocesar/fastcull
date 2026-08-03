@@ -94,6 +94,57 @@ faq); QE executed the full DoD path from the docs against the release
 binary. Release-note debt RESOLVED with v0.3.0: the index install note was
 removed and the culling callout pinned to "Changed in 0.3.0". The docs-follow-specs binding lives in CLAUDE.md.
 
+## v0.8.0 (released 2026-08-02)
+
+Everything since v0.7.0 — two performance overhauls, a hardening pass,
+and the truth-telling that closed #27.
+
+The headline is the **texture kitchen** (#30, the user's requirement
+verbatim: "No decoding should be done on the UI thread"). The
+architecture spec had said it from the start — the M2-era budgeted
+deviations (~32 thumb decodes per refresh, 149 MB full-res copies)
+had been violating it since the beginning. One kitchen worker now owns
+every pixels-to-texture conversion; the UI thread's remaining duty is
+an O(1) buffer wrap, and the old paths are deleted, not bypassed.
+Measured A/B on identical drives: UI stalls during a settled 1:1 walk
+21–24 ms in 4 of 5 runs → **zero in all runs**; held-walk stalls of up
+to 78 ms → zero; stop-to-sharp 677–731 → 627–636 ms. The gate earned
+its keep again: a replace-latest dedupe was cancelling a ring
+neighbour's queued fill (flaky 60 s shutter refusals), and QE's
+mutation campaign found three contracts with no red test — all pinned.
+
+Second, **full-res orientation reworked** (#27): the A1's full-res
+JPEG has zero restart markers, so its ~220 ms Huffman decode is
+strictly serial while seven cores idle — that dead time now pays the
+page faults (decode into a pre-faulted buffer, transpose scratch built
+on a spare thread during decode), and the rotate kernel routes writes
+through exact chunks with the bounds check hoisted. Full-res
+decode+rotate 518 → ~277 ms (three independent witnesses, ordering
+preserved in every round), peak memory unchanged. The
+under-350 ms budget is green on the 8-core laptop for the first time —
+the machine on which #27 declared it unpassable.
+
+Third, **the decoder stops trusting JPEG header claims** (#31). A
+639-byte hostile stream claiming 30000x30000 used to decode as Ok
+while committing 2.64 GB; it is now rejected at 2.3 MB peak by a
+500 MP output cap, and truncated scans (which zune reports as
+*successful* decodes) are detected on the raw bytes and surface as the
+Failed badge instead of a giant mostly-blank frame. Residual accepted
+and documented: a crafted stream with plausible dims, a valid EOI and
+too-little entropy data still decodes as a bounded blank success.
+
+With the budget genuinely green, **#27 closed as a documentation
+fix**: no thresholds moved — the spec now says the truth, that they
+bind on an idle run of the development machine (the 32-thread
+reference hardware retired 2026-07-28 stays as provenance), and the
+measured load/thermal boundary is written down so a red on a busy
+machine gets re-run idle instead of read as a regression.
+
+Also: the drive harness learned `open:PATH` (#34), so the real
+Open Folder session swap — kitchen retarget, marks-flush barrier,
+order-flip re-arm — has its first tests, each proven against a
+mutation that turns it red.
+
 ## v0.7.0 (released 2026-08-02)
 
 Everything since v0.6.0. The headline is the **transit quality model** —
