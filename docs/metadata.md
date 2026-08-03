@@ -41,9 +41,12 @@ anywhere (opening the panel if needed).
 - **Revert last apply** undoes exactly the most recent template apply
   or batch edit — one level, so act on it before the next batch.
 - Typing in a field never triggers shortcuts — `Enter` commits and
-  returns you to the grid; clicking away also commits. (There is no
-  abandon-edit gesture in this version — if you mangled a field,
-  correct it and commit again, or use Revert after an apply.)
+  returns you to the grid; clicking away also commits, and so does
+  opening a menu or one of the Help popups. Closing the panel or
+  opening another folder mid-edit **discards** what you had not yet
+  committed. (There is no abandon-edit gesture in this version — if
+  you mangled a field, correct it and commit again, or use Revert
+  after an apply.)
 
 ## Templates (`templates.toml`)
 

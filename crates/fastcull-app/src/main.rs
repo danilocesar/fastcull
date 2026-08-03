@@ -445,6 +445,34 @@ fn load_folder(state: &Rc<RefCell<AppState>>, folder: &std::path::Path) -> Resul
     Ok(())
 }
 
+/// THE focus-continuity rule (issue #41): whenever the focused editor is
+/// destroyed or covered — IPTC panel close, session swap, a modal opening
+/// over a focused field — keyboard focus must deterministically return to
+/// the topmost surface's key scope, or the keyboard dies (no element has
+/// focus and nothing reclaims it; at 1:1 there is no discoverable
+/// recovery) or, worse, keystrokes land invisibly in a field hidden
+/// behind a modal's scrim and get committed as metadata.
+///
+/// Deferred via a zero-length timer ON PURPOSE: Slint's MenuBar restores
+/// focus to the previously-focused element AFTER the item activation
+/// callback runs, inside the same event dispatch — QE proved a
+/// synchronous `focus-keys()` inside an activation is overridden by that
+/// restore. A timer scheduled during the dispatch cannot fire until the
+/// dispatch (activation + menu close + focus restore) has fully
+/// unwound, so the queued claim always lands last. The Slint side adds a
+/// synchronous belt-and-braces bounce on the editors themselves (a focus
+/// gain that arrives behind a modal is handed straight to the modal's
+/// scope) so the dangerous surfaces never hold the keyboard even
+/// mid-dispatch.
+fn refocus_topmost_deferred(win: &MainWindow) {
+    let win = win.as_weak();
+    slint::Timer::single_shot(std::time::Duration::ZERO, move || {
+        if let Some(win) = win.upgrade() {
+            win.invoke_focus_keys();
+        }
+    });
+}
+
 /// The Open Folder ACTION — everything the menu entry does after the native
 /// dialog has produced a path: session swap via [`load_folder`], fresh grid
 /// zoom, viewport at the top, error surfaced in the status bar. Shared by
@@ -461,7 +489,18 @@ fn open_folder_at(win: &MainWindow, state: &Rc<RefCell<AppState>>, folder: &std:
             st.last_grid_zoom = 1;
             drop(st);
             win.set_vp_y(0.0);
+            // Invalidate every in-flight edit BEFORE any focus movement
+            // (issue #41 D3): editors stamp this generation on focus
+            // gain, and a blur commit from a stale stamp discards — the
+            // structural guarantee that the old session's half-typed
+            // text can never be committed against the new session's
+            // images (user decision: swap mid-edit discards).
+            win.set_session_gen(win.get_session_gen().wrapping_add(1));
             refresh(win, state);
+            // The swap rebuilt the panel's field rows and dropped any
+            // editor focus; without this claim the first keystroke on
+            // the fresh session is dead.
+            refocus_topmost_deferred(win);
         }
         Err(e) => {
             eprintln!("fastcull: {e}");
@@ -764,6 +803,21 @@ fn main() {
         slint::quit_event_loop().ok();
     });
     {
+        // Help > About / Keyboard Shortcuts: steal the keyboard from any
+        // focused editor now COVERED by the modal (issue #41 D2). The
+        // immediate claim handles the non-menu callers; the deferred one
+        // survives the MenuBar's post-activation focus restore, which
+        // otherwise hands the keys back to the field hidden behind the
+        // scrim — an un-dismissable modal, with every keystroke landing
+        // invisibly in the field and committable as metadata.
+        let win = window.as_weak();
+        window.on_modal_opened(move || {
+            let Some(win) = win.upgrade() else { return };
+            win.invoke_focus_keys();
+            refocus_topmost_deferred(&win);
+        });
+    }
+    {
         let state = Rc::clone(&state);
         let win = window.as_weak();
         window.on_iptc_toggle(move || {
@@ -783,6 +837,16 @@ fn main() {
             // The dock reflows the grid: anchor on the cursor so the
             // viewport doesn't land somewhere new (persona gap 1).
             reveal_cursor(&win, &state);
+            // Closing the panel DESTROYS its editors; if one was focused,
+            // focus lands on no element and the keyboard dies (issue #41
+            // D1 — the user's live hit, via View > IPTC Panel; the menu's
+            // own restore targets the destroyed editor and strands the
+            // keys). The mid-edit text is discarded with the editor (user
+            // decision). Close only: on OPEN the K path may just have
+            // landed focus in the keyword field, which must keep it.
+            if !win.get_iptc_visible() {
+                refocus_topmost_deferred(&win);
+            }
         });
     }
     {
@@ -1578,10 +1642,13 @@ fn main() {
                         v
                     };
                     if visible {
-                        // Same keyboard steal as the menu path
-                        // (validator M1: a focused panel field must not
-                        // keep the keys while the modal covers it).
-                        win.invoke_focus_keys();
+                        // The SHIPPED steal path, same as the menu items
+                        // (issue #41: these toggles used to call a bare
+                        // focus-keys(), replicating the intended menu
+                        // behavior rather than the real one — the
+                        // fidelity trap issue #13 records; menu-restore
+                        // fidelity itself needs the click. token).
+                        win.invoke_modal_opened();
                     }
                     trace_mark(&format!("{key} toggled to {visible}"));
                     return;
@@ -1745,7 +1812,7 @@ fn main() {
                     let st = state.borrow();
                     trace_mark(&format!(
                         "QEDUMP {label} keysfocus={} one2one={} zoom={} iptc={} about={} \
-                         shortcuts={} copy={} summary={:?} revert={:?} status={:?}",
+                         shortcuts={} copy={} summary={:?} template={:?} revert={:?} status={:?}",
                         win.get_dbg_keys_focus(),
                         win.get_one2one(),
                         st.zoom,
@@ -1754,6 +1821,7 @@ fn main() {
                         win.get_shortcuts_visible(),
                         win.get_copy_visible(),
                         win.get_copy_summary().as_str(),
+                        win.get_copy_template().as_str(),
                         win.get_iptc_revert_label().as_str(),
                         win.get_status().as_str(),
                     ));
