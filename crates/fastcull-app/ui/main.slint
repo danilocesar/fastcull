@@ -1016,17 +1016,25 @@ export component MainWindow inherits Window {
                                         // belongs to (#41 D3, see
                                         // session-gen).
                                         self.edit-gen = root.session-gen;
-                                        if (root.about-visible || root.shortcuts-visible) {
+                                        if (root.about-visible || root.shortcuts-visible || root.copy-visible) {
                                             // Focus continuity (#41 D2):
                                             // an editor must never hold
                                             // the keyboard behind a
-                                            // modal's scrim — the menu's
-                                            // post-activation focus
-                                            // restore lands here, and
-                                            // this bounce hands it
-                                            // straight to the modal's
+                                            // covering surface — the
+                                            // menu's post-activation
+                                            // focus restore lands here,
+                                            // and this bounce hands it
+                                            // straight to the covering
                                             // scope, synchronously.
-                                            keys.focus();
+                                            // focus-keys routes: keys
+                                            // for the modals, the copy
+                                            // dialog's own scope when
+                                            // the dialog covers (gate
+                                            // finding: File > Copy
+                                            // Picks over a focused
+                                            // field held only by
+                                            // init-timing luck).
+                                            root.focus-keys();
                                         }
                                     } else if (root.iptc-visible && self.edit-gen == root.session-gen && self.text != row.value) {
                                         // G7: click-away from a half-typed
@@ -1137,12 +1145,12 @@ export component MainWindow inherits Window {
                         if (self.has-focus) {
                             // Session stamp (#41 D3, see session-gen).
                             self.edit-gen = root.session-gen;
-                            if (root.about-visible || root.shortcuts-visible) {
+                            if (root.about-visible || root.shortcuts-visible || root.copy-visible) {
                                 // Focus continuity (#41 D2): bounce a
                                 // focus gain that arrives behind a
-                                // modal's scrim — same rule as the field
-                                // rows above.
-                                keys.focus();
+                                // covering surface — same rule and
+                                // routing as the field rows above.
+                                root.focus-keys();
                             }
                         } else if (root.iptc-visible && self.edit-gen == root.session-gen && self.text != "") {
                             // G7 click-away commits; panel destruction or
