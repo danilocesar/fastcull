@@ -33,6 +33,10 @@ fn shoot_env_stderr(args: &[&str], envs: &[(&str, &str)], out: &Path) -> String 
         .arg("--screenshot")
         .arg(out)
         .env("FASTCULL_NO_CACHE", "1") // never touch the user's real cache
+        // Never read or write the user's real ui.toml either (issue #13
+        // gap, surfaced by the issue #41 sweep): a driven copy dialog
+        // otherwise shows the user's real remembered destination.
+        .env("FASTCULL_NO_CONFIG", "1")
         .stderr(std::process::Stdio::piped());
     for (k, v) in envs {
         cmd.env(k, v);

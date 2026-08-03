@@ -1663,6 +1663,102 @@ fn main() {
                     open_folder_at(&win, &state, std::path::Path::new(path));
                     return;
                 }
+                if let Some(spec) = key.strip_prefix("key:") {
+                    // key:<k> / key:ctrl+<k> — dispatch a REAL key press +
+                    // release through `slint::Window::dispatch_event`, i.e.
+                    // through the true focus system. The nav tokens above
+                    // call handle_nav directly and BYPASS focus entirely,
+                    // which is why the issue #41 class (keyboard stranded
+                    // when a focused editor is destroyed or covered) stayed
+                    // green under every driven test: only a dispatched
+                    // event can land on no element. Named keys cover what
+                    // the regression tests need; anything else is sent as
+                    // literal text (so `key:k` types k, `key:+` zooms).
+                    // `ctrl+` synthesizes a held Control around the press,
+                    // which Slint folds into `event.modifiers` (issue #13).
+                    use slint::platform::{Key, WindowEvent};
+                    let (ctrl, name) = match spec.strip_prefix("ctrl+") {
+                        Some(rest) if !rest.is_empty() => (true, rest),
+                        _ => (false, spec),
+                    };
+                    let text: slint::SharedString = match name {
+                        "escape" => char::from(Key::Escape).to_string().into(),
+                        "return" => char::from(Key::Return).to_string().into(),
+                        "tab" => char::from(Key::Tab).to_string().into(),
+                        "left" => char::from(Key::LeftArrow).to_string().into(),
+                        "right" => char::from(Key::RightArrow).to_string().into(),
+                        "up" => char::from(Key::UpArrow).to_string().into(),
+                        "down" => char::from(Key::DownArrow).to_string().into(),
+                        s => s.into(),
+                    };
+                    let ctrl_text: slint::SharedString =
+                        char::from(Key::Control).to_string().into();
+                    if ctrl {
+                        win.window().dispatch_event(WindowEvent::KeyPressed {
+                            text: ctrl_text.clone(),
+                        });
+                    }
+                    win.window()
+                        .dispatch_event(WindowEvent::KeyPressed { text: text.clone() });
+                    win.window()
+                        .dispatch_event(WindowEvent::KeyReleased { text });
+                    if ctrl {
+                        win.window()
+                            .dispatch_event(WindowEvent::KeyReleased { text: ctrl_text });
+                    }
+                    return;
+                }
+                if let Some(at) = key.strip_prefix("click.") {
+                    // click.X,Y — a REAL pointer move + press + release at
+                    // window-logical coordinates, hit-tested by Slint like
+                    // a physical click. This is what makes the menu bar
+                    // drivable headlessly (menus render in-window on this
+                    // backend), including the menu's own focus save/restore
+                    // — the exact machinery the about/shortcuts toggles
+                    // above cannot exercise (issue #13's fidelity note).
+                    // Spelled with a dot so the step's `MS:ACTION` split
+                    // stays visually unambiguous in scripts.
+                    if let Some((x, y)) = at.split_once(',') {
+                        if let (Ok(x), Ok(y)) = (x.parse::<f32>(), y.parse::<f32>()) {
+                            use slint::platform::{PointerEventButton, WindowEvent};
+                            let pos = slint::LogicalPosition::new(x, y);
+                            win.window()
+                                .dispatch_event(WindowEvent::PointerMoved { position: pos });
+                            win.window().dispatch_event(WindowEvent::PointerPressed {
+                                position: pos,
+                                button: PointerEventButton::Left,
+                            });
+                            win.window().dispatch_event(WindowEvent::PointerReleased {
+                                position: pos,
+                                button: PointerEventButton::Left,
+                            });
+                        }
+                    }
+                    return;
+                }
+                if let Some(label) = key.strip_prefix("dump.") {
+                    // dump.<label> — trace the focus/surface state for test
+                    // assertions. `keysfocus` observes the main key scope's
+                    // real has-focus (the dbg-keys-focus debug property):
+                    // focus was otherwise INVISIBLE to every headless run,
+                    // which is how a stranded keyboard shipped (issue #41).
+                    let st = state.borrow();
+                    trace_mark(&format!(
+                        "QEDUMP {label} keysfocus={} one2one={} zoom={} iptc={} about={} \
+                         shortcuts={} copy={} summary={:?} revert={:?} status={:?}",
+                        win.get_dbg_keys_focus(),
+                        win.get_one2one(),
+                        st.zoom,
+                        win.get_iptc_visible(),
+                        win.get_about_visible(),
+                        win.get_shortcuts_visible(),
+                        win.get_copy_visible(),
+                        win.get_copy_summary().as_str(),
+                        win.get_iptc_revert_label().as_str(),
+                        win.get_status().as_str(),
+                    ));
+                    return;
+                }
                 if let Some(dims) = key.strip_prefix("resize:") {
                     // resize:WxH (logical px) — the user's reported bug
                     // class (issue #16) needs REAL window resizes to be
@@ -1904,6 +2000,14 @@ fn reveal_cursor(win: &MainWindow, state: &Rc<RefCell<AppState>>) {
 /// Remembered UI preferences (fileops.md: destination and rename template
 /// survive across sessions). Tiny TOML in the fastcull config dir.
 fn ui_prefs_path() -> Option<std::path::PathBuf> {
+    // FASTCULL_NO_CONFIG: hermetic test runs must never read or write the
+    // user's real ~/.config/fastcull/ui.toml (issue #13 gap, found by the
+    // issue #41 sweep: a driven copy dialog displayed the user's real
+    // remembered destination — FASTCULL_NO_CACHE sandboxes only the
+    // cache). Gating the PATH covers both load and save in one place.
+    if std::env::var_os("FASTCULL_NO_CONFIG").is_some() {
+        return None;
+    }
     let dirs = directories::ProjectDirs::from("org", "fastcull", "fastcull")?;
     Some(dirs.config_dir().join("ui.toml"))
 }
