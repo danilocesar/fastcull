@@ -94,6 +94,38 @@ faq); QE executed the full DoD path from the docs against the release
 binary. Release-note debt RESOLVED with v0.3.0: the index install note was
 removed and the culling callout pinned to "Changed in 0.3.0". The docs-follow-specs binding lives in CLAUDE.md.
 
+## v0.8.1 (released 2026-08-03)
+
+Bug fixes only — two strands since v0.8.0, both from live reports.
+
+The first is **focus continuity** (#41, #42, reported by the user):
+closing the IPTC panel from the menu left the keyboard dead — no key
+did anything, and at 1:1 there was no discoverable way out — and a
+Help > About opened over a focused field was worse: undismissable,
+with every keystroke landing invisibly in the hidden field, where a
+blind-typed "keyword" could be silently committed onto an image. The
+rule now is deterministic: whenever the focused editor is destroyed
+(panel closed by any route, session swap) or covered (About,
+shortcuts, or the copy dialog over it), the keyboard returns to the
+topmost surface. A destroyed editor discards its half-typed text —
+a session swap can no longer commit the old session's half-edit onto
+the new session's image — while a covered one commits exactly like
+clicking away always has. Esc now always closes the topmost modal
+first: About over the copy dialog takes two Esc presses, and the
+dialog's state survives the first one. Under the hood the drive
+harness learned real key and click dispatch (`key:`, `click.`,
+`dump.` tokens) plus a `FASTCULL_NO_CONFIG` sandbox, so this whole
+bug class finally has red-proven tests.
+
+The second is **the Windows console window** (#40): a double-clicked
+fastcull-app.exe no longer drags a console window along, and closing
+a stray terminal can no longer take the app down with it. Launched
+*from* a terminal, diagnostics still work — `FASTCULL_TRACE` output
+attaches to that terminal (with the standard trade-off, recorded in
+the FAQ, that closing that terminal closes the app). The CLI stays a
+console program on purpose, and CI now asserts both PE subsystems on
+every Windows build so neither can silently flip again.
+
 ## v0.8.0 (released 2026-08-02)
 
 Everything since v0.7.0 — two performance overhauls, a hardening pass,
