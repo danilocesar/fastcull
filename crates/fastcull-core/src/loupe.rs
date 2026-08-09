@@ -8,8 +8,11 @@
 //! Ready event so the UI swaps quality in place without blocking.
 //!
 //! `focus(index, display_long)` schedules the focused image at top priority
-//! and prefetches ±PREFETCH neighbors; a byte-budget LRU (default 2 GiB)
-//! evicts the least recently focused images, never the focused one.
+//! and prefetches ±PREFETCH neighbors — in VIEW order, the order arrows
+//! actually travel (`set_view`; issue #46): an id-space ring on a
+//! capture-sorted multi-body folder warmed frames no arrow could reach
+//! while every real neighbor stayed cold. A byte-budget LRU (default
+//! 2 GiB) evicts the least recently focused images, never the focused one.
 
 use std::collections::HashMap;
 use std::path::PathBuf;
@@ -114,6 +117,73 @@ struct LoupeState {
     /// the REQUEST, so the settle must remember the real intent or a frame
     /// would stay soft forever once the user stops.
     desired_long: u32,
+    /// The app's VIEW order: `view_ids[pos]` = image id, `view_pos[id]` =
+    /// position (usize::MAX = filtered out). The prefetch ring and the
+    /// travel-direction latch walk THIS order, because arrows move over
+    /// view positions (issue #46 M1): the old id-space ring, on a
+    /// capture-sorted folder whose filenames interleave (two bodies, or
+    /// repeated capture times), prefetched frames no arrow could reach
+    /// while every real neighbor stayed cold — a deterministic fit-flash
+    /// on every step. Empty = identity (id order): core-only consumers
+    /// and engines whose app never calls `set_view` keep the old
+    /// behavior exactly.
+    view_ids: Vec<usize>,
+    view_pos: Vec<usize>,
+}
+
+impl LoupeState {
+    /// View position of an image id (identity when no view is set).
+    fn pos_of(&self, id: usize) -> Option<usize> {
+        if self.view_ids.is_empty() {
+            return Some(id);
+        }
+        self.view_pos.get(id).copied().filter(|p| *p != usize::MAX)
+    }
+
+    /// Image id at a view position (identity when no view is set).
+    fn id_at(&self, pos: usize) -> Option<usize> {
+        if self.view_ids.is_empty() {
+            Some(pos)
+        } else {
+            self.view_ids.get(pos).copied()
+        }
+    }
+
+    /// Length of the space the ring is clamped to: the view when set,
+    /// else the whole folder.
+    fn ring_len(&self, count: usize) -> usize {
+        if self.view_ids.is_empty() {
+            count
+        } else {
+            self.view_ids.len()
+        }
+    }
+}
+
+/// Install a view order (the body of [`LoupeEngine::set_view`], pure so
+/// the ring tests exercise the shipped mapping, not a re-implementation).
+fn apply_view(state: &mut LoupeState, order: &[usize], count: usize) {
+    state.view_ids = order.to_vec();
+    state.view_pos = vec![usize::MAX; count];
+    for (pos, id) in order.iter().enumerate() {
+        if *id < count {
+            state.view_pos[*id] = pos;
+        }
+    }
+}
+
+/// Ring members as image ids for view positions `lo..=hi` around the
+/// focused position `fpos`: farthest first (workers pop from the back, so
+/// the nearest neighbor is popped soonest), the focused position excluded
+/// (its id is pushed last by the caller). Positions that map to no id
+/// (stale view) are skipped rather than guessed.
+fn ring_ids(state: &LoupeState, fpos: usize, lo: usize, hi: usize) -> Vec<usize> {
+    let mut ring: Vec<(usize, usize)> = (lo..=hi)
+        .filter(|p| *p != fpos)
+        .filter_map(|p| state.id_at(p).map(|id| (p, id)))
+        .collect();
+    ring.sort_by_key(|(p, _)| std::cmp::Reverse(p.abs_diff(fpos)));
+    ring.into_iter().map(|(_, id)| id).collect()
 }
 
 struct Shared {
@@ -165,9 +235,10 @@ impl LoupeEngine {
 
     /// The user is looking at `index` on a display whose longest edge is
     /// `display_long` physical pixels: ensure it and its ±PREFETCH neighbors
-    /// have an asset sufficient for that display (ladder rule) or are
-    /// queued. Returns the best cached image immediately (which may be a
-    /// lower rung — a better one arrives as an event once cooked).
+    /// — in VIEW order (see `set_view`) — have an asset sufficient for that
+    /// display (ladder rule) or are queued. Returns the best cached image
+    /// immediately (which may be a lower rung — a better one arrives as an
+    /// event once cooked).
     pub fn focus(&self, index: usize, display_long: u32) -> Option<FullImage> {
         let count = self.shared.paths.len();
         if count == 0 || index >= count {
@@ -184,12 +255,28 @@ impl LoupeEngine {
         // Stopped: ask for what the app actually wants, over the tight ring,
         // which is the pre-existing behaviour and is what keeps tap-stepping
         // through a burst sharp.
-        let (request, lo, hi) =
-            focus_plan(transit, state.travel_forward, index, display_long, count);
-        // Prefetch ring: farthest neighbors first, focused index last (back
-        // of the queue = popped first by workers).
-        let mut wanted: Vec<usize> = (lo..=hi).filter(|i| *i != index).collect();
-        wanted.sort_by_key(|i| std::cmp::Reverse(i.abs_diff(index)));
+        //
+        // The ring is planned in VIEW-POSITION space and mapped back to
+        // image ids at request time (issue #46): arrows travel the view. A
+        // focused id with no view position (filtered out mid-flight) gets
+        // no neighbors — its neighbors are unknowable, and guessing in id
+        // space is the bug this replaced.
+        let (request, wanted) = match state.pos_of(index) {
+            Some(fpos) => {
+                let (request, lo, hi) = focus_plan(
+                    transit,
+                    state.travel_forward,
+                    fpos,
+                    display_long,
+                    state.ring_len(count),
+                );
+                (request, ring_ids(&state, fpos, lo, hi))
+            }
+            None => (plan_request(transit, display_long), Vec::new()),
+        };
+        // Farthest neighbors first, focused index last (back of the queue
+        // = popped first by workers).
+        let mut wanted: Vec<usize> = wanted.into_iter().filter(|i| *i < count).collect();
         wanted.push(index);
         for i in wanted {
             if !sufficient_cached(&mut state, i, request, stamp) && !state.failed.contains(&i) {
@@ -211,6 +298,21 @@ impl LoupeEngine {
     /// Cached image without scheduling anything (e.g. re-render).
     pub fn peek(&self, index: usize) -> Option<FullImage> {
         lock(&self.shared).cache.get(&index).map(|(i, _)| i.clone())
+    }
+
+    /// Supply the app's current VIEW order (`order[pos]` = image id), the
+    /// order arrows actually travel. The prefetch ring and the direction
+    /// latch follow it from the next `focus()` on — the app calls this
+    /// from every view recompute, so a filter or sort change re-keys the
+    /// ring the same tick (issue #46: an id-space ring on an interleaved
+    /// view prefetched frames no arrow could reach). The POLICY (ring
+    /// widths, lean, transit capping) stays in this module; the caller
+    /// supplies only the mapping it already owns. Never calling this
+    /// keeps identity order — the pre-#46 behavior, exact.
+    pub fn set_view(&self, order: &[usize]) {
+        let count = self.shared.paths.len();
+        let mut state = lock(&self.shared);
+        apply_view(&mut state, order, count);
     }
 
     /// Grid-cell ladder (same 25% rule as focus): ensure every `index` has
@@ -316,7 +418,15 @@ fn cached_serves(state: &LoupeState, index: usize, display_long: u32) -> bool {
 /// at the back (popped next); a ring neighbor goes to the front so it can
 /// never outrank the focused frame's own pending work.
 fn revive_deferred(state: &mut LoupeState, index: usize, target: u32, stamp: u64) -> bool {
-    let in_ring = state.focused.is_some_and(|f| index.abs_diff(f) <= PREFETCH);
+    // Ring membership in VIEW positions (issue #46), like the ring itself:
+    // an id 2 away can be a view-order stranger, and a view neighbor can
+    // be any id at all. No position (filtered out) = not in the ring.
+    let in_ring = state
+        .focused
+        .is_some_and(|f| match (state.pos_of(index), state.pos_of(f)) {
+            (Some(a), Some(b)) => a.abs_diff(b) <= PREFETCH,
+            _ => false,
+        });
     if !in_ring || state.failed.contains(&index) || sufficient_cached(state, index, target, stamp) {
         return false;
     }
@@ -351,8 +461,18 @@ fn note_focus(state: &mut LoupeState, index: usize, display_long: u32, now: std:
             .last_index_change
             .is_some_and(|t| now.saturating_duration_since(t) <= TRANSIT_GAP);
         state.last_index_change = Some(now);
-        // Latch direction HERE, where a real change proves it.
-        state.travel_forward = state.focused.is_none_or(|p| index >= p);
+        // Latch direction HERE, where a real change proves it — in VIEW
+        // positions (issue #46): arrows travel the view, and comparing
+        // ids on an interleaved view read a steady forward hold as
+        // jumping around, flapping the ring's lean. No previous focus,
+        // or one no longer in the view: forward (matching the pre-#46
+        // first-focus default).
+        let new_pos = state.pos_of(index);
+        let prev_pos = state.focused.and_then(|p| state.pos_of(p));
+        state.travel_forward = match (new_pos, prev_pos) {
+            (Some(n), Some(p)) => n >= p,
+            _ => true,
+        };
     }
     if state.focused != Some(index) {
         state.focused = Some(index);
@@ -447,6 +567,10 @@ const TRANSIT_BEHIND: usize = 2;
 /// sharp.
 ///
 /// Returns `(request, lo, hi)` with `lo..=hi` already clamped to `count`.
+///
+/// Since issue #46 the coordinates are VIEW POSITIONS, not image ids —
+/// the caller (`focus`) maps positions back to ids via `ring_ids` at
+/// request time. The policy in here is unchanged.
 fn focus_plan(
     transit: bool,
     forward: bool,
@@ -464,7 +588,7 @@ fn focus_plan(
             (TRANSIT_AHEAD, TRANSIT_BEHIND)
         };
         (
-            transit_request(display_long),
+            plan_request(transit, display_long),
             index.saturating_sub(back),
             (index + ahead).min(count - 1),
         )
@@ -474,6 +598,17 @@ fn focus_plan(
             index.saturating_sub(PREFETCH),
             (index + PREFETCH).min(count - 1),
         )
+    }
+}
+
+/// What to ask the decoder for: the mid while moving, the app's real
+/// target when stopped. Split from `focus_plan` so a focus with no view
+/// position (no ring) still requests the right rung.
+fn plan_request(transit: bool, display_long: u32) -> u32 {
+    if transit {
+        transit_request(display_long)
+    } else {
+        display_long
     }
 }
 
@@ -1136,6 +1271,98 @@ mod tests {
             !serves(&mid, MID_RUNG_MAX_LONG),
             "MID_RUNG_MAX_LONG is NOT served by a 1616 mid — that was the bug"
         );
+    }
+
+    /// The prefetch ring walks the VIEW order, not id order (issue #46).
+    ///
+    /// The M1 shape: a capture-time sort over a folder cycling three file
+    /// classes interleaves ids in the view, so the old ±PREFETCH ring in
+    /// id space warmed frames no arrow could reach while every actual
+    /// arrow neighbor stayed cold — a deterministic fit-flash per step.
+    #[test]
+    fn the_prefetch_ring_walks_view_order_not_id_order() {
+        let view = [0usize, 3, 6, 9, 1, 4, 7, 2, 5, 8];
+        let mut state = LoupeState::default();
+        apply_view(&mut state, &view, 10);
+        // Focused on id 9 = view position 3: the settled ±PREFETCH ring
+        // covers positions 1..=5, i.e. ids {3, 6, 1, 4} — and none of id
+        // 9's id-space neighbors (7, 8), which are view strangers.
+        let fpos = state.pos_of(9).expect("id 9 is in the view");
+        assert_eq!(fpos, 3);
+        let (_, lo, hi) = focus_plan(false, true, fpos, u32::MAX, state.ring_len(10));
+        let ids = ring_ids(&state, fpos, lo, hi);
+        let mut sorted = ids.clone();
+        sorted.sort_unstable();
+        assert_eq!(
+            sorted,
+            vec![1, 3, 4, 6],
+            "the ring must hold the VIEW neighbors of id 9, not its id \
+             neighbors: got {ids:?}"
+        );
+        // Farthest first: the two nearest view neighbors (ids 6 and 1,
+        // positions 2 and 4) must sit at the BACK, where workers pop.
+        assert_eq!(
+            {
+                let mut tail = ids[2..].to_vec();
+                tail.sort_unstable();
+                tail
+            },
+            vec![1, 6],
+            "nearest view neighbors must be popped first: got {ids:?}"
+        );
+        // No view installed: identity — the pre-#46 id-space behavior,
+        // which keeps core-only consumers and the older tests exact.
+        let state = LoupeState::default();
+        let mut ids = ring_ids(&state, 9, 7, 11);
+        ids.sort_unstable();
+        assert_eq!(ids, vec![7, 8, 10, 11], "no view = identity order");
+    }
+
+    /// The travel-direction latch compares VIEW positions (issue #46): on
+    /// an interleaved view a steady forward hold FALLS in id half the
+    /// time, and an id comparison flaps the transit ring's lean.
+    #[test]
+    fn travel_direction_is_latched_in_view_positions() {
+        use std::time::{Duration, Instant};
+        let view = [0usize, 3, 6, 9, 1, 4, 7, 2, 5, 8];
+        let t0 = Instant::now();
+        let mut st = LoupeState::default();
+        apply_view(&mut st, &view, 10);
+        // Forward in the VIEW: id 9 (pos 3) -> id 1 (pos 4).
+        note_focus(&mut st, 9, u32::MAX, t0);
+        note_focus(&mut st, 1, u32::MAX, t0 + Duration::from_millis(120));
+        assert!(
+            st.travel_forward,
+            "pos 3 -> pos 4 is forward travel although the id fell 9 -> 1"
+        );
+        // Backward in the view despite a rising id: id 1 (pos 4) -> id 6
+        // (pos 2).
+        note_focus(&mut st, 6, u32::MAX, t0 + Duration::from_millis(240));
+        assert!(
+            !st.travel_forward,
+            "pos 4 -> pos 2 is backward although the id rose 1 -> 6"
+        );
+    }
+
+    /// Deferred-upgrade revival uses the same view-order ring (issue #46):
+    /// an id 8 away can be the direct view neighbor, and the id next door
+    /// can be a view stranger.
+    #[test]
+    fn deferred_revival_ring_follows_view_order() {
+        let view = [0usize, 3, 6, 9, 1, 4, 7, 2, 5, 8];
+        let mut state = stable_focus_state(9); // view position 3
+        apply_view(&mut state, &view, 10);
+        assert!(
+            revive_deferred(&mut state, 1, u32::MAX, 1),
+            "id 1 is the focused frame's direct VIEW neighbor (pos 4)"
+        );
+        state.queue.clear();
+        assert!(
+            !revive_deferred(&mut state, 8, u32::MAX, 1),
+            "id 8 neighbors 9 in id space but sits at view pos 9 — a \
+             stranger the ring must not revive"
+        );
+        assert!(state.queue.is_empty(), "nothing may be re-queued");
     }
 
     fn stable_focus_state(index: usize) -> LoupeState {

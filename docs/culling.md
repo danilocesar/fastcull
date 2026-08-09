@@ -75,6 +75,11 @@ grid once everything is closed.
 - **Loupe, zoomed**: the wheel walks the zoom steps under the pointer,
   capping exactly at 1:1. A click re-centers on the clicked point,
   double-click jumps to 1:1 there, and dragging pans the image.
+- **Dragging has no glide**: the image tracks your hand exactly and
+  stops dead where you release — no coasting afterwards. (The grid
+  keeps its kinetic scroll: flicking through a grid is browsing, but at
+  1:1 you're judging a spot, and a glide would carry you past it. For
+  long travel across a frame, one click re-centers.)
 - Zoom and pan position **carry across images**: lock 1:1 on the eye,
   arrow through the sequence, `Y`/`N` each frame — every image shows
   the same spot at the same zoom.
@@ -82,6 +87,13 @@ grid once everything is closed.
 > **Fixed in 0.5.0**: double-click did not actually reach 1:1 once you
 > were zoomed in — it just re-centered twice. It works now, from fit and
 > from any zoom step.
+
+> **Fixed after 0.8.1**: a fast drag-flick used to set the image
+> coasting, and an arrow pressed while it still coasted showed the next
+> photo at the wrong spot — sometimes parked at its top-left corner with
+> your carried position silently lost. Flicks no longer coast (release
+> always stops the image), so nothing can drag your zoomed position away
+> between photos.
 
 ## While the folder is still loading
 
@@ -134,7 +146,10 @@ Two things worth knowing:
 
 - **The framing never moves.** Locked to 1:1 on someone's eye, you stay at
   1:1 on that eye the whole way through — travelling never zooms you out
-  and never re-centers you.
+  and never re-centers you. If you land on a frame nothing has decoded
+  yet, the loupe shows a rough placeholder-quality version **at your
+  spot** (with the "◌ loading" pill) until the real pixels arrive
+  moments later.
 - **Tapping is not holding.** Step frame by frame — a tap, a look, a tap —
   and every frame goes to full quality immediately, because you're
   evaluating, not travelling. The app tells the two apart by your speed:
@@ -156,6 +171,15 @@ Sharpening after you stop takes around a third of a second for a
 full-resolution A1 frame, even on a modest laptop — most of that is the
 JPEG decode itself, which cannot be split across cores. Travelling stays
 smooth regardless.
+
+> **Fixed after 0.8.1**: arrowing onto a frame nothing had decoded yet
+> used to flash the ENTIRE next photo at fit for a split second before
+> snapping back to your spot — most visible in folders where the
+> capture-time order interleaves the filenames (two bodies, two cards),
+> because the read-ahead used to follow file order instead of the order
+> on your screen. Both halves are fixed: the loupe never leaves your
+> zoom and position, and the read-ahead now warms the frames your arrow
+> keys will actually reach.
 
 ## Fit shows the whole frame
 

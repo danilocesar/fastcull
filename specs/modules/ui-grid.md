@@ -109,12 +109,24 @@ where it is."
   Implementation rule (issue #6): the zoom overlay is a PERMANENT element
   whose visibility is toggled — never a conditional (`if`) element. A
   conditional is re-created on every texture gap during held-arrow
-  navigation, and a fresh Flickable initializes/clamps its viewport
+  navigation, and a freshly created element initializes its viewport
   before the offset write lands: one 0,0 frame per transition, a visible
-  top-left stream under key repeat. Mid-navigation offset read-backs are
-  never folded into the pan center (`capture_pan` folds only when the
-  overlay still belongs to the cursor's image — the hand is on the arrow
-  key, not the mouse).
+  top-left stream under key repeat.
+  **Single-writer rule (issue #46, superseding the read-back scheme)**:
+  Rust is the ONLY writer of the overlay's viewport offsets. A drag is
+  reported by the overlay's touch surface as an explicit `loupe-dragged`
+  event, folded through the pointer machine into the pan centre, and the
+  offsets are rewritten synchronously from that centre — there is no
+  Flickable, no offset read-back, and no `capture_pan`. The retired
+  read-back inferred "the user dragged" from displacement, which is the
+  #16/#22 disease in a new organ: a fling's deceleration binding fed it
+  ANIMATED offsets nobody was touching, and every refresh of the decay
+  folded them into the pan centre as phantom drags until the carried
+  centre was permanently lost (issue #46 M3, `pan fold` traces with no
+  hand on the mouse). The doctrine holds here as everywhere: **intent is
+  only ever claimed from a POSITIVE input signal — the drag event itself
+  — never inferred from displacement**, because no elimination list of
+  displacement causes stays complete.
 - **Transit vs settled (user requirement 2026-08-01)**: the user's words —
   *"while I'm holding a key and rapidly moving between shots I don't need
   the image to be as good as possibile, I need it to move fast. feeling
@@ -130,11 +142,39 @@ where it is."
   | SETTLED | the user stops (see the timing note below) | the app's real target for the focused frame |
   | SETTLED-AND-IDLE | after that lands | full-res look-ahead on the ±`PREFETCH` neighbours |
 
+  **Every ring is a VIEW-ORDER ring (issue #46).** The engine's rings —
+  transit, settled, look-ahead, and the deferred-upgrade revival gate —
+  are planned in view POSITIONS and mapped to image ids at request time
+  (`LoupeEngine::set_view`; the app re-keys it on every view recompute,
+  so a filter or sort change re-keys the ring the same tick). The old
+  ±`PREFETCH` in image-id space was wrong the moment view order diverged
+  from id order — a capture-time sort over interleaved filenames (two
+  bodies; repeated capture times) is the everyday case — and there it
+  warmed frames no arrow could reach while EVERY actual neighbor stayed
+  cold: the deterministic per-step fit-flash of issue #46 M1. The
+  travel-direction latch compares view positions for the same reason (a
+  forward hold FALLS in id half the time on an interleaved view). The
+  policy (ring widths, lean, transit capping) stays in core; the app
+  supplies only the position↔id mapping it already owns. An engine whose
+  consumer never calls `set_view` keeps identity order — the pre-#46
+  behavior, exactly, which is what the pre-#46 core tests still pin.
+
   - **The geometry never changes.** Transit keeps the carried factor and
-    pan centre; it does NOT drop to fit. The spec already learned this
-    once — "the old drop-to-fit strobed the whole burst-transit loop and
-    trained the user to tap instead of hold" — and zoom/pan persistence is
-    what makes 1:1 burst comparison work at all.
+    pan centre; it does NOT drop to fit — **in every reachable path,
+    including jumps** (`[`/`]`, PgUp/PgDn, Home/End land outside any
+    ring; the thumb rung below covers them). The spec already learned
+    this once — "the old drop-to-fit strobed the whole burst-transit
+    loop and trained the user to tap instead of hold" — and zoom/pan
+    persistence is what makes 1:1 burst comparison work at all. Until
+    issue #46 this sentence was aspiration: with neither the full-res
+    nor the mid rung in hand, the renderer's fallback arm dropped the
+    overlay and the N=1 strip showed the whole next frame at fit for
+    1.5–75 ms per step (one or two pump ticks) — the user's "shows it at
+    0,0 briefly, then snaps back". The thumb rung and the residual hold
+    (quality rule below) closed the gap; the renderer traces
+    `loupe overlay dropped` if any future path re-opens it, and the
+    regression tests grep for that line and assert `one2one` across a
+    cook-widened transit.
   - **SETTLED-AND-IDLE is not optional.** Requesting only the focused frame
     on settle would make tap-stepping through a burst at 1:1 pay a full
     decode on every frame, forever. It needs no new code — it is the
@@ -271,11 +311,12 @@ where it is."
     old code showed blank frames; the knife-edge at exactly `TRANSIT_GAP`
     is the part worth a deliberate decision.
   - Wraparound direction latch: if the app ever wraps cursor 0 → count−1
-    on backward travel, `index >= prev` in `note_focus` reads that one
-    step as "forward" and leans the ring the wrong way for one refocus
-    cycle. Self-corrects at the next step; no main-relative regression
-    (main has no lean at all); recorded so a future wraparound feature
-    knows to fix the latch with it.
+    on backward travel, the position comparison in `note_focus` (view
+    positions since issue #46; was `index >= prev` in id space) reads
+    that one step as "forward" and leans the ring the wrong way for one
+    refocus cycle. Self-corrects at the next step; no main-relative
+    regression (main has no lean at all); recorded so a future
+    wraparound feature knows to fix the latch with it.
   - Sharpness-on-stop variance: at the ENGINE level stop-to-sharp is
     371–408 ms with ±20 ms spread across hold lengths 4–64 (QE
     2026-08-01) — extremely consistent. The wider swings observed at the
@@ -308,9 +349,39 @@ where it is."
   rest unsharp without the cue** — any above-fit view rendered from
   below the top rung shows the top-left cue pill ("you are never
   silently looking at soft pixels"), removed atomically when the sharp
-  texture swaps in place. Identity is sacred: the soft pixels are
-  always the CURRENT image's own mid rung; if even that is missing the
-  view drops to fit (honest degradation) — never the previous frame.
+  texture swaps in place.
+  **The soft ladder gained a bottom rung (issue #46), and the identity
+  rule gained one bounded, recorded exception.** The above-fit render
+  ladder is now: full-res (sharp) → mid rung (soft) → the cursor's own
+  320 px grid THUMB (soft — ~25× mush at 1:1, and exactly right during
+  transit: position and identity continuity is what the eye tracks at
+  video speed, persona-reviewed MUST-HAVE) → residual HOLD. The old
+  behavior below the mid — drop to fit — was the M1 fit-flash and is
+  GONE from every reachable path.
+  **Residual HOLD (the recorded exception; persona-reviewed USEFUL with
+  the bound demanded and applied)**: when not even the thumb exists (a
+  cold-start edge: the thumb pipeline has not served that image yet),
+  the overlay keeps the PREVIOUS image's pixels at the carried
+  geometry, cue pill on — the video-player dropped-frame convention;
+  the alternatives were the fit strobe (the bug) or a black frame
+  (retinal pumping in a dark room). This is knowingly a bounded breach
+  of "never the previous frame": during the hold the mark badge and
+  status bar name the NEW image over the old pixels (marks still land
+  on the intended image — addressing is correct; only the judged
+  pixels lag). The bound is double: a decode FAILURE of the cursor
+  image drops to fit immediately (the strip owns the failed badge),
+  and `OVERLAY_HOLD_CAP` (250 ms, one settle window) caps a wedged
+  decode — never an unbounded wrong-pixels hold. In any healthy
+  release-profile session the thumb or mid lands well inside the cap;
+  a CONGESTED adoption queue (observed in debug-profile runs, where
+  149 MB texture fills stack up behind the cook hold) can legitimately
+  fire the cap first — the capped drop traces its reason
+  (`loupe overlay dropped … (hold cap)`, distinct from the outlawed
+  excuse-less `(no rung in hand)` form) and the overlay RE-RAISES the
+  moment any rung of the cursor image lands. A cold ENTRY into zoom
+  with no pixels of the image at all (nothing to hold) keeps the
+  overlay down until the first rung lands — the pre-existing honest
+  behavior, unchanged.
   An INFINITY-pinned desire (Z) during transit renders at the last
   RESOLVED factor (the carried magnification, not the sentinel); a
   VIRGIN pin (nothing resolved yet this session) renders the mid at its
@@ -381,7 +452,7 @@ scrolling are out of scope; they reuse this machine when they land.
 | Ctrl+Wheel | grid zoom in/out — still the M2 deferral | **reserved**: the modifier is ignored, the plain-wheel row applies | **reserved**: the modifier is ignored, the plain-wheel row applies |
 | Click | move the cursor to that cell + collapse the multi-selection (issue #7); Ctrl/Shift variants per the cursor contract | **nothing** — the whole image is on screen, and the keyboard ladder stays center-anchored (user decision 2026-07-26, Q5) | re-center the view on the clicked point; factor unchanged |
 | Double-click | **open that image in the loupe at fit** (user decision 2026-07-26 — the first click has already moved the cursor there, so this is purely "enter the loupe"); the previous grid zoom is remembered for `G`/`Esc` | → **1:1 with the clicked point centered** | → **1:1 with the clicked point centered** (already at 1:1: re-center only) |
-| Drag | scroll the view (Flickable kinetic drag, today's behavior — **kept**); rubber-band multi-select is the reserved future gesture | **nothing** — nothing is off-screen, so there is no pan axis | **pan the image**, 1:1 with pointer motion, clamped so the image never detaches from the viewport edges |
+| Drag | scroll the view (Flickable kinetic drag, today's behavior — **kept**); rubber-band multi-select is the reserved future gesture | **nothing** — nothing is off-screen, so there is no pan axis | **pan the image**, 1:1 with pointer motion, clamped so the image never detaches from the viewport edges; **release stops the image dead — no fling, no inertia** (issue #46, see below) |
 
 Rules that the table alone does not carry:
 
@@ -429,7 +500,31 @@ Rules that the table alone does not carry:
   offset (most of the viewport on an A1 frame).
 - **Drag beats click.** A click fires only on press+release without
   movement beyond the drag threshold; once a drag starts, the release
-  produces no click and no double-click.
+  produces no click and no double-click. (Since issue #46 the loupe
+  overlay enforces this itself — an 8 logical px latch on its touch
+  surface, matching the retired Flickable's grab threshold — because
+  nothing steals the grab anymore. The below-threshold prefix of a drag
+  is not lost: the first applied event carries the full displacement
+  since the press.)
+- **Loupe pan has NO inertia — decided, not omitted (issue #46).** The
+  contract above always promised "pan 1:1 with pointer motion" and
+  named kinetic behavior only for the GRID's drag-scroll; the shipped
+  overlay nevertheless used a Flickable, whose flick physics installed
+  a deceleration animation binding on the viewport offsets at release.
+  That binding SURVIVES programmatic sets (the write is stored; the
+  next tick overwrites it from the simulation until the decay ends), so
+  an arrow pressed during the decay rendered the NEXT image at the
+  still-animating offsets — crossing exactly 0,0 — and the read-back
+  then folded those offsets into the pan centre as phantom drags until
+  the carried position was permanently lost (M3). The fix removes the
+  physics rather than fencing it: the overlay has no Flickable; drags
+  pan 1:1 while the button is down and **release stops the image where
+  the hand stopped**. Persona verdict (MUST-HAVE): inertia at 1:1 is
+  hostile to focus judgment — a glide overshoots the feather every
+  time — and long travel already has a better gesture (click
+  re-centers). Flicking a grid is browsing; gliding at 1:1 is judging:
+  different verbs, different physics. The grid keeps its kinetic
+  scroll unchanged.
 - **A double-click needs proximity, not just timing** (persona finding —
   scanning an intermediate factor by clicking eye, then beak, then wingtip
   in quick succession is two independent re-centers, not a jump to 1:1):
@@ -530,30 +625,41 @@ Rules that the table alone does not carry:
   coalesced wheel deltas may emit fewer stops than notches (single emit per
   event — accepted), and the two surfaces keep separate accumulators whose
   residue carries over until a direction flip resets it; two-finger
-  trackpad scroll reaches the overlay Flickable as a drag (pans above fit,
-  zooms at fit — asymmetric; trackpads are declared out of scope in this
-  contract, revisit with gesture support); wheel in the zoom overlay's
-  letterbox BARS is not loupe input and falls through to the Flickable —
-  and when that axis has no pan range the Flickable ignores it too, so the
-  event reaches the GRID Flickable behind the overlay and scrolls the strip
-  invisibly (reachable only for very wide frames; the cursor re-anchor
-  corrects it once the cell leaves the viewport — extend the wheel surface
-  over the bars if it ever shows); the scrollbar's wheel swallow also
-  deadens its 18px strip in GRID view (was native scroll — tiny strip,
-  accepted).
+  trackpad scroll over the overlay IMAGE now walks the zoom ladder at
+  every factor (issue #46: the Flickable that used to intercept it as a
+  pan is gone, so the surface's scroll handler sees it like the wheel —
+  the old fit/zoomed asymmetry is closed by accident; trackpads remain
+  declared out of scope, revisit with gesture support); wheel in the
+  zoom overlay's letterbox BARS is not loupe input and — with no
+  Flickable in between since issue #46 — falls through to the GRID
+  Flickable behind the overlay and scrolls the strip invisibly at any
+  pan range, not only degenerate ones (reachable only for very wide
+  frames; the cursor re-anchor corrects it once the cell leaves the
+  viewport — extend the wheel surface over the bars if it ever shows);
+  a drag STARTED in a letterbox bar is inert since issue #46 (the drag
+  surface is the image, and bars only exist at moderate factors where
+  one axis has no pan anyway — deep 1:1 has no bars; extend the drag
+  surface over the bars if it ever shows); the scrollbar's wheel
+  swallow also deadens its 18px strip in GRID view (was native scroll —
+  tiny strip, accepted).
 
-  **Two table cells are implemented OUTSIDE the machine** (recorded
-  2026-07-30 rather than left silent, since this section demands "no
-  zoom/pan branching in the app crate"): `Zoomed` × Drag is the overlay
-  Flickable's native kinetic pan folded back by `capture_pan`, and `Zoomed`
-  × Click is applied directly by `on_loupe_clicked` — both because Slint
-  already delivers image-relative fractions there, so routing them through
-  `step()` would add a lossy coordinate round-trip for no behavioural gain.
-  Consequences to know: `PointerInput::Drag` and the `Zoomed`+`Click` arm
-  are exercised only by their unit tests, so a future change to them
-  silently changes nothing in the app; and the enum carries a single `Drag`
-  input rather than the `DragStart`/`Drag`/`DragEnd` triple listed under
-  *Inputs* above.
+  **One table cell is implemented OUTSIDE the machine** (recorded
+  2026-07-30, narrowed by issue #46): `Zoomed` × Click is applied
+  directly by `on_loupe_clicked`, because Slint already delivers
+  image-relative fractions there and routing them through `step()`
+  would add a lossy coordinate round-trip for no behavioural gain —
+  so the `Zoomed`+`Click` arm is exercised only by its unit tests, and
+  a future change to it silently changes nothing in the app. `Zoomed` ×
+  Drag, previously the second outside cell (the overlay Flickable's
+  kinetic pan folded back by `capture_pan`), now DOES route through the
+  machine: the overlay's touch surface reports `loupe-dragged(dx, dy)`,
+  the bridge feeds `PointerInput::Drag` to `step()`, and the returned
+  `Recenter` is applied like every other action — the machine's Drag
+  row finally has its production caller. The enum still carries a
+  single `Drag` input rather than the `DragStart`/`Drag`/`DragEnd`
+  triple listed under *Inputs* above (the press/release edges live in
+  the overlay's drag latch, which owns only the threshold and
+  click-suppression bookkeeping).
 
   **The machine's state is the DESIRED factor, which the screen may not be
   showing yet.** `machine_ctx` derives `Fit`/`Zoomed` from the clamped
@@ -1290,6 +1396,42 @@ the user confirms, all cheap to change):**
       NOT covered by a test: the measured performance figures themselves —
       nothing turns red if the frames-on-screen or stop-to-sharp numbers
       regress (see issue #27 on the perf-budget rule).
+- [x] **No fit-drop, no fling, no phantom fold (issue #46)**. Core: the
+      ring maps view positions to ids and back
+      (`the_prefetch_ring_walks_view_order_not_id_order`), the direction
+      latch compares positions
+      (`travel_direction_is_latched_in_view_positions`), deferred
+      revival uses the same ring
+      (`deferred_revival_ring_follows_view_order`), and the public api
+      proves the ring decodes view neighbors and NOT id neighbors
+      (`prefetch_follows_the_view_order_through_the_public_api`).
+      App level, driven through real dispatched pointer/key events and
+      dump/trace state (pixels are useless here — a far-panned 1:1
+      snapshots black, and a wrong-position frame is a state nothing
+      re-renders): a cook-widened cold jump keeps `one2one` and the
+      carried pan centre and renders the thumb rung
+      (`transit_to_a_cold_frame_keeps_the_overlay_at_the_carried_center`);
+      drag pans 1:1 and folds into the centre, release stops the image
+      dead, and navigation after a flick keeps the drag-carried centre
+      with zero `pan fold` traces
+      (`loupe_drag_pans_one_to_one_and_a_fling_never_survives_navigation`);
+      paced taps over an interleaved-id session land warm — no overlay
+      drop, no thumb-rung rescue needed
+      (`paced_taps_over_an_interleaved_session_land_warm`). Every
+      bug-shaped assertion red-run-verified against the pre-fix build
+      (6d15ed1 + the drive-harness commit, release profile — the
+      profile the 5/5 and 3/3 reproductions were proven in); the slow-
+      drag half of the M3 test guards the surviving 1:1-pan contract,
+      and its fold-at-drag-time assertion is ALSO red on pre-fix code,
+      which deferred the fold to the next input. Recorded limitations: the F2 warm-landing pin (zero
+      thumb-rung rescues at a 600 ms cadence) binds in RELEASE builds
+      only — a debug build decodes a mid slower than the cadence, so
+      the test skips that one assertion there (the perf_budgets
+      precedent) while its no-drop and `one2one` assertions still
+      bind; and the M1 test allows the spec'd reason-carrying drops
+      (failure/hold-cap) while asserting the excuse-less
+      `(no rung in hand)` drop away, plus recovery via the late
+      "landed" dump.
 - [x] **Provisional order while loading** (issue #25):
       `filter::provisional_order_is_stable_while_metadata_streams` feeds the
       capture keys in one at a time and asserts the view is IDENTICAL at
