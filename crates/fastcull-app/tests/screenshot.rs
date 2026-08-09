@@ -833,14 +833,15 @@ fn empty_folder_renders_chrome_and_empty_state() {
 }
 
 /// Issue #6 smoke: rapid keyboard navigation at 1:1 must never fold a
-/// phantom "drag" into pan_center (the capture_pan trace fires on any
-/// fold — during pure keyboard nav there must be none) and must exit
-/// cleanly. LIMITATION, recorded in the issue: the visible 0x0-frame
-/// symptom needs the GPU renderer + real key repeat and is NOT
-/// reproducible under the software renderer — the structural fix (the
-/// overlay is visibility-toggled, never re-created) plus this misfold
-/// guard is what CAN be checked headlessly; the visual check stays
-/// manual per the machine-freeze protocol.
+/// phantom "drag" into pan_center. Since issue #46 this holds
+/// STRUCTURALLY — `capture_pan` (whose "pan fold" trace this greps) is
+/// deleted and pan mutations come only from the explicit drag event —
+/// so the test now guards against any future read-back reintroducing
+/// the trace, alongside the clean-exit smoke. LIMITATION, recorded in
+/// issue #6: the visible 0x0-frame symptom needs the GPU renderer +
+/// real key repeat and is NOT reproducible under the software renderer
+/// — the structural fixes plus this misfold guard are what CAN be
+/// checked headlessly; the visual check stays manual.
 #[test]
 fn rapid_nav_at_one_to_one_never_folds_a_phantom_drag() {
     if !has_display() {
@@ -3217,5 +3218,348 @@ fn copy_picks_from_the_menu_over_a_focused_field_owns_the_keyboard() {
     assert!(
         qedump(&stderr, "end").contains("zoom=2"),
         "the `+` after the dialog closed was dead:\n{stderr}"
+    );
+}
+
+// ---------------------------------------------------------------------------
+// Issue #46: transit fit-flash (M1) and fling-survives-navigation (M3).
+// These drive real pointer sequences through the promoted press./move./
+// release. tokens and assert on dump./trace state — pixel assertions are
+// useless here (a far-panned 1:1 snapshots black under the software
+// renderer, and a wrong-position frame is a state nothing re-renders).
+// Red-run claims are per-test; the red runs execute against the pre-fix
+// build (6d15ed1 + the drive-harness commit) in RELEASE mode, where the
+// reproduction was proven 5/5 and 3/3 deterministic.
+// ---------------------------------------------------------------------------
+
+/// A field=value token out of a QEDUMP line (fields never contain spaces
+/// except the quoted status/summary strings, which these fields precede
+/// or follow as whole tokens).
+fn dump_field<'a>(line: &'a str, field: &str) -> &'a str {
+    let tag = format!("{field}=");
+    line.split_whitespace()
+        .find_map(|t| t.strip_prefix(&tag))
+        .unwrap_or_else(|| panic!("no {field}= in dump line: {line}"))
+}
+
+/// Ten files cycling the three A1 classes: identical per-class EXIF
+/// capture times make the capture sort interleave VIEW order against
+/// image-id order — the issue #46 M1 shape, where the pre-fix id-space
+/// prefetch ring left every arrow neighbor cold, deterministically.
+fn interleaved_session(dir: &Path) {
+    std::fs::create_dir_all(dir).unwrap();
+    let classes = [
+        "A1_full_compressed.ARW",
+        "A1_full_lossless_compressed.ARW",
+        "A1_full_uncompressed.ARW",
+    ];
+    for i in 0..10 {
+        place_fixture(
+            &raws_dir().join(classes[i % 3]),
+            &dir.join(format!("IMG_{i:04}.ARW")),
+        );
+    }
+}
+
+/// Issue #46 M1 + the persona's jump-navigation condition: at deep 1:1,
+/// landing on a stone-cold image (End — far outside ANY prefetch ring)
+/// must keep the overlay up at the carried factor and pan centre —
+/// never an EXCUSE-LESS drop to fit. The target's thumb was never
+/// visible so it is not even in `st.images` yet: the overlay HOLDs the
+/// previous pixels (that is where the +80 ms dump lands — the hold
+/// engages synchronously with the End refresh and `OVERLAY_HOLD_CAP`
+/// cannot fire before 250 ms), then the freshly prepped thumb renders
+/// (~150–300 ms behind the cook hold in release; later in debug, where
+/// the kitchen queue is congested by 149 MB debug-profile fills and the
+/// hold cap may legitimately fire first — the spec'd bounded drop,
+/// which must RE-RAISE the moment the thumb lands; the far "landed"
+/// dump covers both timelines).
+///
+/// RED on pre-fix code (+ the drive-harness commit): `one2one=false` at
+/// the mid-gap dump (the overlay dropped and the strip showed the whole
+/// frame at fit), a "loupe overlay dropped … (no rung in hand)" trace —
+/// the excuse-less drop, which post-fix is structurally impossible —
+/// and neither a "loupe hold" nor a "loupe thumb" render anywhere.
+#[test]
+fn transit_to_a_cold_frame_keeps_the_overlay_at_the_carried_center() {
+    if !has_display() {
+        eprintln!("screenshot smoke skipped: no display server");
+        return;
+    }
+    let _s = serial();
+    let dir = out_dir().join("i46-m1");
+    interleaved_session(&dir);
+    let out = out_dir().join("i46-m1.jpg");
+    let stderr = shoot_env_stderr(
+        &["--start-11", dir.to_str().unwrap()],
+        &[
+            ("FASTCULL_TRACE", "1"),
+            ("FASTCULL_KITCHEN_COOK_MS", "150"),
+            (
+                "FASTCULL_DRIVE",
+                "20000:dump.pre;20050:end;20130:dump.midgap;26500:dump.landed",
+            ),
+        ],
+        &out,
+    );
+    let pre = qedump(&stderr, "pre");
+    let midgap = qedump(&stderr, "midgap");
+    let landed = qedump(&stderr, "landed");
+    assert_eq!(
+        dump_field(pre, "one2one"),
+        "true",
+        "overlay must be up before the jump (soft or sharp):\n{pre}"
+    );
+    // THE bug: pre-fix the overlay dropped here and the strip rendered
+    // the whole next frame at fit.
+    assert_eq!(
+        dump_field(midgap, "one2one"),
+        "true",
+        "the overlay dropped to fit on a cold jump — the M1 fit-flash:\n{stderr}"
+    );
+    assert_eq!(
+        dump_field(midgap, "soft"),
+        "true",
+        "a no-rung window must be flagged by the cue pill:\n{midgap}"
+    );
+    assert_eq!(
+        dump_field(midgap, "pan"),
+        "0.5000,0.5000",
+        "the carried pan centre was disturbed by the cold jump:\n{midgap}"
+    );
+    assert!(
+        stderr.contains("loupe hold idx"),
+        "the residual hold never engaged — where did the mid-gap pixels come from?\n{stderr}"
+    );
+    // The thumb-rung render is deterministic in RELEASE (the cook hold
+    // sequences thumb ahead of mid, with a refresh between the two
+    // kitchen completions). A congested debug kitchen can adopt both in
+    // one drain, where rendering the better rung directly is correct —
+    // so this pin binds in release only (the perf_budgets precedent);
+    // the hold, no-excuse-less-drop and one2one pins bind everywhere.
+    if !cfg!(debug_assertions) {
+        assert!(
+            stderr.contains("loupe thumb idx"),
+            "the thumb rung never rendered once the thumb was prepped:\n{stderr}"
+        );
+    } else {
+        eprintln!("thumb-rung pin skipped: debug build (run with --release)");
+    }
+    // The EXCUSE-LESS drop is the bug and must be impossible. The spec'd
+    // bounded drops (decode failure; hold cap under a congested debug
+    // kitchen) carry their reason and re-raise — the landed dump below
+    // proves the recovery.
+    assert!(
+        !stderr.contains("(no rung in hand)"),
+        "the overlay dropped with no excuse during transit:\n{stderr}"
+    );
+    // Geometry continuity, checkable when the factor had RESOLVED before
+    // the jump (a release-profile run; debug decodes may still be at the
+    // virgin pin at the pre dump, where extents legitimately differ):
+    // same aspect, same carried factor => identical offsets.
+    if dump_field(pre, "soft") == "false" {
+        let vx = |l: &str| dump_field(l, "vx").parse::<f32>().unwrap();
+        assert!(
+            (vx(pre) - vx(midgap)).abs() <= 1.5,
+            "carried offset moved across the thumb render: pre {} vs midgap {}",
+            vx(pre),
+            vx(midgap)
+        );
+    }
+    assert_eq!(
+        dump_field(landed, "one2one"),
+        "true",
+        "the overlay must still be up after the landing:\n{landed}"
+    );
+}
+
+/// Issue #46 M3 (and the F3/F4 contracts): loupe drag-pan is 1:1 with
+/// the pointer and STOPS on release — no fling physics exists to survive
+/// into a navigation, and the pan centre is folded only by the real drag
+/// itself (the #16/#22 positive-signal doctrine).
+///
+/// One app run, three phases at a resolved 1:1 (the 45 s lead time is
+/// what a debug-profile full-res decode needs; the `predrag` guard fails
+/// loudly rather than letting a slow run pass vacuously):
+///  1. slow drag — pans 1:1 (the guard half, green on both sides);
+///  2. flick — five fast moves and release: offsets must be IDENTICAL
+///     at +100 ms and +400 ms after release (pre-fix: the Flickable's
+///     deceleration binding was still animating them);
+///  3. arrow during where the decay would be — the next image must keep
+///     the drag-carried pan centre (pre-fix: phantom `pan fold`s degraded
+///     it toward the corner and the view parked at 0,0).
+///
+/// RED on pre-fix code (+ the drive-harness commit, release build):
+/// `pan fold` traces present, offsets drift between the two post-release
+/// dumps, and the post-navigation pan centre no longer matches the
+/// post-drag one.
+#[test]
+fn loupe_drag_pans_one_to_one_and_a_fling_never_survives_navigation() {
+    if !has_display() {
+        eprintln!("screenshot smoke skipped: no display server");
+        return;
+    }
+    let _s = serial();
+    let dir = out_dir().join("i46-m3");
+    std::fs::create_dir_all(&dir).unwrap();
+    for (src, dst) in [
+        ("A1_full_compressed.ARW", "a.ARW"),
+        ("A1_full_lossless_compressed.ARW", "b.ARW"),
+        ("A1_full_uncompressed.ARW", "c.ARW"),
+    ] {
+        place_fixture(&raws_dir().join(src), &dir.join(dst));
+    }
+    let out = out_dir().join("i46-m3.jpg");
+    let stderr = shoot_env_stderr(
+        &["--start-11", dir.to_str().unwrap()],
+        &[
+            ("FASTCULL_TRACE", "1"),
+            (
+                "FASTCULL_DRIVE",
+                // Phase 1: slow drag right+down by (100, 40). Phase 2:
+                // the flick (5 events, 16 ms apart — the velocity ring
+                // buffer needs real timing). Phase 3: arrow mid-"decay".
+                "45000:dump.predrag;45050:press.700,450;45150:move.750,470;45250:move.800,490;\
+                 45350:release.800,490;45450:dump.dragged;\
+                 45600:press.700,450;45616:move.800,520;45632:move.900,590;45648:move.1000,660;\
+                 45664:move.1100,730;45680:release.1100,730;\
+                 45780:dump.afterfling1;46080:dump.afterfling2;\
+                 46200:right;46300:dump.afternav;47100:dump.late",
+            ),
+        ],
+        &out,
+    );
+    let predrag = qedump(&stderr, "predrag");
+    let dragged = qedump(&stderr, "dragged");
+    let fling1 = qedump(&stderr, "afterfling1");
+    let fling2 = qedump(&stderr, "afterfling2");
+    let afternav = qedump(&stderr, "afternav");
+    let late = qedump(&stderr, "late");
+    // Guard: the 1:1 must be RESOLVED before the pointer work, or the
+    // extents are fit-sized and nothing can pan — a vacuous pass.
+    assert_eq!(
+        dump_field(predrag, "one2one"),
+        "true",
+        "overlay not up before the drag:\n{predrag}"
+    );
+    assert_eq!(
+        dump_field(predrag, "soft"),
+        "false",
+        "full-res not resolved 45 s in — the drag would have no pan range \
+         and every assertion below would be vacuous:\n{predrag}"
+    );
+    let vx = |l: &str| dump_field(l, "vx").parse::<f32>().unwrap();
+    let vy = |l: &str| dump_field(l, "vy").parse::<f32>().unwrap();
+    let pan = |l: &str| {
+        let (x, y) = dump_field(l, "pan").split_once(',').expect("pan pair");
+        (x.parse::<f32>().unwrap(), y.parse::<f32>().unwrap())
+    };
+    // Phase 1 — the drag contract: 1:1 with pointer motion (±12 px
+    // absorbs the drag threshold), folded into the carried centre.
+    assert!(
+        (vx(dragged) - vx(predrag) - 100.0).abs() <= 12.0
+            && (vy(dragged) - vy(predrag) - 40.0).abs() <= 12.0,
+        "drag is not 1:1 with the pointer: {} -> {} / {} -> {}\n{stderr}",
+        vx(predrag),
+        vx(dragged),
+        vy(predrag),
+        vy(dragged)
+    );
+    assert!(
+        pan(dragged).0 < pan(predrag).0 - 0.005,
+        "the drag never folded into the pan centre: {:?} -> {:?}",
+        pan(predrag),
+        pan(dragged)
+    );
+    // Phase 2 — release stops the image dead: identical offsets 100 ms
+    // and 400 ms after release. Pre-fix the deceleration binding was
+    // still animating them here.
+    assert!(
+        (vx(fling1) - vx(fling2)).abs() < 0.5 && (vy(fling1) - vy(fling2)).abs() < 0.5,
+        "offsets still moving after release — fling physics installed: \
+         +100ms {},{} vs +400ms {},{}\n{stderr}",
+        vx(fling1),
+        vy(fling1),
+        vx(fling2),
+        vy(fling2)
+    );
+    // Phase 3 — nothing survives into navigation: the carried centre is
+    // exactly where the (real) flick-drag left it, on the next image and
+    // 900 ms later. Pre-fix, phantom folds ground it toward the corner
+    // and the view parked at offset 0,0.
+    assert!(
+        !stderr.contains("pan fold"),
+        "a pan fold was inferred — displacement-derived drags are back:\n{stderr}"
+    );
+    let (fx, fy) = pan(fling2);
+    for (name, line) in [("afternav", afternav), ("late", late)] {
+        let (px, py) = pan(line);
+        assert!(
+            (px - fx).abs() < 0.003 && (py - fy).abs() < 0.003,
+            "{name}: carried pan centre corrupted after navigation: \
+             {fx:.4},{fy:.4} -> {px:.4},{py:.4}\n{stderr}"
+        );
+    }
+    assert_eq!(
+        dump_field(late, "one2one"),
+        "true",
+        "overlay lost after the navigation:\n{late}"
+    );
+}
+
+/// Issue #46 F2: the loupe prefetch ring walks VIEW order, so paced taps
+/// over a capture-sorted session with interleaved ids land on WARM
+/// frames. Pre-fix (+ the drive-harness commit), the id-space ring left
+/// every arrow neighbor cold and this exact five-tap script dropped the
+/// overlay five out of five times.
+#[test]
+fn paced_taps_over_an_interleaved_session_land_warm() {
+    if !has_display() {
+        eprintln!("screenshot smoke skipped: no display server");
+        return;
+    }
+    let _s = serial();
+    let dir = out_dir().join("i46-f2");
+    interleaved_session(&dir);
+    let out = out_dir().join("i46-f2.jpg");
+    let stderr = shoot_env_stderr(
+        &["--start-11", dir.to_str().unwrap()],
+        &[
+            ("FASTCULL_TRACE", "1"),
+            (
+                "FASTCULL_DRIVE",
+                "8000:right;8600:right;9200:right;9800:right;10400:right;11000:dump.done",
+            ),
+        ],
+        &out,
+    );
+    let fired = stderr.lines().filter(|l| l.contains("drive: ")).count();
+    assert!(
+        fired >= 5,
+        "tap script never ran ({fired} drive marks):\n{stderr}"
+    );
+    assert!(
+        !stderr.contains("loupe overlay dropped"),
+        "a paced tap still hit a cold frame and dropped the overlay:\n{stderr}"
+    );
+    // F2 specifically, not F1 masking it: a warm landing renders from the
+    // mid or better — the thumb rung is the cold-path rescue and must not
+    // be needed at a 600 ms cadence with a view-order ring. RELEASE
+    // profile only (the perf_budgets precedent): a debug build decodes a
+    // mid slower than the tap cadence, so the thumb rescue legitimately
+    // fires there — the no-drop and one2one assertions above still bind.
+    if !cfg!(debug_assertions) {
+        assert!(
+            !stderr.contains("loupe thumb idx"),
+            "a paced tap fell to the THUMB rung — the ring is not warming \
+             the view neighbors:\n{stderr}"
+        );
+    } else {
+        eprintln!("warm-landing pin skipped: debug build (run with --release)");
+    }
+    assert_eq!(
+        dump_field(qedump(&stderr, "done"), "one2one"),
+        "true",
+        "overlay down after the taps:\n{stderr}"
     );
 }
