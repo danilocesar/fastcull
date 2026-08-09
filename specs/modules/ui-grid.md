@@ -1507,12 +1507,30 @@ Documented because they ship in release builds (validator finding):
   save/restore machinery, plus panel fields and modal scrims. (Spelled
   with a dot: the visual break from the step's `MS:ACTION` colon keeps
   scripts readable.)
+  `press.X,Y` / `move.X,Y` / `release.X,Y` (issue #46; promoted from QE
+  instrumentation like `key:`/`click.` before them, the PR #43
+  precedent) are `click.`'s three phases as separately SCHEDULABLE
+  steps — real dispatched pointer events that, spread over timed script
+  steps, carry real inter-event timing, which is what makes a drag a
+  drag: `click.`'s single-tick sequence has zero displacement and zero
+  velocity, so no drag gesture (and no drag-derived defect class — the
+  issue #46 fling was exactly one) was drivable headlessly before
+  these. `press.` dispatches a move first so hover state is coherent,
+  like `click.`; a `move.` while pressed extends the drag; scripts are
+  responsible for pairing press/release (an unpaired `press.` leaves
+  the button down, exactly like a real stuck button — that fidelity is
+  the point).
   `dump.<label>` traces the focus/surface state for test assertions:
   `keysfocus` (the main key scope's real `has-focus`, via the
   `dbg-keys-focus` debug property), loupe/zoom state, panel and modal
   visibility, the copy dialog's visibility, plan summary and rename
   template, the revert-slot label, and the status line. Keyboard focus was otherwise INVISIBLE to
   every headless run — a stranded keyboard could not even be asserted.
+  It also carries the loupe pan block (`soft`, `vx`/`vy`, the
+  fractional pan centre, the desired factor — issue #46): a
+  wrong-position frame is precisely a state nothing re-renders, so
+  render-time traces (which fire on CHANGE) cannot see it; the dump
+  makes the overlay's position observable at a scripted instant.
 - `FASTCULL_NO_CONFIG=1`: makes `ui.toml` (the remembered copy
   destination/template) unreachable for both load and save — what
   `FASTCULL_NO_CACHE` does for the cache (issue #13 gap, surfaced by the

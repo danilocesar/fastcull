@@ -1841,16 +1841,76 @@ fn main() {
                     }
                     return;
                 }
+                if let Some((coords, kind)) = key
+                    .strip_prefix("press.")
+                    .map(|a| (a, 0u8))
+                    .or_else(|| key.strip_prefix("move.").map(|a| (a, 1u8)))
+                    .or_else(|| key.strip_prefix("release.").map(|a| (a, 2u8)))
+                {
+                    // press.X,Y / move.X,Y / release.X,Y — the three phases
+                    // of `click.` split into separately SCHEDULABLE steps
+                    // (issue #46, promoted from the reproduction's QE
+                    // instrumentation like `key:`/`click.` before it, PR
+                    // #43). Spread over timed steps they carry real
+                    // inter-event timing, which is what a drag needs to BE
+                    // a drag: `click.`'s move+press+release in one tick has
+                    // zero displacement and zero velocity, so no drag
+                    // gesture — and no drag-derived defect class — was
+                    // drivable headlessly. A `press.` dispatches a move
+                    // first so hover state is coherent, exactly like
+                    // `click.`; a lone `move.` while pressed extends the
+                    // drag. Same dot spelling, same reason.
+                    if let Some((x, y)) = coords.split_once(',') {
+                        if let (Ok(x), Ok(y)) = (x.parse::<f32>(), y.parse::<f32>()) {
+                            use slint::platform::{PointerEventButton, WindowEvent};
+                            let pos = slint::LogicalPosition::new(x, y);
+                            match kind {
+                                0 => {
+                                    win.window().dispatch_event(WindowEvent::PointerMoved {
+                                        position: pos,
+                                    });
+                                    win.window().dispatch_event(WindowEvent::PointerPressed {
+                                        position: pos,
+                                        button: PointerEventButton::Left,
+                                    });
+                                }
+                                1 => {
+                                    win.window().dispatch_event(WindowEvent::PointerMoved {
+                                        position: pos,
+                                    });
+                                }
+                                _ => {
+                                    win.window().dispatch_event(WindowEvent::PointerReleased {
+                                        position: pos,
+                                        button: PointerEventButton::Left,
+                                    });
+                                }
+                            }
+                            trace_mark(&format!(
+                                "drive ptr {} {x:.0},{y:.0}",
+                                ["press", "move", "release"][kind as usize]
+                            ));
+                        }
+                    }
+                    return;
+                }
                 if let Some(label) = key.strip_prefix("dump.") {
                     // dump.<label> — trace the focus/surface state for test
                     // assertions. `keysfocus` observes the main key scope's
                     // real has-focus (the dbg-keys-focus debug property):
                     // focus was otherwise INVISIBLE to every headless run,
                     // which is how a stranded keyboard shipped (issue #41).
+                    // The loupe pan block (soft/vx/vy/pan/zf, issue #46)
+                    // makes the overlay's position observable at a scripted
+                    // instant: mid-transit geometry and the carried pan
+                    // centre could otherwise only be inferred from renders
+                    // that trace on CHANGE, and a wrong-position frame is
+                    // exactly a state nothing re-renders.
                     let st = state.borrow();
                     trace_mark(&format!(
                         "QEDUMP {label} keysfocus={} one2one={} zoom={} iptc={} about={} \
-                         shortcuts={} copy={} summary={:?} template={:?} revert={:?} status={:?}",
+                         shortcuts={} copy={} summary={:?} template={:?} revert={:?} status={:?} \
+                         soft={} vx={:.1} vy={:.1} pan={:.4},{:.4} zf={:.3}",
                         win.get_dbg_keys_focus(),
                         win.get_one2one(),
                         st.zoom,
@@ -1862,6 +1922,12 @@ fn main() {
                         win.get_copy_template().as_str(),
                         win.get_iptc_revert_label().as_str(),
                         win.get_status().as_str(),
+                        win.get_loupe_soft(),
+                        win.get_loupe_vx(),
+                        win.get_loupe_vy(),
+                        st.pan_center.0,
+                        st.pan_center.1,
+                        st.zoom_factor,
                     ));
                     return;
                 }
@@ -3538,6 +3604,18 @@ fn refresh_inner(win: &MainWindow, state: &Rc<RefCell<AppState>>) {
             win.set_one2one(true);
         }
         _ => {
+            // Sentinel trace (issue #46): an overlay that DROPS while at
+            // the loupe with a non-empty view is the M1 fit-flash — the
+            // transit contract's "does NOT drop to fit" forbids it, and
+            // the regression tests grep for this line. Grid refreshes
+            // pass through this arm constantly with one2one already
+            // false; only the true->false edge at the loupe is the
+            // defect, so only that edge traces.
+            if at_loupe && view_len > 0 && win.get_one2one() {
+                trace_mark(&format!(
+                    "loupe overlay dropped idx {cursor} (no rung in hand)"
+                ));
+            }
             win.set_one2one(false);
             win.set_loupe_soft(false);
             st.last_pan_write = None;
