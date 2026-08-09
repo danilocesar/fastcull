@@ -1952,6 +1952,37 @@ fn main() {
                     }
                     return;
                 }
+                if let Some(at) = key.strip_prefix("wheel.") {
+                    // wheel.X,Y,DY — a REAL scroll event at window-logical
+                    // coordinates, DY in logical px (60 = one notch-
+                    // equivalent per the pointer contract's accumulator;
+                    // positive = wheel up). Promoted for the same reason as
+                    // press./move./release. (issue #46, QE gap): the
+                    // overlay's scroll wiring — surfaces, accumulators, the
+                    // post-Flickable coordinate terms — was reachable by no
+                    // test and no Wayland automation, i.e. review-verified
+                    // only. A move precedes the scroll so hover targeting
+                    // is coherent, like click./press. .
+                    if let Some((x, rest)) = at.split_once(',') {
+                        if let Some((y, dy)) = rest.split_once(',') {
+                            if let (Ok(x), Ok(y), Ok(dy)) =
+                                (x.parse::<f32>(), y.parse::<f32>(), dy.parse::<f32>())
+                            {
+                                use slint::platform::WindowEvent;
+                                let pos = slint::LogicalPosition::new(x, y);
+                                win.window()
+                                    .dispatch_event(WindowEvent::PointerMoved { position: pos });
+                                win.window().dispatch_event(WindowEvent::PointerScrolled {
+                                    position: pos,
+                                    delta_x: 0.0,
+                                    delta_y: dy,
+                                });
+                                trace_mark(&format!("drive ptr wheel {x:.0},{y:.0} dy {dy:.0}"));
+                            }
+                        }
+                    }
+                    return;
+                }
                 if let Some(label) = key.strip_prefix("dump.") {
                     // dump.<label> — trace the focus/surface state for test
                     // assertions. `keysfocus` observes the main key scope's
@@ -3566,10 +3597,16 @@ fn refresh_inner(win: &MainWindow, state: &Rc<RefCell<AppState>>) {
     // exactly right during transit (persona: "what my eye needs is that
     // the blob stays where the blob was"). Identity is intact: it is the
     // CURRENT image's own thumb, flagged by the cue pill like every
-    // sub-top rung.
+    // sub-top rung. A decode-FAILED cursor skips the rescue (validator
+    // finding): a file whose 320 px thumb survived while every loupe
+    // rung is corrupt would otherwise sit at 1:1 behind a "loading"
+    // pill that can never complete, hiding the strip's failed badge —
+    // fit plus the badge is the honest floor there.
     let (soft, soft_is_thumb) = match soft {
         Some(img) => (Some(img), false),
-        None if sharp.is_none() && overlay => (st.images.get(&cursor).cloned(), true),
+        None if sharp.is_none() && overlay && !st.failed.contains(&cursor) => {
+            (st.images.get(&cursor).cloned(), true)
+        }
         None => (None, false),
     };
     // The soft view needs a FINITE factor: an INFINITY pin (Z) resolves
