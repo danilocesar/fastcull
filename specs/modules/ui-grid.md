@@ -357,7 +357,12 @@ where it is."
   transit: position and identity continuity is what the eye tracks at
   video speed, persona-reviewed MUST-HAVE) → residual HOLD. The old
   behavior below the mid — drop to fit — was the M1 fit-flash and is
-  GONE from every reachable path.
+  GONE from every reachable path. A decode-FAILED cursor image skips
+  the thumb rescue (validator finding on the first cut): a file whose
+  320 px thumb survived while every loupe rung is corrupt would
+  otherwise sit at 1:1 behind a "◌ loading" pill that can never
+  complete, hiding the strip's failed badge — fit plus the badge is
+  the honest floor for that corruption shape.
   **Residual HOLD (the recorded exception; persona-reviewed USEFUL with
   the bound demanded and applied)**: when not even the thumb exists (a
   cold-start edge: the thumb pipeline has not served that image yet),
@@ -371,8 +376,14 @@ where it is."
   pixels lag). The bound is double: a decode FAILURE of the cursor
   image drops to fit immediately (the strip owns the failed badge),
   and `OVERLAY_HOLD_CAP` (250 ms, one settle window) caps a wedged
-  decode — never an unbounded wrong-pixels hold. In any healthy
-  release-profile session the thumb or mid lands well inside the cap;
+  decode — never an unbounded wrong-pixels hold. The cap is PER
+  CURSOR IMAGE (recorded, validator finding): a hold-arrow run across
+  consecutively cold frames re-times it at each cursor change, so the
+  same stale pixels can exceed 250 ms in aggregate across images in
+  the wedged-decode pathology — the bound is on how long any one
+  photograph can be misrepresented, not on the pixels' total tenure.
+  In any healthy release-profile session the thumb or mid lands well
+  inside the cap;
   a CONGESTED adoption queue (observed in debug-profile runs, where
   149 MB texture fills stack up behind the cook hold) can legitimately
   fire the cap first — the capped drop traces its reason
@@ -382,6 +393,15 @@ where it is."
   with no pixels of the image at all (nothing to hold) keeps the
   overlay down until the first rung lands — the pre-existing honest
   behavior, unchanged.
+  **Recorded deferral (validator concern, gate 2026-08-09)**: the
+  hold state machine (cap timing, failure gating, re-raise) and the
+  view-distance full-res texture eviction live in the APP crate as
+  stateful policy with no core unit pins — only the timing-sensitive
+  integration tests cover them. Precedented (the render ladder was
+  already app-side) but each #46-class bug so far lived exactly in
+  untestable app-side state; the next transit-affecting change should
+  force this block into core as a pure decision function. Deferred
+  explicitly, not silently.
   An INFINITY-pinned desire (Z) during transit renders at the last
   RESOLVED factor (the carried magnification, not the sentinel); a
   VIRGIN pin (nothing resolved yet this session) renders the mid at its
@@ -489,14 +509,17 @@ Rules that the table alone does not carry:
   prefix of double-click's (center on P, then go to 1:1 at P) — so the
   intermediate state is invisible and no click needs to be held back
   waiting for a possible second one. **Why the target point survives the
-  prefix** (recorded 2026-07-30 — it is a cancellation, not an accident
-  anyone should have to re-derive): the two `clicked` calls re-centre the
-  view and `refresh()` rewrites `loupe-vx/vy` SYNCHRONOUSLY, so by the time
-  `double-clicked` evaluates `zoomed-img.x + mouse-x + loupe-vx` its frozen
-  `mouse-x` and the new offset cancel exactly and the machine recovers the
-  point actually pressed. This holds only while that refresh is
-  synchronous — if the pan write is ever deferred to a timer or animated,
-  the 1:1 landing point silently moves by roughly `max/factor ×` the click
+  prefix** (recorded 2026-07-30; expression updated for the issue #46
+  restructure — it is a cancellation, not an accident anyone should
+  have to re-derive): the two `clicked` calls re-centre the view and
+  `refresh()` rewrites `loupe-vx/vy` SYNCHRONOUSLY, so by the time
+  `double-clicked` evaluates `zoomed-img.x + mouse-x` (the image's `x`
+  carries the pan offset since the Flickable's removal — the same sum
+  the old `+ loupe-vx` term spelled explicitly) its frozen `mouse-x`
+  and the new offset cancel exactly and the machine recovers the point
+  actually pressed. This holds only while that refresh is synchronous —
+  if the pan write is ever deferred to a timer or animated, the 1:1
+  landing point silently moves by roughly `max/factor ×` the click
   offset (most of the viewport on an A1 frame).
 - **Drag beats click.** A click fires only on press+release without
   movement beyond the drag threshold; once a drag starts, the release
@@ -630,12 +653,15 @@ Rules that the table alone does not carry:
   pan is gone, so the surface's scroll handler sees it like the wheel —
   the old fit/zoomed asymmetry is closed by accident; trackpads remain
   declared out of scope, revisit with gesture support); wheel in the
-  zoom overlay's letterbox BARS is not loupe input and — with no
-  Flickable in between since issue #46 — falls through to the GRID
-  Flickable behind the overlay and scrolls the strip invisibly at any
-  pan range, not only degenerate ones (reachable only for very wide
-  frames; the cursor re-anchor corrects it once the cell leaves the
-  viewport — extend the wheel surface over the bars if it ever shows);
+  zoom overlay's letterbox BARS is not loupe input — with the Flickable
+  gone (issue #46) nothing on the overlay consumes it, and the
+  validator's live probes (700x1100 window, factor 1.5, 180 px bars)
+  found bar wheel, bar click, bar double-click and a 900 px bar drag
+  ALL INERT: an earlier revision of this bullet claimed the wheel
+  reaches the grid Flickable behind the overlay and scrolls the strip
+  invisibly, which did not reproduce — recorded as inert until a
+  geometry is found where it is not (extend the wheel surface over the
+  bars if one ever shows);
   a drag STARTED in a letterbox bar is inert since issue #46 (the drag
   surface is the image, and bars only exist at moderate factors where
   one axis has no pan anyway — deep 1:1 has no bars; extend the drag
@@ -1431,7 +1457,18 @@ the user confirms, all cheap to change):**
       bind; and the M1 test allows the spec'd reason-carrying drops
       (failure/hold-cap) while asserting the excuse-less
       `(no rung in hand)` drop away, plus recovery via the late
-      "landed" dump.
+      "landed" dump. The wheel wiring the restructure touched is
+      pinned by `overlay_wheel_still_zooms_one_stop_per_notch` (real
+      dispatched scroll events via the `wheel.` token; a guard — wheel
+      SEMANTICS did not change, only the surface wiring — non-vacuous
+      because a dead scroll path leaves the factor at 1.0; covers both
+      accumulators and the fit→overlay handoff). Still without a
+      deterministic release-profile exercise (recorded, QE gate): the
+      `(hold cap)` drop-and-re-raise fires routinely in debug runs and
+      the M1 test asserts the recovery whenever it fires, but forcing
+      it deterministically in release needs a decode-wedge knob —
+      deferred alongside the wedge affordances already recorded in
+      this spec.
 - [x] **Provisional order while loading** (issue #25):
       `filter::provisional_order_is_stable_while_metadata_streams` feeds the
       capture keys in one at a time and asserts the view is IDENTICAL at
@@ -1662,6 +1699,14 @@ Documented because they ship in release builds (validator finding):
   responsible for pairing press/release (an unpaired `press.` leaves
   the button down, exactly like a real stuck button — that fidelity is
   the point).
+  `wheel.X,Y,DY` (issue #46 gate finding) dispatches a REAL scroll
+  event at window-logical coordinates, `DY` in logical px (60 = one
+  notch-equivalent per this contract's accumulator; positive = up),
+  preceded by a move so hover targeting is coherent. Promoted because
+  the overlay's scroll wiring — which #46 rewrote — was reachable by
+  no test and no Wayland automation: which surface receives a wheel,
+  the two separate accumulators, and the post-Flickable coordinate
+  terms were all review-verified only.
   `dump.<label>` traces the focus/surface state for test assertions:
   `keysfocus` (the main key scope's real `has-focus`, via the
   `dbg-keys-focus` debug property), loupe/zoom state, panel and modal

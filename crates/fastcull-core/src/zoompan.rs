@@ -38,11 +38,11 @@ pub fn ladder_down(factor: f32) -> f32 {
     stop
 }
 
-/// One-axis pan offset (Flickable `viewport-x`/`-y`, i.e. `<= 0`) that
+/// One-axis pan offset (the overlay's `loupe-vx`/`-vy`, i.e. `<= 0`) that
 /// places `frac` (fractional image coordinate, 0..1) at the viewport
 /// center, clamped so the image never detaches from the edges. An extent
-/// smaller than the viewport centers (offset 0 — the Image element centers
-/// itself within the viewport).
+/// smaller than the viewport centers (offset 0 — the centering term in the
+/// overlay image's position handles it).
 pub fn offset_centering(viewport: f32, extent: f32, frac: f32) -> f32 {
     // Totality guard (QE finding D3, 2026-07-30): `f32::clamp` PANICS when
     // its bounds are NaN or inverted, and a non-finite extent produces

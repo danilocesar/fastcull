@@ -3563,3 +3563,55 @@ fn paced_taps_over_an_interleaved_session_land_warm() {
         "overlay down after the taps:\n{stderr}"
     );
 }
+
+/// Issue #46 gate gap (QE): the overlay's wheel wiring — the fit
+/// surface's and the overlay TouchArea's separate notch accumulators
+/// and the post-Flickable coordinate terms — was reachable by no test
+/// and no Wayland automation. Driven here with real dispatched scroll
+/// events (`wheel.` token): one notch at fit enters the ladder, one
+/// notch over the risen overlay climbs it, and two half-notches
+/// accumulate into exactly one stop. A guard (green on both sides of
+/// the #46 fix — wheel SEMANTICS did not change, only its wiring):
+/// non-vacuous because a dead scroll path leaves zf at 1.0.
+#[test]
+fn overlay_wheel_still_zooms_one_stop_per_notch() {
+    if !has_display() {
+        eprintln!("screenshot smoke skipped: no display server");
+        return;
+    }
+    let _s = serial();
+    let dir = out_dir().join("i46-wheel");
+    std::fs::create_dir_all(&dir).unwrap();
+    place_fixture(
+        &raws_dir().join("A1_full_compressed.ARW"),
+        &dir.join("one.ARW"),
+    );
+    let out = out_dir().join("i46-wheel.jpg");
+    let stderr = shoot_env_stderr(
+        &["--start-loupe", dir.to_str().unwrap()],
+        &[
+            ("FASTCULL_TRACE", "1"),
+            (
+                "FASTCULL_DRIVE",
+                "8000:wheel.700,450,60;9500:dump.w1;10000:wheel.700,450,60;10500:dump.w2;\
+                 11000:wheel.700,450,30;11200:wheel.700,450,30;11700:dump.w3",
+            ),
+        ],
+        &out,
+    );
+    assert_eq!(
+        dump_field(qedump(&stderr, "w1"), "zf"),
+        "1.500",
+        "a wheel notch at fit did not enter the zoom ladder:\n{stderr}"
+    );
+    assert_eq!(
+        dump_field(qedump(&stderr, "w2"), "zf"),
+        "2.250",
+        "a wheel notch over the zoom overlay did not climb one stop:\n{stderr}"
+    );
+    assert_eq!(
+        dump_field(qedump(&stderr, "w3"), "zf"),
+        "3.375",
+        "two half-notches did not accumulate into exactly one stop:\n{stderr}"
+    );
+}

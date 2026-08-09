@@ -98,11 +98,15 @@ export component MainWindow inherits Window {
     in property <image> loupe-image;
     in property <length> loupe-w: 0px;
     in property <length> loupe-h: 0px;
-    // Zoomed-loupe pan offsets (Flickable viewport, <= 0). Two-way: Rust
-    // writes them on zoom/anchor changes, drag-pan updates them, Rust reads
-    // them back to keep the fractional pan center (ui-grid.md zoom ladder).
-    in-out property <length> loupe-vx: 0px;
-    in-out property <length> loupe-vy: 0px;
+    // Zoomed-loupe pan offsets (<= 0), applied directly to the overlay
+    // image's position. RUST IS THE ONLY WRITER (issue #46 single-writer
+    // rule): drags arrive as loupe-dragged events and come back as
+    // programmatic writes — nothing on the Slint side may ever set these,
+    // which `in` (not `in-out`) makes the compiler enforce. The M3 bug
+    // class (a binding animating the offsets underneath Rust) starts
+    // with the first Slint-side writer.
+    in property <length> loupe-vx: 0px;
+    in property <length> loupe-vy: 0px;
     // The loupe overlay area (Rust needs it for fit/1:1 factor math). The
     // overlay's height is content.height - statusbar.height, and keys is
     // ALREADY statusbar-short — so this is keys.height exactly (validator
