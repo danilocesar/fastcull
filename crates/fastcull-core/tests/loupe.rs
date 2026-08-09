@@ -318,6 +318,52 @@ fn a_backward_hold_keeps_leaning_backward_across_refocus() {
     );
 }
 
+/// The ring reaches what ARROWS reach (issue #46), through the public
+/// api: with a view whose positions interleave image ids (the
+/// capture-sorted multi-body shape), a settled focus must prefetch the
+/// VIEW neighbors — and must NOT spend workers on the id neighbors,
+/// which are frames no arrow can reach from here.
+#[test]
+fn prefetch_follows_the_view_order_through_the_public_api() {
+    let _serial = SERIAL
+        .lock()
+        .unwrap_or_else(std::sync::PoisonError::into_inner);
+    let (engine, rx) = LoupeEngine::start(a1_cycled(12), DEFAULT_BUDGET_BYTES);
+    // Capture-sort interleave over three file classes: view pos -> id.
+    let view = [0usize, 3, 6, 9, 1, 4, 7, 2, 5, 8, 11, 10];
+    engine.set_view(&view);
+    // Settled focus on id 9 = view position 3: the ±PREFETCH ring is
+    // positions 1..=5 = ids {3, 6, 1, 4}. Target 2000 px: the mid rung
+    // serves it, so the whole ring is debug-build cheap.
+    engine.focus(9, 2000);
+    let want = [9usize, 3, 6, 1, 4];
+    let best = collect(&rx, 120, |b| want.iter().all(|i| b.contains_key(i)));
+    for i in want {
+        assert!(
+            best.contains_key(&i),
+            "view-ring member {i} was never decoded: saw {:?}",
+            {
+                let mut k: Vec<_> = best.keys().copied().collect();
+                k.sort_unstable();
+                k
+            }
+        );
+    }
+    // Drain a further grace period, then assert the id-space neighbors
+    // of 9 (ids 7, 8, 10, 11 — all outside the view ring) never decoded:
+    // that is precisely the work the old ring wasted while the real
+    // neighbors stayed cold.
+    let late = collect(&rx, 3, |_| false);
+    for stranger in [7usize, 8, 10, 11] {
+        assert!(
+            !best.contains_key(&stranger) && !late.contains_key(&stranger),
+            "id-space neighbor {stranger} was prefetched — the ring is \
+             still walking id order"
+        );
+    }
+    drop(engine);
+}
+
 /// `decode_oriented` must actually APPLY the orientation it is given —
 /// the wiring, not the kernel. QE proved this seam unpinned (2026-08-02):
 /// deleting the `apply_orientation_with` call from `decode_oriented` left

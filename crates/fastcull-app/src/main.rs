@@ -32,6 +32,14 @@ const MARGIN_ROWS: usize = 1;
 /// visible-window bound (recorded decision: 4K + 6 columns worst case).
 const MIDS_CAP: usize = 64;
 
+/// Longest the residual HOLD (issue #46) may keep the PREVIOUS image's
+/// pixels on screen when not even the cursor's own thumb exists: one
+/// settle window (persona condition — "don't ship an unbounded lie"). In
+/// any healthy session the thumb or mid lands well inside this; the cap
+/// exists for the wedged-decode pathology, where the view then drops to
+/// fit honestly rather than showing photo N−1 labeled photo N forever.
+const OVERLAY_HOLD_CAP: std::time::Duration = std::time::Duration::from_millis(250);
+
 /// Selection wash hue: the SAME accent blue as the cursor outline, so the two
 /// indicators stay one visual family — filled means selected, bright border
 /// means cursor, and the two compose instead of competing.
@@ -149,11 +157,25 @@ struct AppState {
     /// image navigation (contract: lock 1:1 on the eye, arrow through the
     /// burst); resets to center when returning to fit.
     pan_center: (f32, f32),
-    /// The loupe offsets we last WROTE to the Flickable: when the read-back
-    /// differs, the user dragged, and the drag wins over `pan_center` (a
-    /// mid-drag engine refresh must not yank the view back). None while the
-    /// overlay is hidden.
+    /// The loupe offsets we last WROTE — trace-dedup bookkeeping ONLY
+    /// since issue #46: Rust is the single writer of the offsets (the
+    /// overlay has no Flickable), and a drag arrives as a `loupe-dragged`
+    /// callback that mutates `pan_center` at the source — there is
+    /// nothing to read back and no drag to infer. None while the overlay
+    /// is hidden.
     last_pan_write: Option<(f32, f32)>,
+    /// Residual HOLD (issue #46, spec'd in ui-grid.md): `(cursor, since)`
+    /// while the overlay is keeping the PREVIOUS image's pixels because
+    /// not even the cursor's own thumb exists yet. Bounded: a decode
+    /// failure or `OVERLAY_HOLD_CAP` elapsing drops to fit honestly —
+    /// never an unbounded wrong-pixels hold (persona condition).
+    overlay_hold: Option<(usize, std::time::Instant)>,
+    /// `(cursor, was_thumb)` of the last SOFT render — trace dedup for
+    /// the soft branch. Keyed on the rung, not just the cursor, so the
+    /// thumb→mid upgrade of one image still traces (it is a visual
+    /// change, and `transit_at_zoom_stays_soft_never_drops_to_fit`
+    /// asserts the soft render is observable).
+    last_soft_rung: Option<(usize, bool)>,
     /// The texture kitchen: every pixels->texture conversion happens on
     /// its worker (01-architecture.md: the UI thread never decodes).
     kitchen: kitchen::Kitchen,
@@ -302,6 +324,14 @@ fn recompute_view(st: &mut AppState) {
     // fire on it (issue #22 — the cursor moved during folder load with
     // no input, and the load-race flaked CI).
     st.view_generation = st.view_generation.wrapping_add(1);
+    // Re-key the loupe prefetch ring in the same tick (issue #46): the
+    // ring walks VIEW order — what arrows actually reach — and a stale
+    // ring after a filter/sort change would warm ghosts. Every view
+    // change funnels through here (load_folder recomputes after the
+    // engine starts, so a fresh session is keyed too).
+    if let Some(loupe) = &st.loupe {
+        loupe.set_view(&st.view);
+    }
 }
 
 /// Recompute the view AND re-apply the cursor rules. Every membership
@@ -396,6 +426,8 @@ fn load_folder(state: &Rc<RefCell<AppState>>, folder: &std::path::Path) -> Resul
     st.terminal_native.clear();
     st.last_resolved_factor = None; // magnification never carries across sessions
     st.last_badge = None; // indexes mean a different image now
+    st.overlay_hold = None; // a hold must not straddle a session swap
+    st.last_soft_rung = None;
     st.zoom_factor = 1.0;
     st.pan_center = (0.5, 0.5);
     st.mids.clear();
@@ -656,6 +688,8 @@ fn main() {
         zoom_factor: if start_11 { f32::INFINITY } else { 1.0 },
         pan_center: (0.5, 0.5),
         last_pan_write: None,
+        overlay_hold: None,
+        last_soft_rung: None,
         kitchen: {
             // Completion nudge: the worker pokes the event loop so a
             // finished texture is adopted as soon as the UI is idle —
@@ -1276,7 +1310,6 @@ fn main() {
             let Some(win) = win.upgrade() else { return };
             {
                 let mut st = state.borrow_mut();
-                capture_pan(&win, &mut st);
                 // Clicking to pixel-peep is as much a claim as any other
                 // click (validator: a capture-key re-sort could otherwise
                 // swap the image under an active 1:1 inspection).
@@ -1284,6 +1317,32 @@ fn main() {
                 st.pan_center = (fx.clamp(0.0, 1.0), fy.clamp(0.0, 1.0));
             }
             refresh(&win, &state);
+        });
+    }
+    {
+        // Overlay drag-pan (issue #46): dx/dy from the overlay TouchArea,
+        // folded through the pointer machine's Zoomed×Drag row — the
+        // table cell that used to be implemented OUTSIDE the machine via
+        // the Flickable's kinetic pan plus offset read-back. Rust
+        // recenters `pan_center` and refresh() rewrites the offsets
+        // synchronously: single writer, and the drag itself is the
+        // positive signal the #16/#22 doctrine demands — no displacement
+        // inference anywhere.
+        let state = Rc::clone(&state);
+        let win = window.as_weak();
+        window.on_loupe_dragged(move |dx, dy| {
+            let Some(win) = win.upgrade() else { return };
+            let action = {
+                let st = state.borrow();
+                let (ms, geo) = machine_ctx(&win, &st);
+                fastcull_core::pointer::step(
+                    ms,
+                    fastcull_core::pointer::PointerInput::Drag { dx, dy },
+                    &geo,
+                )
+                .1
+            };
+            apply_pointer_action(&win, &state, action);
         });
     }
     {
@@ -1307,8 +1366,7 @@ fn main() {
         window.on_pointer_wheel(move |up, ctrl, x, y| {
             let Some(win) = win.upgrade() else { return };
             let action = {
-                let mut st = state.borrow_mut();
-                capture_pan(&win, &mut st); // fold a pending drag first
+                let st = state.borrow();
                 let (ms, geo) = machine_ctx(&win, &st);
                 fastcull_core::pointer::step(
                     ms,
@@ -2637,7 +2695,6 @@ fn handle_loupe_double_click(win: &MainWindow, state: &Rc<RefCell<AppState>>, x:
     use fastcull_core::pointer as pm;
     let action = {
         let mut st = state.borrow_mut();
-        capture_pan(win, &mut st);
         let (ms, geo) = machine_ctx(win, &st);
         st.cursor_touched = true;
         pm::step(ms, pm::PointerInput::DoubleClick { pos: (x, y) }, &geo).1
@@ -2686,41 +2743,15 @@ fn apply_pointer_action(
     refresh(win, state);
 }
 
-/// Fold a drag-pan back into the fractional pan center: drags move the
-/// Flickable viewport without Rust hearing about it, so every mutation
-/// path reads the offsets back before acting. Programmatic writes are
-/// recognized via `last_pan_write` and never misread as drags.
-fn capture_pan(win: &MainWindow, st: &mut AppState) {
-    if !win.get_one2one() {
-        return;
-    }
-    // Issue #6 guard: only fold offsets back for the image we last drove
-    // the overlay FOR. Mid-navigation, a readback delta is a Flickable
-    // clamp/init artifact, never a user drag — the hand is on the arrow
-    // key, not the mouse.
-    if st.last_overlay_cursor != Some(st.cursor) {
-        return;
-    }
-    let (vx, vy) = (win.get_loupe_vx(), win.get_loupe_vy());
-    let Some((wx, wy)) = st.last_pan_write else {
-        return; // overlay not yet driven by us: nothing to fold back
-    };
-    if (vx - wx).abs() < 0.5 && (vy - wy).abs() < 0.5 {
-        return; // no drag since our last write
-    }
-    st.pan_center = (
-        fastcull_core::zoompan::frac_at_center(win.get_grid_width(), win.get_loupe_w(), vx),
-        fastcull_core::zoompan::frac_at_center(win.get_loupe_area_h(), win.get_loupe_h(), vy),
-    );
-    // Forensics for issue #6: a "drag" fold nobody dragged (e.g. a
-    // recreated/clamped Flickable writing back through the two-way
-    // binding) corrupts pan_center mid-navigation.
-    trace_mark(&format!(
-        "pan fold: read {vx:.0},{vy:.0} (last write {wx:.0},{wy:.0}) -> center {:.3},{:.3}",
-        st.pan_center.0, st.pan_center.1
-    ));
-    st.last_pan_write = Some((vx, vy));
-}
+// `capture_pan` — the read-back that folded Flickable offset deltas into
+// `pan_center` — is GONE (issue #46). It inferred a drag from
+// displacement, and a fling's physics binding fed it animated offsets
+// nobody dragged, corrupting the carried centre on every refresh of the
+// decay. Per the #16/#22 doctrine (intent only ever from a POSITIVE
+// signal), the drag itself is now the signal: the overlay's TouchArea
+// reports it through `loupe-dragged`, Rust recenters through the pointer
+// machine, and the offsets have exactly one writer. There is nothing
+// left to read back.
 
 /// Populate the panel models for the current batch (selection in view
 /// order, or the cursor). Field rows get the tri-state UI mapping: common
@@ -2878,9 +2909,6 @@ fn handle_nav(win: &MainWindow, state: &Rc<RefCell<AppState>>, key: &str) {
 fn handle_nav_inner(win: &MainWindow, state: &Rc<RefCell<AppState>>, key: &str) {
     let (layout, viewport_h, scroll_y) = current_geometry(win, state);
     let mut st = state.borrow_mut();
-    // A drag since the last render moved the pan; fold it in before any
-    // action reads or resets the pan center.
-    capture_pan(win, &mut st);
     // Marks and navigation claim the cursor (issue #4); zoom keys do not
     // move it and stay neutral.
     if matches!(
@@ -3329,11 +3357,20 @@ fn refresh_inner(win: &MainWindow, state: &Rc<RefCell<AppState>>) {
     // job (the SQLite cache keeps the encoded copy); a submitted index
     // vanishes from `thumb_jpegs`, which is what makes this loop
     // naturally idempotent across refreshes.
-    let to_prep: Vec<usize> = ids
+    let mut to_prep: Vec<usize> = ids
         .iter()
         .copied()
         .filter(|i| st.thumb_jpegs.contains_key(i) && !st.images.contains_key(i))
         .collect();
+    // Cursor first (issue #46): at the loupe the cursor's thumb is the
+    // transit rescue rung, and the kitchen is FIFO — cooking a margin
+    // cell ahead of it extends a residual hold pointlessly (observed:
+    // the margin thumb took the first cook slot and the hold cap fired
+    // 9 ms before the cursor's own thumb landed).
+    if let Some(pos) = to_prep.iter().position(|i| *i == st.cursor) {
+        let c = to_prep.remove(pos);
+        to_prep.insert(0, c);
+    }
     for index in to_prep {
         if let Some(jpeg) = st.thumb_jpegs.remove(&index) {
             st.kitchen.submit_thumb(index, jpeg);
@@ -3499,15 +3536,15 @@ fn refresh_inner(win: &MainWindow, state: &Rc<RefCell<AppState>>) {
     // below it the view stays at the carried factor rendered SOFT from
     // the cursor's mid rung, FLAGGED by the cue pill — never unflagged
     // upscaling, and fit only when even the mid is missing.
-    capture_pan(win, &mut st); // drag since last render wins over pan_center
     let factor = clamped_factor(win, &st);
     let overlay = factor > 1.0 && at_loupe;
     // Issue #21 (user-approved contract): above fit, always show the
     // CURRENT image at the carried factor and pan center — rung QUALITY
     // may degrade (mid rung upscaled, flagged by the cue pill), position
-    // and identity may not. The stale-image prohibition is untouched:
-    // the soft texture is always the cursor's own mid rung; if even
-    // that is missing, drop to fit (honest degradation).
+    // and identity may not. Extended below the mid by issue #46: the
+    // ladder's last rung with pixels is the cursor's own grid THUMB —
+    // the overlay NEVER drops to fit while the desire is above it (the
+    // transit contract), however cold the neighbor.
     let sharp = fullres_for(&st, cursor).filter(|img| {
         img.size().width.max(img.size().height) > fastcull_core::loupe::MID_RUNG_MAX_LONG
             || st.terminal_native.contains(&cursor)
@@ -3523,6 +3560,17 @@ fn refresh_inner(win: &MainWindow, state: &Rc<RefCell<AppState>>) {
             .or_else(|| fullres_for(&st, cursor))
     } else {
         None
+    };
+    // Thumb rung (issue #46): below the mid, the cursor's own 320 px grid
+    // thumb, upscaled to the carried geometry — colored mush at 1:1, and
+    // exactly right during transit (persona: "what my eye needs is that
+    // the blob stays where the blob was"). Identity is intact: it is the
+    // CURRENT image's own thumb, flagged by the cue pill like every
+    // sub-top rung.
+    let (soft, soft_is_thumb) = match soft {
+        Some(img) => (Some(img), false),
+        None if sharp.is_none() && overlay => (st.images.get(&cursor).cloned(), true),
+        None => (None, false),
     };
     // The soft view needs a FINITE factor: an INFINITY pin (Z) resolves
     // against native dims we don't have yet — carry the last resolved
@@ -3569,14 +3617,17 @@ fn refresh_inner(win: &MainWindow, state: &Rc<RefCell<AppState>>) {
             st.last_resolved_factor = Some(factor);
             st.last_pan_write = Some((ox, oy));
             st.last_overlay_cursor = Some(cursor);
+            st.overlay_hold = None;
+            st.last_soft_rung = None;
             win.set_loupe_soft(false);
             win.set_one2one(true);
         }
         (None, Some(img)) if overlay => {
-            // SOFT transit render: the mid rung upscaled to the carried
-            // factor. Same extent math — only the aspect matters at a
-            // given factor (dims x fit_scale = the fit extent regardless
-            // of rung resolution).
+            // SOFT transit render: the mid rung — or, below it, the grid
+            // thumb (issue #46) — upscaled to the carried factor. Same
+            // extent math for both — only the aspect matters at a given
+            // factor (dims x fit_scale = the fit extent regardless of
+            // rung resolution).
             let size = img.size();
             let sf = win.window().scale_factor();
             let (mw, mh) = (size.width as f32 / sf, size.height as f32 / sf);
@@ -3593,33 +3644,70 @@ fn refresh_inner(win: &MainWindow, state: &Rc<RefCell<AppState>>) {
             win.set_loupe_image(img);
             win.set_loupe_vx(ox);
             win.set_loupe_vy(oy);
-            if st.last_overlay_cursor != Some(cursor) || !win.get_one2one() {
+            if st.last_soft_rung != Some((cursor, soft_is_thumb)) {
                 trace_mark(&format!(
-                    "loupe soft idx {cursor} factor {f:.3} extent {ew:.0}x{eh:.0}"
+                    "loupe {} idx {cursor} factor {f:.3} extent {ew:.0}x{eh:.0}",
+                    if soft_is_thumb { "thumb" } else { "soft" }
                 ));
             }
+            st.last_soft_rung = Some((cursor, soft_is_thumb));
             st.last_pan_write = Some((ox, oy));
             st.last_overlay_cursor = Some(cursor);
+            st.overlay_hold = None;
             win.set_loupe_soft(true);
             win.set_one2one(true);
         }
         _ => {
-            // Sentinel trace (issue #46): an overlay that DROPS while at
-            // the loupe with a non-empty view is the M1 fit-flash — the
-            // transit contract's "does NOT drop to fit" forbids it, and
-            // the regression tests grep for this line. Grid refreshes
-            // pass through this arm constantly with one2one already
-            // false; only the true->false edge at the loupe is the
-            // defect, so only that edge traces.
-            if at_loupe && view_len > 0 && win.get_one2one() {
-                trace_mark(&format!(
-                    "loupe overlay dropped idx {cursor} (no rung in hand)"
-                ));
+            // Not even the cursor's own THUMB exists (cold-start edge —
+            // the thumb pipeline has not served this image yet), or the
+            // desire is at/below fit. Two very different situations:
+            //
+            // Residual HOLD (issue #46, recorded in ui-grid.md): with the
+            // overlay up and the desire still above fit, keep the
+            // PREVIOUS image's pixels at the carried geometry, flagged by
+            // the cue pill — a fit-drop is the strobe the transit
+            // contract forbids, and a black frame is retinal pumping at
+            // 9pm (persona). BOUNDED, never an open-ended lie: a decode
+            // FAILURE of the cursor image drops to fit immediately (the
+            // strip owns the failed badge), and OVERLAY_HOLD_CAP caps a
+            // wedged decode. The mark badge and status bar name the NEW
+            // image during the hold; the accepted, capped cost is
+            // recorded in the spec.
+            let now = std::time::Instant::now();
+            let failed = st.failed.contains(&cursor);
+            let capped = matches!(st.overlay_hold, Some((c, since)) if c == cursor
+                && now.duration_since(since) >= OVERLAY_HOLD_CAP);
+            if overlay && win.get_one2one() && !failed && !capped {
+                if !matches!(st.overlay_hold, Some((c, _)) if c == cursor) {
+                    st.overlay_hold = Some((cursor, now));
+                    trace_mark(&format!(
+                        "loupe hold idx {cursor} (not even a thumb; previous pixels kept)"
+                    ));
+                }
+                // Geometry, pixels, last_pan_write and last_overlay_cursor
+                // all stay on the PREVIOUS image — the pixels still belong
+                // to it, and the first rung of the new image lands in the
+                // branches above.
+                win.set_loupe_soft(true);
+            } else {
+                // Honest drop: leaving the ladder (desire at/below fit or
+                // not at the loupe), a failed cursor image, or a hold that
+                // outlived its cap. An overlay dropping while the desire
+                // is still above fit is the M1 fit-flash unless excused by
+                // failure/cap — trace it (the regression tests grep this).
+                if win.get_one2one() && overlay {
+                    trace_mark(&format!(
+                        "loupe overlay dropped idx {cursor} ({})",
+                        if failed { "decode failed" } else { "hold cap" }
+                    ));
+                }
+                win.set_one2one(false);
+                win.set_loupe_soft(false);
+                st.last_pan_write = None;
+                st.last_overlay_cursor = None;
+                st.overlay_hold = None;
+                st.last_soft_rung = None;
             }
-            win.set_one2one(false);
-            win.set_loupe_soft(false);
-            st.last_pan_write = None;
-            st.last_overlay_cursor = None;
         }
     }
     // Fit pointer surface (issue #11): active at 1 column with no zoom
@@ -3883,15 +3971,31 @@ fn refresh_inner(win: &MainWindow, state: &Rc<RefCell<AppState>>) {
 /// prefetch ring size (5 = cursor ±2): the old 3-slot FIFO let the prefetch
 /// evict the focused image itself (validator HIGH finding; the user saw it
 /// as back-arrow quality degradation).
+///
+/// Eviction is by VIEW distance from the cursor, not insertion age
+/// (issue #46): age is view-order-blind — the provisional-order startup
+/// window legitimately decodes filename-order neighbors, and once the
+/// capture sort lands those are strangers occupying slots; age eviction
+/// then discarded exactly the view neighbor the NEXT tap needed while
+/// keeping a frame seven positions away (observed as an 81 ms thumb
+/// blink on a warm frame). Entries no longer in the view evict first.
 fn insert_fullres(st: &mut AppState, index: usize, texture: slint::Image) {
     st.fullres.retain(|(i, _)| *i != index);
     st.fullres.push((index, texture));
     let cursor = st.cursor;
     while st.fullres.len() > 5 {
+        let pos_of = |id: usize| st.view.iter().position(|v| *v == id);
+        let cursor_pos = pos_of(cursor);
         let victim = st
             .fullres
             .iter()
-            .position(|(i, _)| *i != cursor)
+            .enumerate()
+            .filter(|(_, (i, _))| *i != cursor)
+            .max_by_key(|(_, (i, _))| match (cursor_pos, pos_of(*i)) {
+                (Some(c), Some(p)) => p.abs_diff(c),
+                _ => usize::MAX, // not in the view (or no view): first out
+            })
+            .map(|(slot, _)| slot)
             .unwrap_or(0);
         st.fullres.remove(victim);
     }

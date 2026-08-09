@@ -221,6 +221,15 @@ export component MainWindow inherits Window {
     // Click-to-zoom (ui-grid.md: a click is always "center HERE").
     // loupe-clicked: fractional image coordinates inside the zoom overlay.
     callback loupe-clicked(float, float);
+    // loupe-dragged(dx, dy): logical-px pointer displacement of an active
+    // overlay drag (issue #46). Rust folds it through the pointer
+    // machine's Zoomed×Drag row and rewrites loupe-vx/vy synchronously —
+    // the ONE writer of the offsets. The overlay deliberately has no
+    // Flickable and therefore no fling physics: a release stops the
+    // image dead (the pointer contract promises "pan 1:1 with pointer
+    // motion", never inertia), and no animation can survive into a
+    // navigation or programmatic pan write.
+    callback loupe-dragged(float, float);
     // Pointer state machine (issue #11, ui-grid.md Mouse & pointer
     // contract): normalized events routed to fastcull-core::pointer.
     // pointer-wheel(up, ctrl, x, y): one notch-equivalent, view-area
@@ -755,16 +764,26 @@ export component MainWindow inherits Window {
 
         // Zoomed loupe overlay (any factor above fit, capped at 1:1): the
         // full-res texture GPU-scaled to loupe-w/h, pannable by drag; a
-        // click (press+release without movement — Flickable grabs real
-        // drags) re-centers on the clicked point (ui-grid.md zoom ladder).
+        // click (press+release without movement past the drag threshold)
+        // re-centers on the clicked point (ui-grid.md zoom ladder).
         // ALWAYS instantiated, visibility-toggled — never `if root.one2one`
         // (issue #6): a conditional element is torn down and re-created on
         // every texture gap during held-arrow navigation, and a freshly
-        // created Flickable initializes/clamps its viewport before Rust's
-        // offset write lands — one frame at 0,0 per transition, a visible
-        // top-left stream at 20 fps culling. An invisible element is
-        // neither rendered nor hit-tested, so the grid beneath keeps its
-        // input when the overlay is down.
+        // created element initializes before Rust's offset write lands —
+        // one frame at 0,0 per transition, a visible top-left stream at
+        // 20 fps culling. An invisible element is neither rendered nor
+        // hit-tested, so the grid beneath keeps its input when the
+        // overlay is down.
+        //
+        // There is deliberately NO Flickable here (issue #46): a real
+        // flick made it install its deceleration binding on the viewport
+        // offsets, which SURVIVED programmatic writes — an arrow pressed
+        // during the decay rendered the next image at the still-animating
+        // offsets (crossing 0,0) and fed them back into the pan centre as
+        // phantom drags. The image is positioned directly from
+        // loupe-vx/vy, which Rust alone writes; the TouchArea below
+        // implements the drag (1:1 with the pointer, stop on release —
+        // the pointer contract never promised inertia).
         Rectangle {
             visible: root.one2one;
             // Overlay covers the GRID area, not the window: with the IPTC
@@ -777,27 +796,63 @@ export component MainWindow inherits Window {
             width: parent.width - root.panel-w;
             height: parent.height - statusbar.height;
             background: #000000;
-            Flickable {
-                width: 100%;
-                height: 100%;
-                viewport-width: max(root.loupe-w, parent.width);
-                viewport-height: max(root.loupe-h, parent.height);
-                viewport-x <=> root.loupe-vx;
-                viewport-y <=> root.loupe-vy;
-                zoomed-img := Image {
-                    source: root.loupe-image;
-                    x: max(0px, (parent.width - root.loupe-w) / 2);
-                    y: max(0px, (parent.height - root.loupe-h) / 2);
-                    width: root.loupe-w;
-                    height: root.loupe-h;
+            clip: true;
+            zoomed-img := Image {
+                source: root.loupe-image;
+                // Centering term for an extent smaller than the viewport
+                // (offset_centering returns 0 there), plus the pan offset
+                // (<= 0) — the same geometry the Flickable composed from
+                // its content x and viewport-x.
+                x: max(0px, (parent.width - root.loupe-w) / 2) + root.loupe-vx;
+                y: max(0px, (parent.height - root.loupe-h) / 2) + root.loupe-vy;
+                width: root.loupe-w;
+                height: root.loupe-h;
+            }
+            TouchArea {
+                property <length> wheel-acc: 0;
+                // Drag state: `dragging` latches once the pointer travels
+                // past the threshold while pressed (Slint's Flickable used
+                // 8 logical px — keep the feel), and suppresses the
+                // click/double-click of that release ("drag beats click").
+                // Reset on the next press, never on release: `clicked`
+                // fires at release time and must still see it.
+                property <bool> dragging: false;
+                property <length> drag-dx: 0;
+                property <length> drag-dy: 0;
+                x: zoomed-img.x;
+                y: zoomed-img.y;
+                width: zoomed-img.width;
+                height: zoomed-img.height;
+                pointer-event(e) => {
+                    if (e.kind == PointerEventKind.down) {
+                        self.dragging = false;
+                    }
                 }
-                TouchArea {
-                    property <length> wheel-acc: 0;
-                    x: zoomed-img.x;
-                    y: zoomed-img.y;
-                    width: zoomed-img.width;
-                    height: zoomed-img.height;
-                    clicked => {
+                moved => {
+                    // Drag-pan, 1:1 with pointer motion (pointer
+                    // contract). Rust is the ONLY writer of loupe-vx/vy:
+                    // the callback folds the delta through the pointer
+                    // machine's Zoomed×Drag row and rewrites the offsets
+                    // synchronously, so this content-space touch area has
+                    // already moved with the image when the next event's
+                    // coordinates are computed — mouse-x - pressed-x is
+                    // therefore the UN-APPLIED residual since the press:
+                    // deltas never double-apply, motion spent against the
+                    // pan clamp stays in the residual (absolute
+                    // grab-point behavior), and the below-threshold
+                    // prefix of a drag is recovered in full by the first
+                    // applied event.
+                    self.drag-dx = self.mouse-x - self.pressed-x;
+                    self.drag-dy = self.mouse-y - self.pressed-y;
+                    if (!self.dragging && abs(self.drag-dx) + abs(self.drag-dy) > 8px) {
+                        self.dragging = true;
+                    }
+                    if (self.dragging) {
+                        root.loupe-dragged(self.drag-dx / 1px, self.drag-dy / 1px);
+                    }
+                }
+                clicked => {
+                    if (!self.dragging) {
                         root.loupe-clicked(
                             self.pressed-x / max(1px, self.width),
                             self.pressed-y / max(1px, self.height));
@@ -809,44 +864,45 @@ export component MainWindow inherits Window {
                         // — the click still re-centers exactly as before.
                         keys.focus();
                     }
-                    // Wheel above fit walks the zoom ladder, anchored
-                    // under the pointer (issue #11 — the wheel no longer
-                    // pans). Children see scroll before the Flickable, so
-                    // accepting here keeps drag-pan native while the
-                    // wheel zooms. Coords are converted to the overlay's
-                    // view space (viewport offsets are <= 0).
-                    scroll-event(e) => {
-                        if (e.delta-y == 0) {
-                            return reject;
-                        }
-                        if ((e.delta-y > 0 && self.wheel-acc < 0) || (e.delta-y < 0 && self.wheel-acc > 0)) {
-                            self.wheel-acc = 0;
-                        }
-                        self.wheel-acc += e.delta-y;
-                        if (self.wheel-acc >= 60px) {
-                            self.wheel-acc -= 60px;
-                            root.pointer-wheel(true, e.modifiers.control,
-                                zoomed-img.x + self.mouse-x + root.loupe-vx,
-                                zoomed-img.y + self.mouse-y + root.loupe-vy);
-                        } else if (self.wheel-acc <= -60px) {
-                            self.wheel-acc += 60px;
-                            root.pointer-wheel(false, e.modifiers.control,
-                                zoomed-img.x + self.mouse-x + root.loupe-vx,
-                                zoomed-img.y + self.mouse-y + root.loupe-vy);
-                        }
-                        return accept;
+                }
+                // Wheel above fit walks the zoom ladder, anchored
+                // under the pointer (issue #11 — the wheel no longer
+                // pans). Coords are converted to the overlay's view
+                // space (zoomed-img.x already carries the pan offset).
+                scroll-event(e) => {
+                    if (e.delta-y == 0) {
+                        return reject;
                     }
-                    double-clicked => {
+                    if ((e.delta-y > 0 && self.wheel-acc < 0) || (e.delta-y < 0 && self.wheel-acc > 0)) {
+                        self.wheel-acc = 0;
+                    }
+                    self.wheel-acc += e.delta-y;
+                    if (self.wheel-acc >= 60px) {
+                        self.wheel-acc -= 60px;
+                        root.pointer-wheel(true, e.modifiers.control,
+                            zoomed-img.x + self.mouse-x,
+                            zoomed-img.y + self.mouse-y);
+                    } else if (self.wheel-acc <= -60px) {
+                        self.wheel-acc += 60px;
+                        root.pointer-wheel(false, e.modifiers.control,
+                            zoomed-img.x + self.mouse-x,
+                            zoomed-img.y + self.mouse-y);
+                    }
+                    return accept;
+                }
+                double-clicked => {
+                    if (!self.dragging) {
                         root.zoom-double-clicked(
-                            zoomed-img.x + self.mouse-x + root.loupe-vx,
-                            zoomed-img.y + self.mouse-y + root.loupe-vy);
+                            zoomed-img.x + self.mouse-x,
+                            zoomed-img.y + self.mouse-y);
                     }
                 }
             }
-            // Loading cue pill (issue #21): VIEWPORT-FIXED — a
-            // sibling of the Flickable, never inside it (validator
-            // MAJOR: Flickable children live in panned content space,
-            // so the pill sat thousands of px off-screen at zoom).
+            // Loading cue pill (issue #21): VIEWPORT-FIXED — never
+            // positioned in panned content space (validator MAJOR on
+            // the Flickable-era overlay: a content-space pill sat
+            // thousands of px off-screen at zoom; the panning Image is
+            // its sibling for the same reason).
             // Permanent element, visibility-toggled (the issue #6/#20
             // rule); pointer-inert (no TouchArea). Sits BELOW the #20
             // state badge slot (top-left, 14px, belongs to the mark —
