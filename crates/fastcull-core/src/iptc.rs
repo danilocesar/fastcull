@@ -885,8 +885,7 @@ mod tests {
 
     #[test]
     fn templates_toml_roundtrip_unicode_and_partial_corruption() {
-        let dir = std::env::temp_dir().join(format!("fastcull-iptc-{}", std::process::id()));
-        std::fs::create_dir_all(&dir).unwrap();
+        let dir = crate::testutil::scratch_dir("iptc");
         let path = dir.join("templates.toml");
         let tpls = vec![
             IptcTemplate {

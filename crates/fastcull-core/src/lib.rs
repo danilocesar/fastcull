@@ -28,6 +28,31 @@ pub mod viewassets;
 pub mod xmp;
 pub mod zoompan;
 
+/// Scratch directories for unit tests, in one place.
+///
+/// Eight test modules had their own copy of this three-line scaffold,
+/// and they had drifted: some cleaned the directory first, some did not,
+/// some included the thread id (without which two tests in the same
+/// binary share a directory and race each other).
+#[cfg(test)]
+pub(crate) mod testutil {
+    use std::path::PathBuf;
+
+    /// A fresh `<temp>/fastcull-<tag>-<pid>-<thread>` directory: the
+    /// thread id keeps parallel tests in one binary apart, and the
+    /// pre-clean means a crashed earlier run cannot poison this one.
+    pub(crate) fn scratch_dir(tag: &str) -> PathBuf {
+        let dir = std::env::temp_dir().join(format!(
+            "fastcull-{tag}-{}-{:?}",
+            std::process::id(),
+            std::thread::current().id()
+        ));
+        std::fs::remove_dir_all(&dir).ok();
+        std::fs::create_dir_all(&dir).unwrap();
+        dir
+    }
+}
+
 /// Application version, shared by the CLI and the UI shell.
 pub const VERSION: &str = env!("CARGO_PKG_VERSION");
 

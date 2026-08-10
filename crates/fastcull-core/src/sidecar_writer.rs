@@ -206,14 +206,7 @@ mod tests {
     use crate::xmp::{read_sidecar, sidecar_path};
 
     fn tmp() -> PathBuf {
-        let dir = std::env::temp_dir().join(format!(
-            "fastcull-scw-{}-{:?}",
-            std::process::id(),
-            std::thread::current().id()
-        ));
-        std::fs::remove_dir_all(&dir).ok();
-        std::fs::create_dir_all(&dir).unwrap();
-        dir
+        crate::testutil::scratch_dir("scw")
     }
 
     #[test]
