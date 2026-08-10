@@ -2294,19 +2294,52 @@ fn write_snapshot_jpeg(
     std::fs::write(out, data).is_ok()
 }
 
-/// Re-anchor the scroll so the cursor is visible, then refresh. Order per
-/// the cursor contract: virtual height BEFORE viewport-y.
-fn reveal_cursor(win: &MainWindow, state: &Rc<RefCell<AppState>>) {
-    let (layout, viewport_h, scroll_y) = current_geometry(win, state);
-    let pos = state.borrow().cursor_pos().unwrap_or(0);
+/// Compute the reveal that keeps the cursor visible under the CURRENT
+/// state, and mark that geometry as consumed. Callable with the state
+/// borrow held — handle_nav holds it across its whole body and used to
+/// re-inline this whole computation because of that.
+///
+/// Returns the (virtual height, viewport-y) pair for `apply_reveal`; it
+/// deliberately does NOT write them itself, because writing vp-y can
+/// re-enter Rust (`changed vp-y` -> viewport-changed -> refresh), and
+/// refresh re-borrows the state.
+fn reveal_scroll(
+    win: &MainWindow,
+    st: &mut AppState,
+    viewport_h: f32,
+    scroll_y: f32,
+) -> (f32, f32) {
+    let width = win.get_grid_width();
+    let layout = GridLayout::new(st.zoom, width, viewport_h, st.view.len());
+    let pos = st.cursor_pos().unwrap_or(0);
     let new_scroll = layout.scroll_to_reveal(pos, scroll_y, viewport_h);
-    win.set_virtual_height(layout.total_height);
-    win.set_vp_y(-new_scroll);
     // This reveal IS the relayout correction for its geometry: mark it
     // consumed so refresh doesn't re-anchor on top of an already
     // consistent (geometry, offset) pair (the grid resize branch
-    // double-corrected panel toggles with mixed old/new frames).
-    state.borrow_mut().last_view_geometry = Some((win.get_grid_width(), viewport_h));
+    // double-corrected panel toggles with mixed old/new frames, and a nav
+    // key racing a resize would double-correct the same way).
+    st.last_view_geometry = Some((width, viewport_h));
+    (layout.total_height, -new_scroll)
+}
+
+/// Write a computed reveal to the window. Order matters (spec, cursor
+/// contract): the Flickable clamps viewport-y against its CURRENT
+/// viewport height, so the new virtual height must land FIRST or the
+/// reveal is clamped against stale bounds and the cursor scrolls out of
+/// view. Call with no state borrow held (see `reveal_scroll`).
+fn apply_reveal(win: &MainWindow, (virtual_height, vp_y): (f32, f32)) {
+    win.set_virtual_height(virtual_height);
+    win.set_vp_y(vp_y);
+}
+
+/// Re-anchor the scroll so the cursor is visible, then refresh.
+fn reveal_cursor(win: &MainWindow, state: &Rc<RefCell<AppState>>) {
+    let (_, viewport_h, scroll_y) = current_geometry(win, state);
+    let reveal = {
+        let mut st = state.borrow_mut();
+        reveal_scroll(win, &mut st, viewport_h, scroll_y)
+    };
+    apply_reveal(win, reveal);
     refresh(win, state);
 }
 
@@ -3253,21 +3286,11 @@ fn handle_nav_inner(win: &MainWindow, state: &Rc<RefCell<AppState>>, key: &str) 
             }
         }
     }
-    // Keep the cursor visible under the (possibly new) layout. Order matters
-    // (spec, cursor contract): the Flickable clamps viewport-y against its
-    // CURRENT viewport-height, so the new virtual height must land first or
-    // the reveal gets clamped against stale bounds and the cursor scrolls
-    // out of view.
-    let layout = GridLayout::new(st.zoom, win.get_grid_width(), viewport_h, st.view.len());
-    let pos = st.cursor_pos().unwrap_or(0);
-    let new_scroll = layout.scroll_to_reveal(pos, scroll_y, viewport_h);
-    // Every reveal marks its geometry as consumed (spec) — a nav key
-    // racing a resize must not let the relayout branch double-correct
-    // an already consistent (geometry, offset) pair.
-    st.last_view_geometry = Some((win.get_grid_width(), viewport_h));
+    // Keep the cursor visible under the (possibly new) layout — the same
+    // reveal reveal_cursor performs, with the borrow still held.
+    let reveal = reveal_scroll(win, &mut st, viewport_h, scroll_y);
     drop(st);
-    win.set_virtual_height(layout.total_height);
-    win.set_vp_y(-new_scroll);
+    apply_reveal(win, reveal);
     refresh(win, state);
 }
 
