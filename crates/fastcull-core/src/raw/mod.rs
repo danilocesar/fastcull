@@ -11,6 +11,7 @@
 //! then to the 8640×5760 full-resolution JPEG (with `ImageWidth`/`ImageLength`
 //! tags); raw sensor data lives in a SubIFD with no JPEG pointer tags.
 
+mod endian;
 mod jpeg;
 #[cfg(test)]
 pub(crate) use jpeg::hostile as jpeg_hostile;

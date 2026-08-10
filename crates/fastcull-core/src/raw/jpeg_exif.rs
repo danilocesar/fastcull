@@ -10,8 +10,9 @@
 
 use std::io::{Read, Seek, SeekFrom};
 
+use super::endian::Endian;
 use super::jpeg;
-use super::sony::{find_in_ifd, En};
+use super::sony::find_in_ifd;
 
 /// Longest ASCII value we will allocate for (model/serial/date strings
 /// are tens of bytes; anything bigger is hostile).
@@ -64,7 +65,7 @@ impl<R: Seek> Seek for OffsetReader<R> {
 }
 
 /// ASCII tag value (trimmed, NUL-stripped); `None` when absent/hostile.
-fn ascii_value<R: Read + Seek>(reader: &mut R, en: &En, ifd: u64, tag: u16) -> Option<String> {
+fn ascii_value<R: Read + Seek>(reader: &mut R, en: &Endian, ifd: u64, tag: u16) -> Option<String> {
     let (ty, count, val) = find_in_ifd(reader, ifd, en, tag)?;
     if ty != 2 || count == 0 || count > MAX_ASCII {
         return None;
@@ -111,11 +112,7 @@ pub fn read_tiff_exif<R: Read + Seek>(tiff: &mut R) -> Option<JpegExif> {
     tiff.seek(SeekFrom::Start(0)).ok()?;
     let mut header = [0u8; 8];
     tiff.read_exact(&mut header).ok()?;
-    let en = match &header[0..2] {
-        b"II" => En(true),
-        b"MM" => En(false),
-        _ => return None,
-    };
+    let en = Endian::from_marker(&header[0..2])?;
     if en.u16([header[2], header[3]]) != 42 {
         return None;
     }

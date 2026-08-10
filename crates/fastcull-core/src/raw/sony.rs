@@ -22,6 +22,7 @@
 //!   single drive), SequenceImageNumber @0x12 (u32 LE, raw; exiftool
 //!   displays raw+1 = "number of images captured in burst sequence").
 
+use super::endian::Endian;
 use std::io::{Read, Seek, SeekFrom};
 
 /// Raw sequence facts from the maker note. Interpretation into the
@@ -68,30 +69,11 @@ fn decipher_table() -> [u8; 256] {
     table
 }
 
-pub(super) struct En(pub(super) bool); // little?
-
-impl En {
-    pub(super) fn u16(&self, b: [u8; 2]) -> u16 {
-        if self.0 {
-            u16::from_le_bytes(b)
-        } else {
-            u16::from_be_bytes(b)
-        }
-    }
-    pub(super) fn u32(&self, b: [u8; 4]) -> u32 {
-        if self.0 {
-            u32::from_le_bytes(b)
-        } else {
-            u32::from_be_bytes(b)
-        }
-    }
-}
-
 /// Find `tag` in the IFD at `offset`; return (type, count, value bytes).
 pub(super) fn find_in_ifd<R: Read + Seek>(
     reader: &mut R,
     offset: u64,
-    en: &En,
+    en: &Endian,
     tag: u16,
 ) -> Option<(u16, u32, [u8; 4])> {
     reader.seek(SeekFrom::Start(offset)).ok()?;
@@ -122,11 +104,7 @@ pub fn read_sequence<R: Read + Seek>(reader: &mut R) -> Option<SonySequence> {
     reader.seek(SeekFrom::Start(0)).ok()?;
     let mut header = [0u8; 8];
     reader.read_exact(&mut header).ok()?;
-    let en = match &header[0..2] {
-        b"II" => En(true),
-        b"MM" => En(false),
-        _ => return None,
-    };
+    let en = Endian::from_marker(&header[0..2])?;
     if en.u16([header[2], header[3]]) != 42 {
         return None;
     }
@@ -168,6 +146,9 @@ pub fn read_sequence<R: Read + Seek>(reader: &mut R) -> Option<SonySequence> {
         *b = table[*b as usize];
     }
     let release_mode2 = blob[0x09];
+    // Deliberately NOT the file's endianness (so not `Endian`): the
+    // deciphered 0x9400 blob is little-endian whatever the container is
+    // (exiftool semantics).
     let raw_seq = u32::from_le_bytes([blob[0x12], blob[0x13], blob[0x14], blob[0x15]]);
     Some(SonySequence {
         release_mode2,
