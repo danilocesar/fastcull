@@ -33,6 +33,139 @@ pub struct IptcData {
     pub keywords: Vec<String>,
 }
 
+/// The IPTC fields FastCull edits, as one enumerated table.
+///
+/// This list used to be maintained in nine places (the two structs, the
+/// apply macro, three xmp.rs tables, and three more in the app's panel
+/// bridge). Adding a field meant finding all nine; missing one produced a
+/// field that reads but never writes, or shows but never saves.
+///
+/// The DECLARATION ORDER is load-bearing twice over: it is the panel's
+/// row order (the index is the UI callback contract) and the order
+/// properties are emitted into the sidecar. Do not reorder it.
+///
+/// The struct fields of [`IptcData`]/[`IptcTemplate`] stay — they are the
+/// storage, and serde reads them by name — but every LIST of them is now
+/// this enum.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum IptcField {
+    Title,
+    Description,
+    Creator,
+    Rights,
+    Headline,
+    City,
+    Country,
+    Credit,
+    Source,
+    JobId,
+    Location,
+}
+
+impl IptcField {
+    /// Every field, in panel and sidecar order.
+    pub const ALL: [IptcField; 11] = [
+        IptcField::Title,
+        IptcField::Description,
+        IptcField::Creator,
+        IptcField::Rights,
+        IptcField::Headline,
+        IptcField::City,
+        IptcField::Country,
+        IptcField::Credit,
+        IptcField::Source,
+        IptcField::JobId,
+        IptcField::Location,
+    ];
+
+    /// The panel row label (UI display order = `ALL` order).
+    pub fn label(self) -> &'static str {
+        match self {
+            IptcField::Title => "Title",
+            IptcField::Description => "Description",
+            IptcField::Creator => "Creator",
+            IptcField::Rights => "Copyright",
+            IptcField::Headline => "Headline",
+            IptcField::City => "City",
+            IptcField::Country => "Country",
+            IptcField::Credit => "Credit",
+            IptcField::Source => "Source",
+            IptcField::JobId => "Job ID",
+            IptcField::Location => "Location",
+        }
+    }
+
+    /// The struct field name — also the templates.toml key and the name
+    /// template errors report.
+    pub fn key(self) -> &'static str {
+        match self {
+            IptcField::Title => "title",
+            IptcField::Description => "description",
+            IptcField::Creator => "creator",
+            IptcField::Rights => "rights",
+            IptcField::Headline => "headline",
+            IptcField::City => "city",
+            IptcField::Country => "country",
+            IptcField::Credit => "credit",
+            IptcField::Source => "source",
+            IptcField::JobId => "job_id",
+            IptcField::Location => "location",
+        }
+    }
+
+    /// This field's value in some image's data.
+    pub fn get(self, d: &IptcData) -> Option<&String> {
+        match self {
+            IptcField::Title => d.title.as_ref(),
+            IptcField::Description => d.description.as_ref(),
+            IptcField::Creator => d.creator.as_ref(),
+            IptcField::Rights => d.rights.as_ref(),
+            IptcField::Headline => d.headline.as_ref(),
+            IptcField::City => d.city.as_ref(),
+            IptcField::Country => d.country.as_ref(),
+            IptcField::Credit => d.credit.as_ref(),
+            IptcField::Source => d.source.as_ref(),
+            IptcField::JobId => d.job_id.as_ref(),
+            IptcField::Location => d.location.as_ref(),
+        }
+    }
+
+    /// Set (or, with `None`, REMOVE — the tri-state clear) the value.
+    pub fn set(self, d: &mut IptcData, value: Option<String>) {
+        let slot = match self {
+            IptcField::Title => &mut d.title,
+            IptcField::Description => &mut d.description,
+            IptcField::Creator => &mut d.creator,
+            IptcField::Rights => &mut d.rights,
+            IptcField::Headline => &mut d.headline,
+            IptcField::City => &mut d.city,
+            IptcField::Country => &mut d.country,
+            IptcField::Credit => &mut d.credit,
+            IptcField::Source => &mut d.source,
+            IptcField::JobId => &mut d.job_id,
+            IptcField::Location => &mut d.location,
+        };
+        *slot = value;
+    }
+
+    /// This field's (possibly `{variable}`-carrying) template value.
+    pub fn template_value(self, t: &IptcTemplate) -> Option<&String> {
+        match self {
+            IptcField::Title => t.title.as_ref(),
+            IptcField::Description => t.description.as_ref(),
+            IptcField::Creator => t.creator.as_ref(),
+            IptcField::Rights => t.rights.as_ref(),
+            IptcField::Headline => t.headline.as_ref(),
+            IptcField::City => t.city.as_ref(),
+            IptcField::Country => t.country.as_ref(),
+            IptcField::Credit => t.credit.as_ref(),
+            IptcField::Source => t.source.as_ref(),
+            IptcField::JobId => t.job_id.as_ref(),
+            IptcField::Location => t.location.as_ref(),
+        }
+    }
+}
+
 /// Sanitize user-entered text for metadata fields (iptc-templates.md panel
 /// rules): NFC-normalize (NFD and NFC spellings must be ONE keyword),
 /// strip control characters (raw controls make the XMP packet invalid --
@@ -294,24 +427,6 @@ pub fn expand(
 
 // ------------------------------------------------------------------- apply
 
-/// Field-pair list shared by the apply loop (template getter, data setter
-/// target). Keywords are handled separately (additive union).
-macro_rules! for_each_field {
-    ($m:ident) => {
-        $m!(title);
-        $m!(description);
-        $m!(creator);
-        $m!(rights);
-        $m!(headline);
-        $m!(city);
-        $m!(country);
-        $m!(credit);
-        $m!(source);
-        $m!(job_id);
-        $m!(location);
-    };
-}
-
 /// Apply a template to a batch (spec tri-state, 2026-07-25: ABSENT fields
 /// preserve, fields that are EMPTY AFTER TRIMMING clear (field -> None),
 /// non-empty fields overwrite; keywords union additively). ALL expansions
@@ -337,39 +452,36 @@ pub fn apply_template(
         Clear,
     }
     struct Plan {
-        fields: Vec<(&'static str, Planned)>,
+        fields: Vec<(IptcField, Planned)>,
         keywords: Vec<String>,
     }
     let mut plans = Vec::with_capacity(n);
     for (i, ctx) in ctxs.iter().enumerate() {
         let seq = i + 1;
-        let mut fields: Vec<(&'static str, Planned)> = Vec::new();
-        macro_rules! plan_field {
-            ($f:ident) => {
-                match tpl.$f.as_deref() {
-                    None => {}
-                    // Empty AFTER TRIMMING clears (validator M2: "   " was
-                    // neither clear nor meaningful, and the sidecar reader
-                    // drops whitespace-only values on round-trip anyway).
-                    Some(blank) if blank.trim().is_empty() => {
-                        fields.push((stringify!($f), Planned::Clear))
-                    }
-                    Some(raw) => {
-                        // Sanitize the EXPANDED value (QE D1: a control
-                        // char legally TOML-escaped in templates.toml
-                        // corrupted every sidecar of a batch Apply);
-                        // empty-after-sanitize folds into Clear.
-                        let value = sanitize_text(&expand(stringify!($f), raw, ctx, seq, n)?);
-                        if value.is_empty() {
-                            fields.push((stringify!($f), Planned::Clear));
-                        } else {
-                            fields.push((stringify!($f), Planned::Set(value)));
-                        }
+        let mut fields: Vec<(IptcField, Planned)> = Vec::new();
+        for field in IptcField::ALL {
+            match field.template_value(tpl).map(String::as_str) {
+                None => {}
+                // Empty AFTER TRIMMING clears (validator M2: "   " was
+                // neither clear nor meaningful, and the sidecar reader
+                // drops whitespace-only values on round-trip anyway).
+                Some(blank) if blank.trim().is_empty() => {
+                    fields.push((field, Planned::Clear));
+                }
+                Some(raw) => {
+                    // Sanitize the EXPANDED value (QE D1: a control char
+                    // legally TOML-escaped in templates.toml corrupted
+                    // every sidecar of a batch Apply); empty-after-
+                    // sanitize folds into Clear.
+                    let value = sanitize_text(&expand(field.key(), raw, ctx, seq, n)?);
+                    if value.is_empty() {
+                        fields.push((field, Planned::Clear));
+                    } else {
+                        fields.push((field, Planned::Set(value)));
                     }
                 }
-            };
+            }
         }
-        for_each_field!(plan_field);
         let mut keywords = Vec::new();
         for raw in &tpl.keywords {
             let kw = expand("keywords", raw, ctx, seq, n)?;
@@ -383,18 +495,14 @@ pub fn apply_template(
     // Phase 2: snapshot + mutate (infallible from here).
     let snapshots: Vec<IptcData> = images.to_vec();
     for (img, plan) in images.iter_mut().zip(plans) {
-        for (name, value) in plan.fields {
-            macro_rules! set_field {
-                ($f:ident) => {
-                    if name == stringify!($f) {
-                        img.$f = match &value {
-                            Planned::Set(v) => Some(v.clone()),
-                            Planned::Clear => None, // property removed
-                        };
-                    }
-                };
-            }
-            for_each_field!(set_field);
+        for (field, value) in plan.fields {
+            field.set(
+                img,
+                match value {
+                    Planned::Set(v) => Some(v),
+                    Planned::Clear => None, // property removed
+                },
+            );
         }
         img.add_keywords(plan.keywords);
     }
@@ -472,18 +580,18 @@ pub fn parse_templates(content: &str) -> Result<TemplateLoad, IptcError> {
         match value.clone().try_into::<IptcTemplate>() {
             Ok(mut tpl) => {
                 tpl.name = name.clone();
-                macro_rules! warn_empty {
-                    ($f:ident) => {
-                        if tpl.$f.as_deref().is_some_and(|v| v.trim().is_empty()) {
-                            load.warnings.push(format!(
-                                "template '{name}': empty '{}' CLEARS that field on \
-                                 every image it is applied to",
-                                stringify!($f)
-                            ));
-                        }
-                    };
+                for field in IptcField::ALL {
+                    if field
+                        .template_value(&tpl)
+                        .is_some_and(|v| v.trim().is_empty())
+                    {
+                        load.warnings.push(format!(
+                            "template '{name}': empty '{}' CLEARS that field on \
+                             every image it is applied to",
+                            field.key()
+                        ));
+                    }
                 }
-                for_each_field!(warn_empty);
                 load.templates.push(tpl);
             }
             Err(e) => load.entry_errors.push(format!("template '{name}': {e}")),

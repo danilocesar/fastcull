@@ -23,6 +23,7 @@ use std::path::{Path, PathBuf};
 use quick_xml::events::{BytesStart, Event};
 
 use crate::catalog::PickState;
+use crate::iptc::IptcField;
 
 #[derive(Debug, thiserror::Error)]
 pub enum XmpError {
@@ -90,7 +91,7 @@ pub fn read_sidecar(path: &Path) -> Result<SidecarState, XmpError> {
     // IPTC field currently being read (element form): set on Start of a
     // mapped property, harvested from Text (directly or inside its
     // Alt/Seq rdf:li), cleared on the matching End.
-    let mut in_iptc_field: Option<&'static str> = None;
+    let mut in_iptc_field: Option<IptcField> = None;
     let mut buf = Vec::new();
     loop {
         let event = reader.read_event_into(&mut buf)?;
@@ -172,43 +173,54 @@ pub fn read_sidecar(path: &Path) -> Result<SidecarState, XmpError> {
     Ok(state)
 }
 
-/// Map an XML local name to the IptcData field it feeds (xmp-sidecars.md
-/// table). Matching by local name accepts alias prefixes, symmetric with
-/// the keyword reader.
-fn iptc_field_for(local: &[u8]) -> Option<&'static str> {
-    Some(match local {
-        b"title" => "title",
-        b"description" => "description",
-        b"creator" => "creator",
-        b"rights" => "rights",
-        b"Headline" => "headline",
-        b"City" => "city",
-        b"Country" => "country",
-        b"Credit" => "credit",
-        b"Source" => "source",
-        b"TransmissionReference" => "job_id",
-        b"Location" => "location",
-        _ => return None,
-    })
+/// The XMP property each field maps to (xmp-sidecars.md table), and the
+/// shape it is written in. The field LIST itself lives in
+/// `iptc::IptcField`; this is the sidecar half of the mapping, and the
+/// match is exhaustive, so a new field cannot be added without deciding
+/// its property here.
+fn xmp_property(field: IptcField) -> (&'static str, XmpForm) {
+    match field {
+        IptcField::Title => ("dc:title", XmpForm::Alt),
+        IptcField::Description => ("dc:description", XmpForm::Alt),
+        IptcField::Creator => ("dc:creator", XmpForm::Seq),
+        IptcField::Rights => ("dc:rights", XmpForm::Alt),
+        IptcField::Headline => ("photoshop:Headline", XmpForm::Simple),
+        IptcField::City => ("photoshop:City", XmpForm::Simple),
+        IptcField::Country => ("photoshop:Country", XmpForm::Simple),
+        IptcField::Credit => ("photoshop:Credit", XmpForm::Simple),
+        IptcField::Source => ("photoshop:Source", XmpForm::Simple),
+        IptcField::JobId => ("photoshop:TransmissionReference", XmpForm::Simple),
+        IptcField::Location => ("Iptc4xmpCore:Location", XmpForm::Simple),
+    }
 }
 
-fn set_iptc_field(iptc: &mut crate::iptc::IptcData, field: &str, value: &str) {
-    let slot = match field {
-        "title" => &mut iptc.title,
-        "description" => &mut iptc.description,
-        "creator" => &mut iptc.creator,
-        "rights" => &mut iptc.rights,
-        "headline" => &mut iptc.headline,
-        "city" => &mut iptc.city,
-        "country" => &mut iptc.country,
-        "credit" => &mut iptc.credit,
-        "source" => &mut iptc.source,
-        "job_id" => &mut iptc.job_id,
-        "location" => &mut iptc.location,
-        _ => return,
-    };
-    if slot.is_none() {
-        *slot = Some(value.to_string()); // first value wins
+/// How a field's value is serialized inside its property element.
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum XmpForm {
+    /// `rdf:Alt` with an `x-default` li (title, description, rights).
+    Alt,
+    /// `rdf:Seq` with one li (creator).
+    Seq,
+    /// The value directly in the element (photoshop/Iptc4xmpCore set).
+    Simple,
+}
+
+/// Map an XML local name to the field it feeds. Matching by local name
+/// accepts alias prefixes, symmetric with the keyword reader — and it is
+/// the LOCAL half of the same one-line-per-field table above, so the two
+/// directions cannot disagree about which properties we own.
+fn iptc_field_for(local: &[u8]) -> Option<IptcField> {
+    IptcField::ALL
+        .into_iter()
+        .find(|f| local_name(xmp_property(*f).0.as_bytes()) == local)
+}
+
+/// First value wins: a property already filled by an earlier form
+/// (attribute before element, x-default before other languages) is not
+/// overwritten.
+fn set_iptc_field(iptc: &mut crate::iptc::IptcData, field: IptcField, value: &str) {
+    if field.get(iptc).is_none() {
+        field.set(iptc, Some(value.to_string()));
     }
 }
 
@@ -329,38 +341,17 @@ fn iptc_block(iptc: &crate::iptc::IptcData) -> String {
         )
     };
     let simple = |name: &str, v: &str| format!("\n   <{name}>{}</{name}>", xml_escape(v));
-    if let Some(v) = iptc.title.as_deref() {
-        out.push_str(&alt("dc:title", v));
-    }
-    if let Some(v) = iptc.description.as_deref() {
-        out.push_str(&alt("dc:description", v));
-    }
-    if let Some(v) = iptc.creator.as_deref() {
-        out.push_str(&seq("dc:creator", v));
-    }
-    if let Some(v) = iptc.rights.as_deref() {
-        out.push_str(&alt("dc:rights", v));
-    }
-    if let Some(v) = iptc.headline.as_deref() {
-        out.push_str(&simple("photoshop:Headline", v));
-    }
-    if let Some(v) = iptc.city.as_deref() {
-        out.push_str(&simple("photoshop:City", v));
-    }
-    if let Some(v) = iptc.country.as_deref() {
-        out.push_str(&simple("photoshop:Country", v));
-    }
-    if let Some(v) = iptc.credit.as_deref() {
-        out.push_str(&simple("photoshop:Credit", v));
-    }
-    if let Some(v) = iptc.source.as_deref() {
-        out.push_str(&simple("photoshop:Source", v));
-    }
-    if let Some(v) = iptc.job_id.as_deref() {
-        out.push_str(&simple("photoshop:TransmissionReference", v));
-    }
-    if let Some(v) = iptc.location.as_deref() {
-        out.push_str(&simple("Iptc4xmpCore:Location", v));
+    // Declaration order of IptcField IS the element order of the block.
+    for field in IptcField::ALL {
+        let Some(v) = field.get(iptc).map(String::as_str) else {
+            continue;
+        };
+        let (name, form) = xmp_property(field);
+        out.push_str(&match form {
+            XmpForm::Alt => alt(name, v),
+            XmpForm::Seq => seq(name, v),
+            XmpForm::Simple => simple(name, v),
+        });
     }
     out
 }
