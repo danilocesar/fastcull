@@ -295,15 +295,7 @@ impl LoupeEngine {
         let mut wanted: Vec<usize> = wanted.into_iter().filter(|i| *i < count).collect();
         wanted.push(index);
         for i in wanted {
-            if !sufficient_cached(&mut state, i, request, stamp) && !state.failed.contains(&i) {
-                if state.in_flight.contains(&i) {
-                    let e = state.deferred.entry(i).or_insert(0);
-                    *e = (*e).max(request);
-                } else {
-                    state.queue.retain(|(q, _, _)| *q != i);
-                    state.queue.push((i, request, true));
-                }
-            }
+            schedule(&mut state, i, request, stamp, Origin::Focus);
         }
         let hit = state.cache.get(&index).map(|(img, _)| img.clone());
         drop(state);
@@ -348,20 +340,7 @@ impl LoupeEngine {
             if i >= count {
                 continue;
             }
-            if !sufficient_cached(&mut state, i, display_long, stamp) && !state.failed.contains(&i)
-            {
-                if state.in_flight.contains(&i) {
-                    let e = state.deferred.entry(i).or_insert(0);
-                    *e = (*e).max(display_long);
-                } else {
-                    if state.queue.iter().any(|(q, _, _)| *q == i) {
-                        continue; // already scheduled by focus/prefetch
-                    }
-                    // Front of the vec = popped last: focused work stays first.
-                    state.queue.insert(0, (i, display_long, false));
-                    queued_any = true;
-                }
-            }
+            queued_any |= schedule(&mut state, i, display_long, stamp, Origin::Grid);
         }
         drop(state);
         if queued_any {
@@ -451,6 +430,58 @@ fn revive_deferred(state: &mut LoupeState, index: usize, target: u32, stamp: u64
         state.queue.push((index, target, true));
     } else {
         state.queue.insert(0, (index, target, true));
+    }
+    true
+}
+
+/// Where a scheduled request goes in the queue — the ONE thing
+/// `focus()` and `want()` disagree about.
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+enum Origin {
+    /// Focus and its prefetch ring: the BACK of the queue (workers pop
+    /// from the back, so this is served first), REPLACING any pending
+    /// entry for the same index — the latest intent wins. Marked
+    /// focus-origin, so the grid-want cull never drops it.
+    Focus,
+    /// Grid want (intermediate zoom cells): the FRONT of the queue, so
+    /// focused work stays ahead of it, and it YIELDS to an entry the
+    /// focus path already placed rather than displacing it.
+    Grid,
+}
+
+/// Schedule `index` at `target`, or record why it needs no work.
+///
+/// The rule was spelled out twice — once in `focus`, once in `want` —
+/// including the deferred-upgrade merge, which has a recorded QE defect
+/// of its own (a dropped upgrade meant 1:1 never arrived without the
+/// app's refresh loop, see `LoupeState::deferred`). It is now single-site:
+/// sufficient-or-failed does nothing, in-flight merges the target into
+/// the deferred map with `max` (a smaller later request must never undo a
+/// bigger one), and anything else is queued at the origin's polarity.
+///
+/// Returns true only when an entry was actually queued — `want` wakes
+/// workers on that, `focus` wakes them unconditionally.
+fn schedule(state: &mut LoupeState, index: usize, target: u32, stamp: u64, origin: Origin) -> bool {
+    if sufficient_cached(state, index, target, stamp) || state.failed.contains(&index) {
+        return false;
+    }
+    if state.in_flight.contains(&index) {
+        let e = state.deferred.entry(index).or_insert(0);
+        *e = (*e).max(target);
+        return false;
+    }
+    match origin {
+        Origin::Focus => {
+            state.queue.retain(|(q, _, _)| *q != index);
+            state.queue.push((index, target, true));
+        }
+        Origin::Grid => {
+            if state.queue.iter().any(|(q, _, _)| *q == index) {
+                return false; // already scheduled by focus/prefetch
+            }
+            // Front of the vec = popped last: focused work stays first.
+            state.queue.insert(0, (index, target, false));
+        }
     }
     true
 }
@@ -1017,6 +1048,43 @@ fn evict_to_budget(state: &mut LoupeState, budget: usize) {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// The two scheduling polarities, pinned: focus work goes to the BACK
+    /// (popped first) and replaces a pending entry for the same index;
+    /// grid work goes to the FRONT and yields to whatever focus queued.
+    /// And the in-flight case defers with a MAX merge — a later smaller
+    /// target must never undo a bigger one (recorded QE defect).
+    #[test]
+    fn schedule_polarity_and_deferred_merge() {
+        let mut st = LoupeState::default();
+        // Grid want first, then focus: focus must end up behind it in the
+        // vec (= popped first) and carry the focus-origin flag.
+        assert!(schedule(&mut st, 7, 1616, 1, Origin::Grid));
+        assert!(schedule(&mut st, 3, 8640, 2, Origin::Focus));
+        assert_eq!(st.queue, vec![(7, 1616, false), (3, 8640, true)]);
+
+        // A grid want for an already-queued index yields (no duplicate,
+        // no downgrade of the focus entry's target).
+        assert!(!schedule(&mut st, 3, 1616, 3, Origin::Grid));
+        assert_eq!(st.queue, vec![(7, 1616, false), (3, 8640, true)]);
+
+        // A focus request for an already-queued index REPLACES it.
+        assert!(schedule(&mut st, 7, 8640, 4, Origin::Focus));
+        assert_eq!(st.queue, vec![(3, 8640, true), (7, 8640, true)]);
+
+        // In flight: nothing is queued, the target is deferred, and the
+        // merge keeps the LARGEST target regardless of arrival order.
+        st.in_flight.push(5);
+        assert!(!schedule(&mut st, 5, 8640, 5, Origin::Focus));
+        assert!(!schedule(&mut st, 5, 1616, 6, Origin::Grid));
+        assert_eq!(st.deferred.get(&5), Some(&8640));
+        assert_eq!(st.queue.len(), 2, "an in-flight index is never queued");
+
+        // Failed indexes are never scheduled again.
+        st.failed.insert(9);
+        assert!(!schedule(&mut st, 9, 1616, 7, Origin::Focus));
+        assert_eq!(st.queue.len(), 2);
+    }
 
     /// The boundary of the top-rung predicate, pinned: the mid-class
     /// ceiling itself is NOT top (`serves` allows only a 1.25x upscale
