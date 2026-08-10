@@ -94,6 +94,48 @@ faq); QE executed the full DoD path from the docs against the release
 binary. Release-note debt RESOLVED with v0.3.0: the index install note was
 removed and the culling callout pinned to "Changed in 0.3.0". The docs-follow-specs binding lives in CLAUDE.md.
 
+## v0.9.0 (released 2026-08-09)
+
+One report drove this release (#46, reported by the user): at deep
+1:1, arrowing onto a photo nothing had decoded yet flashed the ENTIRE
+next frame at fit for a split second before snapping back to the
+carried spot — and sometimes the next photo appeared parked at its
+top-left corner with the carried position silently lost. Three
+mechanisms were underneath, and fixing the third changes how the loupe
+feels under the hand, which is why this is 0.9.0 and not a patch.
+
+First, **the loupe never drops to fit in transit**. Landing on a frame
+with no decoded pixels used to fall back to the whole-photo fit view;
+now a rough placeholder-quality frame renders at the carried zoom and
+position — with the "◌ loading" pill — until the real pixels land
+moments later. During transit the eye tracks position, not detail, so
+mush at the right spot beats a sharp flash of the wrong framing. A
+decode that outright fails still surfaces its Failed badge instead of
+a stale placeholder.
+
+Second, **read-ahead follows the screen, not the filenames**. The
+prefetch ring warmed neighbours by file order while the arrow keys
+walk the order on screen — in folders where capture time interleaves
+the filenames (two bodies, two cards) it warmed frames no arrow would
+ever reach while every real neighbour stayed cold, which is what made
+the flash so common. Every ring now works in on-screen view order, so
+the frames being warmed are the frames the arrows will actually hit.
+
+Third, **no coasting into a navigation** — this is the felt change. A
+fast drag-flick used to set the image gliding, and an arrow pressed
+while it still coasted rendered the next photo at the wrong spot; the
+animation's writes were being misread as hand drags and folded into
+the stored pan centre until the carried position was gone for good.
+Dragging in the loupe now has no glide at all: the image tracks the
+hand exactly and stops dead on release, and the stored position only
+ever moves on a real drag. (The grid keeps its kinetic scroll —
+flicking through a grid is browsing; at 1:1 the user is judging a
+spot, and a glide would carry past it.)
+
+Under the hood the drive harness learned pointer dispatch (`press.`,
+`move.`, `release.`, `wheel.` tokens) and a loupe-pan dump block, so
+drag/flick/navigate sequences finally have red-proven tests.
+
 ## v0.8.1 (released 2026-08-03)
 
 Bug fixes only — two strands since v0.8.0, both from live reports.
