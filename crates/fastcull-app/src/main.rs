@@ -300,6 +300,40 @@ impl AppState {
         self.zoom == grid::ZOOM_COLUMNS.len() - 1
     }
 
+    /// Remember the grid zoom to come back to when the loupe is left.
+    /// Saved on BOTH ways in: the jump (`enter_loupe`) and the last
+    /// zoom-in step across the boundary.
+    fn remember_grid_zoom(&mut self) {
+        self.last_grid_zoom = self.zoom;
+    }
+
+    /// Climb from a grid zoom into the loupe at `factor` (fit = 1.0,
+    /// `INFINITY` = "1:1 as soon as the ceiling is known"). Returns false
+    /// when the view was already at the loupe — nothing was touched, and
+    /// the caller's own already-there branch applies.
+    fn enter_loupe(&mut self, factor: f32) -> bool {
+        if self.at_loupe() {
+            return false;
+        }
+        self.remember_grid_zoom();
+        self.zoom = grid::ZOOM_COLUMNS.len() - 1;
+        self.zoom_factor = factor;
+        true
+    }
+
+    /// Drop back to the remembered grid zoom, at fit and un-panned. A
+    /// no-op when the view is not at the loupe. `last_grid_zoom` is
+    /// clamped below the loupe step so a stale value can never park the
+    /// exit back on the loupe itself.
+    fn exit_loupe(&mut self) {
+        if !self.at_loupe() {
+            return;
+        }
+        self.zoom_factor = 1.0;
+        self.pan_center = (0.5, 0.5);
+        self.zoom = self.last_grid_zoom.min(grid::ZOOM_COLUMNS.len() - 2);
+    }
+
     /// The cursor's position in the current view (None = cursor image is
     /// filtered out or the view is empty).
     fn cursor_pos(&self) -> Option<usize> {
@@ -375,11 +409,8 @@ fn recompute_view_keep_cursor(st: &mut AppState, user_changed_query: bool) {
     ) {
         st.cursor = id;
     }
-    let loupe_step = grid::ZOOM_COLUMNS.len() - 1;
-    if st.view.is_empty() && st.zoom == loupe_step {
-        st.zoom_factor = 1.0;
-        st.pan_center = (0.5, 0.5);
-        st.zoom = st.last_grid_zoom.min(loupe_step - 1);
+    if st.view.is_empty() {
+        st.exit_loupe(); // nothing to look at: the empty state is a grid
     }
 }
 
@@ -2756,7 +2787,6 @@ fn apply_pointer_action(
     action: fastcull_core::pointer::Action,
 ) {
     use fastcull_core::pointer::Action;
-    let loupe_step = grid::ZOOM_COLUMNS.len() - 1;
     {
         let mut st = state.borrow_mut();
         match action {
@@ -2771,10 +2801,9 @@ fn apply_pointer_action(
                 st.pan_center = center;
             }
             Action::EnterLoupe => {
-                if st.zoom < loupe_step {
-                    st.last_grid_zoom = st.zoom;
-                    st.zoom = loupe_step;
-                }
+                st.enter_loupe(1.0);
+                // Also from INSIDE the loupe (a double-click while zoomed
+                // is the way back to fit), so these are unconditional.
                 st.zoom_factor = 1.0;
                 st.pan_center = (0.5, 0.5);
             }
@@ -2974,7 +3003,6 @@ fn handle_nav_inner(win: &MainWindow, state: &Rc<RefCell<AppState>>, key: &str) 
     ) {
         st.cursor_touched = true;
     }
-    let loupe_step = grid::ZOOM_COLUMNS.len() - 1;
     match key {
         "pick" | "reject" | "clear" => {
             let pick = match key {
@@ -3005,11 +3033,7 @@ fn handle_nav_inner(win: &MainWindow, state: &Rc<RefCell<AppState>>, key: &str) 
                     None => {
                         // Inbox zero (persona G2): leaving the loupe — the
                         // empty state is a grid-level view.
-                        if st.zoom == loupe_step {
-                            st.zoom_factor = 1.0;
-                            st.pan_center = (0.5, 0.5);
-                            st.zoom = st.last_grid_zoom.min(loupe_step - 1);
-                        }
+                        st.exit_loupe();
                     }
                 }
             }
@@ -3019,12 +3043,8 @@ fn handle_nav_inner(win: &MainWindow, state: &Rc<RefCell<AppState>>, key: &str) 
         "one2one" => {
             // Z: fit -> 1:1; zoomed (1:1 or intermediate) -> back to fit;
             // from a grid zoom: jump straight to loupe 1:1.
-            if st.loupe.is_some() {
-                if st.zoom < loupe_step {
-                    st.last_grid_zoom = st.zoom;
-                    st.zoom = loupe_step;
-                    st.zoom_factor = f32::INFINITY;
-                } else if st.zoom_factor > 1.0 {
+            if st.loupe.is_some() && !st.enter_loupe(f32::INFINITY) {
+                if st.zoom_factor > 1.0 {
                     st.zoom_factor = 1.0;
                     st.pan_center = (0.5, 0.5); // fit forgets the pan spot
                 } else if max_factor(win, &st).is_none_or(|max| max > 1.0) {
@@ -3041,11 +3061,11 @@ fn handle_nav_inner(win: &MainWindow, state: &Rc<RefCell<AppState>>, key: &str) 
                 // (the deselect gesture — gate finding).
                 st.selection.clear();
             }
+            st.exit_loupe();
+            // At a grid zoom there is no loupe to leave, but a carried
+            // factor (and its pan) is still dropped here.
             st.zoom_factor = 1.0;
             st.pan_center = (0.5, 0.5);
-            if st.zoom == loupe_step {
-                st.zoom = st.last_grid_zoom.min(loupe_step - 1);
-            }
         }
         "zoom-in" => {
             if st.at_loupe() {
@@ -3061,8 +3081,8 @@ fn handle_nav_inner(win: &MainWindow, state: &Rc<RefCell<AppState>>, key: &str) 
                     };
                 }
             } else {
-                if st.zoom + 1 == loupe_step {
-                    st.last_grid_zoom = st.zoom;
+                if st.zoom + 1 == grid::ZOOM_COLUMNS.len() - 1 {
+                    st.remember_grid_zoom(); // this step crosses INTO the loupe
                 }
                 st.zoom = grid::zoom_step(st.zoom, 1);
             }
