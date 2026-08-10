@@ -725,7 +725,7 @@ fn make_grid_thumb_gated(
         let previews = find_embedded_jpegs(&mut file).map_err(|e| format!("parse: {e}"))?;
         let source = previews
             .grid_source()
-            .ok_or("no usable embedded preview")?
+            .ok_or(crate::raw::NO_USABLE_PREVIEW)?
             .clone();
         if let Some(permit) = &permit {
             permit.set_bytes(source.len);

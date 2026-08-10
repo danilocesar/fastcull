@@ -27,6 +27,17 @@ use std::io::{Read, Seek, SeekFrom};
 
 pub use tiff::TiffError;
 
+/// Failure text when a file carries no preview this app can use at all —
+/// no grid source, no ladder rung. Both engines badge with it (the grid
+/// pipeline and the loupe ladder), and the tests match it by substring,
+/// so it exists once.
+pub const NO_USABLE_PREVIEW: &str = "no usable embedded preview";
+
+/// Failure text when previews were FOUND but none of them decoded. Kept
+/// distinct from `NO_USABLE_PREVIEW` on purpose: "nothing to read" and
+/// "read it, it was broken" are different bug reports.
+pub const NO_DECODABLE_PREVIEW: &str = "no decodable preview";
+
 /// An embedded JPEG discovered inside a RAW container.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct EmbeddedJpeg {
