@@ -365,36 +365,46 @@ fn iptc_block(iptc: &crate::iptc::IptcData) -> String {
     out
 }
 
-/// Event rewrite for write_iptc: drop every owned property (element form,
-/// any Description, matched by local name) and every owned attribute
-/// (compact form), then inject the fresh block into the first Description
-/// with the needed namespaces ensured.
-fn rewrite_iptc(existing: &[u8], iptc: &crate::iptc::IptcData) -> Result<String, XmpError> {
+/// The shared mechanics of a property rewrite: walk the sidecar's events,
+/// drop the elements WE own (so they can be re-emitted from current
+/// state), and hand every rdf:Description to a strategy that decides
+/// whether to rewrite its start tag and what block to inject after it.
+///
+/// The held-whitespace rule lives here, once. Indentation text nodes of
+/// removed elements must go WITH them, or every rewrite leaves an
+/// orphaned blank line and sidecars grow without bound over a captioning
+/// session (QE-measured +19 bytes per rewrite). Whitespace-only text is
+/// therefore held back until the next event decides its fate.
+///
+/// `owns(name)` takes the RAW qualified name (strategies match by local
+/// name themselves). `describe(element, first)` returns None to pass the
+/// Description through untouched, or the replacement start tag plus an
+/// optional block to write inside it; when the source element was
+/// self-closing and it IS rewritten, the walker expands it to Start+End
+/// so the block has somewhere to live.
+///
+/// Errors with `NoDescription` when the document has none — a sidecar we
+/// cannot place our properties in is not one we may silently return.
+fn rewrite_walk<O, D>(existing: &[u8], owns: O, mut describe: D) -> Result<String, XmpError>
+where
+    O: Fn(&[u8]) -> bool,
+    D: FnMut(&BytesStart, bool) -> Result<Option<(BytesStart<'static>, Option<String>)>, XmpError>,
+{
     if std::str::from_utf8(existing).is_err() {
         return Err(XmpError::NotUtf8);
     }
-    let owned = |name: &[u8]| {
-        matches!(local_name(name), b"subject" | b"hierarchicalSubject")
-            || iptc_field_for(local_name(name)).is_some()
-    };
-    let block = iptc_block(iptc);
     let mut reader = quick_xml::Reader::from_reader(existing);
     reader.config_mut().trim_text(false);
     let mut writer = quick_xml::Writer::new(Vec::new());
     let mut buf = Vec::new();
-    // Indentation text nodes of removed elements must go WITH them, or
-    // every rewrite leaves an orphaned blank line and sidecars grow
-    // without bound over a captioning session (QE-measured +19 bytes per
-    // rewrite). Whitespace-only text is held back until the next event
-    // decides its fate.
     let mut held_ws: Option<Vec<u8>> = None;
-    let mut first_done = false;
-    let mut skip_depth = 0usize;
+    let mut seen_description = false;
+    let mut skip_depth = 0usize; // >0: inside an element we own
     loop {
         let event = reader.read_event_into(&mut buf)?;
         // Flush or drop held whitespace depending on what follows it.
         let feeds_removed = match &event {
-            Event::Start(e) | Event::Empty(e) => owned(e.name().as_ref()),
+            Event::Start(e) | Event::Empty(e) => owns(e.name().as_ref()),
             _ => false,
         };
         if let Some(ws) = held_ws.take() {
@@ -414,69 +424,88 @@ fn rewrite_iptc(existing: &[u8], iptc: &crate::iptc::IptcData) -> Result<String,
         }
         match event {
             Event::Eof => break,
-            Event::Start(ref e) if owned(e.name().as_ref()) => skip_depth += 1,
-            Event::Empty(ref e) if skip_depth == 0 && owned(e.name().as_ref()) => {}
-            Event::End(ref e) if skip_depth > 0 && owned(e.name().as_ref()) => skip_depth -= 1,
+            Event::Start(ref e) if owns(e.name().as_ref()) => skip_depth += 1,
+            Event::Empty(ref e) if skip_depth == 0 && owns(e.name().as_ref()) => {}
+            Event::End(ref e) if skip_depth > 0 && owns(e.name().as_ref()) => skip_depth -= 1,
             _ if skip_depth > 0 => {}
             Event::Start(ref e) | Event::Empty(ref e) if is_rdf_description(e) => {
-                let was_empty = matches!(event, Event::Empty(_));
-                let first = !first_done;
-                first_done = true;
-                let mut out =
-                    BytesStart::new(String::from_utf8_lossy(e.name().as_ref()).into_owned());
-                let (mut dc, mut lr, mut ps, mut core) = (false, false, false, false);
-                for attr in e.attributes() {
-                    let attr = attr?;
-                    match attr.key.as_ref() {
-                        b"xmlns:dc" => dc = true,
-                        b"xmlns:lr" => lr = true,
-                        b"xmlns:photoshop" => ps = true,
-                        b"xmlns:Iptc4xmpCore" => core = true,
-                        // Owned compact-form attributes are replaced by the
-                        // element block (or removed, when the field is None).
-                        key if iptc_field_for(local_name(key)).is_some() => continue,
-                        _ => {}
+                let first = !seen_description;
+                seen_description = true;
+                match describe(e, first)? {
+                    Some((out, block)) => {
+                        let was_empty = matches!(event, Event::Empty(_));
+                        let name = String::from_utf8_lossy(e.name().as_ref()).into_owned();
+                        writer.write_event(Event::Start(out))?;
+                        if let Some(block) = block {
+                            writer.get_mut().extend_from_slice(block.as_bytes());
+                        }
+                        if was_empty {
+                            writer
+                                .write_event(Event::End(quick_xml::events::BytesEnd::new(name)))?;
+                        }
                     }
-                    out.push_attribute(attr);
-                }
-                if first && !block.is_empty() {
-                    if !dc {
-                        out.push_attribute(("xmlns:dc", "http://purl.org/dc/elements/1.1/"));
-                    }
-                    if !lr {
-                        out.push_attribute(("xmlns:lr", "http://ns.adobe.com/lightroom/1.0/"));
-                    }
-                    if !ps {
-                        out.push_attribute((
-                            "xmlns:photoshop",
-                            "http://ns.adobe.com/photoshop/1.0/",
-                        ));
-                    }
-                    if !core {
-                        out.push_attribute((
-                            "xmlns:Iptc4xmpCore",
-                            "http://iptc.org/std/Iptc4xmpCore/1.0/xmlns/",
-                        ));
-                    }
-                }
-                writer.write_event(Event::Start(out))?;
-                if first {
-                    writer.get_mut().extend_from_slice(block.as_bytes());
-                }
-                if was_empty {
-                    writer.write_event(Event::End(quick_xml::events::BytesEnd::new(
-                        String::from_utf8_lossy(e.name().as_ref()).into_owned(),
-                    )))?;
+                    None => writer.write_event(event.clone())?,
                 }
             }
             other => writer.write_event(other)?,
         }
         buf.clear();
     }
-    if !first_done {
+    if !seen_description {
         return Err(XmpError::NoDescription);
     }
     Ok(String::from_utf8_lossy(&writer.into_inner()).into_owned())
+}
+
+/// Event rewrite for write_iptc: drop every owned property (element form,
+/// any Description, matched by local name) and every owned attribute
+/// (compact form), then inject the fresh block into the first Description
+/// with the needed namespaces ensured.
+fn rewrite_iptc(existing: &[u8], iptc: &crate::iptc::IptcData) -> Result<String, XmpError> {
+    let owned = |name: &[u8]| {
+        matches!(local_name(name), b"subject" | b"hierarchicalSubject")
+            || iptc_field_for(local_name(name)).is_some()
+    };
+    let block = iptc_block(iptc);
+    // EVERY Description is rewritten here, not just the first: owned
+    // properties also exist in COMPACT (attribute) form, and one left
+    // behind in a later block would resurrect a value the panel cleared.
+    rewrite_walk(existing, owned, |e, first| {
+        let mut out = BytesStart::new(String::from_utf8_lossy(e.name().as_ref()).into_owned());
+        let (mut dc, mut lr, mut ps, mut core) = (false, false, false, false);
+        for attr in e.attributes() {
+            let attr = attr?;
+            match attr.key.as_ref() {
+                b"xmlns:dc" => dc = true,
+                b"xmlns:lr" => lr = true,
+                b"xmlns:photoshop" => ps = true,
+                b"xmlns:Iptc4xmpCore" => core = true,
+                // Owned compact-form attributes are replaced by the
+                // element block (or removed, when the field is None).
+                key if iptc_field_for(local_name(key)).is_some() => continue,
+                _ => {}
+            }
+            out.push_attribute(attr);
+        }
+        if first && !block.is_empty() {
+            if !dc {
+                out.push_attribute(("xmlns:dc", "http://purl.org/dc/elements/1.1/"));
+            }
+            if !lr {
+                out.push_attribute(("xmlns:lr", "http://ns.adobe.com/lightroom/1.0/"));
+            }
+            if !ps {
+                out.push_attribute(("xmlns:photoshop", "http://ns.adobe.com/photoshop/1.0/"));
+            }
+            if !core {
+                out.push_attribute((
+                    "xmlns:Iptc4xmpCore",
+                    "http://iptc.org/std/Iptc4xmpCore/1.0/xmlns/",
+                ));
+            }
+        }
+        Ok(Some((out, first.then(|| block.clone()))))
+    })
 }
 
 /// XML-escaped `rdf:li` rows for a keyword bag, matching the fresh-sidecar
@@ -499,9 +528,6 @@ fn keyword_bags_only(keywords: &[String]) -> String {
 /// namespaces. The first Description in Empty form (`<rdf:Description/>`)
 /// is expanded to Start+End so it can hold children.
 fn rewrite_keywords(existing: &[u8], keywords: &[String]) -> Result<String, XmpError> {
-    if std::str::from_utf8(existing).is_err() {
-        return Err(XmpError::NotUtf8);
-    }
     // ONLY the two properties the mapping table assigns to us; anything
     // else (digiKam:TagsList, acdsee:categories, …) is foreign and must
     // survive untouched (preserve-unknown rule). Matched by LOCAL name,
@@ -509,89 +535,37 @@ fn rewrite_keywords(existing: &[u8], keywords: &[String]) -> Result<String, XmpE
     // another prefix (dcx:subject) would otherwise keep a stale bag that
     // resurrects deleted keywords on the next read (validator finding).
     let is_subject = |name: &[u8]| matches!(local_name(name), b"subject" | b"hierarchicalSubject");
-    let mut reader = quick_xml::Reader::from_reader(existing);
-    reader.config_mut().trim_text(false);
-    let mut writer = quick_xml::Writer::new(Vec::new());
-    let mut buf = Vec::new();
-    // Indentation text nodes of removed elements must go WITH them, or
-    // every rewrite leaves an orphaned blank line and sidecars grow
-    // without bound over a captioning session (QE-measured +19 bytes per
-    // rewrite). Whitespace-only text is held back until the next event
-    // decides its fate.
-    let mut held_ws: Option<Vec<u8>> = None;
-    let mut first_done = false;
-    let mut skip_depth = 0usize; // >0: inside an old subject element
-    loop {
-        let event = reader.read_event_into(&mut buf)?;
-        // Flush or drop held whitespace depending on what follows it.
-        let feeds_removed = match &event {
-            Event::Start(e) | Event::Empty(e) => is_subject(e.name().as_ref()),
-            _ => false,
-        };
-        if let Some(ws) = held_ws.take() {
-            if !feeds_removed && skip_depth == 0 {
-                writer.get_mut().extend_from_slice(&ws);
+    // Unlike the IPTC rewrite, only the FIRST Description is touched:
+    // keywords have no compact form to strip, so later blocks pass
+    // through byte for byte.
+    rewrite_walk(existing, is_subject, |e, first| {
+        if !first {
+            return Ok(None);
+        }
+        let mut out = BytesStart::new(String::from_utf8_lossy(e.name().as_ref()).into_owned());
+        let (mut has_dc, mut has_lr) = (false, false);
+        for attr in e.attributes() {
+            let attr = attr?;
+            match attr.key.as_ref() {
+                b"xmlns:dc" => has_dc = true,
+                b"xmlns:lr" => has_lr = true,
+                _ => {}
+            }
+            out.push_attribute(attr);
+        }
+        if !keywords.is_empty() {
+            if !has_dc {
+                out.push_attribute(("xmlns:dc", "http://purl.org/dc/elements/1.1/"));
+            }
+            if !has_lr {
+                out.push_attribute(("xmlns:lr", "http://ns.adobe.com/lightroom/1.0/"));
             }
         }
-        if skip_depth == 0 {
-            if let Event::Text(t) = &event {
-                let raw = t.clone().into_inner().into_owned();
-                if raw.iter().all(|b| b.is_ascii_whitespace()) {
-                    held_ws = Some(raw);
-                    buf.clear();
-                    continue;
-                }
-            }
-        }
-        match event {
-            Event::Eof => break,
-            Event::Start(ref e) if is_subject(e.name().as_ref()) => skip_depth += 1,
-            Event::Empty(ref e) if skip_depth == 0 && is_subject(e.name().as_ref()) => {}
-            Event::End(ref e) if skip_depth > 0 && is_subject(e.name().as_ref()) => skip_depth -= 1,
-            _ if skip_depth > 0 => {}
-            Event::Start(ref e) | Event::Empty(ref e) if is_rdf_description(e) && !first_done => {
-                first_done = true;
-                let was_empty = matches!(event, Event::Empty(_));
-                let mut out =
-                    BytesStart::new(String::from_utf8_lossy(e.name().as_ref()).into_owned());
-                let (mut has_dc, mut has_lr) = (false, false);
-                for attr in e.attributes() {
-                    let attr = attr?;
-                    match attr.key.as_ref() {
-                        b"xmlns:dc" => has_dc = true,
-                        b"xmlns:lr" => has_lr = true,
-                        _ => {}
-                    }
-                    out.push_attribute(attr);
-                }
-                if !keywords.is_empty() {
-                    if !has_dc {
-                        out.push_attribute(("xmlns:dc", "http://purl.org/dc/elements/1.1/"));
-                    }
-                    if !has_lr {
-                        out.push_attribute(("xmlns:lr", "http://ns.adobe.com/lightroom/1.0/"));
-                    }
-                }
-                writer.write_event(Event::Start(out))?;
-                if !keywords.is_empty() {
-                    writer
-                        .get_mut()
-                        .extend_from_slice(keyword_bags_only(keywords).as_bytes());
-                }
-                if was_empty {
-                    writer.write_event(Event::End(quick_xml::events::BytesEnd::new(
-                        String::from_utf8_lossy(e.name().as_ref()).into_owned(),
-                    )))?;
-                }
-            }
-            other => writer.write_event(other)?,
-        }
-        buf.clear();
-    }
-    if !first_done {
-        return Err(XmpError::NoDescription);
-    }
-    Ok(String::from_utf8_lossy(&writer.into_inner()).into_owned())
+        Ok(Some((
+            out,
+            (!keywords.is_empty()).then(|| keyword_bags_only(keywords)),
+        )))
+    })
 }
 
 /// Event-level rewrite of an existing sidecar: only the first
