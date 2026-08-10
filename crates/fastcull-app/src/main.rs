@@ -1677,21 +1677,29 @@ fn main() {
                             } => {
                                 let long = image.width.max(image.height);
                                 trace_mark(&format!("loupe ready idx {index} long {long}"));
-                                if long <= fastcull_core::loupe::MID_RUNG_MAX_LONG {
-                                    // Mid rung: kitchen copies it off-thread
-                                    // (Wrap = native size, never downscaled —
-                                    // a terminal small file's native size IS
-                                    // its zoom ceiling, issue #8).
-                                    if terminal {
-                                        // Metadata now; the texture follows
-                                        // when the kitchen serves it.
-                                        st.terminal_native.insert(index);
+                                let job = route_warm(
+                                    long,
+                                    terminal,
+                                    at_loupe,
+                                    st.mids.contains_key(&index),
+                                    WarmCtx::Announced,
+                                );
+                                if let Some(WarmJob::Wrap { terminal: true }) = job {
+                                    // Metadata now; the texture follows
+                                    // when the kitchen serves it.
+                                    st.terminal_native.insert(index);
+                                }
+                                match job {
+                                    // Mid rung: kitchen copies it off-thread.
+                                    Some(WarmJob::Wrap { terminal }) => {
+                                        st.kitchen.submit_wrap(index, image.clone(), terminal)
                                     }
-                                    st.kitchen.submit_wrap(index, image.clone(), terminal);
-                                } else if at_loupe {
-                                    // Full rung: 150 MB fill on the kitchen
-                                    // worker; core LRU keeps the pixels.
-                                    st.kitchen.submit_full(index, image.clone());
+                                    // Full rung: the fill runs on the kitchen
+                                    // worker; the core LRU keeps the pixels.
+                                    Some(WarmJob::Full) => {
+                                        st.kitchen.submit_full(index, image.clone())
+                                    }
+                                    None => {}
                                 }
                                 dirty = true;
                             }
@@ -2640,6 +2648,81 @@ fn aspect_for(st: &AppState, index: usize) -> Option<f32> {
     (size.height > 0).then(|| size.width as f32 / size.height as f32)
 }
 
+/// Which kitchen lane a WARM image takes — one already-decoded image the
+/// app must hand to the kitchen, at the two places that happens.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum WarmJob {
+    /// Top-priority full-res fill: the sharp 1:1 source.
+    Full,
+    /// Native-size copy (never downscaled) into the mid rung. `terminal`
+    /// also teaches the app the file's zoom ceiling (issue #8).
+    Wrap { terminal: bool },
+}
+
+/// Where the warm image came from. The two sites route DIFFERENTLY and
+/// always did — this enum states the difference once instead of leaving
+/// two hand-copies to embody it and drift (they did, on 2026-08-02).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum WarmCtx {
+    /// The engine ANNOUNCED a fresh decode (`LoupeEvent::Ready`), for any
+    /// index in the prefetch ring, not just the cursor's.
+    Announced,
+    /// `focus()` handed back a CACHED image for the cursor because the
+    /// UI-side texture had been evicted (the rebuild path).
+    FocusHit,
+}
+
+/// The warm-hit routing rule, both contexts, one function.
+///
+/// `mid_held` = a mid-rung texture for this index is already in `st.mids`;
+/// `at_loupe` = the loupe is on screen right now.
+fn route_warm(
+    long: u32,
+    terminal: bool,
+    at_loupe: bool,
+    mid_held: bool,
+    ctx: WarmCtx,
+) -> Option<WarmJob> {
+    match ctx {
+        WarmCtx::Announced => {
+            // SIZE alone decides here, deliberately: a terminal image at
+            // or below mid class goes through Wrap, which is native size
+            // and never downscaled, so its pixels ARE the zoom ceiling
+            // (issue #8) — routing it to Full instead would resize the
+            // one rung the file can never re-cook. `mid_held` is ignored:
+            // a freshly announced decode supersedes whatever is held.
+            if is_top_rung(long, false) {
+                // A Full is a large fill on the kitchen worker: only
+                // worth cooking where it can be shown.
+                at_loupe.then_some(WarmJob::Full)
+            } else {
+                Some(WarmJob::Wrap { terminal })
+            }
+        }
+        WarmCtx::FocusHit => {
+            // Route by RUNG (validator finding, 2026-08-02): only a real
+            // top rung earns the Full lane — the old code parked warm
+            // MIDS in the fullres slot too, which burned the top-priority
+            // lane on a texture the sharp filter can never accept. Here
+            // terminality DOES promote: the caller is the cursor's own
+            // rebuild, and a terminal texture is that cursor's top rung.
+            // `at_loupe` does not gate it either — this path only runs
+            // inside the at-loupe branch of refresh.
+            if is_top_rung(long, terminal) {
+                Some(WarmJob::Full)
+            } else if !mid_held {
+                // A warm sub-top hit (the pruned-and-revisited path: the
+                // engine re-announces a cached mid beyond the retained
+                // window) goes through Wrap into st.mids — where the
+                // soft-transit renderer looks FIRST.
+                Some(WarmJob::Wrap { terminal })
+            } else {
+                None
+            }
+        }
+    }
+}
+
 /// The 1:1 zoom ceiling relative to fit for the cursor image, derived from
 /// its full-res texture (`ui-grid.md` zoom ladder: 1:1 means device
 /// pixels). None until the top rung is adopted — the ceiling is unknowable
@@ -3536,25 +3619,21 @@ fn refresh_inner(win: &MainWindow, state: &Rc<RefCell<AppState>>) {
             if let (Some(image), true) = (hit, missing) {
                 // Kitchen fills the buffer off-thread; the pending guards
                 // absorb the refresh loop re-asking every frame while it
-                // cooks. Route by RUNG (validator finding, 2026-08-02):
-                // only a real top rung is a Full — the old code parked
-                // warm MIDS in the fullres slot too, which burned the
-                // top-priority lane on a texture the sharp filter can
-                // never accept. A warm sub-top hit (the pruned-and-
-                // revisited path: the engine re-announces a cached mid
-                // beyond the retained window) goes through Wrap into
-                // st.mids instead — which is where the soft-transit
-                // renderer looks FIRST, so the revisit soft source that
-                // mid-in-fullres used to provide is preserved.
+                // cooks. The routing rule itself (and why this context
+                // differs from the pump's) lives in `route_warm`.
                 let long = image.width.max(image.height);
-                if is_top_rung(long, st.terminal_native.contains(&focus_index)) {
-                    st.kitchen.submit_full(focus_index, image);
-                } else if !st.mids.contains_key(&focus_index) {
-                    st.kitchen.submit_wrap(
-                        focus_index,
-                        image,
-                        st.terminal_native.contains(&focus_index),
-                    );
+                match route_warm(
+                    long,
+                    st.terminal_native.contains(&focus_index),
+                    at_loupe,
+                    st.mids.contains_key(&focus_index),
+                    WarmCtx::FocusHit,
+                ) {
+                    Some(WarmJob::Full) => st.kitchen.submit_full(focus_index, image),
+                    Some(WarmJob::Wrap { terminal }) => {
+                        st.kitchen.submit_wrap(focus_index, image, terminal)
+                    }
+                    None => {}
                 }
             }
         }
@@ -4069,5 +4148,58 @@ fn insert_fullres(st: &mut AppState, index: usize, texture: slint::Image) {
             .map(|(slot, _)| slot)
             .unwrap_or(0);
         st.fullres.remove(victim);
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// The two warm-hit contexts DIFFER, on purpose, in exactly two ways.
+    /// Pinning both so the next change to one of them is a visible edit to
+    /// this table rather than a silent divergence (which is how the
+    /// 2026-08-02 bug happened).
+    #[test]
+    fn warm_routing_differs_by_context_only_where_intended() {
+        const BIG: u32 = fastcull_core::loupe::MID_RUNG_MAX_LONG + 1;
+        const SMALL: u32 = 640;
+
+        // 1. A terminal SMALL image: the announcement Wraps it (native
+        // size is its ceiling, issue #8); the cursor's own rebuild treats
+        // it as the top rung and Fulls it.
+        assert_eq!(
+            route_warm(SMALL, true, true, false, WarmCtx::Announced),
+            Some(WarmJob::Wrap { terminal: true })
+        );
+        assert_eq!(
+            route_warm(SMALL, true, true, false, WarmCtx::FocusHit),
+            Some(WarmJob::Full)
+        );
+
+        // 2. A held mid: the announcement still Wraps (a fresh decode
+        // supersedes what is held); the rebuild leaves it alone.
+        assert_eq!(
+            route_warm(SMALL, false, true, true, WarmCtx::Announced),
+            Some(WarmJob::Wrap { terminal: false })
+        );
+        assert_eq!(
+            route_warm(SMALL, false, true, true, WarmCtx::FocusHit),
+            None
+        );
+
+        // Away from the loupe, an announced top rung is not cooked at all,
+        // while a sub-top one still fills the mid rung for the grid.
+        assert_eq!(
+            route_warm(BIG, false, false, false, WarmCtx::Announced),
+            None
+        );
+        assert_eq!(
+            route_warm(SMALL, false, false, false, WarmCtx::Announced),
+            Some(WarmJob::Wrap { terminal: false })
+        );
+        assert_eq!(
+            route_warm(BIG, false, true, false, WarmCtx::Announced),
+            Some(WarmJob::Full)
+        );
     }
 }
