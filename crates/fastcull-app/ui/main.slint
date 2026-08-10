@@ -1526,23 +1526,23 @@ export component MainWindow inherits Window {
             card-height: 560px;
             card-padding: 18px;
             dismissed => { root.shortcuts-visible = false; }
-                    Text {
-                        text: "Keyboard shortcuts";
-                        color: #ffffff;
-                        font-size: 16px;
-                    }
-                    Text {
-                        text: "Arrows / PgUp / PgDn / Home / End   navigate\nY, P or Space   pick (take)\nN or X   reject\nU   clear mark\n+ / -   zoom in / out (grid → loupe fit → ×1.5 steps → 1:1, center held)\nWheel in loupe   zoom, anchored under the pointer (grid: scroll)\nZ   fit → 1:1; zoomed → back to fit (from grid: jump to 1:1)\nClick in loupe   above fit: center on the clicked point\nDouble-click   grid: open in loupe; loupe: 1:1 on the clicked point\nG or Esc   back to the grid\nK   keyword field (opens the IPTC panel)\nI   IPTC panel\nShift+arrows   extend selection\nCtrl+A   select all (filtered set)\n[ / ]   previous / next burst\nCtrl+O   open folder\nCtrl+E   Copy Picks…\nCtrl+Q   quit\n1–5, 0   reserved (star ratings, v2)";
-                        color: #c8c8d0;
-                        font-size: 13px;
-                    }
-                    Text {
-                        // License line moved to About (issue #23 — its
-                        // intended home per the M5 deferral note).
-                        text: "Esc or click to close.";
-                        color: #707078;
-                        font-size: 11px;
-                    }
+            Text {
+                text: "Keyboard shortcuts";
+                color: #ffffff;
+                font-size: 16px;
+            }
+            Text {
+                text: "Arrows / PgUp / PgDn / Home / End   navigate\nY, P or Space   pick (take)\nN or X   reject\nU   clear mark\n+ / -   zoom in / out (grid → loupe fit → ×1.5 steps → 1:1, center held)\nWheel in loupe   zoom, anchored under the pointer (grid: scroll)\nZ   fit → 1:1; zoomed → back to fit (from grid: jump to 1:1)\nClick in loupe   above fit: center on the clicked point\nDouble-click   grid: open in loupe; loupe: 1:1 on the clicked point\nG or Esc   back to the grid\nK   keyword field (opens the IPTC panel)\nI   IPTC panel\nShift+arrows   extend selection\nCtrl+A   select all (filtered set)\n[ / ]   previous / next burst\nCtrl+O   open folder\nCtrl+E   Copy Picks…\nCtrl+Q   quit\n1–5, 0   reserved (star ratings, v2)";
+                color: #c8c8d0;
+                font-size: 13px;
+            }
+            Text {
+                // License line moved to About (issue #23 — its
+                // intended home per the M5 deferral note).
+                text: "Esc or click to close.";
+                color: #707078;
+                font-size: 11px;
+            }
         }
 
         // About dialog (issue #23; replaces the About→shortcuts
@@ -1566,60 +1566,60 @@ export component MainWindow inherits Window {
             // it (a URL you may be trying to select is on it).
             card-eats-clicks: true;
             dismissed => { root.about-visible = false; }
-                    // Two lines, not one. A dev build's version is now
-                    // `X.Y.Z-devel-YYYYMMDD-<hash>` (issue #26), and this
-                    // Text had no `wrap:` while its neighbours do — Slint
-                    // clips an unwrapped Text from the RIGHT, which is
-                    // exactly where the commit hash lives — and that is the
-                    // one part of the string a bug report cannot lose
-                    // (persona review 2026-07-31). Measured, today's string
-                    // occupies ~365px of the 444px content box, so it would
-                    // NOT have clipped yet; the split is precaution against
-                    // the next thing that lengthens it, not a fix for an
-                    // observed truncation. `wrap` is belt-and-braces and
-                    // does not guarantee against a mid-token break: Unicode
-                    // line breaking permits one after a hyphen, so the real
-                    // safety is the width margin. (The version is displayed
-                    // text, not selectable — a Slint Text cannot be copied;
-                    // the docs therefore say "include", not "paste".)
-                    Text {
-                        text: "FastCull";
-                        color: #ffffff;
-                        font-size: 16px;
-                    }
-                    Text {
-                        text: "version " + root.about-version;
-                        color: #c8c8d0;
-                        font-size: 13px;
-                        wrap: word-wrap;
-                    }
-                    Text {
-                        text: "A fast, keyboard-first photo culling tool: fly through a folder of RAW or JPEG photos, pick the keepers, tag them, and copy them out checksum-verified — without ever touching your originals.";
-                        color: #c8c8d0;
-                        font-size: 13px;
-                        wrap: word-wrap;
-                    }
-                    Text {
-                        text: "Main contributor: Danilo de Paula";
-                        color: #c8c8d0;
-                        font-size: 13px;
-                    }
-                    Text {
-                        text: "Repository: https://github.com/danilocesar/fastcull";
-                        color: #c8c8d0;
-                        font-size: 13px;
-                    }
-                    Text {
-                        text: "Free software, released under the GPL-3.0-or-later license.";
-                        color: #c8c8d0;
-                        font-size: 13px;
-                        wrap: word-wrap;
-                    }
-                    Text {
-                        text: "Esc or click outside to close.";
-                        color: #707078;
-                        font-size: 11px;
-                    }
+            // Two lines, not one. A dev build's version is now
+            // `X.Y.Z-devel-YYYYMMDD-<hash>` (issue #26), and this
+            // Text had no `wrap:` while its neighbours do — Slint
+            // clips an unwrapped Text from the RIGHT, which is
+            // exactly where the commit hash lives — and that is the
+            // one part of the string a bug report cannot lose
+            // (persona review 2026-07-31). Measured, today's string
+            // occupies ~365px of the 444px content box, so it would
+            // NOT have clipped yet; the split is precaution against
+            // the next thing that lengthens it, not a fix for an
+            // observed truncation. `wrap` is belt-and-braces and
+            // does not guarantee against a mid-token break: Unicode
+            // line breaking permits one after a hyphen, so the real
+            // safety is the width margin. (The version is displayed
+            // text, not selectable — a Slint Text cannot be copied;
+            // the docs therefore say "include", not "paste".)
+            Text {
+                text: "FastCull";
+                color: #ffffff;
+                font-size: 16px;
+            }
+            Text {
+                text: "version " + root.about-version;
+                color: #c8c8d0;
+                font-size: 13px;
+                wrap: word-wrap;
+            }
+            Text {
+                text: "A fast, keyboard-first photo culling tool: fly through a folder of RAW or JPEG photos, pick the keepers, tag them, and copy them out checksum-verified — without ever touching your originals.";
+                color: #c8c8d0;
+                font-size: 13px;
+                wrap: word-wrap;
+            }
+            Text {
+                text: "Main contributor: Danilo de Paula";
+                color: #c8c8d0;
+                font-size: 13px;
+            }
+            Text {
+                text: "Repository: https://github.com/danilocesar/fastcull";
+                color: #c8c8d0;
+                font-size: 13px;
+            }
+            Text {
+                text: "Free software, released under the GPL-3.0-or-later license.";
+                color: #c8c8d0;
+                font-size: 13px;
+                wrap: word-wrap;
+            }
+            Text {
+                text: "Esc or click outside to close.";
+                color: #707078;
+                font-size: 11px;
+            }
         }
 
         statusbar := Rectangle {
