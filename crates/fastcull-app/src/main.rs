@@ -20,6 +20,7 @@ mod kitchen;
 
 use fastcull_core::catalog::Session;
 use fastcull_core::grid::{self, GridLayout, Nav};
+use fastcull_core::loupe::is_top_rung;
 use fastcull_core::pipeline::{JobSpec, Pipeline, SessionEvent};
 use slint::{ComponentHandle, Model, VecModel};
 
@@ -2086,14 +2087,15 @@ fn main() {
                     let st = state_rc.borrow();
                     let one2one = st.zoom_factor <= 1.0
                         || st.fullres.iter().any(|(i, img)| {
+                            // A terminal small texture IS the top rung
+                            // (bare JPEGs, issue #8 — QE D2: the 60s
+                            // refusal hit every small-JPEG --start-11 run),
+                            // which is why the predicate is shared.
                             *i == st.cursor
-                                && (img.size().width.max(img.size().height)
-                                    > fastcull_core::loupe::MID_RUNG_MAX_LONG
-                                    // A terminal small texture IS the top
-                                    // rung (bare JPEGs, issue #8 — QE D2:
-                                    // the 60s refusal hit every small-JPEG
-                                    // --start-11 run).
-                                    || st.terminal_native.contains(&st.cursor))
+                                && is_top_rung(
+                                    img.size().width.max(img.size().height),
+                                    st.terminal_native.contains(&st.cursor),
+                                )
                         });
                     // At LOUPE FIT the old gate was vacuous (zoom_factor is
                     // 1.0), so the shutter fired on the bare 1.5 s floor —
@@ -2607,9 +2609,10 @@ fn max_factor(win: &MainWindow, st: &AppState) -> Option<f32> {
         .find(|(i, _)| *i == st.cursor)
         .map(|(_, img)| img)?;
     let size = img.size();
-    if size.width.max(size.height) <= fastcull_core::loupe::MID_RUNG_MAX_LONG
-        && !st.terminal_native.contains(&st.cursor)
-    {
+    if !is_top_rung(
+        size.width.max(size.height),
+        st.terminal_native.contains(&st.cursor),
+    ) {
         return None; // not the top rung: native size unknown
     }
     let sf = win.window().scale_factor();
@@ -3513,9 +3516,7 @@ fn refresh_inner(win: &MainWindow, state: &Rc<RefCell<AppState>>) {
                 // renderer looks FIRST, so the revisit soft source that
                 // mid-in-fullres used to provide is preserved.
                 let long = image.width.max(image.height);
-                if long > fastcull_core::loupe::MID_RUNG_MAX_LONG
-                    || st.terminal_native.contains(&focus_index)
-                {
+                if is_top_rung(long, st.terminal_native.contains(&focus_index)) {
                     st.kitchen.submit_full(focus_index, image);
                 } else if !st.mids.contains_key(&focus_index) {
                     st.kitchen.submit_wrap(
@@ -3577,8 +3578,10 @@ fn refresh_inner(win: &MainWindow, state: &Rc<RefCell<AppState>>) {
     // the overlay NEVER drops to fit while the desire is above it (the
     // transit contract), however cold the neighbor.
     let sharp = fullres_for(&st, cursor).filter(|img| {
-        img.size().width.max(img.size().height) > fastcull_core::loupe::MID_RUNG_MAX_LONG
-            || st.terminal_native.contains(&cursor)
+        is_top_rung(
+            img.size().width.max(img.size().height),
+            st.terminal_native.contains(&cursor),
+        )
     });
     let soft = if sharp.is_none() && overlay {
         // The cursor's own mid — or a warm sub-top texture the engine

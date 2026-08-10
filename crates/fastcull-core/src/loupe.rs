@@ -34,6 +34,22 @@ pub const MID_RUNG_MAX_LONG: u32 = 2048;
 /// Downscale target when adopting a full-res image for a grid cell.
 pub const MID_RUNG_TARGET: u32 = 1616;
 
+/// Is this decoded asset the file's TOP rung — the one the sharp 1:1 view
+/// may use and the one the zoom ceiling is read from?
+///
+/// Two ways to qualify, and both matter:
+/// * `long_edge` above `MID_RUNG_MAX_LONG` — a real full-res decode;
+/// * `terminal` — the file has nothing better to give (bare JPEGs and
+///   other single-rung sources, issue #8), so its native size IS the
+///   ceiling however small it is.
+///
+/// This is the meaning of `MID_RUNG_MAX_LONG`, and it was spelled by hand
+/// at five call sites; one of them shipped without the terminal half and
+/// made every small-JPEG session refuse to sharpen (QE D2).
+pub fn is_top_rung(long_edge: u32, terminal: bool) -> bool {
+    long_edge > MID_RUNG_MAX_LONG || terminal
+}
+
 /// A decoded full-resolution image, shared with the UI without copying.
 #[derive(Debug, Clone)]
 pub struct FullImage {
@@ -1001,6 +1017,17 @@ fn evict_to_budget(state: &mut LoupeState, budget: usize) {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// The boundary of the top-rung predicate, pinned: the mid-class
+    /// ceiling itself is NOT top (`serves` allows only a 1.25x upscale
+    /// above it), one pixel more is, and a terminal rung is top at any
+    /// size (issue #8).
+    #[test]
+    fn top_rung_boundary() {
+        assert!(!is_top_rung(MID_RUNG_MAX_LONG, false));
+        assert!(is_top_rung(MID_RUNG_MAX_LONG + 1, false));
+        assert!(is_top_rung(640, true));
+    }
 
     /// State whose focus has already HELD past the debounce (the
     /// settled case) at a MAX target; tests for fresh/transient/
