@@ -358,11 +358,19 @@ where it is."
   video speed, persona-reviewed MUST-HAVE) → residual HOLD. The old
   behavior below the mid — drop to fit — was the M1 fit-flash and is
   GONE from every reachable path. A decode-FAILED cursor image skips
-  the thumb rescue (validator finding on the first cut): a file whose
-  320 px thumb survived while every loupe rung is corrupt would
-  otherwise sit at 1:1 behind a "◌ loading" pill that can never
-  complete, hiding the strip's failed badge — fit plus the badge is
-  the honest floor for that corruption shape.
+  the thumb rescue (validator finding on the first cut): an image with
+  a live thumb TEXTURE but no decodable loupe rung would otherwise sit
+  at 1:1 behind a "◌ loading" pill that can never complete, hiding the
+  strip's failed badge — fit plus the badge is the honest floor. The
+  shape is unreachable as a static file (QE, gate round 2: the grid
+  thumb and the loupe's first rung decode the same `grid_source()`
+  bytes, so on disk they live or die together); it is the MID-SESSION
+  route that is real — a file that dies on disk (or a stale cache's
+  thumb for a since-corrupted file) after its thumb reached memory.
+  One causally unavoidable transient is accepted: the first focus of a
+  freshly dead file renders the thumb for the milliseconds until its
+  decode attempt fails, because the failure does not exist as
+  knowledge yet; the gate binds from the Failed event on.
   **Residual HOLD (the recorded exception; persona-reviewed USEFUL with
   the bound demanded and applied)**: when not even the thumb exists (a
   cold-start edge: the thumb pipeline has not served that image yet),
@@ -1454,10 +1462,23 @@ the user confirms, all cheap to change):**
       only — a debug build decodes a mid slower than the cadence, so
       the test skips that one assertion there (the perf_budgets
       precedent) while its no-drop and `one2one` assertions still
-      bind; and the M1 test allows the spec'd reason-carrying drops
-      (failure/hold-cap) while asserting the excuse-less
-      `(no rung in hand)` drop away, plus recovery via the late
-      "landed" dump. The wheel wiring the restructure touched is
+      bind; the M1 test and the failed-cursor gate test run in RELEASE
+      only outright — in debug both ride the app's own 60 s
+      screenshot-readiness cap (the cursor's 50 MP debug decode landed
+      at 58.5 s on a loaded 8-core laptop; a 2-vCPU CI runner under
+      the cook hold has no margin at all — validator, gate round 2),
+      while the debug profile keeps its no-drop coverage through
+      `paced_taps` and `transit_at_zoom_stays_soft`; the M1 test
+      allows the spec'd reason-carrying drops (failure/hold-cap) while
+      asserting the excuse-less `(no rung in hand)` drop away, plus
+      recovery via the late "landed" dump. The failed-cursor gate is
+      pinned by
+      `a_decode_failed_cursor_drops_to_fit_instead_of_masking_the_badge`
+      (mid-session corruption — a helper thread kills the file on disk
+      after its thumb reached memory; red-run-verified against the
+      pre-gate build: the thumb rendered on every visit and the
+      `(decode failed)` drop never appeared). The wheel wiring the
+      restructure touched is
       pinned by `overlay_wheel_still_zooms_one_stop_per_notch` (real
       dispatched scroll events via the `wheel.` token; a guard — wheel
       SEMANTICS did not change, only the surface wiring — non-vacuous
@@ -1586,6 +1607,13 @@ the user confirms, all cheap to change):**
       `loupe_double_click_above_fit_reaches_one_to_one` does. Believed
       renderer-local (the shipping femtovg path is unaffected), but that is
       unproven — no window capture was available to check it.
+      **A `--start-11` run whose FINAL cursor is a decode-FAILED image
+      while the desire is above fit trips the 60 s readiness cap and
+      exits 1** (QE, issue #46 gate round 2): the 1:1 readiness gate has
+      no failed-cursor escape, unlike the fit gate. Loud, arguably
+      intended — but a drive script that visits a failed image at 1:1
+      must END on a decodable cursor, as the failed-cursor gate test
+      does.
       Also not drivable headlessly: the `✓ copied` badge, because Copy Picks
       opens a native folder dialog and `FASTCULL_DRIVE` has no copy action
       (QE G2). It is covered only by sharing the bottom-anchored band with
@@ -1706,7 +1734,9 @@ Documented because they ship in release builds (validator finding):
   the overlay's scroll wiring — which #46 rewrote — was reachable by
   no test and no Wayland automation: which surface receives a wheel,
   the two separate accumulators, and the post-Flickable coordinate
-  terms were all review-verified only.
+  terms were all review-verified only. `delta_x` is dispatched as 0 —
+  horizontal scroll is undrivable until the token grows a fourth
+  field (recorded limitation; nothing in the app consumes it today).
   `dump.<label>` traces the focus/surface state for test assertions:
   `keysfocus` (the main key scope's real `has-focus`, via the
   `dbg-keys-focus` debug property), loupe/zoom state, panel and modal

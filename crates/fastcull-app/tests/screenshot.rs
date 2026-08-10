@@ -3280,10 +3280,24 @@ fn interleaved_session(dir: &Path) {
 /// frame at fit), a "loupe overlay dropped … (no rung in hand)" trace —
 /// the excuse-less drop, which post-fix is structurally impossible —
 /// and neither a "loupe hold" nor a "loupe thumb" render anywhere.
+///
+/// RELEASE ONLY (validator, gate round 2): in debug the run rides the
+/// app's own 60 s screenshot-readiness cap — the cursor's 50 MP debug
+/// decode plus ten thumb jobs plus the cook hold landed at 58.5 s on a
+/// loaded 8-core laptop, so under contention (or a 2-vCPU CI runner)
+/// the app exits 1 at the cap before the shutter can fire. The debug
+/// profile keeps its no-drop coverage through paced_taps and
+/// transit_at_zoom_stays_soft; the phase pins here bind in release,
+/// the profile the reproduction and the red-run were proven in (the
+/// perf_budgets precedent).
 #[test]
 fn transit_to_a_cold_frame_keeps_the_overlay_at_the_carried_center() {
     if !has_display() {
         eprintln!("screenshot smoke skipped: no display server");
+        return;
+    }
+    if cfg!(debug_assertions) {
+        eprintln!("skipped: debug build rides the 60 s readiness cap (run with --release)");
         return;
     }
     let _s = serial();
@@ -3614,4 +3628,102 @@ fn overlay_wheel_still_zooms_one_stop_per_notch() {
         "3.375",
         "two half-notches did not accumulate into exactly one stop:\n{stderr}"
     );
+}
+
+/// Issue #46 gate round 2 (validator MEDIUM): a decode-FAILED cursor
+/// must skip the thumb rescue — pre-gate, a corrupt image whose thumb
+/// texture was already in memory rendered at 1:1 behind a "loading"
+/// pill that could never complete, hiding the strip's failed badge.
+///
+/// The shape is UNREACHABLE as a static file (the grid thumb and the
+/// loupe's first rung decode the same grid_source() bytes — they live
+/// or die together; QE, gate round 2), so this test manufactures the
+/// field route: the file dies on disk AFTER its thumb was decoded. A
+/// helper thread zeroes the copy from byte 200,000 to EOF at T+9 s —
+/// after every thumb has landed (~2 s in release), before the first
+/// End-jump focuses the file.
+///
+/// Sequence: the FIRST End renders the thumb once (the failure is not
+/// knowable until the decode attempt fails milliseconds later — the
+/// causally unavoidable transient, which also proves non-vacuously
+/// that the masking shape was armed), then drops with the
+/// "(decode failed)" excuse; the SECOND End, failure known, drops in
+/// the same tick with NO thumb render. The script ends on a healthy
+/// cursor because a --start-11 shutter whose final cursor is failed
+/// above fit trips the 60 s readiness cap (recorded limitation).
+///
+/// RED on the pre-gate build (b2ce1f9): the thumb renders on EVERY
+/// End (count >= 2) and the "(decode failed)" drop never appears.
+/// RELEASE ONLY: debug rides the 60 s readiness cap (see the M1 test).
+#[test]
+fn a_decode_failed_cursor_drops_to_fit_instead_of_masking_the_badge() {
+    if !has_display() {
+        eprintln!("screenshot smoke skipped: no display server");
+        return;
+    }
+    if cfg!(debug_assertions) {
+        eprintln!("skipped: debug build rides the 60 s readiness cap (run with --release)");
+        return;
+    }
+    let _s = serial();
+    let dir = out_dir().join("i46-failgate");
+    std::fs::create_dir_all(&dir).unwrap();
+    for i in 0..11 {
+        place_fixture(
+            &raws_dir().join("A1_full_compressed.ARW"),
+            &dir.join(format!("IMG_{i:04}.ARW")),
+        );
+    }
+    // A real COPY, never a symlink: the corrupter must not touch the
+    // shared fixture RAW.
+    let corrupt = dir.join("zz_corrupt.ARW");
+    std::fs::copy(raws_dir().join("A1_full_compressed.ARW"), &corrupt).unwrap();
+    let corrupter = {
+        let path = corrupt.clone();
+        std::thread::spawn(move || {
+            std::thread::sleep(Duration::from_secs(9));
+            use std::io::{Seek, Write};
+            let len = std::fs::metadata(&path).unwrap().len();
+            let mut f = std::fs::OpenOptions::new().write(true).open(&path).unwrap();
+            f.seek(std::io::SeekFrom::Start(200_000)).unwrap();
+            f.write_all(&vec![0u8; (len - 200_000) as usize]).unwrap();
+        })
+    };
+    let out = out_dir().join("i46-failgate.jpg");
+    let stderr = shoot_env_stderr(
+        &["--start-11", dir.to_str().unwrap()],
+        &[
+            ("FASTCULL_TRACE", "1"),
+            (
+                "FASTCULL_DRIVE",
+                "15000:end;15250:dump.t1;16000:home;17000:end;17150:dump.t2;18000:home",
+            ),
+        ],
+        &out,
+    );
+    corrupter.join().unwrap();
+    let thumb_renders = stderr.matches("loupe thumb idx 11 ").count();
+    assert!(
+        thumb_renders >= 1,
+        "the corrupt image's thumb never rendered at all — the masking \
+         shape was never armed and this test proves nothing:\n{stderr}"
+    );
+    assert!(
+        stderr.contains("loupe overlay dropped idx 11 (decode failed)"),
+        "a failed cursor never dropped to fit — the thumb rescue is \
+         masking the failed badge again:\n{stderr}"
+    );
+    assert_eq!(
+        thumb_renders, 1,
+        "the thumb rendered again on a KNOWN-failed cursor (the second \
+         End) — the gate is gone:\n{stderr}"
+    );
+    for label in ["t1", "t2"] {
+        assert_eq!(
+            dump_field(qedump(&stderr, label), "one2one"),
+            "false",
+            "the overlay is still up on the failed cursor at {label} — \
+             the fit strip (and its failed badge) is hidden:\n{stderr}"
+        );
+    }
 }
