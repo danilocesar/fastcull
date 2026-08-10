@@ -270,15 +270,26 @@ fn trace_clock() -> u128 {
         .as_millis()
 }
 
+/// Start a stopwatch for `trace_slow` — None (and no cost) when tracing
+/// is off. The `Option` IS the on/off switch, so a timed section never
+/// calls `Instant::now` in a normal run.
+fn trace_start() -> Option<std::time::Instant> {
+    trace_enabled().then(std::time::Instant::now)
+}
+
+/// Report a stopwatch started by `trace_start` if the section was slow
+/// enough to matter for a hang report.
 fn trace_slow(label: &str, t0: Option<std::time::Instant>) {
     if let Some(t0) = t0 {
         let ms = t0.elapsed().as_millis();
         if ms > 20 {
-            eprintln!("fastcull-trace: [{}] {label} took {ms} ms", trace_clock());
+            trace_mark(&format!("{label} took {ms} ms"));
         }
     }
 }
 
+/// The ONE place a trace line is emitted: tests grep these lines, so the
+/// format lives in a single string.
 fn trace_mark(label: &str) {
     if trace_enabled() {
         eprintln!("fastcull-trace: [{}] {label}", trace_clock());
@@ -3064,7 +3075,7 @@ fn apply_filter_change(
 }
 
 fn handle_nav(win: &MainWindow, state: &Rc<RefCell<AppState>>, key: &str) {
-    let t0 = trace_enabled().then(std::time::Instant::now);
+    let t0 = trace_start();
     handle_nav_inner(win, state, key);
     trace_slow(&format!("handle_nav({key})"), t0);
 }
@@ -3340,7 +3351,7 @@ fn current_geometry(win: &MainWindow, state: &Rc<RefCell<AppState>>) -> (GridLay
 
 /// Rebuild the windowed model for the current viewport.
 fn refresh(win: &MainWindow, state: &Rc<RefCell<AppState>>) {
-    let t0 = trace_enabled().then(std::time::Instant::now);
+    let t0 = trace_start();
     refresh_inner(win, state);
     trace_slow("refresh", t0);
 }
