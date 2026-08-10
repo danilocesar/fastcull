@@ -5,6 +5,7 @@
 //! hostile files: offset cycles, absurd entry counts, and out-of-range offsets
 //! terminate the walk instead of the process.
 
+use super::endian::Endian;
 use std::io::{Read, Seek, SeekFrom};
 
 #[derive(Debug, thiserror::Error)]
@@ -40,26 +41,6 @@ pub(crate) struct JpegPointer {
     pub height: Option<u32>,
 }
 
-#[derive(Clone, Copy)]
-struct Endian(bool); // true = little
-
-impl Endian {
-    fn u16(self, b: [u8; 2]) -> u16 {
-        if self.0 {
-            u16::from_le_bytes(b)
-        } else {
-            u16::from_be_bytes(b)
-        }
-    }
-    fn u32(self, b: [u8; 4]) -> u32 {
-        if self.0 {
-            u32::from_le_bytes(b)
-        } else {
-            u32::from_be_bytes(b)
-        }
-    }
-}
-
 /// Walk all IFDs reachable from the TIFF header (next-IFD chain + SubIFDs,
 /// breadth-first) and collect JPEG pointers.
 pub(crate) struct WalkResult {
@@ -76,11 +57,8 @@ pub(crate) fn walk_jpeg_pointers<R: Read + Seek>(reader: &mut R) -> Result<WalkR
     reader
         .read_exact(&mut header)
         .map_err(|_| TiffError::NotTiff("file shorter than TIFF header"))?;
-    let endian = match &header[0..2] {
-        b"II" => Endian(true),
-        b"MM" => Endian(false),
-        _ => return Err(TiffError::NotTiff("missing II/MM byte-order mark")),
-    };
+    let endian = Endian::from_marker(&header[0..2])
+        .ok_or(TiffError::NotTiff("missing II/MM byte-order mark"))?;
     if endian.u16([header[2], header[3]]) != 42 {
         return Err(TiffError::NotTiff("bad TIFF magic"));
     }
