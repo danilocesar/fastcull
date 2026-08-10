@@ -289,6 +289,17 @@ impl AppState {
         self.labels.len()
     }
 
+    /// Is the view at the loupe (the last zoom step, one column)?
+    ///
+    /// The zoom INDEX is the authority, not the column count the layout
+    /// happens to produce: `GridLayout::new` derives columns from this
+    /// same index (`ZOOM_COLUMNS[zoom.min(len-1)]`), and every writer of
+    /// `zoom` keeps it inside the ladder, so `layout.columns == 1` — the
+    /// second idiom this replaces — is exactly this predicate.
+    fn at_loupe(&self) -> bool {
+        self.zoom == grid::ZOOM_COLUMNS.len() - 1
+    }
+
     /// The cursor's position in the current view (None = cursor image is
     /// filtered out or the view is empty).
     fn cursor_pos(&self) -> Option<usize> {
@@ -1539,7 +1550,7 @@ fn main() {
                             }
                         }
                     }
-                    let at_loupe = st.zoom == grid::ZOOM_COLUMNS.len() - 1;
+                    let at_loupe = st.at_loupe();
                     let failures: Vec<_> = st
                         .sidecar_errs
                         .as_ref()
@@ -2115,7 +2126,7 @@ fn main() {
                     // is adopted into the fullres slot (issue #8), and an
                     // empty view has no cursor — all keep the old
                     // behaviour or they would hang into the 60 s cap.
-                    let at_loupe = st.zoom == grid::ZOOM_COLUMNS.len() - 1;
+                    let at_loupe = st.at_loupe();
                     let fit = !at_loupe
                         || st.synthetic
                         || st.view.is_empty()
@@ -3025,7 +3036,7 @@ fn handle_nav_inner(win: &MainWindow, state: &Rc<RefCell<AppState>>, key: &str) 
             }
         }
         "grid" => {
-            if st.zoom != loupe_step && st.zoom_factor <= 1.0 {
+            if !st.at_loupe() && st.zoom_factor <= 1.0 {
                 // Already at a grid zoom: Esc/G collapses the selection
                 // (the deselect gesture — gate finding).
                 st.selection.clear();
@@ -3037,7 +3048,7 @@ fn handle_nav_inner(win: &MainWindow, state: &Rc<RefCell<AppState>>, key: &str) 
             }
         }
         "zoom-in" => {
-            if st.zoom == loupe_step {
+            if st.at_loupe() {
                 if st.loupe.is_some() {
                     // Climb one x1.5 stop from the CLAMPED factor (the
                     // desired one may be INFINITY from an earlier Z). An
@@ -3164,7 +3175,7 @@ fn handle_nav_inner(win: &MainWindow, state: &Rc<RefCell<AppState>>, key: &str) 
 fn drain_kitchen(win: &MainWindow, state: &Rc<RefCell<AppState>>) -> bool {
     use fastcull_core::loupe::MID_RUNG_MAX_LONG;
     let mut st = state.borrow_mut();
-    let at_loupe = st.zoom == grid::ZOOM_COLUMNS.len() - 1;
+    let at_loupe = st.at_loupe();
     let done = st.kitchen.drain();
     if done.is_empty() {
         return false;
@@ -3427,7 +3438,7 @@ fn refresh_inner(win: &MainWindow, state: &Rc<RefCell<AppState>>) {
     // Loupe: at 1-column zoom the visible image IS the cursor (spec, cursor
     // contract): scrolling moves the cursor, and full-res always targets
     // what the user is looking at.
-    let at_loupe = layout.columns == 1;
+    let at_loupe = st.at_loupe();
     if at_loupe && view_len > 0 {
         // Scroll moves the cursor ONLY when the cursor's cell left the
         // viewport: unconditionally snapping to the center row made arrow
