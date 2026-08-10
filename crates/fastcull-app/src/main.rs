@@ -20,6 +20,7 @@ mod kitchen;
 
 use fastcull_core::catalog::Session;
 use fastcull_core::grid::{self, GridLayout, Nav};
+use fastcull_core::iptc::IptcField;
 use fastcull_core::loupe::is_top_rung;
 use fastcull_core::pipeline::{JobSpec, Pipeline, SessionEvent};
 use slint::{ComponentHandle, Model, VecModel};
@@ -993,7 +994,7 @@ fn main() {
                     }
                     let label = format!(
                         "{} on {} image(s)",
-                        IPTC_FIELD_LABELS.get(i as usize).unwrap_or(&"field"),
+                        iptc_field_label(i as usize),
                         batch.len()
                     );
                     commit_batch_mutation(&mut st, &batch, snaps, &label);
@@ -1030,7 +1031,7 @@ fn main() {
                     }
                     let label = format!(
                         "clear {} on {} image(s)",
-                        IPTC_FIELD_LABELS.get(i as usize).unwrap_or(&"field"),
+                        iptc_field_label(i as usize),
                         batch.len()
                     );
                     commit_batch_mutation(&mut st, &batch, snaps, &label);
@@ -2618,53 +2619,25 @@ fn reload_templates(st: &mut AppState) {
     }
 }
 
-/// The 11 panel field rows, in display order. Index = callback contract
-/// with the UI (iptc-field-committed / iptc-field-clear).
-const IPTC_FIELD_LABELS: [&str; 11] = [
-    "Title",
-    "Description",
-    "Creator",
-    "Copyright",
-    "Headline",
-    "City",
-    "Country",
-    "Credit",
-    "Source",
-    "Job ID",
-    "Location",
-];
+/// The panel field rows: the core table, in its declaration order, which
+/// IS the display order. The row index is the callback contract with the
+/// UI (iptc-field-committed / iptc-field-clear), so it must stay the
+/// core order — hence indexing `IptcField::ALL` rather than keeping a
+/// parallel list here.
+///
+/// An out-of-range index (a UI/core disagreement) reads as "no value" and
+/// writes nowhere, exactly as the hand-written match arms did.
+fn iptc_field_label(i: usize) -> &'static str {
+    IptcField::ALL.get(i).map_or("field", |f| f.label())
+}
 
 fn iptc_field_get(d: &fastcull_core::iptc::IptcData, i: usize) -> Option<&String> {
-    match i {
-        0 => d.title.as_ref(),
-        1 => d.description.as_ref(),
-        2 => d.creator.as_ref(),
-        3 => d.rights.as_ref(),
-        4 => d.headline.as_ref(),
-        5 => d.city.as_ref(),
-        6 => d.country.as_ref(),
-        7 => d.credit.as_ref(),
-        8 => d.source.as_ref(),
-        9 => d.job_id.as_ref(),
-        10 => d.location.as_ref(),
-        _ => None,
-    }
+    IptcField::ALL.get(i).and_then(|f| f.get(d))
 }
 
 fn iptc_field_set(d: &mut fastcull_core::iptc::IptcData, i: usize, v: Option<String>) {
-    match i {
-        0 => d.title = v,
-        1 => d.description = v,
-        2 => d.creator = v,
-        3 => d.rights = v,
-        4 => d.headline = v,
-        5 => d.city = v,
-        6 => d.country = v,
-        7 => d.credit = v,
-        8 => d.source = v,
-        9 => d.job_id = v,
-        10 => d.location = v,
-        _ => {}
+    if let Some(f) = IptcField::ALL.get(i) {
+        f.set(d, v);
     }
 }
 
@@ -2967,7 +2940,7 @@ fn refresh_iptc_panel(win: &MainWindow, st: &mut AppState) {
     // Build plain-data snapshots first; the Slint models are rebuilt ONLY
     // when content changed (gate finding: unconditional rebuilds tore the
     // field editors down mid-typing on every 33 ms engine tick).
-    let rows: Vec<(String, String, bool)> = (0..IPTC_FIELD_LABELS.len())
+    let rows: Vec<(String, String, bool)> = (0..IptcField::ALL.len())
         .map(|i| {
             let mut vs = batch
                 .iter()
@@ -2981,7 +2954,7 @@ fn refresh_iptc_panel(win: &MainWindow, st: &mut AppState) {
                 vs.any(|v| v != h)
             };
             (
-                IPTC_FIELD_LABELS[i].to_string(),
+                iptc_field_label(i).to_string(),
                 if mixed {
                     String::new()
                 } else {
