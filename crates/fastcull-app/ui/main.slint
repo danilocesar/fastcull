@@ -48,6 +48,77 @@ component Chip inherits Rectangle {
     }
 }
 
+// Modal scaffolding shared by the Help > Shortcuts and About popups:
+// full-area scrim, click-outside-to-close, wheel swallowed (validator M2
+// — TouchAreas pass unhandled scrolls through to the Flickable below),
+// and a centred card of the house style.
+//
+// Layout only. The two popups' KEY handling deliberately stays in the
+// root key scopes where PR #43 put it (the focus-continuity rules), and
+// every difference between the two cards is a property here rather than
+// a silent drift: card height, card padding, and whether clicks on the
+// card itself are swallowed.
+component ModalScrim inherits Rectangle {
+    in property <length> card-height;
+    in property <length> card-padding: 16px;
+    in property <bool> card-eats-clicks: false;
+    callback dismissed();
+    y: 0; // missing-binding trap (issue #12): unset y centered the scrim 13px low
+    background: #000000aa;
+    TouchArea {
+        clicked => { root.dismissed(); }
+        scroll-event(e) => { return accept; }
+    }
+    Rectangle {
+        x: (parent.width - self.width) / 2;
+        y: (parent.height - self.height) / 2;
+        width: 480px;
+        height: min(root.card-height, parent.height - 40px);
+        border-radius: 8px;
+        background: #202028;
+        border-width: 1px;
+        border-color: #3a3a44;
+        if root.card-eats-clicks: TouchArea { } // clicks on the card never close it
+        VerticalLayout {
+            padding: root.card-padding;
+            spacing: 8px;
+            @children
+        }
+    }
+}
+
+// Wheel sub-notch accumulator, shared by the two surfaces that zoom on
+// the wheel (the fit surface and the zoom overlay).
+//
+// One notch = one ladder stop: winit delivers 60px per wheel notch
+// (validated against the backend source); subtracting rather than
+// zeroing keeps the remainder for hi-res devices, and a direction flip
+// resets the residue so a reversal never fires late. `feed` returns
+// +1/-1 when a notch fires (0 otherwise) and also leaves it in `last`,
+// because a callback body cannot hold a local.
+component WheelNotches {
+    property <length> acc: 0;
+    out property <int> last: 0;
+    public function feed(dy: length) -> int {
+        if ((dy > 0 && self.acc < 0) || (dy < 0 && self.acc > 0)) {
+            self.acc = 0;
+        }
+        self.acc += dy;
+        if (self.acc >= 60px) {
+            self.acc -= 60px;
+            self.last = 1;
+            return 1;
+        }
+        if (self.acc <= -60px) {
+            self.acc += 60px;
+            self.last = -1;
+            return -1;
+        }
+        self.last = 0;
+        return 0;
+    }
+}
+
 // One IPTC panel field row (iptc-templates.md tri-state UI rule, v1
 // reading): bare emptiness preserves; the per-field clear control acts
 // IMMEDIATELY (revert-covered) — no pending-clear badge state. mixed =
@@ -476,10 +547,14 @@ export component MainWindow inherits Window {
                 // Explicit x: Slint CENTERS an element whose width is bound
                 // but whose x is not (issue #12: the panel toggle shifted
                 // the grid right by panel-w/2, half of it under the panel).
+                //
+                // grid-width/grid-height ARE this rectangle (see their
+                // declarations): the Rust layout math and the element it
+                // lays out now read the same two expressions.
                 x: 0;
                 y: root.bar-h;
-                width: parent.width - root.panel-w;
-                height: parent.height - root.bar-h;
+                width: root.grid-width;
+                height: root.grid-height;
                 viewport-width: self.width;
                 viewport-height: root.virtual-height;
                 viewport-y <=> root.vp-y;
@@ -640,31 +715,18 @@ export component MainWindow inherits Window {
             // Permanent + visibility-toggled (issue #6 rule); declared
             // BEFORE the scrollbar so the bar stays on top and draggable.
             fit-ta := TouchArea {
-                property <length> wheel-acc: 0;
                 visible: root.at-fit;
                 x: 0;
                 y: root.bar-h;
-                width: parent.width - root.panel-w;
-                height: parent.height - root.bar-h;
+                width: root.grid-width;
+                height: root.grid-height;
+                fit-wheel := WheelNotches { }
                 scroll-event(e) => {
                     if (e.delta-y == 0) {
                         return reject;
                     }
-                    // One notch = one ladder stop: winit delivers 60px
-                    // per wheel notch (validated against the backend
-                    // source); subtract keeps remainders for hi-res
-                    // devices, a direction flip resets the residue.
-                    if ((e.delta-y > 0 && self.wheel-acc < 0) || (e.delta-y < 0 && self.wheel-acc > 0)) {
-                        self.wheel-acc = 0;
-                    }
-                    self.wheel-acc += e.delta-y;
-                    if (self.wheel-acc >= 60px) {
-                        self.wheel-acc -= 60px;
-                        root.pointer-wheel(true, e.modifiers.control,
-                            self.mouse-x, self.mouse-y + root.bar-h);
-                    } else if (self.wheel-acc <= -60px) {
-                        self.wheel-acc += 60px;
-                        root.pointer-wheel(false, e.modifiers.control,
+                    if (fit-wheel.feed(e.delta-y) != 0) {
+                        root.pointer-wheel(fit-wheel.last > 0, e.modifiers.control,
                             self.mouse-x, self.mouse-y + root.bar-h);
                     }
                     return accept;
@@ -751,8 +813,8 @@ export component MainWindow inherits Window {
             if root.empty-message != "": Rectangle {
                 x: 0;
                 y: root.bar-h;
-                width: parent.width - root.panel-w;
-                height: parent.height - root.bar-h;
+                width: root.grid-width;
+                height: root.grid-height;
                 background: #161618;
                 Text {
                     text: root.empty-message;
@@ -797,8 +859,12 @@ export component MainWindow inherits Window {
             // the missing-binding trap.
             x: 0;
             y: 0;
-            width: parent.width - root.panel-w;
-            height: parent.height - statusbar.height;
+            width: root.grid-width;
+            // NOT grid-height: the overlay starts at y 0, above the filter
+            // bar, so its height is the loupe area (which is exactly
+            // `content.height - statusbar.height`, see loupe-area-h) —
+            // the one quantity of the three that legitimately differs.
+            height: root.loupe-area-h;
             background: #000000;
             clip: true;
             zoomed-img := Image {
@@ -813,7 +879,7 @@ export component MainWindow inherits Window {
                 height: root.loupe-h;
             }
             TouchArea {
-                property <length> wheel-acc: 0;
+                zoom-wheel := WheelNotches { }
                 // Drag state: `dragging` latches once the pointer travels
                 // past the threshold while pressed (Slint's Flickable used
                 // 8 logical px — keep the feel), and suppresses the
@@ -877,18 +943,8 @@ export component MainWindow inherits Window {
                     if (e.delta-y == 0) {
                         return reject;
                     }
-                    if ((e.delta-y > 0 && self.wheel-acc < 0) || (e.delta-y < 0 && self.wheel-acc > 0)) {
-                        self.wheel-acc = 0;
-                    }
-                    self.wheel-acc += e.delta-y;
-                    if (self.wheel-acc >= 60px) {
-                        self.wheel-acc -= 60px;
-                        root.pointer-wheel(true, e.modifiers.control,
-                            zoomed-img.x + self.mouse-x,
-                            zoomed-img.y + self.mouse-y);
-                    } else if (self.wheel-acc <= -60px) {
-                        self.wheel-acc += 60px;
-                        root.pointer-wheel(false, e.modifiers.control,
+                    if (zoom-wheel.feed(e.delta-y) != 0) {
+                        root.pointer-wheel(zoom-wheel.last > 0, e.modifiers.control,
                             zoomed-img.x + self.mouse-x,
                             zoomed-img.y + self.mouse-y);
                     }
@@ -1464,30 +1520,12 @@ export component MainWindow inherits Window {
         // old order left the panel clickable above an "open" modal.
         // Keyboard-shortcuts popup (Help menu; Esc closes). The keyboard map
         // in ui-grid.md is the source of truth for this list.
-        if root.shortcuts-visible: Rectangle {
-            y: 0; // missing-binding trap (issue #12): unset y centered the scrim 13px low
+        if root.shortcuts-visible: ModalScrim {
             width: 100%;
             height: parent.height - statusbar.height;
-            background: #000000aa;
-            TouchArea {
-                clicked => { root.shortcuts-visible = false; }
-                // The wheel must not scroll the grid under the scrim
-                // (validator M2 — TouchAreas pass unhandled scrolls
-                // through to the Flickable below).
-                scroll-event(e) => { return accept; }
-            }
-            Rectangle {
-                x: (parent.width - self.width) / 2;
-                y: (parent.height - self.height) / 2;
-                width: 480px;
-                height: min(560px, parent.height - 40px);
-                border-radius: 8px;
-                background: #202028;
-                border-width: 1px;
-                border-color: #3a3a44;
-                VerticalLayout {
-                    padding: 18px;
-                    spacing: 8px;
+            card-height: 560px;
+            card-padding: 18px;
+            dismissed => { root.shortcuts-visible = false; }
                     Text {
                         text: "Keyboard shortcuts";
                         color: #ffffff;
@@ -1505,8 +1543,6 @@ export component MainWindow inherits Window {
                         color: #707078;
                         font-size: 11px;
                     }
-                }
-            }
         }
 
         // About dialog (issue #23; replaces the About→shortcuts
@@ -1516,35 +1552,20 @@ export component MainWindow inherits Window {
         // for a URL opener; persona: it must never wrap or ellipsize —
         // a truncated URL you can't retype is worse than a non-clickable
         // one you can).
-        if root.about-visible: Rectangle {
-            y: 0; // missing-binding trap (issue #12)
+        if root.about-visible: ModalScrim {
             width: 100%;
             height: parent.height - statusbar.height;
-            background: #000000aa;
-            TouchArea {
-                clicked => { root.about-visible = false; }
-                // Same wheel swallow as the shortcuts scrim (M2).
-                scroll-event(e) => { return accept; }
-            }
-            Rectangle {
-                x: (parent.width - self.width) / 2;
-                y: (parent.height - self.height) / 2;
-                width: 480px;
-                // 348px, not 320: issue #26 split the title into two lines,
-                // and at the old height the closing hint was pushed outside
-                // the rounded rect (QE D2 — a real before/after regression,
-                // reproducible at 480x320). The `min` still yields to a
-                // short window; the spacing below was tightened so the card
-                // needs no more room than it did before the split.
-                height: min(348px, parent.height - 40px);
-                border-radius: 8px;
-                background: #202028;
-                border-width: 1px;
-                border-color: #3a3a44;
-                TouchArea { } // clicks on the card never close it
-                VerticalLayout {
-                    padding: 16px;
-                    spacing: 8px;
+            // 348px, not 320: issue #26 split the title into two lines,
+            // and at the old height the closing hint was pushed outside
+            // the rounded rect (QE D2 — a real before/after regression,
+            // reproducible at 480x320). The `min` still yields to a
+            // short window; the spacing was tightened so the card needs
+            // no more room than it did before the split.
+            card-height: 348px;
+            // Unlike the shortcuts card, clicks on THIS card do not close
+            // it (a URL you may be trying to select is on it).
+            card-eats-clicks: true;
+            dismissed => { root.about-visible = false; }
                     // Two lines, not one. A dev build's version is now
                     // `X.Y.Z-devel-YYYYMMDD-<hash>` (issue #26), and this
                     // Text had no `wrap:` while its neighbours do — Slint
@@ -1599,8 +1620,6 @@ export component MainWindow inherits Window {
                         color: #707078;
                         font-size: 11px;
                     }
-                }
-            }
         }
 
         statusbar := Rectangle {
