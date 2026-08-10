@@ -508,14 +508,7 @@ mod tests {
     use crate::catalog::PickState;
 
     fn tmp() -> PathBuf {
-        let dir = std::env::temp_dir().join(format!(
-            "fastcull-fops-{}-{:?}",
-            std::process::id(),
-            std::thread::current().id()
-        ));
-        std::fs::remove_dir_all(&dir).ok();
-        std::fs::create_dir_all(&dir).unwrap();
-        dir
+        crate::testutil::scratch_dir("fops")
     }
 
     fn src_with(dir: &Path, names: &[(&str, &[u8])]) -> Vec<PlanSource> {

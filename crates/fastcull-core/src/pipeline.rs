@@ -829,8 +829,7 @@ mod tests {
     /// PRE-FIX CODE (make_grid_thumb returned Ok there).
     #[test]
     fn truncated_bare_jpeg_yields_failed_not_a_blank_thumb() {
-        let dir = std::env::temp_dir().join(format!("fastcull-hostile31-{}", std::process::id()));
-        std::fs::create_dir_all(&dir).unwrap();
+        let dir = crate::testutil::scratch_dir("hostile31");
         let intact = crate::raw::jpeg_hostile::encoded(320, 200);
         let path = dir.join("truncated.jpg");
         std::fs::write(&path, crate::raw::jpeg_hostile::truncate_scan(&intact, 64)).unwrap();

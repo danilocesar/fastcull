@@ -190,13 +190,7 @@ mod tests {
     use super::*;
 
     fn make_folder(files: &[&str]) -> PathBuf {
-        let dir = std::env::temp_dir().join(format!(
-            "fastcull-catalog-{}-{:?}",
-            std::process::id(),
-            std::thread::current().id()
-        ));
-        std::fs::remove_dir_all(&dir).ok();
-        std::fs::create_dir_all(&dir).unwrap();
+        let dir = crate::testutil::scratch_dir("catalog");
         for f in files {
             std::fs::write(dir.join(f), b"stub").unwrap();
         }

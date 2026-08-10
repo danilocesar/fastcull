@@ -1712,8 +1712,7 @@ mod tests {
             second,
         );
         b.set_ifd0(ifd0);
-        let dir = std::env::temp_dir().join(format!("fastcull-ladder31-{}", std::process::id()));
-        std::fs::create_dir_all(&dir).unwrap();
+        let dir = crate::testutil::scratch_dir("ladder31");
         let path = dir.join("mid_ok_full_cut.arw");
         std::fs::write(&path, &b.bytes).unwrap();
 

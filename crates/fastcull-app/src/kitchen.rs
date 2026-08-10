@@ -490,6 +490,26 @@ mod tests {
         }
     }
 
+    /// A kitchen with NO worker thread: the queue can be inspected and
+    /// asserted on without a cook racing the assertions. Returns the
+    /// shared state too, since that is where the queue lives.
+    fn paused() -> (Kitchen, Arc<Shared>) {
+        let shared = Arc::new(Shared {
+            queue: Mutex::new(Vec::new()),
+            in_flight: Mutex::new(None),
+            done: Mutex::new(Vec::new()),
+            wake: Condvar::new(),
+            shutdown: AtomicBool::new(false),
+            generation: AtomicU64::new(0),
+            notify: Box::new(|| {}),
+        });
+        let k = Kitchen {
+            shared: Arc::clone(&shared),
+            worker: None,
+        };
+        (k, shared)
+    }
+
     /// The priority contract: Full (latest) > Wrap > Thumb (oldest) > Mid.
     /// This ordering is what keeps the sharpness-on-stop tail ahead of a
     /// page of thumbnails — pure function so it cannot rot untested.
@@ -645,19 +665,7 @@ mod tests {
     /// proved the whole screenshot suite cannot see that mutation (F2).
     #[test]
     fn drain_returns_everything_at_once() {
-        let shared = Arc::new(Shared {
-            queue: Mutex::new(Vec::new()),
-            in_flight: Mutex::new(None),
-            done: Mutex::new(Vec::new()),
-            wake: Condvar::new(),
-            shutdown: AtomicBool::new(false),
-            generation: AtomicU64::new(0),
-            notify: Box::new(|| {}),
-        });
-        let k = Kitchen {
-            shared: Arc::clone(&shared),
-            worker: None,
-        };
+        let (k, shared) = paused();
         for i in 0..40 {
             lock(&shared.done).push((
                 0,
@@ -678,19 +686,7 @@ mod tests {
     /// the fixed contract (F3).
     #[test]
     fn full_jobs_coexist_per_index_and_dedupe() {
-        let shared = Arc::new(Shared {
-            queue: Mutex::new(Vec::new()),
-            in_flight: Mutex::new(None),
-            done: Mutex::new(Vec::new()),
-            wake: Condvar::new(),
-            shutdown: AtomicBool::new(false),
-            generation: AtomicU64::new(0),
-            notify: Box::new(|| {}),
-        });
-        let k = Kitchen {
-            shared: Arc::clone(&shared),
-            worker: None,
-        };
+        let (k, shared) = paused();
         k.submit_full(0, img(1, 1, 0));
         k.submit_full(1, img(1, 1, 1));
         {
@@ -718,19 +714,7 @@ mod tests {
     fn cull_mids_is_mid_only_and_visibility_scoped() {
         // No worker racing us: fill the queue while holding it hostage is
         // not possible from outside, so use a paused shared directly.
-        let shared = Arc::new(Shared {
-            queue: Mutex::new(Vec::new()),
-            in_flight: Mutex::new(None),
-            done: Mutex::new(Vec::new()),
-            wake: Condvar::new(),
-            shutdown: AtomicBool::new(false),
-            generation: AtomicU64::new(0),
-            notify: Box::new(|| {}),
-        });
-        let k = Kitchen {
-            shared: Arc::clone(&shared),
-            worker: None,
-        };
+        let (k, shared) = paused();
         k.submit_mid(1, img(1, 1, 0));
         k.submit_mid(2, img(1, 1, 0));
         k.submit_thumb(3, vec![1, 2, 3]);
