@@ -853,7 +853,7 @@ fn decode_ladder(
         }
     }
     if rungs.is_empty() {
-        return Err("no usable embedded preview".into());
+        return Err(crate::raw::NO_USABLE_PREVIEW.into());
     }
 
     let top_long = rungs
@@ -902,7 +902,7 @@ fn decode_ladder(
         note_best(shared, index, achieved);
         Ok(())
     } else {
-        Err("no decodable preview".into())
+        Err(crate::raw::NO_DECODABLE_PREVIEW.into())
     }
 }
 
