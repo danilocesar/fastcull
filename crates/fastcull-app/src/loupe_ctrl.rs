@@ -4,8 +4,11 @@
 //! warm-decode routing rule, and the full-res texture ring.
 //!
 //! Not here: WHICH rung the loupe ends up showing (sharp / soft mid / thumb
-//! rescue / fit) is decided by the refresh pass in `presenter.rs` — this
-//! module supplies the geometry and the textures it chooses among.
+//! rescue / hold / fit) is decided by `fastcull_core::transit::render_rung`
+//! and walked by the refresh pass in `presenter.rs` — this module supplies
+//! the geometry and the textures it chooses among. The ring's victim choice
+//! is core's too (`transit::evict_fullres`); `insert_fullres` below just
+//! carries it out.
 
 use std::cell::RefCell;
 use std::rc::Rc;
@@ -467,38 +470,30 @@ fn apply_pointer_action(
 // machine, and the offsets have exactly one writer. There is nothing
 // left to read back.
 
-/// Keep a full-res texture, protecting the cursor's and capping at the
-/// prefetch ring size (5 = cursor ±2): the old 3-slot FIFO let the prefetch
-/// evict the focused image itself (validator HIGH finding; the user saw it
-/// as back-arrow quality degradation).
+/// Keep a full-res texture, giving up slots until the ring is back within
+/// [`FULLRES_RING`].
 ///
-/// Eviction is by VIEW distance from the cursor, not insertion age
-/// (issue #46): age is view-order-blind — the provisional-order startup
-/// window legitimately decodes filename-order neighbors, and once the
-/// capture sort lands those are strangers occupying slots; age eviction
-/// then discarded exactly the view neighbor the NEXT tap needed while
-/// keeping a frame seven positions away (observed as an 81 ms thumb
-/// blink on a warm frame). Entries no longer in the view evict first.
+/// The victim CHOICE — protect the cursor's own texture, farthest by view
+/// distance first, out-of-view entries ahead of everything, ties to the
+/// later slot — lives in `fastcull_core::transit::evict_fullres` and is
+/// table-tested there (A3). Here: re-inserting the texture (a re-announced
+/// index moves to the end of the ring, as it always did) and removing the
+/// slots core names. `evict_fullres` returns None once the ring fits, so
+/// even the capacity test is not re-derived at this end — the literal `5`
+/// that used to sit in this loop is gone, and the ring is now `2·PREFETCH+1`
+/// by construction rather than by comment.
 pub(crate) fn insert_fullres(st: &mut AppState, index: usize, texture: slint::Image) {
     st.textures.fullres.retain(|(i, _)| *i != index);
     st.textures.fullres.push((index, texture));
     let cursor = st.grid.cursor;
-    while st.textures.fullres.len() > 5 {
-        let pos_of = |id: usize| st.grid.view.iter().position(|v| *v == id);
-        let cursor_pos = pos_of(cursor);
-        let victim = st
-            .textures
-            .fullres
-            .iter()
-            .enumerate()
-            .filter(|(_, (i, _))| *i != cursor)
-            .max_by_key(|(_, (i, _))| match (cursor_pos, pos_of(*i)) {
-                (Some(c), Some(p)) => p.abs_diff(c),
-                _ => usize::MAX, // not in the view (or no view): first out
-            })
-            .map(|(slot, _)| slot)
-            .unwrap_or(0);
-        st.textures.fullres.remove(victim);
+    loop {
+        let held: Vec<usize> = st.textures.fullres.iter().map(|(i, _)| *i).collect();
+        match fastcull_core::transit::evict_fullres(&held, cursor, &st.grid.view) {
+            Some(victim) => {
+                st.textures.fullres.remove(victim);
+            }
+            None => break,
+        }
     }
 }
 
