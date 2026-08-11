@@ -148,15 +148,15 @@ fn load_folder(state: &Rc<RefCell<AppState>>, folder: &std::path::Path) -> Resul
     st.bursts = crate::state::BurstIndex::new(count);
     st.iptc = vec![fastcull_core::iptc::IptcData::default(); count];
     st.touched_iptc.clear();
-    st.panel_cache = Default::default();
+    st.iptc_panel.cache = Default::default();
     st.copy.plan = None;
     st.copy.handle = None;
     st.copy.rx = None;
     st.copy.copied_to.clear();
     st.selection.reset();
-    st.revert = Default::default();
-    st.revert_ids.clear();
-    st.revert_label.clear();
+    st.iptc_panel.revert = Default::default();
+    st.iptc_panel.revert_ids.clear();
+    st.iptc_panel.revert_label.clear();
     // templates.toml: read at session open (spec: live-reload = re-read
     // here and on panel toggle, no watcher). Errors/warnings surface in
     // the panel warning strip.
