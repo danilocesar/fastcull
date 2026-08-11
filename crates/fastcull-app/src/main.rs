@@ -2330,10 +2330,19 @@ fn write_snapshot_jpeg(
 /// change tracker to a thread-local list (i-slint-core-1.17.1
 /// properties/change_tracker.rs `mark_dirty`); the notify functions run
 /// later, when the event loop calls `run_change_handlers()` (via
-/// `WindowInner::ensure_tree_instantiated`, window.rs). So no refresh can
-/// interleave between `apply_reveal`'s writes and this mark in either
-/// order, and mark-then-write is observationally identical to
-/// write-then-mark here.
+/// `WindowInner::ensure_tree_instantiated`, window.rs, and
+/// `platform::update_timers_and_animations`, platform.rs — the only two
+/// callers). So no refresh can interleave between `apply_reveal`'s writes
+/// and this mark in either order, and mark-then-write is observationally
+/// identical to write-then-mark here.
+///
+/// Re-verified for OUR window, not just for the library: `changed vp-y =>
+/// root.viewport-changed()` (main.slint) compiles to `change_tracker2` on
+/// `InnerMainWindow`, initialized with `ChangeTracker::init(eval = flick
+/// viewport_y, notify = call viewport_changed)` in the generated
+/// `.../out/main.rs`. `viewport-changed` is the callback whose Rust
+/// handler is `refresh` — so the one re-entry that could observe this mark
+/// is that tracker, and that tracker is queued, never called from `set`.
 fn reveal_scroll(
     win: &MainWindow,
     st: &mut AppState,

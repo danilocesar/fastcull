@@ -59,9 +59,13 @@ component Chip inherits Rectangle {
 // a silent drift: card height, card padding, and whether clicks on the
 // card itself are swallowed.
 component ModalScrim inherits Rectangle {
-    // MANDATORY — an unset length is 0px in Slint, which yields an
-    // invisible card that fails silently rather than loudly. Every call
-    // site must bind this.
+    // MANDATORY — Slint has no required property, and an unset length is
+    // 0px, so a call site that forgets this used to get NO CARD AT ALL:
+    // the scrim darkened, the text floated over the grid unclipped, and
+    // nothing said why (verified by unbinding it on the About site).
+    // Unset now means FULL HEIGHT (see the card's `height` below) — still
+    // wrong, but unmissable and impossible to mistake for a correct card.
+    // Both existing sites bind it, so no pixel moves.
     in property <length> card-height;
     in property <length> card-padding: 16px;
     in property <bool> card-eats-clicks: false;
@@ -83,7 +87,11 @@ component ModalScrim inherits Rectangle {
         x: (parent.width - self.width) / 2;
         y: (parent.height - self.height) / 2;
         width: root.card-width;
-        height: min(root.card-height, parent.height - 40px);
+        // The `> 0px` arm is the unbound-property trap above, not a layout
+        // choice: an unset card-height means "fill", never "vanish".
+        height: root.card-height > 0px
+            ? min(root.card-height, parent.height - 40px)
+            : parent.height - 40px;
         border-radius: 8px;
         background: #202028;
         border-width: 1px;
@@ -1297,13 +1305,31 @@ export component MainWindow inherits Window {
         // Enter is the whole feature. The remembered destination is
         // displayed PROMINENTLY (the yesterday's-job failure mode).
         //
-        // KNOWN RESIDUAL (gate finding): this is a third hand-rolled copy
-        // of the ModalScrim scaffolding. It was left out of that
-        // extraction deliberately — it hosts `copy-keys` as an ANCESTOR of
-        // the whole dialog, which ModalScrim cannot express today, and its
-        // scrim TouchArea swallows clicks WITHOUT dismissing. ModalScrim's
-        // card width is a property now so the rest of the gap is only this
-        // FocusScope nesting.
+        // KNOWN RESIDUAL (gate finding, re-asked by a later review): this
+        // is a third hand-rolled copy of the ModalScrim scaffolding, and it
+        // stays hand-rolled because the difference is FUNCTIONAL, not
+        // cosmetic — adopting the component would move key handling, which
+        // this pass is not allowed to do.
+        //
+        //   * `copy-keys` is a FocusScope that must be an ANCESTOR of the
+        //     whole dialog: key events bubble only up the focused element's
+        //     ancestor chain, and this dialog moves focus into its own
+        //     children (dest button, skip toggle, Start). As a sibling,
+        //     Enter/Esc died inside whichever child last held focus (PR #43
+        //     focus continuity, issue #42 containment). A ModalScrim child
+        //     lands INSIDE the card's VerticalLayout via `@children`, i.e.
+        //     a descendant of the card — the one place this scope cannot
+        //     be.
+        //   * the scrim TouchArea here swallows clicks WITHOUT dismissing;
+        //     ModalScrim's calls `dismissed()`. That one IS expressible
+        //     (bind `dismissed => { }`), so it is not the blocker.
+        //   * no `scroll-event` arm — see the NOTE below, issue #49.
+        //
+        // The card width was the accidental half of the gap and is a
+        // property now (57c225c); what is left needs ModalScrim to take the
+        // focus scope as a WRAPPER rather than a child — a component-API
+        // change with focus behavior riding on it, which belongs in its own
+        // PR, not in a behavior-preserving dedup.
         if root.copy-visible: Rectangle {
             y: 0; // missing-binding trap (issue #12): unset y centered the scrim 13px low
             width: 100%;
