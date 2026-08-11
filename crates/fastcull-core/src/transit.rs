@@ -93,9 +93,13 @@ pub struct RungInputs {
     /// A TOP-rung texture for the cursor is in hand (`loupe::is_top_rung`
     /// over the full-res slot, terminality included).
     pub has_sharp: bool,
-    /// A sub-top texture of the cursor's own image is in hand: its mid
-    /// rung, or a warm sub-top texture the engine re-announced into the
-    /// full-res slot (the pruned-and-revisited path).
+    /// SOME texture of the cursor's own image below the sharp arm is in
+    /// hand: its mid rung, or a warm texture the engine re-announced into
+    /// the full-res slot (the pruned-and-revisited path). The app gathers
+    /// it as "mid rung, else full-res slot", so when `has_sharp` is also
+    /// true this may be that same TOP-rung texture — harmless, because the
+    /// ladder tests `has_sharp` first and `has_mid` is only ever read below
+    /// it. Do not read this field as "strictly sub-top".
     pub has_mid: bool,
     /// The cursor's own 320 px grid thumb is in hand.
     pub has_thumb: bool,
@@ -625,8 +629,12 @@ mod tests {
         }
     }
 
-    /// Every combination of the eight inputs the ladder reads: 2^6 boolean
-    /// combinations × 5 hold states = 320 rows.
+    /// Every combination of the SEVEN inputs that vary: 2^6 boolean
+    /// combinations × 5 hold states = 320 rows. The eighth, `hold_cap`,
+    /// is pinned at production's `OVERLAY_HOLD_CAP` on purpose — only
+    /// `elapsed >= cap` is ever asked, and the 249/250 ms hold states
+    /// above already sweep both sides of that comparison. Varying the cap
+    /// itself would re-test the same boundary in different units.
     fn every_input_combination() -> Vec<RungInputs> {
         let holds = [
             None,
@@ -834,9 +842,31 @@ mod tests {
         let held = [10, 9, 11, 8, 12, 7];
         // 7 is 3 away, so it goes first...
         assert_eq!(evict_fullres(&held, 10, &view), Some(5));
+        // SYNTHETIC ring, deliberately: id 11 appears twice, which
+        // `insert_fullres`'s retain-then-push dedupe forbids in the app. A
+        // duplicate is the only way to force a max-distance TIE in a ring
+        // this size on a linear view, and the app never hands us a longer
+        // one (it pushes, then evicts down from six). The tie rule itself
+        // is app-reachable — a non-linear view order reaches it — so the
+        // rule is pinned here on the smallest state that shows it.
         let held = [10, 9, 11, 8, 12, 11];
         // ...with the maximum shared by 8 (slot 3) and 12 (slot 4).
         assert_eq!(evict_fullres(&held, 10, &view), Some(4));
+    }
+
+    #[test]
+    fn ties_go_to_the_later_slot_on_a_view_the_app_can_reach() {
+        // The row above forces its tie with a duplicate id. This one uses
+        // six DISTINCT ids and a view order the app really produces (a
+        // filtered / capture-time-sorted view, where neighbours in id
+        // space are not neighbours in view space): ids 20 and 31 are both
+        // three positions from the cursor, so the tie rule alone decides.
+        let view = [20, 30, 9, 10, 11, 21, 31];
+        let held = [10, 9, 11, 30, 20, 31];
+        // View positions: 20@0, 30@1, 9@2, cursor 10@3, 11@4, 21@5, 31@6.
+        // Distances: 9→1, 11→1, 30→2, 20→3, 31→3. Farthest is the 20/31
+        // tie, and the LATER slot (5, id 31) loses.
+        assert_eq!(evict_fullres(&held, 10, &view), Some(5));
     }
 
     #[test]
