@@ -279,14 +279,30 @@ fn visible_window(st: &mut AppState, pass: &Pass) -> (std::ops::Range<usize>, Ve
     (range, ids)
 }
 
-fn refresh_inner(win: &MainWindow, state: &Rc<RefCell<AppState>>) {
-    let geom = current_geometry(win, state);
-    let mut st = state.borrow_mut();
-    let mut pass = detect_drift(win, &mut st, geom);
-    anchor_the_scroll(win, &mut st, &mut pass);
-    let (range, ids) = visible_window(&mut st, &pass);
-    // The phases still inline below read the pass through these aliases;
-    // they go away as each one moves into its own function.
+/// The UI-side full-res texture held for `index`, if any. Used by the rung
+/// choice (is there a sharp one for the cursor?) and by the cell fill.
+fn fullres_for(st: &AppState, index: usize) -> Option<slint::Image> {
+    st.textures
+        .fullres
+        .iter()
+        .find(|(i, _)| *i == index)
+        .map(|(_, img)| img.clone())
+}
+
+/// PHASE 4 — the cursor claim at the loupe, and the warm-decode request
+/// for what it is now looking at. At one column the visible image IS the
+/// cursor (cursor contract), so a scroll that carries the cursor's cell off
+/// screen MOVES the cursor — but only a POSITIVE scrollbar signal counts
+/// (issues #16/#22); geometry moving under the cursor re-anchors instead.
+///
+/// Takes the `Rc` as well as the borrow: the re-anchor arm schedules a
+/// zero-delay follow-up refresh, and that closure needs its own handle.
+fn claim_cursor_at_loupe(
+    win: &MainWindow,
+    state: &Rc<RefCell<AppState>>,
+    st: &mut AppState,
+    pass: &Pass,
+) {
     let layout = &pass.layout;
     let (viewport_h, scroll_y, view_len) = (pass.viewport_h, pass.scroll_y, pass.view_len);
     let (at_loupe, relayout, view_mutated) = (pass.at_loupe, pass.relayout, pass.view_mutated);
@@ -402,6 +418,15 @@ fn refresh_inner(win: &MainWindow, state: &Rc<RefCell<AppState>>) {
             }
         }
     }
+}
+
+/// PHASE 5 — the intermediate-zoom ladder: cells that have outgrown the
+/// 320 px thumb climb to the mid rung, and mids for cells that scrolled
+/// away are dropped. Returns whether this zoom wants mids at all — the
+/// cell fill needs the same answer.
+fn climb_mid_rung(win: &MainWindow, st: &mut AppState, pass: &Pass, ids: &[usize]) -> bool {
+    let layout = &pass.layout;
+    let at_loupe = pass.at_loupe;
     // Intermediate-zoom ladder (user bug report: cells looked bad between
     // 8-column and loupe): cells wider than 320*1.25 physical px outgrow the
     // thumb — climb them to the mid rung via the same 25% rule.
@@ -415,8 +440,8 @@ fn refresh_inner(win: &MainWindow, state: &Rc<RefCell<AppState>>) {
             // thumbs). Downscales cook on the kitchen worker; stale ones
             // for scrolled-away cells are culled here, at the submission
             // wave (spec rule) — landed ones are still adopted.
-            stx.kitchen.cull_mids(&ids);
-            for (index, image) in stx.textures.va.ensure(&ids, cell_phys as u32, loupe) {
+            stx.kitchen.cull_mids(ids);
+            for (index, image) in stx.textures.va.ensure(ids, cell_phys as u32, loupe) {
                 if stx.textures.mids.len() >= MIDS_CAP && !stx.textures.mids.contains_key(&index) {
                     break;
                 }
@@ -425,16 +450,18 @@ fn refresh_inner(win: &MainWindow, state: &Rc<RefCell<AppState>>) {
         }
     }
     st.textures.mids.retain(|i, _| ids.contains(i));
-    st.textures.va.prune(&ids);
+    st.textures.va.prune(ids);
+    want_mid
+}
 
+/// PHASE 6 — which rung the loupe overlay shows, and the render of it:
+/// sharp (the top rung) / soft (the cursor's mid) / thumb rescue / a
+/// bounded residual hold / the honest drop to fit — plus the state badge.
+/// The ladder and its rules are ui-grid.md's; this is the app-side walk of
+/// them. Returns the cursor's mark, which the status line spells out.
+fn render_loupe_rung(win: &MainWindow, st: &mut AppState, pass: &Pass) -> i32 {
+    let (at_loupe, view_len) = (pass.at_loupe, pass.view_len);
     let cursor = st.grid.cursor;
-    let fullres_for = |st: &AppState, index: usize| -> Option<slint::Image> {
-        st.textures
-            .fullres
-            .iter()
-            .find(|(i, _)| *i == index)
-            .map(|(_, img)| img.clone())
-    };
     // Zoom overlay (any factor above fit, capped at 1:1): only shown when
     // a texture of the CURSOR's own exists (a stale previous image must
     // never pose as the current one), sized as fit-extent × factor in
@@ -443,7 +470,7 @@ fn refresh_inner(win: &MainWindow, state: &Rc<RefCell<AppState>>) {
     // below it the view stays at the carried factor rendered SOFT from
     // the cursor's mid rung, FLAGGED by the cue pill — never unflagged
     // upscaling, and fit only when even the mid is missing.
-    let factor = clamped_factor(win, &st);
+    let factor = clamped_factor(win, st);
     let overlay = factor > 1.0 && at_loupe;
     // Issue #21 (user-approved contract): above fit, always show the
     // CURRENT image at the carried factor and pan center — rung QUALITY
@@ -452,7 +479,7 @@ fn refresh_inner(win: &MainWindow, state: &Rc<RefCell<AppState>>) {
     // ladder's last rung with pixels is the cursor's own grid THUMB —
     // the overlay NEVER drops to fit while the desire is above it (the
     // transit contract), however cold the neighbor.
-    let sharp = fullres_for(&st, cursor).filter(|img| {
+    let sharp = fullres_for(st, cursor).filter(|img| {
         is_top_rung(
             img.size().width.max(img.size().height),
             st.textures.terminal_native.contains(&cursor),
@@ -467,7 +494,7 @@ fn refresh_inner(win: &MainWindow, state: &Rc<RefCell<AppState>>) {
             .mids
             .get(&cursor)
             .cloned()
-            .or_else(|| fullres_for(&st, cursor))
+            .or_else(|| fullres_for(st, cursor))
     } else {
         None
     };
@@ -658,7 +685,27 @@ fn refresh_inner(win: &MainWindow, state: &Rc<RefCell<AppState>>) {
         // (validator m3).
         st.loupe_view.last_badge = None;
     }
+    cursor_mark
+}
 
+fn refresh_inner(win: &MainWindow, state: &Rc<RefCell<AppState>>) {
+    let geom = current_geometry(win, state);
+    let mut st = state.borrow_mut();
+    let mut pass = detect_drift(win, &mut st, geom);
+    anchor_the_scroll(win, &mut st, &mut pass);
+    let (range, ids) = visible_window(&mut st, &pass);
+    // The two phases still inline below read the pass through these
+    // aliases; they go away when those phases move out too.
+    let layout = &pass.layout;
+    let view_len = pass.view_len;
+    let at_loupe = pass.at_loupe;
+    claim_cursor_at_loupe(win, state, &mut st, &pass);
+    let want_mid = climb_mid_rung(win, &mut st, &pass, &ids);
+    let cursor_mark = render_loupe_rung(win, &mut st, &pass);
+    // AFTER the claim phase, which is the only thing in the pass that can
+    // move the cursor: the cells and the status line must name the same
+    // image the rung choice just rendered.
+    let cursor = st.grid.cursor;
     // Mutate the one bound VecModel in place (spec: reuse, don't recreate).
     let model = Rc::clone(&st.cells);
     let mut row = 0usize;
