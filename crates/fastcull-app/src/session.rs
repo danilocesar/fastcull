@@ -58,9 +58,7 @@ pub(crate) fn dispatch(state: &Rc<RefCell<AppState>>, launch: Launch, start_11: 
             st.picks = vec![fastcull_core::catalog::PickState::Unmarked; n];
             st.capture_keys = vec![None; n];
             st.frame_meta = vec![fastcull_core::burst::FrameMeta::default(); n];
-            st.burst_of = vec![None; n];
-            st.burst_badge = vec![0; n];
-            st.burst_pos = vec![None; n];
+            st.bursts = crate::state::BurstIndex::new(n);
             st.iptc = vec![fastcull_core::iptc::IptcData::default(); n];
             st.synthetic = true;
             st.session_open = true;
@@ -147,10 +145,7 @@ fn load_folder(state: &Rc<RefCell<AppState>>, folder: &std::path::Path) -> Resul
     st.va = fastcull_core::viewassets::ViewAssets::default();
     st.capture_keys = vec![None; count];
     st.frame_meta = vec![fastcull_core::burst::FrameMeta::default(); count];
-    st.burst_of = vec![None; count];
-    st.burst_badge = vec![0; count];
-    st.burst_pos = vec![None; count];
-    st.burst_dirty = false;
+    st.bursts = crate::state::BurstIndex::new(count);
     st.iptc = vec![fastcull_core::iptc::IptcData::default(); count];
     st.touched_iptc.clear();
     st.panel_cache = Default::default();

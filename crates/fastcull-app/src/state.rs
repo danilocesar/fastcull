@@ -83,6 +83,38 @@ pub(crate) struct CopyState {
     pub(crate) copied_to: HashMap<usize, std::path::PathBuf>,
 }
 
+/// Burst grouping outputs (M7, burst-grouping.md), all indexed by IMAGE
+/// id and all rebuilt together by `recompute_bursts` — at most once per
+/// pump tick while metadata streams (`dirty`).
+///
+/// The three vectors are parallel and MUST stay the same length as the
+/// session's per-image vectors; [`BurstIndex::new`] is the one place that
+/// length is decided.
+#[derive(Default)]
+pub(crate) struct BurstIndex {
+    /// Which group each image belongs to (None = a single).
+    pub(crate) group_of: Vec<Option<usize>>,
+    /// Badge count on the group's FIRST frame (0 = no badge).
+    pub(crate) badge: Vec<usize>,
+    /// "7/23" position inside the group.
+    pub(crate) pos: Vec<Option<(usize, usize)>>,
+    /// Set when frame metadata landed and the grouping is stale.
+    pub(crate) dirty: bool,
+}
+
+impl BurstIndex {
+    /// A fresh index for a session of `count` images: no groups yet, and
+    /// nothing to regroup until metadata arrives.
+    pub(crate) fn new(count: usize) -> Self {
+        Self {
+            group_of: vec![None; count],
+            badge: vec![0; count],
+            pos: vec![None; count],
+            dirty: false,
+        }
+    }
+}
+
 pub(crate) struct AppState {
     pub(crate) labels: Vec<String>,
     /// RAW paths for real sessions (empty for --synthetic).
@@ -213,13 +245,8 @@ pub(crate) struct AppState {
     pub(crate) capture_keys: Vec<Option<String>>,
     /// Burst inputs per image (M7), from MetadataReady summaries.
     pub(crate) frame_meta: Vec<fastcull_core::burst::FrameMeta>,
-    /// Burst outputs by IMAGE id: group membership, badge count on the
-    /// group's first frame (0 = no badge), and "7/23" position. Rebuilt
-    /// at most once per pump tick while metadata streams (burst_dirty).
-    pub(crate) burst_of: Vec<Option<usize>>,
-    pub(crate) burst_badge: Vec<usize>,
-    pub(crate) burst_pos: Vec<Option<(usize, usize)>>,
-    pub(crate) burst_dirty: bool,
+    /// Burst grouping outputs (M7), indexed by image id.
+    pub(crate) bursts: BurstIndex,
     /// Per-image IPTC state (M5 panel): seeded from sidecars at open,
     /// edited by the panel, persisted via SidecarWriter::iptc.
     pub(crate) iptc: Vec<fastcull_core::iptc::IptcData>,

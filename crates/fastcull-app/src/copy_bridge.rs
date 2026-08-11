@@ -320,7 +320,7 @@ pub(crate) fn recompute_bursts(st: &mut AppState) {
     // A burst is a fact about capture times, so grouping over issue #25's
     // provisional filename order would invent groups. Grouping over
     // partly-loaded keys is already approximate and is redone as metadata
-    // streams (burst_dirty).
+    // streams (bursts.dirty).
     let order = fastcull_core::filter::view_true_sort(
         &st.picks,
         &st.labels,
@@ -334,17 +334,22 @@ pub(crate) fn recompute_bursts(st: &mut AppState) {
     let grouping =
         fastcull_core::burst::group(&frames, &fastcull_core::burst::BurstConfig::default());
     let n = st.labels.len();
-    st.burst_of = vec![None; n];
-    st.burst_badge = vec![0; n];
-    st.burst_pos = vec![None; n];
+    // Rebuilt from scratch every time, so the three parallel vectors are
+    // re-sized through the one constructor that owns their length. The
+    // dirty flag is the caller's (the pump clears it before calling), not
+    // ours to reset.
+    st.bursts = crate::state::BurstIndex {
+        dirty: st.bursts.dirty,
+        ..crate::state::BurstIndex::new(n)
+    };
     let positions = grouping.positions(); // one O(n) pass, not per-frame
     for (pos_in_order, id) in order.iter().enumerate() {
-        st.burst_of[*id] = grouping.group[pos_in_order];
+        st.bursts.group_of[*id] = grouping.group[pos_in_order];
         // Badge goes on the group's FIRST frame (position 1) — with
         // interleaved bodies members need not be contiguous.
         if let Some((1, size)) = positions[pos_in_order] {
-            st.burst_badge[*id] = size;
+            st.bursts.badge[*id] = size;
         }
-        st.burst_pos[*id] = positions[pos_in_order];
+        st.bursts.pos[*id] = positions[pos_in_order];
     }
 }

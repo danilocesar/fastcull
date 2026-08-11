@@ -290,7 +290,7 @@ fn handle_nav_inner(win: &MainWindow, state: &Rc<RefCell<AppState>>, key: &str) 
             if !st.view.is_empty() {
                 let pos = st.cursor_pos().unwrap_or(0);
                 let view = st.view.clone();
-                let group_of = |p: usize| st.burst_of.get(view[p]).copied().flatten();
+                let group_of = |p: usize| st.bursts.group_of.get(view[p]).copied().flatten();
                 let new_pos = fastcull_core::burst::next_boundary(
                     pos,
                     view.len(),
