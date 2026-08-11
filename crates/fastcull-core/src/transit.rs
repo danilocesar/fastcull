@@ -9,8 +9,9 @@
 //! (the strip owns the failed badge), and a cap (`OVERLAY_HOLD_CAP` in the
 //! app, `hold_cap` here) ends a wedged decode's hold.
 //!
-//! This module owns that ladder as [`render_rung`]. It speaks in rungs,
-//! holds and decisions only — never textures, properties or Slint (01-architecture.md:
+//! This module owns that ladder as [`render_rung`], and the full-res ring's
+//! victim choice as [`evict_fullres`]. It speaks in rungs, holds and
+//! decisions only — never textures, properties or Slint (01-architecture.md:
 //! if a piece of code can live in `fastcull-core`, it must). The app gathers
 //! the plain-data inputs (texture lookups, the clock read, the zoom factor),
 //! calls in, and does the property writes its answer names.
@@ -21,6 +22,17 @@
 //! what makes the cap testable as a table instead of a stopwatch.
 
 use std::time::Duration;
+
+use crate::loupe::PREFETCH;
+
+/// Full-res textures the UI keeps at once: the cursor plus the engine's
+/// prefetch ring on both sides.
+///
+/// This was the bare literal `5` in the app, with `2·PREFETCH+1` written
+/// only in a comment beside it — so a change to [`PREFETCH`] moved the
+/// engine's ring and left the texture ring behind. Derived now, and pinned
+/// by `the_ring_is_the_prefetch_ring`.
+pub const FULLRES_RING: usize = 2 * PREFETCH + 1;
 
 /// What the overlay should do this refresh.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -159,6 +171,48 @@ pub fn render_rung(i: &RungInputs) -> RenderDecision {
             DropReason::HoldCap
         },
     }
+}
+
+/// Which slot of the full-res texture ring to give up, or `None` while the
+/// ring is within [`FULLRES_RING`].
+///
+/// `held` is the image ids in slot order (most recently inserted last),
+/// `view` the current view order. Eviction is by VIEW distance from the
+/// cursor, not insertion age (issue #46): age is view-order-blind — the
+/// provisional-order startup window legitimately decodes filename-order
+/// neighbors, and once the capture sort lands those are strangers occupying
+/// slots; age eviction then discarded exactly the view neighbor the next
+/// tap needed while keeping a frame seven positions away (observed as an
+/// 81 ms thumb blink on a warm frame).
+///
+/// Three rules the caller must not re-derive:
+/// * the CURSOR's own texture is never the victim (it is what the user is
+///   looking at; a prefetch evicting it was seen as back-arrow quality
+///   degradation);
+/// * an entry no longer in the view (or any entry when the cursor itself
+///   is not in the view) is at maximum distance and goes first;
+/// * on a TIE the LATER slot goes — the freshly inserted texture loses to
+///   an equally distant older one, which is what keeps a back-and-forth
+///   walk from thrashing the neighbor it just came from.
+pub fn evict_fullres(held: &[usize], cursor: usize, view: &[usize]) -> Option<usize> {
+    if held.len() <= FULLRES_RING {
+        return None;
+    }
+    let pos_of = |id: usize| view.iter().position(|v| *v == id);
+    let cursor_pos = pos_of(cursor);
+    Some(
+        held.iter()
+            .enumerate()
+            .filter(|(_, id)| **id != cursor)
+            .max_by_key(|(_, id)| match (cursor_pos, pos_of(**id)) {
+                (Some(c), Some(p)) => p.abs_diff(c),
+                _ => usize::MAX, // not in the view (or no view): first out
+            })
+            .map(|(slot, _)| slot)
+            // Only reachable if every slot holds the cursor, which the
+            // caller's dedupe makes impossible — stay total anyway.
+            .unwrap_or(0),
+    )
 }
 
 #[cfg(test)]
@@ -695,5 +749,199 @@ mod tests {
                 );
             }
         }
+    }
+
+    // ---------------------------------------------------------------
+    // The full-res ring.
+    // ---------------------------------------------------------------
+
+    #[test]
+    fn the_ring_is_the_prefetch_ring() {
+        assert_eq!(FULLRES_RING, 2 * PREFETCH + 1);
+        assert_eq!(FULLRES_RING, 5, "the literal the app used to carry");
+    }
+
+    #[test]
+    fn a_ring_within_capacity_evicts_nothing() {
+        let view: Vec<usize> = (0..20).collect();
+        for n in 0..=FULLRES_RING {
+            let held: Vec<usize> = (0..n).collect();
+            assert_eq!(evict_fullres(&held, 0, &view), None, "held {n}");
+        }
+    }
+
+    #[test]
+    fn the_victim_is_the_farthest_in_view_order() {
+        let view: Vec<usize> = (0..20).collect();
+        // Cursor at 10; the farthest held id is 3 (distance 7), in slot 1.
+        let held = [9, 3, 10, 11, 12, 8];
+        assert_eq!(evict_fullres(&held, 10, &view), Some(1));
+    }
+
+    #[test]
+    fn the_cursors_own_texture_is_never_the_victim() {
+        // The cursor sits at one END of the ring, so it IS the farthest
+        // entry by distance — and must still survive.
+        let view: Vec<usize> = (0..20).collect();
+        let held = [10, 9, 8, 7, 6, 5];
+        assert_eq!(evict_fullres(&held, 10, &view), Some(5)); // id 5, not id 10
+    }
+
+    #[test]
+    fn distance_is_view_order_not_id_order() {
+        // The capture sort interleaves two camera bodies: id 19 is the
+        // cursor's immediate view NEIGHBOUR while id 11 is five positions
+        // away. Age or id order would evict exactly the frame the next tap
+        // needs (issue #46, the 81 ms thumb blink).
+        let view = vec![0, 10, 1, 11, 2, 12, 3, 13, 9, 19];
+        let held = [9, 19, 11, 12, 13, 3];
+        // Cursor id 9 sits at view position 8. Distances: 19→1, 11→5,
+        // 12→3, 13→1, 3→2. The farthest is id 11 in slot 2.
+        assert_eq!(evict_fullres(&held, 9, &view), Some(2));
+    }
+
+    #[test]
+    fn an_entry_no_longer_in_the_view_goes_first() {
+        // A filter removed id 4 from the view: it is unreachable by any
+        // arrow, so it outranks even the farthest live entry.
+        let view = vec![0, 1, 2, 3, 5, 6, 7, 8, 9, 10];
+        let held = [0, 4, 9, 10, 8, 7];
+        assert_eq!(evict_fullres(&held, 7, &view), Some(1));
+    }
+
+    #[test]
+    fn a_cursor_outside_the_view_makes_every_entry_maximal() {
+        // Nothing has a distance, so the tie rule decides: the LAST
+        // non-cursor slot.
+        let view = vec![0, 1, 2, 3, 4, 5];
+        let held = [0, 1, 2, 3, 4, 99];
+        assert_eq!(evict_fullres(&held, 42, &view), Some(5));
+        // ...and with the cursor among them it is still spared.
+        let held = [0, 1, 2, 3, 4, 42];
+        assert_eq!(evict_fullres(&held, 42, &view), Some(4));
+    }
+
+    #[test]
+    fn ties_go_to_the_later_slot() {
+        // ids 8 and 12 are both 2 away from the cursor at 10. The freshly
+        // inserted one (the later slot) loses — a back-and-forth walk then
+        // keeps the neighbour it just came from.
+        let view: Vec<usize> = (0..20).collect();
+        let held = [10, 9, 11, 8, 12, 13];
+        // Distances: 9→1, 11→1, 8→2, 12→2, 13→3. Farthest is 13 (slot 5).
+        assert_eq!(evict_fullres(&held, 10, &view), Some(5));
+        // Remove it and the 8/12 tie decides: slot 4 (id 12), the later.
+        let held = [10, 9, 11, 8, 12, 7];
+        // 7 is 3 away, so it goes first...
+        assert_eq!(evict_fullres(&held, 10, &view), Some(5));
+        let held = [10, 9, 11, 8, 12, 11];
+        // ...with the maximum shared by 8 (slot 3) and 12 (slot 4).
+        assert_eq!(evict_fullres(&held, 10, &view), Some(4));
+    }
+
+    #[test]
+    fn an_empty_view_evicts_the_last_non_cursor_slot() {
+        // No view at all (a session being swapped): every entry is at
+        // maximum distance, so the tie rule alone decides.
+        let held = [1, 2, 3, 4, 5, 6];
+        assert_eq!(evict_fullres(&held, 3, &[]), Some(5));
+    }
+
+    #[test]
+    fn repeated_eviction_walks_the_ring_down_to_capacity() {
+        // The caller's loop: evict until `None`. Pinning the SEQUENCE,
+        // because that is what the app does and a single-shot victim can
+        // be right while the walk is wrong.
+        let view: Vec<usize> = (0..20).collect();
+        let mut held = vec![10, 3, 11, 17, 9, 12, 8];
+        let mut evicted = Vec::new();
+        while let Some(victim) = evict_fullres(&held, 10, &view) {
+            evicted.push(held.remove(victim));
+        }
+        assert_eq!(evicted, vec![17, 3]);
+        assert_eq!(held, vec![10, 11, 9, 12, 8]);
+        assert_eq!(held.len(), FULLRES_RING);
+    }
+
+    /// The rule stated in WORDS rather than in `max_by_key`: farthest by
+    /// view distance wins, out-of-view is maximal, the cursor is spared,
+    /// and a tie goes to the LATER slot.
+    ///
+    /// Written as an explicit scan on purpose. The app's version leaned on
+    /// `max_by_key` returning the LAST maximum — documented std behavior,
+    /// but nothing in the app ever said the tie rule mattered. Re-deriving
+    /// it by hand here is what makes the sweep below a check rather than a
+    /// mirror.
+    fn farthest_by_hand(held: &[usize], cursor: usize, view: &[usize]) -> Option<usize> {
+        if held.len() <= FULLRES_RING {
+            return None;
+        }
+        let pos_of = |id: usize| view.iter().position(|v| *v == id);
+        let mut best: Option<(usize, usize)> = None; // (distance, slot)
+        for (slot, id) in held.iter().enumerate() {
+            if *id == cursor {
+                continue;
+            }
+            let distance = match (pos_of(cursor), pos_of(*id)) {
+                (Some(c), Some(p)) => p.abs_diff(c),
+                _ => usize::MAX,
+            };
+            // `>=`, not `>`: an equal distance later in the ring replaces
+            // the earlier one — the tie goes to the fresher slot.
+            if best.is_none_or(|(d, _)| distance >= d) {
+                best = Some((distance, slot));
+            }
+        }
+        Some(best.map_or(0, |(_, slot)| slot))
+    }
+
+    #[test]
+    fn the_victim_rule_holds_over_a_generated_sweep() {
+        // Deterministic LCG (Numerical Recipes): no dependency, same rows
+        // every run. 2,000 rings over views that shrink under a filter,
+        // cursors that fall out of the view, ties by construction (the id
+        // pool is small), and lengths on both sides of the ring capacity.
+        let mut seed: u64 = 0x5DEE_CE66;
+        let mut next = move |n: usize| {
+            seed = seed.wrapping_mul(1_664_525).wrapping_add(1_013_904_223);
+            (seed >> 16) as usize % n
+        };
+        let mut evicted_something = 0;
+        let mut cursor_out_of_view = 0;
+        for _ in 0..2_000 {
+            let view: Vec<usize> = (0..12).filter(|_| next(4) > 0).collect();
+            let mut held: Vec<usize> = Vec::new();
+            let want = 1 + next(9);
+            while held.len() < want {
+                let id = next(14); // 12..13 are ids no view ever contains
+                if !held.contains(&id) {
+                    held.push(id);
+                }
+            }
+            let cursor = next(14);
+            if !view.contains(&cursor) {
+                cursor_out_of_view += 1;
+            }
+            let victim = evict_fullres(&held, cursor, &view);
+            assert_eq!(
+                victim,
+                farthest_by_hand(&held, cursor, &view),
+                "held {held:?} cursor {cursor} view {view:?}"
+            );
+            if let Some(slot) = victim {
+                evicted_something += 1;
+                assert!(held.len() > FULLRES_RING, "evicted inside capacity");
+                assert_ne!(held[slot], cursor, "the cursor was evicted");
+            }
+        }
+        // Non-vacuity: the sweep really exercised both interesting shapes.
+        assert!(
+            evicted_something > 200,
+            "only {evicted_something} evictions"
+        );
+        assert!(
+            cursor_out_of_view > 100,
+            "only {cursor_out_of_view} stray cursors"
+        );
     }
 }
