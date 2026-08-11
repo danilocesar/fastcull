@@ -9,7 +9,7 @@ use fastcull_core::grid::{self, GridLayout, Nav};
 use slint::ComponentHandle;
 
 use crate::loupe_ctrl::{clamped_factor, max_factor};
-use crate::refresh;
+use crate::presenter::refresh;
 use crate::state::AppState;
 use crate::trace::{trace_slow, trace_start};
 use crate::MainWindow;
