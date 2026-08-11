@@ -1,10 +1,29 @@
 //! The presenter: the single refresh pass that turns `AppState` into what
-//! the window shows — scroll anchoring, texture requests, the loupe
-//! overlay's rung choice, the cell model, the filter bar and the status
-//! line. Every controller ends by calling [`refresh`].
+//! the window shows. Every controller ends by calling [`refresh`].
 //!
-//! Its internal phase split is a later pass (audit A2); this module holds
-//! it intact.
+//! The pass runs in eight phases, in this order, under ONE state borrow:
+//!
+//! 1. [`detect_drift`] — what changed since the last refresh: the grid
+//!    geometry (relayout, issue #16), the view's membership or order
+//!    (issue #22), the load-settled edge (issue #25).
+//! 2. [`anchor_the_scroll`] — put the viewport back where the content the
+//!    user was looking at is, after a whole-grid re-sort or a relayout.
+//! 3. [`visible_window`] — which view positions are on screen, what the
+//!    engine should prioritise, which thumbs go to the texture kitchen.
+//! 4. [`claim_cursor_at_loupe`] — at one column the visible image IS the
+//!    cursor, so a scroll can move it (cursor contract); then the warm
+//!    decode request for what it now looks at.
+//! 5. [`climb_mid_rung`] — cells that outgrew the 320 px thumb.
+//! 6. [`render_loupe_rung`] — sharp / soft / thumb rescue / bounded hold /
+//!    honest drop, plus the state badge (the ui-grid.md ladder).
+//! 7. [`fill_grid_cells`] — the windowed cell model, mutated in place.
+//! 8. [`write_status_and_chrome`] — filter bar, empty state, IPTC panel,
+//!    scroll hint, status line.
+//!
+//! What one phase computes for the next travels in [`Pass`] — including
+//! `scroll_y`, which phase 2 may correct and everything after must render
+//! against. It is deliberately NOT a field of `AppState`: it is a fact
+//! about this pass, and the window owns the real scroll position.
 
 use std::cell::RefCell;
 use std::ops::Range;
