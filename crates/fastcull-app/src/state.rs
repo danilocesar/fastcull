@@ -63,6 +63,26 @@ pub(crate) struct PanelCache {
     pub(crate) names: Vec<String>,
 }
 
+/// M6 Copy Picks (fileops.md): the previewed plan, the running worker, and
+/// which ids were copied WHERE this session (the re-run skip default + the
+/// copied badge).
+///
+/// The handle and its receiver are ONE thing — a running copy — and live
+/// together so they can never be set or cleared apart.
+#[derive(Default)]
+pub(crate) struct CopyState {
+    /// The previewed plan (rebuilt by `copy_replan`).
+    pub(crate) plan: Option<fastcull_core::fileops::CopyPlan>,
+    /// The chosen destination. Remembered ACROSS sessions (fileops.md:
+    /// "destination and rename template survive across sessions") — see
+    /// [`CopyState::begin_session`].
+    pub(crate) dest: Option<std::path::PathBuf>,
+    pub(crate) handle: Option<fastcull_core::fileops::CopyHandle>,
+    pub(crate) rx: Option<std::sync::mpsc::Receiver<fastcull_core::fileops::CopyEvent>>,
+    /// Image id -> the folder it was copied to, this session.
+    pub(crate) copied_to: HashMap<usize, std::path::PathBuf>,
+}
+
 pub(crate) struct AppState {
     pub(crate) labels: Vec<String>,
     /// RAW paths for real sessions (empty for --synthetic).
@@ -226,14 +246,8 @@ pub(crate) struct AppState {
     pub(crate) template_warnings: Vec<String>,
     pub(crate) iptc_visible: bool,
     pub(crate) filter_bar_visible: bool,
-    /// M6 Copy Picks: the previewed plan (rebuilt by replan), the running
-    /// worker, and which ids were copied WHERE this session (the re-run
-    /// skip default + the copied badge).
-    pub(crate) copy_plan: Option<fastcull_core::fileops::CopyPlan>,
-    pub(crate) copy_dest: Option<std::path::PathBuf>,
-    pub(crate) copy_handle: Option<fastcull_core::fileops::CopyHandle>,
-    pub(crate) copy_rx: Option<std::sync::mpsc::Receiver<fastcull_core::fileops::CopyEvent>>,
-    pub(crate) copied_to: HashMap<usize, std::path::PathBuf>,
+    /// The Copy Picks dialog's state (M6).
+    pub(crate) copy: CopyState,
     /// Engine event receivers live in state so File > Open Folder can swap
     /// the whole session without restarting the event pump.
     pub(crate) pipeline_rx: Option<std::sync::mpsc::Receiver<SessionEvent>>,

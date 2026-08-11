@@ -120,7 +120,8 @@ pub(crate) fn start(window: &MainWindow, state: &Rc<RefCell<AppState>>) -> slint
                     }
                     // Copy Picks progress/report (M6).
                     let copy_events: Vec<_> = st
-                        .copy_rx
+                        .copy
+                        .rx
                         .as_ref()
                         .map(|rx| rx.try_iter().collect())
                         .unwrap_or_default();
@@ -136,13 +137,13 @@ pub(crate) fn start(window: &MainWindow, state: &Rc<RefCell<AppState>>) -> slint
                             }
                             CopyEvent::Failed { .. } => {} // in the report
                             CopyEvent::Finished(report) => {
-                                if let Some(dest) = st.copy_dest.clone() {
+                                if let Some(dest) = st.copy.dest.clone() {
                                     for id in &report.copied_ids {
-                                        st.copied_to.insert(*id, dest.clone());
+                                        st.copy.copied_to.insert(*id, dest.clone());
                                     }
                                 }
-                                st.copy_handle = None;
-                                st.copy_rx = None;
+                                st.copy.handle = None;
+                                st.copy.rx = None;
                                 if let Some(win) = win.upgrade() {
                                     // The green light to format a card
                                     // appears ONLY when this run actually

@@ -28,7 +28,7 @@ pub(crate) fn wire(window: &MainWindow, state: &Rc<RefCell<AppState>>) {
             refocus_topmost_deferred(&win);
             {
                 let mut st = state.borrow_mut();
-                if st.copy_handle.is_some() {
+                if st.copy.handle.is_some() {
                     // A copy is running: just re-show the dialog.
                     win.set_copy_visible(true);
                     return;
@@ -43,15 +43,16 @@ pub(crate) fn wire(window: &MainWindow, state: &Rc<RefCell<AppState>>) {
                     writer.flush();
                 }
                 let (dest, template) = load_ui_prefs();
-                if st.copy_dest.is_none() {
-                    st.copy_dest = dest;
+                if st.copy.dest.is_none() {
+                    st.copy.dest = dest;
                 }
                 // The remembered template is OFFERED, never pre-applied
                 // (fileops.md "never silently pre-applied"; gate finding).
                 win.set_copy_last_template(template.into());
                 win.set_copy_template("".into());
                 win.set_copy_dest(
-                    st.copy_dest
+                    st.copy
+                        .dest
                         .as_ref()
                         .map(|d| d.to_string_lossy().into_owned())
                         .unwrap_or_default()
@@ -73,7 +74,7 @@ pub(crate) fn wire(window: &MainWindow, state: &Rc<RefCell<AppState>>) {
             // Folder); the native dialog allows creating a folder.
             if let Some(dir) = rfd::FileDialog::new().pick_folder() {
                 let mut st = state.borrow_mut();
-                st.copy_dest = Some(dir.clone());
+                st.copy.dest = Some(dir.clone());
                 save_ui_prefs(Some(&dir), win.get_copy_template().as_str());
                 win.set_copy_dest(dir.to_string_lossy().into_owned().into());
                 copy_replan(&win, &mut st);
@@ -86,7 +87,7 @@ pub(crate) fn wire(window: &MainWindow, state: &Rc<RefCell<AppState>>) {
         window.on_copy_replan(move || {
             let Some(win) = win.upgrade() else { return };
             let mut st = state.borrow_mut();
-            save_ui_prefs(st.copy_dest.as_deref(), win.get_copy_template().as_str());
+            save_ui_prefs(st.copy.dest.as_deref(), win.get_copy_template().as_str());
             copy_replan(&win, &mut st);
         });
     }
@@ -104,12 +105,12 @@ pub(crate) fn wire(window: &MainWindow, state: &Rc<RefCell<AppState>>) {
                 writer.flush();
             }
             copy_replan(&win, &mut st);
-            let Some(plan) = st.copy_plan.take() else {
+            let Some(plan) = st.copy.plan.take() else {
                 return; // replan surfaced an error; the dialog shows it
             };
             let (handle, rx) = fastcull_core::fileops::execute(plan);
-            st.copy_handle = Some(handle);
-            st.copy_rx = Some(rx);
+            st.copy.handle = Some(handle);
+            st.copy.rx = Some(rx);
             win.set_copy_state(1);
             win.set_copy_progress("Starting…".into());
         });
@@ -118,7 +119,7 @@ pub(crate) fn wire(window: &MainWindow, state: &Rc<RefCell<AppState>>) {
         let state = Rc::clone(state);
         window.on_copy_cancel(move || {
             let st = state.borrow();
-            if let Some(handle) = &st.copy_handle {
+            if let Some(handle) = &st.copy.handle {
                 handle.cancel();
             }
         });
@@ -130,9 +131,9 @@ pub(crate) fn wire(window: &MainWindow, state: &Rc<RefCell<AppState>>) {
             let Some(win) = win.upgrade() else { return };
             {
                 let mut st = state.borrow_mut();
-                if st.copy_handle.is_none() {
+                if st.copy.handle.is_none() {
                     // keep plan state tidy between opens
-                    st.copy_plan = None;
+                    st.copy.plan = None;
                 }
             }
             win.set_copy_visible(false);
@@ -143,7 +144,7 @@ pub(crate) fn wire(window: &MainWindow, state: &Rc<RefCell<AppState>>) {
         let state = Rc::clone(state);
         window.on_copy_open_dest_folder(move || {
             let st = state.borrow();
-            if let Some(dest) = &st.copy_dest {
+            if let Some(dest) = &st.copy.dest {
                 #[cfg(target_os = "windows")]
                 let cmd = "explorer";
                 #[cfg(not(target_os = "windows"))]
@@ -218,12 +219,12 @@ fn copy_replan(win: &MainWindow, st: &mut AppState) {
     win.set_copy_preview("".into());
     win.set_copy_collisions("".into());
     win.set_copy_show_skip_toggle(false);
-    st.copy_plan = None;
+    st.copy.plan = None;
     if sources.is_empty() {
         win.set_copy_summary("No picked images — nothing to copy.".into());
         return;
     }
-    let Some(dest) = st.copy_dest.clone() else {
+    let Some(dest) = st.copy.dest.clone() else {
         win.set_copy_summary(
             format!("{} picked images. Choose a destination.", sources.len()).into(),
         );
@@ -240,6 +241,7 @@ fn copy_replan(win: &MainWindow, st: &mut AppState) {
     // different path spelling must not lose the re-run skip default.
     let dest_canon = dest.canonicalize().unwrap_or_else(|_| dest.clone());
     let already: std::collections::HashSet<usize> = st
+        .copy
         .copied_to
         .iter()
         .filter(|(_, d)| d.canonicalize().unwrap_or_else(|_| (*d).clone()) == dest_canon)
@@ -288,7 +290,7 @@ fn copy_replan(win: &MainWindow, st: &mut AppState) {
             win.set_copy_collisions(notes.join(" · ").into());
             win.set_copy_show_skip_toggle(collided);
             win.set_copy_ready(true);
-            st.copy_plan = Some(p);
+            st.copy.plan = Some(p);
         }
         Err(
             e @ (PlanError::InsufficientSpace { .. }

@@ -154,10 +154,10 @@ fn load_folder(state: &Rc<RefCell<AppState>>, folder: &std::path::Path) -> Resul
     st.iptc = vec![fastcull_core::iptc::IptcData::default(); count];
     st.touched_iptc.clear();
     st.panel_cache = Default::default();
-    st.copy_plan = None;
-    st.copy_handle = None;
-    st.copy_rx = None;
-    st.copied_to.clear();
+    st.copy.plan = None;
+    st.copy.handle = None;
+    st.copy.rx = None;
+    st.copy.copied_to.clear();
     st.selection.reset();
     st.revert = Default::default();
     st.revert_ids.clear();
