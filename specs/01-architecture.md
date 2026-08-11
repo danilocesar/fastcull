@@ -47,6 +47,7 @@ terminal tool. CI asserts both PE subsystem fields on every Windows build
 | burst | `burst.rs` | burst grouping |
 | fileops | `fileops.rs` | copy/rename engine with sidecar lockstep |
 | filter | `filter.rs` | filter/sort predicates over the session |
+| transit | `transit.rs` | loupe render ladder + full-res ring eviction, as pure decision functions (spec'd in `ui-grid.md`) |
 
 ## Data flow
 

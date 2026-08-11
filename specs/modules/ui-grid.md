@@ -401,15 +401,50 @@ where it is."
   with no pixels of the image at all (nothing to hold) keeps the
   overlay down until the first rung lands — the pre-existing honest
   behavior, unchanged.
-  **Recorded deferral (validator concern, gate 2026-08-09)**: the
-  hold state machine (cap timing, failure gating, re-raise) and the
-  view-distance full-res texture eviction live in the APP crate as
-  stateful policy with no core unit pins — only the timing-sensitive
-  integration tests cover them. Precedented (the render ladder was
-  already app-side) but each #46-class bug so far lived exactly in
-  untestable app-side state; the next transit-affecting change should
-  force this block into core as a pure decision function. Deferred
-  explicitly, not silently.
+  **Recorded deferral — CLOSED 2026-08-11 (raised as a validator
+  concern, gate 2026-08-09)**: the deferral read "the hold state
+  machine (cap timing, failure gating, re-raise) and the view-distance
+  full-res texture eviction live in the APP crate as stateful policy
+  with no core unit pins — only the timing-sensitive integration tests
+  cover them. Precedented (the render ladder was already app-side) but
+  each #46-class bug so far lived exactly in untestable app-side
+  state; the next transit-affecting change should force this block
+  into core as a pure decision function. Deferred explicitly, not
+  silently." That trigger was honored: the whole block is now
+  `fastcull_core::transit`, and the app-side state it named no longer
+  decides anything.
+  * `render_rung(&RungInputs) -> RenderDecision` is the ladder above,
+    entire: which rungs are in hand, whether the cursor's decode
+    failed, whether the overlay is wanted and whether it was up, and
+    the hold's (is-it-this-cursor, how-long) pair go in; Sharp /
+    Soft{is_thumb} / Hold{start} / Drop{reason} comes out. The
+    function is TOTAL — every input combination yields a decision, and
+    the table sweeps all 320 of them (2^6 booleans × 5 hold states)
+    against the pre-move app ladder transcribed in its own shape, so
+    the extraction is pinned as an equivalence, not as a description.
+    Both residuals recorded above have their own named rows: the
+    causally-unavoidable thumb transient before a failure is knowledge,
+    and the cap re-timing at each cursor change.
+  * `evict_fullres(held, cursor, view) -> Option<slot>` is the
+    view-distance eviction, with the three rules the app had left
+    implicit now written down and tested: the cursor's texture is
+    never the victim, an out-of-view entry (or any entry when the
+    cursor itself has left the view) goes first, and a tie goes to the
+    LATER slot. `FULLRES_RING` is `2·PREFETCH+1`, derived rather than
+    the bare `5` the app used to carry beside a comment saying so.
+  * The cap DURATION (`OVERLAY_HOLD_CAP`, 250 ms) stays an app
+    constant and is passed in as `hold_cap`. That is deliberate: it is
+    a UI tuning value beside its siblings, and passing it makes the
+    cap a table row instead of a hardwired duration.
+  What the app kept is what only the app can do: texture lookup, the
+  clock read, the zoompan extent math, and the property writes each
+  decision names. The claim that this policy lives in "untestable
+  app-side state" is therefore retired — the timing-sensitive
+  integration tests are no longer the only cover, they are the
+  integration pins over a unit-covered policy. The release-profile
+  exercise of the `(hold cap)` drop-and-re-raise (recorded below with
+  the acceptance log) still wants a decode-wedge knob, but now only for
+  integration-level exercise: the policy itself is unit-covered.
   An INFINITY-pinned desire (Z) during transit renders at the last
   RESOLVED factor (the carried magnification, not the sentinel); a
   VIRGIN pin (nothing resolved yet this session) renders the mid at its
@@ -1490,7 +1525,11 @@ the user confirms, all cheap to change):**
       the M1 test asserts the recovery whenever it fires, but forcing
       it deterministically in release needs a decode-wedge knob —
       deferred alongside the wedge affordances already recorded in
-      this spec.
+      this spec. Narrowed 2026-08-11 (A3): the cap timing, the failure
+      gate and the re-raise are now unit-covered as
+      `transit::render_rung` table rows, so the missing knob costs an
+      integration-level exercise of a policy that is otherwise pinned,
+      not the only coverage of it.
 - [x] **Provisional order while loading** (issue #25):
       `filter::provisional_order_is_stable_while_metadata_streams` feeds the
       capture keys in one at a time and asserts the view is IDENTICAL at
