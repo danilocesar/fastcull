@@ -75,6 +75,11 @@ pub(crate) const MIDS_CAP: usize = 64;
 /// any healthy session the thumb or mid lands well inside this; the cap
 /// exists for the wedged-decode pathology, where the view then drops to
 /// fit honestly rather than showing photo N−1 labeled photo N forever.
+///
+/// The VALUE lives here, with its sibling UI tuning constants; the rule it
+/// bounds is `fastcull_core::transit::render_rung`, which takes it as
+/// `hold_cap` (A3). That split is deliberate — an elapsed time and a cap
+/// passed IN are what make the bound a table row rather than a stopwatch.
 pub(crate) const OVERLAY_HOLD_CAP: std::time::Duration = std::time::Duration::from_millis(250);
 
 /// Selection wash hue: the SAME accent blue as the cursor outline, so the two
@@ -411,6 +416,10 @@ pub(crate) struct LoupeViewState {
     /// not even the cursor's own thumb exists yet. Bounded: a decode
     /// failure or `OVERLAY_HOLD_CAP` elapsing drops to fit honestly —
     /// never an unbounded wrong-pixels hold (persona condition).
+    ///
+    /// Since A3 this field is the hold's RECORD, not its rule: the
+    /// presenter reduces it to `transit::HoldState` (is it this cursor,
+    /// how long has it run) and `transit::render_rung` decides.
     pub(crate) overlay_hold: Option<(usize, std::time::Instant)>,
     /// `(cursor, was_thumb)` of the last SOFT render — trace dedup for
     /// the soft branch. Keyed on the rung, not just the cursor, so the
