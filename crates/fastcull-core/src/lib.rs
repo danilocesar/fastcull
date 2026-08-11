@@ -1,9 +1,10 @@
 //! FastCull engine: everything except the UI.
 //!
 //! This crate owns the RAW preview pipeline, the XMP sidecar model, IPTC
-//! templates, burst grouping, filtering, and the copy/rename engine. It has no
-//! UI dependencies so that all behavior is exercisable from unit and
-//! integration tests.
+//! templates, burst grouping, filtering, the copy/rename engine, and the
+//! decision functions the UI walks (the pointer machine, the grid layout,
+//! the loupe's transit ladder). It has no UI dependencies so that all
+//! behavior is exercisable from unit and integration tests.
 //!
 //! Module specifications live in `specs/modules/` at the repository root and
 //! are the source of truth for behavior. Invariant that outranks everything

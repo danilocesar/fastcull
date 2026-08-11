@@ -15,7 +15,8 @@
 //!    decode request for what it now looks at.
 //! 5. [`climb_mid_rung`] — cells that outgrew the 320 px thumb.
 //! 6. [`render_loupe_rung`] — sharp / soft / thumb rescue / bounded hold /
-//!    honest drop, plus the state badge (the ui-grid.md ladder).
+//!    honest drop, plus the state badge. The ui-grid.md ladder, DECIDED by
+//!    `fastcull_core::transit::render_rung` and only rendered here.
 //! 7. [`fill_grid_cells`] — the windowed cell model, mutated in place.
 //! 8. [`write_status_and_chrome`] — filter bar, empty state, IPTC panel,
 //!    scroll hint, status line.
