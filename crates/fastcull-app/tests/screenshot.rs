@@ -3703,6 +3703,12 @@ fn a_decode_failed_cursor_drops_to_fit_instead_of_masking_the_badge() {
     );
     corrupter.join().unwrap();
     let thumb_renders = stderr.matches("loupe thumb idx 11 ").count();
+    // FLAKE (issue #50): this precondition races. Arming the masking shape
+    // needs the thumb render to win a same-tick contest against the decode
+    // failure; under full parallel load it loses ~15% of the time — measured
+    // at that rate on unmodified main too, so it is this test's design, not
+    // product drift. The guard stays (without it the test passes vacuously);
+    // #50 tracks making the ordering deterministic.
     assert!(
         thumb_renders >= 1,
         "the corrupt image's thumb never rendered at all — the masking \
