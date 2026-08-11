@@ -156,7 +156,7 @@ pub(crate) fn wire(window: &MainWindow, state: &Rc<RefCell<AppState>>) {
 
 /// Picked images in SESSION SORT ORDER (fileops.md: scope is "everything
 /// with a star", filter-independent; `{seq}` follows the session sort).
-pub(crate) fn plan_sources(st: &AppState) -> Vec<fastcull_core::fileops::PlanSource> {
+fn plan_sources(st: &AppState) -> Vec<fastcull_core::fileops::PlanSource> {
     let all_query = fastcull_core::filter::ViewQuery {
         filter: fastcull_core::filter::PickFilter::All,
         ..st.query
@@ -210,7 +210,7 @@ fn human_bytes(b: u64) -> String {
 
 /// Rebuild the copy plan from the dialog's current inputs and publish the
 /// preview properties (fileops.md dialog minimums).
-pub(crate) fn copy_replan(win: &MainWindow, st: &mut AppState) {
+fn copy_replan(win: &MainWindow, st: &mut AppState) {
     use fastcull_core::fileops::{plan, ExistsMode, PlanError};
     let sources = plan_sources(st);
     win.set_copy_error("".into());

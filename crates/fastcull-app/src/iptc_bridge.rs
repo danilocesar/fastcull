@@ -304,15 +304,15 @@ pub(crate) fn wire(window: &MainWindow, state: &Rc<RefCell<AppState>>) {
 ///
 /// An out-of-range index (a UI/core disagreement) reads as "no value" and
 /// writes nowhere, exactly as the hand-written match arms did.
-pub(crate) fn iptc_field_label(i: usize) -> &'static str {
+fn iptc_field_label(i: usize) -> &'static str {
     IptcField::ALL.get(i).map_or("field", |f| f.label())
 }
 
-pub(crate) fn iptc_field_get(d: &fastcull_core::iptc::IptcData, i: usize) -> Option<&String> {
+fn iptc_field_get(d: &fastcull_core::iptc::IptcData, i: usize) -> Option<&String> {
     IptcField::ALL.get(i).and_then(|f| f.get(d))
 }
 
-pub(crate) fn iptc_field_set(d: &mut fastcull_core::iptc::IptcData, i: usize, v: Option<String>) {
+fn iptc_field_set(d: &mut fastcull_core::iptc::IptcData, i: usize, v: Option<String>) {
     if let Some(f) = IptcField::ALL.get(i) {
         f.set(d, v);
     }
@@ -432,7 +432,7 @@ pub(crate) fn refresh_iptc_panel(win: &MainWindow, st: &mut AppState) {
 /// Apply, manual field commit, keyword add/chip removal — every one, per
 /// the user decision). `snapshots` are pre-mutation states parallel to
 /// `ids`; writes go through the serialized writer thread.
-pub(crate) fn commit_batch_mutation(
+fn commit_batch_mutation(
     st: &mut AppState,
     ids: &[usize],
     snapshots: Vec<fastcull_core::iptc::IptcData>,
