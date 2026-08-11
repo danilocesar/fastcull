@@ -209,10 +209,22 @@ enum XmpForm {
 /// accepts alias prefixes, symmetric with the keyword reader — and it is
 /// the LOCAL half of the same one-line-per-field table above, so the two
 /// directions cannot disagree about which properties we own.
+///
+/// The local names are derived from that table once and cached: this runs
+/// per XML event on the sidecar read path (every file at folder load) and
+/// three times per event while rewriting, and the first cut recomputed
+/// every candidate's local name on every call (gate finding). Deriving
+/// them keeps the single source of truth that a second hand-written match
+/// would have cost.
 fn iptc_field_for(local: &[u8]) -> Option<IptcField> {
-    IptcField::ALL
-        .into_iter()
-        .find(|f| local_name(xmp_property(*f).0.as_bytes()) == local)
+    static LOCALS: std::sync::OnceLock<[(&'static [u8], IptcField); IptcField::ALL.len()]> =
+        std::sync::OnceLock::new();
+    let locals = LOCALS
+        .get_or_init(|| IptcField::ALL.map(|f| (local_name(xmp_property(f).0.as_bytes()), f)));
+    locals
+        .iter()
+        .find(|(name, _)| *name == local)
+        .map(|(_, f)| *f)
 }
 
 /// First value wins: a property already filled by an earlier form
@@ -1248,6 +1260,89 @@ mod tests {
         assert!(write_pick(&raw, PickState::Picked).is_err());
         // Original bytes untouched.
         assert_eq!(std::fs::read_to_string(&sc).unwrap(), "<not xml at all");
+        std::fs::remove_dir_all(&dir).ok();
+    }
+
+    /// The IPTC payload the rewrite goldens are written with.
+    fn rewrite_fixture_iptc() -> crate::iptc::IptcData {
+        crate::iptc::IptcData {
+            title: Some("Fresh title".into()),
+            description: None,
+            creator: Some("Fresh creator".into()),
+            rights: None,
+            headline: Some("Fresh headline".into()),
+            city: Some("Fresh city".into()),
+            country: None,
+            credit: None,
+            source: Some("Fresh source".into()),
+            job_id: None,
+            location: Some("Fresh location".into()),
+            keywords: vec![],
+        }
+    }
+
+    /// The keyword payload the rewrite golden is written with.
+    fn rewrite_fixture_keywords() -> Vec<String> {
+        vec!["fresh one".into(), "fresh&two".into()]
+    }
+
+    /// Byte arbiter for the REWRITE path (gate finding). The committed
+    /// goldens only covered fresh sidecars, which never enter
+    /// `rewrite_walk` at all — so the walker extraction had to be checked
+    /// with a throwaway harness that was then deleted, leaving the next
+    /// change to it with no byte-level pin.
+    ///
+    /// The input fixture is deliberately hostile, and each hostility
+    /// separates the two strategies:
+    /// - owned properties in COMPACT (attribute) form on BOTH Descriptions
+    ///   — write_iptc must strip them everywhere, write_keywords must leave
+    ///   the second Description's alone;
+    /// - a SELF-CLOSED second Description — write_iptc expands it to
+    ///   Start+End so its block has somewhere to live, write_keywords
+    ///   leaves it self-closed;
+    /// - an ALIAS-prefixed subject bag (`alias:subject`) — owned by local
+    ///   name, so both drop it;
+    /// - foreign attributes and elements (exif:*) that must survive both;
+    /// - indentation whitespace, which the held-whitespace rule must carry
+    ///   out with the elements it removes (no orphaned blank lines, the
+    ///   +19-bytes-per-rewrite growth bug).
+    ///
+    /// These bytes were verified identical to the pre-refactor code at
+    /// 2a9f53b, so the golden pins behavior the pass preserved rather than
+    /// behavior it introduced.
+    #[test]
+    fn rewrites_of_a_hostile_sidecar_match_golden_bytes() {
+        let gold = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("tests/golden");
+        let input = std::fs::read(gold.join("rewrite-hostile-in.xmp")).unwrap();
+        let dir = tmp();
+
+        let raw_i = dir.join("i.ARW");
+        std::fs::write(sidecar_path(&raw_i), &input).unwrap();
+        write_iptc(&raw_i, &rewrite_fixture_iptc()).unwrap();
+        assert_eq!(
+            std::fs::read(sidecar_path(&raw_i)).unwrap(),
+            std::fs::read(gold.join("rewrite-hostile-iptc.xmp")).unwrap(),
+            "write_iptc drifted from the rewrite golden"
+        );
+
+        let raw_k = dir.join("k.ARW");
+        std::fs::write(sidecar_path(&raw_k), &input).unwrap();
+        write_keywords(&raw_k, &rewrite_fixture_keywords()).unwrap();
+        assert_eq!(
+            std::fs::read(sidecar_path(&raw_k)).unwrap(),
+            std::fs::read(gold.join("rewrite-hostile-keywords.xmp")).unwrap(),
+            "write_keywords drifted from the rewrite golden"
+        );
+
+        // The no-growth rule (QE-measured +19 bytes per rewrite): rewriting
+        // an already-rewritten sidecar with the same values is a fixpoint.
+        let once = std::fs::read(sidecar_path(&raw_i)).unwrap();
+        write_iptc(&raw_i, &rewrite_fixture_iptc()).unwrap();
+        assert_eq!(
+            std::fs::read(sidecar_path(&raw_i)).unwrap(),
+            once,
+            "a second identical rewrite must not change a byte"
+        );
         std::fs::remove_dir_all(&dir).ok();
     }
 }
