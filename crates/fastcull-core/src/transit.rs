@@ -843,12 +843,13 @@ mod tests {
         // 7 is 3 away, so it goes first...
         assert_eq!(evict_fullres(&held, 10, &view), Some(5));
         // SYNTHETIC ring, deliberately: id 11 appears twice, which
-        // `insert_fullres`'s retain-then-push dedupe forbids in the app. A
-        // duplicate is the only way to force a max-distance TIE in a ring
-        // this size on a linear view, and the app never hands us a longer
-        // one (it pushes, then evicts down from six). The tie rule itself
-        // is app-reachable — a non-linear view order reaches it — so the
-        // rule is pinned here on the smallest state that shows it.
+        // `insert_fullres`'s retain-then-push dedupe forbids in the app.
+        // The duplicate is NOT the only way to tie at max distance — a
+        // duplicate-free linear ring ties too (e.g. [10,9,11,8,7,13] at
+        // cursor 10: ids 7 and 13 are both 3 away) — it is just the
+        // smallest state that pins the last-maximum rule on a value pair
+        // the surrounding rows already use. The tie rule itself is
+        // app-reachable (equidistant neighbors on any view).
         let held = [10, 9, 11, 8, 12, 11];
         // ...with the maximum shared by 8 (slot 3) and 12 (slot 4).
         assert_eq!(evict_fullres(&held, 10, &view), Some(4));
