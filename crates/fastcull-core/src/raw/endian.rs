@@ -11,8 +11,17 @@
 //! garbage rather than failing.
 
 /// Byte order of a TIFF header and everything it points at.
+///
+/// Two named variants rather than a bool: the old per-walker copies were
+/// `struct Endian(bool)` with the meaning of `true` in a comment, and a
+/// wrong guess in this file format reads plausible garbage instead of
+/// failing. `from_marker` is the only way to make one, so the II/MM
+/// decision happens once.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub(crate) struct Endian(pub(crate) bool); // true = little
+pub(crate) enum Endian {
+    Little,
+    Big,
+}
 
 impl Endian {
     /// The order named by a TIFF byte-order mark (`II` little, `MM` big).
@@ -20,25 +29,23 @@ impl Endian {
     /// error or simply "not a file I handle".
     pub(crate) fn from_marker(mark: &[u8]) -> Option<Self> {
         match mark {
-            b"II" => Some(Endian(true)),
-            b"MM" => Some(Endian(false)),
+            b"II" => Some(Endian::Little),
+            b"MM" => Some(Endian::Big),
             _ => None,
         }
     }
 
     pub(crate) fn u16(self, b: [u8; 2]) -> u16 {
-        if self.0 {
-            u16::from_le_bytes(b)
-        } else {
-            u16::from_be_bytes(b)
+        match self {
+            Endian::Little => u16::from_le_bytes(b),
+            Endian::Big => u16::from_be_bytes(b),
         }
     }
 
     pub(crate) fn u32(self, b: [u8; 4]) -> u32 {
-        if self.0 {
-            u32::from_le_bytes(b)
-        } else {
-            u32::from_be_bytes(b)
+        match self {
+            Endian::Little => u32::from_le_bytes(b),
+            Endian::Big => u32::from_be_bytes(b),
         }
     }
 }

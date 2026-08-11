@@ -1,0 +1,33 @@
+<?xpacket begin="﻿" id="W5M0MpCehiHzreSzNTczkc9d"?>
+<x:xmpmeta xmlns:x="adobe:ns:meta/" x:xmptk="FastCull test fixture">
+ <rdf:RDF xmlns:rdf="http://www.w3.org/1999/02/22-rdf-syntax-ns#">
+  <rdf:Description rdf:about="" xmlns:dc="http://purl.org/dc/elements/1.1/" xmlns:photoshop="http://ns.adobe.com/photoshop/1.0/" xmlns:exif="http://ns.adobe.com/exif/1.0/" xmlns:alias="http://purl.org/dc/elements/1.1/" photoshop:City="StaleCity" photoshop:Credit="StaleCredit" exif:ISOSpeedRatings="400" xmlns:lr="http://ns.adobe.com/lightroom/1.0/">
+   <dc:subject>
+    <rdf:Bag>
+     <rdf:li>fresh one</rdf:li>
+     <rdf:li>fresh&amp;two</rdf:li>
+    </rdf:Bag>
+   </dc:subject>
+   <lr:hierarchicalSubject>
+    <rdf:Bag>
+     <rdf:li>fresh one</rdf:li>
+     <rdf:li>fresh&amp;two</rdf:li>
+    </rdf:Bag>
+   </lr:hierarchicalSubject>
+   <dc:title>
+    <rdf:Alt>
+     <rdf:li xml:lang="x-default">Stale title</rdf:li>
+    </rdf:Alt>
+   </dc:title>
+   <dc:creator>
+    <rdf:Seq>
+     <rdf:li>Stale creator</rdf:li>
+    </rdf:Seq>
+   </dc:creator>
+   <exif:ExposureTime>1/250</exif:ExposureTime>
+   <photoshop:Headline>Stale headline</photoshop:Headline>
+  </rdf:Description>
+  <rdf:Description rdf:about="" xmlns:photoshop="http://ns.adobe.com/photoshop/1.0/" photoshop:Country="StaleCountry" photoshop:Source="StaleSource"/>
+ </rdf:RDF>
+</x:xmpmeta>
+<?xpacket end="w"?>

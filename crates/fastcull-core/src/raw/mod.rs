@@ -30,14 +30,16 @@ pub use tiff::TiffError;
 
 /// Failure text when a file carries no preview this app can use at all —
 /// no grid source, no ladder rung. Both engines badge with it (the grid
-/// pipeline and the loupe ladder), and the tests match it by substring,
-/// so it exists once.
-pub const NO_USABLE_PREVIEW: &str = "no usable embedded preview";
+/// pipeline and the loupe ladder), so it exists once.
+///
+/// This text reaches the user as a badge, so it is pinned by
+/// `badge_text_is_pinned` below rather than left to drift on a typo.
+pub(crate) const NO_USABLE_PREVIEW: &str = "no usable embedded preview";
 
 /// Failure text when previews were FOUND but none of them decoded. Kept
 /// distinct from `NO_USABLE_PREVIEW` on purpose: "nothing to read" and
 /// "read it, it was broken" are different bug reports.
-pub const NO_DECODABLE_PREVIEW: &str = "no decodable preview";
+pub(crate) const NO_DECODABLE_PREVIEW: &str = "no decodable preview";
 
 /// An embedded JPEG discovered inside a RAW container.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -351,6 +353,42 @@ mod tests {
         b.set_ifd0(ifd0);
         let previews = find_embedded_jpegs(&mut b.cursor()).unwrap();
         assert_eq!(previews.candidates.len(), 1);
+    }
+
+    /// The no-preview badge text, pinned end to end (gate finding: the
+    /// constants were introduced with a claim that "the tests match it by
+    /// substring", and no test did — a typo could have changed the text
+    /// the user reads, in both engines at once, unnoticed).
+    ///
+    /// A container that parses cleanly but carries no JPEG pointer is the
+    /// exact trigger, so this drives the real grid path rather than only
+    /// asserting a string against itself.
+    #[test]
+    fn no_preview_badges_with_the_pinned_text() {
+        let mut b = TiffBuilder::new(true);
+        // An IFD with dimensions but no 0x0201/0x0202 pointer pair: valid
+        // TIFF, nothing this app can show.
+        let ifd0 = b.add_ifd(&[(0x0100, 3, 1, 4000), (0x0101, 3, 1, 3000)], 0);
+        b.set_ifd0(ifd0);
+        let previews = find_embedded_jpegs(&mut b.cursor()).unwrap();
+        assert!(previews.grid_source().is_none(), "fixture must have none");
+
+        let dir = crate::testutil::scratch_dir("nopreview");
+        let path = dir.join("no_preview.ARW");
+        std::fs::write(&path, b.cursor().into_inner()).unwrap();
+        let spec = crate::pipeline::JobSpec {
+            path,
+            size: 0,
+            mtime: None,
+        };
+        let err = crate::pipeline::make_grid_thumb(&spec)
+            .expect_err("a container with no preview must fail the thumb");
+        assert_eq!(err, NO_USABLE_PREVIEW);
+        std::fs::remove_dir_all(&dir).ok();
+
+        // The wording itself (both engines badge with these).
+        assert_eq!(NO_USABLE_PREVIEW, "no usable embedded preview");
+        assert_eq!(NO_DECODABLE_PREVIEW, "no decodable preview");
     }
 
     /// Issue #31 boundary: the pixel cap admits everything up to and
