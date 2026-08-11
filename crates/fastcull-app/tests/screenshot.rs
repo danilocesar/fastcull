@@ -3274,9 +3274,9 @@ fn interleaved_session(dir: &Path) {
 /// landing on a stone-cold image (End — far outside ANY prefetch ring)
 /// must keep the overlay up at the carried factor and pan centre —
 /// never an EXCUSE-LESS drop to fit. The target's thumb was never
-/// visible so it is not even in `st.images` yet: the overlay HOLDs the
-/// previous pixels (that is where the +80 ms dump lands — the hold
-/// engages synchronously with the End refresh and `OVERLAY_HOLD_CAP`
+/// visible so it is not even in `st.textures.images` yet: the overlay
+/// HOLDs the previous pixels (that is where the +80 ms dump lands — the
+/// hold engages synchronously with the End refresh and `OVERLAY_HOLD_CAP`
 /// cannot fire before 250 ms), then the freshly prepped thumb renders
 /// (~150–300 ms behind the cook hold in release; later in debug, where
 /// the kitchen queue is congested by 149 MB debug-profile fills and the

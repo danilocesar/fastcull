@@ -341,6 +341,17 @@ impl GridViewState {
     /// Everything else — including `last_view_geometry`, which the old
     /// hand-written reset list had drifted into forgetting — goes back to
     /// its default.
+    ///
+    /// `last_grid_zoom` resets DELIBERATELY, even though its companion
+    /// `zoom` is one of the two survivors above. The asymmetry is the
+    /// point: `zoom` is where the view IS (decided by the launch path),
+    /// while `last_grid_zoom` is the step to come BACK to when the loupe
+    /// is left — a memory of the folder that just closed. Carrying it
+    /// would exit the loupe in folder B at folder A's remembered step.
+    /// Nothing observes this today (every path into a new folder is at
+    /// the grid with it already at the default, and `open_folder_at`
+    /// overwrites both right after this returns), so it is here for the
+    /// swap-while-at-the-loupe caller that does not exist yet.
     pub(crate) fn begin_session(&mut self) {
         *self = Self {
             zoom: self.zoom,
@@ -549,6 +560,18 @@ impl SessionState {
             paths,
             // A session exists the moment this is built; the empty-state
             // message distinguishes "no folder" from "empty folder".
+            //
+            // Note the direction change against the old `load_folder`,
+            // which set this LAST, once the engines were up: the flag now
+            // goes true at the TOP of a swap, before the sidecar writer,
+            // the pipeline and the loupe engine are started. Nothing can
+            // observe that window today — `load_folder` holds ONE mutable
+            // borrow of the AppState across the entire swap, so no
+            // refresh and no callback can run until the engines are in
+            // place. That single borrow is the invariant this relies on:
+            // an early return or a `?` inserted between `begin_session`
+            // and `Pipeline::start` would release it with a session
+            // claiming to be open and nothing behind it.
             session_open: true,
             ..Self::default()
         }
