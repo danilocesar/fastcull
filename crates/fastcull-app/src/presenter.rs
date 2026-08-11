@@ -7,6 +7,7 @@
 //! it intact.
 
 use std::cell::RefCell;
+use std::ops::Range;
 use std::rc::Rc;
 
 use fastcull_core::grid::{self, GridLayout};
@@ -234,7 +235,7 @@ fn anchor_the_scroll(win: &MainWindow, st: &mut AppState, pass: &mut Pass) {
 /// PHASE 3 — the visible window: which view positions are on screen (plus
 /// the margin rows), what the engine should prioritise, and which thumbs
 /// go to the texture kitchen.
-fn visible_window(st: &mut AppState, pass: &Pass) -> (std::ops::Range<usize>, Vec<usize>) {
+fn visible_window(st: &mut AppState, pass: &Pass) -> (Range<usize>, Vec<usize>) {
     let (layout, viewport_h, scroll_y, view_len) =
         (&pass.layout, pass.viewport_h, pass.scroll_y, pass.view_len);
     // Visible VIEW positions; `ids` are the image ids shown there (the two
@@ -688,24 +689,18 @@ fn render_loupe_rung(win: &MainWindow, st: &mut AppState, pass: &Pass) -> i32 {
     cursor_mark
 }
 
-fn refresh_inner(win: &MainWindow, state: &Rc<RefCell<AppState>>) {
-    let geom = current_geometry(win, state);
-    let mut st = state.borrow_mut();
-    let mut pass = detect_drift(win, &mut st, geom);
-    anchor_the_scroll(win, &mut st, &mut pass);
-    let (range, ids) = visible_window(&mut st, &pass);
-    // The two phases still inline below read the pass through these
-    // aliases; they go away when those phases move out too.
+/// PHASE 7 — the cell model: the windowed rows the grid binds to, mutated
+/// in place (spec: reuse the model, don't recreate it). Per cell the
+/// quality ladder is full-res > mid > 320 px thumb > placeholder.
+fn fill_grid_cells(
+    win: &MainWindow,
+    st: &AppState,
+    pass: &Pass,
+    range: Range<usize>,
+    want_mid: bool,
+) {
     let layout = &pass.layout;
-    let view_len = pass.view_len;
     let at_loupe = pass.at_loupe;
-    claim_cursor_at_loupe(win, state, &mut st, &pass);
-    let want_mid = climb_mid_rung(win, &mut st, &pass, &ids);
-    let cursor_mark = render_loupe_rung(win, &mut st, &pass);
-    // AFTER the claim phase, which is the only thing in the pass that can
-    // move the cursor: the cells and the status line must name the same
-    // image the rung choice just rendered.
-    let cursor = st.grid.cursor;
     // Mutate the one bound VecModel in place (spec: reuse, don't recreate).
     let model = Rc::clone(&st.cells);
     let mut row = 0usize;
@@ -713,7 +708,7 @@ fn refresh_inner(win: &MainWindow, state: &Rc<RefCell<AppState>>) {
         let index = st.grid.view[pos];
         let (x, y) = layout.position(pos);
         let full = if at_loupe {
-            fullres_for(&st, index)
+            fullres_for(st, index)
         } else {
             None
         };
@@ -780,7 +775,21 @@ fn refresh_inner(win: &MainWindow, state: &Rc<RefCell<AppState>>) {
     }
 
     win.set_virtual_height(layout.total_height);
+}
 
+/// PHASE 8 — the chrome: filter bar counts and labels, the empty-state
+/// message, the IPTC panel, the scroll hint and the status line. Nothing
+/// here decides anything; it is the pass's findings, in words.
+fn write_status_and_chrome(
+    win: &MainWindow,
+    st: &mut AppState,
+    pass: &Pass,
+    range: Range<usize>,
+    cursor: usize,
+    cursor_mark: i32,
+) {
+    let layout = &pass.layout;
+    let view_len = pass.view_len;
     // Filter bar + status (M5): live counts, active chip, sort label,
     // inbox-zero empty state (persona G2).
     let counts = fastcull_core::filter::counts(&st.session.picks);
@@ -838,7 +847,7 @@ fn refresh_inner(win: &MainWindow, state: &Rc<RefCell<AppState>>) {
     } else {
         format!(" — showing {view_len} of {count}")
     };
-    refresh_iptc_panel(win, &mut st);
+    refresh_iptc_panel(win, st);
     win.set_scroll_hint(
         if st.grid.view.is_empty() {
             String::new()
@@ -940,4 +949,24 @@ fn refresh_inner(win: &MainWindow, state: &Rc<RefCell<AppState>>) {
         )
         .into(),
     );
+}
+
+fn refresh_inner(win: &MainWindow, state: &Rc<RefCell<AppState>>) {
+    let geom = current_geometry(win, state);
+    let mut st = state.borrow_mut();
+    // One borrow, eight phases, in this order — each named after what it
+    // decides. Everything they hand each other travels in `Pass` or in
+    // these locals; nothing is smuggled through AppState.
+    let mut pass = detect_drift(win, &mut st, geom);
+    anchor_the_scroll(win, &mut st, &mut pass);
+    let (range, ids) = visible_window(&mut st, &pass);
+    claim_cursor_at_loupe(win, state, &mut st, &pass);
+    let want_mid = climb_mid_rung(win, &mut st, &pass, &ids);
+    let cursor_mark = render_loupe_rung(win, &mut st, &pass);
+    // Read AFTER the claim phase, the only thing in the pass that can move
+    // the cursor: the cells and the status line must name the same image
+    // the rung choice just rendered.
+    let cursor = st.grid.cursor;
+    fill_grid_cells(win, &st, &pass, range.clone(), want_mid);
+    write_status_and_chrome(win, &mut st, &pass, range, cursor, cursor_mark);
 }
