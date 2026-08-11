@@ -8,8 +8,10 @@ use std::rc::Rc;
 use fastcull_core::iptc::IptcField;
 use slint::{ComponentHandle, VecModel};
 
+use crate::focus::refocus_topmost_deferred;
+use crate::session::reload_templates;
 use crate::state::AppState;
-use crate::{refocus_topmost_deferred, refresh, reload_templates, reveal_cursor};
+use crate::{refresh, reveal_cursor};
 use crate::{IptcFieldRow, KeywordChip, MainWindow};
 
 /// Wire the IPTC panel: the dock toggle plus every editing callback.

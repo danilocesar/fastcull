@@ -7,9 +7,10 @@ use std::rc::Rc;
 
 use slint::ComponentHandle;
 
+use crate::focus::refocus_topmost_deferred;
+use crate::session::{load_ui_prefs, save_ui_prefs};
 use crate::state::AppState;
 use crate::MainWindow;
-use crate::{load_ui_prefs, refocus_topmost_deferred, save_ui_prefs};
 
 /// Wire the Copy Picks dialog (fileops.md): open/plan/start/cancel/close
 /// and the destination picker.
