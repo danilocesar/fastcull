@@ -11,9 +11,10 @@ use fastcull_core::pipeline::{JobSpec, Pipeline};
 use slint::ComponentHandle;
 
 use crate::focus::refocus_topmost_deferred;
+use crate::nav::recompute_view;
+use crate::refresh;
 use crate::state::AppState;
 use crate::MainWindow;
-use crate::{recompute_view, refresh};
 
 /// Wire File > Open Folder (the native picker; the action itself is
 /// [`open_folder_at`], shared with the drive harness).
