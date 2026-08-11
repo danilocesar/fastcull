@@ -115,6 +115,29 @@ impl BurstIndex {
     }
 }
 
+/// The IPTC panel's own state (M5, iptc-templates.md): whether the dock is
+/// up, what its models currently show, and the one shared revert slot.
+///
+/// Not here: the per-image IPTC DATA (`iptc`, `touched_iptc`) and the
+/// templates — those belong to the session, not to the panel, and they
+/// outlive the panel being closed.
+#[derive(Default)]
+pub(crate) struct IptcPanelState {
+    /// Is the dock on screen? Survives a session swap (see
+    /// [`IptcPanelState::begin_session`]).
+    pub(crate) visible: bool,
+    /// Last-set panel model contents: the models are ONLY rebuilt when
+    /// these differ (gate finding: rebuilding on every engine event tore
+    /// down the field editors mid-typing).
+    pub(crate) cache: PanelCache,
+    /// ONE shared single-level revert slot (user decision): armed by every
+    /// batch mutation from the panel; the ids the snapshots belong to ride
+    /// alongside so revert lands on the right images even after re-sorts.
+    pub(crate) revert: fastcull_core::iptc::RevertSlot,
+    pub(crate) revert_ids: Vec<usize>,
+    pub(crate) revert_label: String,
+}
+
 pub(crate) struct AppState {
     pub(crate) labels: Vec<String>,
     /// RAW paths for real sessions (empty for --synthetic).
@@ -254,24 +277,15 @@ pub(crate) struct AppState {
     /// read racing the debounced write must not revert fresh intent
     /// (same guard as `touched` for picks — gate finding).
     pub(crate) touched_iptc: HashSet<usize>,
-    /// Last-set panel model contents: the models are ONLY rebuilt when
-    /// these differ (gate finding: rebuilding on every engine event tore
-    /// down the field editors mid-typing).
-    pub(crate) panel_cache: PanelCache,
+    /// The IPTC panel surface (M5).
+    pub(crate) iptc_panel: IptcPanelState,
     /// Multi-selection (Shift+arrows, Ctrl+A; batch = selection in view
     /// order or the cursor — core model, tested).
     pub(crate) selection: fastcull_core::selection::Selection,
-    /// ONE shared single-level revert slot (user decision): armed by every
-    /// batch mutation from the panel; the ids the snapshots belong to ride
-    /// alongside so revert lands on the right images even after re-sorts.
-    pub(crate) revert: fastcull_core::iptc::RevertSlot,
-    pub(crate) revert_ids: Vec<usize>,
-    pub(crate) revert_label: String,
     /// Templates + load warnings (templates.toml, read at session open —
     /// live-reload is read-on-open per spec).
     pub(crate) templates: Vec<fastcull_core::iptc::IptcTemplate>,
     pub(crate) template_warnings: Vec<String>,
-    pub(crate) iptc_visible: bool,
     pub(crate) filter_bar_visible: bool,
     /// The Copy Picks dialog's state (M6).
     pub(crate) copy: CopyState,

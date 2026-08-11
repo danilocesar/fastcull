@@ -24,15 +24,15 @@ pub(crate) fn wire(window: &MainWindow, state: &Rc<RefCell<AppState>>) {
             let Some(win) = win.upgrade() else { return };
             {
                 let mut st = state.borrow_mut();
-                st.iptc_visible = !st.iptc_visible;
-                if st.iptc_visible {
+                st.iptc_panel.visible = !st.iptc_panel.visible;
+                if st.iptc_panel.visible {
                     reload_templates(&mut st); // read-on-open live-reload
                 }
                 // Publish the new dock state BEFORE any geometry read:
                 // grid-width is a binding on it, and revealing against
                 // the STALE width mis-anchored the viewport and let the
                 // follow-scroll claim swap the photo (issue #16).
-                win.set_iptc_visible(st.iptc_visible);
+                win.set_iptc_visible(st.iptc_panel.visible);
             }
             // The dock reflows the grid: anchor on the cursor so the
             // viewport doesn't land somewhere new (persona gap 1).
@@ -274,12 +274,12 @@ pub(crate) fn wire(window: &MainWindow, state: &Rc<RefCell<AppState>>) {
             let Some(win) = win.upgrade() else { return };
             {
                 let mut st = state.borrow_mut();
-                let ids = std::mem::take(&mut st.revert_ids);
+                let ids = std::mem::take(&mut st.iptc_panel.revert_ids);
                 let mut images: Vec<_> = ids
                     .iter()
                     .filter_map(|id| st.iptc.get(*id).cloned())
                     .collect();
-                if st.revert.revert_into(&mut images) {
+                if st.iptc_panel.revert.revert_into(&mut images) {
                     for (id, data) in ids.iter().zip(images) {
                         if let Some(slot) = st.iptc.get_mut(*id) {
                             *slot = data.clone();
@@ -289,7 +289,7 @@ pub(crate) fn wire(window: &MainWindow, state: &Rc<RefCell<AppState>>) {
                         }
                     }
                 }
-                st.revert_label.clear();
+                st.iptc_panel.revert_label.clear();
             }
             refresh(&win, &state);
         });
@@ -325,8 +325,8 @@ fn iptc_field_set(d: &mut fastcull_core::iptc::IptcData, i: usize, v: Option<Str
 /// coverage counts on multi-selections (persona: an un-revertible
 /// batch-destructive X is unacceptable — removal arms the shared slot).
 pub(crate) fn refresh_iptc_panel(win: &MainWindow, st: &mut AppState) {
-    win.set_iptc_visible(st.iptc_visible);
-    if !st.iptc_visible {
+    win.set_iptc_visible(st.iptc_panel.visible);
+    if !st.iptc_panel.visible {
         return;
     }
     let batch = st.selection.batch(&st.view, st.cursor);
@@ -391,7 +391,7 @@ pub(crate) fn refresh_iptc_panel(win: &MainWindow, st: &mut AppState) {
         .collect();
     let names: Vec<String> = st.templates.iter().map(|t| t.name.clone()).collect();
 
-    if st.panel_cache.rows != rows {
+    if st.iptc_panel.cache.rows != rows {
         win.set_iptc_fields(slint::ModelRc::new(VecModel::from(
             rows.iter()
                 .map(|(label, value, mixed)| IptcFieldRow {
@@ -401,9 +401,9 @@ pub(crate) fn refresh_iptc_panel(win: &MainWindow, st: &mut AppState) {
                 })
                 .collect::<Vec<_>>(),
         )));
-        st.panel_cache.rows = rows;
+        st.iptc_panel.cache.rows = rows;
     }
-    if st.panel_cache.chips != chips {
+    if st.iptc_panel.cache.chips != chips {
         win.set_iptc_keywords(slint::ModelRc::new(VecModel::from(
             chips
                 .iter()
@@ -413,19 +413,19 @@ pub(crate) fn refresh_iptc_panel(win: &MainWindow, st: &mut AppState) {
                 })
                 .collect::<Vec<_>>(),
         )));
-        st.panel_cache.chips = chips;
+        st.iptc_panel.cache.chips = chips;
     }
-    if st.panel_cache.names != names {
+    if st.iptc_panel.cache.names != names {
         win.set_iptc_templates(slint::ModelRc::new(VecModel::from(
             names
                 .iter()
                 .map(|n| slint::SharedString::from(n.as_str()))
                 .collect::<Vec<_>>(),
         )));
-        st.panel_cache.names = names;
+        st.iptc_panel.cache.names = names;
     }
-    win.set_iptc_revert_enabled(!st.revert_ids.is_empty());
-    win.set_iptc_revert_label(st.revert_label.clone().into());
+    win.set_iptc_revert_enabled(!st.iptc_panel.revert_ids.is_empty());
+    win.set_iptc_revert_label(st.iptc_panel.revert_label.clone().into());
 }
 
 /// Persist + arm the shared revert slot after a batch mutation (template
@@ -438,9 +438,9 @@ fn commit_batch_mutation(
     snapshots: Vec<fastcull_core::iptc::IptcData>,
     label: &str,
 ) {
-    st.revert.store(snapshots);
-    st.revert_ids = ids.to_vec();
-    st.revert_label = format!("Revert: {label}");
+    st.iptc_panel.revert.store(snapshots);
+    st.iptc_panel.revert_ids = ids.to_vec();
+    st.iptc_panel.revert_label = format!("Revert: {label}");
     st.touched_iptc.extend(ids.iter().copied());
     if let Some(writer) = &st.writer {
         for id in ids {
