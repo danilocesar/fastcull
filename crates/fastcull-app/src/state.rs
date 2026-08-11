@@ -138,6 +138,39 @@ pub(crate) struct IptcPanelState {
     pub(crate) revert_label: String,
 }
 
+/// Every UI-side texture the app holds, plus the bookkeeping that decides
+/// which rung each image is currently showing at.
+///
+/// This is a CACHE, not data: everything in here can be re-derived from
+/// the engines (the SQLite thumb cache and the loupe LRU keep the pixels),
+/// which is why a session swap can drop the whole thing without asking
+/// anyone's permission.
+#[derive(Default)]
+pub(crate) struct TextureStore {
+    /// Encoded thumbs by index (30–60 KB each); decoded lazily per window,
+    /// bytes dropped after decode (the SQLite cache keeps the encoded copy).
+    pub(crate) thumb_jpegs: HashMap<usize, Vec<u8>>,
+    /// Decoded thumb textures, kept for the session (spec: thumbs are cheap).
+    pub(crate) images: HashMap<usize, slint::Image>,
+    /// Images whose decode failed (the strip's failed badge).
+    pub(crate) failed: HashSet<usize>,
+    /// Mid-rung textures (1616x1080, ~5 MB each) for intermediate zooms
+    /// whose cells outgrow the 320 px thumb; pruned to the visible window.
+    pub(crate) mids: HashMap<usize, slint::Image>,
+    /// Bookkeeping for `mids` (core-side, tested by tests/zoom_walk.rs):
+    /// which rung each held texture is, and what must be adopted from the
+    /// engine cache when no event will fire.
+    pub(crate) va: fastcull_core::viewassets::ViewAssets,
+    /// UI-side textures for the focused image ± neighbors: sized to the
+    /// prefetch ring (5) and cursor-protected on eviction (see
+    /// insert_fullres); the core LRU holds the pixel data for rebuilds.
+    pub(crate) fullres: Vec<(usize, slint::Image)>,
+    /// Images whose best rung is mid-class-or-smaller but TERMINAL (the
+    /// file's native size — bare JPEGs, issue #8): their small texture
+    /// counts as the top rung for the zoom ceiling.
+    pub(crate) terminal_native: HashSet<usize>,
+}
+
 pub(crate) struct AppState {
     pub(crate) labels: Vec<String>,
     /// RAW paths for real sessions (empty for --synthetic).
@@ -152,12 +185,8 @@ pub(crate) struct AppState {
     pub(crate) sidecar_failures: usize,
     pub(crate) zoom: usize,
     pub(crate) cursor: usize,
-    /// Encoded thumbs by index (30–60 KB each); decoded lazily per window,
-    /// bytes dropped after decode (the SQLite cache keeps the encoded copy).
-    pub(crate) thumb_jpegs: HashMap<usize, Vec<u8>>,
-    /// Decoded images, kept for the session (spec: thumbs are cheap).
-    pub(crate) images: HashMap<usize, slint::Image>,
-    pub(crate) failed: HashSet<usize>,
+    /// Every UI-side texture (thumbs, mids, full-res) and its bookkeeping.
+    pub(crate) textures: TextureStore,
     pub(crate) pipeline: Option<Pipeline>,
     pub(crate) thumbs_done: usize,
     /// True for --synthetic sessions: cells get distinct placeholder hues;
@@ -171,10 +200,6 @@ pub(crate) struct AppState {
     pub(crate) cells: Rc<VecModel<CellData>>,
     /// Full-res loupe assets (real sessions only).
     pub(crate) loupe: Option<fastcull_core::loupe::LoupeEngine>,
-    /// Images whose best rung is mid-class-or-smaller but TERMINAL (the
-    /// file's native size — bare JPEGs, issue #8): their small texture
-    /// counts as the top rung for the zoom ceiling.
-    pub(crate) terminal_native: HashSet<usize>,
     /// The last FINITE factor the sharp overlay rendered at: during a
     /// transit whose desired factor is the INFINITY pin (Z), the soft
     /// view carries this value — visual continuity is the whole point
@@ -208,10 +233,6 @@ pub(crate) struct AppState {
     /// scrolling — the loupe follow-scroll claim must not fire (issue
     /// #16: marks landed on a photo the user already left).
     pub(crate) last_view_geometry: Option<(f32, f32)>,
-    /// UI-side textures for the focused image ± neighbors: sized to the
-    /// prefetch ring (5) and cursor-protected on eviction (see
-    /// insert_fullres); the core LRU holds the pixel data for rebuilds.
-    pub(crate) fullres: Vec<(usize, slint::Image)>,
     /// DESIRED loupe zoom factor relative to fit (ui-grid.md zoom ladder):
     /// 1.0 = fit, `f32::INFINITY` = 1:1 wanted before the full-res texture
     /// (and thus the real ceiling) is known. Clamped to the 1:1 ceiling at
@@ -252,13 +273,6 @@ pub(crate) struct AppState {
     pub(crate) cursor_touched: bool,
     /// Grid zoom to return to when leaving the loupe with G/Esc.
     pub(crate) last_grid_zoom: usize,
-    /// Mid-rung textures (1616x1080, ~5 MB each) for intermediate zooms
-    /// whose cells outgrow the 320 px thumb; pruned to the visible window.
-    pub(crate) mids: HashMap<usize, slint::Image>,
-    /// Bookkeeping for `mids` (core-side, tested by tests/zoom_walk.rs):
-    /// which rung each held texture is, and what must be adopted from the
-    /// engine cache when no event will fire.
-    pub(crate) va: fastcull_core::viewassets::ViewAssets,
     /// M5 filter/sort state: the grid binds to `view` (image ids passing the
     /// filter, in sort order); `cursor` remains an IMAGE id throughout.
     pub(crate) query: fastcull_core::filter::ViewQuery,

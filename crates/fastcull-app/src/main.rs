@@ -44,7 +44,7 @@
 //! across surfaces.
 
 use std::cell::RefCell;
-use std::collections::{HashMap, HashSet};
+use std::collections::HashSet;
 use std::rc::Rc;
 
 mod copy_bridge;
@@ -182,16 +182,13 @@ fn main() {
             1 // 8 columns
         },
         cursor: 0,
-        thumb_jpegs: HashMap::new(),
-        images: HashMap::new(),
-        failed: HashSet::new(),
+        textures: Default::default(),
         pipeline: None,
         thumbs_done: 0,
         synthetic: false,
         session_open: false,
         cells,
         loupe: None,
-        terminal_native: HashSet::new(),
         view_generation: 0,
         last_view_generation: 0,
         last_cursor_visible: true,
@@ -199,7 +196,6 @@ fn main() {
         last_resolved_factor: None,
         last_badge: None,
         last_view_geometry: None,
-        fullres: Vec::new(),
         zoom_factor: if start_11 { f32::INFINITY } else { 1.0 },
         pan_center: (0.5, 0.5),
         last_pan_write: None,
@@ -225,8 +221,6 @@ fn main() {
         last_overlay_cursor: None,
         cursor_touched: false,
         last_grid_zoom: 1,
-        mids: HashMap::new(),
-        va: fastcull_core::viewassets::ViewAssets::default(),
         query: fastcull_core::filter::ViewQuery::default(),
         view: Vec::new(),
         capture_keys: Vec::new(),

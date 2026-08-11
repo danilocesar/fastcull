@@ -200,7 +200,7 @@ fn refresh_inner(win: &MainWindow, state: &Rc<RefCell<AppState>>) {
     let mut to_prep: Vec<usize> = ids
         .iter()
         .copied()
-        .filter(|i| st.thumb_jpegs.contains_key(i) && !st.images.contains_key(i))
+        .filter(|i| st.textures.thumb_jpegs.contains_key(i) && !st.textures.images.contains_key(i))
         .collect();
     // Cursor first (issue #46): at the loupe the cursor's thumb is the
     // transit rescue rung, and the kitchen is FIFO — cooking a margin
@@ -212,7 +212,7 @@ fn refresh_inner(win: &MainWindow, state: &Rc<RefCell<AppState>>) {
         to_prep.insert(0, c);
     }
     for index in to_prep {
-        if let Some(jpeg) = st.thumb_jpegs.remove(&index) {
+        if let Some(jpeg) = st.textures.thumb_jpegs.remove(&index) {
             st.kitchen.submit_thumb(index, jpeg);
         }
     }
@@ -307,7 +307,7 @@ fn refresh_inner(win: &MainWindow, state: &Rc<RefCell<AppState>>) {
                 (win.get_grid_width() * win.window().scale_factor()) as u32
             };
             let hit = loupe.focus(focus_index, display_long);
-            let missing = !st.fullres.iter().any(|(i, _)| *i == focus_index);
+            let missing = !st.textures.fullres.iter().any(|(i, _)| *i == focus_index);
             if let (Some(image), true) = (hit, missing) {
                 // Kitchen fills the buffer off-thread; the pending guards
                 // absorb the refresh loop re-asking every frame while it
@@ -316,9 +316,9 @@ fn refresh_inner(win: &MainWindow, state: &Rc<RefCell<AppState>>) {
                 let long = image.width.max(image.height);
                 match route_warm(
                     long,
-                    st.terminal_native.contains(&focus_index),
+                    st.textures.terminal_native.contains(&focus_index),
                     at_loupe,
-                    st.mids.contains_key(&focus_index),
+                    st.textures.mids.contains_key(&focus_index),
                     WarmCtx::FocusHit,
                 ) {
                     Some(WarmJob::Full) => st.kitchen.submit_full(focus_index, image),
@@ -344,20 +344,21 @@ fn refresh_inner(win: &MainWindow, state: &Rc<RefCell<AppState>>) {
             // for scrolled-away cells are culled here, at the submission
             // wave (spec rule) — landed ones are still adopted.
             stx.kitchen.cull_mids(&ids);
-            for (index, image) in stx.va.ensure(&ids, cell_phys as u32, loupe) {
-                if stx.mids.len() >= MIDS_CAP && !stx.mids.contains_key(&index) {
+            for (index, image) in stx.textures.va.ensure(&ids, cell_phys as u32, loupe) {
+                if stx.textures.mids.len() >= MIDS_CAP && !stx.textures.mids.contains_key(&index) {
                     break;
                 }
                 stx.kitchen.submit_mid(index, image);
             }
         }
     }
-    st.mids.retain(|i, _| ids.contains(i));
-    st.va.prune(&ids);
+    st.textures.mids.retain(|i, _| ids.contains(i));
+    st.textures.va.prune(&ids);
 
     let cursor = st.cursor;
     let fullres_for = |st: &AppState, index: usize| -> Option<slint::Image> {
-        st.fullres
+        st.textures
+            .fullres
             .iter()
             .find(|(i, _)| *i == index)
             .map(|(_, img)| img.clone())
@@ -382,7 +383,7 @@ fn refresh_inner(win: &MainWindow, state: &Rc<RefCell<AppState>>) {
     let sharp = fullres_for(&st, cursor).filter(|img| {
         is_top_rung(
             img.size().width.max(img.size().height),
-            st.terminal_native.contains(&cursor),
+            st.textures.terminal_native.contains(&cursor),
         )
     });
     let soft = if sharp.is_none() && overlay {
@@ -390,7 +391,8 @@ fn refresh_inner(win: &MainWindow, state: &Rc<RefCell<AppState>>) {
         // re-announced into the fullres slot (the pruned-and-revisited
         // path: validator M3, held-left beyond the mids window used to
         // re-strobe fit with the pixels literally in hand).
-        st.mids
+        st.textures
+            .mids
             .get(&cursor)
             .cloned()
             .or_else(|| fullres_for(&st, cursor))
@@ -409,8 +411,8 @@ fn refresh_inner(win: &MainWindow, state: &Rc<RefCell<AppState>>) {
     // fit plus the badge is the honest floor there.
     let (soft, soft_is_thumb) = match soft {
         Some(img) => (Some(img), false),
-        None if sharp.is_none() && overlay && !st.failed.contains(&cursor) => {
-            (st.images.get(&cursor).cloned(), true)
+        None if sharp.is_none() && overlay && !st.textures.failed.contains(&cursor) => {
+            (st.textures.images.get(&cursor).cloned(), true)
         }
         None => (None, false),
     };
@@ -516,7 +518,7 @@ fn refresh_inner(win: &MainWindow, state: &Rc<RefCell<AppState>>) {
             // image during the hold; the accepted, capped cost is
             // recorded in the spec.
             let now = std::time::Instant::now();
-            let failed = st.failed.contains(&cursor);
+            let failed = st.textures.failed.contains(&cursor);
             let capped = matches!(st.overlay_hold, Some((c, since)) if c == cursor
                 && now.duration_since(since) >= OVERLAY_HOLD_CAP);
             if overlay && win.get_one2one() && !failed && !capped {
@@ -602,12 +604,12 @@ fn refresh_inner(win: &MainWindow, state: &Rc<RefCell<AppState>>) {
             .as_ref()
             .or_else(|| {
                 if want_mid || at_loupe {
-                    st.mids.get(&index)
+                    st.textures.mids.get(&index)
                 } else {
                     None
                 }
             })
-            .or(st.images.get(&index));
+            .or(st.textures.images.get(&index));
         let cell = CellData {
             x,
             y,
@@ -615,7 +617,7 @@ fn refresh_inner(win: &MainWindow, state: &Rc<RefCell<AppState>>) {
             h: layout.cell_height,
             image: image.cloned().unwrap_or_default(),
             has_image: image.is_some(),
-            failed: st.failed.contains(&index),
+            failed: st.textures.failed.contains(&index),
             label: st.labels.get(index).cloned().unwrap_or_default().into(),
             is_cursor: index == st.cursor,
             selected: st.selection.is_selected(index),
