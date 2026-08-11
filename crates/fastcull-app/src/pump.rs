@@ -11,12 +11,11 @@ use fastcull_core::pipeline::SessionEvent;
 use slint::ComponentHandle;
 
 use crate::copy_bridge::recompute_bursts;
+use crate::nav::recompute_view_keep_cursor;
 use crate::state::{AppState, MIDS_CAP};
 use crate::trace::trace_mark;
 use crate::MainWindow;
-use crate::{
-    insert_fullres, kitchen, recompute_view_keep_cursor, refresh, route_warm, WarmCtx, WarmJob,
-};
+use crate::{insert_fullres, kitchen, refresh, route_warm, WarmCtx, WarmJob};
 
 /// Wire the kitchen's completion nudge: a finished texture is adopted as
 /// soon as the UI thread is idle, without waiting for the next tick.
