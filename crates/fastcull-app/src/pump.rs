@@ -82,7 +82,7 @@ pub(crate) fn start(window: &MainWindow, state: &Rc<RefCell<AppState>>) -> slint
                                 }
                                 if let Some(slot) = st.frame_meta.get_mut(index) {
                                     *slot = fastcull_core::burst::FrameMeta::from_summary(&exif);
-                                    st.burst_dirty = true;
+                                    st.bursts.dirty = true;
                                 }
                             }
                             SessionEvent::Sidecar { index, pick, iptc } => {
@@ -245,8 +245,8 @@ pub(crate) fn start(window: &MainWindow, state: &Rc<RefCell<AppState>>) -> slint
                         recompute_view_keep_cursor(&mut st, false);
                     }
 
-                    if st.burst_dirty {
-                        st.burst_dirty = false;
+                    if st.bursts.dirty {
+                        st.bursts.dirty = false;
                         recompute_bursts(&mut st);
                     }
                 }

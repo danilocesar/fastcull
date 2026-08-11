@@ -621,7 +621,7 @@ fn refresh_inner(win: &MainWindow, state: &Rc<RefCell<AppState>>) {
             selected: st.selection.is_selected(index),
             id: index as i32,
             copied: st.copy.copied_to.contains_key(&index),
-            burst_count: st.burst_badge.get(index).copied().unwrap_or(0) as i32,
+            burst_count: st.bursts.badge.get(index).copied().unwrap_or(0) as i32,
             seed: if st.synthetic { index as i32 } else { -1 },
             // At the loupe (N=1) the #20 badge pill owns state display:
             // bare cells keep the grid's 40% reject dim out of the loupe
@@ -737,7 +737,8 @@ fn refresh_inner(win: &MainWindow, state: &Rc<RefCell<AppState>>) {
     );
     // M7: "· burst 7/23" when the cursor sits inside a group.
     let burst_note = st
-        .burst_pos
+        .bursts
+        .pos
         .get(cursor)
         .copied()
         .flatten()
