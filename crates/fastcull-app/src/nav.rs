@@ -105,7 +105,7 @@ pub(crate) fn recompute_view(st: &mut AppState) {
     // ring after a filter/sort change would warm ghosts. Every view
     // change funnels through here (load_folder recomputes after the
     // engine starts, so a fresh session is keyed too).
-    if let Some(loupe) = &st.loupe {
+    if let Some(loupe) = &st.loupe_view.engine {
         loupe.set_view(&st.grid.view);
     }
 }
@@ -227,20 +227,20 @@ fn handle_nav_inner(win: &MainWindow, state: &Rc<RefCell<AppState>>, key: &str) 
         "one2one" => {
             // Z: fit -> 1:1; zoomed (1:1 or intermediate) -> back to fit;
             // from a grid zoom: jump straight to loupe 1:1.
-            if st.loupe.is_some() && !st.enter_loupe(f32::INFINITY) {
-                if st.zoom_factor > 1.0 {
-                    st.zoom_factor = 1.0;
-                    st.pan_center = (0.5, 0.5); // fit forgets the pan spot
+            if st.loupe_view.engine.is_some() && !st.enter_loupe(f32::INFINITY) {
+                if st.loupe_view.zoom_factor > 1.0 {
+                    st.loupe_view.zoom_factor = 1.0;
+                    st.loupe_view.pan_center = (0.5, 0.5); // fit forgets the pan spot
                 } else if max_factor(win, &st).is_none_or(|max| max > 1.0) {
                     // Small-file guard (validator L1): a known ceiling at
                     // or below fit has no 1:1 to jump to; leaving the
                     // desire at fit keeps the next `-` meaningful.
-                    st.zoom_factor = f32::INFINITY;
+                    st.loupe_view.zoom_factor = f32::INFINITY;
                 }
             }
         }
         "grid" => {
-            if !st.at_loupe() && st.zoom_factor <= 1.0 {
+            if !st.at_loupe() && st.loupe_view.zoom_factor <= 1.0 {
                 // Already at a grid zoom: Esc/G collapses the selection
                 // (the deselect gesture — gate finding).
                 st.grid.selection.clear();
@@ -248,18 +248,18 @@ fn handle_nav_inner(win: &MainWindow, state: &Rc<RefCell<AppState>>, key: &str) 
             st.exit_loupe();
             // At a grid zoom there is no loupe to leave, but a carried
             // factor (and its pan) is still dropped here.
-            st.zoom_factor = 1.0;
-            st.pan_center = (0.5, 0.5);
+            st.loupe_view.zoom_factor = 1.0;
+            st.loupe_view.pan_center = (0.5, 0.5);
         }
         "zoom-in" => {
             if st.at_loupe() {
-                if st.loupe.is_some() {
+                if st.loupe_view.engine.is_some() {
                     // Climb one x1.5 stop from the CLAMPED factor (the
                     // desired one may be INFINITY from an earlier Z). An
                     // unknown ceiling (full-res not decoded yet) climbs
                     // optimistically; the render clamp lands it at 1:1.
                     let actual = clamped_factor(win, &st);
-                    st.zoom_factor = match max_factor(win, &st) {
+                    st.loupe_view.zoom_factor = match max_factor(win, &st) {
                         Some(max) => fastcull_core::zoompan::ladder_up(actual, max),
                         None => actual * fastcull_core::zoompan::ZOOM_STEP,
                     };
@@ -272,18 +272,18 @@ fn handle_nav_inner(win: &MainWindow, state: &Rc<RefCell<AppState>>, key: &str) 
             }
         }
         "zoom-out" => {
-            if st.zoom_factor > 1.0 {
+            if st.loupe_view.zoom_factor > 1.0 {
                 // Retrace the x1.5 stops down to fit, never straight to
                 // the grid. Unknown ceiling: nothing above fit was ever
                 // rendered, so fit is the only honest stop.
                 let actual = clamped_factor(win, &st);
-                st.zoom_factor = if max_factor(win, &st).is_some() {
+                st.loupe_view.zoom_factor = if max_factor(win, &st).is_some() {
                     fastcull_core::zoompan::ladder_down(actual)
                 } else {
                     1.0
                 };
-                if st.zoom_factor <= 1.0 {
-                    st.pan_center = (0.5, 0.5); // fit forgets the pan spot
+                if st.loupe_view.zoom_factor <= 1.0 {
+                    st.loupe_view.pan_center = (0.5, 0.5); // fit forgets the pan spot
                 }
             } else {
                 st.grid.zoom = grid::zoom_step(st.grid.zoom, -1);

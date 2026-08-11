@@ -345,9 +345,9 @@ pub(crate) fn install(window: &MainWindow, state: &Rc<RefCell<AppState>>) -> Rc<
                         win.get_loupe_soft(),
                         win.get_loupe_vx(),
                         win.get_loupe_vy(),
-                        st.pan_center.0,
-                        st.pan_center.1,
-                        st.zoom_factor,
+                        st.loupe_view.pan_center.0,
+                        st.loupe_view.pan_center.1,
+                        st.loupe_view.zoom_factor,
                     ));
                     return;
                 }

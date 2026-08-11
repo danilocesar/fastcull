@@ -76,7 +76,7 @@ pub(crate) fn dispatch(state: &Rc<RefCell<AppState>>, launch: Launch, start_11: 
             }
             // load_folder resets the zoom; --start-11 wants 1:1 back on.
             if start_11 {
-                state.borrow_mut().zoom_factor = f32::INFINITY;
+                state.borrow_mut().loupe_view.zoom_factor = f32::INFINITY;
             }
         }
     }
@@ -103,9 +103,15 @@ fn load_folder(state: &Rc<RefCell<AppState>>, folder: &std::path::Path) -> Resul
         .collect();
     let mut st = state.borrow_mut();
     st.pipeline = None;
-    st.loupe = None;
+    // The whole loupe view dies with the session it was looking at: the
+    // engine and its receiver (stopped here, before the new ones start),
+    // the desired factor and pan, and every scrap of "what did the overlay
+    // last draw" bookkeeping. Replacing the struct rather than clearing
+    // ten fields by hand is the point of the A2 sub-structs: three of
+    // those fields (last_pan_write, last_overlay_cursor, and the grid's
+    // last_view_geometry) were NOT in the old hand-written list.
+    st.loupe_view = crate::state::LoupeViewState::default();
     st.pipeline_rx = None;
-    st.loupe_rx = None;
     drop(st.writer.take()); // flush barrier for the previous session's marks
     st.sidecar_errs = None;
 
@@ -135,12 +141,6 @@ fn load_folder(state: &Rc<RefCell<AppState>>, folder: &std::path::Path) -> Resul
     st.synthetic = false;
     st.textures.fullres.clear();
     st.textures.terminal_native.clear();
-    st.last_resolved_factor = None; // magnification never carries across sessions
-    st.last_badge = None; // indexes mean a different image now
-    st.overlay_hold = None; // a hold must not straddle a session swap
-    st.last_soft_rung = None;
-    st.zoom_factor = 1.0;
-    st.pan_center = (0.5, 0.5);
     st.textures.mids.clear();
     st.textures.va = fastcull_core::viewassets::ViewAssets::default();
     st.capture_keys = vec![None; count];
@@ -183,9 +183,9 @@ fn load_folder(state: &Rc<RefCell<AppState>>, folder: &std::path::Path) -> Resul
     let (loupe, loupe_rx) =
         fastcull_core::loupe::LoupeEngine::start(paths, fastcull_core::loupe::DEFAULT_BUDGET_BYTES);
     st.pipeline = Some(pipeline);
-    st.loupe = Some(loupe);
+    st.loupe_view.engine = Some(loupe);
     st.pipeline_rx = Some(rx);
-    st.loupe_rx = Some(loupe_rx);
+    st.loupe_view.rx = Some(loupe_rx);
     st.session_open = true;
     recompute_view(&mut st);
     Ok(())

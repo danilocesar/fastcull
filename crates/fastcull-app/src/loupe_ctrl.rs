@@ -38,7 +38,7 @@ pub(crate) fn wire(window: &MainWindow, state: &Rc<RefCell<AppState>>) {
                 // click (validator: a capture-key re-sort could otherwise
                 // swap the image under an active 1:1 inspection).
                 st.grid.cursor_touched = true;
-                st.pan_center = (fx.clamp(0.0, 1.0), fy.clamp(0.0, 1.0));
+                st.loupe_view.pan_center = (fx.clamp(0.0, 1.0), fy.clamp(0.0, 1.0));
             }
             refresh(&win, &state);
         });
@@ -303,8 +303,8 @@ pub(crate) fn max_factor(win: &MainWindow, st: &AppState) -> Option<f32> {
 /// ceiling (an INFINITY desire = "1:1 as soon as we know where that is").
 pub(crate) fn clamped_factor(win: &MainWindow, st: &AppState) -> f32 {
     match max_factor(win, st) {
-        Some(max) => st.zoom_factor.clamp(1.0, max.max(1.0)),
-        None => st.zoom_factor.max(1.0),
+        Some(max) => st.loupe_view.zoom_factor.clamp(1.0, max.max(1.0)),
+        None => st.loupe_view.zoom_factor.max(1.0),
     }
 }
 
@@ -380,7 +380,7 @@ fn machine_ctx(
         native_w: native.0,
         native_h: native.1,
         max_factor: max_factor(win, st),
-        pan_center: st.pan_center,
+        pan_center: st.loupe_view.pan_center,
         fit_cell,
     };
     (state, geo)
@@ -431,21 +431,21 @@ fn apply_pointer_action(
         let mut st = state.borrow_mut();
         match action {
             Action::SetZoom { factor, center } => {
-                st.pan_center = center;
-                st.zoom_factor = factor;
+                st.loupe_view.pan_center = center;
+                st.loupe_view.zoom_factor = factor;
                 if factor <= 1.0 {
-                    st.pan_center = (0.5, 0.5); // fit forgets the pan spot
+                    st.loupe_view.pan_center = (0.5, 0.5); // fit forgets the pan spot
                 }
             }
             Action::Recenter { center } => {
-                st.pan_center = center;
+                st.loupe_view.pan_center = center;
             }
             Action::EnterLoupe => {
                 st.enter_loupe(1.0);
                 // Also from INSIDE the loupe (a double-click while zoomed
                 // is the way back to fit), so these are unconditional.
-                st.zoom_factor = 1.0;
-                st.pan_center = (0.5, 0.5);
+                st.loupe_view.zoom_factor = 1.0;
+                st.loupe_view.pan_center = (0.5, 0.5);
             }
             Action::None
             | Action::Reserved(_)

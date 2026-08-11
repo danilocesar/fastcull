@@ -291,7 +291,7 @@ fn refresh_inner(win: &MainWindow, state: &Rc<RefCell<AppState>>) {
                 });
             }
         }
-        if let Some(loupe) = &st.loupe {
+        if let Some(loupe) = &st.loupe_view.engine {
             // focus() returns the cached image on a warm hit: the rebuild
             // path for textures evicted UI-side (validator finding — going
             // backwards previously degraded to the thumb forever).
@@ -301,7 +301,7 @@ fn refresh_inner(win: &MainWindow, state: &Rc<RefCell<AppState>>) {
             // revised by #21: the top rung is still ALWAYS requested;
             // until it lands the view renders soft-flagged, never
             // unflagged).
-            let display_long = if st.zoom_factor > 1.0 {
+            let display_long = if st.loupe_view.zoom_factor > 1.0 {
                 u32::MAX
             } else {
                 (win.get_grid_width() * win.window().scale_factor()) as u32
@@ -337,7 +337,7 @@ fn refresh_inner(win: &MainWindow, state: &Rc<RefCell<AppState>>) {
     let want_mid = !at_loupe && cell_phys > 320.0 * 1.25;
     if want_mid {
         let stx = &mut *st;
-        if let Some(loupe) = &stx.loupe {
+        if let Some(loupe) = &stx.loupe_view.engine {
             // ensure() also returns cached images no event will announce
             // (the zoom-walk bug: pruned-and-revisited cells stayed
             // thumbs). Downscales cook on the kitchen worker; stale ones
@@ -427,7 +427,7 @@ fn refresh_inner(win: &MainWindow, state: &Rc<RefCell<AppState>>) {
     let soft_factor = if factor.is_finite() {
         Some(factor)
     } else {
-        st.last_resolved_factor
+        st.loupe_view.last_resolved_factor
     };
     match (sharp, soft) {
         (Some(img), _) if overlay => {
@@ -438,8 +438,8 @@ fn refresh_inner(win: &MainWindow, state: &Rc<RefCell<AppState>>) {
             let s = fastcull_core::zoompan::fit_scale(vw, vh, nw, nh);
             // Texture present => max_factor was known => factor is finite.
             let (ew, eh) = (nw * s * factor, nh * s * factor);
-            let ox = fastcull_core::zoompan::offset_centering(vw, ew, st.pan_center.0);
-            let oy = fastcull_core::zoompan::offset_centering(vh, eh, st.pan_center.1);
+            let ox = fastcull_core::zoompan::offset_centering(vw, ew, st.loupe_view.pan_center.0);
+            let oy = fastcull_core::zoompan::offset_centering(vh, eh, st.loupe_view.pan_center.1);
             win.set_loupe_w(ew);
             win.set_loupe_h(eh);
             win.set_loupe_image(img);
@@ -447,22 +447,22 @@ fn refresh_inner(win: &MainWindow, state: &Rc<RefCell<AppState>>) {
             win.set_loupe_vy(oy);
             // Trace on any offset, visibility or CURSOR change (QE: silent
             // same-size persistence made cross-image forensics blind).
-            if st.last_pan_write != Some((ox, oy))
+            if st.loupe_view.last_pan_write != Some((ox, oy))
                 || !win.get_one2one()
                 || win.get_loupe_soft()
-                || st.last_overlay_cursor != Some(cursor)
+                || st.loupe_view.last_overlay_cursor != Some(cursor)
             {
                 trace_mark(&format!(
                     "loupe idx {cursor} factor {factor:.3} extent {ew:.0}x{eh:.0} \
                      center {:.3},{:.3} off {ox:.0},{oy:.0}",
-                    st.pan_center.0, st.pan_center.1
+                    st.loupe_view.pan_center.0, st.loupe_view.pan_center.1
                 ));
             }
-            st.last_resolved_factor = Some(factor);
-            st.last_pan_write = Some((ox, oy));
-            st.last_overlay_cursor = Some(cursor);
-            st.overlay_hold = None;
-            st.last_soft_rung = None;
+            st.loupe_view.last_resolved_factor = Some(factor);
+            st.loupe_view.last_pan_write = Some((ox, oy));
+            st.loupe_view.last_overlay_cursor = Some(cursor);
+            st.loupe_view.overlay_hold = None;
+            st.loupe_view.last_soft_rung = None;
             win.set_loupe_soft(false);
             win.set_one2one(true);
         }
@@ -481,23 +481,23 @@ fn refresh_inner(win: &MainWindow, state: &Rc<RefCell<AppState>>) {
             // floored at fit.
             let f = soft_factor.unwrap_or_else(|| (1.0 / s.max(1e-6)).max(1.0));
             let (ew, eh) = (mw * s * f, mh * s * f);
-            let ox = fastcull_core::zoompan::offset_centering(vw, ew, st.pan_center.0);
-            let oy = fastcull_core::zoompan::offset_centering(vh, eh, st.pan_center.1);
+            let ox = fastcull_core::zoompan::offset_centering(vw, ew, st.loupe_view.pan_center.0);
+            let oy = fastcull_core::zoompan::offset_centering(vh, eh, st.loupe_view.pan_center.1);
             win.set_loupe_w(ew);
             win.set_loupe_h(eh);
             win.set_loupe_image(img);
             win.set_loupe_vx(ox);
             win.set_loupe_vy(oy);
-            if st.last_soft_rung != Some((cursor, soft_is_thumb)) {
+            if st.loupe_view.last_soft_rung != Some((cursor, soft_is_thumb)) {
                 trace_mark(&format!(
                     "loupe {} idx {cursor} factor {f:.3} extent {ew:.0}x{eh:.0}",
                     if soft_is_thumb { "thumb" } else { "soft" }
                 ));
             }
-            st.last_soft_rung = Some((cursor, soft_is_thumb));
-            st.last_pan_write = Some((ox, oy));
-            st.last_overlay_cursor = Some(cursor);
-            st.overlay_hold = None;
+            st.loupe_view.last_soft_rung = Some((cursor, soft_is_thumb));
+            st.loupe_view.last_pan_write = Some((ox, oy));
+            st.loupe_view.last_overlay_cursor = Some(cursor);
+            st.loupe_view.overlay_hold = None;
             win.set_loupe_soft(true);
             win.set_one2one(true);
         }
@@ -519,11 +519,11 @@ fn refresh_inner(win: &MainWindow, state: &Rc<RefCell<AppState>>) {
             // recorded in the spec.
             let now = std::time::Instant::now();
             let failed = st.textures.failed.contains(&cursor);
-            let capped = matches!(st.overlay_hold, Some((c, since)) if c == cursor
+            let capped = matches!(st.loupe_view.overlay_hold, Some((c, since)) if c == cursor
                 && now.duration_since(since) >= OVERLAY_HOLD_CAP);
             if overlay && win.get_one2one() && !failed && !capped {
-                if !matches!(st.overlay_hold, Some((c, _)) if c == cursor) {
-                    st.overlay_hold = Some((cursor, now));
+                if !matches!(st.loupe_view.overlay_hold, Some((c, _)) if c == cursor) {
+                    st.loupe_view.overlay_hold = Some((cursor, now));
                     trace_mark(&format!(
                         "loupe hold idx {cursor} (not even a thumb; previous pixels kept)"
                     ));
@@ -547,10 +547,10 @@ fn refresh_inner(win: &MainWindow, state: &Rc<RefCell<AppState>>) {
                 }
                 win.set_one2one(false);
                 win.set_loupe_soft(false);
-                st.last_pan_write = None;
-                st.last_overlay_cursor = None;
-                st.overlay_hold = None;
-                st.last_soft_rung = None;
+                st.loupe_view.last_pan_write = None;
+                st.loupe_view.last_overlay_cursor = None;
+                st.loupe_view.overlay_hold = None;
+                st.loupe_view.last_soft_rung = None;
             }
         }
     }
@@ -568,7 +568,7 @@ fn refresh_inner(win: &MainWindow, state: &Rc<RefCell<AppState>>) {
     };
     win.set_loupe_mark(cursor_mark);
     if at_loupe && view_len > 0 {
-        if st.last_badge != Some((cursor, cursor_mark)) {
+        if st.loupe_view.last_badge != Some((cursor, cursor_mark)) {
             trace_mark(&format!(
                 "loupe badge idx {cursor} mark {}",
                 match cursor_mark {
@@ -577,14 +577,14 @@ fn refresh_inner(win: &MainWindow, state: &Rc<RefCell<AppState>>) {
                     _ => "none",
                 }
             ));
-            st.last_badge = Some((cursor, cursor_mark));
+            st.loupe_view.last_badge = Some((cursor, cursor_mark));
         }
     } else {
         // Reset on leaving the loupe so RE-ENTERING traces a fresh line
         // even on an unchanged (cursor, mark) — trace forensics must
         // show what the badge said each time the loupe came up
         // (validator m3).
-        st.last_badge = None;
+        st.loupe_view.last_badge = None;
     }
 
     // Mutate the one bound VecModel in place (spec: reuse, don't recreate).
