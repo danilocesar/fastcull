@@ -116,8 +116,8 @@ fn load_folder(state: &Rc<RefCell<AppState>>, folder: &std::path::Path) -> Resul
     st.picks = vec![fastcull_core::catalog::PickState::Unmarked; count];
     st.touched.clear();
     st.sidecar_failures = 0;
-    st.cursor = 0;
-    st.cursor_touched = false;
+    st.grid.cursor = 0;
+    st.grid.cursor_touched = false;
     st.textures.thumb_jpegs.clear();
     st.textures.images.clear();
     st.textures.failed.clear();
@@ -130,8 +130,8 @@ fn load_folder(state: &Rc<RefCell<AppState>>, folder: &std::path::Path) -> Resul
     // synchronously before the pump can deliver an event, but that is an
     // implicit invariant one reordered call away from a second folder
     // silently losing its re-anchor (validator concern, 2026-07-31).
-    st.last_metadata_complete = false;
-    st.last_cursor_visible = true;
+    st.grid.last_metadata_complete = false;
+    st.grid.last_cursor_visible = true;
     st.synthetic = false;
     st.textures.fullres.clear();
     st.textures.terminal_native.clear();
@@ -153,7 +153,7 @@ fn load_folder(state: &Rc<RefCell<AppState>>, folder: &std::path::Path) -> Resul
     st.copy.handle = None;
     st.copy.rx = None;
     st.copy.copied_to.clear();
-    st.selection.reset();
+    st.grid.selection.reset();
     st.iptc_panel.revert = Default::default();
     st.iptc_panel.revert_ids.clear();
     st.iptc_panel.revert_label.clear();
@@ -163,7 +163,7 @@ fn load_folder(state: &Rc<RefCell<AppState>>, folder: &std::path::Path) -> Resul
     reload_templates(&mut st);
     // A new folder starts unfiltered: a hidden active filter on a fresh
     // session would look like missing files.
-    st.query = fastcull_core::filter::ViewQuery::default();
+    st.grid.query = fastcull_core::filter::ViewQuery::default();
 
     let (writer, errs) = fastcull_core::sidecar_writer::SidecarWriter::start();
     st.writer = Some(writer);
@@ -207,8 +207,8 @@ pub(crate) fn open_folder_at(
             // Menu-open behaves like the CLI argument (spec): fresh
             // grid zoom, cursor at the first image.
             let mut st = state.borrow_mut();
-            st.zoom = 1;
-            st.last_grid_zoom = 1;
+            st.grid.zoom = 1;
+            st.grid.last_grid_zoom = 1;
             drop(st);
             win.set_vp_y(0.0);
             // Invalidate every in-flight edit BEFORE any focus movement

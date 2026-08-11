@@ -48,16 +48,16 @@ fn refresh_inner(win: &MainWindow, state: &Rc<RefCell<AppState>>) {
     // refresh is chrome/window movement (panel toggle, resize), never
     // user scrolling.
     let geom_now = (win.get_grid_width(), viewport_h);
-    let prev_geom = st.last_view_geometry;
+    let prev_geom = st.grid.last_view_geometry;
     let relayout = prev_geom.is_some_and(|g| g != geom_now);
-    st.last_view_geometry = Some(geom_now);
+    st.grid.last_view_geometry = Some(geom_now);
     // A view that mutated since the last refresh (metadata re-sort
     // during load, live filter removal) displaces the cursor without
     // any scrolling — the follow-scroll claim must re-anchor instead
     // (issue #22).
-    let view_mutated = st.last_view_generation != st.view_generation;
-    st.last_view_generation = st.view_generation;
-    let view_len = st.view.len();
+    let view_mutated = st.grid.last_view_generation != st.grid.view_generation;
+    st.grid.last_view_generation = st.grid.view_generation;
+    let view_len = st.grid.view.len();
     // Issue #25's one re-sort: the instant the last metadata job lands, the
     // WHOLE grid reorders from the provisional filename order into the
     // user's sort. Every other view mutation moves a few cells; this one
@@ -74,9 +74,9 @@ fn refresh_inner(win: &MainWindow, state: &Rc<RefCell<AppState>>) {
     // swallow it and the re-sort would silently never re-anchor for the rest
     // of the session (validator concern, 2026-07-31).
     let can_anchor = viewport_h > 0.0 && view_len > 0;
-    let load_settled = st.metadata_complete() && !st.last_metadata_complete && can_anchor;
+    let load_settled = st.metadata_complete() && !st.grid.last_metadata_complete && can_anchor;
     if can_anchor {
-        st.last_metadata_complete = st.metadata_complete();
+        st.grid.last_metadata_complete = st.metadata_complete();
     }
 
     // GRID-level resize anchoring (user report: shrink the window and
@@ -108,7 +108,7 @@ fn refresh_inner(win: &MainWindow, state: &Rc<RefCell<AppState>>) {
             cur_pos,
             scroll_y,
             viewport_h,
-            st.last_cursor_visible,
+            st.grid.last_cursor_visible,
         );
         // Unconditional marker: a test must be able to see that the flip
         // HAPPENED, not only that it moved something (validator: the old
@@ -117,7 +117,7 @@ fn refresh_inner(win: &MainWindow, state: &Rc<RefCell<AppState>>) {
         // occurred and correctly changed nothing).
         trace_mark(&format!(
             "load settled: cursor pos {cur_pos}, scroll {scroll_y:.0} -> {corrected:.0}  (cursor was {})",
-            if st.last_cursor_visible {
+            if st.grid.last_cursor_visible {
                 "visible"
             } else {
                 "off-screen; offset kept"
@@ -129,7 +129,7 @@ fn refresh_inner(win: &MainWindow, state: &Rc<RefCell<AppState>>) {
     }
     if relayout && layout.columns > 1 && view_len > 0 && viewport_h > 0.0 {
         if let Some((old_width, old_viewport_h)) = prev_geom {
-            let old_layout = GridLayout::new(st.zoom, old_width, old_viewport_h, view_len);
+            let old_layout = GridLayout::new(st.grid.zoom, old_width, old_viewport_h, view_len);
             let old_pitch = old_layout.cell_height + grid::CELL_GAP;
             let new_pitch = layout.cell_height + grid::CELL_GAP;
             let old_max = (old_layout.total_height - old_viewport_h).max(0.0);
@@ -173,14 +173,14 @@ fn refresh_inner(win: &MainWindow, state: &Rc<RefCell<AppState>>) {
     // the recorded value is one pass stale. Harmless only because the
     // consumer is gated on `columns > 1`; revisit if that gate is relaxed.
     if can_anchor {
-        st.last_cursor_visible = st
+        st.grid.last_cursor_visible = st
             .cursor_pos()
             .is_some_and(|p| layout.is_visible(p, scroll_y, viewport_h));
     }
     // Visible VIEW positions; `ids` are the image ids shown there (the two
     // coincide only with filter=All + capture sort before keys arrive).
     let range = layout.visible_range(view_len, scroll_y, viewport_h, MARGIN_ROWS);
-    let ids: Vec<usize> = range.clone().map(|pos| st.view[pos]).collect();
+    let ids: Vec<usize> = range.clone().map(|pos| st.grid.view[pos]).collect();
 
     // Tell the engine what is on screen (priority promotion).
     if let Some(pipeline) = &st.pipeline {
@@ -207,7 +207,7 @@ fn refresh_inner(win: &MainWindow, state: &Rc<RefCell<AppState>>) {
     // cell ahead of it extends a residual hold pointlessly (observed:
     // the margin thumb took the first cook slot and the hold cap fired
     // 9 ms before the cursor's own thumb landed).
-    if let Some(pos) = to_prep.iter().position(|i| *i == st.cursor) {
+    if let Some(pos) = to_prep.iter().position(|i| *i == st.grid.cursor) {
         let c = to_prep.remove(pos);
         to_prep.insert(0, c);
     }
@@ -268,8 +268,8 @@ fn refresh_inner(win: &MainWindow, state: &Rc<RefCell<AppState>>) {
                 trace_mark(&format!(
                     "follow-scroll claim: cursor pos {cur_pos} -> {claimed}"
                 ));
-                st.cursor = st.view[claimed];
-                st.cursor_touched = true; // scrolling the loupe IS cursor movement
+                st.grid.cursor = st.grid.view[claimed];
+                st.grid.cursor_touched = true; // scrolling the loupe IS cursor movement
             } else {
                 // Geometry changed under the cursor (panel toggle, window
                 // RESIZE — the user's reported bug): this is NOT
@@ -295,7 +295,7 @@ fn refresh_inner(win: &MainWindow, state: &Rc<RefCell<AppState>>) {
             // focus() returns the cached image on a warm hit: the rebuild
             // path for textures evicted UI-side (validator finding — going
             // backwards previously degraded to the thumb forever).
-            let focus_index = st.cursor;
+            let focus_index = st.grid.cursor;
             // Ladder target: fit view needs the viewport in physical pixels;
             // any factor above fit demands the top rung (quality rule as
             // revised by #21: the top rung is still ALWAYS requested;
@@ -355,7 +355,7 @@ fn refresh_inner(win: &MainWindow, state: &Rc<RefCell<AppState>>) {
     st.textures.mids.retain(|i, _| ids.contains(i));
     st.textures.va.prune(&ids);
 
-    let cursor = st.cursor;
+    let cursor = st.grid.cursor;
     let fullres_for = |st: &AppState, index: usize| -> Option<slint::Image> {
         st.textures
             .fullres
@@ -591,7 +591,7 @@ fn refresh_inner(win: &MainWindow, state: &Rc<RefCell<AppState>>) {
     let model = Rc::clone(&st.cells);
     let mut row = 0usize;
     for pos in range.clone() {
-        let index = st.view[pos];
+        let index = st.grid.view[pos];
         let (x, y) = layout.position(pos);
         let full = if at_loupe {
             fullres_for(&st, index)
@@ -619,8 +619,8 @@ fn refresh_inner(win: &MainWindow, state: &Rc<RefCell<AppState>>) {
             has_image: image.is_some(),
             failed: st.textures.failed.contains(&index),
             label: st.labels.get(index).cloned().unwrap_or_default().into(),
-            is_cursor: index == st.cursor,
-            selected: st.selection.is_selected(index),
+            is_cursor: index == st.grid.cursor,
+            selected: st.grid.selection.is_selected(index),
             id: index as i32,
             copied: st.copy.copied_to.contains_key(&index),
             burst_count: st.bursts.badge.get(index).copied().unwrap_or(0) as i32,
@@ -659,10 +659,10 @@ fn refresh_inner(win: &MainWindow, state: &Rc<RefCell<AppState>>) {
     win.set_counts_picked(counts.picked as i32);
     win.set_counts_rejected(counts.rejected as i32);
     win.set_counts_unmarked(counts.unmarked as i32);
-    win.set_filter_bar_visible(st.filter_bar_visible);
+    win.set_filter_bar_visible(st.grid.filter_bar_visible);
     use fastcull_core::filter::{PickFilter, SortKey};
     win.set_active_filter(
-        match st.query.filter {
+        match st.grid.query.filter {
             PickFilter::All => "all",
             PickFilter::Picked => "picked",
             PickFilter::Rejected => "rejected",
@@ -671,7 +671,7 @@ fn refresh_inner(win: &MainWindow, state: &Rc<RefCell<AppState>>) {
         .into(),
     );
     win.set_sort_label(
-        match (st.query.sort, st.query.ascending) {
+        match (st.grid.query.sort, st.grid.query.ascending) {
             (SortKey::CaptureTime, true) => "Capture ↑",
             (SortKey::CaptureTime, false) => "Capture ↓",
             (SortKey::Filename, true) => "Name ↑",
@@ -681,7 +681,7 @@ fn refresh_inner(win: &MainWindow, state: &Rc<RefCell<AppState>>) {
     );
     let count = st.count();
     win.set_empty_message(if view_len == 0 && count > 0 {
-        let what = match st.query.filter {
+        let what = match st.grid.query.filter {
             PickFilter::All => "images",
             PickFilter::Picked => "picked",
             PickFilter::Rejected => "rejected",
@@ -704,22 +704,23 @@ fn refresh_inner(win: &MainWindow, state: &Rc<RefCell<AppState>>) {
 
     let cursor_pos = st.cursor_pos();
     let cursor_in_view = cursor_pos.is_some();
-    let showing = if st.query.filter == PickFilter::All {
+    let showing = if st.grid.query.filter == PickFilter::All {
         String::new()
     } else {
         format!(" — showing {view_len} of {count}")
     };
     refresh_iptc_panel(win, &mut st);
     win.set_scroll_hint(
-        if st.view.is_empty() {
+        if st.grid.view.is_empty() {
             String::new()
         } else {
             // "795 / 1450 · 15:42" — capture time appended when sorting by
             // capture (persona: a day is navigated by light, not by frame
             // numbers); filename sorts get numbers only.
-            let mut hint = format!("{} / {}", range.start + 1, st.view.len());
-            if st.query.sort == fastcull_core::filter::SortKey::CaptureTime {
+            let mut hint = format!("{} / {}", range.start + 1, st.grid.view.len());
+            if st.grid.query.sort == fastcull_core::filter::SortKey::CaptureTime {
                 if let Some(key) = st
+                    .grid
                     .view
                     .get(range.start)
                     .and_then(|id| st.capture_keys.get(*id))
@@ -753,7 +754,7 @@ fn refresh_inner(win: &MainWindow, state: &Rc<RefCell<AppState>>) {
     // the semantics live in fastcull-core, the app only renders them). An
     // empty selection stays silent: the batch is then just the cursor, and
     // "1 selected" on every image would be noise.
-    let sel_note = match st.selection.count_in_view(&st.view) {
+    let sel_note = match st.grid.selection.count_in_view(&st.grid.view) {
         0 => String::new(),
         n => format!(" · {n} selected"),
     };

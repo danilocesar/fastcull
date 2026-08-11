@@ -160,7 +160,7 @@ pub(crate) fn wire(window: &MainWindow, state: &Rc<RefCell<AppState>>) {
 fn plan_sources(st: &AppState) -> Vec<fastcull_core::fileops::PlanSource> {
     let all_query = fastcull_core::filter::ViewQuery {
         filter: fastcull_core::filter::PickFilter::All,
-        ..st.query
+        ..st.grid.query
     };
     // `{seq}` is baked into PERMANENT FILENAMES on disk — the one
     // irreversible artifact this app produces — and both fileops.md and

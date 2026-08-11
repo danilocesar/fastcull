@@ -48,7 +48,7 @@ pub(crate) fn wire(window: &MainWindow, state: &Rc<RefCell<AppState>>) {
                 use fastcull_core::filter::SortKey;
                 let mut st = state.borrow_mut();
                 // Cycle: Capture ↑ → Capture ↓ → Name ↑ → Name ↓ → …
-                let q = &mut st.query;
+                let q = &mut st.grid.query;
                 (q.sort, q.ascending) = match (q.sort, q.ascending) {
                     (SortKey::CaptureTime, true) => (SortKey::CaptureTime, false),
                     (SortKey::CaptureTime, false) => (SortKey::Filename, true),
@@ -70,10 +70,11 @@ pub(crate) fn wire(window: &MainWindow, state: &Rc<RefCell<AppState>>) {
             let Some(win) = win.upgrade() else { return };
             let hide_resets = {
                 let mut st = state.borrow_mut();
-                st.filter_bar_visible = !st.filter_bar_visible;
-                win.set_filter_bar_visible(st.filter_bar_visible);
+                st.grid.filter_bar_visible = !st.grid.filter_bar_visible;
+                win.set_filter_bar_visible(st.grid.filter_bar_visible);
                 // Persona G6: a filter must never be active while invisible.
-                !st.filter_bar_visible && st.query.filter != fastcull_core::filter::PickFilter::All
+                !st.grid.filter_bar_visible
+                    && st.grid.query.filter != fastcull_core::filter::PickFilter::All
             };
             if hide_resets {
                 apply_filter_change(&win, &state, fastcull_core::filter::PickFilter::All);
@@ -86,21 +87,26 @@ pub(crate) fn wire(window: &MainWindow, state: &Rc<RefCell<AppState>>) {
 
 pub(crate) fn recompute_view(st: &mut AppState) {
     let complete = st.metadata_complete();
-    st.view =
-        fastcull_core::filter::view(&st.picks, &st.labels, &st.capture_keys, &st.query, complete);
+    st.grid.view = fastcull_core::filter::view(
+        &st.picks,
+        &st.labels,
+        &st.capture_keys,
+        &st.grid.query,
+        complete,
+    );
     // Every membership/order change bumps the generation: a cursor
     // displaced by a view RE-SORT (capture keys streaming in during
     // load) is not scrolling, and the follow-scroll claim must not
     // fire on it (issue #22 — the cursor moved during folder load with
     // no input, and the load-race flaked CI).
-    st.view_generation = st.view_generation.wrapping_add(1);
+    st.grid.view_generation = st.grid.view_generation.wrapping_add(1);
     // Re-key the loupe prefetch ring in the same tick (issue #46): the
     // ring walks VIEW order — what arrows actually reach — and a stale
     // ring after a filter/sort change would warm ghosts. Every view
     // change funnels through here (load_folder recomputes after the
     // engine starts, so a fresh session is keyed too).
     if let Some(loupe) = &st.loupe {
-        loupe.set_view(&st.view);
+        loupe.set_view(&st.grid.view);
     }
 }
 
@@ -120,20 +126,20 @@ pub(crate) fn recompute_view(st: &mut AppState) {
 /// `filter::cursor_after_recompute` — see it for why this is a state and not
 /// an edge.
 pub(crate) fn recompute_view_keep_cursor(st: &mut AppState, user_changed_query: bool) {
-    let old_view = std::mem::take(&mut st.view);
-    let old_cursor = old_view.contains(&st.cursor).then_some(st.cursor);
+    let old_view = std::mem::take(&mut st.grid.view);
+    let old_cursor = old_view.contains(&st.grid.cursor).then_some(st.grid.cursor);
     recompute_view(st);
     if let Some(id) = fastcull_core::filter::cursor_after_recompute(
         &old_view,
         old_cursor,
-        &st.view,
-        st.cursor_touched,
+        &st.grid.view,
+        st.grid.cursor_touched,
         st.metadata_complete(),
         user_changed_query,
     ) {
-        st.cursor = id;
+        st.grid.cursor = id;
     }
-    if st.view.is_empty() {
+    if st.grid.view.is_empty() {
         st.exit_loupe(); // nothing to look at: the empty state is a grid
     }
 }
@@ -146,7 +152,7 @@ fn apply_filter_change(
 ) {
     {
         let mut st = state.borrow_mut();
-        st.query.filter = filter;
+        st.grid.query.filter = filter;
         recompute_view_keep_cursor(&mut st, true); // the USER re-filtered
     }
     reveal_cursor(win, state);
@@ -179,7 +185,7 @@ fn handle_nav_inner(win: &MainWindow, state: &Rc<RefCell<AppState>>, key: &str) 
             | "burst-prev"
             | "burst-next"
     ) {
-        st.cursor_touched = true;
+        st.grid.cursor_touched = true;
     }
     match key {
         "pick" | "reject" | "clear" => {
@@ -188,7 +194,7 @@ fn handle_nav_inner(win: &MainWindow, state: &Rc<RefCell<AppState>>, key: &str) 
                 "reject" => fastcull_core::catalog::PickState::Rejected,
                 _ => fastcull_core::catalog::PickState::Unmarked,
             };
-            let cursor = st.cursor;
+            let cursor = st.grid.cursor;
             // Marks land on the cursor image only while it is in the view
             // (an empty filtered view has nothing to mark).
             if let (Some(old_pos), Some(slot)) = (st.cursor_pos(), st.picks.get_mut(cursor)) {
@@ -204,10 +210,10 @@ fn handle_nav_inner(win: &MainWindow, state: &Rc<RefCell<AppState>>, key: &str) 
                 match fastcull_core::filter::cursor_after_mark(
                     cursor,
                     old_pos,
-                    &st.view,
+                    &st.grid.view,
                     key != "clear",
                 ) {
-                    Some(id) => st.cursor = id,
+                    Some(id) => st.grid.cursor = id,
                     None => {
                         // Inbox zero (persona G2): leaving the loupe — the
                         // empty state is a grid-level view.
@@ -237,7 +243,7 @@ fn handle_nav_inner(win: &MainWindow, state: &Rc<RefCell<AppState>>, key: &str) 
             if !st.at_loupe() && st.zoom_factor <= 1.0 {
                 // Already at a grid zoom: Esc/G collapses the selection
                 // (the deselect gesture — gate finding).
-                st.selection.clear();
+                st.grid.selection.clear();
             }
             st.exit_loupe();
             // At a grid zoom there is no loupe to leave, but a carried
@@ -259,10 +265,10 @@ fn handle_nav_inner(win: &MainWindow, state: &Rc<RefCell<AppState>>, key: &str) 
                     };
                 }
             } else {
-                if st.zoom + 1 == grid::ZOOM_COLUMNS.len() - 1 {
+                if st.grid.zoom + 1 == grid::ZOOM_COLUMNS.len() - 1 {
                     st.remember_grid_zoom(); // this step crosses INTO the loupe
                 }
-                st.zoom = grid::zoom_step(st.zoom, 1);
+                st.grid.zoom = grid::zoom_step(st.grid.zoom, 1);
             }
         }
         "zoom-out" => {
@@ -280,16 +286,16 @@ fn handle_nav_inner(win: &MainWindow, state: &Rc<RefCell<AppState>>, key: &str) 
                     st.pan_center = (0.5, 0.5); // fit forgets the pan spot
                 }
             } else {
-                st.zoom = grid::zoom_step(st.zoom, -1);
+                st.grid.zoom = grid::zoom_step(st.grid.zoom, -1);
             }
         }
         // [ / ]: previous/next burst boundary over the FILTERED view
         // (burst-grouping.md UI contract): first visible frame of the
         // adjacent group; singles are their own territory; clamps.
         "burst-prev" | "burst-next" => {
-            if !st.view.is_empty() {
+            if !st.grid.view.is_empty() {
                 let pos = st.cursor_pos().unwrap_or(0);
-                let view = st.view.clone();
+                let view = st.grid.view.clone();
                 let group_of = |p: usize| st.bursts.group_of.get(view[p]).copied().flatten();
                 let new_pos = fastcull_core::burst::next_boundary(
                     pos,
@@ -297,16 +303,16 @@ fn handle_nav_inner(win: &MainWindow, state: &Rc<RefCell<AppState>>, key: &str) 
                     group_of,
                     key == "burst-next",
                 );
-                st.cursor = view[new_pos];
+                st.grid.cursor = view[new_pos];
                 // Plain navigation resets the Shift-span anchor, same as
                 // the arrow keys (selection contract, ui-grid.md).
-                st.selection.reset_anchor();
+                st.grid.selection.reset_anchor();
             }
         }
         "select-all" => {
-            st.cursor_touched = true;
-            let view = st.view.clone();
-            st.selection.select_all(&view);
+            st.grid.cursor_touched = true;
+            let view = st.grid.view.clone();
+            st.grid.selection.select_all(&view);
         }
         nav => {
             let (nav, extends) = match nav {
@@ -325,25 +331,25 @@ fn handle_nav_inner(win: &MainWindow, state: &Rc<RefCell<AppState>>, key: &str) 
                 _ => return,
             };
             if extends {
-                st.cursor_touched = true; // shift-nav claims like plain nav
+                st.grid.cursor_touched = true; // shift-nav claims like plain nav
             }
             // Navigation happens over VIEW positions; the cursor stays an
             // image id (M5 filter model).
-            if !st.view.is_empty() {
+            if !st.grid.view.is_empty() {
                 let rows_per_page =
                     ((viewport_h / (layout.cell_height + grid::CELL_GAP)) as usize).max(1);
                 let pos = st.cursor_pos().unwrap_or(0);
                 let new_pos =
-                    grid::navigate(pos, st.view.len(), layout.columns, rows_per_page, nav);
-                let from = st.cursor;
-                st.cursor = st.view[new_pos];
+                    grid::navigate(pos, st.grid.view.len(), layout.columns, rows_per_page, nav);
+                let from = st.grid.cursor;
+                st.grid.cursor = st.grid.view[new_pos];
                 if extends {
                     // Shift+arrow: span anchor..cursor (core model).
-                    let view = st.view.clone();
-                    let to = st.cursor;
-                    st.selection.extend_to(&view, from, to);
+                    let view = st.grid.view.clone();
+                    let to = st.grid.cursor;
+                    st.grid.selection.extend_to(&view, from, to);
                 } else {
-                    st.selection.reset_anchor();
+                    st.grid.selection.reset_anchor();
                 }
             }
         }
@@ -370,7 +376,12 @@ pub(crate) fn current_geometry(
 ) -> (GridLayout, f32, f32) {
     let st = state.borrow();
     let (viewport_h, scroll_y) = viewport_metrics(win);
-    let layout = GridLayout::new(st.zoom, win.get_grid_width(), viewport_h, st.view.len());
+    let layout = GridLayout::new(
+        st.grid.zoom,
+        win.get_grid_width(),
+        viewport_h,
+        st.grid.view.len(),
+    );
     (layout, viewport_h, scroll_y)
 }
 
@@ -414,7 +425,7 @@ fn reveal_scroll(
     scroll_y: f32,
 ) -> (f32, f32) {
     let width = win.get_grid_width();
-    let layout = GridLayout::new(st.zoom, width, viewport_h, st.view.len());
+    let layout = GridLayout::new(st.grid.zoom, width, viewport_h, st.grid.view.len());
     let pos = st.cursor_pos().unwrap_or(0);
     let new_scroll = layout.scroll_to_reveal(pos, scroll_y, viewport_h);
     // This reveal IS the relayout correction for its geometry: mark it
@@ -422,7 +433,7 @@ fn reveal_scroll(
     // consistent (geometry, offset) pair (the grid resize branch
     // double-corrected panel toggles with mixed old/new frames, and a nav
     // key racing a resize would double-correct the same way).
-    st.last_view_geometry = Some((width, viewport_h));
+    st.grid.last_view_geometry = Some((width, viewport_h));
     (layout.total_height, -new_scroll)
 }
 

@@ -171,44 +171,28 @@ pub(crate) struct TextureStore {
     pub(crate) terminal_native: HashSet<usize>,
 }
 
-pub(crate) struct AppState {
-    pub(crate) labels: Vec<String>,
-    /// RAW paths for real sessions (empty for --synthetic).
-    pub(crate) paths: Vec<std::path::PathBuf>,
-    /// Pick state per image (mirrors sidecars; synthetic = in-memory only).
-    pub(crate) picks: Vec<fastcull_core::catalog::PickState>,
-    /// Images whose pick the user changed this session: sidecar-at-open
-    /// events must not overwrite fresh user intent.
-    pub(crate) touched: HashSet<usize>,
-    pub(crate) writer: Option<fastcull_core::sidecar_writer::SidecarWriter>,
-    /// Failed sidecar writes this session (surfaced in the status bar).
-    pub(crate) sidecar_failures: usize,
+/// The grid surface: which images are on screen, in what order, where the
+/// cursor and the selection are, and the "what did the last refresh see"
+/// bookkeeping that tells a re-sort apart from a scroll.
+///
+/// The cursor is an IMAGE id, never a position — positions change under it
+/// every time the view re-sorts (issue #22, bug #46).
+pub(crate) struct GridViewState {
+    /// Index into `grid::ZOOM_COLUMNS`; the last step IS the loupe.
     pub(crate) zoom: usize,
+    /// Grid zoom to return to when leaving the loupe with G/Esc.
+    pub(crate) last_grid_zoom: usize,
+    /// The cursor, as an image id.
     pub(crate) cursor: usize,
-    /// Every UI-side texture (thumbs, mids, full-res) and its bookkeeping.
-    pub(crate) textures: TextureStore,
-    pub(crate) pipeline: Option<Pipeline>,
-    pub(crate) thumbs_done: usize,
-    /// True for --synthetic sessions: cells get distinct placeholder hues;
-    /// real folders use the spec's neutral gray.
-    pub(crate) synthetic: bool,
-    /// False until a session exists (folder opened or --synthetic). The
-    /// folderless launch (issue #5) shows "No folder open" — a different
-    /// message from "folder opened but it has no images".
-    pub(crate) session_open: bool,
-    /// The one VecModel the window binds; refresh mutates it in place.
-    pub(crate) cells: Rc<VecModel<CellData>>,
-    /// Full-res loupe assets (real sessions only).
-    pub(crate) loupe: Option<fastcull_core::loupe::LoupeEngine>,
-    /// The last FINITE factor the sharp overlay rendered at: during a
-    /// transit whose desired factor is the INFINITY pin (Z), the soft
-    /// view carries this value — visual continuity is the whole point
-    /// of issue #21 (the carried magnification, not the sentinel).
-    pub(crate) last_resolved_factor: Option<f32>,
-    /// (cursor, mark) the loupe badge last traced — dedupes the trace
-    /// line, not the property write (issue #20; the property is set
-    /// every refresh, atomically with the image swap).
-    pub(crate) last_badge: Option<(usize, i32)>,
+    /// False until the user first moves the cursor or marks (issue #4):
+    /// while untouched, the cursor tracks the view's FIRST image through
+    /// the progressive metadata re-sorts, so a folder never opens with
+    /// the cursor stranded mid-grid (name order vs capture order).
+    pub(crate) cursor_touched: bool,
+    /// M5 filter/sort state: the grid binds to `view` (image ids passing the
+    /// filter, in sort order); `cursor` remains an IMAGE id throughout.
+    pub(crate) query: fastcull_core::filter::ViewQuery,
+    pub(crate) view: Vec<usize>,
     /// Bumped on every recompute_view (membership or order change).
     pub(crate) view_generation: u64,
     /// The generation the last refresh saw: a mismatch means the view
@@ -233,6 +217,94 @@ pub(crate) struct AppState {
     /// scrolling — the loupe follow-scroll claim must not fire (issue
     /// #16: marks landed on a photo the user already left).
     pub(crate) last_view_geometry: Option<(f32, f32)>,
+    /// Multi-selection (Shift+arrows, Ctrl+A; batch = selection in view
+    /// order or the cursor — core model, tested).
+    pub(crate) selection: fastcull_core::selection::Selection,
+    /// Is the filter bar on screen? Survives a session swap.
+    pub(crate) filter_bar_visible: bool,
+}
+
+/// Hand-written rather than derived: three of these do NOT start at the
+/// type's zero. `zoom` starts at the 8-column step (the launch default),
+/// `last_cursor_visible` starts TRUE so a folder's first refresh treats the
+/// cursor as one the user is looking at, and the filter bar starts visible.
+impl Default for GridViewState {
+    fn default() -> Self {
+        Self {
+            zoom: 1, // 8 columns
+            last_grid_zoom: 1,
+            cursor: 0,
+            cursor_touched: false,
+            query: fastcull_core::filter::ViewQuery::default(),
+            view: Vec::new(),
+            view_generation: 0,
+            last_view_generation: 0,
+            last_cursor_visible: true,
+            last_metadata_complete: false,
+            last_view_geometry: None,
+            selection: fastcull_core::selection::Selection::default(),
+            filter_bar_visible: true,
+        }
+    }
+}
+
+impl GridViewState {
+    /// Is the view at the loupe (the last zoom step, one column)?
+    ///
+    /// The zoom INDEX is the authority, not the column count the layout
+    /// happens to produce: `GridLayout::new` derives columns from this
+    /// same index (`ZOOM_COLUMNS[zoom.min(len-1)]`), and every writer of
+    /// `zoom` keeps it inside the ladder, so `layout.columns == 1` — the
+    /// second idiom this replaces — is exactly this predicate.
+    pub(crate) fn at_loupe(&self) -> bool {
+        self.zoom == grid::ZOOM_COLUMNS.len() - 1
+    }
+
+    /// The cursor's position in the current view (None = cursor image is
+    /// filtered out or the view is empty).
+    pub(crate) fn cursor_pos(&self) -> Option<usize> {
+        self.view.iter().position(|id| *id == self.cursor)
+    }
+}
+
+pub(crate) struct AppState {
+    pub(crate) labels: Vec<String>,
+    /// RAW paths for real sessions (empty for --synthetic).
+    pub(crate) paths: Vec<std::path::PathBuf>,
+    /// Pick state per image (mirrors sidecars; synthetic = in-memory only).
+    pub(crate) picks: Vec<fastcull_core::catalog::PickState>,
+    /// Images whose pick the user changed this session: sidecar-at-open
+    /// events must not overwrite fresh user intent.
+    pub(crate) touched: HashSet<usize>,
+    pub(crate) writer: Option<fastcull_core::sidecar_writer::SidecarWriter>,
+    /// Failed sidecar writes this session (surfaced in the status bar).
+    pub(crate) sidecar_failures: usize,
+    /// What the grid is showing and where the cursor is inside it.
+    pub(crate) grid: GridViewState,
+    /// Every UI-side texture (thumbs, mids, full-res) and its bookkeeping.
+    pub(crate) textures: TextureStore,
+    pub(crate) pipeline: Option<Pipeline>,
+    pub(crate) thumbs_done: usize,
+    /// True for --synthetic sessions: cells get distinct placeholder hues;
+    /// real folders use the spec's neutral gray.
+    pub(crate) synthetic: bool,
+    /// False until a session exists (folder opened or --synthetic). The
+    /// folderless launch (issue #5) shows "No folder open" — a different
+    /// message from "folder opened but it has no images".
+    pub(crate) session_open: bool,
+    /// The one VecModel the window binds; refresh mutates it in place.
+    pub(crate) cells: Rc<VecModel<CellData>>,
+    /// Full-res loupe assets (real sessions only).
+    pub(crate) loupe: Option<fastcull_core::loupe::LoupeEngine>,
+    /// The last FINITE factor the sharp overlay rendered at: during a
+    /// transit whose desired factor is the INFINITY pin (Z), the soft
+    /// view carries this value — visual continuity is the whole point
+    /// of issue #21 (the carried magnification, not the sentinel).
+    pub(crate) last_resolved_factor: Option<f32>,
+    /// (cursor, mark) the loupe badge last traced — dedupes the trace
+    /// line, not the property write (issue #20; the property is set
+    /// every refresh, atomically with the image swap).
+    pub(crate) last_badge: Option<(usize, i32)>,
     /// DESIRED loupe zoom factor relative to fit (ui-grid.md zoom ladder):
     /// 1.0 = fit, `f32::INFINITY` = 1:1 wanted before the full-res texture
     /// (and thus the real ceiling) is known. Clamped to the 1:1 ceiling at
@@ -266,17 +338,6 @@ pub(crate) struct AppState {
     pub(crate) kitchen: kitchen::Kitchen,
     /// Which image the overlay last showed (trace bookkeeping only).
     pub(crate) last_overlay_cursor: Option<usize>,
-    /// False until the user first moves the cursor or marks (issue #4):
-    /// while untouched, the cursor tracks the view's FIRST image through
-    /// the progressive metadata re-sorts, so a folder never opens with
-    /// the cursor stranded mid-grid (name order vs capture order).
-    pub(crate) cursor_touched: bool,
-    /// Grid zoom to return to when leaving the loupe with G/Esc.
-    pub(crate) last_grid_zoom: usize,
-    /// M5 filter/sort state: the grid binds to `view` (image ids passing the
-    /// filter, in sort order); `cursor` remains an IMAGE id throughout.
-    pub(crate) query: fastcull_core::filter::ViewQuery,
-    pub(crate) view: Vec<usize>,
     /// EXIF capture sort keys, filled by MetadataReady events (None until
     /// metadata loads; keyless images sort after keyed ones by name).
     pub(crate) capture_keys: Vec<Option<String>>,
@@ -293,14 +354,10 @@ pub(crate) struct AppState {
     pub(crate) touched_iptc: HashSet<usize>,
     /// The IPTC panel surface (M5).
     pub(crate) iptc_panel: IptcPanelState,
-    /// Multi-selection (Shift+arrows, Ctrl+A; batch = selection in view
-    /// order or the cursor — core model, tested).
-    pub(crate) selection: fastcull_core::selection::Selection,
     /// Templates + load warnings (templates.toml, read at session open —
     /// live-reload is read-on-open per spec).
     pub(crate) templates: Vec<fastcull_core::iptc::IptcTemplate>,
     pub(crate) template_warnings: Vec<String>,
-    pub(crate) filter_bar_visible: bool,
     /// The Copy Picks dialog's state (M6).
     pub(crate) copy: CopyState,
     /// Engine event receivers live in state so File > Open Folder can swap
@@ -316,22 +373,18 @@ impl AppState {
         self.labels.len()
     }
 
-    /// Is the view at the loupe (the last zoom step, one column)?
-    ///
-    /// The zoom INDEX is the authority, not the column count the layout
-    /// happens to produce: `GridLayout::new` derives columns from this
-    /// same index (`ZOOM_COLUMNS[zoom.min(len-1)]`), and every writer of
-    /// `zoom` keeps it inside the ladder, so `layout.columns == 1` — the
-    /// second idiom this replaces — is exactly this predicate.
+    /// Is the view at the loupe (the last zoom step, one column)? The
+    /// predicate itself lives on [`GridViewState`]; this is the shorthand
+    /// every controller already calls.
     pub(crate) fn at_loupe(&self) -> bool {
-        self.zoom == grid::ZOOM_COLUMNS.len() - 1
+        self.grid.at_loupe()
     }
 
     /// Remember the grid zoom to come back to when the loupe is left.
     /// Saved on BOTH ways in: the jump (`enter_loupe`) and the last
     /// zoom-in step across the boundary.
     pub(crate) fn remember_grid_zoom(&mut self) {
-        self.last_grid_zoom = self.zoom;
+        self.grid.last_grid_zoom = self.grid.zoom;
     }
 
     /// Climb from a grid zoom into the loupe at `factor` (fit = 1.0,
@@ -343,7 +396,7 @@ impl AppState {
             return false;
         }
         self.remember_grid_zoom();
-        self.zoom = grid::ZOOM_COLUMNS.len() - 1;
+        self.grid.zoom = grid::ZOOM_COLUMNS.len() - 1;
         self.zoom_factor = factor;
         true
     }
@@ -358,13 +411,13 @@ impl AppState {
         }
         self.zoom_factor = 1.0;
         self.pan_center = (0.5, 0.5);
-        self.zoom = self.last_grid_zoom.min(grid::ZOOM_COLUMNS.len() - 2);
+        self.grid.zoom = self.grid.last_grid_zoom.min(grid::ZOOM_COLUMNS.len() - 2);
     }
 
     /// The cursor's position in the current view (None = cursor image is
-    /// filtered out or the view is empty).
+    /// filtered out or the view is empty). Shorthand for the grid's own.
     pub(crate) fn cursor_pos(&self) -> Option<usize> {
-        self.view.iter().position(|id| *id == self.cursor)
+        self.grid.cursor_pos()
     }
 
     /// Has every image's metadata job finished? (Issue #25: until it has,

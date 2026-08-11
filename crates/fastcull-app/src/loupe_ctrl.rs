@@ -37,7 +37,7 @@ pub(crate) fn wire(window: &MainWindow, state: &Rc<RefCell<AppState>>) {
                 // Clicking to pixel-peep is as much a claim as any other
                 // click (validator: a capture-key re-sort could otherwise
                 // swap the image under an active 1:1 inspection).
-                st.cursor_touched = true;
+                st.grid.cursor_touched = true;
                 st.pan_center = (fx.clamp(0.0, 1.0), fy.clamp(0.0, 1.0));
             }
             refresh(&win, &state);
@@ -104,7 +104,7 @@ pub(crate) fn wire(window: &MainWindow, state: &Rc<RefCell<AppState>>) {
         // gate enforces the rule, see `handle_loupe_double_click`.
         let state = Rc::clone(state);
         window.on_fit_clicked(move || {
-            state.borrow_mut().cursor_touched = true;
+            state.borrow_mut().grid.cursor_touched = true;
         });
     }
     {
@@ -159,26 +159,26 @@ pub(crate) fn wire(window: &MainWindow, state: &Rc<RefCell<AppState>>) {
             {
                 let mut st = state.borrow_mut();
                 let id = id as usize;
-                if !st.view.contains(&id) {
+                if !st.grid.view.contains(&id) {
                     return;
                 }
-                st.cursor_touched = true; // clicks claim (untouched-cursor rule)
+                st.grid.cursor_touched = true; // clicks claim (untouched-cursor rule)
                 if ctrl {
                     // Ctrl+click: toggle membership; cursor moves too.
-                    st.selection.toggle(id);
-                    st.cursor = id;
+                    st.grid.selection.toggle(id);
+                    st.grid.cursor = id;
                 } else if shift {
                     // Shift+click: span cursor..clicked (view order).
-                    let view = st.view.clone();
-                    let from = st.cursor;
-                    st.selection.extend_to(&view, from, id);
-                    st.cursor = id;
+                    let view = st.grid.view.clone();
+                    let from = st.grid.cursor;
+                    st.grid.selection.extend_to(&view, from, id);
+                    st.grid.cursor = id;
                 } else {
                     // Plain click: collapse any selection (gate finding:
                     // after Ctrl+A there was NO deselect gesture), move
                     // the cursor.
-                    st.selection.clear();
-                    st.cursor = id;
+                    st.grid.selection.clear();
+                    st.grid.cursor = id;
                 }
             }
             refresh(&win, &state);
@@ -284,12 +284,12 @@ pub(crate) fn max_factor(win: &MainWindow, st: &AppState) -> Option<f32> {
         .textures
         .fullres
         .iter()
-        .find(|(i, _)| *i == st.cursor)
+        .find(|(i, _)| *i == st.grid.cursor)
         .map(|(_, img)| img)?;
     let size = img.size();
     if !is_top_rung(
         size.width.max(size.height),
-        st.textures.terminal_native.contains(&st.cursor),
+        st.textures.terminal_native.contains(&st.grid.cursor),
     ) {
         return None; // not the top rung: native size unknown
     }
@@ -332,17 +332,17 @@ fn machine_ctx(
         .textures
         .fullres
         .iter()
-        .find(|(i, _)| *i == st.cursor)
+        .find(|(i, _)| *i == st.grid.cursor)
         .map(|(_, img)| {
             let s = img.size();
             (s.width as f32 / sf, s.height as f32 / sf)
         })
-        .or_else(|| aspect_for(st, st.cursor).map(|aspect| (vh * aspect, vh)))
+        .or_else(|| aspect_for(st, st.grid.cursor).map(|aspect| (vh * aspect, vh)))
         .unwrap_or((vw, vh));
     // The COUNT is the Grid arm's payload, so it is still derived here;
     // the PREDICATE is `at_loupe()` (they agree — a single 1 sits at the
     // last index and zoom is clamped to the ladder).
-    let columns = grid::ZOOM_COLUMNS[st.zoom.min(grid::ZOOM_COLUMNS.len() - 1)];
+    let columns = grid::ZOOM_COLUMNS[st.grid.zoom.min(grid::ZOOM_COLUMNS.len() - 1)];
     let state = if !st.at_loupe() {
         pm::ViewState::Grid {
             columns: columns as u8,
@@ -362,7 +362,7 @@ fn machine_ctx(
         // The layout is bounded by the GRID area's height (below the filter
         // bar), not by `vh`/`loupe_area_h` — the zoom overlay covers the bar
         // but the fit view does not.
-        let layout = GridLayout::new(st.zoom, vw, win.get_grid_height(), st.view.len());
+        let layout = GridLayout::new(st.grid.zoom, vw, win.get_grid_height(), st.grid.view.len());
         let pos = st.cursor_pos().unwrap_or(0);
         let (cx, cy) = layout.position(pos);
         let scroll_y = (-win.get_vp_y()).max(0.0);
@@ -412,7 +412,7 @@ fn handle_loupe_double_click(win: &MainWindow, state: &Rc<RefCell<AppState>>, x:
     let action = {
         let mut st = state.borrow_mut();
         let (ms, geo) = machine_ctx(win, &st);
-        st.cursor_touched = true;
+        st.grid.cursor_touched = true;
         pm::step(ms, pm::PointerInput::DoubleClick { pos: (x, y) }, &geo).1
     };
     apply_pointer_action(win, state, action);
@@ -482,9 +482,9 @@ fn apply_pointer_action(
 pub(crate) fn insert_fullres(st: &mut AppState, index: usize, texture: slint::Image) {
     st.textures.fullres.retain(|(i, _)| *i != index);
     st.textures.fullres.push((index, texture));
-    let cursor = st.cursor;
+    let cursor = st.grid.cursor;
     while st.textures.fullres.len() > 5 {
-        let pos_of = |id: usize| st.view.iter().position(|v| *v == id);
+        let pos_of = |id: usize| st.grid.view.iter().position(|v| *v == id);
         let cursor_pos = pos_of(cursor);
         let victim = st
             .textures
