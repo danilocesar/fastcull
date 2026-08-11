@@ -10,12 +10,12 @@ use fastcull_core::loupe::is_top_rung;
 use fastcull_core::pipeline::SessionEvent;
 use slint::ComponentHandle;
 
+use crate::copy_bridge::recompute_bursts;
 use crate::state::{AppState, MIDS_CAP};
 use crate::trace::trace_mark;
 use crate::MainWindow;
 use crate::{
-    insert_fullres, kitchen, recompute_bursts, recompute_view_keep_cursor, refresh, route_warm,
-    WarmCtx, WarmJob,
+    insert_fullres, kitchen, recompute_view_keep_cursor, refresh, route_warm, WarmCtx, WarmJob,
 };
 
 /// Wire the kitchen's completion nudge: a finished texture is adopted as
