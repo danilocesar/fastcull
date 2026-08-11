@@ -54,19 +54,19 @@ pub(crate) fn dispatch(state: &Rc<RefCell<AppState>>, launch: Launch, start_11: 
         }
         Launch::Synthetic(n) => {
             let mut st = state.borrow_mut();
-            st.labels = (0..n).map(|i| format!("SYN{i:05}.ARW")).collect();
-            st.picks = vec![fastcull_core::catalog::PickState::Unmarked; n];
-            st.capture_keys = vec![None; n];
-            st.frame_meta = vec![fastcull_core::burst::FrameMeta::default(); n];
+            st.session.labels = (0..n).map(|i| format!("SYN{i:05}.ARW")).collect();
+            st.session.picks = vec![fastcull_core::catalog::PickState::Unmarked; n];
+            st.session.capture_keys = vec![None; n];
+            st.session.frame_meta = vec![fastcull_core::burst::FrameMeta::default(); n];
             st.bursts = crate::state::BurstIndex::new(n);
-            st.iptc = vec![fastcull_core::iptc::IptcData::default(); n];
-            st.synthetic = true;
-            st.session_open = true;
+            st.session.iptc = vec![fastcull_core::iptc::IptcData::default(); n];
+            st.session.synthetic = true;
+            st.session.session_open = true;
             // No pipeline runs in synthetic mode, so no job ever completes:
             // without this the session is permanently "still loading" and
             // the status bar would claim "0/N loaded - sorting by name"
             // forever, on the very frames the screenshot suite captures.
-            st.thumbs_done = n;
+            st.session.thumbs_done = n;
             recompute_view(&mut st);
         }
         Launch::Folder(path) => {
@@ -102,7 +102,7 @@ fn load_folder(state: &Rc<RefCell<AppState>>, folder: &std::path::Path) -> Resul
         })
         .collect();
     let mut st = state.borrow_mut();
-    st.pipeline = None;
+    st.session.pipeline = None;
     // The whole loupe view dies with the session it was looking at: the
     // engine and its receiver (stopped here, before the new ones start),
     // the desired factor and pan, and every scrap of "what did the overlay
@@ -111,23 +111,23 @@ fn load_folder(state: &Rc<RefCell<AppState>>, folder: &std::path::Path) -> Resul
     // those fields (last_pan_write, last_overlay_cursor, and the grid's
     // last_view_geometry) were NOT in the old hand-written list.
     st.loupe_view = crate::state::LoupeViewState::default();
-    st.pipeline_rx = None;
-    drop(st.writer.take()); // flush barrier for the previous session's marks
-    st.sidecar_errs = None;
+    st.session.pipeline_rx = None;
+    drop(st.session.writer.take()); // flush barrier for the previous session's marks
+    st.session.sidecar_errs = None;
 
     let count = labels.len();
     let paths: Vec<std::path::PathBuf> = jobs.iter().map(|j| j.path.clone()).collect();
-    st.labels = labels;
-    st.paths = paths.clone();
-    st.picks = vec![fastcull_core::catalog::PickState::Unmarked; count];
-    st.touched.clear();
-    st.sidecar_failures = 0;
+    st.session.labels = labels;
+    st.session.paths = paths.clone();
+    st.session.picks = vec![fastcull_core::catalog::PickState::Unmarked; count];
+    st.session.touched.clear();
+    st.session.sidecar_failures = 0;
     st.grid.cursor = 0;
     st.grid.cursor_touched = false;
     st.textures.thumb_jpegs.clear();
     st.textures.images.clear();
     st.textures.failed.clear();
-    st.thumbs_done = 0;
+    st.session.thumbs_done = 0;
     // New session: drop queued kitchen work and orphan late completions
     // (their generation dies with the old session).
     st.kitchen.retarget();
@@ -138,16 +138,16 @@ fn load_folder(state: &Rc<RefCell<AppState>>, folder: &std::path::Path) -> Resul
     // silently losing its re-anchor (validator concern, 2026-07-31).
     st.grid.last_metadata_complete = false;
     st.grid.last_cursor_visible = true;
-    st.synthetic = false;
+    st.session.synthetic = false;
     st.textures.fullres.clear();
     st.textures.terminal_native.clear();
     st.textures.mids.clear();
     st.textures.va = fastcull_core::viewassets::ViewAssets::default();
-    st.capture_keys = vec![None; count];
-    st.frame_meta = vec![fastcull_core::burst::FrameMeta::default(); count];
+    st.session.capture_keys = vec![None; count];
+    st.session.frame_meta = vec![fastcull_core::burst::FrameMeta::default(); count];
     st.bursts = crate::state::BurstIndex::new(count);
-    st.iptc = vec![fastcull_core::iptc::IptcData::default(); count];
-    st.touched_iptc.clear();
+    st.session.iptc = vec![fastcull_core::iptc::IptcData::default(); count];
+    st.session.touched_iptc.clear();
     st.iptc_panel.cache = Default::default();
     st.copy.plan = None;
     st.copy.handle = None;
@@ -166,8 +166,8 @@ fn load_folder(state: &Rc<RefCell<AppState>>, folder: &std::path::Path) -> Resul
     st.grid.query = fastcull_core::filter::ViewQuery::default();
 
     let (writer, errs) = fastcull_core::sidecar_writer::SidecarWriter::start();
-    st.writer = Some(writer);
-    st.sidecar_errs = Some(errs);
+    st.session.writer = Some(writer);
+    st.session.sidecar_errs = Some(errs);
     // FASTCULL_NO_CACHE: hermetic test runs must not touch the user's
     // real per-user cache DB (validator/QE finding).
     let cache_path = if std::env::var_os("FASTCULL_NO_CACHE").is_some() {
@@ -182,11 +182,11 @@ fn load_folder(state: &Rc<RefCell<AppState>>, folder: &std::path::Path) -> Resul
     );
     let (loupe, loupe_rx) =
         fastcull_core::loupe::LoupeEngine::start(paths, fastcull_core::loupe::DEFAULT_BUDGET_BYTES);
-    st.pipeline = Some(pipeline);
+    st.session.pipeline = Some(pipeline);
     st.loupe_view.engine = Some(loupe);
-    st.pipeline_rx = Some(rx);
+    st.session.pipeline_rx = Some(rx);
     st.loupe_view.rx = Some(loupe_rx);
-    st.session_open = true;
+    st.session.session_open = true;
     recompute_view(&mut st);
     Ok(())
 }
@@ -235,18 +235,18 @@ pub(crate) fn open_folder_at(
 /// read-on-open live-reload). Parse errors and CLEAR warnings both land in
 /// the panel warning strip.
 pub(crate) fn reload_templates(st: &mut AppState) {
-    st.templates.clear();
-    st.template_warnings.clear();
+    st.session.templates.clear();
+    st.session.template_warnings.clear();
     let Some(path) = fastcull_core::iptc::default_templates_path() else {
         return;
     };
     match fastcull_core::iptc::load_templates(&path) {
         Ok(load) => {
-            st.templates = load.templates;
-            st.template_warnings = load.entry_errors;
-            st.template_warnings.extend(load.warnings);
+            st.session.templates = load.templates;
+            st.session.template_warnings = load.entry_errors;
+            st.session.template_warnings.extend(load.warnings);
         }
-        Err(e) => st.template_warnings.push(e.to_string()),
+        Err(e) => st.session.template_warnings.push(e.to_string()),
     }
 }
 

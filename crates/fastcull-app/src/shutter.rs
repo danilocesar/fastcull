@@ -87,7 +87,7 @@ pub(crate) fn arm(
                     // behaviour or they would hang into the 60 s cap.
                     let at_loupe = st.at_loupe();
                     let fit = !at_loupe
-                        || st.synthetic
+                        || st.session.synthetic
                         || st.grid.view.is_empty()
                         || st.textures.failed.contains(&st.grid.cursor)
                         || st
@@ -199,7 +199,7 @@ pub(crate) fn shutdown(state: &Rc<RefCell<AppState>>) {
         eprintln!("fastcull: shutdown watchdog fired - storage not responding; exiting");
         std::process::exit(1);
     });
-    let writer = state.borrow_mut().writer.take();
+    let writer = state.borrow_mut().session.writer.take();
     drop(writer); // drains every pending sidecar write, then joins
     std::process::exit(0);
 }

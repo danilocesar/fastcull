@@ -341,26 +341,53 @@ impl Default for LoupeViewState {
     }
 }
 
-pub(crate) struct AppState {
+/// One folder's worth of session: the images, everything the user has said
+/// about them, the engines producing data for them, and how far that
+/// production has got.
+///
+/// The per-image vectors (`labels`, `paths`, `picks`, `capture_keys`,
+/// `frame_meta`, `iptc`) are PARALLEL: index i means the same photograph in
+/// all six, and an image id IS an index into them.
+pub(crate) struct SessionState {
     pub(crate) labels: Vec<String>,
     /// RAW paths for real sessions (empty for --synthetic).
     pub(crate) paths: Vec<std::path::PathBuf>,
     /// Pick state per image (mirrors sidecars; synthetic = in-memory only).
     pub(crate) picks: Vec<fastcull_core::catalog::PickState>,
+    /// EXIF capture sort keys, filled by MetadataReady events (None until
+    /// metadata loads; keyless images sort after keyed ones by name).
+    pub(crate) capture_keys: Vec<Option<String>>,
+    /// Burst inputs per image (M7), from MetadataReady summaries.
+    pub(crate) frame_meta: Vec<fastcull_core::burst::FrameMeta>,
+    /// Per-image IPTC state (M5 panel): seeded from sidecars at open,
+    /// edited by the panel, persisted via SidecarWriter::iptc.
+    pub(crate) iptc: Vec<fastcull_core::iptc::IptcData>,
     /// Images whose pick the user changed this session: sidecar-at-open
     /// events must not overwrite fresh user intent.
     pub(crate) touched: HashSet<usize>,
+    /// Images whose IPTC the user edited this session: a stale sidecar
+    /// read racing the debounced write must not revert fresh intent
+    /// (same guard as `touched` for picks — gate finding).
+    pub(crate) touched_iptc: HashSet<usize>,
+    /// The serialized sidecar writer. Dropping it FLUSHES pending marks
+    /// (xmp-sidecars.md: flushed on session close), which is why the swap
+    /// drops the old one before starting the new session's.
     pub(crate) writer: Option<fastcull_core::sidecar_writer::SidecarWriter>,
     /// Failed sidecar writes this session (surfaced in the status bar).
     pub(crate) sidecar_failures: usize,
-    /// What the grid is showing and where the cursor is inside it.
-    pub(crate) grid: GridViewState,
-    /// The loupe overlay: its engine, its desire, and what it last drew.
-    pub(crate) loupe_view: LoupeViewState,
-    /// Every UI-side texture (thumbs, mids, full-res) and its bookkeeping.
-    pub(crate) textures: TextureStore,
+    pub(crate) sidecar_errs:
+        Option<std::sync::mpsc::Receiver<fastcull_core::sidecar_writer::WriteFailure>>,
+    /// The thumbnail/metadata pipeline and its events. Receivers live in
+    /// state so File > Open Folder can swap the whole session without
+    /// restarting the event pump.
     pub(crate) pipeline: Option<Pipeline>,
+    pub(crate) pipeline_rx: Option<std::sync::mpsc::Receiver<SessionEvent>>,
+    /// Finished pipeline jobs (ThumbReady AND Failed both count).
     pub(crate) thumbs_done: usize,
+    /// Templates + load warnings (templates.toml, read at session open —
+    /// live-reload is read-on-open per spec).
+    pub(crate) templates: Vec<fastcull_core::iptc::IptcTemplate>,
+    pub(crate) template_warnings: Vec<String>,
     /// True for --synthetic sessions: cells get distinct placeholder hues;
     /// real folders use the spec's neutral gray.
     pub(crate) synthetic: bool,
@@ -368,43 +395,95 @@ pub(crate) struct AppState {
     /// folderless launch (issue #5) shows "No folder open" — a different
     /// message from "folder opened but it has no images".
     pub(crate) session_open: bool,
-    /// The one VecModel the window binds; refresh mutates it in place.
-    pub(crate) cells: Rc<VecModel<CellData>>,
-    /// The texture kitchen: every pixels->texture conversion happens on
-    /// its worker (01-architecture.md: the UI thread never decodes).
-    pub(crate) kitchen: kitchen::Kitchen,
-    /// EXIF capture sort keys, filled by MetadataReady events (None until
-    /// metadata loads; keyless images sort after keyed ones by name).
-    pub(crate) capture_keys: Vec<Option<String>>,
-    /// Burst inputs per image (M7), from MetadataReady summaries.
-    pub(crate) frame_meta: Vec<fastcull_core::burst::FrameMeta>,
+}
+
+impl Default for SessionState {
+    /// The pre-folder state: no images, no engines, and `session_open`
+    /// false so the empty window says "No folder open" rather than "no
+    /// images" (issue #5).
+    fn default() -> Self {
+        Self {
+            labels: Vec::new(),
+            paths: Vec::new(),
+            picks: Vec::new(),
+            capture_keys: Vec::new(),
+            frame_meta: Vec::new(),
+            iptc: Vec::new(),
+            touched: HashSet::new(),
+            touched_iptc: HashSet::new(),
+            writer: None,
+            sidecar_failures: 0,
+            sidecar_errs: None,
+            pipeline: None,
+            pipeline_rx: None,
+            thumbs_done: 0,
+            templates: Vec::new(),
+            template_warnings: Vec::new(),
+            synthetic: false,
+            session_open: false,
+        }
+    }
+}
+
+impl SessionState {
+    pub(crate) fn count(&self) -> usize {
+        self.labels.len()
+    }
+
+    /// Has every image's metadata job finished? (Issue #25: until it has,
+    /// the view is ordered by filename — see `filter::view`.)
+    ///
+    /// `thumbs_done` counts BOTH `ThumbReady` and `Failed`, so it is the
+    /// count of finished jobs, and EXIF is read inside that same job. A file
+    /// that fails to READ therefore cannot strand the session in the
+    /// provisional order — which counting `MetadataReady` alone would do,
+    /// since the pipeline emits it only when the EXIF read succeeds.
+    ///
+    /// A read that never RETURNS still can: one worker wedged on a dying
+    /// card or a stalled network mount leaves this one short forever, and
+    /// the whole session stays in filename order with no way to force the
+    /// sort. Accepted for now and recorded in ui-grid.md — the fix is a
+    /// per-file give-up or a "sort anyway" affordance, not a smaller
+    /// predicate.
+    pub(crate) fn metadata_complete(&self) -> bool {
+        self.thumbs_done >= self.labels.len()
+    }
+}
+
+pub(crate) struct AppState {
+    /// The open folder: its images, the user's judgements about them, and
+    /// the engines producing data for them.
+    pub(crate) session: SessionState,
+    /// What the grid is showing and where the cursor is inside it.
+    pub(crate) grid: GridViewState,
+    /// The loupe overlay: its engine, its desire, and what it last drew.
+    pub(crate) loupe_view: LoupeViewState,
+    /// Every UI-side texture (thumbs, mids, full-res) and its bookkeeping.
+    pub(crate) textures: TextureStore,
     /// Burst grouping outputs (M7), indexed by image id.
     pub(crate) bursts: BurstIndex,
-    /// Per-image IPTC state (M5 panel): seeded from sidecars at open,
-    /// edited by the panel, persisted via SidecarWriter::iptc.
-    pub(crate) iptc: Vec<fastcull_core::iptc::IptcData>,
-    /// Images whose IPTC the user edited this session: a stale sidecar
-    /// read racing the debounced write must not revert fresh intent
-    /// (same guard as `touched` for picks — gate finding).
-    pub(crate) touched_iptc: HashSet<usize>,
     /// The IPTC panel surface (M5).
     pub(crate) iptc_panel: IptcPanelState,
-    /// Templates + load warnings (templates.toml, read at session open —
-    /// live-reload is read-on-open per spec).
-    pub(crate) templates: Vec<fastcull_core::iptc::IptcTemplate>,
-    pub(crate) template_warnings: Vec<String>,
     /// The Copy Picks dialog's state (M6).
     pub(crate) copy: CopyState,
-    /// Engine event receivers live in state so File > Open Folder can swap
-    /// the whole session without restarting the event pump.
-    pub(crate) pipeline_rx: Option<std::sync::mpsc::Receiver<SessionEvent>>,
-    pub(crate) sidecar_errs:
-        Option<std::sync::mpsc::Receiver<fastcull_core::sidecar_writer::WriteFailure>>,
+    /// SURVIVOR: the one VecModel the window binds. It is not session
+    /// data at all — replacing it would unbind the grid from the window,
+    /// so refresh mutates it in place for the life of the process.
+    pub(crate) cells: Rc<VecModel<CellData>>,
+    /// SURVIVOR: the texture kitchen — a worker THREAD (plus its queue),
+    /// not state. Every pixels->texture conversion happens on it
+    /// (01-architecture.md: the UI thread never decodes). A session swap
+    /// retargets it (dropping queued work and orphaning late completions
+    /// via the generation fence) rather than replacing it, because
+    /// restarting a thread per folder would be pure cost.
+    pub(crate) kitchen: kitchen::Kitchen,
 }
 
 impl AppState {
+    /// How many images the open session has. Shorthand for the session's
+    /// own count — the call sites read the same as before.
     pub(crate) fn count(&self) -> usize {
-        self.labels.len()
+        self.session.count()
     }
 
     /// Is the view at the loupe (the last zoom step, one column)? The
@@ -454,22 +533,9 @@ impl AppState {
         self.grid.cursor_pos()
     }
 
-    /// Has every image's metadata job finished? (Issue #25: until it has,
-    /// the view is ordered by filename — see `filter::view`.)
-    ///
-    /// `thumbs_done` counts BOTH `ThumbReady` and `Failed`, so it is the
-    /// count of finished jobs, and EXIF is read inside that same job. A file
-    /// that fails to READ therefore cannot strand the session in the
-    /// provisional order — which counting `MetadataReady` alone would do,
-    /// since the pipeline emits it only when the EXIF read succeeds.
-    ///
-    /// A read that never RETURNS still can: one worker wedged on a dying
-    /// card or a stalled network mount leaves this one short forever, and
-    /// the whole session stays in filename order with no way to force the
-    /// sort. Accepted for now and recorded in ui-grid.md — the fix is a
-    /// per-file give-up or a "sort anyway" affordance, not a smaller
-    /// predicate.
+    /// Has every image's metadata job finished? Shorthand for the
+    /// session's own predicate (issue #25).
     pub(crate) fn metadata_complete(&self) -> bool {
-        self.thumbs_done >= self.labels.len()
+        self.session.metadata_complete()
     }
 }
