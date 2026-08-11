@@ -2,6 +2,10 @@
 //! loupe surfaces) folded through the core pointer machine, the loupe's
 //! geometry helpers (aspect, the 1:1 ceiling, the rendered factor), the
 //! warm-decode routing rule, and the full-res texture ring.
+//!
+//! Not here: WHICH rung the loupe ends up showing (sharp / soft mid / thumb
+//! rescue / fit) is decided by the refresh pass in `presenter.rs` — this
+//! module supplies the geometry and the textures it chooses among.
 
 use std::cell::RefCell;
 use std::rc::Rc;
