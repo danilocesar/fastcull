@@ -102,6 +102,21 @@ pub(crate) struct BurstIndex {
     pub(crate) dirty: bool,
 }
 
+impl CopyState {
+    /// Everything a session swap must forget — which is everything EXCEPT
+    /// the destination. fileops.md remembers that across sessions (the
+    /// user copies a card at a time into the same shoot folder), so it is
+    /// carried explicitly. Written as "replace the struct, naming what
+    /// survives" rather than "clear four fields" so that a field added
+    /// later is forgotten by default: forgetting is the safe direction.
+    pub(crate) fn begin_session(&mut self) {
+        *self = Self {
+            dest: self.dest.take(),
+            ..Self::default()
+        };
+    }
+}
+
 impl BurstIndex {
     /// A fresh index for a session of `count` images: no groups yet, and
     /// nothing to regroup until metadata arrives.
@@ -136,6 +151,18 @@ pub(crate) struct IptcPanelState {
     pub(crate) revert: fastcull_core::iptc::RevertSlot,
     pub(crate) revert_ids: Vec<usize>,
     pub(crate) revert_label: String,
+}
+
+impl IptcPanelState {
+    /// Everything a session swap must forget. The dock's VISIBILITY
+    /// survives — it is a window layout the user chose, and a folder swap
+    /// is not a reason to open or close a panel under their hands.
+    pub(crate) fn begin_session(&mut self) {
+        *self = Self {
+            visible: self.visible,
+            ..Self::default()
+        };
+    }
 }
 
 /// Every UI-side texture the app holds, plus the bookkeeping that decides
@@ -249,6 +276,31 @@ impl Default for GridViewState {
 }
 
 impl GridViewState {
+    /// Everything a session swap must forget. Two fields survive:
+    ///
+    /// - `zoom`, because the zoom step is decided by the LAUNCH path, not
+    ///   by the folder: `--start-loupe` sets it before the first folder is
+    ///   ever loaded, and File > Open Folder resets it to the grid right
+    ///   after this returns. Defaulting it here would open every
+    ///   `--start-loupe` run in the grid.
+    /// - `filter_bar_visible`, for the same reason as the IPTC dock: it is
+    ///   window layout the user chose, not session state.
+    ///
+    /// The filter itself does NOT survive (the query goes back to
+    /// default): a hidden active filter on a fresh folder would look like
+    /// missing files.
+    ///
+    /// Everything else — including `last_view_geometry`, which the old
+    /// hand-written reset list had drifted into forgetting — goes back to
+    /// its default.
+    pub(crate) fn begin_session(&mut self) {
+        *self = Self {
+            zoom: self.zoom,
+            filter_bar_visible: self.filter_bar_visible,
+            ..Self::default()
+        };
+    }
+
     /// Is the view at the loupe (the last zoom step, one column)?
     ///
     /// The zoom INDEX is the authority, not the column count the layout
@@ -426,6 +478,50 @@ impl Default for SessionState {
 }
 
 impl SessionState {
+    /// A fresh session over `labels` (and `paths`, empty for --synthetic).
+    /// The one place the per-image vectors' LENGTH is decided: picks,
+    /// capture keys, frame metadata and IPTC are all sized from the label
+    /// count here, so they cannot be sized differently by two callers.
+    pub(crate) fn new(labels: Vec<String>, paths: Vec<std::path::PathBuf>) -> Self {
+        let count = labels.len();
+        // Synthetic sessions have no files, hence no paths; a real folder
+        // must have exactly one path per image.
+        debug_assert!(
+            paths.is_empty() || paths.len() == count,
+            "session has {} labels but {} paths",
+            count,
+            paths.len()
+        );
+        Self {
+            picks: vec![fastcull_core::catalog::PickState::Unmarked; count],
+            capture_keys: vec![None; count],
+            frame_meta: vec![fastcull_core::burst::FrameMeta::default(); count],
+            iptc: vec![fastcull_core::iptc::IptcData::default(); count],
+            labels,
+            paths,
+            // A session exists the moment this is built; the empty-state
+            // message distinguishes "no folder" from "empty folder".
+            session_open: true,
+            ..Self::default()
+        }
+    }
+
+    /// The `--synthetic N` session: N placeholder images, no files, no
+    /// pipeline — and therefore no job that will ever complete, so the
+    /// finished-job count is pre-filled or the status bar would claim
+    /// "0/N loaded" forever on the very frames the screenshot suite
+    /// captures.
+    pub(crate) fn synthetic(n: usize) -> Self {
+        Self {
+            synthetic: true,
+            thumbs_done: n,
+            ..Self::new(
+                (0..n).map(|i| format!("SYN{i:05}.ARW")).collect(),
+                Vec::new(),
+            )
+        }
+    }
+
     pub(crate) fn count(&self) -> usize {
         self.labels.len()
     }
@@ -480,6 +576,50 @@ pub(crate) struct AppState {
 }
 
 impl AppState {
+    /// Swap in a new folder: every group that describes ONE session is
+    /// replaced wholesale, and the handful of things that outlive a
+    /// session are named here rather than left implicit.
+    ///
+    /// This replaces the old hand-written list of ~45 field resets in
+    /// `load_folder`. The difference that matters is not length: a field
+    /// added to a group from now on is reset because it is PART OF THE
+    /// GROUP, not because someone remembered to add a line here. The three
+    /// fields the old list had already drifted into forgetting
+    /// (`last_pan_write`, `last_overlay_cursor`, `last_view_geometry`) are
+    /// covered by construction.
+    ///
+    /// Ordering: everything old goes down before anything new comes up.
+    /// The old session's engines stop here and its sidecar writer is
+    /// dropped — which FLUSHES its pending marks (xmp-sidecars.md) — so
+    /// the caller's `SidecarWriter::start()` afterwards is on the far side
+    /// of that barrier. The loupe engine and the writer have no ordering
+    /// between them: they share nothing.
+    pub(crate) fn begin_session(&mut self, labels: Vec<String>, paths: Vec<std::path::PathBuf>) {
+        let count = labels.len();
+        self.session = SessionState::new(labels, paths);
+        self.loupe_view = LoupeViewState::default();
+        self.textures = TextureStore::default();
+        self.bursts = BurstIndex::new(count);
+        self.grid.begin_session();
+        self.iptc_panel.begin_session();
+        self.copy.begin_session();
+        // SURVIVOR: the kitchen is a worker thread. Retargeting bumps its
+        // generation so queued work is dropped and late completions are
+        // orphaned, without paying to restart a thread per folder.
+        self.kitchen.retarget();
+        // SURVIVOR: `cells` — the model the window is bound to.
+        //
+        // The per-image vectors are parallel by contract; assert it where
+        // the count is actually known.
+        debug_assert_eq!(self.session.picks.len(), count);
+        debug_assert_eq!(self.session.capture_keys.len(), count);
+        debug_assert_eq!(self.session.frame_meta.len(), count);
+        debug_assert_eq!(self.session.iptc.len(), count);
+        debug_assert_eq!(self.bursts.group_of.len(), count);
+        debug_assert_eq!(self.bursts.badge.len(), count);
+        debug_assert_eq!(self.bursts.pos.len(), count);
+    }
+
     /// How many images the open session has. Shorthand for the session's
     /// own count — the call sites read the same as before.
     pub(crate) fn count(&self) -> usize {
