@@ -190,12 +190,13 @@ pub(crate) fn wire(window: &MainWindow, state: &Rc<RefCell<AppState>>) {
 /// aspect is rung-invariant). None while only the placeholder exists.
 fn aspect_for(st: &AppState, index: usize) -> Option<f32> {
     let size = st
+        .textures
         .fullres
         .iter()
         .find(|(i, _)| *i == index)
         .map(|(_, img)| img.size())
-        .or_else(|| st.mids.get(&index).map(|img| img.size()))
-        .or_else(|| st.images.get(&index).map(|img| img.size()))?;
+        .or_else(|| st.textures.mids.get(&index).map(|img| img.size()))
+        .or_else(|| st.textures.images.get(&index).map(|img| img.size()))?;
     (size.height > 0).then(|| size.width as f32 / size.height as f32)
 }
 
@@ -225,7 +226,7 @@ pub(crate) enum WarmCtx {
 
 /// The warm-hit routing rule, both contexts, one function.
 ///
-/// `mid_held` = a mid-rung texture for this index is already in `st.mids`;
+/// `mid_held` = a mid-rung texture for this index is already in `st.textures.mids`;
 /// `at_loupe` = the loupe is on screen right now.
 pub(crate) fn route_warm(
     long: u32,
@@ -264,7 +265,7 @@ pub(crate) fn route_warm(
             } else if !mid_held {
                 // A warm sub-top hit (the pruned-and-revisited path: the
                 // engine re-announces a cached mid beyond the retained
-                // window) goes through Wrap into st.mids — where the
+                // window) goes through Wrap into st.textures.mids — where the
                 // soft-transit renderer looks FIRST.
                 Some(WarmJob::Wrap { terminal })
             } else {
@@ -280,6 +281,7 @@ pub(crate) fn route_warm(
 /// before the native dimensions are.
 pub(crate) fn max_factor(win: &MainWindow, st: &AppState) -> Option<f32> {
     let img = st
+        .textures
         .fullres
         .iter()
         .find(|(i, _)| *i == st.cursor)
@@ -287,7 +289,7 @@ pub(crate) fn max_factor(win: &MainWindow, st: &AppState) -> Option<f32> {
     let size = img.size();
     if !is_top_rung(
         size.width.max(size.height),
-        st.terminal_native.contains(&st.cursor),
+        st.textures.terminal_native.contains(&st.cursor),
     ) {
         return None; // not the top rung: native size unknown
     }
@@ -327,6 +329,7 @@ fn machine_ctx(
     // else the viewport.
     let sf = win.window().scale_factor();
     let native = st
+        .textures
         .fullres
         .iter()
         .find(|(i, _)| *i == st.cursor)
@@ -477,13 +480,14 @@ fn apply_pointer_action(
 /// keeping a frame seven positions away (observed as an 81 ms thumb
 /// blink on a warm frame). Entries no longer in the view evict first.
 pub(crate) fn insert_fullres(st: &mut AppState, index: usize, texture: slint::Image) {
-    st.fullres.retain(|(i, _)| *i != index);
-    st.fullres.push((index, texture));
+    st.textures.fullres.retain(|(i, _)| *i != index);
+    st.textures.fullres.push((index, texture));
     let cursor = st.cursor;
-    while st.fullres.len() > 5 {
+    while st.textures.fullres.len() > 5 {
         let pos_of = |id: usize| st.view.iter().position(|v| *v == id);
         let cursor_pos = pos_of(cursor);
         let victim = st
+            .textures
             .fullres
             .iter()
             .enumerate()
@@ -494,7 +498,7 @@ pub(crate) fn insert_fullres(st: &mut AppState, index: usize, texture: slint::Im
             })
             .map(|(slot, _)| slot)
             .unwrap_or(0);
-        st.fullres.remove(victim);
+        st.textures.fullres.remove(victim);
     }
 }
 

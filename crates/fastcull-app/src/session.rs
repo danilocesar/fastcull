@@ -118,9 +118,9 @@ fn load_folder(state: &Rc<RefCell<AppState>>, folder: &std::path::Path) -> Resul
     st.sidecar_failures = 0;
     st.cursor = 0;
     st.cursor_touched = false;
-    st.thumb_jpegs.clear();
-    st.images.clear();
-    st.failed.clear();
+    st.textures.thumb_jpegs.clear();
+    st.textures.images.clear();
+    st.textures.failed.clear();
     st.thumbs_done = 0;
     // New session: drop queued kitchen work and orphan late completions
     // (their generation dies with the old session).
@@ -133,16 +133,16 @@ fn load_folder(state: &Rc<RefCell<AppState>>, folder: &std::path::Path) -> Resul
     st.last_metadata_complete = false;
     st.last_cursor_visible = true;
     st.synthetic = false;
-    st.fullres.clear();
-    st.terminal_native.clear();
+    st.textures.fullres.clear();
+    st.textures.terminal_native.clear();
     st.last_resolved_factor = None; // magnification never carries across sessions
     st.last_badge = None; // indexes mean a different image now
     st.overlay_hold = None; // a hold must not straddle a session swap
     st.last_soft_rung = None;
     st.zoom_factor = 1.0;
     st.pan_center = (0.5, 0.5);
-    st.mids.clear();
-    st.va = fastcull_core::viewassets::ViewAssets::default();
+    st.textures.mids.clear();
+    st.textures.va = fastcull_core::viewassets::ViewAssets::default();
     st.capture_keys = vec![None; count];
     st.frame_meta = vec![fastcull_core::burst::FrameMeta::default(); count];
     st.bursts = crate::state::BurstIndex::new(count);

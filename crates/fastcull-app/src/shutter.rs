@@ -56,7 +56,7 @@ pub(crate) fn arm(
                 let (one2one_ready, fit_ready) = {
                     let st = state_rc.borrow();
                     let one2one = st.zoom_factor <= 1.0
-                        || st.fullres.iter().any(|(i, img)| {
+                        || st.textures.fullres.iter().any(|(i, img)| {
                             // A terminal small texture IS the top rung
                             // (bare JPEGs, issue #8 — QE D2: the 60s
                             // refusal hit every small-JPEG --start-11 run),
@@ -64,7 +64,7 @@ pub(crate) fn arm(
                             *i == st.cursor
                                 && is_top_rung(
                                     img.size().width.max(img.size().height),
-                                    st.terminal_native.contains(&st.cursor),
+                                    st.textures.terminal_native.contains(&st.cursor),
                                 )
                         });
                     // At LOUPE FIT the old gate was vacuous (zoom_factor is
@@ -81,7 +81,7 @@ pub(crate) fn arm(
                     // the wrong state to photograph. Scoped: synthetic
                     // sessions never produce textures, a failed cursor
                     // never will (the loupe's Failed event fills
-                    // `st.failed`), a terminal small file's whole-file rung
+                    // `st.textures.failed`), a terminal small file's whole-file rung
                     // is adopted into the fullres slot (issue #8), and an
                     // empty view has no cursor — all keep the old
                     // behaviour or they would hang into the 60 s cap.
@@ -89,9 +89,9 @@ pub(crate) fn arm(
                     let fit = !at_loupe
                         || st.synthetic
                         || st.view.is_empty()
-                        || st.failed.contains(&st.cursor)
-                        || st.fullres.iter().any(|(i, _)| *i == st.cursor)
-                        || st.mids.contains_key(&st.cursor);
+                        || st.textures.failed.contains(&st.cursor)
+                        || st.textures.fullres.iter().any(|(i, _)| *i == st.cursor)
+                        || st.textures.mids.contains_key(&st.cursor);
                     (one2one, fit)
                 };
                 let ready = one2one_ready && fit_ready;

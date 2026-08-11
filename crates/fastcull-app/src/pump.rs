@@ -63,12 +63,12 @@ pub(crate) fn start(window: &MainWindow, state: &Rc<RefCell<AppState>>) -> slint
                             SessionEvent::ThumbReady {
                                 index, thumb_jpeg, ..
                             } => {
-                                st.thumb_jpegs.insert(index, thumb_jpeg);
+                                st.textures.thumb_jpegs.insert(index, thumb_jpeg);
                                 st.thumbs_done += 1;
                                 dirty = true;
                             }
                             SessionEvent::Failed { index, .. } => {
-                                st.failed.insert(index);
+                                st.textures.failed.insert(index);
                                 st.thumbs_done += 1;
                                 dirty = true;
                             }
@@ -216,7 +216,7 @@ pub(crate) fn start(window: &MainWindow, state: &Rc<RefCell<AppState>>) -> slint
                                 if let Some(WarmJob::Wrap { terminal: true }) = job {
                                     // Metadata now; the texture follows
                                     // when the kitchen serves it.
-                                    st.terminal_native.insert(index);
+                                    st.textures.terminal_native.insert(index);
                                 }
                                 match job {
                                     // Mid rung: kitchen copies it off-thread.
@@ -233,7 +233,7 @@ pub(crate) fn start(window: &MainWindow, state: &Rc<RefCell<AppState>>) -> slint
                                 dirty = true;
                             }
                             fastcull_core::loupe::LoupeEvent::Failed { index, .. } => {
-                                st.failed.insert(index); // badge; core won't retry
+                                st.textures.failed.insert(index); // badge; core won't retry
                                 dirty = true;
                             }
                         }
@@ -283,7 +283,9 @@ fn drain_kitchen(win: &MainWindow, state: &Rc<RefCell<AppState>>) -> bool {
     for d in done {
         match d {
             kitchen::Done::Thumb { index, buf } => {
-                st.images.insert(index, slint::Image::from_rgb8(buf));
+                st.textures
+                    .images
+                    .insert(index, slint::Image::from_rgb8(buf));
             }
             kitchen::Done::Full { index, buf } => {
                 // The 150 MB texture is only held while the loupe can use
@@ -311,10 +313,10 @@ fn drain_kitchen(win: &MainWindow, state: &Rc<RefCell<AppState>>) -> bool {
                 // the pixels, not about the file's ladder being topped
                 // out — hence the explicit `false` for terminal.
                 if !is_top_rung(long, false)
-                    && (st.mids.len() < MIDS_CAP || st.mids.contains_key(&index))
+                    && (st.textures.mids.len() < MIDS_CAP || st.textures.mids.contains_key(&index))
                 {
-                    st.mids.insert(index, texture);
-                    st.va.note_held(index, long);
+                    st.textures.mids.insert(index, texture);
+                    st.textures.va.note_held(index, long);
                 }
             }
             kitchen::Done::Mid {
@@ -322,9 +324,9 @@ fn drain_kitchen(win: &MainWindow, state: &Rc<RefCell<AppState>>) -> bool {
                 buf,
                 held_long,
             } => {
-                if st.mids.len() < MIDS_CAP || st.mids.contains_key(&index) {
-                    st.mids.insert(index, slint::Image::from_rgb8(buf));
-                    st.va.note_held(index, held_long);
+                if st.textures.mids.len() < MIDS_CAP || st.textures.mids.contains_key(&index) {
+                    st.textures.mids.insert(index, slint::Image::from_rgb8(buf));
+                    st.textures.va.note_held(index, held_long);
                 }
             }
         }
