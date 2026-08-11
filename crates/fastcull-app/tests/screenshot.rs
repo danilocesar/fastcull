@@ -3242,6 +3242,15 @@ fn dump_field<'a>(line: &'a str, field: &str) -> &'a str {
         .unwrap_or_else(|| panic!("no {field}= in dump line: {line}"))
 }
 
+/// The millisecond stamp a `FASTCULL_TRACE` line carries, as in
+/// `fastcull-trace: [51] loupe thumb idx 0 ...` — the app's own clock, so
+/// a test can tell a startup event from one inside a drive script's
+/// window. `None` for any line without a well-formed stamp; callers decide
+/// whether that is disqualifying (an unstamped line is never "early").
+fn trace_ms(line: &str) -> Option<u64> {
+    line.split_once('[')?.1.split_once(']')?.0.parse().ok()
+}
+
 /// Ten files cycling the three A1 classes: identical per-class EXIF
 /// capture times make the capture sort interleave VIEW order against
 /// image-id order — the issue #46 M1 shape, where the pre-fix id-space
@@ -3536,15 +3545,15 @@ fn paced_taps_over_an_interleaved_session_land_warm() {
     let dir = out_dir().join("i46-f2");
     interleaved_session(&dir);
     let out = out_dir().join("i46-f2.jpg");
+    // The first tap, shared with the warm-landing assertion below so the
+    // script and the window it is judged over cannot drift apart.
+    const FIRST_TAP_MS: u64 = 8000;
+    let drive = format!(
+        "{FIRST_TAP_MS}:right;8600:right;9200:right;9800:right;10400:right;11000:dump.done"
+    );
     let stderr = shoot_env_stderr(
         &["--start-11", dir.to_str().unwrap()],
-        &[
-            ("FASTCULL_TRACE", "1"),
-            (
-                "FASTCULL_DRIVE",
-                "8000:right;8600:right;9200:right;9800:right;10400:right;11000:dump.done",
-            ),
-        ],
+        &[("FASTCULL_TRACE", "1"), ("FASTCULL_DRIVE", &drive)],
         &out,
     );
     let fired = stderr.lines().filter(|l| l.contains("drive: ")).count();
@@ -3562,11 +3571,29 @@ fn paced_taps_over_an_interleaved_session_land_warm() {
     // profile only (the perf_budgets precedent): a debug build decodes a
     // mid slower than the tap cadence, so the thumb rescue legitimately
     // fires there — the no-drop and one2one assertions above still bind.
+    //
+    // Scoped to the TAP WINDOW, which is what the message claims. The
+    // cold start is not a paced tap: at t=0 nothing is decoded yet, so
+    // the very first frame legitimately renders through the thumb rescue
+    // (that IS issue #46's cold path) before the mid lands milliseconds
+    // later. A whole-session `contains` also caught that startup render,
+    // so on a loaded runner — where the mid loses the opening race — the
+    // test failed while every one of the five taps had landed at the top
+    // rung. Observed on CI 2026-08-11 (run 31455826044): the only thumb
+    // was `[51] loupe thumb idx 0`, superseded by `[76] loupe soft idx 0`,
+    // with all five taps at 8000-10400 ms rendering the full 8640x5760.
+    // Anything at or after the first tap still fails, which is the
+    // regression this pins.
     if !cfg!(debug_assertions) {
+        let late_thumb = stderr
+            .lines()
+            .filter(|l| l.contains("loupe thumb idx"))
+            .find(|l| trace_ms(l).is_none_or(|ms| ms >= FIRST_TAP_MS));
         assert!(
-            !stderr.contains("loupe thumb idx"),
+            late_thumb.is_none(),
             "a paced tap fell to the THUMB rung — the ring is not warming \
-             the view neighbors:\n{stderr}"
+             the view neighbors:\n{}\n--- full trace ---\n{stderr}",
+            late_thumb.unwrap_or_default()
         );
     } else {
         eprintln!("warm-landing pin skipped: debug build (run with --release)");
