@@ -742,7 +742,8 @@ Recorded deviations/decisions (M2, REVISED 2026-08-02 — user decision:
   are culled to the visible set at submission waves; Thumb jobs are never
   culled because their encoded bytes were MOVED into the job, and
   Full/Wrap jobs serve the loupe, which already governs its own requests.
-  A landed thumb for a scrolled-away cell is adopted into `st.images`
+  A landed thumb for a scrolled-away cell is adopted into
+  `st.textures.images`
   (paid-for work; the pruned-and-revisited rule); a landed MID for an
   invisible cell is adopted and then dropped by the visible-set retain on
   the next refresh — the adopt is cheap, the retain is the existing
