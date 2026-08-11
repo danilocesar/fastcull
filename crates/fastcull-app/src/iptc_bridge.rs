@@ -62,7 +62,7 @@ pub(crate) fn wire(window: &MainWindow, state: &Rc<RefCell<AppState>>) {
             let text = fastcull_core::iptc::sanitize_text(text.as_str());
             if !text.is_empty() {
                 let mut st = state.borrow_mut();
-                let batch = st.selection.batch(&st.view, st.cursor);
+                let batch = st.grid.selection.batch(&st.grid.view, st.grid.cursor);
                 // No-op guard (gate finding): a value-unchanged commit —
                 // Enter as "back to the grid", or the G7 click-away
                 // double-fire — must not clobber the shared revert slot
@@ -103,7 +103,7 @@ pub(crate) fn wire(window: &MainWindow, state: &Rc<RefCell<AppState>>) {
             let Some(win) = win.upgrade() else { return };
             {
                 let mut st = state.borrow_mut();
-                let batch = st.selection.batch(&st.view, st.cursor);
+                let batch = st.grid.selection.batch(&st.grid.view, st.grid.cursor);
                 let all_unset = batch.iter().all(|id| {
                     st.iptc
                         .get(*id)
@@ -142,7 +142,7 @@ pub(crate) fn wire(window: &MainWindow, state: &Rc<RefCell<AppState>>) {
                 .collect();
             if !kws.is_empty() {
                 let mut st = state.borrow_mut();
-                let batch = st.selection.batch(&st.view, st.cursor);
+                let batch = st.grid.selection.batch(&st.grid.view, st.grid.cursor);
                 // No-op guard (gate N2): re-entering an already-present
                 // keyword — easy via the G7 click-away — must not clobber
                 // the shared revert slot or rewrite sidecars. Dry-run on
@@ -180,7 +180,7 @@ pub(crate) fn wire(window: &MainWindow, state: &Rc<RefCell<AppState>>) {
             let Some(win) = win.upgrade() else { return };
             {
                 let mut st = state.borrow_mut();
-                let batch = st.selection.batch(&st.view, st.cursor);
+                let batch = st.grid.selection.batch(&st.grid.view, st.grid.cursor);
                 // Rebuild the chip order exactly as the panel shows it
                 // (first-seen across the batch in view order).
                 let mut order: Vec<String> = Vec::new();
@@ -217,7 +217,7 @@ pub(crate) fn wire(window: &MainWindow, state: &Rc<RefCell<AppState>>) {
             let Some(win) = win.upgrade() else { return };
             {
                 let mut st = state.borrow_mut();
-                let batch = st.selection.batch(&st.view, st.cursor);
+                let batch = st.grid.selection.batch(&st.grid.view, st.grid.cursor);
                 let Some(tpl) = st.templates.get(tpl_index as usize).cloned() else {
                     return;
                 };
@@ -329,7 +329,7 @@ pub(crate) fn refresh_iptc_panel(win: &MainWindow, st: &mut AppState) {
     if !st.iptc_panel.visible {
         return;
     }
-    let batch = st.selection.batch(&st.view, st.cursor);
+    let batch = st.grid.selection.batch(&st.grid.view, st.grid.cursor);
     win.set_iptc_batch_label(
         match batch.len() {
             0 => "No image".to_string(),

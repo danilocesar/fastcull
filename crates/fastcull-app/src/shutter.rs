@@ -61,10 +61,10 @@ pub(crate) fn arm(
                             // (bare JPEGs, issue #8 — QE D2: the 60s
                             // refusal hit every small-JPEG --start-11 run),
                             // which is why the predicate is shared.
-                            *i == st.cursor
+                            *i == st.grid.cursor
                                 && is_top_rung(
                                     img.size().width.max(img.size().height),
-                                    st.textures.terminal_native.contains(&st.cursor),
+                                    st.textures.terminal_native.contains(&st.grid.cursor),
                                 )
                         });
                     // At LOUPE FIT the old gate was vacuous (zoom_factor is
@@ -88,10 +88,14 @@ pub(crate) fn arm(
                     let at_loupe = st.at_loupe();
                     let fit = !at_loupe
                         || st.synthetic
-                        || st.view.is_empty()
-                        || st.textures.failed.contains(&st.cursor)
-                        || st.textures.fullres.iter().any(|(i, _)| *i == st.cursor)
-                        || st.textures.mids.contains_key(&st.cursor);
+                        || st.grid.view.is_empty()
+                        || st.textures.failed.contains(&st.grid.cursor)
+                        || st
+                            .textures
+                            .fullres
+                            .iter()
+                            .any(|(i, _)| *i == st.grid.cursor)
+                        || st.textures.mids.contains_key(&st.grid.cursor);
                     (one2one, fit)
                 };
                 let ready = one2one_ready && fit_ready;
@@ -125,10 +129,10 @@ pub(crate) fn arm(
                 {
                     let st = state_rc.borrow();
                     let layout = GridLayout::new(
-                        st.zoom,
+                        st.grid.zoom,
                         win.get_grid_width(),
                         win.get_grid_height(),
-                        st.view.len(),
+                        st.grid.view.len(),
                     );
                     let scroll = (-win.get_vp_y()).max(0.0);
                     let cursor_top = st.cursor_pos().map(|p| layout.position(p).1).unwrap_or(0.0);

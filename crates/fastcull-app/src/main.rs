@@ -176,12 +176,16 @@ fn main() {
         touched: HashSet::new(),
         writer: None,
         sidecar_failures: 0,
-        zoom: if start_at_loupe {
-            grid::ZOOM_COLUMNS.len() - 1
-        } else {
-            1 // 8 columns
+        // Only the launch zoom differs from the grid's own defaults
+        // (--start-loupe/--start-11 open straight at the loupe step).
+        grid: state::GridViewState {
+            zoom: if start_at_loupe {
+                grid::ZOOM_COLUMNS.len() - 1
+            } else {
+                1 // 8 columns
+            },
+            ..Default::default()
         },
-        cursor: 0,
         textures: Default::default(),
         pipeline: None,
         thumbs_done: 0,
@@ -189,13 +193,8 @@ fn main() {
         session_open: false,
         cells,
         loupe: None,
-        view_generation: 0,
-        last_view_generation: 0,
-        last_cursor_visible: true,
-        last_metadata_complete: false,
         last_resolved_factor: None,
         last_badge: None,
-        last_view_geometry: None,
         zoom_factor: if start_11 { f32::INFINITY } else { 1.0 },
         pan_center: (0.5, 0.5),
         last_pan_write: None,
@@ -219,20 +218,14 @@ fn main() {
             }))
         },
         last_overlay_cursor: None,
-        cursor_touched: false,
-        last_grid_zoom: 1,
-        query: fastcull_core::filter::ViewQuery::default(),
-        view: Vec::new(),
         capture_keys: Vec::new(),
         frame_meta: Vec::new(),
         bursts: Default::default(),
         iptc: Vec::new(),
         touched_iptc: HashSet::new(),
         iptc_panel: Default::default(),
-        selection: Default::default(),
         templates: Vec::new(),
         template_warnings: Vec::new(),
-        filter_bar_visible: true,
         copy: Default::default(),
         pipeline_rx: None,
         loupe_rx: None,

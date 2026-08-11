@@ -333,7 +333,7 @@ pub(crate) fn install(window: &MainWindow, state: &Rc<RefCell<AppState>>) -> Rc<
                          soft={} vx={:.1} vy={:.1} pan={:.4},{:.4} zf={:.3}",
                         win.get_dbg_keys_focus(),
                         win.get_one2one(),
-                        st.zoom,
+                        st.grid.zoom,
                         win.get_iptc_visible(),
                         win.get_about_visible(),
                         win.get_shortcuts_visible(),
