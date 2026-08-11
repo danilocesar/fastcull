@@ -7,10 +7,11 @@ use std::rc::Rc;
 
 use slint::ComponentHandle;
 
+use crate::session::open_folder_at;
 use crate::state::AppState;
 use crate::trace::trace_mark;
 use crate::MainWindow;
-use crate::{handle_nav, open_folder_at, refresh};
+use crate::{handle_nav, refresh};
 
 /// Schedule every step of the FASTCULL_DRIVE script (a no-op when the
 /// variable is unset). Returns the not-yet-fired counter the screenshot
