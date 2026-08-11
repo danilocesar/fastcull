@@ -203,7 +203,7 @@ pub(crate) fn shutdown(state: &Rc<RefCell<AppState>>) {
 /// Snapshot writer: always JPEG q92 regardless of the output extension
 /// (recorded in ui-grid.md — lossless PNG would need an extra dependency and
 /// smoke comparisons don't require it). RGBA in, RGB JPEG out.
-pub(crate) fn write_snapshot_jpeg(
+fn write_snapshot_jpeg(
     out: &std::path::Path,
     buf: &slint::SharedPixelBuffer<slint::Rgba8Pixel>,
 ) -> bool {

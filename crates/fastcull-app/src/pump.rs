@@ -271,7 +271,7 @@ pub(crate) fn start(window: &MainWindow, state: &Rc<RefCell<AppState>>) -> slint
 /// persona condition: the wrap is O(1), so rationing adoption would turn
 /// "one tick later" into a visible trickle-in. Returns whether anything
 /// was adopted (callers refresh on true).
-pub(crate) fn drain_kitchen(win: &MainWindow, state: &Rc<RefCell<AppState>>) -> bool {
+fn drain_kitchen(win: &MainWindow, state: &Rc<RefCell<AppState>>) -> bool {
     let mut st = state.borrow_mut();
     let at_loupe = st.at_loupe();
     let done = st.kitchen.drain();

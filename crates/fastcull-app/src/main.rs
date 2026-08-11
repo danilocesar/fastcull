@@ -11,6 +11,29 @@
 //! Usage: `fastcull-app [<folder>]` or `fastcull-app --synthetic 2000` —
 //! no arguments opens the empty window (desktop-launcher start, issue #5)
 //! (colored placeholder cells, no RAW files needed — the M2 60 fps spike).
+//!
+//! Layout: this file parses the command line, builds the window and the one
+//! [`AppState`], and wires the controllers. One controller per surface or
+//! concern, and each one names itself:
+//!
+//! | file | when you open it |
+//! |---|---|
+//! | `state.rs` | the state every controller borrows, and the app constants |
+//! | `session.rs` | opening a folder, launch dispatch, templates, ui.toml prefs |
+//! | `nav.rs` | keyboard navigation, marks, filter/sort, cursor reveal |
+//! | `loupe_ctrl.rs` | pointer gestures, loupe geometry, the full-res ring |
+//! | `presenter.rs` | the refresh pass: state -> window properties and cells |
+//! | `pump.rs` | the 33 ms engine tick and texture adoption |
+//! | `iptc_bridge.rs` | the IPTC panel |
+//! | `copy_bridge.rs` | the Copy Picks dialog (and burst regrouping) |
+//! | `focus.rs` | keyboard focus continuity |
+//! | `shutter.rs` | `--screenshot` readiness gate and shutdown |
+//! | `harness.rs` | the FASTCULL_DRIVE scripted-action interpreter |
+//! | `trace.rs` | the FASTCULL_TRACE log |
+//! | `kitchen.rs` | the texture worker (pixels -> textures, off the UI thread) |
+//!
+//! Controllers call `fastcull-core` and funnel their UI updates through
+//! [`presenter::refresh`]; they do not call each other.
 
 use std::cell::RefCell;
 use std::collections::{HashMap, HashSet};
@@ -227,18 +250,20 @@ fn main() {
 
     session::dispatch(&state, launch, start_11);
 
+    // Callback wiring: each controller installs its own surface's callbacks.
+    // Registration order does not matter — each `on_…` just stores a closure.
     presenter::wire(&window, &state);
     nav::wire(&window, &state);
-
     session::wire(&window, &state);
-    window.on_quit(|| {
-        slint::quit_event_loop().ok();
-    });
     focus::wire(&window);
     iptc_bridge::wire(&window, &state);
     copy_bridge::wire(&window, &state);
     loupe_ctrl::wire(&window, &state);
     pump::wire(&window, &state);
+    window.on_quit(|| {
+        slint::quit_event_loop().ok();
+    });
+
     // The pump timer must outlive the event loop: dropping it stops the tick.
     let _timer = pump::start(&window, &state);
 

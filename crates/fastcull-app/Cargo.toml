@@ -13,7 +13,7 @@ fastcull-core.workspace = true
 # femtovg = GPU/OpenGL renderer (ADR 0002). Building it needs system dev
 # packages: fontconfig-devel libxkbcommon-devel wayland-devel mesa-libGL-devel
 # (dnf) / libfontconfig1-dev libxkbcommon-dev (apt, see CI).
-# VERSION-BUMP CANARY: `reveal_scroll`'s ORDER NOTE (main.rs) proves the
+# VERSION-BUMP CANARY: `reveal_scroll`'s ORDER NOTE (nav.rs) proves the
 # consumed-geometry mark may land before the vp-y write ONLY because Slint's
 # `changed` callbacks are deferred (verified against i-slint-core 1.17.1). A
 # Slint release that runs change handlers synchronously silently invalidates
