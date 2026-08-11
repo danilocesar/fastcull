@@ -24,6 +24,7 @@ pub mod pointer;
 pub mod raw;
 pub mod selection;
 pub mod sidecar_writer;
+pub mod transit;
 pub mod viewassets;
 pub mod xmp;
 pub mod zoompan;
