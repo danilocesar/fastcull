@@ -576,6 +576,29 @@ pub(crate) struct AppState {
 }
 
 impl AppState {
+    /// The state a freshly launched app starts in: no session, the grid at
+    /// its default zoom, no textures. The two things it cannot default are
+    /// passed in — the cell model the window is already bound to, and the
+    /// texture kitchen, whose completion nudge needs a handle on the window.
+    ///
+    /// Launch flags (`--start-loupe`, `--start-11`) are applied by the
+    /// caller through `enter_loupe`, not through more constructor
+    /// arguments: they are a request to enter a view, and the app already
+    /// has a word for that.
+    pub(crate) fn new(cells: Rc<VecModel<CellData>>, kitchen: kitchen::Kitchen) -> Self {
+        Self {
+            session: SessionState::default(),
+            grid: GridViewState::default(),
+            loupe_view: LoupeViewState::default(),
+            textures: TextureStore::default(),
+            bursts: BurstIndex::default(),
+            iptc_panel: IptcPanelState::default(),
+            copy: CopyState::default(),
+            cells,
+            kitchen,
+        }
+    }
+
     /// Swap in a new folder: every group that describes ONE session is
     /// replaced wholesale, and the handful of things that outlive a
     /// session are named here rather than left implicit.

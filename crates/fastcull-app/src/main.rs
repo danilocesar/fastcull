@@ -64,7 +64,6 @@ use crate::presenter::refresh;
 use crate::session::Launch;
 use crate::state::{clamp_wash_opacity, AppState, SELECTION_WASH_OPACITY, SELECTION_WASH_RGB};
 use crate::trace::trace_mark;
-use fastcull_core::grid;
 use slint::{ComponentHandle, VecModel};
 
 slint::include_modules!();
@@ -168,47 +167,31 @@ fn main() {
     let cells = Rc::new(VecModel::from(Vec::<CellData>::new()));
     window.set_cells(slint::ModelRc::from(Rc::clone(&cells)));
     let start_at_loupe = start_11 || start_loupe;
-    let state = Rc::new(RefCell::new(AppState {
-        session: Default::default(),
-        // Only the launch zoom differs from the grid's own defaults
-        // (--start-loupe/--start-11 open straight at the loupe step).
-        grid: state::GridViewState {
-            zoom: if start_at_loupe {
-                grid::ZOOM_COLUMNS.len() - 1
-            } else {
-                1 // 8 columns
-            },
-            ..Default::default()
-        },
-        textures: Default::default(),
-        cells,
-        // Only the launch desire differs from the loupe's own defaults
-        // (--start-11 pins 1:1 before any texture exists).
-        loupe_view: state::LoupeViewState {
-            zoom_factor: if start_11 { f32::INFINITY } else { 1.0 },
-            ..Default::default()
-        },
-        kitchen: {
-            // Completion nudge: the worker pokes the event loop so a
-            // finished texture is adopted as soon as the UI is idle —
-            // the 33 ms pump is the fallback, not the design point
-            // (persona condition: the one-tick cost must not be a
-            // trickle-in).
-            let win = window.as_weak();
-            kitchen::Kitchen::start(Box::new(move || {
-                let win = win.clone();
-                slint::invoke_from_event_loop(move || {
-                    if let Some(win) = win.upgrade() {
-                        win.invoke_kitchen_ready();
-                    }
-                })
-                .ok();
-            }))
-        },
-        bursts: Default::default(),
-        iptc_panel: Default::default(),
-        copy: Default::default(),
+    let kitchen = kitchen::Kitchen::start(Box::new({
+        // Completion nudge: the worker pokes the event loop so a
+        // finished texture is adopted as soon as the UI is idle —
+        // the 33 ms pump is the fallback, not the design point
+        // (persona condition: the one-tick cost must not be a
+        // trickle-in).
+        let win = window.as_weak();
+        move || {
+            let win = win.clone();
+            slint::invoke_from_event_loop(move || {
+                if let Some(win) = win.upgrade() {
+                    win.invoke_kitchen_ready();
+                }
+            })
+            .ok();
+        }
     }));
+    let mut app = AppState::new(cells, kitchen);
+    // --start-loupe / --start-11: open directly at the loupe step, at fit
+    // or pinned to 1:1. Everything else about the fresh state is the
+    // sub-structs' own defaults.
+    if start_at_loupe {
+        app.enter_loupe(if start_11 { f32::INFINITY } else { 1.0 });
+    }
+    let state = Rc::new(RefCell::new(app));
 
     session::dispatch(&state, launch, start_11);
 
