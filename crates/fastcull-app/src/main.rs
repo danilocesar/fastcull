@@ -44,7 +44,6 @@
 //! across surfaces.
 
 use std::cell::RefCell;
-use std::collections::HashSet;
 use std::rc::Rc;
 
 mod copy_bridge;
@@ -170,12 +169,7 @@ fn main() {
     window.set_cells(slint::ModelRc::from(Rc::clone(&cells)));
     let start_at_loupe = start_11 || start_loupe;
     let state = Rc::new(RefCell::new(AppState {
-        labels: Vec::new(),
-        paths: Vec::new(),
-        picks: Vec::new(),
-        touched: HashSet::new(),
-        writer: None,
-        sidecar_failures: 0,
+        session: Default::default(),
         // Only the launch zoom differs from the grid's own defaults
         // (--start-loupe/--start-11 open straight at the loupe step).
         grid: state::GridViewState {
@@ -187,10 +181,6 @@ fn main() {
             ..Default::default()
         },
         textures: Default::default(),
-        pipeline: None,
-        thumbs_done: 0,
-        synthetic: false,
-        session_open: false,
         cells,
         // Only the launch desire differs from the loupe's own defaults
         // (--start-11 pins 1:1 before any texture exists).
@@ -215,17 +205,9 @@ fn main() {
                 .ok();
             }))
         },
-        capture_keys: Vec::new(),
-        frame_meta: Vec::new(),
         bursts: Default::default(),
-        iptc: Vec::new(),
-        touched_iptc: HashSet::new(),
         iptc_panel: Default::default(),
-        templates: Vec::new(),
-        template_warnings: Vec::new(),
         copy: Default::default(),
-        pipeline_rx: None,
-        sidecar_errs: None,
     }));
 
     session::dispatch(&state, launch, start_11);

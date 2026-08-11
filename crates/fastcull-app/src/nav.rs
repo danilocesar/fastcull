@@ -88,9 +88,9 @@ pub(crate) fn wire(window: &MainWindow, state: &Rc<RefCell<AppState>>) {
 pub(crate) fn recompute_view(st: &mut AppState) {
     let complete = st.metadata_complete();
     st.grid.view = fastcull_core::filter::view(
-        &st.picks,
-        &st.labels,
-        &st.capture_keys,
+        &st.session.picks,
+        &st.session.labels,
+        &st.session.capture_keys,
         &st.grid.query,
         complete,
     );
@@ -197,10 +197,13 @@ fn handle_nav_inner(win: &MainWindow, state: &Rc<RefCell<AppState>>, key: &str) 
             let cursor = st.grid.cursor;
             // Marks land on the cursor image only while it is in the view
             // (an empty filtered view has nothing to mark).
-            if let (Some(old_pos), Some(slot)) = (st.cursor_pos(), st.picks.get_mut(cursor)) {
+            if let (Some(old_pos), Some(slot)) = (st.cursor_pos(), st.session.picks.get_mut(cursor))
+            {
                 *slot = pick;
-                st.touched.insert(cursor);
-                if let (Some(writer), Some(path)) = (&st.writer, st.paths.get(cursor)) {
+                st.session.touched.insert(cursor);
+                if let (Some(writer), Some(path)) =
+                    (&st.session.writer, st.session.paths.get(cursor))
+                {
                     writer.mark(path.clone(), pick);
                 }
                 // Advance/removal composition (spec, persona G1): net

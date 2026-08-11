@@ -183,7 +183,7 @@ fn refresh_inner(win: &MainWindow, state: &Rc<RefCell<AppState>>) {
     let ids: Vec<usize> = range.clone().map(|pos| st.grid.view[pos]).collect();
 
     // Tell the engine what is on screen (priority promotion).
-    if let Some(pipeline) = &st.pipeline {
+    if let Some(pipeline) = &st.session.pipeline {
         pipeline.promote(
             ids.iter().copied(),
             fastcull_core::pipeline::Priority::Visible,
@@ -561,7 +561,7 @@ fn refresh_inner(win: &MainWindow, state: &Rc<RefCell<AppState>>) {
     // Loupe state badge (issue #20): the cursor's mark, written in the
     // same refresh pass that swaps the image/cells — never a frame where
     // the badge belongs to the previous photo (the issue #6 stale class).
-    let cursor_mark = match st.picks.get(cursor) {
+    let cursor_mark = match st.session.picks.get(cursor) {
         Some(fastcull_core::catalog::PickState::Picked) => 1,
         Some(fastcull_core::catalog::PickState::Rejected) => 2,
         _ => 0,
@@ -618,13 +618,23 @@ fn refresh_inner(win: &MainWindow, state: &Rc<RefCell<AppState>>) {
             image: image.cloned().unwrap_or_default(),
             has_image: image.is_some(),
             failed: st.textures.failed.contains(&index),
-            label: st.labels.get(index).cloned().unwrap_or_default().into(),
+            label: st
+                .session
+                .labels
+                .get(index)
+                .cloned()
+                .unwrap_or_default()
+                .into(),
             is_cursor: index == st.grid.cursor,
             selected: st.grid.selection.is_selected(index),
             id: index as i32,
             copied: st.copy.copied_to.contains_key(&index),
             burst_count: st.bursts.badge.get(index).copied().unwrap_or(0) as i32,
-            seed: if st.synthetic { index as i32 } else { -1 },
+            seed: if st.session.synthetic {
+                index as i32
+            } else {
+                -1
+            },
             // At the loupe (N=1) the #20 badge pill owns state display:
             // bare cells keep the grid's 40% reject dim out of the loupe
             // (a reject may be re-judged for rescue at full brightness)
@@ -632,7 +642,7 @@ fn refresh_inner(win: &MainWindow, state: &Rc<RefCell<AppState>>) {
             pick: if at_loupe {
                 0
             } else {
-                match st.picks.get(index) {
+                match st.session.picks.get(index) {
                     Some(fastcull_core::catalog::PickState::Picked) => 1,
                     Some(fastcull_core::catalog::PickState::Rejected) => 2,
                     _ => 0,
@@ -654,7 +664,7 @@ fn refresh_inner(win: &MainWindow, state: &Rc<RefCell<AppState>>) {
 
     // Filter bar + status (M5): live counts, active chip, sort label,
     // inbox-zero empty state (persona G2).
-    let counts = fastcull_core::filter::counts(&st.picks);
+    let counts = fastcull_core::filter::counts(&st.session.picks);
     win.set_counts_all(counts.all as i32);
     win.set_counts_picked(counts.picked as i32);
     win.set_counts_rejected(counts.rejected as i32);
@@ -692,7 +702,7 @@ fn refresh_inner(win: &MainWindow, state: &Rc<RefCell<AppState>>) {
             counts.picked, counts.rejected, counts.unmarked, counts.all
         )
         .into()
-    } else if count == 0 && !st.session_open {
+    } else if count == 0 && !st.session.session_open {
         // Folderless launch (issue #5, ui-grid.md): distinct from a
         // folder that opened but contained nothing.
         "No folder open — File > Open Folder… (Ctrl+O)".into()
@@ -723,7 +733,7 @@ fn refresh_inner(win: &MainWindow, state: &Rc<RefCell<AppState>>) {
                     .grid
                     .view
                     .get(range.start)
-                    .and_then(|id| st.capture_keys.get(*id))
+                    .and_then(|id| st.session.capture_keys.get(*id))
                     .and_then(|k| k.as_deref())
                 {
                     // Sort key "YYYY:MM:DD HH:MM:SS.mmm" -> "HH:MM".
@@ -774,7 +784,7 @@ fn refresh_inner(win: &MainWindow, state: &Rc<RefCell<AppState>>) {
     // makes you hunt for the total to know whether to start now or get a
     // beer, and while the order is provisional the status bar is the only
     // honest place to say so — the grid looks identical either way.
-    let loaded = st.thumbs_done.min(count);
+    let loaded = st.session.thumbs_done.min(count);
     let load_note = if st.metadata_complete() {
         format!("{loaded} thumbs loaded")
     } else {
@@ -784,7 +794,7 @@ fn refresh_inner(win: &MainWindow, state: &Rc<RefCell<AppState>>) {
         format!(
             "{} ({}/{}){}{}{}{} — {} — ★{} ✕{}{} — {} column{}",
             if cursor_in_view {
-                st.labels.get(cursor).cloned().unwrap_or_default()
+                st.session.labels.get(cursor).cloned().unwrap_or_default()
             } else {
                 String::new()
             },
@@ -801,8 +811,8 @@ fn refresh_inner(win: &MainWindow, state: &Rc<RefCell<AppState>>) {
             load_note,
             counts.picked,
             counts.rejected,
-            if st.sidecar_failures > 0 {
-                format!(" — ⚠{} sidecar write failures", st.sidecar_failures)
+            if st.session.sidecar_failures > 0 {
+                format!(" — ⚠{} sidecar write failures", st.session.sidecar_failures)
             } else {
                 String::new()
             },

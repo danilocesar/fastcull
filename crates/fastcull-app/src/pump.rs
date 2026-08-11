@@ -54,6 +54,7 @@ pub(crate) fn start(window: &MainWindow, state: &Rc<RefCell<AppState>>) -> slint
                 {
                     let mut st = state.borrow_mut();
                     let events: Vec<SessionEvent> = st
+                        .session
                         .pipeline_rx
                         .as_ref()
                         .map(|rx| rx.try_iter().collect())
@@ -64,23 +65,23 @@ pub(crate) fn start(window: &MainWindow, state: &Rc<RefCell<AppState>>) -> slint
                                 index, thumb_jpeg, ..
                             } => {
                                 st.textures.thumb_jpegs.insert(index, thumb_jpeg);
-                                st.thumbs_done += 1;
+                                st.session.thumbs_done += 1;
                                 dirty = true;
                             }
                             SessionEvent::Failed { index, .. } => {
                                 st.textures.failed.insert(index);
-                                st.thumbs_done += 1;
+                                st.session.thumbs_done += 1;
                                 dirty = true;
                             }
                             SessionEvent::MetadataReady { index, exif, .. } => {
                                 // Capture-time sort keys arrive progressively;
                                 // the view re-sorts as they land (spec:
                                 // keyless images sort after keyed ones).
-                                if let Some(slot) = st.capture_keys.get_mut(index) {
+                                if let Some(slot) = st.session.capture_keys.get_mut(index) {
                                     *slot = exif.sort_key();
                                     dirty = true;
                                 }
-                                if let Some(slot) = st.frame_meta.get_mut(index) {
+                                if let Some(slot) = st.session.frame_meta.get_mut(index) {
                                     *slot = fastcull_core::burst::FrameMeta::from_summary(&exif);
                                     st.bursts.dirty = true;
                                 }
@@ -88,8 +89,8 @@ pub(crate) fn start(window: &MainWindow, state: &Rc<RefCell<AppState>>) -> slint
                             SessionEvent::Sidecar { index, pick, iptc } => {
                                 // Picks from a previous session/tool — never
                                 // override what the user changed just now.
-                                if !st.touched.contains(&index) {
-                                    if let Some(slot) = st.picks.get_mut(index) {
+                                if !st.session.touched.contains(&index) {
+                                    if let Some(slot) = st.session.picks.get_mut(index) {
                                         *slot = pick;
                                         dirty = true;
                                     }
@@ -97,8 +98,8 @@ pub(crate) fn start(window: &MainWindow, state: &Rc<RefCell<AppState>>) -> slint
                                 // Same guard as picks: a sidecar read that
                                 // raced the debounced writer must not
                                 // revert a fresh panel edit (gate finding).
-                                if !st.touched_iptc.contains(&index) {
-                                    if let Some(slot) = st.iptc.get_mut(index) {
+                                if !st.session.touched_iptc.contains(&index) {
+                                    if let Some(slot) = st.session.iptc.get_mut(index) {
                                         *slot = *iptc;
                                     }
                                 }
@@ -107,6 +108,7 @@ pub(crate) fn start(window: &MainWindow, state: &Rc<RefCell<AppState>>) -> slint
                     }
                     let at_loupe = st.at_loupe();
                     let failures: Vec<_> = st
+                        .session
                         .sidecar_errs
                         .as_ref()
                         .map(|rx| rx.try_iter().collect())
@@ -115,7 +117,7 @@ pub(crate) fn start(window: &MainWindow, state: &Rc<RefCell<AppState>>) -> slint
                         // Count for the status bar only: the writer's drain
                         // already eprintlns the path+reason (QE finding —
                         // logging here too printed every failure twice).
-                        st.sidecar_failures += 1;
+                        st.session.sidecar_failures += 1;
                         dirty = true;
                     }
                     // Copy Picks progress/report (M6).

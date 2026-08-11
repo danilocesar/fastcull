@@ -68,17 +68,18 @@ pub(crate) fn wire(window: &MainWindow, state: &Rc<RefCell<AppState>>) {
                 // double-fire — must not clobber the shared revert slot
                 // or rewrite sidecars.
                 let unchanged = batch.iter().all(|id| {
-                    st.iptc
+                    st.session
+                        .iptc
                         .get(*id)
                         .is_some_and(|d| iptc_field_get(d, i as usize) == Some(&text))
                 });
                 if !batch.is_empty() && !unchanged {
                     let snaps: Vec<_> = batch
                         .iter()
-                        .filter_map(|id| st.iptc.get(*id).cloned())
+                        .filter_map(|id| st.session.iptc.get(*id).cloned())
                         .collect();
                     for id in &batch {
-                        if let Some(d) = st.iptc.get_mut(*id) {
+                        if let Some(d) = st.session.iptc.get_mut(*id) {
                             iptc_field_set(d, i as usize, Some(text.clone()));
                         }
                     }
@@ -105,17 +106,18 @@ pub(crate) fn wire(window: &MainWindow, state: &Rc<RefCell<AppState>>) {
                 let mut st = state.borrow_mut();
                 let batch = st.grid.selection.batch(&st.grid.view, st.grid.cursor);
                 let all_unset = batch.iter().all(|id| {
-                    st.iptc
+                    st.session
+                        .iptc
                         .get(*id)
                         .is_some_and(|d| iptc_field_get(d, i as usize).is_none())
                 });
                 if !batch.is_empty() && !all_unset {
                     let snaps: Vec<_> = batch
                         .iter()
-                        .filter_map(|id| st.iptc.get(*id).cloned())
+                        .filter_map(|id| st.session.iptc.get(*id).cloned())
                         .collect();
                     for id in &batch {
-                        if let Some(d) = st.iptc.get_mut(*id) {
+                        if let Some(d) = st.session.iptc.get_mut(*id) {
                             iptc_field_set(d, i as usize, None);
                         }
                     }
@@ -148,7 +150,7 @@ pub(crate) fn wire(window: &MainWindow, state: &Rc<RefCell<AppState>>) {
                 // the shared revert slot or rewrite sidecars. Dry-run on
                 // clones; commit only when something actually changes.
                 let changed = batch.iter().any(|id| {
-                    st.iptc.get(*id).is_some_and(|d| {
+                    st.session.iptc.get(*id).is_some_and(|d| {
                         let mut probe = d.clone();
                         probe.add_keywords(kws.iter().cloned());
                         probe.keywords != d.keywords
@@ -157,10 +159,10 @@ pub(crate) fn wire(window: &MainWindow, state: &Rc<RefCell<AppState>>) {
                 if !batch.is_empty() && changed {
                     let snaps: Vec<_> = batch
                         .iter()
-                        .filter_map(|id| st.iptc.get(*id).cloned())
+                        .filter_map(|id| st.session.iptc.get(*id).cloned())
                         .collect();
                     for id in &batch {
-                        if let Some(d) = st.iptc.get_mut(*id) {
+                        if let Some(d) = st.session.iptc.get_mut(*id) {
                             d.add_keywords(kws.iter().cloned());
                         }
                     }
@@ -185,7 +187,7 @@ pub(crate) fn wire(window: &MainWindow, state: &Rc<RefCell<AppState>>) {
                 // (first-seen across the batch in view order).
                 let mut order: Vec<String> = Vec::new();
                 for id in &batch {
-                    if let Some(d) = st.iptc.get(*id) {
+                    if let Some(d) = st.session.iptc.get(*id) {
                         for kw in &d.keywords {
                             if !order.contains(kw) {
                                 order.push(kw.clone());
@@ -196,10 +198,10 @@ pub(crate) fn wire(window: &MainWindow, state: &Rc<RefCell<AppState>>) {
                 if let Some(kw) = order.get(chip_index as usize).cloned() {
                     let snaps: Vec<_> = batch
                         .iter()
-                        .filter_map(|id| st.iptc.get(*id).cloned())
+                        .filter_map(|id| st.session.iptc.get(*id).cloned())
                         .collect();
                     for id in &batch {
-                        if let Some(d) = st.iptc.get_mut(*id) {
+                        if let Some(d) = st.session.iptc.get_mut(*id) {
                             d.keywords.retain(|k| *k != kw);
                         }
                     }
@@ -218,7 +220,7 @@ pub(crate) fn wire(window: &MainWindow, state: &Rc<RefCell<AppState>>) {
             {
                 let mut st = state.borrow_mut();
                 let batch = st.grid.selection.batch(&st.grid.view, st.grid.cursor);
-                let Some(tpl) = st.templates.get(tpl_index as usize).cloned() else {
+                let Some(tpl) = st.session.templates.get(tpl_index as usize).cloned() else {
                     return;
                 };
                 if !batch.is_empty() {
@@ -226,8 +228,9 @@ pub(crate) fn wire(window: &MainWindow, state: &Rc<RefCell<AppState>>) {
                     let ctxs: Vec<_> = batch
                         .iter()
                         .map(|id| {
-                            let name = st.labels.get(*id).cloned().unwrap_or_default();
+                            let name = st.session.labels.get(*id).cloned().unwrap_or_default();
                             let mtime = st
+                                .session
                                 .paths
                                 .get(*id)
                                 .and_then(|p| std::fs::metadata(p).ok())
@@ -236,7 +239,7 @@ pub(crate) fn wire(window: &MainWindow, state: &Rc<RefCell<AppState>>) {
                             // Camera model is not plumbed yet: {camera}
                             // expands empty (recorded in the spec ledger).
                             fastcull_core::iptc::ExpandContext::from_sort_key(
-                                st.capture_keys.get(*id).and_then(|k| k.as_deref()),
+                                st.session.capture_keys.get(*id).and_then(|k| k.as_deref()),
                                 mtime,
                                 &name,
                                 None,
@@ -245,12 +248,12 @@ pub(crate) fn wire(window: &MainWindow, state: &Rc<RefCell<AppState>>) {
                         .collect();
                     let mut images: Vec<_> = batch
                         .iter()
-                        .filter_map(|id| st.iptc.get(*id).cloned())
+                        .filter_map(|id| st.session.iptc.get(*id).cloned())
                         .collect();
                     match fastcull_core::iptc::apply_template(&tpl, &mut images, &ctxs) {
                         Ok(snaps) => {
                             for (id, data) in batch.iter().zip(images) {
-                                if let Some(slot) = st.iptc.get_mut(*id) {
+                                if let Some(slot) = st.session.iptc.get_mut(*id) {
                                     *slot = data;
                                 }
                             }
@@ -259,7 +262,7 @@ pub(crate) fn wire(window: &MainWindow, state: &Rc<RefCell<AppState>>) {
                         }
                         Err(e) => {
                             // All-or-nothing: nothing changed; surface it.
-                            st.template_warnings = vec![e.to_string()];
+                            st.session.template_warnings = vec![e.to_string()];
                         }
                     }
                 }
@@ -277,14 +280,16 @@ pub(crate) fn wire(window: &MainWindow, state: &Rc<RefCell<AppState>>) {
                 let ids = std::mem::take(&mut st.iptc_panel.revert_ids);
                 let mut images: Vec<_> = ids
                     .iter()
-                    .filter_map(|id| st.iptc.get(*id).cloned())
+                    .filter_map(|id| st.session.iptc.get(*id).cloned())
                     .collect();
                 if st.iptc_panel.revert.revert_into(&mut images) {
                     for (id, data) in ids.iter().zip(images) {
-                        if let Some(slot) = st.iptc.get_mut(*id) {
+                        if let Some(slot) = st.session.iptc.get_mut(*id) {
                             *slot = data.clone();
                         }
-                        if let (Some(path), Some(writer)) = (st.paths.get(*id), &st.writer) {
+                        if let (Some(path), Some(writer)) =
+                            (st.session.paths.get(*id), &st.session.writer)
+                        {
                             writer.iptc(path.clone(), data);
                         }
                     }
@@ -333,25 +338,31 @@ pub(crate) fn refresh_iptc_panel(win: &MainWindow, st: &mut AppState) {
     win.set_iptc_batch_label(
         match batch.len() {
             0 => "No image".to_string(),
-            1 => st.labels.get(batch[0]).cloned().unwrap_or_default(),
+            1 => st.session.labels.get(batch[0]).cloned().unwrap_or_default(),
             n => format!("{n} images selected"),
         }
         .into(),
     );
-    win.set_iptc_warning(st.template_warnings.join("\n").into());
+    win.set_iptc_warning(st.session.template_warnings.join("\n").into());
     // Build plain-data snapshots first; the Slint models are rebuilt ONLY
     // when content changed (gate finding: unconditional rebuilds tore the
     // field editors down mid-typing on every 33 ms engine tick).
     let rows: Vec<(String, String, bool)> = (0..IptcField::ALL.len())
         .map(|i| {
-            let mut vs = batch
-                .iter()
-                .filter_map(|id| st.iptc.get(*id).map(|d| iptc_field_get(d, i).cloned()));
+            let mut vs = batch.iter().filter_map(|id| {
+                st.session
+                    .iptc
+                    .get(*id)
+                    .map(|d| iptc_field_get(d, i).cloned())
+            });
             let head = vs.next().flatten();
             let mixed = {
-                let mut vs = batch
-                    .iter()
-                    .filter_map(|id| st.iptc.get(*id).map(|d| iptc_field_get(d, i).cloned()));
+                let mut vs = batch.iter().filter_map(|id| {
+                    st.session
+                        .iptc
+                        .get(*id)
+                        .map(|d| iptc_field_get(d, i).cloned())
+                });
                 let h = vs.next().flatten();
                 vs.any(|v| v != h)
             };
@@ -368,7 +379,7 @@ pub(crate) fn refresh_iptc_panel(win: &MainWindow, st: &mut AppState) {
         .collect();
     let mut chip_data: Vec<(String, usize)> = Vec::new();
     for id in &batch {
-        if let Some(d) = st.iptc.get(*id) {
+        if let Some(d) = st.session.iptc.get(*id) {
             for kw in &d.keywords {
                 match chip_data.iter_mut().find(|(t, _)| t == kw) {
                     Some((_, n)) => *n += 1,
@@ -389,7 +400,12 @@ pub(crate) fn refresh_iptc_panel(win: &MainWindow, st: &mut AppState) {
             (text, cov)
         })
         .collect();
-    let names: Vec<String> = st.templates.iter().map(|t| t.name.clone()).collect();
+    let names: Vec<String> = st
+        .session
+        .templates
+        .iter()
+        .map(|t| t.name.clone())
+        .collect();
 
     if st.iptc_panel.cache.rows != rows {
         win.set_iptc_fields(slint::ModelRc::new(VecModel::from(
@@ -441,10 +457,11 @@ fn commit_batch_mutation(
     st.iptc_panel.revert.store(snapshots);
     st.iptc_panel.revert_ids = ids.to_vec();
     st.iptc_panel.revert_label = format!("Revert: {label}");
-    st.touched_iptc.extend(ids.iter().copied());
-    if let Some(writer) = &st.writer {
+    st.session.touched_iptc.extend(ids.iter().copied());
+    if let Some(writer) = &st.session.writer {
         for id in ids {
-            if let (Some(path), Some(data)) = (st.paths.get(*id), st.iptc.get(*id)) {
+            if let (Some(path), Some(data)) = (st.session.paths.get(*id), st.session.iptc.get(*id))
+            {
                 writer.iptc(path.clone(), data.clone());
             }
         }

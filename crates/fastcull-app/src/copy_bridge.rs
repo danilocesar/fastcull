@@ -39,7 +39,7 @@ pub(crate) fn wire(window: &MainWindow, state: &Rc<RefCell<AppState>>) {
                 // shipped its RAW without the sidecar while reporting
                 // verified). Flush here so the PREVIEW is truthful;
                 // copy_start flushes AND replans again.
-                if let Some(writer) = &st.writer {
+                if let Some(writer) = &st.session.writer {
                     writer.flush();
                 }
                 let (dest, template) = load_ui_prefs();
@@ -101,7 +101,7 @@ pub(crate) fn wire(window: &MainWindow, state: &Rc<RefCell<AppState>>) {
             // fresh so sidecar existence, refresh mtimes and free space
             // are decided AFTER every pending write landed (gate HIGH
             // finding — a frozen at-open plan is never executed).
-            if let Some(writer) = &st.writer {
+            if let Some(writer) = &st.session.writer {
                 writer.flush();
             }
             copy_replan(&win, &mut st);
@@ -166,30 +166,34 @@ fn plan_sources(st: &AppState) -> Vec<fastcull_core::fileops::PlanSource> {
     // irreversible artifact this app produces — and both fileops.md and
     // docs/copy-picks.md promise it follows the session sort, so a copy
     // started mid-load must not encode a transient view state forever.
-    let ordered =
-        fastcull_core::filter::view_true_sort(&st.picks, &st.labels, &st.capture_keys, &all_query);
+    let ordered = fastcull_core::filter::view_true_sort(
+        &st.session.picks,
+        &st.session.labels,
+        &st.session.capture_keys,
+        &all_query,
+    );
     ordered
         .into_iter()
         .filter(|id| {
             matches!(
-                st.picks.get(*id),
+                st.session.picks.get(*id),
                 Some(fastcull_core::catalog::PickState::Picked)
             )
         })
         .filter_map(|id| {
-            let path = st.paths.get(id)?.clone();
+            let path = st.session.paths.get(id)?.clone();
             let meta = std::fs::metadata(&path).ok();
             let size = meta.as_ref().map(|m| m.len()).unwrap_or(0);
             let mtime = meta
                 .and_then(|m| m.modified().ok())
                 .unwrap_or(std::time::UNIX_EPOCH);
-            let name = st.labels.get(id).cloned().unwrap_or_default();
+            let name = st.session.labels.get(id).cloned().unwrap_or_default();
             Some(fastcull_core::fileops::PlanSource {
                 id,
                 path,
                 size,
                 ctx: fastcull_core::iptc::ExpandContext::from_sort_key(
-                    st.capture_keys.get(id).and_then(|k| k.as_deref()),
+                    st.session.capture_keys.get(id).and_then(|k| k.as_deref()),
                     mtime,
                     &name,
                     None,
@@ -322,18 +326,18 @@ pub(crate) fn recompute_bursts(st: &mut AppState) {
     // partly-loaded keys is already approximate and is redone as metadata
     // streams (bursts.dirty).
     let order = fastcull_core::filter::view_true_sort(
-        &st.picks,
-        &st.labels,
-        &st.capture_keys,
+        &st.session.picks,
+        &st.session.labels,
+        &st.session.capture_keys,
         &capture_query,
     );
     let frames: Vec<fastcull_core::burst::FrameMeta> = order
         .iter()
-        .map(|id| st.frame_meta.get(*id).cloned().unwrap_or_default())
+        .map(|id| st.session.frame_meta.get(*id).cloned().unwrap_or_default())
         .collect();
     let grouping =
         fastcull_core::burst::group(&frames, &fastcull_core::burst::BurstConfig::default());
-    let n = st.labels.len();
+    let n = st.session.labels.len();
     // Rebuilt from scratch every time, so the three parallel vectors are
     // re-sized through the one constructor that owns their length. The
     // dirty flag is the caller's (the pump clears it before calling), not
