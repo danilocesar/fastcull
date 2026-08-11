@@ -59,9 +59,19 @@ component Chip inherits Rectangle {
 // a silent drift: card height, card padding, and whether clicks on the
 // card itself are swallowed.
 component ModalScrim inherits Rectangle {
+    // MANDATORY — an unset length is 0px in Slint, which yields an
+    // invisible card that fails silently rather than loudly. Every call
+    // site must bind this.
     in property <length> card-height;
     in property <length> card-padding: 16px;
     in property <bool> card-eats-clicks: false;
+    // The Copy Picks dialog is a third copy of this scaffolding that has
+    // not been absorbed (it needs a wider card, and it hosts a FocusScope
+    // as an ANCESTOR of the whole dialog, which this component cannot
+    // host today). The width is a property so that migration is not
+    // blocked on this file; the default is what both current sites use,
+    // so no pixel moves.
+    in property <length> card-width: 480px;
     callback dismissed();
     y: 0; // missing-binding trap (issue #12): unset y centered the scrim 13px low
     background: #000000aa;
@@ -72,7 +82,7 @@ component ModalScrim inherits Rectangle {
     Rectangle {
         x: (parent.width - self.width) / 2;
         y: (parent.height - self.height) / 2;
-        width: 480px;
+        width: root.card-width;
         height: min(root.card-height, parent.height - 40px);
         border-radius: 8px;
         background: #202028;
@@ -1286,11 +1296,24 @@ export component MainWindow inherits Window {
         // Copy Picks dialog (M6, fileops.md): modal; Ctrl+E, glance,
         // Enter is the whole feature. The remembered destination is
         // displayed PROMINENTLY (the yesterday's-job failure mode).
+        //
+        // KNOWN RESIDUAL (gate finding): this is a third hand-rolled copy
+        // of the ModalScrim scaffolding. It was left out of that
+        // extraction deliberately — it hosts `copy-keys` as an ANCESTOR of
+        // the whole dialog, which ModalScrim cannot express today, and its
+        // scrim TouchArea swallows clicks WITHOUT dismissing. ModalScrim's
+        // card width is a property now so the rest of the gap is only this
+        // FocusScope nesting.
         if root.copy-visible: Rectangle {
             y: 0; // missing-binding trap (issue #12): unset y centered the scrim 13px low
             width: 100%;
             height: parent.height - statusbar.height;
             background: #000000aa;
+            // NOTE: no scroll-event handler here, unlike ModalScrim — a
+            // wheel over this modal still reaches the Flickable behind it
+            // (the validator-M2 bug class). Pre-existing, and fixing it is
+            // a behavior change, so it is filed rather than smuggled into
+            // a behavior-preserving refactor: issue #49.
             TouchArea { } // swallow clicks behind the dialog (modal)
             copy-keys := FocusScope {
                 // ANCESTOR of the whole dialog (gate finding: as a 0x0
