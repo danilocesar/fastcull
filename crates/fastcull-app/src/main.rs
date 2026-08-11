@@ -1693,7 +1693,11 @@ fn main() {
                                     long,
                                     terminal,
                                     at_loupe,
-                                    st.mids.contains_key(&index),
+                                    // Ignored by Announced (see route_warm):
+                                    // a freshly announced decode supersedes
+                                    // whatever is held, so don't pay for the
+                                    // lookup on this per-event path.
+                                    false,
                                     WarmCtx::Announced,
                                 );
                                 if let Some(WarmJob::Wrap { terminal: true }) = job {
@@ -2312,9 +2316,24 @@ fn write_snapshot_jpeg(
 /// re-inline this whole computation because of that.
 ///
 /// Returns the (virtual height, viewport-y) pair for `apply_reveal`; it
-/// deliberately does NOT write them itself, because writing vp-y can
-/// re-enter Rust (`changed vp-y` -> viewport-changed -> refresh), and
-/// refresh re-borrows the state.
+/// deliberately does NOT write them itself. Keeping the writes outside
+/// the borrow is what lets ONE copy of this serve both callers: handle_nav
+/// cannot write them while it holds `st`.
+///
+/// ORDER NOTE (gate finding, two reviewers): the two copies this replaced
+/// disagreed about when the consumed-geometry mark lands. handle_nav
+/// marked BEFORE writing (forced: it holds the borrow); the old
+/// reveal_cursor marked AFTER. Unifying on handle_nav's order is safe
+/// because the mark can only be observed by a `refresh` re-entered from
+/// the vp-y write, and that re-entry does not exist: Slint's `changed`
+/// callbacks are DEFERRED, not synchronous. `set_vp_y` only appends the
+/// change tracker to a thread-local list (i-slint-core-1.17.1
+/// properties/change_tracker.rs `mark_dirty`); the notify functions run
+/// later, when the event loop calls `run_change_handlers()` (via
+/// `WindowInner::ensure_tree_instantiated`, window.rs). So no refresh can
+/// interleave between `apply_reveal`'s writes and this mark in either
+/// order, and mark-then-write is observationally identical to
+/// write-then-mark here.
 fn reveal_scroll(
     win: &MainWindow,
     st: &mut AppState,
@@ -2346,7 +2365,7 @@ fn apply_reveal(win: &MainWindow, (virtual_height, vp_y): (f32, f32)) {
 
 /// Re-anchor the scroll so the cursor is visible, then refresh.
 fn reveal_cursor(win: &MainWindow, state: &Rc<RefCell<AppState>>) {
-    let (_, viewport_h, scroll_y) = current_geometry(win, state);
+    let (viewport_h, scroll_y) = viewport_metrics(win);
     let reveal = {
         let mut st = state.borrow_mut();
         reveal_scroll(win, &mut st, viewport_h, scroll_y)
@@ -2802,8 +2821,11 @@ fn machine_ctx(
         })
         .or_else(|| aspect_for(st, st.cursor).map(|aspect| (vh * aspect, vh)))
         .unwrap_or((vw, vh));
+    // The COUNT is the Grid arm's payload, so it is still derived here;
+    // the PREDICATE is `at_loupe()` (they agree — a single 1 sits at the
+    // last index and zoom is clamped to the ladder).
     let columns = grid::ZOOM_COLUMNS[st.zoom.min(grid::ZOOM_COLUMNS.len() - 1)];
-    let state = if columns > 1 {
+    let state = if !st.at_loupe() {
         pm::ViewState::Grid {
             columns: columns as u8,
         }
@@ -2818,7 +2840,7 @@ fn machine_ctx(
     // Where the fit view really renders: the cursor's N=1 grid cell in
     // keys-space (validator MAJOR: the fit view is a grid strip cell,
     // scroll-dependent — not an image centered in the viewport).
-    let fit_cell = (columns == 1).then(|| {
+    let fit_cell = st.at_loupe().then(|| {
         // The layout is bounded by the GRID area's height (below the filter
         // bar), not by `vh`/`loupe_area_h` — the zoom overlay covers the bar
         // but the fit view does not.
@@ -3283,7 +3305,6 @@ fn handle_nav_inner(win: &MainWindow, state: &Rc<RefCell<AppState>>, key: &str) 
 /// "one tick later" into a visible trickle-in. Returns whether anything
 /// was adopted (callers refresh on true).
 fn drain_kitchen(win: &MainWindow, state: &Rc<RefCell<AppState>>) -> bool {
-    use fastcull_core::loupe::MID_RUNG_MAX_LONG;
     let mut st = state.borrow_mut();
     let at_loupe = st.at_loupe();
     let done = st.kitchen.drain();
@@ -3317,7 +3338,11 @@ fn drain_kitchen(win: &MainWindow, state: &Rc<RefCell<AppState>>) -> bool {
                     // The file's best rung IS this texture (issue #8).
                     insert_fullres(&mut st, index, texture.clone());
                 }
-                if long <= MID_RUNG_MAX_LONG
+                // Size-only, like route_warm's Announced arm: this asks
+                // "may this artifact enter the mid cache", which is about
+                // the pixels, not about the file's ladder being topped
+                // out — hence the explicit `false` for terminal.
+                if !is_top_rung(long, false)
                     && (st.mids.len() < MIDS_CAP || st.mids.contains_key(&index))
                 {
                     st.mids.insert(index, texture);
@@ -3341,11 +3366,18 @@ fn drain_kitchen(win: &MainWindow, state: &Rc<RefCell<AppState>>) -> bool {
     true
 }
 
+/// The (viewport height, scroll offset) pair, read straight off the
+/// window. Split out of `current_geometry` because `reveal_cursor` needs
+/// only these two — it built a `GridLayout` here and threw it away, then
+/// `reveal_scroll` built an identical one (gate finding).
+fn viewport_metrics(win: &MainWindow) -> (f32, f32) {
+    (win.get_grid_height(), (-win.get_vp_y()).max(0.0))
+}
+
 fn current_geometry(win: &MainWindow, state: &Rc<RefCell<AppState>>) -> (GridLayout, f32, f32) {
     let st = state.borrow();
-    let viewport_h = win.get_grid_height();
+    let (viewport_h, scroll_y) = viewport_metrics(win);
     let layout = GridLayout::new(st.zoom, win.get_grid_width(), viewport_h, st.view.len());
-    let scroll_y = (-win.get_vp_y()).max(0.0);
     (layout, viewport_h, scroll_y)
 }
 
