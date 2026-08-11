@@ -31,6 +31,7 @@ use std::rc::Rc;
 
 use fastcull_core::grid::{self, GridLayout};
 use fastcull_core::loupe::is_top_rung;
+use fastcull_core::transit::{DropReason, RenderDecision};
 use slint::{ComponentHandle, Model};
 
 use crate::iptc_bridge::refresh_iptc_panel;
@@ -474,66 +475,100 @@ fn climb_mid_rung(win: &MainWindow, st: &mut AppState, pass: &Pass, ids: &[usize
     want_mid
 }
 
+/// The honest floor: the overlay comes down to the fit view, and every
+/// piece of bookkeeping about what was on it is cleared.
+///
+/// The trace is the M1 fit-flash pin — an overlay dropping while the desire
+/// is still above fit must NAME its excuse (the regression tests grep these
+/// two strings). The old code re-derived "is this the traced case?" from
+/// `one2one && overlay`; it is now exactly "the reason is one of the two
+/// traced ones", which is the same set by construction: `render_rung` emits
+/// `DecodeFailed`/`HoldCap` only when the overlay was up and still wanted.
+fn honest_drop(win: &MainWindow, st: &mut AppState, cursor: usize, reason: DropReason) {
+    let excuse = match reason {
+        DropReason::DecodeFailed => Some("decode failed"),
+        DropReason::HoldCap => Some("hold cap"),
+        // Leaving the ladder, or a cold entry with nothing on screen:
+        // nothing was lost, so there is nothing to excuse.
+        DropReason::BelowLadder | DropReason::NothingToHold => None,
+    };
+    if let Some(excuse) = excuse {
+        trace_mark(&format!("loupe overlay dropped idx {cursor} ({excuse})"));
+    }
+    win.set_one2one(false);
+    win.set_loupe_soft(false);
+    st.loupe_view.last_pan_write = None;
+    st.loupe_view.last_overlay_cursor = None;
+    st.loupe_view.overlay_hold = None;
+    st.loupe_view.last_soft_rung = None;
+}
+
 /// PHASE 6 — which rung the loupe overlay shows, and the render of it:
 /// sharp (the top rung) / soft (the cursor's mid) / thumb rescue / a
 /// bounded residual hold / the honest drop to fit — plus the state badge.
-/// The ladder and its rules are ui-grid.md's; this is the app-side walk of
-/// them. Returns the cursor's mark, which the status line spells out.
+///
+/// The ladder and its rules are ui-grid.md's, and since A3 the DECISION is
+/// `fastcull_core::transit::render_rung` — table-tested there over every
+/// input combination. What is left here is what only the app can do: look
+/// the textures up, read the clock, do the extent math, and write the
+/// properties each decision names. Returns the cursor's mark, which the
+/// status line spells out.
 fn render_loupe_rung(win: &MainWindow, st: &mut AppState, pass: &Pass) -> i32 {
     let (at_loupe, view_len) = (pass.at_loupe, pass.view_len);
     let cursor = st.grid.cursor;
-    // Zoom overlay (any factor above fit, capped at 1:1): only shown when
-    // a texture of the CURSOR's own exists (a stale previous image must
-    // never pose as the current one), sized as fit-extent × factor in
-    // logical pixels so the capped factor means device pixels on HiDPI.
-    // Quality rule as revised by issue #21: the top rung renders sharp;
-    // below it the view stays at the carried factor rendered SOFT from
-    // the cursor's mid rung, FLAGGED by the cue pill — never unflagged
-    // upscaling, and fit only when even the mid is missing.
+    // Zoom overlay (any factor above fit, capped at 1:1): sized as
+    // fit-extent × factor in logical pixels so the capped factor means
+    // device pixels on HiDPI.
     let factor = clamped_factor(win, st);
     let overlay = factor > 1.0 && at_loupe;
-    // Issue #21 (user-approved contract): above fit, always show the
-    // CURRENT image at the carried factor and pan center — rung QUALITY
-    // may degrade (mid rung upscaled, flagged by the cue pill), position
-    // and identity may not. Extended below the mid by issue #46: the
-    // ladder's last rung with pixels is the cursor's own grid THUMB —
-    // the overlay NEVER drops to fit while the desire is above it (the
-    // transit contract), however cold the neighbor.
+    // The three rungs of the CURSOR's own image, looked up but not yet
+    // judged. Which one (if any) renders is `render_rung`'s call.
     let sharp = fullres_for(st, cursor).filter(|img| {
         is_top_rung(
             img.size().width.max(img.size().height),
             st.textures.terminal_native.contains(&cursor),
         )
     });
-    let soft = if sharp.is_none() && overlay {
-        // The cursor's own mid — or a warm sub-top texture the engine
-        // re-announced into the fullres slot (the pruned-and-revisited
-        // path: validator M3, held-left beyond the mids window used to
-        // re-strobe fit with the pixels literally in hand).
-        st.textures
-            .mids
-            .get(&cursor)
-            .cloned()
-            .or_else(|| fullres_for(st, cursor))
-    } else {
-        None
-    };
-    // Thumb rung (issue #46): below the mid, the cursor's own 320 px grid
-    // thumb, upscaled to the carried geometry — colored mush at 1:1, and
-    // exactly right during transit (persona: "what my eye needs is that
-    // the blob stays where the blob was"). Identity is intact: it is the
-    // CURRENT image's own thumb, flagged by the cue pill like every
-    // sub-top rung. A decode-FAILED cursor skips the rescue (validator
-    // finding): a file whose 320 px thumb survived while every loupe
-    // rung is corrupt would otherwise sit at 1:1 behind a "loading"
-    // pill that can never complete, hiding the strip's failed badge —
-    // fit plus the badge is the honest floor there.
-    let (soft, soft_is_thumb) = match soft {
-        Some(img) => (Some(img), false),
-        None if sharp.is_none() && overlay && !st.textures.failed.contains(&cursor) => {
-            (st.textures.images.get(&cursor).cloned(), true)
-        }
-        None => (None, false),
+    // The mid rung — or a warm sub-top texture the engine re-announced
+    // into the fullres slot (the pruned-and-revisited path: validator M3,
+    // held-left beyond the mids window used to re-strobe fit with the
+    // pixels literally in hand).
+    let mid = st
+        .textures
+        .mids
+        .get(&cursor)
+        .cloned()
+        .or_else(|| fullres_for(st, cursor));
+    // The cursor's own 320 px grid thumb (issue #46's bottom rung).
+    let thumb = st.textures.images.get(&cursor).cloned();
+    // One clock read for the whole decision: the same `now` measures the
+    // hold and stamps a new one, as it always did.
+    let now = std::time::Instant::now();
+    let decision = fastcull_core::transit::render_rung(&fastcull_core::transit::RungInputs {
+        has_sharp: sharp.is_some(),
+        has_mid: mid.is_some(),
+        has_thumb: thumb.is_some(),
+        cursor_failed: st.textures.failed.contains(&cursor),
+        overlay_wanted: overlay,
+        // The overlay's own visibility property IS the "were previous
+        // pixels on screen" memory the hold arm consults.
+        overlay_was_up: win.get_one2one(),
+        hold: st.loupe_view.overlay_hold.map(|(held_for, since)| {
+            fastcull_core::transit::HoldState {
+                same_cursor: held_for == cursor,
+                elapsed: now.duration_since(since),
+            }
+        }),
+        hold_cap: OVERLAY_HOLD_CAP,
+    });
+    // The texture each decision names. `render_rung` decided FROM these
+    // being present, so Sharp and Soft always find theirs; the match below
+    // still covers the pairing for totality.
+    let chosen = match decision {
+        RenderDecision::Sharp => sharp,
+        RenderDecision::Soft { is_thumb: false } => mid,
+        RenderDecision::Soft { is_thumb: true } => thumb,
+        RenderDecision::Hold { .. } | RenderDecision::Drop { .. } => None,
     };
     // The soft view needs a FINITE factor: an INFINITY pin (Z) resolves
     // against native dims we don't have yet — carry the last resolved
@@ -548,8 +583,8 @@ fn render_loupe_rung(win: &MainWindow, st: &mut AppState, pass: &Pass) -> i32 {
     } else {
         st.loupe_view.last_resolved_factor
     };
-    match (sharp, soft) {
-        (Some(img), _) if overlay => {
+    match (decision, chosen) {
+        (RenderDecision::Sharp, Some(img)) => {
             let size = img.size();
             let sf = win.window().scale_factor();
             let (nw, nh) = (size.width as f32 / sf, size.height as f32 / sf);
@@ -585,7 +620,7 @@ fn render_loupe_rung(win: &MainWindow, st: &mut AppState, pass: &Pass) -> i32 {
             win.set_loupe_soft(false);
             win.set_one2one(true);
         }
-        (None, Some(img)) if overlay => {
+        (RenderDecision::Soft { is_thumb }, Some(img)) => {
             // SOFT transit render: the mid rung — or, below it, the grid
             // thumb (issue #46) — upscaled to the carried factor. Same
             // extent math for both — only the aspect matters at a given
@@ -607,70 +642,45 @@ fn render_loupe_rung(win: &MainWindow, st: &mut AppState, pass: &Pass) -> i32 {
             win.set_loupe_image(img);
             win.set_loupe_vx(ox);
             win.set_loupe_vy(oy);
-            if st.loupe_view.last_soft_rung != Some((cursor, soft_is_thumb)) {
+            if st.loupe_view.last_soft_rung != Some((cursor, is_thumb)) {
                 trace_mark(&format!(
                     "loupe {} idx {cursor} factor {f:.3} extent {ew:.0}x{eh:.0}",
-                    if soft_is_thumb { "thumb" } else { "soft" }
+                    if is_thumb { "thumb" } else { "soft" }
                 ));
             }
-            st.loupe_view.last_soft_rung = Some((cursor, soft_is_thumb));
+            st.loupe_view.last_soft_rung = Some((cursor, is_thumb));
             st.loupe_view.last_pan_write = Some((ox, oy));
             st.loupe_view.last_overlay_cursor = Some(cursor);
             st.loupe_view.overlay_hold = None;
             win.set_loupe_soft(true);
             win.set_one2one(true);
         }
-        _ => {
-            // Not even the cursor's own THUMB exists (cold-start edge —
-            // the thumb pipeline has not served this image yet), or the
-            // desire is at/below fit. Two very different situations:
-            //
-            // Residual HOLD (issue #46, recorded in ui-grid.md): with the
-            // overlay up and the desire still above fit, keep the
-            // PREVIOUS image's pixels at the carried geometry, flagged by
-            // the cue pill — a fit-drop is the strobe the transit
-            // contract forbids, and a black frame is retinal pumping at
-            // 9pm (persona). BOUNDED, never an open-ended lie: a decode
-            // FAILURE of the cursor image drops to fit immediately (the
-            // strip owns the failed badge), and OVERLAY_HOLD_CAP caps a
-            // wedged decode. The mark badge and status bar name the NEW
-            // image during the hold; the accepted, capped cost is
-            // recorded in the spec.
-            let now = std::time::Instant::now();
-            let failed = st.textures.failed.contains(&cursor);
-            let capped = matches!(st.loupe_view.overlay_hold, Some((c, since)) if c == cursor
-                && now.duration_since(since) >= OVERLAY_HOLD_CAP);
-            if overlay && win.get_one2one() && !failed && !capped {
-                if !matches!(st.loupe_view.overlay_hold, Some((c, _)) if c == cursor) {
-                    st.loupe_view.overlay_hold = Some((cursor, now));
-                    trace_mark(&format!(
-                        "loupe hold idx {cursor} (not even a thumb; previous pixels kept)"
-                    ));
-                }
-                // Geometry, pixels, last_pan_write and last_overlay_cursor
-                // all stay on the PREVIOUS image — the pixels still belong
-                // to it, and the first rung of the new image lands in the
-                // branches above.
-                win.set_loupe_soft(true);
-            } else {
-                // Honest drop: leaving the ladder (desire at/below fit or
-                // not at the loupe), a failed cursor image, or a hold that
-                // outlived its cap. An overlay dropping while the desire
-                // is still above fit is the M1 fit-flash unless excused by
-                // failure/cap — trace it (the regression tests grep this).
-                if win.get_one2one() && overlay {
-                    trace_mark(&format!(
-                        "loupe overlay dropped idx {cursor} ({})",
-                        if failed { "decode failed" } else { "hold cap" }
-                    ));
-                }
-                win.set_one2one(false);
-                win.set_loupe_soft(false);
-                st.loupe_view.last_pan_write = None;
-                st.loupe_view.last_overlay_cursor = None;
-                st.loupe_view.overlay_hold = None;
-                st.loupe_view.last_soft_rung = None;
+        (RenderDecision::Hold { start }, _) => {
+            // Residual HOLD (issue #46, recorded in ui-grid.md): not even
+            // the cursor's own thumb exists yet, so keep the PREVIOUS
+            // image's pixels at the carried geometry, flagged by the cue
+            // pill — a fit-drop is the strobe the transit contract
+            // forbids, and a black frame is retinal pumping at 9pm
+            // (persona). The bounds that make this honest are the core
+            // decision's; what happens here is the clock STAMP.
+            if start {
+                st.loupe_view.overlay_hold = Some((cursor, now));
+                trace_mark(&format!(
+                    "loupe hold idx {cursor} (not even a thumb; previous pixels kept)"
+                ));
             }
+            // Geometry, pixels, last_pan_write and last_overlay_cursor
+            // all stay on the PREVIOUS image — the pixels still belong
+            // to it, and the first rung of the new image lands in the
+            // branches above.
+            win.set_loupe_soft(true);
+        }
+        (RenderDecision::Drop { reason }, _) => honest_drop(win, st, cursor, reason),
+        // Unreachable: `render_rung` named a rung from these very Options
+        // being Some. The honest floor is the right answer anyway — it is
+        // what the old ladder's catch-all did with no pixels in hand.
+        (RenderDecision::Sharp | RenderDecision::Soft { .. }, None) => {
+            honest_drop(win, st, cursor, DropReason::NothingToHold)
         }
     }
     // Fit pointer surface (issue #11): active at 1 column with no zoom
