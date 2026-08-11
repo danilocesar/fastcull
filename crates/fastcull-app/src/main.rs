@@ -18,11 +18,11 @@
 //!
 //! | file | when you open it |
 //! |---|---|
-//! | `state.rs` | the state every controller borrows, and the app constants |
+//! | `state.rs` | the state every controller borrows (seven groups), and the app constants |
 //! | `session.rs` | opening a folder, launch dispatch, templates, ui.toml prefs |
 //! | `nav.rs` | keyboard navigation, marks, filter/sort, cursor reveal |
 //! | `loupe_ctrl.rs` | pointer gestures, loupe geometry, the full-res ring |
-//! | `presenter.rs` | the refresh pass: state -> window properties, cells, and which loupe rung is shown |
+//! | `presenter.rs` | the refresh pass in eight named phases: state -> window properties, cells, and which loupe rung is shown |
 //! | `pump.rs` | the 33 ms engine tick and texture adoption |
 //! | `iptc_bridge.rs` | the IPTC panel |
 //! | `copy_bridge.rs` | the Copy Picks dialog (and burst regrouping) |

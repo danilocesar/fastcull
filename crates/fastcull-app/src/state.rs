@@ -1,8 +1,56 @@
 //! Application state: the one `AppState` every controller borrows, plus the
 //! app-level constants (window margins, texture caps, selection wash).
 //!
-//! Shape unchanged by the controller split — breaking the struct into
-//! per-surface sub-states is the audit's separate A2 item.
+//! # The shape
+//!
+//! `AppState` is seven groups and two survivors, not a flat field list.
+//! Each group is the state of ONE thing, so a controller's footprint on the
+//! state is visible at a glance — `st.copy.…` is the copy dialog, and
+//! nothing else is:
+//!
+//! | group | what it is |
+//! |---|---|
+//! | [`SessionState`] | the open folder: its images, what the user has said about them, the engines producing data for them |
+//! | [`GridViewState`] | what the grid shows and where the cursor and selection are inside it |
+//! | [`LoupeViewState`] | the loupe overlay: its engine, the desired factor and pan, what it last drew |
+//! | [`TextureStore`] | every UI-side texture (thumbs, mids, full-res) — a cache, re-derivable from the engines |
+//! | [`BurstIndex`] | burst grouping outputs, indexed by image id |
+//! | [`IptcPanelState`] | the IPTC dock: its visibility, its model cache, the revert slot |
+//! | [`CopyState`] | the Copy Picks dialog: plan, destination, running worker, what was copied |
+//!
+//! The two survivors are not state at all: `cells` is the model the window
+//! is bound to, and `kitchen` is a worker thread. Both outlive every
+//! session; both say so at their declaration.
+//!
+//! # The reset rule
+//!
+//! A session swap is [`AppState::begin_session`]: each swap-scoped group is
+//! REPLACED wholesale, never reset field by field. That is the whole point
+//! of the shape. The old code reset ~45 fields by hand in `load_folder` and
+//! the list had already drifted — three fields it should have reset were
+//! missing (`last_pan_write`, `last_overlay_cursor`, `last_view_geometry`).
+//! With whole-struct replacement there is no list to fall out of: a field
+//! added to a group is forgotten on a swap because it is part of the group.
+//!
+//! So when you add a field, the question is not "where do I reset this?" —
+//! it is "which group is this a fact about?". Only if the answer is "none"
+//! does it belong at the top level, and then it owes a comment saying why
+//! it survives a session.
+//!
+//! Three groups DO carry something across a swap, and each names it in its
+//! own `begin_session`: the grid keeps the zoom step (the launch flags set
+//! it before the first folder loads) and the filter bar's visibility, the
+//! IPTC panel keeps the dock's visibility, and the copy dialog keeps the
+//! remembered destination (fileops.md). Everything else in those structs
+//! goes back to its default.
+//!
+//! # Per-image vectors
+//!
+//! Six vectors in [`SessionState`] and three in [`BurstIndex`] are indexed
+//! by image id — index i is the same photograph in all nine. Their length
+//! is decided in exactly two constructors ([`SessionState::new`] and
+//! [`BurstIndex::new`]), and `begin_session` asserts the invariant in debug
+//! builds where the count is known.
 
 use std::collections::{HashMap, HashSet};
 use std::rc::Rc;
