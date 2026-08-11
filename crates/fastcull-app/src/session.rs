@@ -13,7 +13,7 @@ use slint::ComponentHandle;
 use crate::focus::refocus_topmost_deferred;
 use crate::nav::recompute_view;
 use crate::presenter::refresh;
-use crate::state::AppState;
+use crate::state::{AppState, BurstIndex, SessionState};
 use crate::MainWindow;
 
 /// Wire File > Open Folder (the native picker; the action itself is
@@ -54,19 +54,12 @@ pub(crate) fn dispatch(state: &Rc<RefCell<AppState>>, launch: Launch, start_11: 
         }
         Launch::Synthetic(n) => {
             let mut st = state.borrow_mut();
-            st.session.labels = (0..n).map(|i| format!("SYN{i:05}.ARW")).collect();
-            st.session.picks = vec![fastcull_core::catalog::PickState::Unmarked; n];
-            st.session.capture_keys = vec![None; n];
-            st.session.frame_meta = vec![fastcull_core::burst::FrameMeta::default(); n];
-            st.bursts = crate::state::BurstIndex::new(n);
-            st.session.iptc = vec![fastcull_core::iptc::IptcData::default(); n];
-            st.session.synthetic = true;
-            st.session.session_open = true;
-            // No pipeline runs in synthetic mode, so no job ever completes:
-            // without this the session is permanently "still loading" and
-            // the status bar would claim "0/N loaded - sorting by name"
-            // forever, on the very frames the screenshot suite captures.
-            st.session.thumbs_done = n;
+            // Built through the same constructors a real folder uses, so
+            // the per-image vectors are sized in ONE place. Not through
+            // `begin_session`: nothing is being swapped away here (this is
+            // the launch), and the kitchen has no work to retarget.
+            st.session = SessionState::synthetic(n);
+            st.bursts = BurstIndex::new(n);
             recompute_view(&mut st);
         }
         Launch::Folder(path) => {
@@ -102,69 +95,19 @@ fn load_folder(state: &Rc<RefCell<AppState>>, folder: &std::path::Path) -> Resul
         })
         .collect();
     let mut st = state.borrow_mut();
-    st.session.pipeline = None;
-    // The whole loupe view dies with the session it was looking at: the
-    // engine and its receiver (stopped here, before the new ones start),
-    // the desired factor and pan, and every scrap of "what did the overlay
-    // last draw" bookkeeping. Replacing the struct rather than clearing
-    // ten fields by hand is the point of the A2 sub-structs: three of
-    // those fields (last_pan_write, last_overlay_cursor, and the grid's
-    // last_view_geometry) were NOT in the old hand-written list.
-    st.loupe_view = crate::state::LoupeViewState::default();
-    st.session.pipeline_rx = None;
-    drop(st.session.writer.take()); // flush barrier for the previous session's marks
-    st.session.sidecar_errs = None;
-
-    let count = labels.len();
     let paths: Vec<std::path::PathBuf> = jobs.iter().map(|j| j.path.clone()).collect();
-    st.session.labels = labels;
-    st.session.paths = paths.clone();
-    st.session.picks = vec![fastcull_core::catalog::PickState::Unmarked; count];
-    st.session.touched.clear();
-    st.session.sidecar_failures = 0;
-    st.grid.cursor = 0;
-    st.grid.cursor_touched = false;
-    st.textures.thumb_jpegs.clear();
-    st.textures.images.clear();
-    st.textures.failed.clear();
-    st.session.thumbs_done = 0;
-    // New session: drop queued kitchen work and orphan late completions
-    // (their generation dies with the old session).
-    st.kitchen.retarget();
-    // Re-arm issue #25's one-shot re-sort edge for the new session. It
-    // happens to re-arm anyway because every open path refreshes
-    // synchronously before the pump can deliver an event, but that is an
-    // implicit invariant one reordered call away from a second folder
-    // silently losing its re-anchor (validator concern, 2026-07-31).
-    st.grid.last_metadata_complete = false;
-    st.grid.last_cursor_visible = true;
-    st.session.synthetic = false;
-    st.textures.fullres.clear();
-    st.textures.terminal_native.clear();
-    st.textures.mids.clear();
-    st.textures.va = fastcull_core::viewassets::ViewAssets::default();
-    st.session.capture_keys = vec![None; count];
-    st.session.frame_meta = vec![fastcull_core::burst::FrameMeta::default(); count];
-    st.bursts = crate::state::BurstIndex::new(count);
-    st.session.iptc = vec![fastcull_core::iptc::IptcData::default(); count];
-    st.session.touched_iptc.clear();
-    st.iptc_panel.cache = Default::default();
-    st.copy.plan = None;
-    st.copy.handle = None;
-    st.copy.rx = None;
-    st.copy.copied_to.clear();
-    st.grid.selection.reset();
-    st.iptc_panel.revert = Default::default();
-    st.iptc_panel.revert_ids.clear();
-    st.iptc_panel.revert_label.clear();
+    // The whole session swap, in one call: every group that describes one
+    // folder is replaced, the survivors (the kitchen worker, the bound
+    // cell model, the zoom step, the two panel visibilities, the
+    // remembered copy destination) are named in `begin_session` itself.
+    // This is where the previous session's sidecar writer is dropped, and
+    // dropping it flushes its pending marks — the barrier the new writer
+    // below is started on the far side of.
+    st.begin_session(labels, paths.clone());
     // templates.toml: read at session open (spec: live-reload = re-read
     // here and on panel toggle, no watcher). Errors/warnings surface in
     // the panel warning strip.
     reload_templates(&mut st);
-    // A new folder starts unfiltered: a hidden active filter on a fresh
-    // session would look like missing files.
-    st.grid.query = fastcull_core::filter::ViewQuery::default();
-
     let (writer, errs) = fastcull_core::sidecar_writer::SidecarWriter::start();
     st.session.writer = Some(writer);
     st.session.sidecar_errs = Some(errs);
@@ -186,7 +129,6 @@ fn load_folder(state: &Rc<RefCell<AppState>>, folder: &std::path::Path) -> Resul
     st.loupe_view.engine = Some(loupe);
     st.session.pipeline_rx = Some(rx);
     st.loupe_view.rx = Some(loupe_rx);
-    st.session.session_open = true;
     recompute_view(&mut st);
     Ok(())
 }
