@@ -216,6 +216,26 @@ enum XmpForm {
 /// every candidate's local name on every call (gate finding). Deriving
 /// them keeps the single source of truth that a second hand-written match
 /// would have cost.
+///
+/// MEASURED (release, this laptop, `rewrite-hostile-in.xmp` = 33 calls per
+/// `read_sidecar`, 2M-call micro-loop over that file's real key stream), so
+/// the next reader does not have to re-argue it:
+///
+/// | shape                                   | per call | per sidecar |
+/// |-----------------------------------------|----------|-------------|
+/// | recompute `local_name` per candidate    | 58.7 ns  | 1.94 µs     |
+/// | derived + cached, this code             | 10.1 ns  | 0.33 µs     |
+/// | hand-written `match` on the raw bytes   |  6.8 ns  | 0.22 µs     |
+/// | `OnceLock<HashMap<&[u8], IptcField>>`   | 25.0 ns  | 0.83 µs     |
+///
+/// `read_sidecar` itself is ~7.2 µs per file, so what is left here is 4.6%
+/// of it. A hash map — the obvious "stop scanning" move — is 2.5x SLOWER
+/// than an 11-entry scan whose misses die on the length check. The
+/// hand-written match would save 0.11 µs per sidecar (0.2 ms over a
+/// 2000-file folder load, inside the run-to-run noise of `read_sidecar`)
+/// and would cost back the second maintenance site this pass deleted.
+/// That trade is not worth taking; the expensive shape was the first one,
+/// and it is gone.
 fn iptc_field_for(local: &[u8]) -> Option<IptcField> {
     static LOCALS: std::sync::OnceLock<[(&'static [u8], IptcField); IptcField::ALL.len()]> =
         std::sync::OnceLock::new();
