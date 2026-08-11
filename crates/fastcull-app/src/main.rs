@@ -22,7 +22,7 @@
 //! | `session.rs` | opening a folder, launch dispatch, templates, ui.toml prefs |
 //! | `nav.rs` | keyboard navigation, marks, filter/sort, cursor reveal |
 //! | `loupe_ctrl.rs` | pointer gestures, loupe geometry, the full-res ring |
-//! | `presenter.rs` | the refresh pass: state -> window properties and cells |
+//! | `presenter.rs` | the refresh pass: state -> window properties, cells, and which loupe rung is shown |
 //! | `pump.rs` | the 33 ms engine tick and texture adoption |
 //! | `iptc_bridge.rs` | the IPTC panel |
 //! | `copy_bridge.rs` | the Copy Picks dialog (and burst regrouping) |
@@ -33,7 +33,15 @@
 //! | `kitchen.rs` | the texture worker (pixels -> textures, off the UI thread) |
 //!
 //! Controllers call `fastcull-core` and funnel their UI updates through
-//! [`presenter::refresh`]; they do not call each other.
+//! [`presenter::refresh`]. They DO call each other: a helper two surfaces
+//! need lives in the module that owns the concern, and the other module
+//! imports it — `nav` takes the loupe's factor math from `loupe_ctrl`,
+//! `session`/`copy_bridge`/`iptc_bridge` take `refocus_topmost_deferred`
+//! from `focus`, `presenter` takes `refresh_iptc_panel` from `iptc_bridge`.
+//! The split moved code, not calls: this is the pre-split call graph
+//! unchanged, and the `use crate::` block at the top of each module is that
+//! module's outgoing edge list — read it first when tracing a behavior
+//! across surfaces.
 
 use std::cell::RefCell;
 use std::collections::{HashMap, HashSet};
