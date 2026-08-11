@@ -41,9 +41,40 @@ pub(crate) fn refresh(win: &MainWindow, state: &Rc<RefCell<AppState>>) {
     trace_slow("refresh", t0);
 }
 
-fn refresh_inner(win: &MainWindow, state: &Rc<RefCell<AppState>>) {
-    let (layout, viewport_h, mut scroll_y) = current_geometry(win, state);
-    let mut st = state.borrow_mut();
+/// What one refresh pass established about the geometry it renders into,
+/// before it changes anything: the layout, the scroll offset, and the four
+/// "what drifted since last time" answers every later phase asks.
+///
+/// `scroll_y` lives here rather than in `AppState` on purpose: it is a
+/// fact about THIS pass (the anchoring phase may correct it), not a
+/// property of the app — the window owns the real scroll position.
+struct Pass {
+    layout: GridLayout,
+    viewport_h: f32,
+    scroll_y: f32,
+    view_len: usize,
+    /// At one column, the visible image IS the cursor (spec, cursor
+    /// contract). Fixed for the pass: no phase changes the zoom step.
+    at_loupe: bool,
+    /// The grid geometry the PREVIOUS refresh saw (None on the first).
+    prev_geom: Option<(f32, f32)>,
+    /// Geometry changed since the last refresh: chrome or window movement,
+    /// never user scrolling (issue #16).
+    relayout: bool,
+    /// The view's membership or order changed under the cursor (issue #22).
+    view_mutated: bool,
+    /// This pass can actually act on an anchoring decision (it has a
+    /// viewport height and something to show).
+    can_anchor: bool,
+    /// Issue #25's one-shot edge: the last metadata job just landed.
+    load_settled: bool,
+}
+
+/// PHASE 1 — what drifted since the last refresh: geometry (relayout),
+/// view membership/order, and the load-settled edge. Consumes those edges
+/// (recording this pass's values) so each is answered once per refresh.
+fn detect_drift(win: &MainWindow, st: &mut AppState, geom: (GridLayout, f32, f32)) -> Pass {
+    let (layout, viewport_h, scroll_y) = geom;
     // Relayout detection (issue #16): a geometry change since the last
     // refresh is chrome/window movement (panel toggle, resize), never
     // user scrolling.
@@ -78,7 +109,27 @@ fn refresh_inner(win: &MainWindow, state: &Rc<RefCell<AppState>>) {
     if can_anchor {
         st.grid.last_metadata_complete = st.metadata_complete();
     }
+    Pass {
+        layout,
+        viewport_h,
+        scroll_y,
+        view_len,
+        at_loupe: st.at_loupe(),
+        prev_geom,
+        relayout,
+        view_mutated,
+        can_anchor,
+        load_settled,
+    }
+}
 
+/// PHASE 2 — anchoring: put the viewport where the content the user was
+/// looking at still is, after a whole-grid re-sort (issue #25) or a
+/// relayout (issue #16). Writes `pass.scroll_y` so the rest of the pass
+/// renders the corrected view, not the stale one.
+fn anchor_the_scroll(win: &MainWindow, st: &mut AppState, pass: &mut Pass) {
+    let (layout, viewport_h, view_len) = (&pass.layout, pass.viewport_h, pass.view_len);
+    let mut scroll_y = pass.scroll_y;
     // GRID-level resize anchoring (user report: shrink the window and
     // the list "scrolls up", grow and it "scrolls down"). Row pitch is
     // a pure function of the grid width, so keeping the raw pixel
@@ -98,13 +149,13 @@ fn refresh_inner(win: &MainWindow, state: &Rc<RefCell<AppState>>) {
     // input" defect this change exists to remove, and would regress a
     // browsing user against the old behaviour (validator FAIL, 2026-07-31).
     // Same guard the relayout branch below already applies.
-    if load_settled && layout.columns > 1 {
+    if pass.load_settled && layout.columns > 1 {
         let cur_pos = st.cursor_pos().unwrap_or(0);
         // The guard itself lives in core (rule 5) and is unit-tested there:
         // grid::scroll_after_resort. It shipped into review MISSING from the
         // app-level version, so it does not belong in the app.
         let corrected = grid::scroll_after_resort(
-            &layout,
+            layout,
             cur_pos,
             scroll_y,
             viewport_h,
@@ -127,8 +178,8 @@ fn refresh_inner(win: &MainWindow, state: &Rc<RefCell<AppState>>) {
         win.set_vp_y(-corrected);
         scroll_y = corrected;
     }
-    if relayout && layout.columns > 1 && view_len > 0 && viewport_h > 0.0 {
-        if let Some((old_width, old_viewport_h)) = prev_geom {
+    if pass.relayout && layout.columns > 1 && view_len > 0 && viewport_h > 0.0 {
+        if let Some((old_width, old_viewport_h)) = pass.prev_geom {
             let old_layout = GridLayout::new(st.grid.zoom, old_width, old_viewport_h, view_len);
             let old_pitch = old_layout.cell_height + grid::CELL_GAP;
             let new_pitch = layout.cell_height + grid::CELL_GAP;
@@ -172,11 +223,20 @@ fn refresh_inner(win: &MainWindow, state: &Rc<RefCell<AppState>>) {
     // loupe block's own write and follow-scroll claim — so on the N=1 path
     // the recorded value is one pass stale. Harmless only because the
     // consumer is gated on `columns > 1`; revisit if that gate is relaxed.
-    if can_anchor {
+    if pass.can_anchor {
         st.grid.last_cursor_visible = st
             .cursor_pos()
             .is_some_and(|p| layout.is_visible(p, scroll_y, viewport_h));
     }
+    pass.scroll_y = scroll_y;
+}
+
+/// PHASE 3 — the visible window: which view positions are on screen (plus
+/// the margin rows), what the engine should prioritise, and which thumbs
+/// go to the texture kitchen.
+fn visible_window(st: &mut AppState, pass: &Pass) -> (std::ops::Range<usize>, Vec<usize>) {
+    let (layout, viewport_h, scroll_y, view_len) =
+        (&pass.layout, pass.viewport_h, pass.scroll_y, pass.view_len);
     // Visible VIEW positions; `ids` are the image ids shown there (the two
     // coincide only with filter=All + capture sort before keys arrive).
     let range = layout.visible_range(view_len, scroll_y, viewport_h, MARGIN_ROWS);
@@ -216,7 +276,20 @@ fn refresh_inner(win: &MainWindow, state: &Rc<RefCell<AppState>>) {
             st.kitchen.submit_thumb(index, jpeg);
         }
     }
+    (range, ids)
+}
 
+fn refresh_inner(win: &MainWindow, state: &Rc<RefCell<AppState>>) {
+    let geom = current_geometry(win, state);
+    let mut st = state.borrow_mut();
+    let mut pass = detect_drift(win, &mut st, geom);
+    anchor_the_scroll(win, &mut st, &mut pass);
+    let (range, ids) = visible_window(&mut st, &pass);
+    // The phases still inline below read the pass through these aliases;
+    // they go away as each one moves into its own function.
+    let layout = &pass.layout;
+    let (viewport_h, scroll_y, view_len) = (pass.viewport_h, pass.scroll_y, pass.view_len);
+    let (at_loupe, relayout, view_mutated) = (pass.at_loupe, pass.relayout, pass.view_mutated);
     // POSITIVE claim gate (issues #16/#22 family, final form): the
     // follow-scroll claim fires only on actual scrollbar activity — the
     // one gesture the cursor contract names. Inferring "scrolled" from
@@ -233,7 +306,6 @@ fn refresh_inner(win: &MainWindow, state: &Rc<RefCell<AppState>>) {
     // Loupe: at 1-column zoom the visible image IS the cursor (spec, cursor
     // contract): scrolling moves the cursor, and full-res always targets
     // what the user is looking at.
-    let at_loupe = st.at_loupe();
     if at_loupe && view_len > 0 {
         // Scroll moves the cursor ONLY when the cursor's cell left the
         // viewport: unconditionally snapping to the center row made arrow
