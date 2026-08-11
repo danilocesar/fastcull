@@ -192,14 +192,12 @@ fn main() {
         synthetic: false,
         session_open: false,
         cells,
-        loupe: None,
-        last_resolved_factor: None,
-        last_badge: None,
-        zoom_factor: if start_11 { f32::INFINITY } else { 1.0 },
-        pan_center: (0.5, 0.5),
-        last_pan_write: None,
-        overlay_hold: None,
-        last_soft_rung: None,
+        // Only the launch desire differs from the loupe's own defaults
+        // (--start-11 pins 1:1 before any texture exists).
+        loupe_view: state::LoupeViewState {
+            zoom_factor: if start_11 { f32::INFINITY } else { 1.0 },
+            ..Default::default()
+        },
         kitchen: {
             // Completion nudge: the worker pokes the event loop so a
             // finished texture is adopted as soon as the UI is idle —
@@ -217,7 +215,6 @@ fn main() {
                 .ok();
             }))
         },
-        last_overlay_cursor: None,
         capture_keys: Vec::new(),
         frame_meta: Vec::new(),
         bursts: Default::default(),
@@ -228,7 +225,6 @@ fn main() {
         template_warnings: Vec::new(),
         copy: Default::default(),
         pipeline_rx: None,
-        loupe_rx: None,
         sidecar_errs: None,
     }));
 

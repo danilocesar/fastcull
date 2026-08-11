@@ -189,7 +189,8 @@ pub(crate) fn start(window: &MainWindow, state: &Rc<RefCell<AppState>>) -> slint
                         }
                     }
                     let loupe_events: Vec<_> = st
-                        .loupe_rx
+                        .loupe_view
+                        .rx
                         .as_ref()
                         .map(|rx| rx.try_iter().collect())
                         .unwrap_or_default();

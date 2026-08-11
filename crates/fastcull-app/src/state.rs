@@ -267,44 +267,18 @@ impl GridViewState {
     }
 }
 
-pub(crate) struct AppState {
-    pub(crate) labels: Vec<String>,
-    /// RAW paths for real sessions (empty for --synthetic).
-    pub(crate) paths: Vec<std::path::PathBuf>,
-    /// Pick state per image (mirrors sidecars; synthetic = in-memory only).
-    pub(crate) picks: Vec<fastcull_core::catalog::PickState>,
-    /// Images whose pick the user changed this session: sidecar-at-open
-    /// events must not overwrite fresh user intent.
-    pub(crate) touched: HashSet<usize>,
-    pub(crate) writer: Option<fastcull_core::sidecar_writer::SidecarWriter>,
-    /// Failed sidecar writes this session (surfaced in the status bar).
-    pub(crate) sidecar_failures: usize,
-    /// What the grid is showing and where the cursor is inside it.
-    pub(crate) grid: GridViewState,
-    /// Every UI-side texture (thumbs, mids, full-res) and its bookkeeping.
-    pub(crate) textures: TextureStore,
-    pub(crate) pipeline: Option<Pipeline>,
-    pub(crate) thumbs_done: usize,
-    /// True for --synthetic sessions: cells get distinct placeholder hues;
-    /// real folders use the spec's neutral gray.
-    pub(crate) synthetic: bool,
-    /// False until a session exists (folder opened or --synthetic). The
-    /// folderless launch (issue #5) shows "No folder open" — a different
-    /// message from "folder opened but it has no images".
-    pub(crate) session_open: bool,
-    /// The one VecModel the window binds; refresh mutates it in place.
-    pub(crate) cells: Rc<VecModel<CellData>>,
+/// The loupe overlay: the decode engine that feeds it, WHERE the user is
+/// looking (the desired factor and pan anchor), and the bookkeeping of what
+/// was last drawn there.
+///
+/// Every field here is about ONE session's photographs — which is why a
+/// session swap replaces the whole struct rather than resetting fields one
+/// by one (see `load_folder`).
+pub(crate) struct LoupeViewState {
     /// Full-res loupe assets (real sessions only).
-    pub(crate) loupe: Option<fastcull_core::loupe::LoupeEngine>,
-    /// The last FINITE factor the sharp overlay rendered at: during a
-    /// transit whose desired factor is the INFINITY pin (Z), the soft
-    /// view carries this value — visual continuity is the whole point
-    /// of issue #21 (the carried magnification, not the sentinel).
-    pub(crate) last_resolved_factor: Option<f32>,
-    /// (cursor, mark) the loupe badge last traced — dedupes the trace
-    /// line, not the property write (issue #20; the property is set
-    /// every refresh, atomically with the image swap).
-    pub(crate) last_badge: Option<(usize, i32)>,
+    pub(crate) engine: Option<fastcull_core::loupe::LoupeEngine>,
+    /// Decode announcements from the engine (drained by the pump).
+    pub(crate) rx: Option<std::sync::mpsc::Receiver<fastcull_core::loupe::LoupeEvent>>,
     /// DESIRED loupe zoom factor relative to fit (ui-grid.md zoom ladder):
     /// 1.0 = fit, `f32::INFINITY` = 1:1 wanted before the full-res texture
     /// (and thus the real ceiling) is known. Clamped to the 1:1 ceiling at
@@ -333,11 +307,72 @@ pub(crate) struct AppState {
     /// change, and `transit_at_zoom_stays_soft_never_drops_to_fit`
     /// asserts the soft render is observable).
     pub(crate) last_soft_rung: Option<(usize, bool)>,
+    /// The last FINITE factor the sharp overlay rendered at: during a
+    /// transit whose desired factor is the INFINITY pin (Z), the soft
+    /// view carries this value — visual continuity is the whole point
+    /// of issue #21 (the carried magnification, not the sentinel).
+    pub(crate) last_resolved_factor: Option<f32>,
+    /// (cursor, mark) the loupe badge last traced — dedupes the trace
+    /// line, not the property write (issue #20; the property is set
+    /// every refresh, atomically with the image swap).
+    pub(crate) last_badge: Option<(usize, i32)>,
+    /// Which image the overlay last showed (trace bookkeeping only).
+    pub(crate) last_overlay_cursor: Option<usize>,
+}
+
+/// Hand-written: the two fields that describe WHERE the user is looking do
+/// not start at zero. Fit is 1.0 (0.0 would be a degenerate magnification)
+/// and the pan anchor starts at the middle of the frame, not its top-left
+/// corner.
+impl Default for LoupeViewState {
+    fn default() -> Self {
+        Self {
+            engine: None,
+            rx: None,
+            zoom_factor: 1.0,
+            pan_center: (0.5, 0.5),
+            last_pan_write: None,
+            overlay_hold: None,
+            last_soft_rung: None,
+            last_resolved_factor: None,
+            last_badge: None,
+            last_overlay_cursor: None,
+        }
+    }
+}
+
+pub(crate) struct AppState {
+    pub(crate) labels: Vec<String>,
+    /// RAW paths for real sessions (empty for --synthetic).
+    pub(crate) paths: Vec<std::path::PathBuf>,
+    /// Pick state per image (mirrors sidecars; synthetic = in-memory only).
+    pub(crate) picks: Vec<fastcull_core::catalog::PickState>,
+    /// Images whose pick the user changed this session: sidecar-at-open
+    /// events must not overwrite fresh user intent.
+    pub(crate) touched: HashSet<usize>,
+    pub(crate) writer: Option<fastcull_core::sidecar_writer::SidecarWriter>,
+    /// Failed sidecar writes this session (surfaced in the status bar).
+    pub(crate) sidecar_failures: usize,
+    /// What the grid is showing and where the cursor is inside it.
+    pub(crate) grid: GridViewState,
+    /// The loupe overlay: its engine, its desire, and what it last drew.
+    pub(crate) loupe_view: LoupeViewState,
+    /// Every UI-side texture (thumbs, mids, full-res) and its bookkeeping.
+    pub(crate) textures: TextureStore,
+    pub(crate) pipeline: Option<Pipeline>,
+    pub(crate) thumbs_done: usize,
+    /// True for --synthetic sessions: cells get distinct placeholder hues;
+    /// real folders use the spec's neutral gray.
+    pub(crate) synthetic: bool,
+    /// False until a session exists (folder opened or --synthetic). The
+    /// folderless launch (issue #5) shows "No folder open" — a different
+    /// message from "folder opened but it has no images".
+    pub(crate) session_open: bool,
+    /// The one VecModel the window binds; refresh mutates it in place.
+    pub(crate) cells: Rc<VecModel<CellData>>,
     /// The texture kitchen: every pixels->texture conversion happens on
     /// its worker (01-architecture.md: the UI thread never decodes).
     pub(crate) kitchen: kitchen::Kitchen,
-    /// Which image the overlay last showed (trace bookkeeping only).
-    pub(crate) last_overlay_cursor: Option<usize>,
     /// EXIF capture sort keys, filled by MetadataReady events (None until
     /// metadata loads; keyless images sort after keyed ones by name).
     pub(crate) capture_keys: Vec<Option<String>>,
@@ -363,7 +398,6 @@ pub(crate) struct AppState {
     /// Engine event receivers live in state so File > Open Folder can swap
     /// the whole session without restarting the event pump.
     pub(crate) pipeline_rx: Option<std::sync::mpsc::Receiver<SessionEvent>>,
-    pub(crate) loupe_rx: Option<std::sync::mpsc::Receiver<fastcull_core::loupe::LoupeEvent>>,
     pub(crate) sidecar_errs:
         Option<std::sync::mpsc::Receiver<fastcull_core::sidecar_writer::WriteFailure>>,
 }
@@ -397,7 +431,7 @@ impl AppState {
         }
         self.remember_grid_zoom();
         self.grid.zoom = grid::ZOOM_COLUMNS.len() - 1;
-        self.zoom_factor = factor;
+        self.loupe_view.zoom_factor = factor;
         true
     }
 
@@ -409,8 +443,8 @@ impl AppState {
         if !self.at_loupe() {
             return;
         }
-        self.zoom_factor = 1.0;
-        self.pan_center = (0.5, 0.5);
+        self.loupe_view.zoom_factor = 1.0;
+        self.loupe_view.pan_center = (0.5, 0.5);
         self.grid.zoom = self.grid.last_grid_zoom.min(grid::ZOOM_COLUMNS.len() - 2);
     }
 

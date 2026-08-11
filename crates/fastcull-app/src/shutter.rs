@@ -55,7 +55,7 @@ pub(crate) fn arm(
                 }
                 let (one2one_ready, fit_ready) = {
                     let st = state_rc.borrow();
-                    let one2one = st.zoom_factor <= 1.0
+                    let one2one = st.loupe_view.zoom_factor <= 1.0
                         || st.textures.fullres.iter().any(|(i, img)| {
                             // A terminal small texture IS the top rung
                             // (bare JPEGs, issue #8 — QE D2: the 60s
