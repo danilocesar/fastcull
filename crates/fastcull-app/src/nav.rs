@@ -8,10 +8,11 @@ use std::rc::Rc;
 use fastcull_core::grid::{self, GridLayout, Nav};
 use slint::ComponentHandle;
 
+use crate::loupe_ctrl::{clamped_factor, max_factor};
+use crate::refresh;
 use crate::state::AppState;
 use crate::trace::{trace_slow, trace_start};
 use crate::MainWindow;
-use crate::{clamped_factor, max_factor, refresh};
 
 /// Wire the keyboard nav callback and the filter-bar controls (chip,
 /// sort cycle, bar visibility).
