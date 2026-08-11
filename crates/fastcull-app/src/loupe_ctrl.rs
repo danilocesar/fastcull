@@ -10,7 +10,7 @@ use fastcull_core::grid::{self, GridLayout};
 use fastcull_core::loupe::is_top_rung;
 use slint::ComponentHandle;
 
-use crate::refresh;
+use crate::presenter::refresh;
 use crate::state::AppState;
 use crate::MainWindow;
 

@@ -10,7 +10,7 @@ use slint::{ComponentHandle, VecModel};
 
 use crate::focus::refocus_topmost_deferred;
 use crate::nav::reveal_cursor;
-use crate::refresh;
+use crate::presenter::refresh;
 use crate::session::reload_templates;
 use crate::state::AppState;
 use crate::{IptcFieldRow, KeywordChip, MainWindow};

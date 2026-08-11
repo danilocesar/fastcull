@@ -8,7 +8,7 @@ use std::rc::Rc;
 use slint::ComponentHandle;
 
 use crate::nav::handle_nav;
-use crate::refresh;
+use crate::presenter::refresh;
 use crate::session::open_folder_at;
 use crate::state::AppState;
 use crate::trace::trace_mark;

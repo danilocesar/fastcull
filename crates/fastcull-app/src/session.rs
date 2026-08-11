@@ -12,7 +12,7 @@ use slint::ComponentHandle;
 
 use crate::focus::refocus_topmost_deferred;
 use crate::nav::recompute_view;
-use crate::refresh;
+use crate::presenter::refresh;
 use crate::state::AppState;
 use crate::MainWindow;
 
