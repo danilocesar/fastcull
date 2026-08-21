@@ -26,7 +26,13 @@ and the report says exactly what happened.
 Added a caption or a few more picks after copying? Hit `Ctrl+E` again:
 
 - Files already copied this session default to **skip** — only the new
-  picks go.
+  picks go. "Already copied" means the copy is **still there**: if you
+  deleted some copies from the destination by hand (or wiped the whole
+  folder to re-export with a new name template), those picks are copied
+  again — RAW and sidecar together, checksum-verified — and the dialog
+  tells you: *"3 copied earlier but gone from the destination — copying
+  again"*. Removing a copy by hand does not un-pick the photo; press `X`
+  on it in FastCull if you want it to stay out.
 - An image whose **sidecar changed** since the copy gets its sidecar
   re-copied alone; the big RAW isn't transferred twice.
 - Name collisions at the destination default to **auto-suffix**

@@ -157,6 +157,17 @@ pub(crate) fn install(window: &MainWindow, state: &Rc<RefCell<AppState>>) -> Rc<
                     open_folder_at(&win, &state, std::path::Path::new(path));
                     return;
                 }
+                if let Some(path) = key.strip_prefix("copydest:") {
+                    // copydest:PATH — the Copy Picks destination picker
+                    // minus the native rfd dialog (the `open:` reasoning):
+                    // a driven copy → hand-delete → copy run was otherwise
+                    // unreachable headlessly, which is exactly where the
+                    // 2026-08-21 re-run bug shipped. Sets the destination
+                    // the dialog shows on its next Ctrl+E (the open path
+                    // keeps an already-chosen destination over ui.toml).
+                    state.borrow_mut().copy.dest = Some(std::path::PathBuf::from(path));
+                    return;
+                }
                 if let Some(spec) = key.strip_prefix("key:") {
                     // key:<k> / key:ctrl+<k> — dispatch a REAL key press +
                     // release through `slint::Window::dispatch_event`, i.e.
@@ -330,7 +341,8 @@ pub(crate) fn install(window: &MainWindow, state: &Rc<RefCell<AppState>>) -> Rc<
                     trace_mark(&format!(
                         "QEDUMP {label} keysfocus={} one2one={} zoom={} iptc={} about={} \
                          shortcuts={} copy={} summary={:?} template={:?} revert={:?} status={:?} \
-                         soft={} vx={:.1} vy={:.1} pan={:.4},{:.4} zf={:.3}",
+                         soft={} vx={:.1} vy={:.1} pan={:.4},{:.4} zf={:.3} \
+                         copynote={:?} report={:?}",
                         win.get_dbg_keys_focus(),
                         win.get_one2one(),
                         st.grid.zoom,
@@ -348,6 +360,8 @@ pub(crate) fn install(window: &MainWindow, state: &Rc<RefCell<AppState>>) -> Rc<
                         st.loupe_view.pan_center.0,
                         st.loupe_view.pan_center.1,
                         st.loupe_view.zoom_factor,
+                        win.get_copy_collisions().as_str(),
+                        win.get_copy_report().as_str(),
                     ));
                     return;
                 }

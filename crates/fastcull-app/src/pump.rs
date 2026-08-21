@@ -139,10 +139,8 @@ pub(crate) fn start(window: &MainWindow, state: &Rc<RefCell<AppState>>) -> slint
                             }
                             CopyEvent::Failed { .. } => {} // in the report
                             CopyEvent::Finished(report) => {
-                                if let Some(dest) = st.copy.dest.clone() {
-                                    for id in &report.copied_ids {
-                                        st.copy.copied_to.insert(*id, dest.clone());
-                                    }
+                                for (id, path) in &report.landed {
+                                    st.copy.copies.record(*id, path.clone());
                                 }
                                 st.copy.handle = None;
                                 st.copy.rx = None;

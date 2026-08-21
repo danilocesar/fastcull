@@ -75,13 +75,48 @@ explicitly deferred to a later discussion; modal dialog accepted)
   the right default for multi-camera DIFFERENT-file collisions, wrong for
   re-running into the same destination (it would duplicate every
   already-copied file). Images copied this session to the same
-  destination default to SKIP, listed as "N already copied"; the
-  session-only copied badge is what makes that plan line glanceable.
+  destination default to SKIP, listed as "N already at destination
+  (skipped)"; the session-only copied badge is what makes that plan line
+  glanceable.
   Cross-session, the plan's "N exist at destination" summary + the skip
   toggle is the safety net. When skipping an existing RAW whose SOURCE
   sidecar changed since, the sidecar alone is re-copied ("N sidecars
   refreshed" in the report) — the card-format caption-after-copy
   recovery is "Ctrl+E again before quitting".
+- **"Already copied" means "still there" (bug fix + persona review
+  2026-08-21)**: the session remembers, per image and PER DESTINATION,
+  the exact RAW path the copy landed at (`fileops::SessionCopies`), and
+  the plan re-checks that path every run. A copy the user deleted by
+  hand (RAW, or RAW+XMP) is copied again as a normal pick — RAW and
+  sidecar together, verified, under the normal collision rules — and
+  the plan says so: "N copied earlier but gone from the destination —
+  copying again" (counted only for files that actually go out again).
+  The skip default keys on the LANDED name, so a `_2` copy is skipped
+  and sidecar-refreshed as `_2`, never judged under the natural name
+  beside a foreign file (issue #14), and a later template change skips
+  the old copy instead of refreshing an orphan sidecar under the new
+  name. A gone `_2` copy also tells the plan that the natural name is a
+  foreign file: with Skip-existing ON it still goes out as `_2` again,
+  and that foreign file's sidecar is never refreshed (gate finding).
+  Only the collision suffix is evidence — a landed name that differs
+  because the template changed says nothing, and Skip-existing then
+  means skip. The suffix is matched by shape (exact `suffixed` parity:
+  `_k`, k ≥ 2, no leading zero), not provenance: a `{filename}_{seq}`
+  rename template can produce the same name for the session's own copy,
+  and the worst outcome there is one extra verified `_2` copy with an
+  honest note, never a touched foreign file — accepted (gate round 3);
+  carry the CopyRenamed fact with the landed path if cross-session
+  memory of copies is ever added. One record per destination: A → B → A in one session still
+  skips A's copies. The copied badge follows the disk: the Copy dialog
+  re-checks on open, a gone copy loses the badge and regains it when
+  the copy lands again. The previous implementation (an id-only set)
+  forced the skip over an empty folder — the sidecar came back as a
+  refresh, the RAW never; the Skip-existing toggle could not override
+  it. Open persona questions (relayed to the user, not decided): a
+  "don't re-copy the moved ones" escape on the note for users who
+  rearrange the selects folder; cross-session memory of what was
+  copied; a same-size guard against refreshing a foreign file's sidecar
+  cross-session.
 - **Exists-handling UI**: rename default; ONE "Skip existing" toggle shown
   only when collisions exist; overwrite is never exposed in v1 (core
   keeps the mode; it is the one that can destroy a verified prior copy).
@@ -139,6 +174,19 @@ BLAKE3 verification is the only truth at copy time.
 - [x] Sidecar barrier: a pick made ≤1 s before "copy" is present in the copied
       sidecar (regression for the debounce race) —
       sidecar_barrier_fresh_pick_lands_in_the_copy.
+- [x] Re-run after a hand deletion copies again (RAW+XMP, RAW-only), the
+      skip default follows the landed `_2` name (issue #14), is kept per
+      destination, and a new template leaves no orphan sidecar —
+      rerun_recopies_a_destination_the_user_deleted_by_hand,
+      rerun_ships_the_pair_when_only_the_raw_was_deleted,
+      session_skip_follows_the_landed_name_not_the_natural_one,
+      session_copies_are_remembered_per_destination,
+      rerun_with_a_new_template_keeps_the_landed_copy_without_orphans,
+      record_supersedes_the_entry_of_a_re_spelled_folder,
+      collision_suffix_shape_is_recognized,
+      skip_existing_is_honored_when_the_only_evidence_is_a_template_change;
+      app-level: copy_picks_rerun_recopies_hand_deleted_files
+      (screenshot.rs, driven through `copydest:`).
 - [x] No partial files after simulated failure (temp-name copy verified) —
       asserted inside execute_copies_verifies_and_isolates_failures.
 - [ ] Cross-platform: paths with spaces/Unicode; Windows reserved-name rejection

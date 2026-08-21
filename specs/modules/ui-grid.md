@@ -1654,10 +1654,14 @@ the user confirms, all cheap to change):**
       intended — but a drive script that visits a failed image at 1:1
       must END on a decodable cursor, as the failed-cursor gate test
       does.
-      Also not drivable headlessly: the `✓ copied` badge, because Copy Picks
-      opens a native folder dialog and `FASTCULL_DRIVE` has no copy action
-      (QE G2). It is covered only by sharing the bottom-anchored band with
-      the `×N` burst badge, which IS rendered on screen by a real fixture.
+      The `✓ copied` badge was not drivable headlessly either, because Copy
+      Picks opens a native folder dialog and `FASTCULL_DRIVE` had no copy
+      action (QE G2) — it was covered only by sharing the bottom-anchored
+      band with the `×N` burst badge. Since 2026-08-21 `copydest:PATH`
+      (below) drives a REAL copy: the re-run regression test copies,
+      deletes by hand, copies again, and asserts on disk and on the
+      dialog's note/report; the badge itself is still asserted only at the
+      state level (`SessionCopies::is_copied`), not by pixels.
 - [x] **Focus continuity (issues #41/#42)**: driven through REAL key and
       pointer dispatch (`key:`/`click.` — the nav tokens bypass focus and
       cannot see this class), every bug-strand test red-run-verified
@@ -1724,7 +1728,16 @@ Documented because they ship in release builds (validator finding):
   only. Like the menu bar it stays live while a modal is up (harness
   plumbing, not a nav key). The path is everything after the first colon,
   so a folder whose path contains `;` cannot be scripted (recorded
-  limitation of the `;`-separated script format). Caveat for script
+  limitation of the `;`-separated script format).
+  `copydest:PATH` (2026-08-21) is the Copy Picks destination picker minus
+  the native rfd dialog: it sets the destination the dialog shows on its
+  next `Ctrl+E` (the open path keeps an already-chosen destination over
+  the remembered ui.toml one), so a script can drive a real copy →
+  hand-delete → copy run — the exact flow the copied-this-session re-run
+  bug shipped through, untestable before (fileops.md, "already copied
+  means still there"). Same `;` limitation as `open:`; use it BEFORE the
+  `Ctrl+E` that should see it (it does not replan an open dialog).
+  Caveat for script
   authors (QE G2, 2026-08-02): the `--screenshot` readiness gates do not
   re-arm for the swapped-in session — a shutter that was already
   satisfied can fire while the new folder is still loading — so a script

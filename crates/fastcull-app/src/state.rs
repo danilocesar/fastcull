@@ -117,8 +117,9 @@ pub(crate) struct PanelCache {
 }
 
 /// M6 Copy Picks (fileops.md): the previewed plan, the running worker, and
-/// which ids were copied WHERE this session (the re-run skip default + the
-/// copied badge).
+/// what landed WHERE this session (the re-run skip default + the copied
+/// badge — core owns the rule that a copy counts only while it is still
+/// on disk).
 ///
 /// The handle and its receiver are ONE thing — a running copy — and live
 /// together so they can never be set or cleared apart.
@@ -132,8 +133,9 @@ pub(crate) struct CopyState {
     pub(crate) dest: Option<std::path::PathBuf>,
     pub(crate) handle: Option<fastcull_core::fileops::CopyHandle>,
     pub(crate) rx: Option<std::sync::mpsc::Receiver<fastcull_core::fileops::CopyEvent>>,
-    /// Image id -> the folder it was copied to, this session.
-    pub(crate) copied_to: HashMap<usize, std::path::PathBuf>,
+    /// Image id -> the RAW path(s) it landed at, per destination, this
+    /// session; re-checked against the disk by `copy_replan`.
+    pub(crate) copies: fastcull_core::fileops::SessionCopies,
 }
 
 /// Burst grouping outputs (M7, burst-grouping.md), all indexed by IMAGE

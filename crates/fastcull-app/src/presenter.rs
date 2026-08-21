@@ -772,7 +772,7 @@ fn fill_grid_cells(
             is_cursor: index == st.grid.cursor,
             selected: st.grid.selection.is_selected(index),
             id: index as i32,
-            copied: st.copy.copied_to.contains_key(&index),
+            copied: st.copy.copies.is_copied(index),
             burst_count: st.bursts.badge.get(index).copied().unwrap_or(0) as i32,
             seed: if st.session.synthetic {
                 index as i32

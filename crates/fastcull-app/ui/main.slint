@@ -1487,6 +1487,11 @@ export component MainWindow inherits Window {
                         text: root.copy-collisions;
                         color: #ffb84d;
                         font-size: 12px;
+                        // Three notes can share this line ("2 will be
+                        // renamed · 1 sidecars will be refreshed · 1 copied
+                        // earlier but gone…"): unwrapped, the part that
+                        // matters most was clipped at the dialog edge (QE).
+                        wrap: word-wrap;
                     }
                     if root.copy-show-skip-toggle: HorizontalLayout {
                         spacing: 8px;

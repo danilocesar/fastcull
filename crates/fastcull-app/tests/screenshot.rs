@@ -3760,3 +3760,149 @@ fn a_decode_failed_cursor_drops_to_fit_instead_of_masking_the_badge() {
         );
     }
 }
+
+/// The 2026-08-21 Copy Picks re-run bug, end to end (fileops.md, "already
+/// copied means still there"): copy two picks, delete three of the four
+/// landed files BY HAND while the app is live (RAW+XMP of one, RAW only
+/// of the other), Ctrl+E again into the same folder. RED pre-fix: the
+/// dialog said "0 B to copy · 2 sidecars will be refreshed", the report
+/// "Nothing needed copying", and the folder ended up with XMPs only.
+/// Post-fix: the plan counts the bytes again, the amber note names the
+/// gone copies, the report says "2 copied, all checksums verified", and
+/// both pairs are back on disk. The deletion runs on a helper thread
+/// that polls the destination — the drive script is wall-clock timed,
+/// so the second phase starts well after the first copy can finish.
+/// Fixtures are symlinks (the copy follows them); the ~126 MB of real
+/// copies are removed at the end.
+#[test]
+fn copy_picks_rerun_recopies_hand_deleted_files() {
+    if !has_display() {
+        eprintln!("screenshot smoke skipped: no display server");
+        return;
+    }
+    let _s = serial();
+    let src = out_dir().join("rerun-src");
+    let dest = out_dir().join("rerun-dest");
+    std::fs::create_dir_all(&src).unwrap();
+    let raw = raws_dir().join("A1_full_compressed.ARW");
+    place_fixture(&raw, &src.join("a.ARW"));
+    place_fixture(&raw, &src.join("b.ARW"));
+    let raw_len = std::fs::metadata(&raw).unwrap().len();
+
+    // Phase 1 lands at ~3.2 s; the helper deletes as soon as both pairs
+    // are complete; phase 2 starts at 12 s with a wide margin for a debug
+    // build hashing 126 MB twice.
+    let script = format!(
+        "1600:key:y;1900:key:y;2200:copydest:{dest};2600:key:ctrl+e;3000:dump.first;\
+         3200:key:return;12000:key:escape;12400:key:ctrl+e;12800:dump.second;\
+         13000:key:return;19000:dump.third;19300:key:escape;19600:dump.end",
+        dest = dest.display()
+    );
+    let landed = ["a.ARW", "a.ARW.xmp", "b.ARW", "b.ARW.xmp"];
+    let deleter = {
+        let dest = dest.clone();
+        std::thread::spawn(move || -> Result<(), String> {
+            let deadline = Instant::now() + Duration::from_secs(11);
+            while !landed.iter().all(|n| dest.join(n).exists()) {
+                if Instant::now() > deadline {
+                    return Err(format!(
+                        "the first copy did not land within 11 s: {:?}",
+                        std::fs::read_dir(&dest).map(|d| d
+                            .filter_map(|e| e.ok())
+                            .map(|e| e.file_name())
+                            .collect::<Vec<_>>())
+                    ));
+                }
+                std::thread::sleep(Duration::from_millis(100));
+            }
+            // The user's two variants: the whole pair, and the RAW alone.
+            for n in ["a.ARW", "a.ARW.xmp", "b.ARW"] {
+                std::fs::remove_file(dest.join(n)).map_err(|e| format!("rm {n}: {e}"))?;
+            }
+            Ok(())
+        })
+    };
+    let out = out_dir().join("copy-rerun.jpg");
+    let stderr = shoot_env_stderr(
+        &[src.to_str().unwrap()],
+        &[("FASTCULL_TRACE", "1"), ("FASTCULL_DRIVE", script.as_str())],
+        &out,
+    );
+    let deleted = deleter.join().expect("deleter thread");
+    let on_disk: Vec<(String, u64)> = std::fs::read_dir(&dest)
+        .map(|d| {
+            d.filter_map(|e| e.ok())
+                .map(|e| {
+                    (
+                        e.file_name().to_string_lossy().into_owned(),
+                        e.metadata().map(|m| m.len()).unwrap_or(0),
+                    )
+                })
+                .collect()
+        })
+        .unwrap_or_default();
+    std::fs::remove_dir_all(&dest).ok();
+
+    assert_eq!(deleted, Ok(()), "hand deletion did not happen:\n{stderr}");
+    // A Debug-quoted dump field (` name="…"`): the text between the
+    // quotes, up to the first unescaped closing quote.
+    fn field<'a>(dump: &'a str, name: &str) -> &'a str {
+        let tag = format!(" {name}=\"");
+        let rest = dump
+            .split(&tag)
+            .nth(1)
+            .unwrap_or_else(|| panic!("no {name} field in dump: {dump}"));
+        let mut prev = b' ';
+        let end = rest
+            .bytes()
+            .position(|b| {
+                let close = b == b'"' && prev != b'\\';
+                prev = b;
+                close
+            })
+            .unwrap_or(rest.len());
+        &rest[..end]
+    }
+    let first = qedump(&stderr, "first");
+    assert!(
+        field(first, "summary").contains("2 picked") && field(first, "copynote").is_empty(),
+        "the first plan is not a plain two-file copy: {first}"
+    );
+    let second = qedump(&stderr, "second");
+    let summary = field(second, "summary");
+    let note = field(second, "copynote");
+    assert!(
+        summary.contains("2 picked") && !summary.contains("0 B to copy"),
+        "the re-run plan still skips the hand-deleted copies: {second}"
+    );
+    assert!(
+        note.contains("2 copied earlier but gone from the destination — copying again"),
+        "the re-run plan does not name the gone copies: {second}"
+    );
+    assert!(
+        !note.contains("refreshed") && !note.contains("already at destination"),
+        "the re-run plan still claims a skip/refresh over deleted files: {second}"
+    );
+    let third = qedump(&stderr, "third");
+    let report = field(third, "report");
+    assert!(
+        report.starts_with("2 copied, all checksums verified") && !report.contains("refreshed"),
+        "the re-run did not copy both pairs again: {third}"
+    );
+    for n in landed {
+        assert!(
+            on_disk.iter().any(|(f, _)| f == n),
+            "{n} missing after the re-run: {on_disk:?}"
+        );
+    }
+    assert!(
+        !on_disk.iter().any(|(f, _)| f.contains("partial")),
+        "partial files left behind: {on_disk:?}"
+    );
+    // The RAWs came back whole: the copy followed the symlinks and wrote
+    // every byte (the report's verified line is the checksum proof).
+    for n in ["a.ARW", "b.ARW"] {
+        let len = on_disk.iter().find(|(f, _)| f == n).map(|(_, l)| *l);
+        assert_eq!(len, Some(raw_len), "{n} is not a whole copy: {on_disk:?}");
+    }
+}

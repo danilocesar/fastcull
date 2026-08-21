@@ -137,6 +137,12 @@ pub(crate) fn wire(window: &MainWindow, state: &Rc<RefCell<AppState>>) {
                 }
             }
             win.set_copy_visible(false);
+            // The copied badges follow what the dialog just learned about
+            // the disk: a hand-deleted copy lost its badge in
+            // `copy_replan`, and the grid under the dialog must show that
+            // as soon as it is visible again (persona: "the six are the
+            // badge-less cells in the Picked view").
+            crate::presenter::refresh(&win, &state);
             win.invoke_focus_grid();
         });
     }
@@ -241,17 +247,12 @@ fn copy_replan(win: &MainWindow, st: &mut AppState) {
     } else {
         ExistsMode::Rename
     };
-    // Canonicalized comparison: the same destination reached via a
-    // different path spelling must not lose the re-run skip default.
-    let dest_canon = dest.canonicalize().unwrap_or_else(|_| dest.clone());
-    let already: std::collections::HashSet<usize> = st
-        .copy
-        .copied_to
-        .iter()
-        .filter(|(_, d)| d.canonicalize().unwrap_or_else(|_| (*d).clone()) == dest_canon)
-        .map(|(id, _)| *id)
-        .collect();
-    match plan(&sources, &dest, template, mode, &already) {
+    // The badge follows the disk from the moment the dialog looks (a copy
+    // the user deleted by hand loses it here, and gets it back when the
+    // copy lands again — persona decision 2026-08-21); the plan itself
+    // re-checks every landed path on its own.
+    st.copy.copies.refresh();
+    match plan(&sources, &dest, template, mode, &st.copy.copies) {
         Ok(p) => {
             if template.is_some() {
                 let preview: Vec<String> = p
@@ -289,6 +290,15 @@ fn copy_replan(win: &MainWindow, st: &mut AppState) {
             }
             if p.refreshed > 0 {
                 notes.push(format!("{} sidecars will be refreshed", p.refreshed));
+            }
+            if p.recopied > 0 {
+                // The one signal that Enter is about to put back what the
+                // user removed by hand (persona: in a 200 MB plan a 70 MB
+                // difference is invisible).
+                notes.push(format!(
+                    "{} copied earlier but gone from the destination — copying again",
+                    p.recopied
+                ));
             }
             let collided = p.renamed > 0 || p.skipped > 0 || p.refreshed > 0;
             win.set_copy_collisions(notes.join(" · ").into());
