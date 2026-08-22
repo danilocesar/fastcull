@@ -80,10 +80,14 @@ contract leaves no partial behind — with ONE recorded exception (QE
 2026-08-21): a hard QUIT does not join anything. `shutdown()` ends in
 `process::exit` on purpose (01-architecture.md: 32 readers stuck on a
 dying card once made the process unkillable), so `CopyHandle::drop` never
-runs and the file in flight leaves its temp behind. That debris is one
-hidden file, `<dest>/.fastcull-partial-<pid>-<n>`, which can never be
-mistaken for a photograph; joining a copy to a dead card on quit is the
-worse bargain. An overwrite's identity pass reads as
+runs and the file in flight leaves its temp behind: one file per hard quit
+mid-copy, `<dest>/.fastcull-partial-<pid>-<n>`. Because those names are
+unique per file (they have to be — see step 4) they ACCUMULATE rather than
+being reused, and the leading dot hides nothing on Windows (gate finding
+2026-08-22). Nothing sweeps them: deleting at the destination is not this
+module's business, and a name a live process is still writing must never be
+removed by another. They can never be mistaken for a photograph, and
+joining a copy to a dead card on quit is the worse bargain. An overwrite's identity pass reads as
 much as a copy writes, so it polls the cancel flag between blocks and
 gives the run back at once (gate finding 2026-08-21) — otherwise the join
 on the UI thread would span a whole re-verify of a big RAW on top of the
@@ -94,6 +98,10 @@ sitting at "running" with a Cancel button that does nothing.
 The final report's "all checksums verified" sentence appears ONLY when
 the run actually copied and verified at least one file — an all-skipped
 run verified nothing and must not print the format-the-card green light.
+Since 2026-08-22 that rule is `CopyReport::earned_the_green_light()` in
+CORE (it is a fact about the copy, not about the dialog — CLAUDE.md rule
+5); a run an overwrite found byte-identical counts as verified, because
+that check is a BLAKE3 comparison of both ends.
 
 ## Dialog + scope decisions (persona review 2026-07-26; the user CONFIRMED
 2026-07-26: "metadata is added before copying. once the copy is done,
@@ -233,7 +241,12 @@ with three answers:
   started at `_2`). A number `k` is free only when BOTH `<stem>_k.<ext>`
   and `<stem>_k.<ext>.xmp` are free — on disk and unclaimed by this plan —
   so a clash on either member moves the pair to `k+1`, and a copy is never
-  split across two numbers. Growth is unbounded by design (`_1`, `_2`,
+  split across two numbers. Recorded limit (gate finding 2026-08-22): a
+  destination name already within a few bytes of the filesystem's maximum
+  can still overflow through the `_k` and the `.xmp` — the RAW lands and
+  the sidecar fails, honestly reported, and `occupied()` cannot tell "too
+  long" from "free" at plan time. Issue #10 territory (name-length and
+  reserved-name handling per platform). Growth is unbounded by design (`_1`, `_2`,
   `_3`, …): each layer costs a deliberate answer.
 - **Cancel** — nothing is copied at all, not even the clash-free files
   (user decision; Esc means the same).
@@ -264,7 +277,15 @@ executor commits its verified temp file into place without clobbering; a
 name that got occupied between the question and the copy fails THAT file
 honestly ("a file appeared at the destination during the copy") and the
 run continues. Two same-run names differing only in case therefore cannot
-eat each other on a case-insensitive destination.
+eat each other on a case-insensitive destination — under **keep both** and
+the clash-free path because the commit refuses an occupied name, and under
+**overwrite** because the executor additionally refuses to write over a
+name THIS RUN already landed (gate finding 2026-08-22: overwrite commits
+with a rename, which replaces silently, and the plan's in-plan `taken` set
+is exact-case, so nothing else stood between two case-twins on an exFAT
+card or an SMB share). That last check asks the filesystem, so a
+case-sensitive destination — where the two names really are two files —
+never sees a false alarm.
 
 The primitive is `hard_link(tmp, dst)` + unlink of the temp: the portable
 "create this name only if it is free", which fails with `AlreadyExists`
@@ -290,7 +311,14 @@ beside an `.xmp` that describes another photograph:
 - the sidecar half of a pair can fail AFTER its RAW committed (a directory
   under the sidecar's name, ENOSPC, EACCES). That file is reported failed,
   with the reason spelling out which half landed: "the RAW landed but its
-  sidecar did not: …".
+  sidecar did not: …". The same failure on the IDENTITY path — the
+  caption-after-copy refresh beside a RAW that was already byte-identical —
+  is not a failed file at all: the RAW there is this pick's and verified,
+  so the run counts it as identical AND reports the sidecar ("the RAW at
+  the destination is this pick's, verified — but its sidecar could not be
+  refreshed: …"). Reporting that whole file as failed, with identical = 0,
+  described a destination that was in fact correct (gate finding
+  2026-08-22).
 
 The opposite direction — OUR sidecar beside a foreign RAW, issue #14 — is
 structurally prevented: a sidecar is only ever written after its own RAW
@@ -512,6 +540,17 @@ destination and copy again, or re-import in darktable.
       destination is rejected at plan time while a symlink TO a folder is
       accepted (asserted in
       a_destination_that_is_a_file_is_rejected_by_the_plan).
+- [x] Gate round 5 (2026-08-22): a failed caption refresh still counts the
+      RAW it verified and says so —
+      a_failed_refresh_still_counts_the_raw_it_verified; an overwrite never
+      replaces a name this run already landed, on a destination that
+      collapses two names —
+      an_overwrite_never_replaces_a_file_this_run_just_landed; the green
+      light is core's rule — the_green_light_needs_verified_bytes (plus the
+      app's report_lines tests); the "Use last: …" template chip is
+      confined to the plan state, so it can no longer replan under the
+      question and leave it describing an operation the answer will not
+      perform (main.slint).
 - [ ] NOT VERIFIED ANYWHERE, carried forward (QE 2026-08-21): a
       case-insensitive destination (no casefold/FAT mount available on the
       dev box), so "a case-variant counts as occupied" and rule 4's

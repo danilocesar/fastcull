@@ -570,14 +570,33 @@ pub struct CopyReport {
     pub renamed_example: Option<String>,
     pub failed: Vec<(String, String)>, // (name, reason)
     /// True iff every byte this run wrote or checked was BLAKE3-verified
-    /// against the source stream — the "green light to format the card"
-    /// sentence.
+    /// against the source stream. NOT the green light on its own — a run
+    /// that moved nothing leaves this true; see
+    /// [`CopyReport::earned_the_green_light`].
     pub all_verified: bool,
     pub cancelled: bool,
     /// Every id whose RAW is now at the destination because of this run —
     /// transferred or verified identical — with the path it landed at.
     /// What the session records (`SessionCopies::record`) for the ✓ badge.
     pub landed: Vec<(usize, PathBuf)>,
+}
+
+impl CopyReport {
+    /// May this run print "all checksums verified" — the sentence that
+    /// tells the user the card is safe to format (fileops.md)?
+    ///
+    /// The rule lives HERE, not in the dialog that renders it (CLAUDE.md
+    /// rule 5): a run must actually have verified something. Files copied
+    /// count, and so do files an overwrite found byte-identical at the
+    /// destination — that check IS a BLAKE3 comparison of both ends. A
+    /// cancelled run, a run with a failure, and a run that moved nothing
+    /// have verified nothing worth a green light.
+    pub fn earned_the_green_light(&self) -> bool {
+        self.copied + self.identical > 0
+            && self.all_verified
+            && self.failed.is_empty()
+            && !self.cancelled
+    }
 }
 
 pub struct CopyHandle {
@@ -632,6 +651,16 @@ fn run_plan(plan: CopyPlan, tx: &Sender<CopyEvent>, cancel: &AtomicBool) {
         all_verified: true,
         ..Default::default()
     };
+    // Every name this run has already put on disk, lowercased. An
+    // overwrite commits with `rename`, which replaces silently — and on a
+    // destination that cannot tell `C.ARW` from `c.ARW` (exFAT card, SMB
+    // share, APFS/NTFS) the second of two same-run names would replace the
+    // FIRST ONE'S verified copy while the report said both were copied
+    // (gate finding 2026-08-22; the plan's in-plan `taken` set is
+    // exact-case and cannot see it). Checked at the last instant, so a
+    // case-SENSITIVE destination — where the two names are genuinely
+    // different files — never sees a false alarm.
+    let mut landed_names: HashSet<String> = HashSet::new();
     // A plan built before the question is a QUESTION, not an instruction
     // (fileops.md rule 3). The app replans with the answer's policy and
     // executes THAT; if a wiring mistake ever sends the frozen one here,
@@ -676,6 +705,13 @@ fn run_plan(plan: CopyPlan, tx: &Sender<CopyEvent>, cancel: &AtomicBool) {
                     report.landed.push((job.id, job.dst_raw.clone()));
                 })
             }
+            PlanAction::Replace if would_eat_our_own(job, &landed_names) => {
+                Err(std::io::Error::new(
+                    std::io::ErrorKind::AlreadyExists,
+                    "another file in this run already landed under this name — the destination \
+                     cannot tell the two names apart",
+                ))
+            }
             PlanAction::Replace => replace_pair(job, cancel).map(|outcome| {
                 match outcome {
                     Replaced::Transferred { existed } => {
@@ -684,10 +720,17 @@ fn run_plan(plan: CopyPlan, tx: &Sender<CopyEvent>, cancel: &AtomicBool) {
                             report.replaced += 1;
                         }
                     }
-                    Replaced::AlreadyIdentical { refreshed } => {
+                    Replaced::AlreadyIdentical {
+                        refreshed,
+                        sidecar_error,
+                    } => {
                         report.identical += 1;
                         if refreshed {
                             report.refreshed += 1;
+                        }
+                        if let Some(reason) = sidecar_error {
+                            report.all_verified = false;
+                            report.failed.push((name.clone(), reason));
                         }
                     }
                 }
@@ -697,6 +740,9 @@ fn run_plan(plan: CopyPlan, tx: &Sender<CopyEvent>, cancel: &AtomicBool) {
                 report.landed.push((job.id, job.dst_raw.clone()));
             }),
         };
+        if result.is_ok() {
+            landed_names.insert(name.to_lowercase());
+        }
         if let Err(e) = result {
             if e.kind() == std::io::ErrorKind::Interrupted && cancel.load(Ordering::Relaxed) {
                 // Cancelled INSIDE an overwrite's identity pass, which is
@@ -719,14 +765,33 @@ fn run_plan(plan: CopyPlan, tx: &Sender<CopyEvent>, cancel: &AtomicBool) {
     tx.send(CopyEvent::Finished(report)).ok();
 }
 
+/// Would this overwrite replace a file THIS RUN just landed? Only true
+/// when the destination really does collapse the two names: the name is
+/// occupied AND (case-insensitively) one we already wrote. On a
+/// case-sensitive destination the name is simply free and this is false.
+fn would_eat_our_own(job: &CopyJob, landed_names: &HashSet<String>) -> bool {
+    job.dst_raw
+        .file_name()
+        .map(|n| n.to_string_lossy().to_lowercase())
+        .is_some_and(|n| landed_names.contains(&n) && occupied(&job.dst_raw))
+}
+
 /// What an overwrite actually had to do.
 enum Replaced {
     /// The RAW crossed the wire (and replaced a file, if one was there).
     Transferred { existed: bool },
     /// The destination RAW was already byte-identical to the source —
     /// verified by hash, not re-transferred; `refreshed` says whether its
-    /// sidecar had to be rewritten.
-    AlreadyIdentical { refreshed: bool },
+    /// sidecar had to be rewritten, and `sidecar_error` carries a sidecar
+    /// rewrite that FAILED. That is not a failed file: the RAW at the
+    /// destination is this pick's, verified — so the run counts it as
+    /// identical AND reports the sidecar honestly (gate finding
+    /// 2026-08-22: it used to be reported as a wholly failed file with
+    /// `identical = 0`, over a destination that was in fact correct).
+    AlreadyIdentical {
+        refreshed: bool,
+        sidecar_error: Option<String>,
+    },
 }
 
 fn copy_pair(job: &CopyJob, commit: Commit) -> std::io::Result<()> {
@@ -772,23 +837,40 @@ fn replace_pair(job: &CopyJob, cancel: &AtomicBool) -> std::io::Result<Replaced>
     // The RAW at the destination IS the source, byte for byte (BLAKE3, not
     // size-or-mtime guessing). Only the sidecar is rewritten, and only if
     // it differs.
-    let refreshed = match &job.src_xmp {
+    let (refreshed, sidecar_error) = match &job.src_xmp {
         Some(src) => {
             let same = match comparable_hash(&job.dst_xmp, cancel)? {
                 Some(dst) => hash_file(src, cancel)? == dst,
                 None => false,
             };
-            if !same {
-                copy_verified(src, &job.dst_xmp, Commit::Replace)?;
+            if same {
+                (false, None)
+            } else {
+                // The RAW is already right — this is the caption-after-copy
+                // refresh. If it fails, say which half is good rather than
+                // calling the whole file failed (fileops.md §4).
+                match copy_verified(src, &job.dst_xmp, Commit::Replace) {
+                    Ok(()) => (true, None),
+                    Err(e) if e.kind() == std::io::ErrorKind::Interrupted => return Err(e),
+                    Err(e) => (
+                        false,
+                        Some(format!(
+                            "the RAW at the destination is this pick's, verified — but its \
+                             sidecar could not be refreshed: {e}"
+                        )),
+                    ),
+                }
             }
-            !same
         }
         // No sidecar of our own to write: a foreign one under this name
         // stays where it is. Nothing at the destination is ever deleted
         // (fileops.md) — "keep both" is the answer that avoids the pairing.
-        None => false,
+        None => (false, None),
     };
-    Ok(Replaced::AlreadyIdentical { refreshed })
+    Ok(Replaced::AlreadyIdentical {
+        refreshed,
+        sidecar_error,
+    })
 }
 
 /// The hash to compare an overwrite's destination against — `None` when
@@ -1875,6 +1957,130 @@ mod tests {
             );
         }
         std::fs::remove_dir_all(&dir).ok();
+    }
+
+    /// The caption-after-copy refresh can fail on its own (ENOSPC, EACCES,
+    /// something else under the sidecar's name) — and when it does, the RAW
+    /// at the destination is still this pick's, verified. The run says
+    /// exactly that instead of calling the whole file failed (gate finding
+    /// 2026-08-22: it reported `identical = 0` over a correct destination).
+    #[test]
+    fn a_failed_refresh_still_counts_the_raw_it_verified() {
+        let dir = tmp();
+        let sources = src_with(&dir, &[("a.ARW", b"aaaa")]);
+        crate::xmp::write_pick(&sources[0].path, PickState::Picked).unwrap();
+        let dest = dir.join("out");
+        std::fs::create_dir_all(&dest).unwrap();
+        // The destination RAW is already byte-identical…
+        std::fs::write(dest.join("a.ARW"), b"aaaa").unwrap();
+        // …and its sidecar name is a directory, so the refresh cannot land.
+        std::fs::create_dir_all(dest.join("a.ARW.xmp")).unwrap();
+
+        let report = run(
+            &sources,
+            &dest,
+            None,
+            ClashPolicy::Overwrite,
+            &SessionCopies::default(),
+        );
+        assert_eq!(
+            (report.identical, report.refreshed, report.copied),
+            (1, 0, 0),
+            "the identical RAW is still identical"
+        );
+        assert_eq!(report.failed.len(), 1, "{:?}", report.failed);
+        assert!(
+            report.failed[0]
+                .1
+                .contains("sidecar could not be refreshed")
+                && report.failed[0].1.contains("verified"),
+            "{:?}",
+            report.failed
+        );
+        assert!(
+            !report.earned_the_green_light(),
+            "a run with a failure is never a green light"
+        );
+        assert_eq!(std::fs::read(dest.join("a.ARW")).unwrap(), b"aaaa");
+        std::fs::remove_dir_all(&dir).ok();
+    }
+
+    /// An overwrite commits with a rename, which replaces silently — so on
+    /// a destination that cannot tell two names apart, the second of them
+    /// must not eat the first one's verified copy. The guard fires only
+    /// when the name really is occupied by something this run landed, so a
+    /// case-SENSITIVE destination never sees a false alarm (gate finding
+    /// 2026-08-22).
+    #[test]
+    fn an_overwrite_never_replaces_a_file_this_run_just_landed() {
+        let dir = tmp();
+        let sources = src_with(&dir, &[("a.ARW", b"aaaa")]);
+        let dest = dir.join("out");
+        std::fs::create_dir_all(&dest).unwrap();
+        std::fs::write(dest.join("a.ARW"), b"foreign").unwrap();
+        let p = super::plan(
+            &sources,
+            &dest,
+            None,
+            ClashPolicy::Overwrite,
+            &SessionCopies::default(),
+        )
+        .unwrap();
+        let job = &p.jobs[0];
+        // Nothing landed yet: the overwrite is exactly what was asked for.
+        assert!(!would_eat_our_own(job, &HashSet::new()));
+        // A different name this run landed is no reason to refuse.
+        let other: HashSet<String> = ["b.arw".to_string()].into_iter().collect();
+        assert!(!would_eat_our_own(job, &other));
+        // The destination collapsing this name onto one we already wrote is.
+        let same: HashSet<String> = ["a.arw".to_string()].into_iter().collect();
+        assert!(would_eat_our_own(job, &same));
+        // …and when the name is NOT occupied, there is nothing to eat —
+        // which is what a case-sensitive destination reports.
+        std::fs::remove_file(dest.join("a.ARW")).unwrap();
+        assert!(!would_eat_our_own(job, &same));
+        std::fs::remove_dir_all(&dir).ok();
+    }
+
+    /// The green light is core's rule, and it follows what was verified.
+    #[test]
+    fn the_green_light_needs_verified_bytes() {
+        let verified_copy = CopyReport {
+            copied: 3,
+            all_verified: true,
+            ..Default::default()
+        };
+        assert!(verified_copy.earned_the_green_light());
+        // An overwrite that only RE-VERIFIED earns it too: that check is a
+        // BLAKE3 comparison of both ends.
+        assert!(CopyReport {
+            identical: 145,
+            all_verified: true,
+            ..Default::default()
+        }
+        .earned_the_green_light());
+        // A run that moved nothing, a cancelled run and a run with a
+        // failure never do.
+        assert!(!CopyReport {
+            all_verified: true,
+            ..Default::default()
+        }
+        .earned_the_green_light());
+        assert!(!CopyReport {
+            cancelled: true,
+            ..verified_copy.clone()
+        }
+        .earned_the_green_light());
+        assert!(!CopyReport {
+            failed: vec![("a.ARW".into(), "nope".into())],
+            ..verified_copy.clone()
+        }
+        .earned_the_green_light());
+        assert!(!CopyReport {
+            all_verified: false,
+            ..verified_copy
+        }
+        .earned_the_green_light());
     }
 
     /// A plan built BEFORE the answer is a question, not an instruction:

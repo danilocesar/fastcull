@@ -326,14 +326,9 @@ fn drain_kitchen(win: &MainWindow, state: &Rc<RefCell<AppState>>) -> bool {
 /// saying "nothing needed copying" over a run whose files FAILED states
 /// the opposite of what happened (QE finding 2026-08-21).
 pub(crate) fn report_lines(report: &fastcull_core::fileops::CopyReport) -> Vec<String> {
-    // The green light to format a card appears ONLY when this run actually
-    // verified something (gate finding: a run that moved nothing verified
-    // nothing). An overwrite that found the destination byte-identical DID
-    // verify it — BLAKE3, both ends — so it earns the sentence too.
-    let verified = report.copied + report.identical > 0
-        && report.all_verified
-        && report.failed.is_empty()
-        && !report.cancelled;
+    // The rule for the green light lives in core (CLAUDE.md rule 5); this
+    // function only decides which line carries the sentence.
+    let verified = report.earned_the_green_light();
     let plural = |n: usize| if n == 1 { "" } else { "s" };
     let mut lines = Vec::new();
     if report.copied > 0 {

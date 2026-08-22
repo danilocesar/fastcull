@@ -1561,7 +1561,15 @@ export component MainWindow inherits Window {
                                 copy-keys.focus();
                             }
                         }
-                        if root.copy-last-template != "" && root.copy-template == "": Chip {
+                        // PLAN STATE ONLY. Its two siblings are already
+                        // `enabled: copy-state == 0`; this one had no guard,
+                        // so it could be clicked WHILE THE QUESTION WAS UP —
+                        // replanning under it and leaving the counts, the
+                        // example names, the keep-both name and the byte
+                        // cost describing the old template while the answer
+                        // executed the new one. The mouse analogue of the
+                        // Ctrl+O finding (gate finding 2026-08-22).
+                        if root.copy-state == 0 && root.copy-last-template != "" && root.copy-template == "": Chip {
                             label: "Use last: " + root.copy-last-template;
                             active: false;
                             clicked => {
