@@ -102,6 +102,8 @@ pub enum PlanError {
     InsufficientSpace { needed: u64, free: u64 },
     #[error("the destination is not a folder")]
     DestNotADirectory,
+    #[error("rename template produced '{name}', which is a path, not a file name")]
+    TemplateMakesAPath { name: String },
 }
 
 /// The inspectable plan the dialog previews. `jobs` keep the input order
@@ -294,6 +296,19 @@ pub fn plan(
                 crate::iptc::sanitize_text(&expanded)
             }
         };
+        // A template must produce a FILE NAME. `..` or a separator would
+        // write OUTSIDE the folder the clash question names — and, now
+        // that Overwrite is exposed, REPLACE files there (gate finding
+        // 2026-08-22). Both separators are rejected on every platform, so
+        // one template means the same thing on Linux and on Windows.
+        if name.is_empty()
+            || name == "."
+            || name == ".."
+            || name.contains('/')
+            || name.contains('\\')
+        {
+            return Err(PlanError::TemplateMakesAPath { name });
+        }
         if let Some(prev) = seen.insert(name.clone(), i) {
             return Err(PlanError::TemplateCollision {
                 name,
@@ -700,7 +715,21 @@ fn run_plan(plan: CopyPlan, tx: &Sender<CopyEvent>, cancel: &AtomicBool) {
             // Unreachable: refused above, before a single byte moved.
             PlanAction::Clash => continue,
             PlanAction::Copy | PlanAction::CopyRenamed => {
-                copy_pair(job, Commit::NoClobber).map(|()| {
+                // `raw_landed` fires the instant the RAW is committed —
+                // BEFORE its sidecar, which can still fail. That file is
+                // on disk and verified either way, so the guard above has
+                // to know about it: without this, a job reported as "the
+                // RAW landed but its sidecar did not" left no trace in
+                // `landed`, and on a folding destination the next
+                // case-twin overwrote it (gate finding 2026-08-22).
+                let mut raw_id = None;
+                let outcome = copy_pair(job, Commit::NoClobber, || {
+                    raw_id = file_identity(&job.dst_raw);
+                });
+                if let Some(id) = raw_id {
+                    landed.insert(id);
+                }
+                outcome.map(|()| {
                     report.copied += 1;
                     if job.action == PlanAction::CopyRenamed {
                         report.renamed += 1;
@@ -714,39 +743,43 @@ fn run_plan(plan: CopyPlan, tx: &Sender<CopyEvent>, cancel: &AtomicBool) {
                 "this name is the file another pick in this run just landed — the \
                      destination cannot tell the two names apart",
             )),
-            PlanAction::Replace => replace_pair(job, cancel).map(|outcome| {
-                match outcome {
-                    Replaced::Transferred { existed } => {
-                        report.copied += 1;
-                        if existed {
-                            report.replaced += 1;
+            PlanAction::Replace => {
+                let mut raw_id = None;
+                let outcome = replace_pair(job, cancel, || {
+                    raw_id = file_identity(&job.dst_raw);
+                });
+                if let Some(id) = raw_id {
+                    landed.insert(id);
+                }
+                outcome.map(|outcome| {
+                    match outcome {
+                        Replaced::Transferred { existed } => {
+                            report.copied += 1;
+                            if existed {
+                                report.replaced += 1;
+                            }
+                        }
+                        Replaced::AlreadyIdentical {
+                            refreshed,
+                            sidecar_error,
+                        } => {
+                            report.identical += 1;
+                            if refreshed {
+                                report.refreshed += 1;
+                            }
+                            if let Some(reason) = sidecar_error {
+                                report.all_verified = false;
+                                report.failed.push((name.clone(), reason));
+                            }
                         }
                     }
-                    Replaced::AlreadyIdentical {
-                        refreshed,
-                        sidecar_error,
-                    } => {
-                        report.identical += 1;
-                        if refreshed {
-                            report.refreshed += 1;
-                        }
-                        if let Some(reason) = sidecar_error {
-                            report.all_verified = false;
-                            report.failed.push((name.clone(), reason));
-                        }
+                    if job.src_xmp.is_none() && occupied(&job.dst_xmp) {
+                        report.foreign_sidecars_left += 1;
                     }
-                }
-                if job.src_xmp.is_none() && occupied(&job.dst_xmp) {
-                    report.foreign_sidecars_left += 1;
-                }
-                report.landed.push((job.id, job.dst_raw.clone()));
-            }),
-        };
-        if result.is_ok() {
-            if let Some(id) = file_identity(&job.dst_raw) {
-                landed.insert(id);
+                    report.landed.push((job.id, job.dst_raw.clone()));
+                })
             }
-        }
+        };
         if let Err(e) = result {
             if e.kind() == std::io::ErrorKind::Interrupted && cancel.load(Ordering::Relaxed) {
                 // Cancelled INSIDE an overwrite's identity pass, which is
@@ -800,6 +833,16 @@ fn file_identity(p: &Path) -> Option<FileIdentity> {
 /// comparing lowercased names failed every overwrite of a case-twin on a
 /// case-SENSITIVE destination, where the two names are two different
 /// files and both copies must go out as asked (QE finding 2026-08-22).
+///
+/// FAILS OPEN in one recorded place (gate finding 2026-08-22, recorded in
+/// fileops.md rather than papered over): a `symlink_metadata` that errors
+/// mid-run leaves the identity unknown and the overwrite proceeds.
+/// Refusing on doubt instead would fail copies the user asked for, on the
+/// far more common case-SENSITIVE destination, to protect a folding one.
+/// The other half of that gap is CLOSED: a RAW whose sidecar then fails is
+/// still on disk, so `copy_pair`/`replace_pair` report the commit through
+/// `raw_committed` and its identity is recorded even though the job as a
+/// whole returns `Err`.
 fn would_eat_our_own(job: &CopyJob, landed: &HashSet<FileIdentity>) -> bool {
     file_identity(&job.dst_raw).is_some_and(|id| landed.contains(&id))
 }
@@ -822,8 +865,12 @@ enum Replaced {
     },
 }
 
-fn copy_pair(job: &CopyJob, commit: Commit) -> std::io::Result<()> {
+/// Copy a RAW and its sidecar. `raw_committed` runs the moment the RAW is
+/// under its final name — the caller needs that even when the sidecar then
+/// fails, because the RAW is on disk from then on.
+fn copy_pair(job: &CopyJob, commit: Commit, raw_committed: impl FnOnce()) -> std::io::Result<()> {
     copy_verified(&job.src_raw, &job.dst_raw, commit)?;
+    raw_committed();
     if let Some(src) = &job.src_xmp {
         // The RAW is already in place when this runs, so the failure the
         // user needs to read is not "copy failed" but "half of the pair
@@ -843,7 +890,11 @@ fn copy_pair(job: &CopyJob, commit: Commit) -> std::io::Result<()> {
 /// the destination — unless it is already the same file, in which case
 /// only the sidecar can have changed, and a 100 MB RAW must not cross the
 /// wire twice for a caption.
-fn replace_pair(job: &CopyJob, cancel: &AtomicBool) -> std::io::Result<Replaced> {
+fn replace_pair(
+    job: &CopyJob,
+    cancel: &AtomicBool,
+    raw_committed: impl FnOnce(),
+) -> std::io::Result<Replaced> {
     // "Replaced" is decided BEFORE anything is written, from what is under
     // either name — an unreadable destination RAW and a sidecar-only clash
     // both really do replace something, and deriving the count from "the
@@ -859,9 +910,13 @@ fn replace_pair(job: &CopyJob, cancel: &AtomicBool) -> std::io::Result<Replaced>
         None => false,
     };
     if !identical {
-        copy_pair(job, Commit::Replace)?;
+        copy_pair(job, Commit::Replace, raw_committed)?;
         return Ok(Replaced::Transferred { existed });
     }
+    // The RAW that is already there IS this pick's, byte for byte: from the
+    // run's point of view this pick has landed, and no later job may
+    // overwrite that file.
+    raw_committed();
     // The RAW at the destination IS the source, byte for byte (BLAKE3, not
     // size-or-mtime guessing). Only the sidecar is rewritten, and only if
     // it differs.
@@ -1894,7 +1949,7 @@ mod tests {
         std::fs::remove_dir_all(&dir).ok();
     }
 
-    /// The temp file is a FIXED name in the destination folder, so a long
+    /// The temp file lives in the destination folder, so a long
     /// destination name cannot push the temp past the filesystem's limit
     /// and split a pair (QE finding: a 228-byte name landed its RAW and
     /// failed its sidecar).
@@ -2090,8 +2145,23 @@ mod tests {
                 "the destination name is another name for a file this run landed"
             );
         }
-        // The whole run, on THIS (case-sensitive) filesystem: two picks
-        // whose names differ only in case are two files, and both go out.
+        // The whole run: two picks whose names differ only in case are two
+        // files — but ONLY on a case-sensitive filesystem. Probe, never
+        // assume (gate finding 2026-08-22: asserting the ext4 outcome
+        // unconditionally turns the windows-latest CI job red, and that is
+        // the job that produces the Windows binary). Where the volume
+        // folds case, `src_with` would write ONE source file and the
+        // scenario cannot exist; the folding branch of the guard is what
+        // runs there, and the hard-link block above already drives it.
+        let probe = dir.join("CaseProbe.tmp");
+        std::fs::write(&probe, b"x").unwrap();
+        let folds_case = dir.join("caseprobe.tmp").exists();
+        std::fs::remove_file(&probe).ok();
+        if folds_case {
+            eprintln!("case-twin run skipped: this filesystem folds case");
+            std::fs::remove_dir_all(&dir).ok();
+            return;
+        }
         let twins = src_with(&dir, &[("C.ARW", b"upper"), ("c.arw", b"lower")]);
         let dest2 = dir.join("twins");
         std::fs::create_dir_all(&dest2).unwrap();
@@ -2111,6 +2181,101 @@ mod tests {
         );
         assert_eq!(std::fs::read(dest2.join("C.ARW")).unwrap(), b"upper");
         assert_eq!(std::fs::read(dest2.join("c.arw")).unwrap(), b"lower");
+        std::fs::remove_dir_all(&dir).ok();
+    }
+
+    /// The same-run guard through the REAL executor, not just its
+    /// predicate (gate finding 2026-08-22: deleting the `landed.insert` or
+    /// the guard arm left the whole suite green). Two destination names
+    /// hard-linked to one file are exactly what a case-folding lookup
+    /// produces — one file, two names — and a hard link drives it on any
+    /// filesystem. The sources are byte-identical to it, so the first job
+    /// takes the identity path (no rename, so the inode survives for the
+    /// second job to resolve to).
+    #[cfg(unix)]
+    #[test]
+    fn the_executor_refuses_to_overwrite_a_file_this_run_just_landed() {
+        let dir = tmp();
+        let sources = src_with(&dir, &[("a.ARW", b"same bytes"), ("b.ARW", b"same bytes")]);
+        let dest = dir.join("out");
+        std::fs::create_dir_all(&dest).unwrap();
+        std::fs::write(dest.join("a.ARW"), b"same bytes").unwrap();
+        std::fs::hard_link(dest.join("a.ARW"), dest.join("b.ARW")).unwrap();
+
+        let report = run(
+            &sources,
+            &dest,
+            None,
+            ClashPolicy::Overwrite,
+            &SessionCopies::default(),
+        );
+        assert_eq!(
+            report.failed.len(),
+            1,
+            "the second pick was NOT refused — the guard never fired: {:?}",
+            report.failed
+        );
+        assert!(
+            report.failed[0]
+                .1
+                .contains("another pick in this run just landed"),
+            "the refusal must say whose file it is: {:?}",
+            report.failed[0]
+        );
+        assert_eq!(
+            report.identical, 1,
+            "only the FIRST pick may reach the identity path; the second is refused"
+        );
+        assert!(!report.all_verified, "a refused pick is not a verified run");
+        // Nothing was destroyed: the two names are still one file, still
+        // holding the bytes that were there.
+        assert_eq!(std::fs::read(dest.join("a.ARW")).unwrap(), b"same bytes");
+        assert_eq!(std::fs::read(dest.join("b.ARW")).unwrap(), b"same bytes");
+        assert_eq!(
+            file_identity(&dest.join("a.ARW")),
+            file_identity(&dest.join("b.ARW")),
+            "the hard link is intact"
+        );
+        std::fs::remove_dir_all(&dir).ok();
+    }
+
+    /// A rename template must produce a file NAME. Before this was
+    /// rejected, `../{seq}.{ext}` wrote outside the folder the clash
+    /// question named — and under Overwrite would have replaced files
+    /// there (gate finding 2026-08-22).
+    #[test]
+    fn plan_rejects_a_template_that_escapes_the_destination() {
+        let dir = tmp();
+        let sources = src_with(&dir, &[("a.ARW", b"aaaa")]);
+        let dest = dir.join("out");
+        for template in [
+            "../{filename}.{ext}",
+            "sub/{filename}.{ext}",
+            "..",
+            "a\\b.{ext}",
+        ] {
+            let e = super::plan(
+                &sources,
+                &dest,
+                Some(template),
+                ClashPolicy::Ask,
+                &SessionCopies::default(),
+            );
+            assert!(
+                matches!(e, Err(PlanError::TemplateMakesAPath { .. })),
+                "template {template:?} was not refused: {e:?}"
+            );
+        }
+        // The ordinary case still plans.
+        let p = super::plan(
+            &sources,
+            &dest,
+            Some("{filename}_x.{ext}"),
+            ClashPolicy::Ask,
+            &SessionCopies::default(),
+        )
+        .unwrap();
+        assert_eq!(p.jobs[0].dst_raw, dest.join("a_x.ARW"));
         std::fs::remove_dir_all(&dir).ok();
     }
 

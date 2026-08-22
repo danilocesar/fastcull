@@ -21,6 +21,11 @@ Plan-time errors (block execution, shown to user):
   a fine destination.
 - Destination inside the source folder, or equal to it.
 - Template collision: two images expand to the same destination name.
+- A rename template that produces a PATH rather than a file name (a `/`,
+  a `\`, or `..`): it would write outside the folder the clash question
+  names, and under Overwrite replace files there (gate finding
+  2026-08-22). Both separators are refused on every platform so one
+  template means the same thing on Linux and Windows.
 - Insufficient free space (sum of sizes vs `statvfs`/`GetDiskFreeSpaceEx`).
 
 Destination file already exists (per-file modes): **rename (default)** / skip /
@@ -289,7 +294,19 @@ That last check is about FILE IDENTITY, not names: on unix, device +
 inode, which two names for one file share and two different files never
 do; off unix, where no stable file-index API exists, the folded name,
 which is the right answer there because Windows filesystems fold case by
-default. Occupancy proves nothing — the destination name of an overwrite
+default — with the caveat that a Windows directory can be made
+case-SENSITIVE (`fsutil file setCaseSensitiveInfo`, which is what every
+WSL-created tree is), and there the folded name would refuse a copy the
+user asked for, exactly as it did on ext4 before this correction. It FAILS
+OPEN in one recorded place: a `symlink_metadata` that errors mid-run
+leaves the identity unknown and the overwrite proceeds — refusing on doubt
+instead would fail copies the user asked for on the far more common
+case-sensitive destination, to protect a folding one. A RAW whose SIDECAR
+then failed is not that case: it is on disk, so the commit is reported
+through `raw_committed` and its identity is recorded even though the job
+returns an error (gate finding 2026-08-22; the fix is unverifiable on this
+machine — see the carried-forward list — because reaching it needs a
+folding destination). Occupancy proves nothing — the destination name of an overwrite
 is occupied by definition — and comparing folded NAMES failed every
 overwrite of a case-twin on a case-SENSITIVE destination, where the two
 names are two different files and both copies must go out as asked (QE
@@ -558,11 +575,24 @@ destination and copy again, or re-import in darktable.
       app's report_lines tests) — and the same-run guard is asserted on
       FILE IDENTITY (a hard link drives the collapsing-lookup case on any
       filesystem) with two real case-twins proving no false alarm on a
-      case-sensitive destination; the "Use last: …" template chip is
-      confined to the plan state, so it can no longer replan under the
-      question and leave it describing an operation the answer will not
-      perform (main.slint).
-- [ ] NOT VERIFIED ANYWHERE, carried forward (QE 2026-08-21): a
+      case-sensitive destination (that whole-run assertion PROBES the
+      filesystem and skips where it folds case, so the windows-latest CI
+      job — the one that produces the Windows binary — stays green), and
+      the guard is driven through the REAL executor by two hard-linked
+      destination names —
+      the_executor_refuses_to_overwrite_a_file_this_run_just_landed, which
+      is what a deleted `landed.insert` or a deleted guard arm turns red;
+      a template that escapes the destination is a plan-time error —
+      plan_rejects_a_template_that_escapes_the_destination. Review-verified
+      only, no driven test (gate 2026-08-21, deliberate): the "Use last: …"
+      template chip's confinement to the plan state — asserting the absence
+      of a control by clicking where it would be is a test that passes when
+      the click misses (main.slint).
+- [ ] NOT VERIFIED ANYWHERE, carried forward (QE 2026-08-21, extended
+      2026-08-22 — the same-run guard's folding-destination behaviour and
+      the recording of a RAW whose sidecar failed are reachable ONLY on a
+      case-folding destination, so both are asserted by their mechanism and
+      by hard-link stand-ins rather than by the real lookup): a
       case-insensitive destination (no casefold/FAT mount available on the
       dev box), so "a case-variant counts as occupied" and rule 4's
       "two same-run names differing only in case cannot eat each other"

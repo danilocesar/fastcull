@@ -501,6 +501,7 @@ fn copy_replan_with(win: &MainWindow, st: &mut AppState, policy: ClashPolicy) {
             | PlanError::DestInsideSource
             | PlanError::TemplateCollision { .. }
             | PlanError::DestNotADirectory
+            | PlanError::TemplateMakesAPath { .. }
             | PlanError::Template(_)),
         ) => {
             win.set_copy_summary(format!("{} picked images.", sources.len()).into());

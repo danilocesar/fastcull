@@ -21,6 +21,13 @@ exactly where they are, and nothing is ever deleted or moved. If a copy
 fails mid-run, finished files stay, the failed file leaves no debris,
 and the report says exactly what happened.
 
+If you **force-quit** the app in the middle of a copy (or the machine
+loses power), the file that was in flight can leave a hidden half-written
+file behind, named like `.fastcull-partial-8421-3`. It is never mistaken
+for one of your photos and never reused — but nothing sweeps it up
+either, so if you go looking with hidden files shown, those are safe to
+delete. Cancelling a copy from the dialog leaves none.
+
 ## When the names are already taken
 
 Before anything moves, FastCull looks at **the destination folder** —
@@ -59,6 +66,13 @@ symlink counts too), it asks once, for the whole run:
 > `DSC01234.ARW.xmp` — the same file name FastCull writes — and
 > Overwrite replaces it. Answer **Keep both**, or copy into a fresh
 > folder, when the destination has been edited elsewhere.
+
+If a caption refresh cannot land — something else is sitting under the
+`.xmp` name, or the destination filled up — the RAW beside it is still
+yours and still verified, and the report says both things: the file counts
+in *"already identical — re-verified in place"* **and** appears in the
+failed list with the reason. Nothing there was damaged; only the sidecar
+update was lost.
 
 The other way round, Overwrite never *deletes* anything at the
 destination: if a pick has no sidecar of its own (its sidecar could not be
