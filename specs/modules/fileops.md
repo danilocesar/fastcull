@@ -158,54 +158,96 @@ ARW can still show a perfect thumbnail — the embedded JPEG sits at the front
 of the file — so "looks fine in the grid" proves nothing about integrity;
 BLAKE3 verification is the only truth at copy time.
 
-## Confirm, then suffix — collision handling v2 (user decision 2026-08-21,
-NOT YET IMPLEMENTED; design review with the persona pending)
+## The clash question — collision handling v2 (user decisions 2026-08-21,
+NOT YET IMPLEMENTED)
 
 The rule as the user stated it: *"if I ask to copy the files to a folder,
 you copy the files — maybe add a warning that the files already exist.
-Context shouldn't matter more than that."* A copy is a copy; the session's
-memory of what it copied must never be a reason NOT to copy (that memory
-caused the 2026-08-21 bug above), and the safety net is one warning, not a
-silent decision.
+Context shouldn't matter more than that."* The session's memory of an
+earlier copy must never decide what gets copied (that memory caused the
+2026-08-21 bug recorded above); the disk decides, and the user answers one
+question.
 
-1. **Clash check before any byte moves.** Once the plan is built (after the
-   flush barrier), compare every file the plan would write against the
-   destination folder. A clash is any name the plan would write that
-   already exists there — RAW or sidecar.
-2. **One confirmation for the whole run**, not per file: *"We will copy the
-   new files with a new suffix in the filename, would you like to proceed?
-   YES / NO"*.
-3. **YES → suffix.** Every clashing image is copied under the first free
-   numeric suffix, appended to the file-name stem, **before** the extension
-   (`DSC01234_1.ARW` — never after it, never `DSC01234.ARW_1`).
-   **The first suffix is `_1`** (v1 shipped `_2` first; this changes it).
-4. **A suffix `k` is free only when BOTH names are free**: neither
-   `<stem>_k.<ext>` nor `<stem>_k.<ext>.xmp` exists at the destination. A
-   clash on EITHER member moves the pair to `k+1` — RAW and sidecar always
-   land under the same suffix, so a copy is never split across two numbers.
-5. **NO → nothing is copied** (see open questions: whether NO cancels the
-   whole run or copies only the non-clashing files).
+**1. The clash check.** After the flush barrier and the final replan, and
+before any byte moves, every name the plan would write — the RAW **and**
+its sidecar, after template expansion — is checked against the
+destination. A name is occupied if the filesystem says so
+(`symlink_metadata`: a regular file, a directory, a symlink, a broken
+symlink, or a case-variant on a case-insensitive volume all count).
+Session memory is not consulted.
 
-Open questions for the design review (Fable + persona, 2026-08-21) — the
-answers land in this section and in `docs/copy-picks.md` with the
-implementation:
-- What NO means: cancel everything, or copy the clash-free files and leave
-  the clashing ones? What the report says afterwards.
-- What survives of the session-memory defaults: the "N already at
-  destination (skipped)" default for the session's own copies, and the
-  sidecar-alone refresh for an image whose caption changed after the copy.
-  Under the plain rule both become "copy it again as `_1`" — the persona's
-  caption-after-copy flow and the "Ctrl+E again before quitting" recovery
-  are what this trades away. `SessionCopies` still feeds the ✓ copied badge
-  either way.
-- The fate of the "Skip existing" toggle (v1 dialog) once the confirmation
-  exists: keep both, or replace the toggle with the YES/NO answer.
-- Whether the confirmation is a second modal over the Copy dialog or a
-  state of the dialog itself (Enter/Esc semantics, issue #42 stacking).
-- Free space and the "N to copy" summary must count clashing files as full
-  copies (under v1 defaults some of them were skips worth 0 bytes).
-- Cross-session `_k` growth on repeated runs into a working selects folder
-  (`_1`, `_2`, `_3`… of the same photo) — acceptable, or bounded?
+**2. One question per run; the answer applies to the whole operation**
+(user decision: *"one file duplicate triggers the question … then this
+option is valid the whole operation"*). No clashes → no question, today's
+flow unchanged. Any clash → the dialog asks, in the spirit of *"We
+detected clashes on filenames"*, naming the destination and the counts,
+with three answers:
+
+- **Overwrite everything** — clashing files are replaced in place;
+  clash-free files copy normally. A clashing RAW whose destination copy is
+  already byte-identical to the source is NOT re-transferred: only its
+  sidecar is rewritten, and only if it differs ("N sidecars refreshed" in
+  the report). That is where the v1 sidecar-alone refresh survives (user
+  decision 2026-08-21: keep the refresh) — the caption-after-copy recovery
+  stays cheap, without the RAW crossing the wire twice. Identity is BLAKE3
+  of the destination against the source stream (the hash the copy computes
+  anyway; the read is cheaper than the rewrite), never size-or-mtime
+  guessing.
+- **Create copies** — every clashing image lands under the first free
+  numeric suffix, appended to the file-name stem **before** the extension
+  (`DSC01234_1.ARW`, never `DSC01234.ARW_1`), **starting at `_1`** (v1
+  started at `_2`). A number `k` is free only when BOTH `<stem>_k.<ext>`
+  and `<stem>_k.<ext>.xmp` are free — on disk and unclaimed by this plan —
+  so a clash on either member moves the pair to `k+1`, and a copy is never
+  split across two numbers. Growth is unbounded by design (`_1`, `_2`,
+  `_3`, …): each layer costs a deliberate answer.
+- **Cancel** — nothing is copied at all, not even the clash-free files
+  (user decision; Esc means the same).
+
+**3. The answer is a policy, not a file list.** After the answer the app
+flushes and replans with the chosen policy, and only that fresh plan
+executes (the ordering contract above: a plan frozen before the question
+is never executed). Free space and the "N to copy" summary are computed
+for the chosen policy; the pre-answer summary states the worst case, and
+the plan errors on space only when even the clash-free total does not fit.
+
+**4. Nothing is replaced unless the user answered Overwrite.** The
+executor commits its verified temp file into place without clobbering; a
+name that got occupied between the question and the copy fails THAT file
+honestly ("a file appeared at the destination during the copy") and the
+run continues. Two same-run names differing only in case therefore cannot
+eat each other on a case-insensitive destination.
+
+**5. Session memory reads, never decides.** `SessionCopies` survives for
+the ✓ copied badge and the "N copied earlier but gone from the destination
+— copying again" note. The forced skip, the landed-name judging and
+`is_collision_suffix_of` are deleted with this change: issue #14's bug
+class (our sidecar written beside a foreign RAW) becomes structurally
+impossible, because a sidecar is only ever written beside its own RAW,
+under a name that is either free or explicitly overwritten. The v1 "Skip
+existing" toggle and the four-way `ExistsMode` are replaced by the three
+answers.
+
+**6. Wording and keys.** The question states what each answer does and
+what it costs, rather than yes/no (persona: at 9pm "proceed" reads as
+"proceed with the copy I asked for"). The destructive answer (Overwrite)
+must not sit on `Y`, `N` or Enter — the culling keys and the
+do-the-obvious-thing key; Esc = Cancel. Exact labels are settled with the
+persona at implementation time.
+
+**Recorded consequence**: exposing Overwrite reverses the v1 decision
+"overwrite is never exposed in v1 — it is the one that can destroy a
+verified prior copy" (user decision 2026-08-21). It is bounded by the
+verified-temp-then-commit contract — a failed or corrupt transfer never
+replaces a good file — but it does replace a destination file that differs
+from the source: another body's frame under the same name, or a copy the
+user edited in place.
+
+**Recorded consequence**: a re-run into a folder that still holds the
+session's own copies now ASKS (they are clashes like any others). The
+answer that adds the new picks is Overwrite, which re-verifies the
+existing ones rather than skipping them; identical RAWs are not
+re-transferred (see above), so the cost is a read, not a write.
 
 ## Acceptance criteria (tests)
 
@@ -239,12 +281,16 @@ implementation:
       (screenshot.rs, driven through `copydest:`).
 - [x] No partial files after simulated failure (temp-name copy verified) —
       asserted inside execute_copies_verifies_and_isolates_failures.
-- [ ] Confirm-then-suffix (v2, not yet implemented): the clash check sees
-      RAW *and* sidecar names; one confirmation per run; YES suffixes from
-      `_1` before the extension with RAW/sidecar in lockstep; a clash on
-      either member advances the pair to the next number; NO does what the
-      design review decides; free space and the summary count clashing
-      files as full copies.
+- [ ] Clash question (v2, not yet implemented): the check sees RAW *and*
+      sidecar names, on templated names, from the filesystem (directory,
+      symlink, broken symlink count); one question per run whose answer is
+      a whole-run policy; Overwrite replaces in place but re-copies only
+      the sidecar when the destination RAW is byte-identical; Create
+      copies suffixes from `_1` before the extension, RAW/sidecar in
+      lockstep, advancing the pair when either member is taken; Cancel
+      copies nothing at all; a name occupied after the question fails that
+      file alone without clobbering; free space and the summary follow the
+      chosen policy.
 - [ ] Cross-platform: paths with spaces/Unicode; Windows reserved-name rejection
       — DEFERRED with the user's explicit OK (2026-07-26, "low priority"),
       tracked as issue #10; spaces/Unicode half already QE-verified
