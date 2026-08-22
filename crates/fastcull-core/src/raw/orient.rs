@@ -226,7 +226,13 @@ fn transpose_rotate(
                             let row = &mut band[dy * ow * 3..(dy + 1) * ow * 3];
                             // Write side: chunked, so no per-pixel bounds
                             // check; `y_rev` hoisted out of the pixel loop.
-                            let tile_px = row[dx0 * 3..dx1 * 3].chunks_exact_mut(3);
+                            // `as_chunks_mut` over `chunks_exact_mut`: the
+                            // pixel width is a constant, so each item is a
+                            // `[u8; 3]` array rather than a slice the
+                            // compiler must re-check (clippy 1.98's
+                            // chunks_exact_to_as_chunks).
+                            let (tile_px, _) = row[dx0 * 3..dx1 * 3].as_chunks_mut::<3>();
+                            let tile_px = tile_px.iter_mut();
                             if y_rev {
                                 for (i, px) in tile_px.enumerate() {
                                     let y = hu - 1 - (dx0 + i);

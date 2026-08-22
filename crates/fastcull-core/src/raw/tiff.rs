@@ -124,7 +124,8 @@ fn read_ifd<R: Read + Seek>(
     let mut height = None;
     let mut sub_ifds: Option<(u32, [u8; 4])> = None;
 
-    for entry in table[..usize::from(entry_count) * 12].chunks_exact(12) {
+    let (entries, _) = table[..usize::from(entry_count) * 12].as_chunks::<12>();
+    for entry in entries {
         let tag = endian.u16([entry[0], entry[1]]);
         let typ = endian.u16([entry[2], entry[3]]);
         let count = endian.u32([entry[4], entry[5], entry[6], entry[7]]);
@@ -177,7 +178,8 @@ fn read_ifd<R: Read + Seek>(
         if count == 1 {
             queue.push(u64::from(endian.u32(value)));
         } else if let Ok(buf) = read_at(reader, u64::from(endian.u32(value)), count as usize * 4) {
-            for chunk in buf.chunks_exact(4) {
+            let (words, _) = buf.as_chunks::<4>();
+            for chunk in words {
                 queue.push(u64::from(
                     endian.u32([chunk[0], chunk[1], chunk[2], chunk[3]]),
                 ));

@@ -85,7 +85,8 @@ pub(super) fn find_in_ifd<R: Read + Seek>(
     }
     let mut table = vec![0u8; usize::from(n) * 12];
     reader.read_exact(&mut table).ok()?;
-    for e in table.chunks_exact(12) {
+    let (entries, _) = table.as_chunks::<12>();
+    for e in entries {
         if en.u16([e[0], e[1]]) == tag {
             return Some((
                 en.u16([e[2], e[3]]),
