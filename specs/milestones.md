@@ -96,6 +96,79 @@ faq); QE executed the full DoD path from the docs against the release
 binary. Release-note debt RESOLVED with v0.3.0: the index install note was
 removed and the culling callout pinned to "Changed in 0.3.0". The docs-follow-specs binding lives in CLAUDE.md.
 
+## v0.10.0 (released 2026-08-22)
+
+Copy Picks. One bug report started it, and answering it properly
+replaced how the whole operation deals with names that are already
+taken.
+
+**The report**: copy the picks, delete some of those copies by hand in
+the destination folder, press `Ctrl+E` again — and nothing came back.
+Sometimes the `.xmp` reappeared without its RAW; usually nothing at
+all, and the only way out was copying to a different folder and moving
+files by hand. The session remembered which images it had copied to a
+folder and turned that memory into a forced skip WITHOUT ever checking
+the copy was still there; the one thing it did re-check was the
+sidecar, which is why the sidecar was the one thing that came back.
+That memory now reads only — it feeds the ✓ badge and the "copied
+earlier but gone" note, and decides nothing.
+
+**The rule, from the user**: *"if I ask to copy the files to a folder,
+you copy the files — maybe add a warning that the files already exist.
+Context shouldn't matter more than that."* So the disk decides. Every
+name the copy would write — the RAW **and** its sidecar, after the
+rename template — is checked against the destination, and if anything
+is already there you get ONE question whose answer governs the whole
+run:
+
+- **Keep both** — the clashing picks land under the first free number,
+  `_1`, `_2`, `_3`… on the file-name stem before the extension, sidecar
+  always sharing the number.
+- **Overwrite those N** — replaces them in place. A destination RAW
+  that is already byte-for-byte identical is NOT sent again: it is
+  checksummed, kept, and only its sidecar is rewritten if captions
+  changed, which makes a second `Ctrl+E` a free "is my export still
+  bit-perfect?" pass before the card is wiped. Overwrite means
+  overwrite — including a destination `.xmp`, which is where darktable
+  keeps its edit history, and the question says so.
+- **Cancel** — copies nothing at all, not even the files that had no
+  clash. `Esc` does the same.
+
+`Enter` deliberately does nothing on that question, and the destructive
+answer is not on `Y` or `N`: those are the culling keys, and
+`Ctrl+E, Enter, Enter` must never replace 148 files by reflex.
+
+**Two picks that share a name never ask.** Two bodies producing the
+same `DSC01234.ARW`, or a template that gives several frames one name:
+the later pick just takes a suffix, under every answer, because
+overwriting one of the user's photographs with another is not a choice
+worth offering. The plan preview says how many that is.
+
+**Nothing is written outside the destination folder** — an invariant
+now, not an assumption. A rename template that produces a path (`/`,
+`\`, `..`) or a name with no stem (`{camera}.{ext}` used to write a
+hidden `.ARW`) is refused before anything moves, on every platform.
+
+**`{camera}` works again** in both the rename field and the IPTC panel;
+it had been handed a literal `None` since the feature shipped and
+stamped an empty string.
+
+Under the hood the copy engine stopped trusting `rename`: every commit
+that is not an answered overwrite goes through a no-clobber primitive,
+so a file that appears between the question and the copy fails that one
+file honestly instead of being destroyed, and two same-run names that a
+case-folding volume treats as one cannot eat each other. Temp files are
+unique per copy after a hard-quit hazard was found: the old shared name
+could alias a freshly committed RAW and truncate a copy the report had
+already called verified. The plan's suffix search resumes instead of
+restarting, after it turned out to freeze the UI for ~3 s per keystroke
+while typing a template over a thousand picks.
+
+Closes #14 (a `_2` copy was judged under its natural name, so a caption
+refresh could land on a different camera's file — structurally
+impossible now: a sidecar is only ever written beside its own RAW).
+Nine gate rounds, and every claim in the spec is a test.
+
 ## v0.9.0 (released 2026-08-09)
 
 One report drove this release (#46, reported by the user): at deep
