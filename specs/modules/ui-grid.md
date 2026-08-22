@@ -1677,7 +1677,17 @@ the user confirms, all cheap to change):**
       and keeps the keyboard, both for a destroyed field editor and for
       the surviving keyword editor — the latter pins the cross-session
       write the fix's first cut produced (`session_swap_mid_keyword_
-      edit_never_writes_into_the_new_session`); Esc over stacked modals
+      edit_never_writes_into_the_new_session` — **INTERMITTENTLY RED,
+      measured 2026-08-22: it fails roughly one run in four, and the
+      leaked sidecar really does contain the abandoned `wip` keyword, in
+      the OLD session's folder. So the discard rule has a race, not just a
+      slow test: the editor's commit sometimes wins against the
+      session-generation bump. Reproduced on `c060e7c`, i.e. it predates
+      the clash-question work; interleaved A/B runs of 6 gave 2/6 failures
+      before that change and 1/6 after, so nothing in that change caused
+      or worsened it. Needs a real fix — this is the one guard standing
+      between a half-typed keyword and someone else's photograph**); Esc
+      over stacked modals
       closes the topmost first with the copy dialog's plan surviving
       verbatim (`esc_over_stacked_modals_closes_the_topmost_first`); a
       1:1 loupe click claims the keyboard (`one_to_one_click_claims_the_

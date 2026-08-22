@@ -2763,6 +2763,14 @@ fn session_swap_mid_field_edit_discards_and_keeps_the_keyboard() {
 /// first fix cut committed \"wip\" against the NEW session's image (a
 /// sidecar appeared in folder B), which is the exact cross-session write
 /// this test pins. RED pre-fix: keysfocus=false after the swap.
+///
+/// KNOWN INTERMITTENT FAILURE (measured 2026-08-22, ~1 run in 4, on an
+/// idle machine): the leaked sidecar contains the abandoned `wip`
+/// keyword, in the OLD session's folder — so this is a real race in the
+/// discard rule, not test noise. It reproduces on `c060e7c` (before the
+/// clash-question work): interleaved runs of 6 gave 2/6 failures there
+/// and 1/6 on the tree that followed. Do NOT quiet this test; when it
+/// fails it is telling the truth. Recorded in ui-grid.md.
 #[test]
 fn session_swap_mid_keyword_edit_never_writes_into_the_new_session() {
     if !has_display() {
