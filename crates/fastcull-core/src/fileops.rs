@@ -100,7 +100,7 @@ pub enum PlanError {
     },
     #[error("not enough free space: need {needed} bytes, {free} available")]
     InsufficientSpace { needed: u64, free: u64 },
-    #[error("the destination is a file, not a folder")]
+    #[error("the destination is not a folder")]
     DestNotADirectory,
 }
 
@@ -1087,7 +1087,6 @@ fn commit_without_hard_links(tmp: &Path, dst: &Path) -> std::io::Result<()> {
 /// unlink left behind) is skipped rather than reused.
 fn create_temp(dir: &Path) -> std::io::Result<(PathBuf, std::fs::File)> {
     static SEQ: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
-    let mut last = None;
     for _ in 0..1024 {
         let n = SEQ.fetch_add(1, Ordering::Relaxed);
         let cand = dir.join(format!(".fastcull-partial-{}-{n}", std::process::id()));
@@ -1097,11 +1096,16 @@ fn create_temp(dir: &Path) -> std::io::Result<(PathBuf, std::fs::File)> {
             .open(&cand)
         {
             Ok(f) => return Ok((cand, f)),
-            Err(e) if e.kind() == std::io::ErrorKind::AlreadyExists => last = Some(e),
+            Err(e) if e.kind() == std::io::ErrorKind::AlreadyExists => continue,
             Err(e) => return Err(e),
         }
     }
-    Err(last.unwrap_or_else(|| std::io::Error::other("no free temp name at the destination")))
+    // Reporting the last `AlreadyExists` here would say "File exists" about
+    // a destination name that is perfectly free — exactly the undecodable
+    // class this module keeps removing (QE finding 2026-08-22).
+    Err(std::io::Error::other(
+        "no free temp name at the destination: 1024 leftover .fastcull-partial files are in the way",
+    ))
 }
 
 fn appeared_during_copy() -> std::io::Error {
@@ -1800,16 +1804,20 @@ mod tests {
         let sources = src_with(&dir, &[("a.ARW", b"aaaa")]);
         let dest = dir.join("not-a-folder");
         std::fs::write(&dest, b"I am a file").unwrap();
-        assert!(matches!(
-            super::plan(
-                &sources,
-                &dest,
-                None,
-                ClashPolicy::Ask,
-                &SessionCopies::default()
-            ),
-            Err(PlanError::DestNotADirectory)
-        ));
+        let err = super::plan(
+            &sources,
+            &dest,
+            None,
+            ClashPolicy::Ask,
+            &SessionCopies::default(),
+        )
+        .unwrap_err();
+        assert!(matches!(err, PlanError::DestNotADirectory));
+        assert_eq!(
+            err.to_string(),
+            "the destination is not a folder",
+            "the message has to fit a link or a device too, not only a file"
+        );
         assert_eq!(std::fs::read(&dest).unwrap(), b"I am a file");
         // A DANGLING symlink is not a folder either — `metadata()` cannot
         // see it, so it used to slip through into the same pile of
