@@ -31,6 +31,15 @@ Plan-time errors (block execution, shown to user):
   Windows.
   *(Two images expanding to the same destination name used to be a
   plan-time error. It is not any more — see "two picks, one name" below.)*
+- A rename template whose expansion has no STEM — anything starting with
+  `.`, which `{camera}.{ext}` produces today because the app never fills
+  `{camera}` (QE finding 2026-08-22). It would write `.ARW`: a hidden file
+  whose whole name is its extension, invisible to FastCull's own scan and
+  to darktable, and the suffix walk then yields `.ARW_1`, which has lost
+  the extension as well. Perfect copies nobody can see are worse than a
+  refusal. **Open, separate from this rule**: `{camera}` expanding to
+  nothing at all in the app is its own bug (`copy_bridge::plan_sources`
+  passes `camera: None`); the template docs offer the variable.
 - Insufficient free space (sum of sizes vs `statvfs`/`GetDiskFreeSpaceEx`).
 
 Destination file already exists (per-file modes): **rename (default)** / skip /
@@ -43,8 +52,8 @@ button). **SUPERSEDED AND REMOVED 2026-08-21 by "The clash question"
 below**: the four-way `ExistsMode`, the auto-suffix that never asked, and
 the `DestExists`/abort error are gone from the code. What survives is the
 SHAPE of the rename (a numeric suffix before the extension, sidecar in
-lockstep — now from `_1`, and only as the answer "keep both") and the
-no-148-row-table rule.
+lockstep — now from `_1`, as the answer "keep both" and, without asking,
+when two picks in one run share a name) and the no-148-row-table rule.
 
 **Execute** (on a worker thread, progress events per file):
 1. Flush pending sidecar writes for all picked images (hard barrier).
@@ -273,8 +282,34 @@ suffix under EVERY policy, Ask included, and the run proceeds without
 asking. The suffix walk skips names taken on disk as well as in the plan,
 so the name it lands on clashes with nothing — which is why it needs no
 question even into a crowded folder. It is silent but not invisible: the
-plan preview says "N share a name with another pick — those get a
-suffix". This also covers a rename template that collapses several images
+plan preview says "N picks share a name with another — those get a
+suffix", counted in `CopyPlan::shared_name`, which is kept apart from
+`renamed` (a suffix taken because the DESTINATION held the name) so
+neither sentence can be said about the other's files.
+
+EXACT-CASE, and that is the one exception to "always" (gate finding
+2026-08-22): the in-plan claim set compares names literally, so two picks
+named `C.ARW` and `c.arw` are two names to us. On a case-SENSITIVE
+destination that is correct — they are two files and both land. On a
+folding one they are one name, and the second pick FAILS instead of being
+suffixed: refused by the no-clobber commit on the clash-free path, or by
+the same-run identity guard under overwrite (§4). Failing is the safe
+direction — the alternative is destroying a verified copy — but it is a
+failure where this rule promises a suffix, and closing it needs the
+destination's folding behaviour probed at plan time, which is on the
+carried-forward NOT-VERIFIED list below.
+
+COST, recorded because it is on the interactive path (gate finding
+2026-08-22): the suffix walk RESUMES per base name instead of restarting
+at `_1` for every pick. Restarting is quadratic, and the input that
+triggers it is ordinary typing — a hand-typed template has a literal
+prefix before its first `{`, so every pick expands to the same name while
+the field is mid-word, and `plan()` runs on the Slint event-loop thread
+on every keystroke. Measured for 2,000 picks on one name: 2 M `stat`
+calls and 1.7 s (btrfs) to 2.3 s (tmpfs) restarting, versus 4-5 ms
+resuming — and a network destination multiplies the per-`stat` cost by
+three orders of magnitude. `many_picks_on_one_name_take_consecutive_
+suffixes` holds it to 300 ms. This also covers a rename template that collapses several images
 onto one name (`same.{ext}` → `same.ARW`, `same_1.ARW`, …), which was a
 blocking plan error until this decision.
 
@@ -507,7 +542,12 @@ copy at the destination and copy again, or re-import in darktable.
 
 ## Acceptance criteria (tests)
 
-- [x] Plan: template expansion, in-plan collision detection,
+- [x] Plan: template expansion, in-plan collision RESOLUTION (two picks on
+      one name are suffixed, never refused — including 2,000 of them
+      within the walk's 300 ms smoke bound, and with the free-space check
+      requiring their bytes) —
+      many_picks_on_one_name_take_consecutive_suffixes,
+      free_space_counts_a_batch_suffixed_pick;
       dest-inside-source rejection (tempdir fixtures) —
       plan_templates_seq_and_suffixes_in_batch_collisions,
       two_picks_with_the_same_name_always_get_a_suffix_without_a_question,
@@ -627,6 +667,12 @@ copy at the destination and copy again, or re-import in darktable.
       "two same-run names differing only in case cannot eat each other"
       are review-verified only; the hard-link-less commit fallback is unit-
       tested but has never run on a filesystem that actually lacks links;
+      a Windows drive-prefixed template name (`C:x.ARW`), which
+      `dest.join` would turn into a drive-relative path OUTSIDE the
+      destination and which the plan now refuses through
+      `Path::components` — on unix that same string is an ordinary file
+      name, so the rejection cannot be exercised here and
+      planned_paths_never_leave_the_destination cannot see it;
       network destinations (the recorded "~2× the clashing bytes over the
       wire" consequence); a real darktable round-trip of the
       overwrite-replaces-sidecars warning.

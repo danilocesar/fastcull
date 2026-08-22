@@ -58,16 +58,18 @@ symlink counts too), it asks once, for the whole run:
   clash. `Esc` does the same and leaves the dialog on your plan, so
   pointing it at another folder is one step.
 
-**Two of your own picks sharing a name** — two bodies, two cards, the
-same `DSC01234.ARW` — never raise this question: the second one always
-lands as `DSC01234_1.ARW`, whatever you answer, because overwriting one
-of your photographs with the other is not something to offer. The plan
-line tells you it happened: *"1 share a name with another pick — those
-get a suffix"*. The same goes for a rename template that gives several
-frames the same name.
 - `Enter` deliberately does nothing on this question: `Ctrl+E`, `Enter`,
   `Enter` must never replace or duplicate 148 files by reflex. Answer
   with `B`, `O`, `Esc` — or click.
+
+**Two of your own picks sharing a name** — two bodies, two cards, the
+same `DSC01234.ARW` — never raise this question at all: the second one
+lands as `DSC01234_1.ARW` whatever you answer, because overwriting one of
+your photographs with the other is not something worth offering. The plan
+line says so before you copy: *"1 pick shares a name with another — it
+gets a suffix"*. The same goes for a rename template that gives several
+frames the same name — they land `same.ARW`, `same_1.ARW`, `same_2.ARW`,
+in your sort order.
 
 > ⚠ **Overwrite replaces sidecars too.** If you have already started
 > developing the copies in darktable, its edit history lives in

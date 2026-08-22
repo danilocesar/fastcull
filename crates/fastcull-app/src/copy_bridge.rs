@@ -482,15 +482,22 @@ fn copy_replan_with(win: &MainWindow, st: &mut AppState, policy: ClashPolicy) {
                     p.clashes
                 ));
             }
-            if p.renamed > 0 {
+            if p.shared_name > 0 {
                 // Not a question — two picks that share a name always get
                 // a suffix (user decision 2026-08-22) — but the user still
                 // has to see that names on disk will differ from the ones
-                // in the grid.
-                notes.push(format!(
-                    "{} share a name with another pick — those get a suffix",
-                    p.renamed
-                ));
+                // in the grid. `shared_name`, never `renamed`: the latter
+                // also counts suffixes taken because the DESTINATION held
+                // the name, and this sentence would then be false about
+                // them (gate finding 2026-08-22).
+                notes.push(if p.shared_name == 1 {
+                    "1 pick shares a name with another — it gets a suffix".to_string()
+                } else {
+                    format!(
+                        "{} picks share a name with another — those get a suffix",
+                        p.shared_name
+                    )
+                });
             }
             if p.recopied > 0 {
                 // The one signal that Enter is about to put back what the
@@ -511,6 +518,7 @@ fn copy_replan_with(win: &MainWindow, st: &mut AppState, policy: ClashPolicy) {
             | PlanError::DestInsideSource
             | PlanError::DestNotADirectory
             | PlanError::TemplateMakesAPath { .. }
+            | PlanError::TemplateMakesAHiddenName { .. }
             | PlanError::Template(_)),
         ) => {
             win.set_copy_summary(format!("{} picked images.", sources.len()).into());

@@ -35,11 +35,14 @@ use crate::xmp::sidecar_path;
 /// not executing anything at all.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum ClashPolicy {
-    /// Build the plan, MARK every clashing image (`PlanAction::Clash`) and
-    /// count it, but resolve nothing: this is the plan the dialog previews
-    /// and the one whose clash count raises the question. [`execute`]
-    /// refuses to run it (fileops.md: a plan frozen before the question is
-    /// never executed).
+    /// Build the plan and MARK every image whose destination pair is
+    /// occupied (`PlanAction::Clash`) without resolving it: this is the
+    /// plan the dialog previews, and its clash count is what raises the
+    /// question. [`execute`] refuses to run it (fileops.md: a plan frozen
+    /// before the question is never executed). It DOES resolve one thing —
+    /// two picks in this same run landing on one name are suffixed here as
+    /// under every other policy, because that is not a question (fileops.md
+    /// "Two picks, one name").
     Ask,
     /// "Overwrite everything": clashing images are written in place. A
     /// destination RAW that is already byte-identical to the source is NOT
@@ -72,8 +75,10 @@ pub struct CopyJob {
 pub enum PlanAction {
     /// Copy RAW + sidecar to a destination pair that is FREE.
     Copy,
-    /// As Copy, but the pair got a collision suffix (`_1`, `_2`, …) under
-    /// [`ClashPolicy::CreateCopies`].
+    /// As Copy, but the pair got a collision suffix (`_1`, `_2`, …):
+    /// either because the user answered [`ClashPolicy::CreateCopies`], or
+    /// because another pick in the SAME run had already claimed the name
+    /// — which is suffixed under every policy, Ask included.
     CopyRenamed,
     /// The destination pair is occupied and the user answered "overwrite
     /// everything": this job MAY replace what is there — the only action
@@ -98,6 +103,10 @@ pub enum PlanError {
     DestNotADirectory,
     #[error("rename template produced '{name}', which is a path, not a file name")]
     TemplateMakesAPath { name: String },
+    #[error(
+        "rename template produced '{name}': a hidden file with no name of its own          (an empty variable before the dot?)"
+    )]
+    TemplateMakesAHiddenName { name: String },
 }
 
 /// The inspectable plan the dialog previews. `jobs` keep the input order
@@ -116,8 +125,11 @@ pub struct CopyPlan {
     pub clash_bytes: u64,
     /// None = statvfs failed ("free space unknown"), check skipped.
     pub free_bytes: Option<u64>,
-    /// Images whose destination pair is occupied (fileops.md: the RAW name
-    /// or its sidecar name, on disk or claimed by this plan).
+    /// Images whose destination pair is occupied ON DISK — the RAW name or
+    /// its sidecar name (fileops.md, the clash check). This is what raises
+    /// the question. A name claimed by another pick in the same plan is
+    /// NOT counted here: it is suffixed on the spot, and counted in
+    /// [`CopyPlan::shared_name`].
     pub clashes: usize,
     /// Of those, the ones where ONLY the sidecar name is taken — a stray
     /// `.xmp` with no RAW beside it. Deliberately NOT shown in the
@@ -126,8 +138,15 @@ pub struct CopyPlan {
     /// plan should be able to describe itself honestly, and the tests
     /// assert on it.
     pub sidecar_only_clashes: usize,
-    /// Jobs that took a `_k` suffix (`CreateCopies`).
+    /// Jobs that took a `_k` suffix because the DESTINATION held their
+    /// name and the user answered "create copies".
     pub renamed: usize,
+    /// Jobs that took a `_k` suffix because ANOTHER PICK in this same run
+    /// had already claimed the name — the two-bodies, two-folders case,
+    /// resolved under every policy without asking (fileops.md "Two picks,
+    /// one name"). Kept apart from `renamed` so the preview line can say
+    /// which cause it is talking about without lying about the other.
+    pub shared_name: usize,
     /// [`ClashPolicy::Ask`] only: the name the FIRST clashing image would
     /// actually land under if the answer is "keep both". The question
     /// shows it, and showing `_1` when `_1` is already taken is a promise
@@ -300,13 +319,32 @@ pub fn plan(
         // on Windows. The suffix walk and the temp names below stay inside
         // `dest` by construction; `planned_paths_never_leave_the_destination`
         // holds the whole plan to it.
-        if name.is_empty()
-            || name == "."
-            || name == ".."
-            || name.contains('/')
-            || name.contains('\\')
-        {
+        // Two checks, because neither alone is enough. The literal one
+        // rejects both separators on EVERY platform, so a template means
+        // the same thing on Linux and on Windows. The component one asks
+        // the platform itself, which is what catches a drive prefix:
+        // `dest.join("C:x.ARW")` on Windows REPLACES the destination with
+        // a drive-relative path (std: "if path has a prefix but no root,
+        // it replaces self"), landing outside the target — the invariant's
+        // one remaining hole until this (gate finding 2026-08-22).
+        let one_plain_component = {
+            let mut c = Path::new(&name).components();
+            let first = c.next();
+            c.next().is_none()
+                && matches!(first, Some(std::path::Component::Normal(part)) if part == name.as_str())
+        };
+        if name.is_empty() || name.contains('/') || name.contains('\\') || !one_plain_component {
             return Err(PlanError::TemplateMakesAPath { name });
+        }
+        // An expansion with no STEM (`{camera}.{ext}` — and `{camera}` is
+        // always empty in the app today) makes `.ARW`: a hidden file whose
+        // whole name is its extension. The copies are perfect and nobody
+        // can see them — FastCull's own scan skips them, and so does
+        // darktable — and the suffix walk then yields `.ARW_1`, which has
+        // lost the extension too. Refused, not shipped (QE finding
+        // 2026-08-22).
+        if name.starts_with('.') {
+            return Err(PlanError::TemplateMakesAHiddenName { name });
         }
         names.push(name);
     }
@@ -320,9 +358,11 @@ pub fn plan(
     // is free only when BOTH are, so a copy is never split across two
     // numbers and a RAW never lands beside a sidecar it does not own.
     let mut taken: HashSet<String> = HashSet::new();
-    let (mut clashes, mut sidecar_only, mut renamed, mut recopied) =
-        (0usize, 0usize, 0usize, 0usize);
+    let (mut clashes, mut sidecar_only, mut renamed, mut recopied, mut shared_name) =
+        (0usize, 0usize, 0usize, 0usize, 0usize);
     let mut keep_both_example: Option<String> = None;
+    // Per-base-name walk cursor; see `first_free_suffix`.
+    let mut suffix_cursor: HashMap<String, usize> = HashMap::new();
     let (mut total_bytes, mut clash_bytes, mut clash_free_bytes) = (0u64, 0u64, 0u64);
     // Folder → "is it `dest`?", compared canonically (the same destination
     // reached via another spelling keeps its note) and memoized per
@@ -361,9 +401,9 @@ pub fn plan(
             // The suffix walk skips names taken on disk AND in this plan,
             // so the name it lands on clashes with nothing — which is why
             // this needs no question even when the destination is crowded.
-            renamed += 1;
+            shared_name += 1;
             (
-                dest.join(first_free_suffix(dest, name, &taken)),
+                dest.join(first_free_suffix(dest, name, &taken, &mut suffix_cursor)),
                 PlanAction::CopyRenamed,
             )
         } else if !clash {
@@ -375,7 +415,14 @@ pub fn plan(
                     // clashing image — the same walk, from the same state,
                     // so the question names the file the copy will make.
                     if keep_both_example.is_none() {
-                        keep_both_example = Some(first_free_suffix(dest, name, &taken));
+                        // A LOOK-AHEAD, so it must not move the cursor
+                        // that the real walk depends on.
+                        keep_both_example = Some(first_free_suffix(
+                            dest,
+                            name,
+                            &taken,
+                            &mut suffix_cursor.clone(),
+                        ));
                     }
                     (natural, PlanAction::Clash)
                 }
@@ -383,7 +430,7 @@ pub fn plan(
                 ClashPolicy::CreateCopies => {
                     renamed += 1;
                     (
-                        dest.join(first_free_suffix(dest, name, &taken)),
+                        dest.join(first_free_suffix(dest, name, &taken, &mut suffix_cursor)),
                         PlanAction::CopyRenamed,
                     )
                 }
@@ -460,6 +507,7 @@ pub fn plan(
         clashes,
         sidecar_only_clashes: sidecar_only,
         renamed,
+        shared_name,
         keep_both_example,
         recopied,
     })
@@ -470,8 +518,24 @@ pub fn plan(
 /// plan. The pair moves together, so a copy is never split across two
 /// numbers (fileops.md); growth is unbounded by design, and each layer
 /// costs the user a deliberate answer.
-fn first_free_suffix(dest: &Path, name: &str, taken: &HashSet<String>) -> String {
-    let mut k = 1usize;
+/// `cursor` remembers, per base name, the last number this plan already
+/// walked past. Without it a plan whose names all collapse onto one base
+/// — an ordinary hand-typed template has a literal prefix before the
+/// first `{`, so EVERY pick expands to the same name while the field is
+/// mid-word — restarts at 1 for each pick and costs N²/2 `stat` calls:
+/// measured 2 M syscalls / 1.5 s for 2,000 picks, on the UI thread, per
+/// keystroke, and 30 minutes if the destination is a network mount (gate
+/// finding 2026-08-22, architecture rule "the UI thread never blocks on
+/// I/O"). Resuming is sound because `taken` only ever grows: a number
+/// found occupied once can never come free within the same plan.
+fn first_free_suffix(
+    dest: &Path,
+    name: &str,
+    taken: &HashSet<String>,
+    cursor: &mut HashMap<String, usize>,
+) -> String {
+    let from = cursor.get(name).copied().unwrap_or(0);
+    let mut k = from + 1;
     loop {
         let cand = suffixed(name, k);
         let cand_xmp = xmp_name_of(&cand);
@@ -480,6 +544,7 @@ fn first_free_suffix(dest: &Path, name: &str, taken: &HashSet<String>) -> String
             && !occupied(&dest.join(&cand_xmp))
             && !taken.contains(&cand_xmp)
         {
+            cursor.insert(name.to_string(), k);
             return cand;
         }
         k += 1;
@@ -574,7 +639,9 @@ pub enum CopyEvent {
 pub struct CopyReport {
     /// RAWs actually transferred and verified.
     pub copied: usize,
-    /// Of those, the ones that landed under a `_k` name ("create copies").
+    /// Of those, the ones that landed under a `_k` name — whether because
+    /// the user answered "create copies" or because two picks in this run
+    /// shared a name.
     pub renamed: usize,
     /// Of those, the ones that replaced a file that was already there
     /// ("overwrite everything").
@@ -1290,9 +1357,10 @@ mod tests {
         assert_eq!(p.jobs[1].dst_raw.file_name().unwrap(), "same_1.ARW");
         assert_eq!(p.jobs[1].dst_xmp.file_name().unwrap(), "same_1.ARW.xmp");
         assert_eq!(
-            (p.clashes, p.renamed),
-            (0, 1),
-            "an in-batch collision is suffixed, never asked about"
+            (p.clashes, p.shared_name, p.renamed),
+            (0, 1, 0),
+            "an in-batch collision is suffixed, never asked about — and it \
+             is counted apart from a destination-clash rename"
         );
         // Unknown variable propagates the template error.
         let err = super::plan(
@@ -1362,7 +1430,7 @@ mod tests {
             (2, 4),
             "the clash-free total and the cost of the clashing half are separate"
         );
-        assert_eq!(p.renamed, 0, "Ask resolves nothing");
+        assert_eq!(p.renamed, 0, "Ask resolves no DESTINATION clash");
         assert_eq!(
             p.keep_both_example.as_deref(),
             Some("a_1.ARW"),
@@ -2345,7 +2413,11 @@ mod tests {
                 "DSC0001_1.ARW",
                 "{policy:?}: the second body's frame takes the suffix"
             );
-            assert_eq!(p.renamed, 1, "{policy:?}");
+            assert_eq!(
+                (p.shared_name, p.renamed),
+                (1, 0),
+                "{policy:?}: counted as a shared name, not a destination rename"
+            );
         }
         // Both really land, and both photographs survive.
         let report = run(
@@ -2418,6 +2490,23 @@ mod tests {
                 }
             }
         }
+        // A template whose expansion has no stem is refused: `.ARW` is a
+        // hidden file that no RAW tool will ever show the user.
+        for template in [".{ext}", ".hidden.{ext}"] {
+            assert!(
+                matches!(
+                    super::plan(
+                        &sources,
+                        &dest,
+                        Some(template),
+                        ClashPolicy::Ask,
+                        &SessionCopies::default()
+                    ),
+                    Err(PlanError::TemplateMakesAHiddenName { .. })
+                ),
+                "template {template:?} was not refused"
+            );
+        }
         // And the templates that would escape are refused outright.
         for template in ["../{filename}.{ext}", "sub/{filename}.{ext}"] {
             assert!(matches!(
@@ -2431,6 +2520,105 @@ mod tests {
                 Err(PlanError::TemplateMakesAPath { .. })
             ));
         }
+        std::fs::remove_dir_all(&dir).ok();
+    }
+
+    /// A batch-suffixed pick is new bytes like any other, so the free-space
+    /// check must require them (gate finding 2026-08-22: nothing covered
+    /// this, and narrowing the accounting would have stayed green).
+    #[test]
+    fn free_space_counts_a_batch_suffixed_pick() {
+        let dir = tmp();
+        let a = dir.join("cam-a");
+        let b = dir.join("cam-b");
+        let mut sources = Vec::new();
+        for (i, folder) in [&a, &b].iter().enumerate() {
+            std::fs::create_dir_all(folder).unwrap();
+            let path = folder.join("DSC0001.ARW");
+            std::fs::write(&path, vec![0u8; 1024]).unwrap();
+            sources.push(PlanSource {
+                id: i,
+                path,
+                size: u64::MAX / 4, // more than any disk has, twice over
+                ctx: ExpandContext {
+                    date: "2026-08-22".into(),
+                    time: "210000".into(),
+                    filename_stem: "DSC0001".into(),
+                    camera: "ILCE-1".into(),
+                    ext_upper: "ARW".into(),
+                },
+            });
+        }
+        let dest = dir.join("out");
+        let err = super::plan(
+            &sources,
+            &dest,
+            None,
+            ClashPolicy::Ask,
+            &SessionCopies::default(),
+        )
+        .unwrap_err();
+        match err {
+            PlanError::InsufficientSpace { needed, .. } => assert_eq!(
+                needed,
+                u64::MAX / 4 * 2,
+                "the suffixed pick's bytes must be required too"
+            ),
+            other => panic!("expected an insufficient-space error, got {other:?}"),
+        }
+        std::fs::remove_dir_all(&dir).ok();
+    }
+
+    /// The suffix walk RESUMES per base name instead of restarting at 1
+    /// (gate finding 2026-08-22: restarting made a plan whose names all
+    /// collapse cost N²/2 stat calls — 2 M syscalls and 1.5 s for 2,000
+    /// picks, on the UI thread, per keystroke while typing a template).
+    /// This asserts the outcome the cursor must not break: every pick
+    /// lands on its own consecutive number, in input order.
+    #[test]
+    fn many_picks_on_one_name_take_consecutive_suffixes() {
+        let dir = tmp();
+        let names: Vec<(String, Vec<u8>)> = (0..2000)
+            .map(|i| (format!("f{i:03}.ARW"), b"x".to_vec()))
+            .collect();
+        let refs: Vec<(&str, &[u8])> = names
+            .iter()
+            .map(|(n, b)| (n.as_str(), b.as_slice()))
+            .collect();
+        let sources = src_with(&dir, &refs);
+        let dest = dir.join("out");
+        let started = std::time::Instant::now();
+        let p = super::plan(
+            &sources,
+            &dest,
+            Some("same.{ext}"),
+            ClashPolicy::Ask,
+            &SessionCopies::default(),
+        )
+        .unwrap();
+        let elapsed = started.elapsed();
+        assert_eq!(p.jobs[0].dst_raw.file_name().unwrap(), "same.ARW");
+        for (i, job) in p.jobs.iter().enumerate().skip(1) {
+            assert_eq!(
+                job.dst_raw.file_name().unwrap(),
+                std::ffi::OsStr::new(&format!("same_{i}.ARW")),
+                "job {i} did not take its own consecutive number"
+            );
+        }
+        assert_eq!((p.clashes, p.shared_name), (0, 1999));
+        // Not a perf budget (those live in perf_budgets.rs and are release
+        // only) — a smoke bound with two-sided margin, sized from the
+        // measurement that found the bug: for these 2,000 names the walk
+        // costs 1.7 s (btrfs) to 2.3 s (tmpfs) when it restarts at 1, and
+        // 4-5 ms when it resumes. 300 ms is ~60x the resuming cost and
+        // ~6x under the restarting one, so it stays quiet under load and
+        // still fails on a machine several times faster than this one.
+        assert!(
+            elapsed < std::time::Duration::from_millis(300),
+            "planning 2,000 colliding names took {elapsed:?} — the suffix \
+             walk is restarting instead of resuming (quadratic, and this \
+             runs on the UI thread on every keystroke)"
+        );
         std::fs::remove_dir_all(&dir).ok();
     }
 
