@@ -3967,6 +3967,7 @@ fn copy_picks_asks_once_and_each_answer_does_what_it_says() {
     let script = format!(
         "1500:key:y;1700:key:y;1900:copydest:{dest};2100:key:ctrl+e;2400:dump.preview;\
          2600:key:return;2900:dump.question;3100:key:return;3300:dump.inert;\
+         3380:key:ctrl+o;3440:dump.accel;\
          3500:key:b;4300:dump.kept;4600:key:escape;\
          4800:key:ctrl+e;5100:key:return;5400:dump.q2;5600:key:o;6400:dump.over;\
          6700:key:escape;6900:copydest:{dest2};7100:key:ctrl+e;7400:key:return;\
@@ -4002,6 +4003,8 @@ fn copy_picks_asks_once_and_each_answer_does_what_it_says() {
     let cancelled_disk = listing(&dest2);
     let landed_a = std::fs::read(dest.join("a.ARW")).ok();
     let landed_a1 = std::fs::read(dest.join("a_1.ARW")).ok();
+    let landed_a1_xmp = std::fs::read(dest.join("a_1.ARW.xmp")).ok();
+    let src_a_xmp = std::fs::read(src.join("a.ARW.xmp")).ok();
     for d in [&src, &src2, &dest, &dest2] {
         std::fs::remove_dir_all(d).ok();
     }
@@ -4032,6 +4035,15 @@ fn copy_picks_asks_once_and_each_answer_does_what_it_says() {
         "3",
         "Enter answered the clash question — Ctrl+E, Enter, Enter must never \
          replace or duplicate anything: {inert}"
+    );
+    // --- an ACCELERATOR must not answer it either -------------------------
+    // Ctrl+O (Open Folder) reaches this scope as a plain "o" plus a
+    // modifier: unguarded, the reflex answered the question — with the
+    // destructive answer (gate finding).
+    assert_eq!(
+        dump_field(qedump(&stderr, "accel"), "copystate"),
+        "3",
+        "Ctrl+O answered the clash question: {stderr}"
     );
     // --- B: keep both -----------------------------------------------------
     let kept = qedump(&stderr, "kept");
@@ -4119,6 +4131,14 @@ fn copy_picks_asks_once_and_each_answer_does_what_it_says() {
         landed_a1.as_deref(),
         Some(a_bytes.as_slice()),
         "keep-both did not land the pick under _1"
+    );
+    // The pairing invariant this whole change exists to protect: the
+    // sidecar beside `a_1.ARW` is a's sidecar, not the one belonging to
+    // the file that was already there (gate finding: the app test checked
+    // the pair by NAME only).
+    assert_eq!(
+        landed_a1_xmp, src_a_xmp,
+        "a_1.ARW.xmp is not the sidecar of the RAW beside it"
     );
     assert_eq!(
         landed_a.as_deref(),

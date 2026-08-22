@@ -56,7 +56,9 @@ Help → Keyboard Shortcuts popup, Settings placeholder (see ui-grid.md).
 
 ## M6 — Copy picks
 fileops plan/execute + dialog + report: rename templates, auto-rename collision
-default, BLAKE3 verification, sidecar lockstep.
+default, BLAKE3 verification, sidecar lockstep. (The auto-rename default was
+replaced 2026-08-21 by the clash question — one question, three answers; see
+fileops.md.)
 
 ## M7 — Bursts + packaging
 

@@ -1442,13 +1442,24 @@ export component MainWindow inherits Window {
                             root.copy-answer-cancel();
                             return accept;
                         }
-                        if (event.text == "b" || event.text == "B") {
-                            root.copy-answer-keep-both();
-                            return accept;
-                        }
-                        if (event.text == "o" || event.text == "O") {
-                            root.copy-answer-overwrite();
-                            return accept;
+                        // BARE letters only. Ctrl+O is Open Folder, and on
+                        // some layouts AltGr produces letters too — but
+                        // every one of them arrives here as the plain
+                        // letter PLUS a modifier, so without this guard the
+                        // Open Folder reflex ANSWERS the question, and the
+                        // answer it gives is the destructive one (gate
+                        // finding 2026-08-21). Shift is fine: "O" is
+                        // matched as well.
+                        if (!event.modifiers.control && !event.modifiers.alt
+                            && !event.modifiers.meta) {
+                            if (event.text == "b" || event.text == "B") {
+                                root.copy-answer-keep-both();
+                                return accept;
+                            }
+                            if (event.text == "o" || event.text == "O") {
+                                root.copy-answer-overwrite();
+                                return accept;
+                            }
                         }
                         // Enter, Space, Y, N, everything: swallowed, and
                         // the question says out loud that it is waiting.
@@ -1570,7 +1581,12 @@ export component MainWindow inherits Window {
                         color: #c8c8d0;
                         font-size: 13px;
                     }
-                    if root.copy-collisions != "" && root.copy-state != 3: Text {
+                    // Plan-preview state only: "Copy will ask what to do"
+                    // read as a promise ABOUT THE FUTURE while the copy was
+                    // running, and sat above the final report on the one
+                    // screen where the user decides whether to trust what
+                    // just happened to their files (gate finding).
+                    if root.copy-collisions != "" && root.copy-state == 0: Text {
                         text: root.copy-collisions;
                         color: #ffb84d;
                         font-size: 12px;

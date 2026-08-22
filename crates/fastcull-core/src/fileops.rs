@@ -100,8 +100,6 @@ pub enum PlanError {
     },
     #[error("not enough free space: need {needed} bytes, {free} available")]
     InsufficientSpace { needed: u64, free: u64 },
-    #[error("I/O: {0}")]
-    Io(#[from] std::io::Error),
 }
 
 /// The inspectable plan the dialog previews. `jobs` keep the input order
@@ -132,6 +130,11 @@ pub struct CopyPlan {
     pub sidecar_only_clashes: usize,
     /// Jobs that took a `_k` suffix (`CreateCopies`).
     pub renamed: usize,
+    /// [`ClashPolicy::Ask`] only: the name the FIRST clashing image would
+    /// actually land under if the answer is "keep both". The question
+    /// shows it, and showing `_1` when `_1` is already taken is a promise
+    /// the copy then breaks (gate finding 2026-08-21).
+    pub keep_both_example: Option<String>,
     /// Copied earlier this session but GONE from the destination when the
     /// plan looked (the user deleted the copy by hand). The dialog's amber
     /// note; it decides nothing.
@@ -304,6 +307,7 @@ pub fn plan(
     let mut taken: HashSet<String> = HashSet::new();
     let (mut clashes, mut sidecar_only, mut renamed, mut recopied) =
         (0usize, 0usize, 0usize, 0usize);
+    let mut keep_both_example: Option<String> = None;
     let (mut total_bytes, mut clash_bytes, mut clash_free_bytes) = (0u64, 0u64, 0u64);
     // Folder → "is it `dest`?", compared canonically (the same destination
     // reached via another spelling keeps its note) and memoized per
@@ -327,26 +331,22 @@ pub fn plan(
             (natural, PlanAction::Copy)
         } else {
             match policy {
-                ClashPolicy::Ask => (natural, PlanAction::Clash),
+                ClashPolicy::Ask => {
+                    // What "keep both" would really do with the first
+                    // clashing image — the same walk, from the same state,
+                    // so the question names the file the copy will make.
+                    if keep_both_example.is_none() {
+                        keep_both_example = Some(first_free_suffix(dest, name, &taken));
+                    }
+                    (natural, PlanAction::Clash)
+                }
                 ClashPolicy::Overwrite => (natural, PlanAction::Replace),
                 ClashPolicy::CreateCopies => {
-                    // First free numeric suffix from `_1`, checking BOTH
-                    // members of the pair, on disk and in-plan.
-                    let mut k = 1usize;
-                    let renamed_to = loop {
-                        let cand = suffixed(name, k);
-                        let cand_xmp = xmp_name_of(&cand);
-                        if !occupied(&dest.join(&cand))
-                            && !taken.contains(&cand)
-                            && !occupied(&dest.join(&cand_xmp))
-                            && !taken.contains(&cand_xmp)
-                        {
-                            break cand;
-                        }
-                        k += 1;
-                    };
                     renamed += 1;
-                    (dest.join(renamed_to), PlanAction::CopyRenamed)
+                    (
+                        dest.join(first_free_suffix(dest, name, &taken)),
+                        PlanAction::CopyRenamed,
+                    )
                 }
             }
         };
@@ -421,8 +421,30 @@ pub fn plan(
         clashes,
         sidecar_only_clashes: sidecar_only,
         renamed,
+        keep_both_example,
         recopied,
     })
+}
+
+/// The first number from 1 upward whose WHOLE PAIR is free — both
+/// `<stem>_k.<ext>` and its sidecar name, on disk and unclaimed by this
+/// plan. The pair moves together, so a copy is never split across two
+/// numbers (fileops.md); growth is unbounded by design, and each layer
+/// costs the user a deliberate answer.
+fn first_free_suffix(dest: &Path, name: &str, taken: &HashSet<String>) -> String {
+    let mut k = 1usize;
+    loop {
+        let cand = suffixed(name, k);
+        let cand_xmp = xmp_name_of(&cand);
+        if !occupied(&dest.join(&cand))
+            && !taken.contains(&cand)
+            && !occupied(&dest.join(&cand_xmp))
+            && !taken.contains(&cand_xmp)
+        {
+            return cand;
+        }
+        k += 1;
+    }
 }
 
 /// Is anything at all sitting under this name? `symlink_metadata`, not
@@ -636,7 +658,7 @@ fn run_plan(plan: CopyPlan, tx: &Sender<CopyEvent>, cancel: &AtomicBool) {
                     report.landed.push((job.id, job.dst_raw.clone()));
                 })
             }
-            PlanAction::Replace => replace_pair(job).map(|outcome| {
+            PlanAction::Replace => replace_pair(job, cancel).map(|outcome| {
                 match outcome {
                     Replaced::Transferred { existed } => {
                         report.copied += 1;
@@ -655,6 +677,14 @@ fn run_plan(plan: CopyPlan, tx: &Sender<CopyEvent>, cancel: &AtomicBool) {
             }),
         };
         if let Err(e) = result {
+            if e.kind() == std::io::ErrorKind::Interrupted && cancel.load(Ordering::Relaxed) {
+                // Cancelled INSIDE an overwrite's identity pass, which is
+                // not a failure. Without this the wait that `Drop` joins on
+                // would span a whole re-verify of a big RAW on top of the
+                // file in flight (gate finding).
+                report.cancelled = true;
+                break;
+            }
             report.all_verified = false;
             report.failed.push((name.clone(), e.to_string()));
             tx.send(CopyEvent::Failed {
@@ -690,15 +720,19 @@ fn copy_pair(job: &CopyJob, commit: Commit) -> std::io::Result<()> {
 /// the destination — unless it is already the same file, in which case
 /// only the sidecar can have changed, and a 100 MB RAW must not cross the
 /// wire twice for a caption.
-fn replace_pair(job: &CopyJob) -> std::io::Result<Replaced> {
-    // Hash the DESTINATION first: when nothing is there (a sidecar-only
-    // clash), the source is never read twice.
-    let dst_hash = hash_file(&job.dst_raw).ok();
-    let existed = dst_hash.is_some();
+fn replace_pair(job: &CopyJob, cancel: &AtomicBool) -> std::io::Result<Replaced> {
+    // "Replaced" is decided BEFORE anything is written, from what is under
+    // either name — an unreadable destination RAW and a sidecar-only clash
+    // both really do replace something, and deriving the count from "the
+    // destination hashed" reported neither (gate finding 2026-08-21).
+    let existed = occupied(&job.dst_raw) || occupied(&job.dst_xmp);
+    // Hash the DESTINATION first: when nothing hashable is there (a
+    // sidecar-only clash), the source is never read twice.
+    let dst_hash = comparable_hash(&job.dst_raw, cancel)?;
     let identical = match dst_hash {
         // An unreadable SOURCE is this file's own failure, not a reason to
         // guess — it propagates.
-        Some(dst) => hash_file(&job.src_raw)? == dst,
+        Some(dst) => hash_file(&job.src_raw, cancel)? == dst,
         None => false,
     };
     if !identical {
@@ -710,26 +744,61 @@ fn replace_pair(job: &CopyJob) -> std::io::Result<Replaced> {
     // it differs.
     let refreshed = match &job.src_xmp {
         Some(src) => {
-            let same = hash_file(&job.dst_xmp)
-                .ok()
-                .is_some_and(|dst| hash_file(src).is_ok_and(|s| s == dst));
+            let same = match comparable_hash(&job.dst_xmp, cancel)? {
+                Some(dst) => hash_file(src, cancel)? == dst,
+                None => false,
+            };
             if !same {
                 copy_verified(src, &job.dst_xmp, Commit::Replace)?;
             }
             !same
         }
+        // No sidecar of our own to write: a foreign one under this name
+        // stays where it is. Nothing at the destination is ever deleted
+        // (fileops.md) — "keep both" is the answer that avoids the pairing.
         None => false,
     };
     Ok(Replaced::AlreadyIdentical { refreshed })
 }
 
+/// The hash to compare an overwrite's destination against — `None` when
+/// there is nothing there that CAN be compared.
+///
+/// Only a REGULAR FILE is ever read (`symlink_metadata`, so a symlink is
+/// not one): reading a FIFO or a device standing under a planned name
+/// would block this worker for ever, and `CopyHandle`'s drop JOINS it, so
+/// quitting would hang too (gate finding 2026-08-21). An unreadable file
+/// is not comparable either. Every such name simply is not "identical"
+/// and falls through to the replace, where the rename takes the name
+/// (symlink, FIFO, unreadable file) or fails honestly (directory).
+fn comparable_hash(p: &Path, cancel: &AtomicBool) -> std::io::Result<Option<blake3::Hash>> {
+    if !p.symlink_metadata().is_ok_and(|m| m.is_file()) {
+        return Ok(None);
+    }
+    match hash_file(p, cancel) {
+        Ok(h) => Ok(Some(h)),
+        // A cancel must reach the caller; anything else means "cannot
+        // compare", not "fail this file".
+        Err(e) if e.kind() == std::io::ErrorKind::Interrupted => Err(e),
+        Err(_) => Ok(None),
+    }
+}
+
 /// Streaming BLAKE3 of a whole file (the identity check inside an
-/// overwrite; the copy computes its own while writing).
-fn hash_file(p: &Path) -> std::io::Result<blake3::Hash> {
+/// overwrite; the copy computes its own while writing). Polls the run's
+/// cancel flag between blocks: on a slow destination this read is as long
+/// as a copy, and cancellation is only as prompt as its longest step.
+fn hash_file(p: &Path, cancel: &AtomicBool) -> std::io::Result<blake3::Hash> {
     let mut f = std::fs::File::open(p)?;
     let mut hasher = blake3::Hasher::new();
     let mut buf = vec![0u8; 1 << 20];
     loop {
+        if cancel.load(Ordering::Relaxed) {
+            return Err(std::io::Error::new(
+                std::io::ErrorKind::Interrupted,
+                "cancelled",
+            ));
+        }
         let n = f.read(&mut buf)?;
         if n == 0 {
             break;
@@ -833,18 +902,22 @@ fn commit_temp(tmp: &Path, dst: &Path, commit: Commit) -> std::io::Result<()> {
             Ok(())
         }
         Err(e) if e.kind() == std::io::ErrorKind::AlreadyExists => Err(appeared_during_copy()),
-        Err(_) => {
-            // Filesystems without hard links (FAT/exFAT cards, some
-            // network mounts) answer EPERM/ENOSYS rather than
-            // AlreadyExists: fall back to check-then-rename. The window
-            // between the check and the rename is unavoidable there and is
-            // recorded in fileops.md.
-            if occupied(dst) {
-                return Err(appeared_during_copy());
-            }
-            std::fs::rename(tmp, dst)
-        }
+        // Filesystems without hard links (FAT/exFAT cards, some network
+        // mounts) answer EPERM/ENOSYS rather than AlreadyExists.
+        Err(_) => commit_without_hard_links(tmp, dst),
     }
+}
+
+/// The fallback for a destination whose filesystem has no hard links:
+/// check, then rename. The window between the two is unavoidable there
+/// (recorded in fileops.md) — which is exactly why it is NOT the normal
+/// path, and why it is a named function with its own test rather than a
+/// branch nothing ever runs (gate finding: CI's tmpfs always links).
+fn commit_without_hard_links(tmp: &Path, dst: &Path) -> std::io::Result<()> {
+    if occupied(dst) {
+        return Err(appeared_during_copy());
+    }
+    std::fs::rename(tmp, dst)
 }
 
 fn appeared_during_copy() -> std::io::Error {
@@ -1026,6 +1099,24 @@ mod tests {
             "the clash-free total and the cost of the clashing half are separate"
         );
         assert_eq!(p.renamed, 0, "Ask resolves nothing");
+        assert_eq!(
+            p.keep_both_example.as_deref(),
+            Some("a_1.ARW"),
+            "the question names the file 'keep both' would make"
+        );
+        // …and when `_1` is taken it names the number that IS free: the
+        // question must not promise a name the copy will not use.
+        std::fs::write(dest.join("a_1.ARW"), b"also there").unwrap();
+        let p = super::plan(
+            &sources,
+            &dest,
+            None,
+            ClashPolicy::Ask,
+            &SessionCopies::default(),
+        )
+        .unwrap();
+        assert_eq!(p.keep_both_example.as_deref(), Some("a_2.ARW"));
+        std::fs::remove_file(dest.join("a_1.ARW")).unwrap();
         std::fs::remove_dir_all(&dir).ok();
     }
 
@@ -1370,6 +1461,149 @@ mod tests {
         std::fs::remove_dir_all(&dir).ok();
     }
 
+    /// Overwrite must never HANG. A FIFO standing under a planned name is
+    /// not something to compare against — reading it blocks for ever, on
+    /// the very worker `CopyHandle`'s drop joins, so the app would hang on
+    /// quit as well (gate finding). It is replaced like any other
+    /// non-directory name.
+    #[test]
+    #[cfg(unix)]
+    fn overwrite_does_not_hang_on_a_fifo_under_a_planned_name() {
+        let dir = tmp();
+        let sources = src_with(&dir, &[("a.ARW", b"aaaa")]);
+        let dest = dir.join("out");
+        std::fs::create_dir_all(&dest).unwrap();
+        let made = std::process::Command::new("mkfifo")
+            .arg(dest.join("a.ARW"))
+            .status()
+            .map(|s| s.success())
+            .unwrap_or(false);
+        if !made {
+            eprintln!("skipped: no mkfifo here");
+            return;
+        }
+        let p = super::plan(
+            &sources,
+            &dest,
+            None,
+            ClashPolicy::Overwrite,
+            &SessionCopies::default(),
+        )
+        .unwrap();
+        assert_eq!(
+            p.jobs[0].action,
+            PlanAction::Replace,
+            "the FIFO occupies the name"
+        );
+        let (handle, rx) = execute(p);
+        // A deadline instead of `drain`: on the pre-fix code this run never
+        // ends, and the handle must then be LEAKED rather than dropped —
+        // dropping it joins the worker that is blocked on the read.
+        let mut report = None;
+        let deadline = std::time::Instant::now() + std::time::Duration::from_secs(20);
+        while std::time::Instant::now() < deadline {
+            match rx.recv_timeout(std::time::Duration::from_millis(200)) {
+                Ok(CopyEvent::Finished(r)) => {
+                    report = Some(r);
+                    break;
+                }
+                Ok(_) => continue,
+                Err(std::sync::mpsc::RecvTimeoutError::Timeout) => continue,
+                Err(_) => break,
+            }
+        }
+        let Some(report) = report else {
+            std::mem::forget(handle);
+            panic!("the copy worker never finished — it is blocked reading the FIFO");
+        };
+        assert_eq!(
+            (report.copied, report.replaced),
+            (1, 1),
+            "{:?}",
+            report.failed
+        );
+        assert_eq!(std::fs::read(dest.join("a.ARW")).unwrap(), b"aaaa");
+        std::fs::remove_dir_all(&dir).ok();
+    }
+
+    /// The mirror image of issue #14, recorded rather than prevented: a
+    /// pick with NO sidecar of its own overwrites a RAW whose sidecar
+    /// belongs to another photograph. Nothing at the destination is ever
+    /// deleted, so that sidecar stays — the answer that avoids the pairing
+    /// is "keep both". This test exists so the outcome is a decision with
+    /// a name, not a surprise (gate finding).
+    #[test]
+    fn overwrite_without_a_sidecar_of_our_own_leaves_the_foreign_one() {
+        let dir = tmp();
+        let sources = src_with(&dir, &[("a.ARW", b"mine")]);
+        assert!(
+            sidecar_path(&sources[0].path).symlink_metadata().is_err(),
+            "fixture: this pick has no sidecar (the write failed, or the card is read-only)"
+        );
+        let dest = dir.join("out");
+        std::fs::create_dir_all(&dest).unwrap();
+        std::fs::write(dest.join("a.ARW"), b"another body").unwrap();
+        std::fs::write(dest.join("a.ARW.xmp"), b"<foreign/>").unwrap();
+
+        // It clashes on BOTH names, and "keep both" walks the pair clear.
+        let p = super::plan(
+            &sources,
+            &dest,
+            None,
+            ClashPolicy::CreateCopies,
+            &SessionCopies::default(),
+        )
+        .unwrap();
+        assert_eq!(p.jobs[0].dst_raw.file_name().unwrap(), "a_1.ARW");
+
+        let report = run(
+            &sources,
+            &dest,
+            None,
+            ClashPolicy::Overwrite,
+            &SessionCopies::default(),
+        );
+        assert_eq!(
+            (report.copied, report.replaced, report.refreshed),
+            (1, 1, 0)
+        );
+        assert_eq!(std::fs::read(dest.join("a.ARW")).unwrap(), b"mine");
+        assert_eq!(
+            std::fs::read(dest.join("a.ARW.xmp")).unwrap(),
+            b"<foreign/>",
+            "we never write, and never delete, a sidecar we do not have"
+        );
+        std::fs::remove_dir_all(&dir).ok();
+    }
+
+    /// The commit path used on filesystems with no hard links (FAT cards,
+    /// some network mounts). CI always has links, so this branch would
+    /// otherwise first run on a user's card (gate finding): it must still
+    /// refuse an occupied name rather than rename over it.
+    #[test]
+    fn the_no_hard_link_fallback_still_refuses_an_occupied_name() {
+        let dir = tmp();
+        let tmp_file = dir.join("t.partial");
+        let dst = dir.join("landing.ARW");
+        std::fs::write(&tmp_file, b"verified").unwrap();
+        commit_without_hard_links(&tmp_file, &dst).unwrap();
+        assert_eq!(std::fs::read(&dst).unwrap(), b"verified");
+        assert!(!tmp_file.exists(), "the temp name is gone after the rename");
+
+        std::fs::write(&tmp_file, b"second").unwrap();
+        let err = commit_without_hard_links(&tmp_file, &dst).unwrap_err();
+        assert!(
+            err.to_string().contains("appeared at the destination"),
+            "{err}"
+        );
+        assert_eq!(
+            std::fs::read(&dst).unwrap(),
+            b"verified",
+            "the file that was there must survive"
+        );
+        std::fs::remove_dir_all(&dir).ok();
+    }
+
     /// A plan built BEFORE the answer is a question, not an instruction:
     /// the executor refuses the whole run rather than guessing — which is
     /// also what Cancel means (nothing is copied at all, not even the
@@ -1611,7 +1845,8 @@ mod tests {
         let report = run(&sources, &dest, None, ClashPolicy::Overwrite, &session);
         assert_eq!(
             (report.copied, report.replaced, report.identical),
-            (1, 0, 0)
+            (1, 1, 0),
+            "the orphan sidecar really was replaced, and the report says so"
         );
         assert_eq!(names_in(&dest), vec!["a.ARW", "a.ARW.xmp"]);
         assert_eq!(std::fs::read(dest.join("a.ARW")).unwrap(), b"aaaa");
@@ -1855,9 +2090,23 @@ mod tests {
         )
         .unwrap();
         let (h, rx) = execute(p);
-        h.cancel(); // set before/while the worker runs: between-files check
+        // Cancel when the worker ANNOUNCES the first file: the flag is set
+        // while that file is still being read, written and verified, so
+        // the between-files check at the top of the next iteration is what
+        // stops the run. Cancelling before `execute` even returned let the
+        // whole plan finish first, and the assertion passed without ever
+        // taking that branch (gate finding).
+        match rx.recv().expect("first file event") {
+            CopyEvent::File { index, .. } => assert_eq!(index, 1),
+            other => panic!("expected the first file event, got {other:?}"),
+        }
+        h.cancel();
         let report = drain(rx);
-        assert!(report.cancelled || report.copied == 3, "cancel raced fine");
+        assert!(report.cancelled, "the between-files check never fired");
+        assert!(
+            report.copied < 3,
+            "cancel is between files, so the rest must not go out: {report:?}"
+        );
         // Whatever finished is complete and verified — nothing partial.
         for j in ["a.ARW", "b.ARW", "c.ARW"] {
             let p = dest.join(j);

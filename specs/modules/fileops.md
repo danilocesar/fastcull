@@ -57,7 +57,13 @@ no-148-row-table rule.
 Cancellation: between files only; already-copied files remain (report says
 so). Dropping the copy handle (quit / Open Folder mid-copy) CANCELS then
 joins: the wait is bounded by the file in flight and the temp-name
-contract leaves no partial behind.
+contract leaves no partial behind. An overwrite's identity pass reads as
+much as a copy writes, so it polls the cancel flag between blocks and
+gives the run back at once (gate finding 2026-08-21) — otherwise the join
+on the UI thread would span a whole re-verify of a big RAW on top of the
+file in flight. Open Folder mid-copy also ends the dialog honestly:
+the run is cancelled by the drop, so the dialog says so instead of
+sitting at "running" with a Cancel button that does nothing.
 
 The final report's "all checksums verified" sentence appears ONLY when
 the run actually copied and verified at least one file — an all-skipped
@@ -255,7 +261,12 @@ the ✓ copied badge and the "N copied earlier but gone from the destination
 `is_collision_suffix_of` are deleted with this change: issue #14's bug
 class (our sidecar written beside a foreign RAW) becomes structurally
 impossible, because a sidecar is only ever written beside its own RAW,
-under a name that is either free or explicitly overwritten. The v1 "Skip
+under a name that is either free or explicitly overwritten. The MIRROR
+image is not impossible and is not claimed to be (gate finding): a pick
+that has no sidecar of its own — its write failed, or the card is
+read-only — can overwrite a RAW and leave a foreign `.xmp` beside it,
+because nothing at the destination is ever deleted (§4). "Keep both" is
+the answer that walks the pair clear of it. The v1 "Skip
 existing" toggle and the four-way `ExistsMode` are replaced by the three
 answers.
 
@@ -277,6 +288,13 @@ e.g. DSC01234.ARW, DSC01235.ARW, DSC01240.ARW …
  Esc  Cancel — copy nothing at all, not even the 136
 ```
 
+- The "keep both" row names the file that answer would REALLY make — the
+  plan walks the suffix from `_1` and hands the dialog the first free
+  pair, so a second keep-both into the same folder says `_2` rather than
+  promising a `_1` the copy would not use (gate finding). Rare corner,
+  recorded: because a suffix can also be claimed IN-PLAN, the number of
+  renames can exceed the clash count when a pick is literally named
+  `<other>_1.<ext>`.
 - Counts are in **picks**, never files (148 picks are 296 files on disk;
   a count the user cannot reconcile is a count they stop trusting), and
   the "other N copy normally" clause is mandatory: once Cancel drops
@@ -297,6 +315,13 @@ e.g. DSC01234.ARW, DSC01235.ARW, DSC01240.ARW …
   as are `Y`/`N`, and no button takes initial focus. A key that is not an
   answer is swallowed AND flips a visible "Pick one: B, O or Esc" line —
   a silently dead Enter reads as a frozen dialog.
+- **The answers are BARE letters only, and the question swallows every
+  accelerator** (gate finding 2026-08-21): `Ctrl+O` — Open Folder, a
+  reflex — arrives in this scope as a plain `o` plus a modifier, and
+  unguarded it ANSWERED the question with the destructive answer. While
+  the question is up, `Ctrl+Q`, `Ctrl+E` and the rest are inert too; the
+  menu bar remains the way out for the mouse. A destructive answer may
+  never be reachable by a key the user presses for something else.
 - **Esc returns to the plan preview** with destination and template
   intact (a second Esc closes the dialog): the topmost-first Esc rule, and
   it makes "cancel, then copy somewhere else" one step.
@@ -314,7 +339,12 @@ e.g. DSC01234.ARW, DSC01235.ARW, DSC01240.ARW …
 - The report counts what actually happened: `3 copied`, `145 already
   identical — re-verified in place`, `12 landed under new names
   (DSC01234_1.ARW …)`, `12 replaced`, `N sidecars replaced beside an
-  identical RAW`. "All checksums verified" now attaches to copied AND
+  identical RAW`. **"Replaced" means "something was under one of the two
+  names and this job was allowed to overwrite it"**, decided from the
+  filesystem before anything is written (gate finding: deriving it from
+  "the destination RAW hashed" silently under-counted an unreadable
+  destination file and a sidecar-only clash — both of which really do
+  replace something). "All checksums verified" now attaches to copied AND
   re-verified files: an identity check IS a BLAKE3 verification of the
   destination against the source, so a re-run doubles as a free "is my
   export still bit-perfect?" pass before the card is wiped (persona).
@@ -405,10 +435,24 @@ destination and copy again, or re-import in darktable.
       the chosen policy — the_free_space_check_follows_the_answer.
       App-level, driven through the real dialog with real key events:
       copy_picks_asks_once_and_each_answer_does_what_it_says (the question
-      appears with its counts, Enter is inert on it, B lands `_1`, O
-      replaces the differing file and re-verifies the identical one, Esc
-      returns to the plan and copies nothing at all — proven on a second
-      destination folder that stays untouched).
+      appears with its counts, Enter and Ctrl+O are both inert on it, B
+      lands `_1` with ITS OWN sidecar beside it, O replaces the differing
+      file and re-verifies the identical one, Esc returns to the plan and
+      copies nothing at all — proven on a second destination folder that
+      stays untouched — and a folder opened under the question drops it).
+- [x] Gate round 2 (2026-08-21): the destructive answer is unreachable by
+      an accelerator (`Ctrl+O` at the question — app test above); an
+      overwrite never hangs on a FIFO under a planned name and never reads
+      a non-regular destination —
+      overwrite_does_not_hang_on_a_fifo_under_a_planned_name; a pick with
+      no sidecar of its own leaves the foreign one and reports the replace
+      — overwrite_without_a_sidecar_of_our_own_leaves_the_foreign_one; the
+      hard-link-less commit fallback still refuses an occupied name —
+      the_no_hard_link_fallback_still_refuses_an_occupied_name; the
+      question names the number "keep both" will really use (asserted in
+      ask_marks_the_clashes_and_counts_their_bytes_apart); cancellation is
+      asserted on the between-files branch rather than racing past it —
+      cancel_between_files_keeps_finished_copies.
 - [ ] Cross-platform: paths with spaces/Unicode; Windows reserved-name rejection
       — DEFERRED with the user's explicit OK (2026-07-26, "low priority"),
       tracked as issue #10; spaces/Unicode half already QE-verified

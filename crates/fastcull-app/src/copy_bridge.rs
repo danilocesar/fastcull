@@ -298,7 +298,7 @@ fn start_copy(win: &MainWindow, st: &mut AppState, plan: fastcull_core::fileops:
 /// §6). Counted in PICKS, not files — 148 picks are 296 files on disk,
 /// and a count the user cannot reconcile is a count they stop trusting.
 fn show_clash_question(win: &MainWindow, plan: &fastcull_core::fileops::CopyPlan) {
-    use fastcull_core::fileops::{suffixed, PlanAction};
+    use fastcull_core::fileops::PlanAction;
     let total = plan.jobs.len();
     let clashes = plan.clashes;
     let free = total.saturating_sub(clashes);
@@ -345,10 +345,14 @@ fn show_clash_question(win: &MainWindow, plan: &fastcull_core::fileops::CopyPlan
         )
         .into()
     });
+    // The name core says the FIRST clashing pick would really land under
+    // — `_1` when `_1` is free, `_2` when it is not (gate finding: the
+    // question promised a name the copy would not use on the second
+    // keep-both into the same folder).
     win.set_copy_confirm_keep_both(
-        match clashing.first() {
-            Some(name) => format!("Keep both — the {clashes} land as {}", suffixed(name, 1)),
-            None => format!("Keep both — the {clashes} land under a _1 name"),
+        match &plan.keep_both_example {
+            Some(name) => format!("Keep both — the {clashes} land as {name}"),
+            None => format!("Keep both — the {clashes} land under a new name"),
         }
         .into(),
     );
@@ -402,8 +406,9 @@ fn answer_clash_question(win: &MainWindow, st: &mut AppState, policy: ClashPolic
 }
 
 /// Rebuild the copy plan from the dialog's current inputs and publish the
-/// preview properties (fileops.md dialog minimums).
-fn copy_replan(win: &MainWindow, st: &mut AppState) {
+/// preview properties (fileops.md dialog minimums). `pub(crate)` because a
+/// session swap must re-derive the preview it left on screen.
+pub(crate) fn copy_replan(win: &MainWindow, st: &mut AppState) {
     copy_replan_with(win, st, ClashPolicy::Ask);
 }
 
@@ -495,8 +500,7 @@ fn copy_replan_with(win: &MainWindow, st: &mut AppState, policy: ClashPolicy) {
             | PlanError::DestEqualsSource
             | PlanError::DestInsideSource
             | PlanError::TemplateCollision { .. }
-            | PlanError::Template(_)
-            | PlanError::Io(_)),
+            | PlanError::Template(_)),
         ) => {
             win.set_copy_summary(format!("{} picked images.", sources.len()).into());
             win.set_copy_error(e.to_string().into());

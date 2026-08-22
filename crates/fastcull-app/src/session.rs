@@ -160,16 +160,32 @@ pub(crate) fn open_folder_at(
             // text can never be committed against the new session's
             // images (user decision: swap mid-edit discards).
             win.set_session_gen(win.get_session_gen().wrapping_add(1));
-            // A clash question belongs to the SESSION it was asked about.
-            // The menu bar stays live while the Copy dialog is up, so a
-            // folder can be opened underneath the question — and the
-            // answer is a policy that gets REPLANNED (fileops.md rule 3),
-            // which would apply "overwrite everything" to a set of picks
-            // the user never saw named. Drop back to the plan preview:
-            // the question has to be asked again, about the new session.
-            if win.get_copy_state() == 3 {
-                win.set_copy_state(0);
-                win.set_copy_confirm("".into());
+            // The Copy dialog survives a session swap on screen, and
+            // everything it was showing belonged to the OLD session.
+            //
+            // * A clash question belongs to the session it was asked
+            //   about: the menu bar stays live while the dialog is up, so
+            //   a folder can be opened underneath the question — and the
+            //   answer is a policy that gets REPLANNED (fileops.md rule
+            //   3), which would apply "overwrite everything" to a set of
+            //   picks the user never saw named.
+            // * A copy that was RUNNING was cancelled by the swap (the
+            //   handle is dropped, which cancels and joins), and its
+            //   events died with it — the dialog would sit at "running"
+            //   for ever with a Cancel button that does nothing.
+            // * The plan preview's counts describe the old folder.
+            if win.get_copy_visible() {
+                if win.get_copy_state() == 1 {
+                    win.set_copy_report(
+                        "Cancelled — the folder was changed. Files that finished remain.".into(),
+                    );
+                    win.set_copy_state(2);
+                } else {
+                    win.set_copy_state(0);
+                    win.set_copy_confirm("".into());
+                    let mut st = state.borrow_mut();
+                    crate::copy_bridge::copy_replan(win, &mut st);
+                }
             }
             refresh(win, state);
             // The swap rebuilt the panel's field rows and dropped any

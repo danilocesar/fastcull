@@ -38,7 +38,9 @@ symlink counts too), it asks once, for the whole run:
 
 - **Keep both** gives each clashing pick the first free number — `_1`,
   then `_2`, … — with the sidecar in lockstep, so a pair never splits
-  across two numbers and nothing already there is touched.
+  across two numbers and nothing already there is touched. The button
+  shows the name it will really use, so a second "keep both" into the
+  same folder says `_2`.
 - **Overwrite** replaces those files. A destination file that is already
   **byte-for-byte identical** is *not* sent again: FastCull checksums
   what's there, keeps it, and rewrites only the sidecar if your captions
