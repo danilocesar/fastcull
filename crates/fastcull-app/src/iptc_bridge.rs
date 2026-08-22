@@ -236,13 +236,11 @@ pub(crate) fn wire(window: &MainWindow, state: &Rc<RefCell<AppState>>) {
                                 .and_then(|p| std::fs::metadata(p).ok())
                                 .and_then(|m| m.modified().ok())
                                 .unwrap_or(std::time::UNIX_EPOCH);
-                            // Camera model is not plumbed yet: {camera}
-                            // expands empty (recorded in the spec ledger).
                             fastcull_core::iptc::ExpandContext::from_sort_key(
                                 st.session.capture_keys.get(*id).and_then(|k| k.as_deref()),
                                 mtime,
                                 &name,
-                                None,
+                                st.session.camera_models.get(*id).and_then(|c| c.as_deref()),
                             )
                         })
                         .collect();

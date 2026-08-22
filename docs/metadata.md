@@ -84,7 +84,7 @@ Values may use variables, expanded per image at apply time:
 | `{seq}` | position in the batch, zero-padded to the width of the batch count (120 images → 3 digits) |
 | `{seq:4}` | the same, padded to exactly 4 digits |
 | `{filename}` | the file name without extension |
-| `{camera}` | the camera model — **currently broken: expands to an empty string; avoid it until fixed** |
+| `{camera}` | the camera model as the camera wrote it (`ILCE-1`), empty for a photo whose metadata has not loaded yet |
 | `{ext}` | the original extension, uppercase |
 
 Literal braces are written `{{` and `}}`. An unknown variable refuses

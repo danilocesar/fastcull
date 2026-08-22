@@ -1742,6 +1742,13 @@ Documented because they ship in release builds (validator finding):
   plumbing, not a nav key). The path is everything after the first colon,
   so a folder whose path contains `;` cannot be scripted (recorded
   limitation of the `;`-separated script format).
+  `copytemplate:TEXT` (2026-08-22) fills the Copy Picks rename field and
+  replans exactly as the field's own `edited` callback does, so a driven
+  run gets the preview and the plan a real keystroke would produce
+  without focusing a LineEdit and sending one key event per character.
+  Use it AFTER the `Ctrl+E` that opens the dialog: opening deliberately
+  clears the field (the remembered template is offered, never
+  pre-applied), so a template set before it is wiped.
   `copydest:PATH` (2026-08-21) is the Copy Picks destination picker minus
   the native rfd dialog: it sets the destination the dialog shows on its
   next `Ctrl+E` (the open path keeps an already-chosen destination over

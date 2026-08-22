@@ -481,6 +481,12 @@ pub(crate) struct SessionState {
     pub(crate) capture_keys: Vec<Option<String>>,
     /// Burst inputs per image (M7), from MetadataReady summaries.
     pub(crate) frame_meta: Vec<fastcull_core::burst::FrameMeta>,
+    /// EXIF camera model per image, for `{camera}` in the IPTC and rename
+    /// templates. Arrives with `MetadataReady`, so it is None until that
+    /// image's metadata lands — a template expanded before then stamps an
+    /// empty camera, which is the same "the answer is not known yet" the
+    /// capture-time sort has (iptc-templates.md).
+    pub(crate) camera_models: Vec<Option<String>>,
     /// Per-image IPTC state (M5 panel): seeded from sidecars at open,
     /// edited by the panel, persisted via SidecarWriter::iptc.
     pub(crate) iptc: Vec<fastcull_core::iptc::IptcData>,
@@ -530,6 +536,7 @@ impl Default for SessionState {
             picks: Vec::new(),
             capture_keys: Vec::new(),
             frame_meta: Vec::new(),
+            camera_models: Vec::new(),
             iptc: Vec::new(),
             touched: HashSet::new(),
             touched_iptc: HashSet::new(),
@@ -566,6 +573,7 @@ impl SessionState {
             picks: vec![fastcull_core::catalog::PickState::Unmarked; count],
             capture_keys: vec![None; count],
             frame_meta: vec![fastcull_core::burst::FrameMeta::default(); count],
+            camera_models: vec![None; count],
             iptc: vec![fastcull_core::iptc::IptcData::default(); count],
             labels,
             paths,
@@ -719,6 +727,7 @@ impl AppState {
         debug_assert_eq!(self.session.picks.len(), count);
         debug_assert_eq!(self.session.capture_keys.len(), count);
         debug_assert_eq!(self.session.frame_meta.len(), count);
+        debug_assert_eq!(self.session.camera_models.len(), count);
         debug_assert_eq!(self.session.iptc.len(), count);
         debug_assert_eq!(self.bursts.group_of.len(), count);
         debug_assert_eq!(self.bursts.badge.len(), count);

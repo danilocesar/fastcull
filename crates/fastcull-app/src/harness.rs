@@ -157,6 +157,17 @@ pub(crate) fn install(window: &MainWindow, state: &Rc<RefCell<AppState>>) -> Rc<
                     open_folder_at(&win, &state, std::path::Path::new(path));
                     return;
                 }
+                if let Some(text) = key.strip_prefix("copytemplate:") {
+                    // copytemplate:TEXT — type a rename template without
+                    // the pointer gymnastics of focusing the LineEdit and
+                    // sending one key event per character (the `copydest:`
+                    // reasoning). Replans exactly as the field's `edited`
+                    // callback does, so the preview and the plan are the
+                    // ones a real keystroke would produce.
+                    win.set_copy_template(text.into());
+                    win.invoke_copy_replan();
+                    return;
+                }
                 if let Some(path) = key.strip_prefix("copydest:") {
                     // copydest:PATH — the Copy Picks destination picker
                     // minus the native rfd dialog (the `open:` reasoning):

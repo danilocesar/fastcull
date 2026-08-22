@@ -85,6 +85,14 @@ pub(crate) fn start(window: &MainWindow, state: &Rc<RefCell<AppState>>) -> slint
                                     *slot = fastcull_core::burst::FrameMeta::from_summary(&exif);
                                     st.bursts.dirty = true;
                                 }
+                                // `{camera}` in both template engines. Kept
+                                // as the MODEL alone (iptc-templates.md:
+                                // "EXIF model string"), which is why this
+                                // is not read off FrameMeta::camera — that
+                                // one prefers the serial number.
+                                if let Some(slot) = st.session.camera_models.get_mut(index) {
+                                    *slot = exif.camera_model.clone();
+                                }
                             }
                             SessionEvent::Sidecar { index, pick, iptc } => {
                                 // Picks from a previous session/tool — never

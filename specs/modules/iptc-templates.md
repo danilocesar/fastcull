@@ -111,10 +111,20 @@ Panel-step ledger (updated after the panel gate, 2026-07-25):
   pending-clear badge state; bare emptiness always preserves, and a
   value-unchanged commit is a strict no-op (must not arm revert or touch
   sidecars).
-- STILL OPEN: `{camera}` expands EMPTY from the panel (the EXIF camera
-  model is not yet plumbed into the app session — a template using
-  {camera} stamps nothing; wire ExpandContext from exif.rs in a follow-up
-  step). Esc inside a field is NOT an abandon gesture (Slint LineEdit
+- CLOSED 2026-08-22: `{camera}` used to expand EMPTY from both the panel
+  and the rename field, because each bridge handed `ExpandContext` a
+  literal `None`. The EXIF model now rides with the session
+  (`SessionState::camera_models`, filled from `MetadataReady` alongside
+  the capture-time sort key) and both bridges pass it. It is the MODEL
+  alone — `FrameMeta::camera` is not the source, since burst grouping
+  prefers the serial number. It stays empty for an image whose metadata
+  has not landed yet, exactly as the capture-time sort is provisional
+  during a load; driven end to end by
+  `camera_template_stamps_the_exif_model` (two A1 frames + a
+  `{camera}.{ext}` rename → `ILCE-1.ARW` and `ILCE-1_1.ARW`, which also
+  exercises the in-batch suffix that one camera over two picks creates).
+  Before the fix the same template wrote `.ARW`, a hidden file with no
+  name of its own — now refused at plan time (fileops.md). Esc inside a field is NOT an abandon gesture (Slint LineEdit
   offers no Esc hook in v1) — the exits are: Enter (commit + focus to
   grid), click-away (G7 commit, focus stays where clicked), a covering
   surface — a Help modal or the copy dialog — which commits like

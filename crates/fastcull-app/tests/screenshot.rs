@@ -4154,3 +4154,74 @@ fn copy_picks_asks_once_and_each_answer_does_what_it_says() {
         "overwrite did not replace the file that was there"
     );
 }
+
+/// `{camera}` used to expand to nothing in the app: both template engines
+/// were handed `camera: None`, so a rename template of `{camera}.{ext}`
+/// wrote `.ARW` — a hidden file with no name of its own — and an IPTC
+/// template stamped an empty string (docs/metadata.md carried a "currently
+/// broken, avoid it" warning). The EXIF model now travels with the session,
+/// and this drives the whole path with the real reference files: two A1
+/// frames, one camera, so the copy also has to resolve the in-batch name
+/// collision it creates (`ILCE-1.ARW` + `ILCE-1_1.ARW`).
+#[test]
+fn camera_template_stamps_the_exif_model() {
+    if !has_display() {
+        eprintln!("screenshot smoke skipped: no display server");
+        return;
+    }
+    let _s = serial();
+    let src = out_dir().join("camtpl-src");
+    let dest = out_dir().join("camtpl-dest");
+    std::fs::create_dir_all(&src).unwrap();
+    for (i, name) in ["A1_full_compressed.ARW", "A1_full_lossless_compressed.ARW"]
+        .iter()
+        .enumerate()
+    {
+        place_fixture(&raws_dir().join(name), &src.join(format!("cam_{i}.ARW")));
+    }
+    let script = format!(
+        "1600:key:y;1900:key:y;2200:copydest:{dest};2600:key:ctrl+e;\
+         3000:copytemplate:{{camera}}.{{ext}};3400:dump.planned;3600:key:return;\
+         16000:dump.done;16400:key:escape;16800:dump.end",
+        dest = dest.display()
+    );
+    let out = out_dir().join("camera-template.jpg");
+    let stderr = shoot_env_stderr(
+        &[src.to_str().unwrap()],
+        &[("FASTCULL_TRACE", "1"), ("FASTCULL_DRIVE", script.as_str())],
+        &out,
+    );
+    let mut on_disk: Vec<String> = std::fs::read_dir(&dest)
+        .map(|d| {
+            d.filter_map(|e| e.ok())
+                .map(|e| e.file_name().to_string_lossy().into_owned())
+                .collect()
+        })
+        .unwrap_or_default();
+    on_disk.sort();
+    std::fs::remove_dir_all(&dest).ok();
+    std::fs::remove_dir_all(&src).ok();
+
+    let planned = qedump(&stderr, "planned");
+    assert!(
+        !planned.contains("copystate=3"),
+        "one camera over two picks is an in-batch collision, which must \
+         never raise the clash question: {planned}"
+    );
+    let done = qedump(&stderr, "done");
+    assert!(
+        done.contains("2 copied"),
+        "the templated copy did not finish: {done}"
+    );
+    assert_eq!(
+        on_disk,
+        vec![
+            "ILCE-1.ARW".to_string(),
+            "ILCE-1.ARW.xmp".to_string(),
+            "ILCE-1_1.ARW".to_string(),
+            "ILCE-1_1.ARW.xmp".to_string(),
+        ],
+        "{{camera}} did not stamp the EXIF model (empty would give \
+         hidden `.ARW` names)"
+    );
+}

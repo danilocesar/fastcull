@@ -241,7 +241,7 @@ fn plan_sources(st: &AppState) -> Vec<fastcull_core::fileops::PlanSource> {
                     st.session.capture_keys.get(id).and_then(|k| k.as_deref()),
                     mtime,
                     &name,
-                    None,
+                    st.session.camera_models.get(id).and_then(|c| c.as_deref()),
                 ),
             })
         })
