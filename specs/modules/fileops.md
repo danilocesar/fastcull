@@ -24,7 +24,8 @@ overwrite / abort. Rename appends a numeric suffix before the extension
 produce identical filenames landing in one flat selects folder (user decision
 after persona review). Auto-renames are summarized (count) in the plan preview; a per-file
 list is v2 (persona: no 148-row table between the user and the Copy
-button).
+button). **Superseded where they disagree by "Confirm, then suffix"
+below (user decision 2026-08-21, NOT YET IMPLEMENTED).**
 
 **Execute** (on a worker thread, progress events per file):
 1. Flush pending sidecar writes for all picked images (hard barrier).
@@ -157,6 +158,55 @@ ARW can still show a perfect thumbnail — the embedded JPEG sits at the front
 of the file — so "looks fine in the grid" proves nothing about integrity;
 BLAKE3 verification is the only truth at copy time.
 
+## Confirm, then suffix — collision handling v2 (user decision 2026-08-21,
+NOT YET IMPLEMENTED; design review with the persona pending)
+
+The rule as the user stated it: *"if I ask to copy the files to a folder,
+you copy the files — maybe add a warning that the files already exist.
+Context shouldn't matter more than that."* A copy is a copy; the session's
+memory of what it copied must never be a reason NOT to copy (that memory
+caused the 2026-08-21 bug above), and the safety net is one warning, not a
+silent decision.
+
+1. **Clash check before any byte moves.** Once the plan is built (after the
+   flush barrier), compare every file the plan would write against the
+   destination folder. A clash is any name the plan would write that
+   already exists there — RAW or sidecar.
+2. **One confirmation for the whole run**, not per file: *"We will copy the
+   new files with a new suffix in the filename, would you like to proceed?
+   YES / NO"*.
+3. **YES → suffix.** Every clashing image is copied under the first free
+   numeric suffix, appended to the file-name stem, **before** the extension
+   (`DSC01234_1.ARW` — never after it, never `DSC01234.ARW_1`).
+   **The first suffix is `_1`** (v1 shipped `_2` first; this changes it).
+4. **A suffix `k` is free only when BOTH names are free**: neither
+   `<stem>_k.<ext>` nor `<stem>_k.<ext>.xmp` exists at the destination. A
+   clash on EITHER member moves the pair to `k+1` — RAW and sidecar always
+   land under the same suffix, so a copy is never split across two numbers.
+5. **NO → nothing is copied** (see open questions: whether NO cancels the
+   whole run or copies only the non-clashing files).
+
+Open questions for the design review (Fable + persona, 2026-08-21) — the
+answers land in this section and in `docs/copy-picks.md` with the
+implementation:
+- What NO means: cancel everything, or copy the clash-free files and leave
+  the clashing ones? What the report says afterwards.
+- What survives of the session-memory defaults: the "N already at
+  destination (skipped)" default for the session's own copies, and the
+  sidecar-alone refresh for an image whose caption changed after the copy.
+  Under the plain rule both become "copy it again as `_1`" — the persona's
+  caption-after-copy flow and the "Ctrl+E again before quitting" recovery
+  are what this trades away. `SessionCopies` still feeds the ✓ copied badge
+  either way.
+- The fate of the "Skip existing" toggle (v1 dialog) once the confirmation
+  exists: keep both, or replace the toggle with the YES/NO answer.
+- Whether the confirmation is a second modal over the Copy dialog or a
+  state of the dialog itself (Enter/Esc semantics, issue #42 stacking).
+- Free space and the "N to copy" summary must count clashing files as full
+  copies (under v1 defaults some of them were skips worth 0 bytes).
+- Cross-session `_k` growth on repeated runs into a working selects folder
+  (`_1`, `_2`, `_3`… of the same photo) — acceptable, or bounded?
+
 ## Acceptance criteria (tests)
 
 - [x] Plan: template expansion, collision detection, dest-inside-source rejection,
@@ -189,6 +239,12 @@ BLAKE3 verification is the only truth at copy time.
       (screenshot.rs, driven through `copydest:`).
 - [x] No partial files after simulated failure (temp-name copy verified) —
       asserted inside execute_copies_verifies_and_isolates_failures.
+- [ ] Confirm-then-suffix (v2, not yet implemented): the clash check sees
+      RAW *and* sidecar names; one confirmation per run; YES suffixes from
+      `_1` before the extension with RAW/sidecar in lockstep; a clash on
+      either member advances the pair to the next number; NO does what the
+      design review decides; free space and the summary count clashing
+      files as full copies.
 - [ ] Cross-platform: paths with spaces/Unicode; Windows reserved-name rejection
       — DEFERRED with the user's explicit OK (2026-07-26, "low priority"),
       tracked as issue #10; spaces/Unicode half already QE-verified
