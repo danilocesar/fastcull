@@ -104,7 +104,7 @@ pub enum PlanError {
     #[error("rename template produced '{name}', which is a path, not a file name")]
     TemplateMakesAPath { name: String },
     #[error(
-        "rename template produced '{name}': a hidden file with no name of its own          (an empty variable before the dot?)"
+        "rename template produced '{name}': a hidden file whose whole name is its extension (an empty variable before the dot?)"
     )]
     TemplateMakesAHiddenName { name: String },
 }
@@ -295,6 +295,10 @@ pub fn plan(
     // phase 2 suffixes them (user decision 2026-08-22).
     let n = sources.len();
     let mut names: Vec<String> = Vec::with_capacity(n);
+    // Is a template actually in play? An empty or whitespace-only one
+    // means "keep the original names", and then the names below are the
+    // user's own files, not something we invented.
+    let templated = matches!(template, Some(t) if !t.trim().is_empty());
     for (i, s) in sources.iter().enumerate() {
         let original = s
             .path
@@ -336,14 +340,22 @@ pub fn plan(
         if name.is_empty() || name.contains('/') || name.contains('\\') || !one_plain_component {
             return Err(PlanError::TemplateMakesAPath { name });
         }
-        // An expansion with no STEM (`{camera}.{ext}` — and `{camera}` is
-        // always empty in the app today) makes `.ARW`: a hidden file whose
-        // whole name is its extension. The copies are perfect and nobody
-        // can see them — FastCull's own scan skips them, and so does
-        // darktable — and the suffix walk then yields `.ARW_1`, which has
-        // lost the extension too. Refused, not shipped (QE finding
-        // 2026-08-22).
-        if name.starts_with('.') {
+        // A TEMPLATE expansion with no stem (`{camera}.{ext}` — and
+        // `{camera}` is always empty in the app today) makes `.ARW`: a
+        // hidden file whose whole name is its extension, which FastCull's
+        // own scan skips (no extension left to match) and darktable never
+        // sees, and the suffix walk then yields `.ARW_1`, which has lost
+        // the extension too. Refused, not shipped (QE finding 2026-08-22).
+        //
+        // TEMPLATED NAMES ONLY (gate finding 2026-08-22). Applied to the
+        // ORIGINAL name this refused the whole copy over a file the user
+        // did not name and cannot fix: `catalog.rs` admits by extension
+        // alone, so a macOS AppleDouble stub `._DSC0001.ARW` sitting on
+        // any card a Mac has touched is a pickable cell, and one such pick
+        // blocked every other file with a message blaming a rename
+        // template that was never typed. The user's own file names are
+        // their business; only names WE invent have to be sane.
+        if templated && name.starts_with('.') {
             return Err(PlanError::TemplateMakesAHiddenName { name });
         }
         names.push(name);
@@ -2490,6 +2502,22 @@ mod tests {
                 }
             }
         }
+        // A pick whose OWN name starts with a dot is copied, not refused:
+        // a macOS `._DSC0001.ARW` stub is admitted by the scanner, and one
+        // such pick must not block every other file (gate finding
+        // 2026-08-22).
+        {
+            let apple = src_with(&dir, &[("._DSC0001.ARW", b"stub")]);
+            let p = super::plan(
+                &apple,
+                &dest,
+                None,
+                ClashPolicy::Ask,
+                &SessionCopies::default(),
+            )
+            .expect("a dot-leading SOURCE name is the user's own file, not our invention");
+            assert_eq!(p.jobs[0].dst_raw.file_name().unwrap(), "._DSC0001.ARW");
+        }
         // A template whose expansion has no stem is refused: `.ARW` is a
         // hidden file that no RAW tool will ever show the user.
         for template in [".{ext}", ".hidden.{ext}"] {
@@ -2507,6 +2535,19 @@ mod tests {
                 "template {template:?} was not refused"
             );
         }
+        let msg = super::plan(
+            &sources,
+            &dest,
+            Some(".{ext}"),
+            ClashPolicy::Ask,
+            &SessionCopies::default(),
+        )
+        .unwrap_err()
+        .to_string();
+        assert!(
+            !msg.contains("  "),
+            "the message reaches the user verbatim; no stray runs of spaces: {msg:?}"
+        );
         // And the templates that would escape are refused outright.
         for template in ["../{filename}.{ext}", "sub/{filename}.{ext}"] {
             assert!(matches!(
@@ -2550,21 +2591,21 @@ mod tests {
             });
         }
         let dest = dir.join("out");
-        let err = super::plan(
-            &sources,
-            &dest,
-            None,
+        for policy in [
             ClashPolicy::Ask,
-            &SessionCopies::default(),
-        )
-        .unwrap_err();
-        match err {
-            PlanError::InsufficientSpace { needed, .. } => assert_eq!(
-                needed,
-                u64::MAX / 4 * 2,
-                "the suffixed pick's bytes must be required too"
-            ),
-            other => panic!("expected an insufficient-space error, got {other:?}"),
+            ClashPolicy::CreateCopies,
+            ClashPolicy::Overwrite,
+        ] {
+            let err =
+                super::plan(&sources, &dest, None, policy, &SessionCopies::default()).unwrap_err();
+            match err {
+                PlanError::InsufficientSpace { needed, .. } => assert_eq!(
+                    needed,
+                    u64::MAX / 4 * 2,
+                    "{policy:?}: the suffixed pick's bytes must be required too"
+                ),
+                other => panic!("{policy:?}: expected an insufficient-space error, got {other:?}"),
+            }
         }
         std::fs::remove_dir_all(&dir).ok();
     }

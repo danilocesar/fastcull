@@ -31,15 +31,22 @@ Plan-time errors (block execution, shown to user):
   Windows.
   *(Two images expanding to the same destination name used to be a
   plan-time error. It is not any more — see "two picks, one name" below.)*
-- A rename template whose expansion has no STEM — anything starting with
+- A rename TEMPLATE whose expansion has no stem — anything starting with
   `.`, which `{camera}.{ext}` produces today because the app never fills
   `{camera}` (QE finding 2026-08-22). It would write `.ARW`: a hidden file
-  whose whole name is its extension, invisible to FastCull's own scan and
-  to darktable, and the suffix walk then yields `.ARW_1`, which has lost
-  the extension as well. Perfect copies nobody can see are worse than a
-  refusal. **Open, separate from this rule**: `{camera}` expanding to
-  nothing at all in the app is its own bug (`copy_bridge::plan_sources`
-  passes `camera: None`); the template docs offer the variable.
+  whose whole name is its extension, which FastCull's own scan skips (no
+  extension left to match) and darktable never sees, and the suffix walk
+  then yields `.ARW_1`, which has lost the extension as well. Perfect
+  copies nobody can see are worse than a refusal. **Templated names only**
+  (gate finding 2026-08-22): applied to ORIGINAL names this refused the
+  whole copy over a file the user did not name — `catalog.rs` admits by
+  extension alone, so a macOS AppleDouble stub `._DSC0001.ARW` is a
+  pickable cell, and one such pick blocked every other file with a message
+  about a template that was never typed. The user's own file names are
+  their business; only names WE invent have to be sane. **Open, separate
+  from this rule**: `{camera}` expanding to nothing at all in the app is
+  its own bug (`copy_bridge::plan_sources` passes `camera: None`) while
+  the template docs offer the variable.
 - Insufficient free space (sum of sizes vs `statvfs`/`GetDiskFreeSpaceEx`).
 
 Destination file already exists (per-file modes): **rename (default)** / skip /
@@ -309,7 +316,17 @@ on every keystroke. Measured for 2,000 picks on one name: 2 M `stat`
 calls and 1.7 s (btrfs) to 2.3 s (tmpfs) restarting, versus 4-5 ms
 resuming — and a network destination multiplies the per-`stat` cost by
 three orders of magnitude. `many_picks_on_one_name_take_consecutive_
-suffixes` holds it to 300 ms. This also covers a rename template that collapses several images
+suffixes` holds it to 300 ms.
+
+What that fix does NOT do (gate finding 2026-08-22, recorded rather than
+implied away): `plan()` is still LINEAR in stat calls — roughly three per
+pick — and still runs synchronously on the event-loop thread, once per
+keystroke in the template field, with no debounce. On a local disk that is
+milliseconds for a 2,000-pick plan; on a network or FUSE destination the
+same three-orders-of-magnitude multiplier applies to the linear term and
+it becomes a visible freeze. The eventual fix is a debounce or planning
+off-thread; the 300 ms smoke bound is a debug-build unit test on
+`temp_dir`, not a budget, and `perf_budgets.rs` has no plan-time entry. This also covers a rename template that collapses several images
 onto one name (`same.{ext}` → `same.ARW`, `same_1.ARW`, …), which was a
 blocking plan error until this decision.
 

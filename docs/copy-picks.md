@@ -57,7 +57,6 @@ symlink counts too), it asks once, for the whole run:
 - **Cancel** copies **nothing at all** — not even the files that had no
   clash. `Esc` does the same and leaves the dialog on your plan, so
   pointing it at another folder is one step.
-
 - `Enter` deliberately does nothing on this question: `Ctrl+E`, `Enter`,
   `Enter` must never replace or duplicate 148 files by reflex. Answer
   with `B`, `O`, `Esc` — or click.
