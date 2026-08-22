@@ -60,6 +60,14 @@ symlink counts too), it asks once, for the whole run:
 > Overwrite replaces it. Answer **Keep both**, or copy into a fresh
 > folder, when the destination has been edited elsewhere.
 
+The other way round, Overwrite never *deletes* anything at the
+destination: if a pick has no sidecar of its own (its sidecar could not be
+written — a locked card, a full disk), overwriting the RAW leaves the
+`.xmp` that was already there, describing a different photo. The report
+says so — *"1 destination sidecar left in place — that pick has no sidecar
+of its own"* — and **Keep both** is the answer that avoids the pairing
+entirely.
+
 Nothing is ever replaced unless you answered Overwrite: each file is
 copied to a temporary name, checksum-verified, and only then given its
 final name — and if something else grabbed that name in the meantime,

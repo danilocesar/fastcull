@@ -14,6 +14,9 @@ sidecar → dest sidecar) plus detected problems. Rename templates reuse the IPT
 variable engine (`{date}`, `{seq}`, `{filename}`, `{camera}`, `{ext}`).
 
 Plan-time errors (block execution, shown to user):
+- Destination that exists but is NOT a folder (QE 2026-08-21: it used to
+  reach the copy and come back as a pile of "File exists (os error 17)"
+  per-file failures).
 - Destination inside the source folder, or equal to it.
 - Template collision: two images expand to the same destination name.
 - Insufficient free space (sum of sizes vs `statvfs`/`GetDiskFreeSpaceEx`).
@@ -50,14 +53,26 @@ no-148-row-table rule.
    directly off the card mount, making this copy the working copy before the
    card is formatted — size-only verification is not enough for that flow.
 4. On per-file failure: record, continue with remaining files (no partial-file left
-   behind — copy to temp name, rename on success).
+   behind — copy to temp name, commit on success). The temp is ONE hidden
+   name per process in the destination folder
+   (`.fastcull-partial-<pid>`), not the final name plus a suffix: the
+   suffix version added ~25 bytes to the final name, so a long templated
+   name could land its RAW and then fail its sidecar on NAME_MAX alone
+   (QE 2026-08-21). One file is in flight at a time, so one name is enough.
 5. Final report: copied / skipped / failed with reasons. Session marks copied
    images with a "copied" badge.
 
 Cancellation: between files only; already-copied files remain (report says
 so). Dropping the copy handle (quit / Open Folder mid-copy) CANCELS then
 joins: the wait is bounded by the file in flight and the temp-name
-contract leaves no partial behind. An overwrite's identity pass reads as
+contract leaves no partial behind — with ONE recorded exception (QE
+2026-08-21): a hard QUIT does not join anything. `shutdown()` ends in
+`process::exit` on purpose (01-architecture.md: 32 readers stuck on a
+dying card once made the process unkillable), so `CopyHandle::drop` never
+runs and the file in flight leaves its temp behind. That debris is a
+single hidden file per process, `<dest>/.fastcull-partial-<pid>`, which
+can never be mistaken for a photograph; joining a copy to a dead card on
+quit is the worse bargain. An overwrite's identity pass reads as
 much as a copy writes, so it polls the cancel flag between blocks and
 gives the run back at once (gate finding 2026-08-21) — otherwise the join
 on the UI thread would span a whole re-verify of a big RAW on top of the
@@ -250,10 +265,25 @@ rename window is unavoidable there and is recorded rather than hidden.
 Overwrite itself never removes a DIRECTORY standing under a planned name
 (the rename fails, that file fails alone) and replaces a symlink as a
 link, never writing through to its target (persona 2026-08-21). Nothing
-at the destination is ever DELETED, only replaced: a pick that has no
-sidecar of its own leaves a foreign `.xmp` sitting beside the RAW it
-overwrote (rare — picking writes a sidecar — and the honest answer for
-that debris is "keep both", which walks the pair onto a free number).
+at the destination is ever DELETED, only replaced. Two consequences, both
+recorded rather than prevented (QE 2026-08-21), and both leaving our RAW
+beside an `.xmp` that describes another photograph:
+
+- a pick that has no sidecar OF ITS OWN — its sidecar write failed, or the
+  card is read-only, which makes it systematic rather than rare for that
+  card — overwrites the RAW and leaves the foreign `.xmp` where it is. The
+  report says so ("N destination sidecars left in place — those picks have
+  none of their own") so the user hears it here rather than from darktable
+  months later, and "keep both" is the answer that walks the pair onto a
+  free number instead;
+- the sidecar half of a pair can fail AFTER its RAW committed (a directory
+  under the sidecar's name, ENOSPC, EACCES). That file is reported failed,
+  with the reason spelling out which half landed: "the RAW landed but its
+  sidecar did not: …".
+
+The opposite direction — OUR sidecar beside a foreign RAW, issue #14 — is
+structurally prevented: a sidecar is only ever written after its own RAW
+has committed.
 
 **5. Session memory reads, never decides.** `SessionCopies` survives for
 the ✓ copied badge and the "N copied earlier but gone from the destination
@@ -308,8 +338,8 @@ e.g. DSC01234.ARW, DSC01235.ARW, DSC01240.ARW …
 - Three answers do not fit side by side in the 560px card (measured), so
   they are stacked rows in order of increasing consequence, Cancel set
   apart. **No answer carries accent/default styling** — a destructive
-  answer that looks pre-chosen gets pressed reflexively — and only the
-  word "Overwrite" is coloured.
+  answer that looks pre-chosen gets pressed reflexively. The overwrite
+  row's LABEL is amber; no row carries an accent box.
 - Keys: `B`, `O`, `Esc`. **Enter and Space are inert** (Ctrl+E, Enter,
   Enter must never mass-replace or mass-duplicate; Space is the pick key),
   as are `Y`/`N`, and no button takes initial focus. A key that is not an
@@ -453,6 +483,26 @@ destination and copy again, or re-import in darktable.
       ask_marks_the_clashes_and_counts_their_bytes_apart); cancellation is
       asserted on the between-files branch rather than racing past it —
       cancel_between_files_keeps_finished_copies.
+- [x] Gate round 3 (QE, 2026-08-21): the report never contradicts itself —
+      no "nothing needed copying" over failures, no green light without
+      verified bytes, and a foreign sidecar left beside our RAW is named —
+      pump.rs `report_lines` unit tests (the_headline_says_what_happened,
+      the_verified_sentence_follows_what_was_verified,
+      a_foreign_sidecar_left_in_place_is_reported); a destination that is a
+      file is a plan error — a_destination_that_is_a_file_is_rejected_by_
+      the_plan; a sidecar that fails after its RAW landed says which half
+      landed — a_sidecar_that_fails_after_its_raw_landed_says_so; a
+      228-byte destination name still ships the whole pair —
+      a_very_long_destination_name_still_ships_the_whole_pair.
+- [ ] NOT VERIFIED ANYWHERE, carried forward (QE 2026-08-21): a
+      case-insensitive destination (no casefold/FAT mount available on the
+      dev box), so "a case-variant counts as occupied" and rule 4's
+      "two same-run names differing only in case cannot eat each other"
+      are review-verified only; the hard-link-less commit fallback is unit-
+      tested but has never run on a filesystem that actually lacks links;
+      network destinations (the recorded "~2× the clashing bytes over the
+      wire" consequence); a real darktable round-trip of the
+      overwrite-replaces-sidecars warning.
 - [ ] Cross-platform: paths with spaces/Unicode; Windows reserved-name rejection
       — DEFERRED with the user's explicit OK (2026-07-26, "low priority"),
       tracked as issue #10; spaces/Unicode half already QE-verified

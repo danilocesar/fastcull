@@ -161,78 +161,7 @@ pub(crate) fn start(window: &MainWindow, state: &Rc<RefCell<AppState>>) -> slint
                                 st.copy.handle = None;
                                 st.copy.rx = None;
                                 if let Some(win) = win.upgrade() {
-                                    // The green light to format a card
-                                    // appears ONLY when this run actually
-                                    // verified something (gate finding: a
-                                    // run that moved nothing verified
-                                    // nothing). An overwrite that found
-                                    // the destination byte-identical DID
-                                    // verify it — BLAKE3, both ends — so
-                                    // it earns the sentence too.
-                                    let verified_line = report.copied + report.identical > 0
-                                        && report.all_verified
-                                        && report.failed.is_empty()
-                                        && !report.cancelled;
-                                    let mut lines = vec![if report.copied == 0 {
-                                        "Nothing needed copying".to_string()
-                                    } else {
-                                        format!(
-                                            "{} copied{}",
-                                            report.copied,
-                                            if verified_line && report.identical == 0 {
-                                                ", all checksums verified"
-                                            } else {
-                                                ""
-                                            }
-                                        )
-                                    }];
-                                    if report.identical > 0 {
-                                        // The re-run's real answer, and a
-                                        // free "is my export still
-                                        // bit-perfect?" pass before the
-                                        // card is wiped (persona).
-                                        lines.push(format!(
-                                            "{} already identical — re-verified in place{}",
-                                            report.identical,
-                                            if verified_line {
-                                                ", all checksums verified"
-                                            } else {
-                                                ""
-                                            }
-                                        ));
-                                    }
-                                    if report.renamed > 0 {
-                                        // One real example name: the
-                                        // report is what the user reads
-                                        // before switching to darktable,
-                                        // and the names are how they find
-                                        // those frames.
-                                        lines.push(match &report.renamed_example {
-                                            Some(name) => format!(
-                                                "{} landed under new names ({name} …)",
-                                                report.renamed
-                                            ),
-                                            None => {
-                                                format!("{} landed under new names", report.renamed)
-                                            }
-                                        });
-                                    }
-                                    if report.replaced > 0 {
-                                        lines.push(format!("{} replaced", report.replaced));
-                                    }
-                                    if report.refreshed > 0 {
-                                        lines.push(format!(
-                                            "{} sidecar{} replaced beside an identical RAW",
-                                            report.refreshed,
-                                            if report.refreshed == 1 { "" } else { "s" }
-                                        ));
-                                    }
-                                    if report.cancelled {
-                                        lines.push("cancelled — finished files remain".into());
-                                    }
-                                    for (name, reason) in &report.failed {
-                                        lines.push(format!("FAILED {name}: {reason}"));
-                                    }
+                                    let lines = report_lines(&report);
                                     win.set_copy_report(lines.join("\n").into());
                                     win.set_copy_state(2);
                                 }
@@ -387,4 +316,211 @@ fn drain_kitchen(win: &MainWindow, state: &Rc<RefCell<AppState>>) -> bool {
     drop(st);
     let _ = win;
     true
+}
+
+/// The final report's lines, from what the run actually did.
+///
+/// A free function so the honesty rules have a test of their own: the
+/// green light ("all checksums verified") appears only over files this run
+/// copied or re-verified, and the headline never contradicts the body —
+/// saying "nothing needed copying" over a run whose files FAILED states
+/// the opposite of what happened (QE finding 2026-08-21).
+pub(crate) fn report_lines(report: &fastcull_core::fileops::CopyReport) -> Vec<String> {
+    // The green light to format a card appears ONLY when this run actually
+    // verified something (gate finding: a run that moved nothing verified
+    // nothing). An overwrite that found the destination byte-identical DID
+    // verify it — BLAKE3, both ends — so it earns the sentence too.
+    let verified = report.copied + report.identical > 0
+        && report.all_verified
+        && report.failed.is_empty()
+        && !report.cancelled;
+    let plural = |n: usize| if n == 1 { "" } else { "s" };
+    let mut lines = Vec::new();
+    if report.copied > 0 {
+        lines.push(format!(
+            "{} copied{}",
+            report.copied,
+            if verified && report.identical == 0 {
+                ", all checksums verified"
+            } else {
+                ""
+            }
+        ));
+    }
+    if report.identical > 0 {
+        // The re-run's real answer, and a free "is my export still
+        // bit-perfect?" pass before the card is wiped (persona).
+        lines.push(format!(
+            "{} already identical — re-verified in place{}",
+            report.identical,
+            if verified {
+                ", all checksums verified"
+            } else {
+                ""
+            }
+        ));
+    }
+    if report.renamed > 0 {
+        // One real example name: the report is what the user reads before
+        // switching to darktable, and the names are how they find those
+        // frames again.
+        lines.push(match &report.renamed_example {
+            Some(name) => format!("{} landed under new names ({name} …)", report.renamed),
+            None => format!("{} landed under new names", report.renamed),
+        });
+    }
+    if report.replaced > 0 {
+        lines.push(format!("{} replaced", report.replaced));
+    }
+    if report.refreshed > 0 {
+        lines.push(format!(
+            "{} sidecar{} replaced beside an identical RAW",
+            report.refreshed,
+            plural(report.refreshed)
+        ));
+    }
+    if report.foreign_sidecars_left > 0 {
+        // Our RAW, someone else's .xmp: the user hears it here, not from
+        // darktable months later (QE finding).
+        let n = report.foreign_sidecars_left;
+        lines.push(if n == 1 {
+            "1 destination sidecar left in place — that pick has no sidecar of its own".to_string()
+        } else {
+            format!("{n} destination sidecars left in place — those picks have none of their own")
+        });
+    }
+    if lines.is_empty() {
+        lines.push(if report.failed.is_empty() {
+            "Nothing needed copying".to_string()
+        } else {
+            format!(
+                "Nothing was copied — {} file{} failed",
+                report.failed.len(),
+                plural(report.failed.len())
+            )
+        });
+    }
+    if report.cancelled {
+        lines.push("cancelled — finished files remain".into());
+    }
+    for (name, reason) in &report.failed {
+        lines.push(format!("FAILED {name}: {reason}"));
+    }
+    lines
+}
+
+#[cfg(test)]
+mod tests {
+    use super::report_lines;
+    use fastcull_core::fileops::CopyReport;
+
+    fn failed(n: usize) -> Vec<(String, String)> {
+        (0..n)
+            .map(|i| (format!("f{i}.ARW"), "Permission denied".into()))
+            .collect()
+    }
+
+    /// The headline may never contradict the body (QE finding): a run whose
+    /// files failed did not "need no copying", and a run that replaced a
+    /// file and then failed its sidecar did not either.
+    #[test]
+    fn the_headline_says_what_happened() {
+        let lines = report_lines(&CopyReport {
+            all_verified: false,
+            failed: failed(2),
+            ..Default::default()
+        });
+        assert_eq!(lines[0], "Nothing was copied — 2 files failed");
+        assert!(lines.iter().any(|l| l.starts_with("FAILED f0.ARW")));
+        assert!(
+            !lines.iter().any(|l| l.contains("checksums verified")),
+            "no green light over a run that copied nothing: {lines:?}"
+        );
+
+        let lines = report_lines(&CopyReport {
+            all_verified: false,
+            failed: failed(1),
+            ..Default::default()
+        });
+        assert_eq!(lines[0], "Nothing was copied — 1 file failed");
+
+        // A genuinely empty run still says the calm thing.
+        let lines = report_lines(&CopyReport {
+            all_verified: true,
+            ..Default::default()
+        });
+        assert_eq!(lines, vec!["Nothing needed copying".to_string()]);
+    }
+
+    /// The green light follows what was verified — copied files AND files
+    /// found byte-identical at the destination — and nothing else.
+    #[test]
+    fn the_verified_sentence_follows_what_was_verified() {
+        let lines = report_lines(&CopyReport {
+            copied: 3,
+            all_verified: true,
+            ..Default::default()
+        });
+        assert_eq!(lines[0], "3 copied, all checksums verified");
+
+        let lines = report_lines(&CopyReport {
+            identical: 145,
+            all_verified: true,
+            ..Default::default()
+        });
+        assert_eq!(
+            lines[0],
+            "145 already identical — re-verified in place, all checksums verified"
+        );
+
+        // Cancelled, or with a failure, the green light is withheld.
+        for report in [
+            CopyReport {
+                copied: 3,
+                all_verified: true,
+                cancelled: true,
+                ..Default::default()
+            },
+            CopyReport {
+                copied: 3,
+                all_verified: false,
+                failed: failed(1),
+                ..Default::default()
+            },
+        ] {
+            let lines = report_lines(&report);
+            assert!(
+                !lines.iter().any(|l| l.contains("checksums verified")),
+                "{lines:?}"
+            );
+        }
+    }
+
+    /// Our RAW beside a sidecar that is not ours is said out loud.
+    #[test]
+    fn a_foreign_sidecar_left_in_place_is_reported() {
+        let lines = report_lines(&CopyReport {
+            copied: 1,
+            replaced: 1,
+            foreign_sidecars_left: 1,
+            all_verified: true,
+            ..Default::default()
+        });
+        assert!(
+            lines.iter().any(|l| l
+                == "1 destination sidecar left in place — that pick has no sidecar of its own"),
+            "{lines:?}"
+        );
+        let lines = report_lines(&CopyReport {
+            copied: 2,
+            foreign_sidecars_left: 2,
+            all_verified: true,
+            ..Default::default()
+        });
+        assert!(
+            lines.iter().any(|l| l
+                == "2 destination sidecars left in place — those picks have none of their own"),
+            "{lines:?}"
+        );
+    }
 }

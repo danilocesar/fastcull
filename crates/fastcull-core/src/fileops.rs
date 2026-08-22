@@ -100,6 +100,8 @@ pub enum PlanError {
     },
     #[error("not enough free space: need {needed} bytes, {free} available")]
     InsufficientSpace { needed: u64, free: u64 },
+    #[error("the destination is a file, not a folder")]
+    DestNotADirectory,
 }
 
 /// The inspectable plan the dialog previews. `jobs` keep the input order
@@ -250,6 +252,13 @@ pub fn plan(
     policy: ClashPolicy,
     session: &SessionCopies,
 ) -> Result<CopyPlan, PlanError> {
+    // A destination that exists but is not a FOLDER is a plan error, not a
+    // pile of per-file "File exists (os error 17)" failures the user has
+    // to decode (QE finding 2026-08-21). Not existing is fine — the copy
+    // creates it.
+    if dest.metadata().is_ok_and(|m| !m.is_dir()) {
+        return Err(PlanError::DestNotADirectory);
+    }
     // Dest-inside-source / equality (canonicalized where possible; a not-
     // yet-created destination canonicalizes its existing ancestors).
     let dest_canon = canonicalize_lenient(dest);
@@ -546,6 +555,12 @@ pub struct CopyReport {
     /// Sidecars rewritten ALONE, beside such an identical RAW — the
     /// caption-after-copy recovery (fileops.md).
     pub refreshed: usize,
+    /// Overwrites that left a sidecar at the destination exactly where it
+    /// was, because THIS pick has none of its own to write (its sidecar
+    /// write failed, or the card is read-only). The RAW is ours and the
+    /// `.xmp` beside it is not — the report says so rather than leaving
+    /// the user to find out from darktable (QE finding 2026-08-21).
+    pub foreign_sidecars_left: usize,
     /// The first name that actually landed under a `_k` suffix — the
     /// report shows one real example, because the names are how the user
     /// finds those frames in the destination folder afterwards.
@@ -673,6 +688,9 @@ fn run_plan(plan: CopyPlan, tx: &Sender<CopyEvent>, cancel: &AtomicBool) {
                         }
                     }
                 }
+                if job.src_xmp.is_none() && occupied(&job.dst_xmp) {
+                    report.foreign_sidecars_left += 1;
+                }
                 report.landed.push((job.id, job.dst_raw.clone()));
             }),
         };
@@ -711,7 +729,16 @@ enum Replaced {
 fn copy_pair(job: &CopyJob, commit: Commit) -> std::io::Result<()> {
     copy_verified(&job.src_raw, &job.dst_raw, commit)?;
     if let Some(src) = &job.src_xmp {
-        copy_verified(src, &job.dst_xmp, commit)?;
+        // The RAW is already in place when this runs, so the failure the
+        // user needs to read is not "copy failed" but "half of the pair
+        // landed" — under an overwrite that means our RAW is now sitting
+        // next to the sidecar that was there before (QE finding).
+        copy_verified(src, &job.dst_xmp, commit).map_err(|e| {
+            std::io::Error::new(
+                e.kind(),
+                format!("the RAW landed but its sidecar did not: {e}"),
+            )
+        })?;
     }
     Ok(())
 }
@@ -839,9 +866,17 @@ fn copy_verified_with(
     if let Some(parent) = dst.parent() {
         std::fs::create_dir_all(parent)?;
     }
-    let mut tmp_os = dst.as_os_str().to_owned();
-    tmp_os.push(format!(".fastcull-partial-{}", std::process::id()));
-    let tmp = PathBuf::from(tmp_os);
+    // ONE temp name per process, in the destination folder — not the final
+    // name plus a suffix. Appending ~25 bytes to the final name pushed long
+    // names past the filesystem's limit, so a pick could land its RAW and
+    // then fail its sidecar purely because of the temp name's length (QE
+    // finding 2026-08-21). One file is in flight at a time, so one name is
+    // enough; the leading dot keeps the debris out of the way if the
+    // process is killed mid-copy.
+    let tmp = dst
+        .parent()
+        .unwrap_or_else(|| Path::new(""))
+        .join(format!(".fastcull-partial-{}", std::process::id()));
     let result = (|| -> std::io::Result<()> {
         let mut reader = std::fs::File::open(src)?;
         let mut writer = std::fs::File::create(&tmp)?;
@@ -1567,6 +1602,10 @@ mod tests {
             (report.copied, report.replaced, report.refreshed),
             (1, 1, 0)
         );
+        assert_eq!(
+            report.foreign_sidecars_left, 1,
+            "the report has to say that the .xmp beside our RAW is not ours"
+        );
         assert_eq!(std::fs::read(dest.join("a.ARW")).unwrap(), b"mine");
         assert_eq!(
             std::fs::read(dest.join("a.ARW.xmp")).unwrap(),
@@ -1600,6 +1639,103 @@ mod tests {
             std::fs::read(&dst).unwrap(),
             b"verified",
             "the file that was there must survive"
+        );
+        std::fs::remove_dir_all(&dir).ok();
+    }
+
+    /// A destination that exists but is a FILE is a plan error, not a pile
+    /// of per-file "File exists" failures to decode (QE finding).
+    #[test]
+    fn a_destination_that_is_a_file_is_rejected_by_the_plan() {
+        let dir = tmp();
+        let sources = src_with(&dir, &[("a.ARW", b"aaaa")]);
+        let dest = dir.join("not-a-folder");
+        std::fs::write(&dest, b"I am a file").unwrap();
+        assert!(matches!(
+            super::plan(
+                &sources,
+                &dest,
+                None,
+                ClashPolicy::Ask,
+                &SessionCopies::default()
+            ),
+            Err(PlanError::DestNotADirectory)
+        ));
+        assert_eq!(std::fs::read(&dest).unwrap(), b"I am a file");
+        std::fs::remove_dir_all(&dir).ok();
+    }
+
+    /// When the RAW has landed and its sidecar then fails, the failure must
+    /// SAY that half the pair is there — under an overwrite that means our
+    /// RAW is now beside the sidecar that was there before (QE finding).
+    #[test]
+    fn a_sidecar_that_fails_after_its_raw_landed_says_so() {
+        let dir = tmp();
+        let sources = src_with(&dir, &[("a.ARW", b"aaaa")]);
+        crate::xmp::write_pick(&sources[0].path, PickState::Picked).unwrap();
+        let dest = dir.join("out");
+        std::fs::create_dir_all(&dest).unwrap();
+        std::fs::write(dest.join("a.ARW"), b"old").unwrap();
+        // A directory under the sidecar's name: the RAW commits, the
+        // sidecar's commit cannot.
+        std::fs::create_dir_all(dest.join("a.ARW.xmp")).unwrap();
+
+        let report = run(
+            &sources,
+            &dest,
+            None,
+            ClashPolicy::Overwrite,
+            &SessionCopies::default(),
+        );
+        assert_eq!(report.copied, 0, "the job as a whole did not succeed");
+        assert_eq!(report.failed.len(), 1, "{:?}", report.failed);
+        assert!(
+            report.failed[0]
+                .1
+                .contains("the RAW landed but its sidecar did not"),
+            "{:?}",
+            report.failed
+        );
+        assert_eq!(
+            std::fs::read(dest.join("a.ARW")).unwrap(),
+            b"aaaa",
+            "the RAW really did land — which is what the message says"
+        );
+        assert!(dest.join("a.ARW.xmp").is_dir(), "the directory survived");
+        assert!(names_in(&dest).iter().all(|n| !n.contains("partial")));
+        std::fs::remove_dir_all(&dir).ok();
+    }
+
+    /// The temp file is a FIXED name in the destination folder, so a long
+    /// destination name cannot push the temp past the filesystem's limit
+    /// and split a pair (QE finding: a 228-byte name landed its RAW and
+    /// failed its sidecar).
+    #[test]
+    fn a_very_long_destination_name_still_ships_the_whole_pair() {
+        let dir = tmp();
+        let sources = src_with(&dir, &[("a.ARW", b"aaaa")]);
+        crate::xmp::write_pick(&sources[0].path, PickState::Picked).unwrap();
+        let dest = dir.join("out");
+        // 228 bytes + ".ARW.xmp" stays inside NAME_MAX (255) — but not with
+        // a 25-byte temp suffix on top of it.
+        let long = "x".repeat(224);
+        let report = run(
+            &sources,
+            &dest,
+            Some(&format!("{long}.{{ext}}")),
+            ClashPolicy::Ask,
+            &SessionCopies::default(),
+        );
+        assert_eq!(
+            (report.copied, report.failed.len()),
+            (1, 0),
+            "{:?}",
+            report.failed
+        );
+        assert!(dest.join(format!("{long}.ARW")).exists());
+        assert!(
+            dest.join(format!("{long}.ARW.xmp")).exists(),
+            "the sidecar shipped with its RAW"
         );
         std::fs::remove_dir_all(&dir).ok();
     }
