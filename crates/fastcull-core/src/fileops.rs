@@ -252,11 +252,14 @@ pub fn plan(
     policy: ClashPolicy,
     session: &SessionCopies,
 ) -> Result<CopyPlan, PlanError> {
-    // A destination that exists but is not a FOLDER is a plan error, not a
-    // pile of per-file "File exists (os error 17)" failures the user has
-    // to decode (QE finding 2026-08-21). Not existing is fine — the copy
-    // creates it.
-    if dest.metadata().is_ok_and(|m| !m.is_dir()) {
+    // A destination that EXISTS but is not a folder is a plan error, not a
+    // pile of per-file "File exists (os error 17)" failures the user has to
+    // decode (QE finding 2026-08-21). "Exists" is asked of the link itself,
+    // so a DANGLING symlink is caught too — it satisfies neither
+    // `metadata()` nor `create_dir_all`, and used to slip through into the
+    // same pile (gate finding). Not existing at all is fine: the copy
+    // creates the folder.
+    if dest.symlink_metadata().is_ok() && !dest.metadata().is_ok_and(|m| m.is_dir()) {
         return Err(PlanError::DestNotADirectory);
     }
     // Dest-inside-source / equality (canonicalized where possible; a not-
@@ -866,20 +869,25 @@ fn copy_verified_with(
     if let Some(parent) = dst.parent() {
         std::fs::create_dir_all(parent)?;
     }
-    // ONE temp name per process, in the destination folder — not the final
-    // name plus a suffix. Appending ~25 bytes to the final name pushed long
-    // names past the filesystem's limit, so a pick could land its RAW and
-    // then fail its sidecar purely because of the temp name's length (QE
-    // finding 2026-08-21). One file is in flight at a time, so one name is
-    // enough; the leading dot keeps the debris out of the way if the
-    // process is killed mid-copy.
-    let tmp = dst
-        .parent()
-        .unwrap_or_else(|| Path::new(""))
-        .join(format!(".fastcull-partial-{}", std::process::id()));
+    // A SHORT, PER-FILE-UNIQUE temp name in the destination folder — never
+    // the final name plus a suffix, and never one shared name.
+    //
+    // Two failures shaped this (both found by the gate, 2026-08-21). The
+    // suffix version added ~25 bytes to the final name, so a long templated
+    // name could land its RAW and then fail its sidecar on the filesystem's
+    // name limit alone. And ONE name for every file is worse than it looks:
+    // the commit hard-links the temp to its final name and then unlinks the
+    // temp, and if that unlink fails (a Windows sharing violation from an
+    // AV scanner or the indexer is the ordinary cause) the temp name is
+    // still a second name for the file just committed — so the NEXT file's
+    // create would truncate a copy this app had already reported verified.
+    // `create_new` closes that door for good: a name we did not just create
+    // is never written through.
+    let dir = dst.parent().unwrap_or_else(|| Path::new(""));
+    let (tmp, writer) = create_temp(dir)?;
     let result = (|| -> std::io::Result<()> {
         let mut reader = std::fs::File::open(src)?;
-        let mut writer = std::fs::File::create(&tmp)?;
+        let mut writer = writer;
         let mut src_hash = blake3::Hasher::new();
         let mut buf = vec![0u8; 1 << 20];
         loop {
@@ -933,6 +941,12 @@ fn commit_temp(tmp: &Path, dst: &Path, commit: Commit) -> std::io::Result<()> {
             // name for it. A failure to unlink it leaves a stray temp
             // file, which is debris — never a reason to call a landed,
             // verified copy a failure.
+            //
+            // Swallowing that failure is only safe because temp names are
+            // never REUSED (see `create_temp`): the alias left behind is
+            // another name for a committed, verified file, and nothing
+            // will ever open it again. With one shared temp name this
+            // `.ok()` was a data-loss path — the next file truncated it.
             std::fs::remove_file(tmp).ok();
             Ok(())
         }
@@ -953,6 +967,31 @@ fn commit_without_hard_links(tmp: &Path, dst: &Path) -> std::io::Result<()> {
         return Err(appeared_during_copy());
     }
     std::fs::rename(tmp, dst)
+}
+
+/// A fresh temp file in `dir`, created EXCLUSIVELY: the name is unique per
+/// file (process id + a monotonic counter, so a second copy worker — the
+/// listed v2 background copy — is safe on the same path), and `create_new`
+/// means an existing name is never opened, let alone truncated. A number
+/// already in use (a leftover from a crashed run, or an alias a failed
+/// unlink left behind) is skipped rather than reused.
+fn create_temp(dir: &Path) -> std::io::Result<(PathBuf, std::fs::File)> {
+    static SEQ: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
+    let mut last = None;
+    for _ in 0..1024 {
+        let n = SEQ.fetch_add(1, Ordering::Relaxed);
+        let cand = dir.join(format!(".fastcull-partial-{}-{n}", std::process::id()));
+        match std::fs::File::options()
+            .write(true)
+            .create_new(true)
+            .open(&cand)
+        {
+            Ok(f) => return Ok((cand, f)),
+            Err(e) if e.kind() == std::io::ErrorKind::AlreadyExists => last = Some(e),
+            Err(e) => return Err(e),
+        }
+    }
+    Err(last.unwrap_or_else(|| std::io::Error::other("no free temp name at the destination")))
 }
 
 fn appeared_during_copy() -> std::io::Error {
@@ -1662,6 +1701,37 @@ mod tests {
             Err(PlanError::DestNotADirectory)
         ));
         assert_eq!(std::fs::read(&dest).unwrap(), b"I am a file");
+        // A DANGLING symlink is not a folder either — `metadata()` cannot
+        // see it, so it used to slip through into the same pile of
+        // per-file failures (gate finding).
+        #[cfg(unix)]
+        {
+            let link = dir.join("dangling-dest");
+            std::os::unix::fs::symlink(dir.join("nowhere"), &link).unwrap();
+            assert!(matches!(
+                super::plan(
+                    &sources,
+                    &link,
+                    None,
+                    ClashPolicy::Ask,
+                    &SessionCopies::default()
+                ),
+                Err(PlanError::DestNotADirectory)
+            ));
+            // …while a symlink TO a folder is a perfectly good destination.
+            let real = dir.join("real-out");
+            std::fs::create_dir_all(&real).unwrap();
+            let good = dir.join("link-to-folder");
+            std::os::unix::fs::symlink(&real, &good).unwrap();
+            assert!(super::plan(
+                &sources,
+                &good,
+                None,
+                ClashPolicy::Ask,
+                &SessionCopies::default()
+            )
+            .is_ok());
+        }
         std::fs::remove_dir_all(&dir).ok();
     }
 
@@ -1737,6 +1807,73 @@ mod tests {
             dest.join(format!("{long}.ARW.xmp")).exists(),
             "the sidecar shipped with its RAW"
         );
+        std::fs::remove_dir_all(&dir).ok();
+    }
+
+    /// The temp file must never be a name this app might open again. The
+    /// commit hard-links the temp to its final name and then unlinks the
+    /// temp; if that unlink fails — a Windows sharing violation from a
+    /// scanner is the ordinary cause — the temp name is STILL a name for
+    /// the file just committed, so reusing it would truncate a copy the
+    /// report has already called verified (gate finding 2026-08-21).
+    #[test]
+    fn a_temp_name_is_never_reused_or_written_through() {
+        let dir = tmp();
+        let src = dir.join("s.bin");
+        std::fs::write(&src, [1u8; 4096]).unwrap();
+
+        let mut first = PathBuf::new();
+        copy_verified_with(&src, &dir.join("a.bin"), Commit::NoClobber, |t| {
+            first = t.to_path_buf()
+        })
+        .unwrap();
+        // Stand in for the alias a failed unlink leaves behind: on the
+        // filesystems where that happens this IS `a.bin`, under a second
+        // name, verified and committed.
+        std::fs::write(&first, b"a committed, verified RAW").unwrap();
+
+        let mut second = PathBuf::new();
+        copy_verified_with(&src, &dir.join("b.bin"), Commit::NoClobber, |t| {
+            second = t.to_path_buf()
+        })
+        .unwrap();
+        assert_ne!(first, second, "every file gets its own temp name");
+        assert_eq!(
+            std::fs::read(&first).unwrap(),
+            b"a committed, verified RAW",
+            "the next copy truncated a file it did not create"
+        );
+        assert_eq!(std::fs::read(dir.join("b.bin")).unwrap(), [1u8; 4096]);
+
+        // And a name that is ALREADY TAKEN is skipped, never opened. The
+        // numbers this process hands out are consecutive, so putting
+        // squatters on the next few is how the collision path gets driven:
+        // with an exclusive create they are stepped over, with a plain
+        // create the first one is opened and truncated.
+        let (taken, _f) = create_temp(&dir).unwrap();
+        let next: u64 = taken
+            .file_name()
+            .and_then(|n| n.to_string_lossy().rsplit('-').next().map(str::to_owned))
+            .and_then(|n| n.parse().ok())
+            .expect("temp names end in their number");
+        let squatters: Vec<PathBuf> = (next + 1..next + 9)
+            .map(|n| dir.join(format!(".fastcull-partial-{}-{n}", std::process::id())))
+            .collect();
+        for sq in &squatters {
+            std::fs::write(sq, b"not mine").unwrap();
+        }
+        let (fresh, _f) = create_temp(&dir).unwrap();
+        assert!(
+            !squatters.contains(&fresh),
+            "a taken temp name was handed out again: {fresh:?}"
+        );
+        for sq in &squatters {
+            assert_eq!(
+                std::fs::read(sq).unwrap(),
+                b"not mine",
+                "a file this process did not create was written through: {sq:?}"
+            );
+        }
         std::fs::remove_dir_all(&dir).ok();
     }
 

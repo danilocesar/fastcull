@@ -14,9 +14,11 @@ sidecar → dest sidecar) plus detected problems. Rename templates reuse the IPT
 variable engine (`{date}`, `{seq}`, `{filename}`, `{camera}`, `{ext}`).
 
 Plan-time errors (block execution, shown to user):
-- Destination that exists but is NOT a folder (QE 2026-08-21: it used to
-  reach the copy and come back as a pile of "File exists (os error 17)"
-  per-file failures).
+- Destination that exists but is NOT a folder — a regular file, or a
+  DANGLING symlink, which `metadata()` cannot see (QE + gate findings
+  2026-08-21: both used to reach the copy and come back as a pile of
+  "File exists (os error 17)" per-file failures). A symlink TO a folder is
+  a fine destination.
 - Destination inside the source folder, or equal to it.
 - Template collision: two images expand to the same destination name.
 - Insufficient free space (sum of sizes vs `statvfs`/`GetDiskFreeSpaceEx`).
@@ -53,12 +55,21 @@ no-148-row-table rule.
    directly off the card mount, making this copy the working copy before the
    card is formatted — size-only verification is not enough for that flow.
 4. On per-file failure: record, continue with remaining files (no partial-file left
-   behind — copy to temp name, commit on success). The temp is ONE hidden
-   name per process in the destination folder
-   (`.fastcull-partial-<pid>`), not the final name plus a suffix: the
-   suffix version added ~25 bytes to the final name, so a long templated
-   name could land its RAW and then fail its sidecar on NAME_MAX alone
-   (QE 2026-08-21). One file is in flight at a time, so one name is enough.
+   behind — copy to temp name, commit on success). The temp name is
+   `<dest>/.fastcull-partial-<pid>-<n>`: short (never the final name plus a
+   suffix — that added ~25 bytes and could push a long templated name past
+   NAME_MAX, landing a RAW and failing its sidecar), UNIQUE PER FILE, and
+   created EXCLUSIVELY (`create_new`).
+   **The uniqueness is load-bearing, not tidiness** (gate finding
+   2026-08-21): the commit hard-links the temp to its final name and then
+   unlinks the temp, and that unlink is allowed to fail — a Windows
+   sharing violation from a scanner is the ordinary cause. The name left
+   behind is then a SECOND NAME FOR THE FILE JUST COMMITTED, so a shared
+   or predictable temp name means the next file truncates a copy already
+   reported verified. Unique names plus `create_new` make that
+   impossible rather than unlikely; a leftover number is stepped over,
+   never opened. The counter is atomic, so the v2 background copy can add
+   a second worker on this path without changing the rule.
 5. Final report: copied / skipped / failed with reasons. Session marks copied
    images with a "copied" badge.
 
@@ -69,10 +80,10 @@ contract leaves no partial behind — with ONE recorded exception (QE
 2026-08-21): a hard QUIT does not join anything. `shutdown()` ends in
 `process::exit` on purpose (01-architecture.md: 32 readers stuck on a
 dying card once made the process unkillable), so `CopyHandle::drop` never
-runs and the file in flight leaves its temp behind. That debris is a
-single hidden file per process, `<dest>/.fastcull-partial-<pid>`, which
-can never be mistaken for a photograph; joining a copy to a dead card on
-quit is the worse bargain. An overwrite's identity pass reads as
+runs and the file in flight leaves its temp behind. That debris is one
+hidden file, `<dest>/.fastcull-partial-<pid>-<n>`, which can never be
+mistaken for a photograph; joining a copy to a dead card on quit is the
+worse bargain. An overwrite's identity pass reads as
 much as a copy writes, so it polls the cancel flag between blocks and
 gives the run back at once (gate finding 2026-08-21) — otherwise the join
 on the UI thread would span a whole re-verify of a big RAW on top of the
@@ -494,6 +505,13 @@ destination and copy again, or re-import in darktable.
       landed — a_sidecar_that_fails_after_its_raw_landed_says_so; a
       228-byte destination name still ships the whole pair —
       a_very_long_destination_name_still_ships_the_whole_pair.
+- [x] Gate round 4 (2026-08-21): a temp name is never reused and never
+      written through, so an alias left behind by a failed unlink cannot be
+      truncated by the next file —
+      a_temp_name_is_never_reused_or_written_through; a dangling-symlink
+      destination is rejected at plan time while a symlink TO a folder is
+      accepted (asserted in
+      a_destination_that_is_a_file_is_rejected_by_the_plan).
 - [ ] NOT VERIFIED ANYWHERE, carried forward (QE 2026-08-21): a
       case-insensitive destination (no casefold/FAT mount available on the
       dev box), so "a case-variant counts as occupied" and rule 4's
