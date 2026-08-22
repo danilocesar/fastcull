@@ -20,12 +20,17 @@ Plan-time errors (block execution, shown to user):
   "File exists (os error 17)" per-file failures). A symlink TO a folder is
   a fine destination.
 - Destination inside the source folder, or equal to it.
-- Template collision: two images expand to the same destination name.
 - A rename template that produces a PATH rather than a file name (a `/`,
-  a `\`, or `..`): it would write outside the folder the clash question
-  names, and under Overwrite replace files there (gate finding
-  2026-08-22). Both separators are refused on every platform so one
-  template means the same thing on Linux and Windows.
+  a `\`, `..`, `.`, or the empty string). This enforces the INVARIANT the
+  user set on 2026-08-22 — *"we should never write files outside of the
+  target"* — which the whole module owes: every byte it writes, including
+  suffixed names and the hidden temp files, lands DIRECTLY in the chosen
+  destination folder, and `planned_paths_never_leave_the_destination`
+  holds every policy and template to it. Both separators are refused on
+  every platform so one template means the same thing on Linux and
+  Windows.
+  *(Two images expanding to the same destination name used to be a
+  plan-time error. It is not any more — see "two picks, one name" below.)*
 - Insufficient free space (sum of sizes vs `statvfs`/`GetDiskFreeSpaceEx`).
 
 Destination file already exists (per-file modes): **rename (default)** / skip /
@@ -256,6 +261,23 @@ with three answers:
 - **Cancel** — nothing is copied at all, not even the clash-free files
   (user decision; Esc means the same).
 
+**Two picks, one name** (user decision 2026-08-22: *"the corner case of
+two same filenames from two different folders should always add the
+sufix"*). A name can be taken by two different things, and they get
+different answers. The DESTINATION holding it is the user's business —
+their folder, their earlier files — so the question is asked. Another
+pick in THIS run holding it is not a question at all: overwriting would
+throw away one of the two photographs the user just asked to copy, and
+cancelling would lose both, so the later pick simply takes the first free
+suffix under EVERY policy, Ask included, and the run proceeds without
+asking. The suffix walk skips names taken on disk as well as in the plan,
+so the name it lands on clashes with nothing — which is why it needs no
+question even into a crowded folder. It is silent but not invisible: the
+plan preview says "N share a name with another pick — those get a
+suffix". This also covers a rename template that collapses several images
+onto one name (`same.{ext}` → `same.ARW`, `same_1.ARW`, …), which was a
+blocking plan error until this decision.
+
 **3. The answer is a policy, not a file list.** After the answer the app
 flushes and replans with the chosen policy, and only that fresh plan
 executes (the ordering contract above: a plan frozen before the question
@@ -470,19 +492,26 @@ copies in darktable and then answers Overwrite loses those history
 stacks; with "skip" gone there is no other answer that adds new picks to
 that folder. The question therefore says so out loud
 ("Overwriting also replaces those files' .xmp sidecars — edits made at the
-destination by another app (darktable) are lost"), and the persona's
-proposed fix — merge into the destination sidecar (read-modify-write,
-preserving foreign nodes) instead of copying over it — is an OPEN
-QUESTION for the user, because it would make the copied sidecar differ
-from the source and so cannot be checksum-verified against it (the
-"Execute" contract above). Recovery today: delete that copy at the
-destination and copy again, or re-import in darktable.
+destination by another app (darktable) are lost").
+
+**DECIDED 2026-08-22 — "overwrite means overwrite"** (the user, asked
+directly): the sidecar is replaced like any other file, and the persona's
+proposed merge (read-modify-write into the destination sidecar, preserving
+foreign nodes) is NOT built. The warning in the question is the whole
+mitigation, and the other two answers are the escape: Keep both, or a
+fresh folder. This also keeps the "Execute" contract intact — a merged
+sidecar would differ from the source and could not be checksum-verified
+against it, so overwrite-means-overwrite is the only answer that leaves
+every copied byte verifiable. Recovery if it happens anyway: delete that
+copy at the destination and copy again, or re-import in darktable.
 
 ## Acceptance criteria (tests)
 
 - [x] Plan: template expansion, in-plan collision detection,
       dest-inside-source rejection (tempdir fixtures) —
-      plan_templates_seq_and_rejects_collisions,
+      plan_templates_seq_and_suffixes_in_batch_collisions,
+      two_picks_with_the_same_name_always_get_a_suffix_without_a_question,
+      planned_paths_never_leave_the_destination,
       plan_rejects_dest_inside_or_equal_to_source.
 - [x] Execute: RAW+sidecar pairs land with correct names; checksums verified
       (and a deliberately corrupted destination write is detected, under

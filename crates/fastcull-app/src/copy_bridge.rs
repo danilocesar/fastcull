@@ -482,6 +482,16 @@ fn copy_replan_with(win: &MainWindow, st: &mut AppState, policy: ClashPolicy) {
                     p.clashes
                 ));
             }
+            if p.renamed > 0 {
+                // Not a question — two picks that share a name always get
+                // a suffix (user decision 2026-08-22) — but the user still
+                // has to see that names on disk will differ from the ones
+                // in the grid.
+                notes.push(format!(
+                    "{} share a name with another pick — those get a suffix",
+                    p.renamed
+                ));
+            }
             if p.recopied > 0 {
                 // The one signal that Enter is about to put back what the
                 // user removed by hand (persona: in a 200 MB plan a 70 MB
@@ -499,7 +509,6 @@ fn copy_replan_with(win: &MainWindow, st: &mut AppState, policy: ClashPolicy) {
             e @ (PlanError::InsufficientSpace { .. }
             | PlanError::DestEqualsSource
             | PlanError::DestInsideSource
-            | PlanError::TemplateCollision { .. }
             | PlanError::DestNotADirectory
             | PlanError::TemplateMakesAPath { .. }
             | PlanError::Template(_)),

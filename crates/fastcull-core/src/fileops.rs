@@ -92,12 +92,6 @@ pub enum PlanError {
     DestInsideSource,
     #[error("rename template: {0}")]
     Template(#[from] IptcError),
-    #[error("template collision: '{name}' is produced by both {first} and {second}")]
-    TemplateCollision {
-        name: String,
-        first: String,
-        second: String,
-    },
     #[error("not enough free space: need {needed} bytes, {free} available")]
     InsufficientSpace { needed: u64, free: u64 },
     #[error("the destination is not a folder")]
@@ -278,10 +272,10 @@ pub fn plan(
     }
 
     // Phase 1: expand every destination name (all-or-nothing, like IPTC
-    // apply) and detect in-plan collisions before touching clashes.
+    // apply). Two picks that expand to the SAME name are not an error —
+    // phase 2 suffixes them (user decision 2026-08-22).
     let n = sources.len();
     let mut names: Vec<String> = Vec::with_capacity(n);
-    let mut seen: HashMap<String, usize> = HashMap::new();
     for (i, s) in sources.iter().enumerate() {
         let original = s
             .path
@@ -289,18 +283,23 @@ pub fn plan(
             .map(|f| f.to_string_lossy().into_owned())
             .unwrap_or_default();
         let name = match template {
-            None => original.clone(),
-            Some(t) if t.trim().is_empty() => original.clone(),
+            None => original,
+            Some(t) if t.trim().is_empty() => original,
             Some(t) => {
                 let expanded = expand("rename", t, &s.ctx, i + 1, n)?;
                 crate::iptc::sanitize_text(&expanded)
             }
         };
-        // A template must produce a FILE NAME. `..` or a separator would
-        // write OUTSIDE the folder the clash question names — and, now
-        // that Overwrite is exposed, REPLACE files there (gate finding
-        // 2026-08-22). Both separators are rejected on every platform, so
-        // one template means the same thing on Linux and on Windows.
+        // INVARIANT (user decision 2026-08-22: "we should never write
+        // files outside of the target"): every byte this module writes
+        // lands directly in the destination folder. A template must
+        // therefore produce a FILE NAME — `..` or a separator would write
+        // where the clash question never mentioned and, now that Overwrite
+        // is a button, REPLACE files there. Both separators are rejected on
+        // every platform, so one template means the same thing on Linux and
+        // on Windows. The suffix walk and the temp names below stay inside
+        // `dest` by construction; `planned_paths_never_leave_the_destination`
+        // holds the whole plan to it.
         if name.is_empty()
             || name == "."
             || name == ".."
@@ -308,17 +307,6 @@ pub fn plan(
             || name.contains('\\')
         {
             return Err(PlanError::TemplateMakesAPath { name });
-        }
-        if let Some(prev) = seen.insert(name.clone(), i) {
-            return Err(PlanError::TemplateCollision {
-                name,
-                first: sources[prev]
-                    .path
-                    .file_name()
-                    .map(|f| f.to_string_lossy().into_owned())
-                    .unwrap_or_default(),
-                second: original,
-            });
         }
         names.push(name);
     }
@@ -345,16 +333,40 @@ pub fn plan(
         let src_xmp = src_xmp_path.exists().then_some(src_xmp_path);
         let natural = dest.join(name);
         let xmp_name = xmp_name_of(name);
-        let raw_taken = occupied(&natural) || taken.contains(name);
-        let xmp_taken = occupied(&dest.join(&xmp_name)) || taken.contains(&xmp_name);
-        let clash = raw_taken || xmp_taken;
+        // TWO different things can take a name, and they get different
+        // answers (user decision 2026-08-22).
+        //
+        // The DESTINATION holding it is the user's business: it is their
+        // folder and their earlier files, so the question is asked.
+        //
+        // Another pick in THIS run holding it is not a question at all —
+        // "the corner case of two same filenames from two different
+        // folders should always add the suffix". There is no sane
+        // alternative: overwriting would mean throwing away one of the two
+        // photographs the user just asked to copy, and cancelling would
+        // lose both. So it is resolved here, silently but visibly (the
+        // preview counts it), under every policy including Ask.
+        let raw_here = occupied(&natural);
+        let xmp_here = occupied(&dest.join(&xmp_name));
+        let dest_taken = raw_here || xmp_here;
+        let batch_taken = taken.contains(name) || taken.contains(&xmp_name);
+        let clash = dest_taken && !batch_taken;
         if clash {
             clashes += 1;
-            if !raw_taken {
+            if !raw_here {
                 sidecar_only += 1;
             }
         }
-        let (dst_raw, action) = if !clash {
+        let (dst_raw, action) = if batch_taken {
+            // The suffix walk skips names taken on disk AND in this plan,
+            // so the name it lands on clashes with nothing — which is why
+            // this needs no question even when the destination is crowded.
+            renamed += 1;
+            (
+                dest.join(first_free_suffix(dest, name, &taken)),
+                PlanAction::CopyRenamed,
+            )
+        } else if !clash {
             (natural, PlanAction::Copy)
         } else {
             match policy {
@@ -1237,7 +1249,7 @@ mod tests {
     }
 
     #[test]
-    fn plan_templates_seq_and_rejects_collisions() {
+    fn plan_templates_seq_and_suffixes_in_batch_collisions() {
         let dir = tmp();
         let sources = src_with(&dir, &[("b.ARW", b"bb"), ("a.ARW", b"aa")]);
         let dest = dir.join("out");
@@ -1263,16 +1275,25 @@ mod tests {
             "2026-07-26_2.ARW.xmp",
             "sidecar lockstep on the RENAMED name"
         );
-        // A constant template collides across images: hard error.
-        let err = super::plan(
+        // A constant template collapses every image onto one name: not an
+        // error and not a question — each one after the first takes the
+        // next suffix (user decision 2026-08-22).
+        let p = super::plan(
             &sources,
             &dest,
             Some("same.{ext}"),
             ClashPolicy::Ask,
             &SessionCopies::default(),
         )
-        .unwrap_err();
-        assert!(matches!(err, PlanError::TemplateCollision { .. }));
+        .unwrap();
+        assert_eq!(p.jobs[0].dst_raw.file_name().unwrap(), "same.ARW");
+        assert_eq!(p.jobs[1].dst_raw.file_name().unwrap(), "same_1.ARW");
+        assert_eq!(p.jobs[1].dst_xmp.file_name().unwrap(), "same_1.ARW.xmp");
+        assert_eq!(
+            (p.clashes, p.renamed),
+            (0, 1),
+            "an in-batch collision is suffixed, never asked about"
+        );
         // Unknown variable propagates the template error.
         let err = super::plan(
             &sources,
@@ -2276,6 +2297,140 @@ mod tests {
         )
         .unwrap();
         assert_eq!(p.jobs[0].dst_raw, dest.join("a_x.ARW"));
+        std::fs::remove_dir_all(&dir).ok();
+    }
+
+    /// Two picks that would land on the SAME name — the two-cameras,
+    /// two-folders case — always get a suffix, under every policy, and
+    /// never raise the question: the destination is not involved, and
+    /// neither overwriting one photograph with the other nor cancelling
+    /// both is a sane answer (user decision 2026-08-22).
+    #[test]
+    fn two_picks_with_the_same_name_always_get_a_suffix_without_a_question() {
+        let dir = tmp();
+        let dest = dir.join("out");
+        // The same file name from two different source folders.
+        let mut sources = Vec::new();
+        for (i, folder) in ["cam-a", "cam-b"].iter().enumerate() {
+            let src = dir.join(folder);
+            std::fs::create_dir_all(&src).unwrap();
+            let path = src.join("DSC0001.ARW");
+            std::fs::write(&path, format!("body {i}").as_bytes()).unwrap();
+            sources.push(PlanSource {
+                id: i,
+                path,
+                size: 6,
+                ctx: ExpandContext {
+                    date: "2026-08-22".into(),
+                    time: "210000".into(),
+                    filename_stem: "DSC0001".into(),
+                    camera: "ILCE-1".into(),
+                    ext_upper: "ARW".into(),
+                },
+            });
+        }
+        for policy in [
+            ClashPolicy::Ask,
+            ClashPolicy::CreateCopies,
+            ClashPolicy::Overwrite,
+        ] {
+            let p = super::plan(&sources, &dest, None, policy, &SessionCopies::default()).unwrap();
+            assert_eq!(
+                p.clashes, 0,
+                "{policy:?}: an empty destination is not a clash — nothing to ask"
+            );
+            assert_eq!(p.jobs[0].dst_raw.file_name().unwrap(), "DSC0001.ARW");
+            assert_eq!(
+                p.jobs[1].dst_raw.file_name().unwrap(),
+                "DSC0001_1.ARW",
+                "{policy:?}: the second body's frame takes the suffix"
+            );
+            assert_eq!(p.renamed, 1, "{policy:?}");
+        }
+        // Both really land, and both photographs survive.
+        let report = run(
+            &sources,
+            &dest,
+            None,
+            ClashPolicy::Ask,
+            &SessionCopies::default(),
+        );
+        assert_eq!((report.copied, report.failed.len()), (2, 0), "{report:?}");
+        assert_eq!(std::fs::read(dest.join("DSC0001.ARW")).unwrap(), b"body 0");
+        assert_eq!(
+            std::fs::read(dest.join("DSC0001_1.ARW")).unwrap(),
+            b"body 1"
+        );
+        // …and when the destination ALSO holds that name, the first pick
+        // is a question and the second still just takes a free suffix.
+        let dest2 = dir.join("out2");
+        std::fs::create_dir_all(&dest2).unwrap();
+        std::fs::write(dest2.join("DSC0001.ARW"), b"theirs").unwrap();
+        let p = super::plan(
+            &sources,
+            &dest2,
+            None,
+            ClashPolicy::Ask,
+            &SessionCopies::default(),
+        )
+        .unwrap();
+        assert_eq!(
+            p.clashes, 1,
+            "only the destination collision is asked about"
+        );
+        assert_eq!(p.jobs[0].action, PlanAction::Clash);
+        assert_eq!(p.jobs[1].action, PlanAction::CopyRenamed);
+        assert_eq!(p.jobs[1].dst_raw.file_name().unwrap(), "DSC0001_1.ARW");
+        std::fs::remove_dir_all(&dir).ok();
+    }
+
+    /// The invariant the user stated on 2026-08-22 — "we should never
+    /// write files outside of the target" — held over the whole plan, not
+    /// just the template check that enforces it: every path any job would
+    /// write sits DIRECTLY in the destination folder, under every policy,
+    /// with and without a template, including the suffixed names.
+    #[test]
+    fn planned_paths_never_leave_the_destination() {
+        let dir = tmp();
+        let sources = src_with(
+            &dir,
+            &[("a.ARW", b"aa"), ("b.ARW", b"bb"), ("c.ARW", b"cc")],
+        );
+        let dest = dir.join("out");
+        std::fs::create_dir_all(&dest).unwrap();
+        std::fs::write(dest.join("a.ARW"), b"theirs").unwrap();
+        for template in [None, Some("{filename}.{ext}"), Some("same.{ext}")] {
+            for policy in [
+                ClashPolicy::Ask,
+                ClashPolicy::CreateCopies,
+                ClashPolicy::Overwrite,
+            ] {
+                let p = super::plan(&sources, &dest, template, policy, &SessionCopies::default())
+                    .unwrap();
+                for job in &p.jobs {
+                    for path in [&job.dst_raw, &job.dst_xmp] {
+                        assert_eq!(
+                            path.parent(),
+                            Some(dest.as_path()),
+                            "{template:?}/{policy:?} would write outside the destination: {path:?}"
+                        );
+                    }
+                }
+            }
+        }
+        // And the templates that would escape are refused outright.
+        for template in ["../{filename}.{ext}", "sub/{filename}.{ext}"] {
+            assert!(matches!(
+                super::plan(
+                    &sources,
+                    &dest,
+                    Some(template),
+                    ClashPolicy::Ask,
+                    &SessionCopies::default()
+                ),
+                Err(PlanError::TemplateMakesAPath { .. })
+            ));
+        }
         std::fs::remove_dir_all(&dir).ok();
     }
 

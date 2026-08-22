@@ -57,6 +57,14 @@ symlink counts too), it asks once, for the whole run:
 - **Cancel** copies **nothing at all** — not even the files that had no
   clash. `Esc` does the same and leaves the dialog on your plan, so
   pointing it at another folder is one step.
+
+**Two of your own picks sharing a name** — two bodies, two cards, the
+same `DSC01234.ARW` — never raise this question: the second one always
+lands as `DSC01234_1.ARW`, whatever you answer, because overwriting one
+of your photographs with the other is not something to offer. The plan
+line tells you it happened: *"1 share a name with another pick — those
+get a suffix"*. The same goes for a rename template that gives several
+frames the same name.
 - `Enter` deliberately does nothing on this question: `Ctrl+E`, `Enter`,
   `Enter` must never replace or duplicate 148 files by reflex. Answer
   with `B`, `O`, `Esc` — or click.
@@ -64,8 +72,9 @@ symlink counts too), it asks once, for the whole run:
 > ⚠ **Overwrite replaces sidecars too.** If you have already started
 > developing the copies in darktable, its edit history lives in
 > `DSC01234.ARW.xmp` — the same file name FastCull writes — and
-> Overwrite replaces it. Answer **Keep both**, or copy into a fresh
-> folder, when the destination has been edited elsewhere.
+> Overwrite replaces it. This is deliberate: overwrite means overwrite,
+> and nothing is merged behind your back. Answer **Keep both**, or copy
+> into a fresh folder, when the destination has been edited elsewhere.
 
 If a caption refresh cannot land — something else is sitting under the
 `.xmp` name, or the destination filled up — the RAW beside it is still
