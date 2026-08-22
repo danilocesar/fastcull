@@ -7,6 +7,8 @@ use std::rc::Rc;
 
 use slint::ComponentHandle;
 
+use fastcull_core::fileops::ClashPolicy;
+
 use crate::focus::refocus_topmost_deferred;
 use crate::session::{load_ui_prefs, save_ui_prefs};
 use crate::state::AppState;
@@ -53,8 +55,8 @@ pub(crate) fn wire(window: &MainWindow, state: &Rc<RefCell<AppState>>) {
                 win.set_copy_dest(
                     st.copy
                         .dest
-                        .as_ref()
-                        .map(|d| d.to_string_lossy().into_owned())
+                        .as_deref()
+                        .map(short_dest)
                         .unwrap_or_default()
                         .into(),
                 );
@@ -76,7 +78,7 @@ pub(crate) fn wire(window: &MainWindow, state: &Rc<RefCell<AppState>>) {
                 let mut st = state.borrow_mut();
                 st.copy.dest = Some(dir.clone());
                 save_ui_prefs(Some(&dir), win.get_copy_template().as_str());
-                win.set_copy_dest(dir.to_string_lossy().into_owned().into());
+                win.set_copy_dest(short_dest(&dir).into());
                 copy_replan(&win, &mut st);
             }
         });
@@ -98,9 +100,9 @@ pub(crate) fn wire(window: &MainWindow, state: &Rc<RefCell<AppState>>) {
             let Some(win) = win.upgrade() else { return };
             let mut st = state.borrow_mut();
             // THE BARRIER, part 2: flush FIRST, then rebuild the plan
-            // fresh so sidecar existence, refresh mtimes and free space
-            // are decided AFTER every pending write landed (gate HIGH
-            // finding — a frozen at-open plan is never executed).
+            // fresh so sidecar existence and free space are decided AFTER
+            // every pending write landed (gate HIGH finding — a frozen
+            // at-open plan is never executed).
             if let Some(writer) = &st.session.writer {
                 writer.flush();
             }
@@ -108,11 +110,48 @@ pub(crate) fn wire(window: &MainWindow, state: &Rc<RefCell<AppState>>) {
             let Some(plan) = st.copy.plan.take() else {
                 return; // replan surfaced an error; the dialog shows it
             };
-            let (handle, rx) = fastcull_core::fileops::execute(plan);
-            st.copy.handle = Some(handle);
-            st.copy.rx = Some(rx);
-            win.set_copy_state(1);
-            win.set_copy_progress("Starting…".into());
+            if plan.clashes == 0 {
+                // Nothing at the destination is in the way: today's flow,
+                // unchanged, no question.
+                start_copy(&win, &mut st, plan);
+                return;
+            }
+            // THE CLASH QUESTION (fileops.md). The plan built here is
+            // DROPPED, deliberately: the answer is a policy, and only a
+            // plan built WITH that policy — after another flush — may run.
+            show_clash_question(&win, &plan);
+        });
+    }
+    {
+        let state = Rc::clone(state);
+        let win = window.as_weak();
+        window.on_copy_answer_keep_both(move || {
+            let Some(win) = win.upgrade() else { return };
+            let mut st = state.borrow_mut();
+            answer_clash_question(&win, &mut st, ClashPolicy::CreateCopies);
+        });
+    }
+    {
+        let state = Rc::clone(state);
+        let win = window.as_weak();
+        window.on_copy_answer_overwrite(move || {
+            let Some(win) = win.upgrade() else { return };
+            let mut st = state.borrow_mut();
+            answer_clash_question(&win, &mut st, ClashPolicy::Overwrite);
+        });
+    }
+    {
+        let state = Rc::clone(state);
+        let win = window.as_weak();
+        window.on_copy_answer_cancel(move || {
+            let Some(win) = win.upgrade() else { return };
+            // Cancel copies NOTHING — not even the clash-free files (user
+            // decision 2026-08-21; Esc means the same). The dialog goes
+            // back to its plan preview with the destination and template
+            // intact, so "cancel, then copy somewhere else" is one step.
+            let mut st = state.borrow_mut();
+            win.set_copy_state(0);
+            copy_replan(&win, &mut st);
         });
     }
     {
@@ -219,16 +258,162 @@ fn human_bytes(b: u64) -> String {
     }
 }
 
+/// The destination as the dialog shows it: the whole path while it is
+/// short, otherwise its TAIL — `…/2026-08-21-osprey/selects`.
+///
+/// Slint's `overflow: elide` cuts the END of a string, which on a real
+/// path throws away the only part that tells two shoots apart and keeps
+/// the home-directory prefix every folder shares (persona 2026-08-21:
+/// "showing me the useless half of the path is a trust failure" — and
+/// this dialog's new job is asking permission to replace files in THIS
+/// folder). The full path is still one click away under "Open
+/// destination".
+fn short_dest(p: &std::path::Path) -> String {
+    let full = p.to_string_lossy().into_owned();
+    if full.chars().count() <= 52 {
+        return full;
+    }
+    let tail: std::path::PathBuf = {
+        let mut last: Vec<_> = p.components().rev().take(2).collect();
+        last.reverse();
+        last.iter().collect()
+    };
+    format!("…/{}", tail.display())
+}
+
+/// Hand a plan to the copy worker and put the dialog in its running state.
+fn start_copy(win: &MainWindow, st: &mut AppState, plan: fastcull_core::fileops::CopyPlan) {
+    let (handle, rx) = fastcull_core::fileops::execute(plan);
+    st.copy.handle = Some(handle);
+    st.copy.rx = Some(rx);
+    win.set_copy_state(1);
+    win.set_copy_progress("Starting…".into());
+}
+
+/// Put the dialog into its question state (fileops.md, "The clash
+/// question"): ONE question for the whole run, stating where, how many,
+/// what still copies normally, and what each answer costs.
+///
+/// Wording settled with the persona at implementation time (fileops.md
+/// §6). Counted in PICKS, not files — 148 picks are 296 files on disk,
+/// and a count the user cannot reconcile is a count they stop trusting.
+fn show_clash_question(win: &MainWindow, plan: &fastcull_core::fileops::CopyPlan) {
+    use fastcull_core::fileops::{suffixed, PlanAction};
+    let total = plan.jobs.len();
+    let clashes = plan.clashes;
+    let free = total.saturating_sub(clashes);
+    let clashing: Vec<String> = plan
+        .jobs
+        .iter()
+        .filter(|j| j.action == PlanAction::Clash)
+        .filter_map(|j| j.dst_raw.file_name())
+        .map(|n| n.to_string_lossy().into_owned())
+        .collect();
+    let dest = win.get_copy_dest();
+    // Built line by line rather than as one escaped literal: the middle
+    // line is the destination, and this text is the last thing the user
+    // reads before a file can be replaced.
+    let others = match free {
+        0 => String::new(),
+        1 => "The other 1 copies normally. ".to_string(),
+        n => format!("The other {n} copy normally. "),
+    };
+    win.set_copy_confirm(
+        [
+            format!("{clashes} of your {total} picks already have files with these names in"),
+            dest.to_string(),
+            format!("{others}Choose once for the whole run:"),
+        ]
+        .join("\n")
+        .into(),
+    );
+    // Three names, never a table: on a two-body night this is how the
+    // user confirms the clashes are the other camera and not their own
+    // export (persona; the 148-row table stays cut).
+    win.set_copy_confirm_examples(if clashing.is_empty() {
+        "".into()
+    } else {
+        format!(
+            "e.g. {}{}",
+            clashing
+                .iter()
+                .take(3)
+                .cloned()
+                .collect::<Vec<_>>()
+                .join(", "),
+            if clashing.len() > 3 { " …" } else { "" }
+        )
+        .into()
+    });
+    win.set_copy_confirm_keep_both(
+        match clashing.first() {
+            Some(name) => format!("Keep both — the {clashes} land as {}", suffixed(name, 1)),
+            None => format!("Keep both — the {clashes} land under a _1 name"),
+        }
+        .into(),
+    );
+    // Bytes belong HERE and nowhere else: this is the only answer whose
+    // cost is knowable up front (the overwrite answer re-checks identical
+    // files instead of re-sending them, so a worst-case number on it
+    // would be a cost the user never pays).
+    win.set_copy_confirm_keep_both_cost(format!("+{}", human_bytes(plan.clash_bytes)).into());
+    win.set_copy_confirm_overwrite(
+        format!("Overwrite those {clashes} — identical files are re-checked, not re-sent").into(),
+    );
+    win.set_copy_confirm_cancel(
+        match free {
+            0 => "Cancel — copy nothing at all".to_string(),
+            n => format!("Cancel — copy nothing at all, not even the {n}"),
+        }
+        .into(),
+    );
+    // The one thing this question destroys, said out loud: a sidecar at
+    // the destination is byte-replaced, and darktable's history stack
+    // lives in a file of exactly that name (persona finding 2026-08-21 —
+    // relayed to the user as an open question about merging instead).
+    win.set_copy_confirm_warning(
+        concat!(
+            "Overwriting also replaces those files' .xmp sidecars — edits made ",
+            "at the destination by another app (darktable) are lost."
+        )
+        .into(),
+    );
+    win.set_copy_confirm_nudge("Pick one: B, O or Esc.".into());
+    win.set_copy_confirm_nudged(false);
+    win.set_copy_state(3);
+}
+
+/// The user answered: flush again, REPLAN with the chosen policy, and run
+/// only that fresh plan (fileops.md rule 3 — the plan built before the
+/// question is never executed). A policy that no longer fits (free space,
+/// a destination that moved) drops back to the plan preview with the
+/// error on it, having copied nothing.
+fn answer_clash_question(win: &MainWindow, st: &mut AppState, policy: ClashPolicy) {
+    if let Some(writer) = &st.session.writer {
+        writer.flush();
+    }
+    copy_replan_with(win, st, policy);
+    match st.copy.plan.take() {
+        Some(plan) => start_copy(win, st, plan),
+        None => {
+            win.set_copy_state(0);
+        }
+    }
+}
+
 /// Rebuild the copy plan from the dialog's current inputs and publish the
 /// preview properties (fileops.md dialog minimums).
 fn copy_replan(win: &MainWindow, st: &mut AppState) {
-    use fastcull_core::fileops::{plan, ExistsMode, PlanError};
+    copy_replan_with(win, st, ClashPolicy::Ask);
+}
+
+fn copy_replan_with(win: &MainWindow, st: &mut AppState, policy: ClashPolicy) {
+    use fastcull_core::fileops::{plan, PlanError};
     let sources = plan_sources(st);
     win.set_copy_error("".into());
     win.set_copy_ready(false);
     win.set_copy_preview("".into());
     win.set_copy_collisions("".into());
-    win.set_copy_show_skip_toggle(false);
     st.copy.plan = None;
     if sources.is_empty() {
         win.set_copy_summary("No picked images — nothing to copy.".into());
@@ -242,17 +427,12 @@ fn copy_replan(win: &MainWindow, st: &mut AppState) {
     };
     let template_raw = win.get_copy_template().to_string();
     let template = (!template_raw.trim().is_empty()).then_some(template_raw.as_str());
-    let mode = if win.get_copy_skip_existing() {
-        ExistsMode::Skip
-    } else {
-        ExistsMode::Rename
-    };
     // The badge follows the disk from the moment the dialog looks (a copy
     // the user deleted by hand loses it here, and gets it back when the
     // copy lands again — persona decision 2026-08-21); the plan itself
-    // re-checks every landed path on its own.
+    // re-reads the destination on its own.
     st.copy.copies.refresh();
-    match plan(&sources, &dest, template, mode, &st.copy.copies) {
+    match plan(&sources, &dest, template, policy, &st.copy.copies) {
         Ok(p) => {
             if template.is_some() {
                 let preview: Vec<String> = p
@@ -273,7 +453,10 @@ fn copy_replan(win: &MainWindow, st: &mut AppState) {
                 format!(
                     "{} picked · {} to copy · {}",
                     sources.len(),
-                    human_bytes(p.total_bytes),
+                    // Before the answer this is the WORST CASE — every
+                    // pick going out, which is what both answers may cost
+                    // (fileops.md rule 3).
+                    human_bytes(p.total_bytes + p.clash_bytes),
                     match p.free_bytes {
                         Some(free) => format!("{} free", human_bytes(free)),
                         None => "free space unknown".to_string(),
@@ -282,14 +465,17 @@ fn copy_replan(win: &MainWindow, st: &mut AppState) {
                 .into(),
             );
             let mut notes = Vec::new();
-            if p.renamed > 0 {
-                notes.push(format!("{} will be renamed (name collisions)", p.renamed));
-            }
-            if p.skipped > 0 {
-                notes.push(format!("{} already at destination (skipped)", p.skipped));
-            }
-            if p.refreshed > 0 {
-                notes.push(format!("{} sidecars will be refreshed", p.refreshed));
+            if p.clashes > 0 {
+                // The split, not just the clash count: "3 new · 148
+                // already exist here" diagnoses the situation before the
+                // question is even asked (persona), and cross-session —
+                // when the ✓ badges are gone — it is the ONLY signal that
+                // the folder already holds this shoot.
+                notes.push(format!(
+                    "{} new · {} already exist here — Copy will ask what to do",
+                    p.jobs.len().saturating_sub(p.clashes),
+                    p.clashes
+                ));
             }
             if p.recopied > 0 {
                 // The one signal that Enter is about to put back what the
@@ -300,9 +486,7 @@ fn copy_replan(win: &MainWindow, st: &mut AppState) {
                     p.recopied
                 ));
             }
-            let collided = p.renamed > 0 || p.skipped > 0 || p.refreshed > 0;
             win.set_copy_collisions(notes.join(" · ").into());
-            win.set_copy_show_skip_toggle(collided);
             win.set_copy_ready(true);
             st.copy.plan = Some(p);
         }
@@ -310,7 +494,6 @@ fn copy_replan(win: &MainWindow, st: &mut AppState) {
             e @ (PlanError::InsufficientSpace { .. }
             | PlanError::DestEqualsSource
             | PlanError::DestInsideSource
-            | PlanError::DestExists(_)
             | PlanError::TemplateCollision { .. }
             | PlanError::Template(_)
             | PlanError::Io(_)),

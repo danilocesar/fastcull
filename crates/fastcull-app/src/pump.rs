@@ -130,10 +130,26 @@ pub(crate) fn start(window: &MainWindow, state: &Rc<RefCell<AppState>>) -> slint
                     for event in copy_events {
                         use fastcull_core::fileops::CopyEvent;
                         match event {
-                            CopyEvent::File { index, total, name } => {
+                            CopyEvent::File {
+                                index,
+                                total,
+                                name,
+                                action,
+                            } => {
                                 if let Some(win) = win.upgrade() {
+                                    // Say WHICH work this is: an overwrite
+                                    // run starts by hashing what is
+                                    // already at the destination, and a
+                                    // progress line that counts to 148
+                                    // saying "copying" reads as "it is
+                                    // sending my whole export again"
+                                    // (persona 2026-08-21).
+                                    let verb = match action {
+                                        fastcull_core::fileops::PlanAction::Replace => "Checking",
+                                        _ => "Copying",
+                                    };
                                     win.set_copy_progress(
-                                        format!("{index} / {total} — {name}").into(),
+                                        format!("{verb} {index} / {total} — {name}").into(),
                                     );
                                 }
                             }
@@ -147,9 +163,13 @@ pub(crate) fn start(window: &MainWindow, state: &Rc<RefCell<AppState>>) -> slint
                                 if let Some(win) = win.upgrade() {
                                     // The green light to format a card
                                     // appears ONLY when this run actually
-                                    // verified copies (gate finding: an
-                                    // all-skipped run verified nothing).
-                                    let verified_line = report.copied > 0
+                                    // verified something (gate finding: a
+                                    // run that moved nothing verified
+                                    // nothing). An overwrite that found
+                                    // the destination byte-identical DID
+                                    // verify it — BLAKE3, both ends — so
+                                    // it earns the sentence too.
+                                    let verified_line = report.copied + report.identical > 0
                                         && report.all_verified
                                         && report.failed.is_empty()
                                         && !report.cancelled;
@@ -159,20 +179,52 @@ pub(crate) fn start(window: &MainWindow, state: &Rc<RefCell<AppState>>) -> slint
                                         format!(
                                             "{} copied{}",
                                             report.copied,
-                                            if verified_line {
+                                            if verified_line && report.identical == 0 {
                                                 ", all checksums verified"
                                             } else {
                                                 ""
                                             }
                                         )
                                     }];
-                                    if report.skipped > 0 {
-                                        lines.push(format!("{} skipped", report.skipped));
+                                    if report.identical > 0 {
+                                        // The re-run's real answer, and a
+                                        // free "is my export still
+                                        // bit-perfect?" pass before the
+                                        // card is wiped (persona).
+                                        lines.push(format!(
+                                            "{} already identical — re-verified in place{}",
+                                            report.identical,
+                                            if verified_line {
+                                                ", all checksums verified"
+                                            } else {
+                                                ""
+                                            }
+                                        ));
+                                    }
+                                    if report.renamed > 0 {
+                                        // One real example name: the
+                                        // report is what the user reads
+                                        // before switching to darktable,
+                                        // and the names are how they find
+                                        // those frames.
+                                        lines.push(match &report.renamed_example {
+                                            Some(name) => format!(
+                                                "{} landed under new names ({name} …)",
+                                                report.renamed
+                                            ),
+                                            None => {
+                                                format!("{} landed under new names", report.renamed)
+                                            }
+                                        });
+                                    }
+                                    if report.replaced > 0 {
+                                        lines.push(format!("{} replaced", report.replaced));
                                     }
                                     if report.refreshed > 0 {
                                         lines.push(format!(
-                                            "{} sidecars refreshed",
-                                            report.refreshed
+                                            "{} sidecar{} replaced beside an identical RAW",
+                                            report.refreshed,
+                                            if report.refreshed == 1 { "" } else { "s" }
                                         ));
                                     }
                                     if report.cancelled {

@@ -15,6 +15,15 @@ may be showing its database copy — select the images and use
 (★ = pick, reject flag = reject); this round-trip is exercised against
 a real darktable in FastCull's test suite.
 
+**I edited the copies in darktable, then copied more picks into the same
+folder — will FastCull touch my edits?**
+Only if you answer **Overwrite** to the clash question. darktable stores
+its history in `DSC01234.ARW.xmp`, which is exactly the sidecar name
+FastCull writes, so Overwrite replaces it along with the RAW. Answer
+**Keep both** (the new files land as `DSC01234_1.ARW`) or copy into a
+fresh folder when the destination has been edited elsewhere. See
+[Copy Picks](copy-picks.md#when-the-names-are-already-taken).
+
 **Does Lightroom read the sidecars?**
 Honest answer: the *contents* are standard XMP that Lightroom
 understands, but the *file name* follows darktable's convention

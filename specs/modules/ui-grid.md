@@ -1660,8 +1660,11 @@ the user confirms, all cheap to change):**
       band with the `×N` burst badge. Since 2026-08-21 `copydest:PATH`
       (below) drives a REAL copy: the re-run regression test copies,
       deletes by hand, copies again, and asserts on disk and on the
-      dialog's note/report; the badge itself is still asserted only at the
-      state level (`SessionCopies::is_copied`), not by pixels.
+      dialog's note/report, and the clash-question test drives all three
+      answers (`key:b` / `key:o` / `key:escape`) plus an inert Enter,
+      asserting `copystate`, the question's text and what each answer left
+      on disk; the badge itself is still asserted only at the state level
+      (`SessionCopies::is_copied`), not by pixels.
 - [x] **Focus continuity (issues #41/#42)**: driven through REAL key and
       pointer dispatch (`key:`/`click.` — the nav tokens bypass focus and
       cannot see this class), every bug-strand test red-run-verified
@@ -1794,7 +1797,13 @@ Documented because they ship in release builds (validator finding):
   `keysfocus` (the main key scope's real `has-focus`, via the
   `dbg-keys-focus` debug property), loupe/zoom state, panel and modal
   visibility, the copy dialog's visibility, plan summary and rename
-  template, the revert-slot label, and the status line. Keyboard focus was otherwise INVISIBLE to
+  template, the revert-slot label, and the status line. Since 2026-08-21
+  it also carries `copystate=` (0 plan / 1 running / 2 report / 3 the
+  clash question) and `confirm=` (the question's text): the clash question
+  is a STATE of the Copy dialog rather than a second modal (fileops.md),
+  so `copy=true` alone cannot tell a plan preview from a question about
+  replacing files — without those two fields the one irreversible
+  operation in the app would be assertable only down to "a dialog exists". Keyboard focus was otherwise INVISIBLE to
   every headless run — a stranded keyboard could not even be asserted.
   It also carries the loupe pan block (`soft`, `vx`/`vy`, the
   fractional pan centre, the desired factor — issue #46): a

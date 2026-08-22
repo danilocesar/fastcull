@@ -48,6 +48,52 @@ component Chip inherits Rectangle {
     }
 }
 
+// One answer to the Copy dialog's clash question (fileops.md): a
+// full-width row carrying the key that answers it, what it does, and what
+// it costs. Deliberately not a std Button — none of the three answers may
+// look like the default action, and the labels are far too long to sit
+// side by side in the card.
+component AnswerRow inherits Rectangle {
+    in property <string> key;
+    in property <string> label;
+    in property <string> cost;
+    in property <color> label-color: #e8e8f0;
+    callback clicked();
+    height: 34px;
+    border-radius: 6px;
+    background: ta.has-hover ? #33333d : #26262e;
+    border-width: 1px;
+    border-color: #3a3a44;
+    HorizontalLayout {
+        padding-left: 10px;
+        padding-right: 10px;
+        spacing: 8px;
+        alignment: start;
+        Text {
+            text: root.key;
+            color: #8a8a96;
+            font-size: 12px;
+            vertical-alignment: center;
+            width: 30px;
+        }
+        Text {
+            text: root.label;
+            color: root.label-color;
+            font-size: 13px;
+            vertical-alignment: center;
+        }
+        Text {
+            text: root.cost;
+            color: #9898a8;
+            font-size: 12px;
+            vertical-alignment: center;
+        }
+    }
+    ta := TouchArea {
+        clicked => { root.clicked(); }
+    }
+}
+
 // Modal scaffolding shared by the Help > Shortcuts and About popups:
 // full-area scrim, click-outside-to-close, wheel swallowed (validator M2
 // — TouchAreas pass unhandled scrolls through to the Flickable below),
@@ -244,8 +290,23 @@ export component MainWindow inherits Window {
     in property <string> copy-summary: "";
     in property <string> copy-preview: "";
     in property <string> copy-collisions: "";
-    in property <bool> copy-show-skip-toggle: false;
-    in-out property <bool> copy-skip-existing: false;
+    // The clash question (copy-state 3, fileops.md "The clash question"):
+    // a STATE of this dialog, not a second modal — the same key scope, the
+    // same Esc rules, no new stacking surface (issue #42). Every string is
+    // built in Rust; the two answers' keys are printed in their rows, so
+    // no mnemonic has to be guessed.
+    in property <string> copy-confirm: "";
+    in property <string> copy-confirm-examples: "";
+    in property <string> copy-confirm-keep-both: "";
+    in property <string> copy-confirm-keep-both-cost: "";
+    in property <string> copy-confirm-overwrite: "";
+    in property <string> copy-confirm-cancel: "";
+    in property <string> copy-confirm-warning: "";
+    // Shown after a key that is NOT an answer (Enter and Space included —
+    // they must never answer this question): a dead key reads as a frozen
+    // dialog, so the question says what it is waiting for.
+    in property <string> copy-confirm-nudge: "";
+    in-out property <bool> copy-confirm-nudged: false;
     in property <string> copy-error: "";
     in property <bool> copy-ready: false;
     in property <string> copy-progress: "";
@@ -378,6 +439,9 @@ export component MainWindow inherits Window {
     callback copy-pick-dest();
     callback copy-replan();
     callback copy-start();
+    callback copy-answer-keep-both();
+    callback copy-answer-overwrite();
+    callback copy-answer-cancel();
     callback copy-cancel();
     callback copy-close();
     callback copy-open-dest-folder();
@@ -1368,6 +1432,29 @@ export component MainWindow inherits Window {
                         }
                         return accept;
                     }
+                    // The clash question owns every key while it is up
+                    // (fileops.md: the destructive answer must not sit on
+                    // Y, N or Enter). Esc cancels the question and returns
+                    // to the plan — a SECOND Esc closes the dialog, so the
+                    // destination and template survive a mis-typed key.
+                    if (root.copy-state == 3) {
+                        if (event.text == Key.Escape) {
+                            root.copy-answer-cancel();
+                            return accept;
+                        }
+                        if (event.text == "b" || event.text == "B") {
+                            root.copy-answer-keep-both();
+                            return accept;
+                        }
+                        if (event.text == "o" || event.text == "O") {
+                            root.copy-answer-overwrite();
+                            return accept;
+                        }
+                        // Enter, Space, Y, N, everything: swallowed, and
+                        // the question says out loud that it is waiting.
+                        root.copy-confirm-nudged = true;
+                        return accept;
+                    }
                     if (event.text == Key.Escape && root.copy-state != 1) {
                         root.copy-close();
                         return accept;
@@ -1483,7 +1570,7 @@ export component MainWindow inherits Window {
                         color: #c8c8d0;
                         font-size: 13px;
                     }
-                    if root.copy-collisions != "": Text {
+                    if root.copy-collisions != "" && root.copy-state != 3: Text {
                         text: root.copy-collisions;
                         color: #ffb84d;
                         font-size: 12px;
@@ -1493,16 +1580,59 @@ export component MainWindow inherits Window {
                         // matters most was clipped at the dialog edge (QE).
                         wrap: word-wrap;
                     }
-                    if root.copy-show-skip-toggle: HorizontalLayout {
-                        spacing: 8px;
-                        Chip {
-                            label: root.copy-skip-existing ? "Skip existing: ON" : "Skip existing: OFF (rename)";
-                            active: root.copy-skip-existing;
-                            clicked => {
-                                root.copy-skip-existing = !root.copy-skip-existing;
-                                root.copy-replan();
-                                copy-keys.focus();
-                            }
+                    // THE CLASH QUESTION (copy-state 3). The rows are
+                    // stacked, not side by side: three outcome-labelled
+                    // answers do not fit across a 560px card (persona
+                    // measurement 2026-08-21), and a vertical list reads
+                    // as what it is — a menu of three choices, in order of
+                    // increasing consequence, with Cancel set apart.
+                    if root.copy-state == 3: VerticalLayout {
+                        spacing: 6px;
+                        Text {
+                            text: root.copy-confirm;
+                            color: #e8e8f0;
+                            font-size: 13px;
+                            wrap: word-wrap;
+                        }
+                        if root.copy-confirm-examples != "": Text {
+                            text: root.copy-confirm-examples;
+                            color: #9898a8;
+                            font-size: 11px;
+                            wrap: word-wrap;
+                        }
+                        Rectangle { height: 2px; }
+                        AnswerRow {
+                            key: "B";
+                            label: root.copy-confirm-keep-both;
+                            cost: root.copy-confirm-keep-both-cost;
+                            clicked => { root.copy-answer-keep-both(); }
+                        }
+                        AnswerRow {
+                            key: "O";
+                            label: root.copy-confirm-overwrite;
+                            // The one answer that destroys something wears
+                            // the colour — the BOX never does. A
+                            // primary-styled destructive button gets
+                            // pressed reflexively within a week (persona).
+                            label-color: #ffb84d;
+                            clicked => { root.copy-answer-overwrite(); }
+                        }
+                        Rectangle { height: 4px; }
+                        AnswerRow {
+                            key: "Esc";
+                            label: root.copy-confirm-cancel;
+                            clicked => { root.copy-answer-cancel(); }
+                        }
+                        if root.copy-confirm-warning != "": Text {
+                            text: root.copy-confirm-warning;
+                            color: #ffb84d;
+                            font-size: 11px;
+                            wrap: word-wrap;
+                        }
+                        if root.copy-confirm-nudged: Text {
+                            text: root.copy-confirm-nudge;
+                            color: #ffb84d;
+                            font-size: 12px;
                         }
                     }
                     if root.copy-error != "": Text {
@@ -1534,7 +1664,10 @@ export component MainWindow inherits Window {
                             text: "Cancel";
                             clicked => { root.copy-cancel(); }
                         }
-                        if root.copy-state != 1: Button {
+                        // No Copy button while the question is up: a
+                        // greyed fourth control is one more thing to parse
+                        // at the moment the user is choosing (persona).
+                        if root.copy-state != 1 && root.copy-state != 3: Button {
                             text: root.copy-state == 2 ? "Close" : "Copy";
                             enabled: root.copy-state == 2 || root.copy-ready;
                             clicked => {

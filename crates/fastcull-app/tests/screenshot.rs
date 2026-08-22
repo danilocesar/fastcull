@@ -3242,6 +3242,27 @@ fn dump_field<'a>(line: &'a str, field: &str) -> &'a str {
         .unwrap_or_else(|| panic!("no {field}= in dump line: {line}"))
 }
 
+/// A Debug-quoted dump field (` name="…"`): the text between the quotes,
+/// up to the first unescaped closing quote. Used for the fields that
+/// contain spaces (summary, copynote, report, confirm).
+fn dump_text<'a>(dump: &'a str, name: &str) -> &'a str {
+    let tag = format!(" {name}=\"");
+    let rest = dump
+        .split(&tag)
+        .nth(1)
+        .unwrap_or_else(|| panic!("no {name} field in dump: {dump}"));
+    let mut prev = b' ';
+    let end = rest
+        .bytes()
+        .position(|b| {
+            let close = b == b'"' && prev != b'\\';
+            prev = b;
+            close
+        })
+        .unwrap_or(rest.len());
+    &rest[..end]
+}
+
 /// The millisecond stamp a `FASTCULL_TRACE` line carries, as in
 /// `fastcull-trace: [51] loupe thumb idx 0 ...` — the app's own clock, so
 /// a test can tell a startup event from one inside a drive script's
@@ -3761,19 +3782,20 @@ fn a_decode_failed_cursor_drops_to_fit_instead_of_masking_the_badge() {
     }
 }
 
-/// The 2026-08-21 Copy Picks re-run bug, end to end (fileops.md, "already
-/// copied means still there"): copy two picks, delete three of the four
-/// landed files BY HAND while the app is live (RAW+XMP of one, RAW only
-/// of the other), Ctrl+E again into the same folder. RED pre-fix: the
-/// dialog said "0 B to copy · 2 sidecars will be refreshed", the report
-/// "Nothing needed copying", and the folder ended up with XMPs only.
-/// Post-fix: the plan counts the bytes again, the amber note names the
-/// gone copies, the report says "2 copied, all checksums verified", and
-/// both pairs are back on disk. The deletion runs on a helper thread
-/// that polls the destination — the drive script is wall-clock timed,
-/// so the second phase starts well after the first copy can finish.
-/// Fixtures are symlinks (the copy follows them); the ~126 MB of real
-/// copies are removed at the end.
+/// The 2026-08-21 Copy Picks re-run bug, end to end (fileops.md): copy
+/// two picks, delete the landed pairs BY HAND while the app is live,
+/// Ctrl+E again into the same folder. RED pre-fix: the dialog said "0 B
+/// to copy · 2 sidecars will be refreshed", the report "Nothing needed
+/// copying", and the folder ended up with XMPs only. Now: the destination
+/// is empty, so nothing clashes, no question is asked, the amber note
+/// names the gone copies, the report says "2 copied, all checksums
+/// verified", and both pairs are back on disk. This is the one app-level
+/// test that moves REAL A1 files (~126 MB), so it also proves the copy
+/// engine on real bytes; the clash question's own flows are driven on
+/// small fixtures below. The deletion runs on a helper thread that polls
+/// the destination — the drive script is wall-clock timed, so the second
+/// phase starts well after the first copy can finish. Fixtures are
+/// symlinks (the copy follows them); the copies are removed at the end.
 #[test]
 fn copy_picks_rerun_recopies_hand_deleted_files() {
     if !has_display() {
@@ -3815,8 +3837,13 @@ fn copy_picks_rerun_recopies_hand_deleted_files() {
                 }
                 std::thread::sleep(Duration::from_millis(100));
             }
-            // The user's two variants: the whole pair, and the RAW alone.
-            for n in ["a.ARW", "a.ARW.xmp", "b.ARW"] {
+            // WHOLE pairs, both of them: with the RAW and its sidecar
+            // gone, nothing at the destination is in the way any more, so
+            // the copy just happens — no clash question in the middle of
+            // the regression this test exists for. (A half-deleted pair
+            // leaves the sidecar NAME occupied, which is a clash by
+            // design and is covered by the clash-question test below.)
+            for n in ["a.ARW", "a.ARW.xmp", "b.ARW", "b.ARW.xmp"] {
                 std::fs::remove_file(dest.join(n)).map_err(|e| format!("rm {n}: {e}"))?;
             }
             Ok(())
@@ -3844,25 +3871,7 @@ fn copy_picks_rerun_recopies_hand_deleted_files() {
     std::fs::remove_dir_all(&dest).ok();
 
     assert_eq!(deleted, Ok(()), "hand deletion did not happen:\n{stderr}");
-    // A Debug-quoted dump field (` name="…"`): the text between the
-    // quotes, up to the first unescaped closing quote.
-    fn field<'a>(dump: &'a str, name: &str) -> &'a str {
-        let tag = format!(" {name}=\"");
-        let rest = dump
-            .split(&tag)
-            .nth(1)
-            .unwrap_or_else(|| panic!("no {name} field in dump: {dump}"));
-        let mut prev = b' ';
-        let end = rest
-            .bytes()
-            .position(|b| {
-                let close = b == b'"' && prev != b'\\';
-                prev = b;
-                close
-            })
-            .unwrap_or(rest.len());
-        &rest[..end]
-    }
+    let field = dump_text;
     let first = qedump(&stderr, "first");
     assert!(
         field(first, "summary").contains("2 picked") && field(first, "copynote").is_empty(),
@@ -3905,4 +3914,215 @@ fn copy_picks_rerun_recopies_hand_deleted_files() {
         let len = on_disk.iter().find(|(f, _)| f == n).map(|(_, l)| *l);
         assert_eq!(len, Some(raw_len), "{n} is not a whole copy: {on_disk:?}");
     }
+}
+
+/// The clash question, end to end (fileops.md, "The clash question"):
+/// every answer, driven through the real dialog with real key events.
+///
+/// One folder already holds a file under a name a pick would take. The
+/// dialog must ASK — once, for the whole run — and then:
+///   * Enter must NOT answer it (Ctrl+E, Enter, Enter is muscle memory;
+///     it may never mass-replace or mass-duplicate),
+///   * "Keep both" (B) lands the clashing pick as `a_1.ARW`, sidecar in
+///     lockstep, and leaves the file that was there byte-for-byte alone,
+///   * "Overwrite" (O) replaces the differing file and re-VERIFIES the
+///     one that is already identical instead of re-sending it,
+///   * Esc cancels: the dialog stays open on its plan (destination and
+///     template intact) and NOTHING is copied — not even the clash-free
+///     file, which is the half of Cancel that a second destination folder
+///     proves on disk at the end of the run.
+///
+/// Fixtures are 2 KB files with RAW extensions (they scan as images and
+/// fail to decode, exactly like `broken.ARW` elsewhere in this file): the
+/// dialog, the answers and the disk are what is under test here, and the
+/// real-bytes path is covered by the re-run test above.
+///
+/// RED pre-change (verified against a worktree at c060e7c): there is no
+/// question at all — the clashing pick is silently auto-suffixed `_2` and
+/// `copystate` does not exist in the dump.
+#[test]
+fn copy_picks_asks_once_and_each_answer_does_what_it_says() {
+    if !has_display() {
+        eprintln!("screenshot smoke skipped: no display server");
+        return;
+    }
+    let _s = serial();
+    let src = out_dir().join("clash-src");
+    let src2 = out_dir().join("clash-src2");
+    let dest = out_dir().join("clash-dest");
+    let dest2 = out_dir().join("clash-dest2");
+    for d in [&src, &src2, &dest, &dest2] {
+        std::fs::remove_dir_all(d).ok();
+        std::fs::create_dir_all(d).unwrap();
+    }
+    std::fs::write(src2.join("other.ARW"), vec![0xEFu8; 2048]).unwrap();
+    let (a_bytes, b_bytes) = (vec![0xABu8; 2048], vec![0xCDu8; 2048]);
+    std::fs::write(src.join("a.ARW"), &a_bytes).unwrap();
+    std::fs::write(src.join("b.ARW"), &b_bytes).unwrap();
+    // The other body's frame, under a name one of the picks wants.
+    let foreign = b"another body's frame".to_vec();
+    std::fs::write(dest.join("a.ARW"), &foreign).unwrap();
+    std::fs::write(dest2.join("a.ARW"), &foreign).unwrap();
+
+    let script = format!(
+        "1500:key:y;1700:key:y;1900:copydest:{dest};2100:key:ctrl+e;2400:dump.preview;\
+         2600:key:return;2900:dump.question;3100:key:return;3300:dump.inert;\
+         3500:key:b;4300:dump.kept;4600:key:escape;\
+         4800:key:ctrl+e;5100:key:return;5400:dump.q2;5600:key:o;6400:dump.over;\
+         6700:key:escape;6900:copydest:{dest2};7100:key:ctrl+e;7400:key:return;\
+         7700:dump.q3;7900:key:escape;8200:dump.cancelled;8500:key:escape;8800:dump.end;\
+         9000:key:ctrl+e;9300:key:return;9600:dump.q4;9800:open:{src2};10200:dump.swapped",
+        dest = dest.display(),
+        dest2 = dest2.display(),
+        src2 = src2.display()
+    );
+    let out = out_dir().join("copy-clash.jpg");
+    let stderr = shoot_env_stderr(
+        &[src.to_str().unwrap()],
+        &[("FASTCULL_TRACE", "1"), ("FASTCULL_DRIVE", script.as_str())],
+        &out,
+    );
+    let listing = |d: &Path| -> Vec<(String, u64)> {
+        let mut v: Vec<(String, u64)> = std::fs::read_dir(d)
+            .map(|it| {
+                it.filter_map(|e| e.ok())
+                    .map(|e| {
+                        (
+                            e.file_name().to_string_lossy().into_owned(),
+                            e.metadata().map(|m| m.len()).unwrap_or(0),
+                        )
+                    })
+                    .collect()
+            })
+            .unwrap_or_default();
+        v.sort();
+        v
+    };
+    let on_disk = listing(&dest);
+    let cancelled_disk = listing(&dest2);
+    let landed_a = std::fs::read(dest.join("a.ARW")).ok();
+    let landed_a1 = std::fs::read(dest.join("a_1.ARW")).ok();
+    for d in [&src, &src2, &dest, &dest2] {
+        std::fs::remove_dir_all(d).ok();
+    }
+
+    // --- the question exists, and states the split -----------------------
+    let preview = qedump(&stderr, "preview");
+    assert_eq!(dump_field(preview, "copystate"), "0", "{preview}");
+    assert!(
+        dump_text(preview, "copynote").contains("1 new · 1 already exist here"),
+        "the plan preview does not pre-announce the clash: {preview}"
+    );
+    let question = qedump(&stderr, "question");
+    assert_eq!(
+        dump_field(question, "copystate"),
+        "3",
+        "Copy did not ask the clash question: {question}"
+    );
+    let asked = dump_text(question, "confirm");
+    assert!(
+        asked.contains("1 of your 2 picks already have files with these names in")
+            && asked.contains("The other 1 copies normally"),
+        "the question does not state the counts: {asked}"
+    );
+    // --- Enter is inert on it --------------------------------------------
+    let inert = qedump(&stderr, "inert");
+    assert_eq!(
+        dump_field(inert, "copystate"),
+        "3",
+        "Enter answered the clash question — Ctrl+E, Enter, Enter must never \
+         replace or duplicate anything: {inert}"
+    );
+    // --- B: keep both -----------------------------------------------------
+    let kept = qedump(&stderr, "kept");
+    assert_eq!(dump_field(kept, "copystate"), "2", "{kept}");
+    let kept_report = dump_text(kept, "report");
+    assert!(
+        kept_report.contains("2 copied, all checksums verified")
+            && kept_report.contains("1 landed under new names (a_1.ARW"),
+        "keep-both did not copy both under a fresh name: {kept_report}"
+    );
+    // --- O: overwrite -----------------------------------------------------
+    let q2 = qedump(&stderr, "q2");
+    assert_eq!(
+        dump_field(q2, "copystate"),
+        "3",
+        "a re-run over the session's own copies must ask again: {q2}"
+    );
+    assert!(
+        dump_text(q2, "confirm").contains("2 of your 2 picks"),
+        "{q2}"
+    );
+    let over = qedump(&stderr, "over");
+    let over_report = dump_text(over, "report");
+    assert!(
+        over_report.contains("1 copied")
+            && over_report.contains("1 already identical — re-verified in place")
+            && over_report.contains("1 replaced"),
+        "overwrite re-sent the identical file (or did not replace the other): {over_report}"
+    );
+    // --- Esc: cancel -------------------------------------------------------
+    let q3 = qedump(&stderr, "q3");
+    assert_eq!(dump_field(q3, "copystate"), "3", "{q3}");
+    let cancelled = qedump(&stderr, "cancelled");
+    assert_eq!(
+        (
+            dump_field(cancelled, "copystate"),
+            dump_field(cancelled, "copy")
+        ),
+        ("0", "true"),
+        "Esc on the question must return to the plan, not close the dialog: {cancelled}"
+    );
+    assert!(
+        dump_text(cancelled, "report").is_empty(),
+        "a cancelled question left a copy report behind: {cancelled}"
+    );
+    assert_eq!(
+        dump_field(qedump(&stderr, "end"), "copy"),
+        "false",
+        "the second Esc did not close the dialog"
+    );
+    // --- a session swap UNDER the question -----------------------------
+    // The menu bar stays live while the dialog is up, so a folder can be
+    // opened underneath the question — and the answer is a policy that
+    // gets replanned, which would apply "overwrite everything" to a set
+    // of picks the user never saw named.
+    assert_eq!(dump_field(qedump(&stderr, "q4"), "copystate"), "3");
+    assert_eq!(
+        dump_field(qedump(&stderr, "swapped"), "copystate"),
+        "0",
+        "opening a folder under the clash question left it answerable for \
+         picks that are no longer the session's: {stderr}"
+    );
+
+    // --- what the disk says ------------------------------------------------
+    assert_eq!(
+        cancelled_disk,
+        vec![("a.ARW".to_string(), foreign.len() as u64)],
+        "Cancel copied something — it must copy NOTHING, not even the clash-free pick \
+         (and neither may the session swap under the second question)"
+    );
+    let names: Vec<&str> = on_disk.iter().map(|(n, _)| n.as_str()).collect();
+    assert_eq!(
+        names,
+        vec![
+            "a.ARW",
+            "a.ARW.xmp",
+            "a_1.ARW",
+            "a_1.ARW.xmp",
+            "b.ARW",
+            "b.ARW.xmp"
+        ],
+        "unexpected destination contents: {on_disk:?}"
+    );
+    assert_eq!(
+        landed_a1.as_deref(),
+        Some(a_bytes.as_slice()),
+        "keep-both did not land the pick under _1"
+    );
+    assert_eq!(
+        landed_a.as_deref(),
+        Some(a_bytes.as_slice()),
+        "overwrite did not replace the file that was there"
+    );
 }

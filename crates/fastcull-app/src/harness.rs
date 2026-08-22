@@ -342,7 +342,7 @@ pub(crate) fn install(window: &MainWindow, state: &Rc<RefCell<AppState>>) -> Rc<
                         "QEDUMP {label} keysfocus={} one2one={} zoom={} iptc={} about={} \
                          shortcuts={} copy={} summary={:?} template={:?} revert={:?} status={:?} \
                          soft={} vx={:.1} vy={:.1} pan={:.4},{:.4} zf={:.3} \
-                         copynote={:?} report={:?}",
+                         copynote={:?} report={:?} copystate={} confirm={:?}",
                         win.get_dbg_keys_focus(),
                         win.get_one2one(),
                         st.grid.zoom,
@@ -362,6 +362,15 @@ pub(crate) fn install(window: &MainWindow, state: &Rc<RefCell<AppState>>) -> Rc<
                         st.loupe_view.zoom_factor,
                         win.get_copy_collisions().as_str(),
                         win.get_copy_report().as_str(),
+                        // The clash question is a STATE of the copy
+                        // dialog (fileops.md), so `copy=true` alone cannot
+                        // tell a plan preview from the question: without
+                        // these two fields a driven run can see that the
+                        // dialog is up but not what it is asking, and the
+                        // one irreversible operation in the app would be
+                        // assertable only down to "a dialog exists".
+                        win.get_copy_state(),
+                        win.get_copy_confirm().as_str(),
                     ));
                     return;
                 }
