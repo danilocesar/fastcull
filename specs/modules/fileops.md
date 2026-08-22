@@ -280,12 +280,20 @@ run continues. Two same-run names differing only in case therefore cannot
 eat each other on a case-insensitive destination — under **keep both** and
 the clash-free path because the commit refuses an occupied name, and under
 **overwrite** because the executor additionally refuses to write over a
-name THIS RUN already landed (gate finding 2026-08-22: overwrite commits
+file THIS RUN already landed (gate finding 2026-08-22: overwrite commits
 with a rename, which replaces silently, and the plan's in-plan `taken` set
 is exact-case, so nothing else stood between two case-twins on an exFAT
-card or an SMB share). That last check asks the filesystem, so a
-case-sensitive destination — where the two names really are two files —
-never sees a false alarm.
+card or an SMB share).
+
+That last check is about FILE IDENTITY, not names: on unix, device +
+inode, which two names for one file share and two different files never
+do; off unix, where no stable file-index API exists, the folded name,
+which is the right answer there because Windows filesystems fold case by
+default. Occupancy proves nothing — the destination name of an overwrite
+is occupied by definition — and comparing folded NAMES failed every
+overwrite of a case-twin on a case-SENSITIVE destination, where the two
+names are two different files and both copies must go out as asked (QE
+finding 2026-08-22, a regression this correction removes).
 
 The primitive is `hard_link(tmp, dst)` + unlink of the temp: the portable
 "create this name only if it is free", which fails with `AlreadyExists`
@@ -547,7 +555,10 @@ destination and copy again, or re-import in darktable.
       collapses two names —
       an_overwrite_never_replaces_a_file_this_run_just_landed; the green
       light is core's rule — the_green_light_needs_verified_bytes (plus the
-      app's report_lines tests); the "Use last: …" template chip is
+      app's report_lines tests) — and the same-run guard is asserted on
+      FILE IDENTITY (a hard link drives the collapsing-lookup case on any
+      filesystem) with two real case-twins proving no false alarm on a
+      case-sensitive destination; the "Use last: …" template chip is
       confined to the plan state, so it can no longer replan under the
       question and leave it describing an operation the answer will not
       perform (main.slint).

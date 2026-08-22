@@ -651,16 +651,20 @@ fn run_plan(plan: CopyPlan, tx: &Sender<CopyEvent>, cancel: &AtomicBool) {
         all_verified: true,
         ..Default::default()
     };
-    // Every name this run has already put on disk, lowercased. An
+    // Every FILE this run has already put on disk, by identity. An
     // overwrite commits with `rename`, which replaces silently — and on a
-    // destination that cannot tell `C.ARW` from `c.ARW` (exFAT card, SMB
-    // share, APFS/NTFS) the second of two same-run names would replace the
+    // destination that cannot tell `C.ARW` from `c.arw` (exFAT card, SMB
+    // share, APFS, NTFS) the second of two same-run names would replace the
     // FIRST ONE'S verified copy while the report said both were copied
     // (gate finding 2026-08-22; the plan's in-plan `taken` set is
-    // exact-case and cannot see it). Checked at the last instant, so a
-    // case-SENSITIVE destination — where the two names are genuinely
-    // different files — never sees a false alarm.
-    let mut landed_names: HashSet<String> = HashSet::new();
+    // exact-case and cannot see it).
+    //
+    // IDENTITY, not the name: comparing lowercased names made every
+    // overwrite of a case-twin fail on a case-SENSITIVE destination, where
+    // the two names are two genuinely different files — the destination
+    // name of a Replace is occupied by definition, so occupancy proves
+    // nothing (QE finding 2026-08-22).
+    let mut landed: HashSet<FileIdentity> = HashSet::new();
     // A plan built before the question is a QUESTION, not an instruction
     // (fileops.md rule 3). The app replans with the answer's policy and
     // executes THAT; if a wiring mistake ever sends the frozen one here,
@@ -705,13 +709,11 @@ fn run_plan(plan: CopyPlan, tx: &Sender<CopyEvent>, cancel: &AtomicBool) {
                     report.landed.push((job.id, job.dst_raw.clone()));
                 })
             }
-            PlanAction::Replace if would_eat_our_own(job, &landed_names) => {
-                Err(std::io::Error::new(
-                    std::io::ErrorKind::AlreadyExists,
-                    "another file in this run already landed under this name — the destination \
-                     cannot tell the two names apart",
-                ))
-            }
+            PlanAction::Replace if would_eat_our_own(job, &landed) => Err(std::io::Error::new(
+                std::io::ErrorKind::AlreadyExists,
+                "this name is the file another pick in this run just landed — the \
+                     destination cannot tell the two names apart",
+            )),
             PlanAction::Replace => replace_pair(job, cancel).map(|outcome| {
                 match outcome {
                     Replaced::Transferred { existed } => {
@@ -741,7 +743,9 @@ fn run_plan(plan: CopyPlan, tx: &Sender<CopyEvent>, cancel: &AtomicBool) {
             }),
         };
         if result.is_ok() {
-            landed_names.insert(name.to_lowercase());
+            if let Some(id) = file_identity(&job.dst_raw) {
+                landed.insert(id);
+            }
         }
         if let Err(e) = result {
             if e.kind() == std::io::ErrorKind::Interrupted && cancel.load(Ordering::Relaxed) {
@@ -765,15 +769,39 @@ fn run_plan(plan: CopyPlan, tx: &Sender<CopyEvent>, cancel: &AtomicBool) {
     tx.send(CopyEvent::Finished(report)).ok();
 }
 
-/// Would this overwrite replace a file THIS RUN just landed? Only true
-/// when the destination really does collapse the two names: the name is
-/// occupied AND (case-insensitively) one we already wrote. On a
-/// case-sensitive destination the name is simply free and this is false.
-fn would_eat_our_own(job: &CopyJob, landed_names: &HashSet<String>) -> bool {
-    job.dst_raw
-        .file_name()
-        .map(|n| n.to_string_lossy().to_lowercase())
-        .is_some_and(|n| landed_names.contains(&n) && occupied(&job.dst_raw))
+/// How a file this run landed is recognised again. On unix that is the
+/// exact answer — device + inode, which two NAMES FOR ONE FILE share and
+/// two different files never do, whatever the filesystem does with case.
+#[cfg(unix)]
+type FileIdentity = (u64, u64);
+/// Off unix there is no stable file-index API, so the name is the best
+/// available stand-in — and the right one there in practice: Windows
+/// filesystems fold case by default, so two names differing only in case
+/// really are one file.
+#[cfg(not(unix))]
+type FileIdentity = String;
+
+#[cfg(unix)]
+fn file_identity(p: &Path) -> Option<FileIdentity> {
+    use std::os::unix::fs::MetadataExt as _;
+    p.symlink_metadata().ok().map(|m| (m.dev(), m.ino()))
+}
+
+#[cfg(not(unix))]
+fn file_identity(p: &Path) -> Option<FileIdentity> {
+    p.symlink_metadata().ok()?;
+    p.file_name().map(|n| n.to_string_lossy().to_lowercase())
+}
+
+/// Would this overwrite replace a file THIS RUN just landed? True only
+/// when the file currently under the destination name IS one we already
+/// wrote — identity, not a name that looks similar. The destination name
+/// of a Replace is occupied BY DEFINITION, so occupancy proves nothing:
+/// comparing lowercased names failed every overwrite of a case-twin on a
+/// case-SENSITIVE destination, where the two names are two different
+/// files and both copies must go out as asked (QE finding 2026-08-22).
+fn would_eat_our_own(job: &CopyJob, landed: &HashSet<FileIdentity>) -> bool {
+    file_identity(&job.dst_raw).is_some_and(|id| landed.contains(&id))
 }
 
 /// What an overwrite actually had to do.
@@ -2007,10 +2035,10 @@ mod tests {
 
     /// An overwrite commits with a rename, which replaces silently — so on
     /// a destination that cannot tell two names apart, the second of them
-    /// must not eat the first one's verified copy. The guard fires only
-    /// when the name really is occupied by something this run landed, so a
-    /// case-SENSITIVE destination never sees a false alarm (gate finding
-    /// 2026-08-22).
+    /// must not eat the first one's verified copy. The guard asks about
+    /// IDENTITY, so two case-twins on a case-SENSITIVE destination are two
+    /// files and both go out as asked (QE finding 2026-08-22: comparing
+    /// names failed the second one on ext4, where nothing was at risk).
     #[test]
     fn an_overwrite_never_replaces_a_file_this_run_just_landed() {
         let dir = tmp();
@@ -2029,16 +2057,52 @@ mod tests {
         let job = &p.jobs[0];
         // Nothing landed yet: the overwrite is exactly what was asked for.
         assert!(!would_eat_our_own(job, &HashSet::new()));
-        // A different name this run landed is no reason to refuse.
-        let other: HashSet<String> = ["b.arw".to_string()].into_iter().collect();
-        assert!(!would_eat_our_own(job, &other));
-        // The destination collapsing this name onto one we already wrote is.
-        let same: HashSet<String> = ["a.arw".to_string()].into_iter().collect();
-        assert!(would_eat_our_own(job, &same));
-        // …and when the name is NOT occupied, there is nothing to eat —
-        // which is what a case-sensitive destination reports.
-        std::fs::remove_file(dest.join("a.ARW")).unwrap();
-        assert!(!would_eat_our_own(job, &same));
+        // Another file this run landed is no reason to refuse.
+        let other = dest.join("b.ARW");
+        std::fs::write(&other, b"someone else's landing").unwrap();
+        let others: HashSet<FileIdentity> = file_identity(&other).into_iter().collect();
+        assert!(!would_eat_our_own(job, &others));
+        // …but the destination name RESOLVING to a file we landed is. A
+        // hard link is exactly what a case-folding lookup does: one file,
+        // two names — and it is drivable on any filesystem.
+        #[cfg(unix)]
+        {
+            let landed_here = dest.join("landed.ARW");
+            std::fs::write(&landed_here, b"our verified copy").unwrap();
+            let twin = dest.join("TWIN.ARW");
+            std::fs::hard_link(&landed_here, &twin).unwrap();
+            let ours: HashSet<FileIdentity> = file_identity(&landed_here).into_iter().collect();
+            let twin_job = CopyJob {
+                dst_raw: twin.clone(),
+                dst_xmp: sidecar_path(&twin),
+                ..job.clone()
+            };
+            assert!(
+                would_eat_our_own(&twin_job, &ours),
+                "the destination name is another name for a file this run landed"
+            );
+        }
+        // The whole run, on THIS (case-sensitive) filesystem: two picks
+        // whose names differ only in case are two files, and both go out.
+        let twins = src_with(&dir, &[("C.ARW", b"upper"), ("c.arw", b"lower")]);
+        let dest2 = dir.join("twins");
+        std::fs::create_dir_all(&dest2).unwrap();
+        std::fs::write(dest2.join("c.arw"), b"foreign").unwrap();
+        let report = run(
+            &twins,
+            &dest2,
+            None,
+            ClashPolicy::Overwrite,
+            &SessionCopies::default(),
+        );
+        assert_eq!(
+            (report.copied, report.replaced, report.failed.len()),
+            (2, 1, 0),
+            "{:?}",
+            report.failed
+        );
+        assert_eq!(std::fs::read(dest2.join("C.ARW")).unwrap(), b"upper");
+        assert_eq!(std::fs::read(dest2.join("c.arw")).unwrap(), b"lower");
         std::fs::remove_dir_all(&dir).ok();
     }
 
