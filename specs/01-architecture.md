@@ -145,6 +145,15 @@ path); the 130–150 ms baseline predates that and timed the decode alone.
 | grid thumb: extract+decode+resize | 7–11 ms | 12–14 ms | < 25 ms |
 | full-res 8640×5760 decode+rotate | 130–150 ms (decode only) | 250–280 ms | < 350 ms |
 | pipeline throughput (all cores) | ~1,500 files/s (post-2026-07-27 EXIF fix; was ~300 mmap-capped) | ~265 files/s | > 60 files/s (4-core runner) |
+| video export, 30 A1 frames (327 MB) | — (M9, 2026-08-27) | ~527 ms | < 2 s |
+
+The video-export row is the only I/O-BOUND budget in the table, and it is
+there to catch a change of KIND rather than a slow drift: the export
+copies embedded JPEGs byte for byte and decodes nothing, so a number
+walking towards the threshold means something started decoding, scaling
+or buffering the frames — which is exactly what video-export.md forbids.
+It writes into `target/` on purpose; `/tmp` is a RAM filesystem on the
+development machine and would measure nothing.
 
 ## Shutdown policy (recorded 2026-07-25)
 

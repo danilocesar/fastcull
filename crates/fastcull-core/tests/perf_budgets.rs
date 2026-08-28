@@ -178,3 +178,89 @@ fn budget_pipeline_throughput_over_60_per_sec() {
         "pipeline throughput {rate:.0} files/sec on {threads} threads (budget > 60)"
     );
 }
+
+/// Budget: 30 A1 frames exported as one Motion JPEG video in < 2 s
+/// (video-export.md, M9).
+///
+/// The whole operation is I/O: 30 embedded JPEGs (~344 MB) are copied
+/// byte for byte out of the RAWs, hashed on the way, and then the
+/// finished file is read back and re-hashed. Nothing is decoded, so a
+/// number creeping past this budget means something started decoding,
+/// scaling or buffering the samples — which is precisely the change this
+/// feature exists NOT to make.
+///
+/// The 30 sources cycle over the three reference RAWs rather than
+/// creating 30 fixture files: the export reads them as 30 independent
+/// frames, and a Windows runner is not asked to copy 2.4 GB of RAWs to
+/// build a fixture it will delete.
+///
+/// The output goes under `target/`, i.e. onto a REAL disk. `/tmp` is a
+/// RAM filesystem on the development machine and would make an
+/// I/O-bound budget measure nothing.
+#[test]
+fn budget_video_export_30_frames_under_2s() {
+    let Some(_serial) = measure_serially() else {
+        return;
+    };
+    let dir = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../../target/perf-clip");
+    std::fs::remove_dir_all(&dir).ok();
+    std::fs::create_dir_all(&dir).unwrap();
+    let sources: Vec<fastcull_core::clip::ClipSource> = (0..30)
+        .map(|i| fastcull_core::clip::ClipSource {
+            id: i,
+            path: testdata(A1_FILES[i % A1_FILES.len()]),
+            name: format!("DSC{:05}.ARW", 5000 + i),
+            // 33 ms apart: a 30 fps burst, the reference workload.
+            time_ms: Some(i as i64 * 33),
+            has_subsec: true,
+        })
+        .collect();
+
+    let samples: Vec<Duration> = (0..3)
+        .map(|_| {
+            let plan = fastcull_core::clip::plan(
+                &sources,
+                &dir,
+                fastcull_core::fileops::ClashPolicy::Overwrite,
+            )
+            .expect("the plan must build");
+            assert_eq!(plan.frames.len(), 30, "all 30 frames must be exportable");
+            let t = Instant::now();
+            let (handle, rx) = fastcull_core::clip::execute(plan);
+            let mut report = None;
+            for event in &rx {
+                if let fastcull_core::clip::ClipEvent::Finished(r) = event {
+                    report = Some(r);
+                }
+            }
+            let elapsed = t.elapsed();
+            drop(handle);
+            let report = report.expect("the export must finish");
+            assert!(
+                report.earned_the_green_light(),
+                "the budget must measure a VERIFIED export, not a failed one: {report:?}"
+            );
+            elapsed
+        })
+        .collect();
+    let med = median(samples);
+    let bytes: u64 = std::fs::read_dir(&dir)
+        .map(|d| {
+            d.filter_map(|e| e.ok())
+                .filter_map(|e| e.metadata().ok())
+                .map(|m| m.len())
+                .sum()
+        })
+        .unwrap_or(0);
+    std::fs::remove_dir_all(&dir).ok();
+    eprintln!(
+        "BUDGET-MEDIAN {:.0} ms for {} MB",
+        med.as_secs_f64() * 1000.0,
+        bytes >> 20
+    );
+    assert!(
+        med < Duration::from_secs(2),
+        "30-frame video export median {med:?} for {} MB (budget 2 s)",
+        bytes >> 20
+    );
+}
