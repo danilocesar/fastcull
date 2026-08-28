@@ -23,7 +23,9 @@ file for full RAW decode.
 - No RAW development/editing of any kind (that is darktable's job).
 - No catalog/database of the user's library — a session is one folder.
 - No card ingest (v2), no star ratings/color labels (v2), no monitor ICC color
-  management (v2), no macOS (v2), no video files.
+  management (v2), no macOS (v2), no video files IN the grid (video OUTPUT
+  of a burst's embedded JPEGs is an export — `modules/video-export.md`,
+  ADR 0004, user decision 2026-08-27).
 - No reject-file handling: after copy-picks, rejects stay where they are (user
   deletes them manually later — recorded decision from the persona review).
 - No undo stack (arrow-back + re-mark covers culling; IPTC has a single-level

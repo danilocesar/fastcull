@@ -47,6 +47,7 @@ terminal tool. CI asserts both PE subsystem fields on every Windows build
 | burst | `burst.rs` | burst grouping |
 | fileops | `fileops.rs` | copy/rename engine with sidecar lockstep |
 | filter | `filter.rs` | filter/sort predicates over the session |
+| clip | `clip.rs`, `clip/qt.rs` | export frames as video: cadence from capture timestamps, Motion JPEG `.mov` muxer (in-tree), derived-output contract (ADR 0004) |
 | transit | `transit.rs` | loupe render ladder + full-res ring eviction, as pure decision functions (spec'd in `ui-grid.md`) |
 
 ## Data flow

@@ -96,6 +96,20 @@ faq); QE executed the full DoD path from the docs against the release
 binary. Release-note debt RESOLVED with v0.3.0: the index install note was
 removed and the culling callout pinned to "Changed in 0.3.0". The docs-follow-specs binding lives in CLAUDE.md.
 
+## M9 — Export frames as video (user decision 2026-08-27)
+
+A second exit beside Copy Picks: the selection (or the burst under the
+cursor) becomes one Motion JPEG `.mov` of the camera's untouched full-res
+JPEGs, at the cadence the camera's own millisecond timestamps give, no
+options, no crop — the phone editor (InShot) does the rest. Spec:
+`modules/video-export.md`; contract: ADR 0004. Chosen after a
+three-persona review and a phone test (the untouched 8640×5760 file
+imported and played in InShot). DoD: the acceptance criteria pass on BOTH
+CI runners (Windows first-class — user requirement), the persona gate
+before code, validator + QE with the module's hostile-input list, docs
+page `docs/export-video.md` in the same commit as the behaviour, one
+README bullet. Explicitly out for a year: any editing surface.
+
 ## v0.10.0 (released 2026-08-22)
 
 Copy Picks. One bug report started it, and answering it properly
