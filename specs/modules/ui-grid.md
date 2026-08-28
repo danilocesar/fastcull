@@ -1777,7 +1777,10 @@ Documented because they ship in release builds (validator finding):
   `key:ctrl+shift+<k>` (2026-08-27) dispatches a real two-modifier chord,
   which the video export needs: `Ctrl+Shift+E` and `Ctrl+E` are two
   different actions and differ ONLY by the Shift modifier, so a harness
-  that could not hold Shift could not tell them apart.
+  that could not hold Shift could not tell them apart. `key:shift+<k>`
+  alone holds Shift only (first used 2026-08-28 for Shift+`]`; the
+  modifier is what separates it from `]`, and the `}` spelling is sent as
+  plain `key:}`).
   Caveat for script
   authors (QE G2, 2026-08-02): the `--screenshot` readiness gates do not
   re-arm for the swapped-in session — a shutter that was already

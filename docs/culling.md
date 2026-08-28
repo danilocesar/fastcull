@@ -273,7 +273,11 @@ it helps:
   41 is one Shift+`]` and then [Export Frames as Video](export-video.md).
   Press again to add the next burst; **Shift+`[`** drops one again
   (from the middle of a burst it selects just that burst, landing on its
-  first frame, like `[`). Bursts are never selected by half. On a US
+  first frame, like `[`). A burst is never selected by half — with one
+  exception worth knowing: with two cameras shooting at once, so that
+  their bursts interleave, the selection is the *range* between the
+  two bursts you spanned, and the other body's burst can be cut at the
+  range's edge; use `Ctrl+Shift+B` when a burst must be exact. On a US
   keyboard these are the `}` and `{` keys — both spellings work.
 - **`Ctrl+Shift+B`** selects the whole burst under the cursor **without
   moving the cursor** — the move for captioning a burst from whichever

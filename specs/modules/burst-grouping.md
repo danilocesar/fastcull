@@ -99,12 +99,14 @@ maker note degrades to it, never to an error).
   #55; persona 2026-08-28, USEFUL, shipped with Ctrl+Shift+B below). One
   rule: the cursor lands exactly where `[`/`]` would land it, and every
   WHOLE burst between the anchor's burst and the cursor's burst is
-  selected — a single counts as a one-frame burst, and a burst is never
-  taken by half. From a burst's opener (where `]` leaves you) Shift+`]`
+  selected — a single counts as a one-frame burst, and in a contiguous
+  capture-sorted view a burst is never taken by half. From a burst's opener (where `]` leaves you) Shift+`]`
   selects that burst plus the next territory in one press — "burst 40
   plus burst 41", the heron taking off and landing. Pressing again adds
-  the next burst; the opposite key drops a whole burst, and flips past
-  the anchor burst like Shift+arrows flip. From mid-burst, Shift+`[`
+  the next burst; after a burst span the opposite key drops a whole
+  burst, and flips past the anchor burst like Shift+arrows flip (from a
+  frame-precise arrow span the first Shift+`[` completes the cursor's
+  burst before it can drop anything — the one rule, applied). From mid-burst, Shift+`[`
   re-anchors on the opener like `[` does, which selects JUST this burst
   with the cursor on its opener. The anchor arms at the pre-press cursor
   (or stays where a live Shift gesture put it) and is widened to its
@@ -114,7 +116,11 @@ maker note degrades to it, never to an error).
   view-order RANGE like every other Shift gesture: with interleaved
   bodies or a non-capture sort the frames between the two bursts come
   along, as Shift+arrows would take them (exact-member islands would be
-  a selection the wash cannot show honestly). Landing on the opener,
+  a selection the wash cannot show honestly) — and there the OTHER
+  body's burst can straddle the range's edge (validator 2026-08-28: body
+  1 = {1,3,5}, body 2 = {2,4,6}, Shift+`]` from single 0 selects 0..=5
+  and leaves 6 out); only the two bursts the gesture spans are widened
+  whole. Two-body shoots that need an exact burst use Ctrl+Shift+B. Landing on the opener,
   not on the selection's last frame, is the persona's call: the `]`
   rhythm survives releasing Shift, the last frame of a burst is the
   least interesting one to look at, and "look ahead with `]`, then
@@ -183,7 +189,8 @@ maker note degrades to it, never to an error).
       groups.
 - [x] Shift+`[`/`]` (issue #55): from a burst's opener Shift+`]` selects
       that burst whole plus the next territory; again adds the next burst;
-      the opposite key drops a whole burst, never half; flips past the
+      the opposite key drops a whole burst, never half (contiguous
+      view); flips past the
       anchor burst; from mid-burst the anchor's burst is taken whole, and
       Shift+`[` selects just this burst; a Shift+arrow after a burst span
       is frame-precise from the burst's edge; interleaved members select
