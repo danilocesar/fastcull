@@ -227,9 +227,10 @@ question is the same dialog state as Copy Picks. Modal, keyboard-contained
   (Shift+`]` is the natural pair of `]`): the common case — the burst under
   the cursor — needs no selection, but "burst 40 plus burst 41" is
   Shift+arrow over 60 frames today. A burst-grouping/selection change with
-  its own gate; tracked as an issue.
+  its own gate; tracked as issue #55.
 - **An "exported as video" badge** on the burst, like the Copy Picks
-  checkmark: USEFUL, not must-have; a new badge surface, deferred.
+  checkmark: USEFUL, not must-have; a new badge surface, deferred —
+  issue #56.
 
 ## Explicitly not built (panel rule, one year from release)
 
