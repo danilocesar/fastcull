@@ -322,6 +322,14 @@ because it is a promise to a user, not an implementation detail:
   cost column is Copy Picks' own: its answer costs bytes on top of a run
   that was going out anyway, while here there is one file whose size the
   plan line states already.
+- **A second export that loses a race for the same name gives up, it
+  does not retry.** Two exports aiming at the same "keep both" number
+  both plan `_1`; the first commits, and the second fails with "a file
+  appeared at the destination during the copy" rather than walking on to
+  `_2` (QE, 2026-08-28). This is the copy engine's own no-clobber
+  behaviour and the safe direction — the alternative is a write that
+  silently lands somewhere the user was never shown — so it stays, and it
+  is recorded rather than left to be rediscovered.
 - **The frame set is probed twice per export** — once when the dialog
   opens and once when the user commits (the plan built for the preview is
   never the one that runs, the same rule Copy Picks has). A file that

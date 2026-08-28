@@ -530,7 +530,9 @@ pub fn read_movie<R: std::io::Read + std::io::Seek>(r: &mut R) -> Result<Movie, 
             b"mdat" => mdat_at = Some(at),
             _ => {}
         }
-        at += size;
+        at = at
+            .checked_add(size)
+            .ok_or(QtError::Malformed("atom size overflows the file cursor"))?;
     }
     let moov = moov.ok_or(QtError::Malformed("no moov"))?;
     let mut m = Parsed::default();
@@ -1071,6 +1073,23 @@ mod tests {
                 v.extend_from_slice(&1u32.to_be_bytes());
                 v.extend_from_slice(b"moov");
                 v.extend_from_slice(&u64::MAX.to_be_bytes());
+                v
+            }),
+            // QE's own reproduction (2026-08-28), and a different shape
+            // from the two above: this `largesize` does not merely exceed
+            // the file, it wraps the cursor BACKWARDS past zero. In a
+            // release build the unchecked sum made the bounds check pass
+            // and the scan restart at offset 0, which is an endless loop,
+            // not a parse — it hung QE's run until it was killed. The
+            // debug panic and this hang are the same missing check.
+            ("a largesize atom that wraps the cursor backwards", {
+                let mut v = vec![0u8; 100];
+                v[0..4].copy_from_slice(&100u32.to_be_bytes());
+                v[4..8].copy_from_slice(b"free");
+                v.extend_from_slice(&1u32.to_be_bytes());
+                v.extend_from_slice(b"free");
+                v.extend_from_slice(&(u64::MAX - 99).to_be_bytes());
+                v.resize(200, 0);
                 v
             }),
             ("a largesize atom shorter than its own header", {
