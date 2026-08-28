@@ -921,6 +921,17 @@ fn verify(
     buf: &mut [u8],
 ) -> std::io::Result<()> {
     let mut file = std::fs::File::open(tmp)?;
+    // The size the dialog quoted, before anything else: a file that is
+    // longer than planned has something in it nobody wrote on purpose,
+    // and one that is shorter is a truncated write the sample walk below
+    // might still miss (it only reads the ranges the header names).
+    let on_disk = file.metadata()?.len();
+    if on_disk != plan.total_bytes {
+        return Err(std::io::Error::other(format!(
+            "the finished file is {on_disk} bytes, not the {} the plan promised",
+            plan.total_bytes
+        )));
+    }
     let movie = qt::read_movie(&mut file)
         .map_err(|e| std::io::Error::other(format!("the finished file did not parse back: {e}")))?;
     let expected = qt::sample_offsets(spec);
@@ -1928,6 +1939,39 @@ mod tests {
             "a file that failed verification must not exist at all: {:?}",
             listing(&dest)
         );
+        std::fs::remove_dir_all(&dir).ok();
+    }
+
+    /// A file longer or shorter than the plan promised is not the file
+    /// the user agreed to, whatever its samples hash to: extra bytes are
+    /// something nobody wrote on purpose, and missing ones are a
+    /// truncated write the sample walk can miss entirely — it only reads
+    /// the ranges the header names.
+    #[test]
+    fn a_file_that_is_not_the_size_the_plan_quoted_is_caught() {
+        let dir = scratch_dir("clip-size");
+        let src = dir.join("src");
+        let dest = dir.join("out");
+        let sources = burst(&src);
+        for extra in [b"appended".to_vec(), Vec::new()] {
+            let plan = plan(&sources, &dest, ClashPolicy::Ask).unwrap();
+            let truncate = extra.is_empty();
+            let (report, _) = run_tampered(&plan, |tmp| {
+                let mut bytes = std::fs::read(tmp).unwrap();
+                if truncate {
+                    bytes.truncate(bytes.len() - 1);
+                } else {
+                    bytes.extend_from_slice(&extra);
+                }
+                std::fs::write(tmp, bytes).unwrap();
+            });
+            let reason = report.failed.clone().expect("a wrong size must be caught");
+            assert!(
+                reason.contains("bytes, not the"),
+                "the failure must say the size is wrong: {reason}"
+            );
+            assert!(listing(&dest).is_empty(), "{:?}", listing(&dest));
+        }
         std::fs::remove_dir_all(&dir).ok();
     }
 
