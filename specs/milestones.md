@@ -110,6 +110,58 @@ before code, validator + QE with the module's hostile-input list, docs
 page `docs/export-video.md` in the same commit as the behaviour, one
 README bullet. Explicitly out for a year: any editing surface.
 
+## v0.11.0 (released 2026-08-28)
+
+One feature, the first thing FastCull writes that is neither a sidecar
+nor a copy: **Export Frames as Video** (M9, `modules/video-export.md`,
+ADR 0004).
+
+The idea came from the user: a 30 fps burst that produced a lovely second
+of motion but no keeper is not garbage — it is a Story. Select the frames
+(or just stand in the burst), `Ctrl+Shift+E`, and one QuickTime `.mov`
+lands in a folder you chose. Every frame in it is the camera's own
+embedded full-res JPEG, **copied byte for byte** — nothing decoded,
+scaled, cropped, rotated or re-compressed — and it plays at the speed
+you actually shot it, measured from the millisecond capture timestamps
+the camera wrote (the median gap, so two bursts selected together do not
+stretch each other). No options. Any crop, speed change or effect belongs
+in the phone editor afterwards: FastCull hands frames to an editor, it is
+never one. Your RAWs, sidecars and marks are not touched.
+
+Why Motion JPEG, and why no encoder: a three-persona product review
+(marketing, product owner, product manager; ~50 sources) found that no
+culling tool does this, that there is no H.264 encoder a static GPL
+binary can ship cleanly on Linux and Windows today (OpenH264 compiled
+from source is outside Cisco's royalty cover until November 2027; the
+pure-Rust AV1 encoder took 110 s for 30 frames and Meta does not accept
+AV1), and that the honest first mile — which frames, straight from the
+RAW folder, no develop step — is the part nobody serves. Muxing the
+camera's JPEGs needs no encoder and no licence, takes half a second for
+30 full-res frames, and the user tested the untouched 8640×5760 file in
+InShot on the phone: it imported and played.
+
+What the file is: `moov` before `mdat` so it plays while it copies;
+64-bit offsets always, because a 400-frame selection is 4.4 GB (QE
+exported a real 4.58 GB file and checked the last sample byte for byte);
+portrait bursts carry the rotation in the track matrix, pixels untouched;
+a frame that does not share the first frame's size or orientation is
+skipped and named in the dialog, never scaled. The write goes through the
+Copy Picks contract — one worker, temp name, no-clobber commit, the clash
+question with its three answers, and a verification that reads the
+finished file back and checks every sample against the hash taken on the
+way in before the file takes its name.
+
+Gate: persona review before code (nothing IN-MY-WAY; it chose the chord,
+the seeded destination and the fallback wording), then two validator and
+two QE rounds; fourteen deliberate mutations each turned exactly the
+expected test red; CI green on Linux and Windows on the final commit.
+Still unverified, and said so in the docs: a FastCull-made file on a
+phone (the phone test used ffmpeg's file of the same shape), InShot
+honouring the rotation flag on a portrait burst, other bodies' JPEG
+flavours. Follow-ups filed: #55 (select this burst / Shift+`]`), #56 (an
+exported badge), #58 (a Copy Picks stopwatch that should assert an
+invariant, not a clock).
+
 ## v0.10.0 (released 2026-08-22)
 
 Copy Picks. One bug report started it, and answering it properly
