@@ -145,10 +145,22 @@ pub(crate) fn open_folder_at(
     folder: &std::path::Path,
 ) {
     // Read BEFORE the swap: `load_folder` replaces the session, which
-    // drops the export handle (cancelling and joining its worker) and
-    // clears this. A worker that committed in that window left a real
-    // file, and the report below must not call that "nothing".
-    let landed_before_the_swap = state.borrow().clip.running_dst.clone();
+    // drops the export handle — cancelling and JOINING its worker — and
+    // clears both of these. A worker that committed in that window left a
+    // real file, and the report below must not call that "nothing".
+    //
+    // The FLAG, not the path: under an Overwrite answer the destination
+    // is occupied from the moment the export starts, so "the file is
+    // there" would have reported yesterday's file as this export's
+    // (validator finding, 2026-08-28). The flag is shared with the
+    // worker and is final once the join has happened.
+    let (swap_dst, swap_landed) = {
+        let st = state.borrow();
+        (
+            st.clip.running_dst.clone(),
+            st.clip.handle.as_ref().map(|h| h.landed_flag()),
+        )
+    };
     match load_folder(state, folder) {
         Ok(()) => {
             // Menu-open behaves like the CLI argument (spec): fresh
@@ -206,17 +218,11 @@ pub(crate) fn open_folder_at(
             // destination — which is why the running destination is kept.
             if win.get_clip_visible() {
                 if win.get_clip_state() == 1 {
-                    let landed = landed_before_the_swap.filter(|p| p.is_file());
+                    let landed =
+                        swap_landed.is_some_and(|f| f.load(std::sync::atomic::Ordering::Relaxed));
+                    let name = swap_dst.as_deref().map(crate::clip_bridge::file_name_of);
                     win.set_clip_report(
-                        match landed {
-                            Some(p) => format!(
-                                "The folder was changed. The video had already finished: {}",
-                                p.file_name().unwrap_or_default().to_string_lossy()
-                            ),
-                            None => "Cancelled — the folder was changed. Nothing was written."
-                                .to_string(),
-                        }
-                        .into(),
+                        crate::clip_bridge::swap_report(landed, name.as_deref()).into(),
                     );
                     win.set_clip_state(2);
                 } else {

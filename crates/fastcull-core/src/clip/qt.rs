@@ -538,20 +538,30 @@ pub fn read_movie<R: std::io::Read + std::io::Seek>(r: &mut R) -> Result<Movie, 
     let mut m = Parsed::default();
     walk(&moov, &mut m, 0)?;
 
+    // The mandatory fields BEFORE the sample tables: `build_samples`
+    // materialises one entry per sample, and a header missing `mdhd` or
+    // `stts` is not a movie no matter how big its tables claim to be.
+    // `MAX_MOOV` bounds the header itself but not the vectors derived
+    // from it, so refusing early is the difference between a rejected
+    // file and a few hundred megabytes of allocation on the way to
+    // rejecting it (validator finding, 2026-08-28).
+    let timescale = m.timescale.ok_or(QtError::Malformed("no mdhd"))?;
+    let sample_ms = m.sample_delta.ok_or(QtError::Malformed("no stts"))?;
+    let format = m
+        .format
+        .ok_or(QtError::Malformed("no sample description"))?;
     let samples = m.build_samples()?;
     Ok(Movie {
         major_brand,
-        timescale: m.timescale.ok_or(QtError::Malformed("no mdhd"))?,
-        sample_ms: m.sample_delta.ok_or(QtError::Malformed("no stts"))?,
+        timescale,
+        sample_ms,
         stts_entries: m.stts_entries,
         width: m.width,
         height: m.height,
         sample_width: m.sample_width,
         sample_height: m.sample_height,
         matrix: m.matrix,
-        format: m
-            .format
-            .ok_or(QtError::Malformed("no sample description"))?,
+        format,
         samples,
         co64: m.co64,
         moov_before_mdat: match (moov_at, mdat_at) {
@@ -1134,6 +1144,25 @@ mod tests {
         write_header(&mut only_ftyp, &spec(&[8], 1)).unwrap();
         only_ftyp.truncate(20);
         assert!(read_movie(&mut Cursor::new(only_ftyp)).is_err());
+    }
+
+    /// A header that is missing a mandatory field is refused BEFORE its
+    /// sample tables are materialised. `MAX_MOOV` bounds the header, not
+    /// the vectors derived from it, so a 60 MB `moov` with no `mdhd`
+    /// used to cost hundreds of megabytes of allocation on the way to
+    /// saying "no mdhd" (validator finding, 2026-08-28).
+    #[test]
+    fn a_header_missing_a_mandatory_field_is_refused_before_it_is_expanded() {
+        let mut good = movie_bytes(&spec(&[64, 64], 1));
+        // Break the media header's type so the walk never sees it. The
+        // sample tables are still perfectly well-formed.
+        let at = find(&good, b"mdhd").unwrap();
+        good[at..at + 4].copy_from_slice(b"xxxx");
+        let err = read_movie(&mut Cursor::new(good)).unwrap_err();
+        assert!(
+            matches!(err, QtError::Malformed(m) if m == "no mdhd"),
+            "expected the mandatory-field refusal, got {err:?}"
+        );
     }
 
     /// The reader walks the chunk tables for real rather than assuming

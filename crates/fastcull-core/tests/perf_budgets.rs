@@ -202,7 +202,18 @@ fn budget_video_export_30_frames_under_2s() {
     let Some(_serial) = measure_serially() else {
         return;
     };
-    let dir = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../../target/perf-clip");
+    // Scoped by process AND thread, like `testutil::scratch_dir` in the
+    // library: the gate runs a validator and a QE agent in parallel, in
+    // different target dirs, and one shared path here means one run's
+    // `remove_dir_all` deleting the other's 327 MB export mid-measurement
+    // (validator finding, 2026-08-28).
+    let dir = PathBuf::from(env!("CARGO_MANIFEST_DIR"))
+        .join("../../target")
+        .join(format!(
+            "perf-clip-{}-{:?}",
+            std::process::id(),
+            std::thread::current().id()
+        ));
     std::fs::remove_dir_all(&dir).ok();
     std::fs::create_dir_all(&dir).unwrap();
     let sources: Vec<fastcull_core::clip::ClipSource> = (0..30)

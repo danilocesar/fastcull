@@ -110,8 +110,9 @@ The file is a standard `.mov`. A file of exactly this shape — thirty
 untouched 8640×5760 Sony A1 frames, 328 MB — was imported and played in
 **InShot** on Android, which is why the format was chosen. Be precise
 about what that proves: the file in that test was muxed by ffmpeg, and
-FastCull's own differs from it only by leaving out two optional boxes and
-using the 64-bit offset table. ffmpeg decodes the two to identical
+FastCull's own differs from it only by leaving out three optional boxes
+(`edts`, `udta` and the `wide` placeholder) and using the 64-bit offset
+table. ffmpeg decodes the two to identical
 frames, and the rotation flag reads back correctly — but **nobody has yet
 put a FastCull-made file on a phone.** If you do, the project would like
 to hear about it either way.

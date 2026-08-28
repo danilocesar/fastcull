@@ -612,18 +612,21 @@ fn plan_with_free(
     // AFTER the natural name is composed, so checking too early accepted
     // a 255-byte plan that then wrote 257 and failed at the commit —
     // after the whole file was on disk (validator finding, 2026-08-28).
-    // Under `Ask` the keep-both candidate is checked too: a question that
-    // offers an answer the write cannot honour is worse than a refusal.
-    for candidate in [Some(&name_of(&dst)), keep_both_example.as_ref()]
-        .into_iter()
-        .flatten()
-    {
-        if candidate.len() > MAX_NAME_BYTES {
-            return Err(ClipError::NameTooLong {
-                len: candidate.len(),
-                name: candidate.clone(),
-            });
-        }
+    //
+    // Only the name THIS plan would write, deliberately: an earlier
+    // version also refused when the keep-both candidate was too long,
+    // which made the whole export impossible — including Overwrite,
+    // which writes the natural name and would have worked (validator
+    // finding, 2026-08-28). A user who then answers "keep both" gets the
+    // refusal from the replan that answer triggers, still before a byte
+    // is written, and the dialog drops back to the plan where Overwrite
+    // is one keystroke away.
+    let final_name = name_of(&dst);
+    if final_name.len() > MAX_NAME_BYTES {
+        return Err(ClipError::NameTooLong {
+            len: final_name.len(),
+            name: final_name,
+        });
     }
 
     // A destination that cannot hold a file this big for a reason free
@@ -727,10 +730,23 @@ impl ClipReport {
 
 pub struct ClipHandle {
     cancel: Arc<AtomicBool>,
+    landed: Arc<AtomicBool>,
     handle: Option<std::thread::JoinHandle<()>>,
 }
 
 impl ClipHandle {
+    /// Did the file actually get its final name? Shared with the worker,
+    /// so it survives this handle being DROPPED — which is how a session
+    /// swap cancels, and the swap then has to say whether anything
+    /// landed. A cancel that arrives after the commit is a file, and the
+    /// destination path alone cannot tell that from a file that was
+    /// already there under an Overwrite answer (validator finding,
+    /// 2026-08-28). Read it after the join: `Drop` joins, so by then the
+    /// answer is final.
+    pub fn landed_flag(&self) -> Arc<AtomicBool> {
+        Arc::clone(&self.landed)
+    }
+
     /// Cancellation between frames, and inside the long reads (the
     /// verify pass polls the same flag): a cancel is only as prompt as
     /// the operation's longest step.
@@ -765,22 +781,24 @@ impl Drop for ClipHandle {
 pub fn execute(plan: ClipPlan) -> (ClipHandle, Receiver<ClipEvent>) {
     let (tx, rx) = std::sync::mpsc::channel();
     let cancel = Arc::new(AtomicBool::new(false));
-    let flag = Arc::clone(&cancel);
+    let landed = Arc::new(AtomicBool::new(false));
+    let (flag, landed_flag) = (Arc::clone(&cancel), Arc::clone(&landed));
     let handle = std::thread::Builder::new()
         .name("export-video".into())
-        .spawn(move || run_plan(&plan, &tx, &flag))
+        .spawn(move || run_plan(&plan, &tx, &flag, &landed_flag))
         .expect("spawn video export worker");
     (
         ClipHandle {
             cancel,
+            landed,
             handle: Some(handle),
         },
         rx,
     )
 }
 
-fn run_plan(plan: &ClipPlan, tx: &Sender<ClipEvent>, cancel: &AtomicBool) {
-    run_plan_with(plan, tx, cancel, |_| {})
+fn run_plan(plan: &ClipPlan, tx: &Sender<ClipEvent>, cancel: &AtomicBool, landed: &AtomicBool) {
+    run_plan_with(plan, tx, cancel, landed, |_| {})
 }
 
 /// [`run_plan`] with a test seam. `tamper` runs on the TEMP file after it
@@ -792,6 +810,7 @@ fn run_plan_with(
     plan: &ClipPlan,
     tx: &Sender<ClipEvent>,
     cancel: &AtomicBool,
+    landed: &AtomicBool,
     tamper: impl FnOnce(&Path),
 ) {
     let mut report = ClipReport {
@@ -815,6 +834,10 @@ fn run_plan_with(
     }
     match write_clip(plan, tx, cancel, tamper) {
         Ok(Written::Committed { bytes }) => {
+            // Set before the report is sent, because on a session swap
+            // the report has nowhere to go: the receiver is already gone
+            // and this flag is the only thing that survives.
+            landed.store(true, Ordering::Relaxed);
             report.frames = plan.frames.len();
             report.bytes = bytes;
             report.path = Some(plan.dst.clone());
@@ -1790,23 +1813,26 @@ mod tests {
         let p = plan(&sources, &dest, ClashPolicy::Ask).unwrap();
         assert_eq!(p.file_name(), natural);
 
-        // Now the name is taken. "Keep both" would need `_1`, i.e. 257
-        // bytes, which no filesystem accepts — so the plan refuses rather
-        // than offering an answer the write cannot honour, and refuses
-        // under the answer itself too.
+        // Now the name is taken. The question is still ASKED — the plan
+        // would write the natural name, which fits — and the two answers
+        // that can be honoured still work.
         std::fs::write(dest.join(&natural), b"yesterday").unwrap();
-        for policy in [ClashPolicy::Ask, ClashPolicy::CreateCopies] {
-            match plan(&sources, &dest, policy) {
-                Err(ClipError::NameTooLong { len, .. }) => {
-                    assert_eq!(len, MAX_NAME_BYTES + 2, "{policy:?}")
-                }
-                other => panic!("{policy:?}: expected a refusal, got {other:?}"),
-            }
-        }
-        // Overwrite writes the natural name, which fits: it still works.
+        let asked = plan(&sources, &dest, ClashPolicy::Ask).unwrap();
+        assert_eq!(asked.action, ClipAction::Clash);
         let over = plan(&sources, &dest, ClashPolicy::Overwrite).unwrap();
         assert_eq!(over.file_name(), natural);
         assert_eq!(over.action, ClipAction::Replace);
+
+        // Only "keep both" cannot be honoured: `_1` makes 257 bytes, and
+        // it is refused BEFORE anything is written — by the replan that
+        // the answer itself triggers, which is where the user finds out
+        // and where Overwrite is still one keystroke away. Refusing the
+        // whole plan instead would have taken Overwrite away too
+        // (validator finding, 2026-08-28).
+        match plan(&sources, &dest, ClashPolicy::CreateCopies) {
+            Err(ClipError::NameTooLong { len, .. }) => assert_eq!(len, MAX_NAME_BYTES + 2),
+            other => panic!("expected a refusal, got {other:?}"),
+        }
         std::fs::remove_dir_all(&dir).ok();
     }
 
@@ -1909,8 +1935,8 @@ mod tests {
 
     fn run_tampered(plan: &ClipPlan, tamper: impl FnOnce(&Path)) -> (ClipReport, Vec<String>) {
         let (tx, rx) = std::sync::mpsc::channel();
-        let cancel = AtomicBool::new(false);
-        run_plan_with(plan, &tx, &cancel, tamper);
+        let (cancel, landed) = (AtomicBool::new(false), AtomicBool::new(false));
+        run_plan_with(plan, &tx, &cancel, &landed, tamper);
         drop(tx);
         let mut report = None;
         let mut events = Vec::new();
@@ -2152,8 +2178,9 @@ mod tests {
         let sources = burst(&src);
         let plan = plan(&sources, &dest, ClashPolicy::Ask).unwrap();
         let (tx, rx) = std::sync::mpsc::channel();
-        let cancel = AtomicBool::new(true); // cancelled before the first frame
-        run_plan(&plan, &tx, &cancel);
+        // Cancelled before the first frame.
+        let (cancel, landed) = (AtomicBool::new(true), AtomicBool::new(false));
+        run_plan(&plan, &tx, &cancel, &landed);
         drop(tx);
         let report = rx
             .into_iter()
@@ -2344,6 +2371,48 @@ mod tests {
                 .is_some_and(|t| t.contains("assumed 15 fps")),
             "the report must repeat the plan's own words about the cadence"
         );
+        std::fs::remove_dir_all(&dir).ok();
+    }
+
+    /// The flag a session swap reads. It says WHETHER the file took its
+    /// final name — which the destination path alone cannot, because
+    /// under an Overwrite answer that path is occupied from the start
+    /// (validator finding, 2026-08-28: the swap's message pointed at
+    /// yesterday's file and called it this export's).
+    #[test]
+    fn the_landed_flag_says_whether_not_where() {
+        let dir = scratch_dir("clip-landed");
+        let src = dir.join("src");
+        let dest = dir.join("out");
+        let sources = burst(&src);
+        std::fs::create_dir_all(&dest).unwrap();
+        // An Overwrite whose destination is occupied BEFORE the run: the
+        // path exists throughout, so only the flag can tell the two
+        // apart.
+        std::fs::write(dest.join("a-c.mov"), b"yesterday's export").unwrap();
+        let plan = plan(&sources, &dest, ClashPolicy::Overwrite).unwrap();
+        assert!(plan.dst.is_file(), "the fixture must be occupied already");
+
+        // Cancelled before the first frame: nothing landed, even though
+        // the destination path is a file.
+        let (tx, rx) = std::sync::mpsc::channel();
+        let (cancel, landed) = (AtomicBool::new(true), AtomicBool::new(false));
+        run_plan(&plan, &tx, &cancel, &landed);
+        drop(rx);
+        assert!(!landed.load(Ordering::Relaxed), "a cancel landed nothing");
+        assert_eq!(
+            std::fs::read(&plan.dst).unwrap(),
+            b"yesterday's export",
+            "and left the old file alone"
+        );
+
+        // Run for real: now it landed.
+        let (tx, rx) = std::sync::mpsc::channel();
+        let (cancel, landed) = (AtomicBool::new(false), AtomicBool::new(false));
+        run_plan(&plan, &tx, &cancel, &landed);
+        drop(rx);
+        assert!(landed.load(Ordering::Relaxed));
+        assert_ne!(std::fs::read(&plan.dst).unwrap(), b"yesterday's export");
         std::fs::remove_dir_all(&dir).ok();
     }
 

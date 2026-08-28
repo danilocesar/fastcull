@@ -185,10 +185,22 @@ as user-verified or NOT VERIFIED.
   are the FIRST AND LAST FRAME IN THE FILE, never a skipped one, or the
   range would name frames the user cannot find inside it; two equal stems
   (the same name with two extensions) collapse to `<stem>.mov` rather
-  than `a-a.mov`; and a composed name over **255 bytes** — the per-name
-  limit of every mainstream filesystem, reachable from two long stems —
-  is refused at PLAN time, because discovering it at commit time would
-  cost the user the whole write first.
+  than `a-a.mov`; and a name over **255 bytes** — the per-name limit of
+  every mainstream filesystem, reachable from two long stems — is refused
+  at PLAN time, because discovering it at commit time would cost the user
+  the whole write first.
+
+  The length is checked on **the name this plan would write**, `_k`
+  suffix included — not on the natural name before the clash question is
+  resolved (validator finding, 2026-08-28: checking early accepted a
+  255-byte plan that then wrote 257 under "keep both" and failed at the
+  commit with the file already on disk). Each answer is therefore judged
+  on its own: a 255-byte name whose destination is occupied still gets
+  the question, Overwrite still works because it writes that same name,
+  and only "keep both" is refused — by the replan that answer itself
+  triggers, still before a byte is written, dropping back to the plan
+  where Overwrite is one keystroke away. Refusing the whole plan instead
+  would take away an answer that works.
 - **Destination**: a folder the user chooses, remembered across sessions
   as `clip_dest` in `ui.toml`. **Seeded from the Copy Picks destination
   until a clip folder is first chosen** (persona decision 2026-08-27: on an
@@ -336,6 +348,16 @@ because it is a promise to a user, not an implementation detail:
   changes between the two is caught by the write's `read_exact`: a frame
   whose bytes have shrunk fails the export honestly rather than writing a
   sample shorter than the size already in the header.
+- **A session swap during a running export reports what LANDED, from a
+  flag, not from the destination path.** The swap cancels by dropping the
+  handle, which cancels and joins; a worker that had already committed
+  leaves a real file whose report dies with the receiver. The worker
+  therefore sets a shared flag the moment the file takes its final name,
+  and the swap reads that. Looking at the path instead is wrong in one
+  specific and very reachable case (validator finding, 2026-08-28): under
+  an Overwrite answer the destination is occupied from the moment the
+  export starts, so "the file is there" reported YESTERDAY's file as this
+  export's.
 - **Two limits of "cancel", named rather than papered over** (validator
   findings, 2026-08-28). The cancel flag is polled between frames and
   again per sample of the read-back, but the `fsync` between those two
@@ -463,6 +485,7 @@ sample RAWs), `app:` = the driven `tests/screenshot.rs` test.
       (the 0-byte RAW),
       `core: names_with_spaces_and_unicode_survive_into_the_file_name`,
       `core: an_impossible_name_refuses_before_anything_is_written`,
+      `core: the_name_check_follows_the_suffix`,
       `core: a_destination_that_is_not_a_folder_refuses_at_plan_time`
       (a file AND a dangling symlink),
       `core: a_read_only_destination_fails_honestly_and_leaves_nothing`,

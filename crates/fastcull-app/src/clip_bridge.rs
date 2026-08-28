@@ -347,14 +347,7 @@ fn clip_replan_with(win: &MainWindow, st: &mut AppState, policy: ClashPolicy) {
                             .strip_prefix("skipped — ")
                             .unwrap_or("they have nothing usable inside them")
                     ),
-                    // Raw byte counts are what core stores; a person
-                    // reading "need 4823456789 bytes" learns nothing
-                    // they can act on.
-                    ClipError::InsufficientSpace { needed, free } => format!(
-                        "This video would be {} and there is {} free at the destination.",
-                        human_bytes(*needed),
-                        human_bytes(*free)
-                    ),
+                    ClipError::InsufficientSpace { needed, free } => no_room_for_it(*needed, *free),
                     other => other.to_string(),
                 }
                 .into(),
@@ -421,6 +414,40 @@ pub(crate) fn mirrored_note(n: usize) -> String {
     }
 }
 
+/// What the dialog says when the folder changed under a running export.
+///
+/// A free function with a test because it is the one message in this
+/// feature that asserts something about the disk without looking at it
+/// — the export either committed before the cancel reached it or it did
+/// not, and saying the wrong one is the failure this wording exists to
+/// avoid (validator finding, 2026-08-28).
+pub(crate) fn swap_report(landed: bool, name: Option<&str>) -> String {
+    match (landed, name) {
+        (true, Some(name)) => {
+            format!("The folder was changed. The video had already finished: {name}")
+        }
+        (true, None) => "The folder was changed. The video had already finished.".to_string(),
+        (false, _) => "Cancelled — the folder was changed. Nothing was written.".to_string(),
+    }
+}
+
+/// A path's file name as a plain string.
+pub(crate) fn file_name_of(p: &std::path::Path) -> String {
+    p.file_name()
+        .map(|n| n.to_string_lossy().into_owned())
+        .unwrap_or_default()
+}
+
+/// The free-space refusal, in units a person reads. Core stores the
+/// numbers as bytes, which is right for core and useless on screen.
+pub(crate) fn no_room_for_it(needed: u64, free: u64) -> String {
+    format!(
+        "This video would be {} and there is {} free at the destination.",
+        human_bytes(needed),
+        human_bytes(free)
+    )
+}
+
 /// A duration in seconds with one decimal — "1.0 s".
 pub(crate) fn seconds(ms: u64) -> String {
     format!("{:.1} s", ms as f64 / 1000.0)
@@ -438,6 +465,30 @@ mod tests {
         assert_eq!(suffix_of("a-b_12.mov", "a-b.mov"), "_12");
         // Unrelated names cannot happen, and must not silently print "".
         assert_eq!(suffix_of("other.mov", "a-b.mov"), "other");
+    }
+
+    /// The two messages this bridge composes without looking at the
+    /// disk. Both used to be formatted inside a closure no test could
+    /// reach (validator finding, 2026-08-28).
+    #[test]
+    fn the_two_untestable_messages_now_have_a_test() {
+        assert_eq!(
+            swap_report(true, Some("DSC05010-DSC05039.mov")),
+            "The folder was changed. The video had already finished: DSC05010-DSC05039.mov"
+        );
+        assert_eq!(
+            swap_report(false, Some("DSC05010-DSC05039.mov")),
+            "Cancelled — the folder was changed. Nothing was written."
+        );
+        // A landed export whose name we somehow lost still must not claim
+        // that nothing was written.
+        assert!(swap_report(true, None).contains("had already finished"));
+        assert!(!swap_report(true, None).contains("Nothing"));
+
+        assert_eq!(
+            no_room_for_it(4_823_456_789, 1_234_567_890),
+            "This video would be 4.5 GB and there is 1.1 GB free at the destination."
+        );
     }
 
     #[test]

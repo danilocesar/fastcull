@@ -54,6 +54,12 @@ symlink counts too), it asks once, for the whole run:
   changed. The report then says *"145 already identical — re-verified in
   place"* — which makes a second `Ctrl+E` a free "is my export still
   bit-perfect?" pass before you wipe the card.
+- The Overwrite promise has one hair-splitting exception, worth knowing
+  if you copy onto a card: on a filesystem with no hard links (FAT32,
+  exFAT, some network mounts) FastCull has to check the name and then
+  write it as two steps instead of one, so a file that appears in that
+  split second is replaced. On any ordinary disk the two are a single
+  operation and cannot be raced.
 - **Cancel** copies **nothing at all** — not even the files that had no
   clash. `Esc` does the same and leaves the dialog on your plan, so
   pointing it at another folder is one step.
