@@ -951,7 +951,20 @@ fn write_status_and_chrome(
     // Is there anything to export as video right now? The menu item's
     // enabled state follows this; the KEY works either way and explains
     // itself below (video-export.md: never a silent grey item).
-    let clip_frames = crate::clip_bridge::clip_scope(st).len();
+    // The CHEAP count (core's `scope_len`), not the list: this runs on
+    // every repaint, and building the list means scanning the whole
+    // session's burst grouping for a number the status line has already
+    // computed. The selection count is `sel_note`'s own; the burst size
+    // is the badge's own.
+    let clip_frames = fastcull_core::clip::scope_len(
+        st.grid.selection.count_in_view(&st.grid.view),
+        st.bursts
+            .pos
+            .get(cursor)
+            .copied()
+            .flatten()
+            .map_or(0, |(_, n)| n),
+    );
     win.set_clip_available(fastcull_core::clip::unavailable_reason(clip_frames).is_none());
     // A refused export explains itself HERE, where the user is already
     // looking after a keystroke that appeared to do nothing. It expires

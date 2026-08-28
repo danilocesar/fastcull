@@ -342,6 +342,26 @@ pub fn scope(selected: &[usize], cursor: usize, group_of: &[Option<usize>]) -> V
         .collect()
 }
 
+/// How many frames the export would take, WITHOUT building the list.
+///
+/// The menu item's enabled state asks this on every refresh, and
+/// [`scope`] answers it by scanning the whole session's grouping — 50,000
+/// comparisons per repaint on a big folder, for a number the app already
+/// has: the selection count the status bar shows, and the burst size the
+/// burst badge shows. Both are O(1) to the caller.
+///
+/// Kept next to `scope` so the two can never drift, and
+/// `the_scope_and_its_count_agree` pins that they do — the same
+/// arrangement `Selection::batch` and `Selection::count_in_view` have,
+/// and for the same reason.
+pub fn scope_len(selected: usize, burst_size: usize) -> usize {
+    if selected > 0 {
+        selected
+    } else {
+        burst_size
+    }
+}
+
 /// Why the export cannot run, in the words the status line says it —
 /// `None` when it can. The menu item is disabled in both non-None cases,
 /// and pressing the key anyway says this rather than doing nothing
@@ -1189,6 +1209,33 @@ mod tests {
         assert_eq!(unavailable_reason(2), None);
         // A cursor past the end of a (stale) grouping is not a panic.
         assert!(scope(&[], 99, &groups).is_empty());
+    }
+
+    /// The cheap count and the real list must always agree: the menu
+    /// item is enabled from one and the export runs on the other, and a
+    /// disagreement is an item that opens a dialog with nothing in it
+    /// (or refuses to open one that would have worked).
+    #[test]
+    fn the_scope_and_its_count_agree() {
+        let groups = vec![Some(0), Some(0), Some(0), None, Some(1), Some(1)];
+        // No selection: the count is the burst size under the cursor.
+        for cursor in 0..groups.len() {
+            let burst = groups[cursor]
+                .map(|g| groups.iter().filter(|x| **x == Some(g)).count())
+                .unwrap_or(0);
+            assert_eq!(
+                scope(&[], cursor, &groups).len(),
+                scope_len(0, burst),
+                "cursor {cursor}"
+            );
+        }
+        // With a selection, the selection wins in both.
+        for selected in [vec![1usize], vec![1, 2], vec![0, 1, 4, 5]] {
+            assert_eq!(
+                scope(&selected, 0, &groups).len(),
+                scope_len(selected.len(), 3)
+            );
+        }
     }
 
     // ------------------------------------------------------------ order

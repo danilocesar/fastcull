@@ -188,11 +188,25 @@ pub(crate) fn wire(window: &MainWindow, state: &Rc<RefCell<AppState>>) {
 /// otherwise the burst under the cursor. The RULE lives in core
 /// (`clip::scope`, CLAUDE.md rule 5); this only supplies the three inputs.
 pub(crate) fn clip_scope(st: &AppState) -> Vec<usize> {
-    let selected = if st.grid.selection.is_empty() {
-        Vec::new()
-    } else {
-        st.grid.selection.batch(&st.grid.view, st.grid.cursor)
-    };
+    // The selection AS THE STATUS BAR COUNTS IT: selected ids that are in
+    // the view, in view order. Deliberately not `Selection::batch`, whose
+    // job is different — it falls back to the cursor alone when nothing
+    // in view is selected, and one frame is not a video. That fallback
+    // would make a selection scrolled out of the filter read as "one
+    // frame selected" here while the menu item (which counts the same way
+    // the status bar does) still offered the burst.
+    let selected: Vec<usize> = st
+        .grid
+        .view
+        .iter()
+        .copied()
+        .filter(|id| st.grid.selection.is_selected(*id))
+        .collect();
+    debug_assert_eq!(
+        selected.len(),
+        st.grid.selection.count_in_view(&st.grid.view),
+        "the export's scope and the count the menu item is enabled from must agree"
+    );
     clip::scope(&selected, st.grid.cursor, &st.bursts.group_of)
 }
 
