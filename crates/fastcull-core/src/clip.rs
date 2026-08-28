@@ -647,10 +647,14 @@ pub enum ClipEvent {
         total: usize,
         name: String,
     },
-    /// The samples are written; the finished file is being re-read and
-    /// re-hashed. On a 4 GB export this pass is long enough that a silent
-    /// progress line reads as a hang.
-    Verifying,
+    /// The samples are written and the finished file is being re-read and
+    /// re-hashed, sample by sample. This carries its own count because on
+    /// a 400-frame 4.4 GB export the pass takes tens of seconds, and a
+    /// progress line frozen at "400 / 400" reads as a hang.
+    Verifying {
+        index: usize,
+        total: usize,
+    },
     Finished(ClipReport),
 }
 
@@ -855,8 +859,7 @@ fn write_clip(
             return Ok(Written::Cancelled);
         }
         tamper(&tmp);
-        tx.send(ClipEvent::Verifying).ok();
-        verify(&tmp, plan, &spec, &hashes, cancel, &mut buf)?;
+        verify(&tmp, plan, &spec, &hashes, cancel, &mut buf, tx)?;
         if cancel.load(Ordering::Relaxed) {
             return Ok(Written::Cancelled);
         }
@@ -919,6 +922,7 @@ fn verify(
     hashes: &[blake3::Hash],
     cancel: &AtomicBool,
     buf: &mut [u8],
+    tx: &Sender<ClipEvent>,
 ) -> std::io::Result<()> {
     let mut file = std::fs::File::open(tmp)?;
     // The size the dialog quoted, before anything else: a file that is
@@ -963,6 +967,11 @@ fn verify(
         if cancel.load(Ordering::Relaxed) {
             return Ok(());
         }
+        tx.send(ClipEvent::Verifying {
+            index: i + 1,
+            total: plan.frames.len(),
+        })
+        .ok();
         if sample.size != frame.len || Some(&sample.offset) != expected.get(i) {
             return Err(std::io::Error::other(format!(
                 "sample {} is not where the plan put it",
@@ -1817,7 +1826,9 @@ mod tests {
                 ClipEvent::Frame { index, total, name } => {
                     events.push(format!("{index}/{total} {name}"))
                 }
-                ClipEvent::Verifying => events.push("verifying".into()),
+                ClipEvent::Verifying { index, total } => {
+                    events.push(format!("verify {index}/{total}"))
+                }
                 ClipEvent::Finished(r) => report = Some(r),
             }
         }
@@ -1884,7 +1895,19 @@ mod tests {
         // The progress the dialog shows: one line per frame, in order,
         // then the verify pass (which on a 4 GB file is long enough that
         // silence would read as a hang).
-        assert_eq!(events, ["1/3 a.ARW", "2/3 b.ARW", "3/3 c.ARW", "verifying"],);
+        assert_eq!(
+            events,
+            [
+                "1/3 a.ARW",
+                "2/3 b.ARW",
+                "3/3 c.ARW",
+                // The read-back counts too: on a 4 GB export this pass
+                // takes tens of seconds, and silence reads as a hang.
+                "verify 1/3",
+                "verify 2/3",
+                "verify 3/3",
+            ],
+        );
         // Nothing but the one file — no `.fastcull-partial-*` left over.
         assert_eq!(listing(&dest), ["a-c.mov"]);
 

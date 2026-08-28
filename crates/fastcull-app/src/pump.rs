@@ -194,12 +194,15 @@ pub(crate) fn start(window: &MainWindow, state: &Rc<RefCell<AppState>>) -> slint
                                     );
                                 }
                             }
-                            ClipEvent::Verifying => {
-                                // On a 4 GB export the read-back is long
-                                // enough that a frozen "30 / 30" would
-                                // read as a hang.
+                            ClipEvent::Verifying { index, total } => {
+                                // The read-back counts too: on a 4 GB
+                                // export it takes tens of seconds, and a
+                                // line frozen at "400 / 400" reads as a
+                                // hang.
                                 if let Some(win) = win.upgrade() {
-                                    win.set_clip_progress("Verifying the file…".into());
+                                    win.set_clip_progress(
+                                        format!("Verifying {index} / {total}").into(),
+                                    );
                                 }
                             }
                             ClipEvent::Finished(report) => {
