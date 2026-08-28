@@ -105,6 +105,24 @@ stays in filename order for that session. Close the folder and reopen it;
 if it happens again, the file the counter is stuck on is the one to look
 at.
 
+**The video I exported is enormous. Did something go wrong?**
+No — that is what it is. The frames in it are the camera's own full-size
+JPEGs, copied without being touched, so a Sony A1 frame is about 11 MB
+and a 30-frame burst is around 330 MB. Making it smaller would mean
+re-compressing your photographs, which is the one thing this export
+refuses to do; your video editor will do it once, at the end, when it
+knows what the clip is actually going to be. See
+[Export Frames as Video](export-video.md).
+
+**My phone editor won't open the exported video.**
+The file is a standard QuickTime `.mov` holding Motion JPEG, which is
+about as widely readable as video gets — but the frames inside it are
+50-megapixel stills, which is unusual video material. That is the likely
+sticking point, not the format. What has been tested end to end is InShot
+on Android with a real 30-frame 8640×5760 export; other editors, iOS, and
+whether a portrait burst comes out upright are all unverified, and the
+project would like to hear about it either way.
+
 ---
 
 Back to: [Getting started](index.md) ·
