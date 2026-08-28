@@ -213,8 +213,10 @@ impl Builder {
     fn full(&mut self, version: u8, flags: u32) {
         self.u32((u32::from(version) << 24) | (flags & 0x00ff_ffff));
     }
-    /// A QuickTime counted string in a fixed-width field: one length byte
-    /// then the text, padded with zeros.
+    /// A QuickTime counted (Pascal) string: one length byte, then the
+    /// text. The two handler names are the only ones this module writes,
+    /// and both are short — the length byte is a `u8` and nothing here
+    /// approaches it.
     fn counted(&mut self, text: &str) {
         let bytes = text.as_bytes();
         self.0.push(bytes.len() as u8);
@@ -235,15 +237,16 @@ impl Builder {
 /// "zero-length" — a wrapped 0 makes a file that some players refuse to
 /// open at all. In practice this cannot trigger (a 4 GB export at 10 fps
 /// is 400 s = 400,000 ticks).
-/// A sample count in the 32-bit field the format gives it. Saturating
-/// like [`ticks32`]: a selection of four billion frames cannot exist, and
-/// a silent wrap would be the worst possible way to find out otherwise.
-fn sample_count(n: usize) -> u32 {
-    u32::try_from(n).unwrap_or(u32::MAX)
-}
-
 fn ticks32(ms: u64) -> u32 {
     u32::try_from(ms).unwrap_or(u32::MAX)
+}
+
+/// A sample count in the 32-bit field the format gives it. Saturating
+/// like [`ticks32`], and for the same reason: a selection of four billion
+/// frames cannot exist, and a silent wrap would be the worst possible way
+/// to find out otherwise.
+fn sample_count(n: usize) -> u32 {
+    u32::try_from(n).unwrap_or(u32::MAX)
 }
 
 /// Write `ftyp`, the whole `moov`, and the `mdat` header — everything
