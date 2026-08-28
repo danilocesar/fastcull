@@ -82,25 +82,40 @@ burst grouping (burst.rs). The export uses that timestamp:
    30 fps A1 burst reads ~33 ms gaps → 30.3 fps; the file plays in real
    time, 1 s for 30 frames. The median, not the mean, so that one pause
    (the gap between two squeezes selected together) does not stretch every
-   frame.
+   frame. Only a pair of CONSECUTIVE frames that BOTH carry SubSec
+   precision contributes a gap (implementation 2026-08-27): a whole-second
+   timestamp dropped into a burst would otherwise add a spurious 1000 ms
+   sample to the population the median is taken from.
 2. **Gaps are not preserved.** A gap larger than the median plays as one
    frame step: two bursts selected together play back to back, the pause
    between them dropped. Recorded alternative, rejected: true per-frame
    durations (QuickTime allows it) would make a 5 s pause a 5 s freeze
    inside the clip and produce variable-frame-rate files that some editors
    mishandle; the phone editor is where pacing is decided.
-3. **Fallbacks, reported in the completion line.** Frames lacking SubSec
-   (1 s granularity: gaps of 0 or 1000 ms) or lacking a timestamp at all →
-   the cadence cannot be measured → **15 fps**, and the report says
-   "timing not in the files — assumed 15 fps". A median gap below 10 ms or
-   above 1000 ms (two bodies interleaved, or a selection of singles) →
-   clamped to [10 fps, 120 fps] and reported likewise. Duration and fps
-   are shown in the plan line before the user confirms, so a wrong cadence
-   is visible before a byte is written — and the plan line carries the
-   SAME "assumed 15 fps" / "clamped" wording as the report (persona: it
-   must be impossible to miss before Enter). When the cadence was
-   measured, neither line says where it came from; the parenthesis appears
-   only in the fallback cases.
+3. **Fallbacks, reported in the completion line.** No pair of frames with
+   SubSec precision (1 s granularity, or no timestamp at all) → the
+   cadence cannot be measured → **15 fps**, and both lines say
+   "timing not in the files — assumed 15 fps". A median gap outside the
+   playable window (two bodies interleaved, or a selection of singles) →
+   clamped, and both lines say so: "gaps of 4.0 s — clamped to 10 fps".
+   Duration and fps are shown in the plan line before the user confirms,
+   so a wrong cadence is visible before a byte is written — and the plan
+   line carries the SAME wording as the report (persona: it must be
+   impossible to miss before Enter). When the cadence was measured,
+   neither line says where it came from: the line is just "30.3 fps".
+
+   **The window, settled at implementation time (2026-08-27).** This
+   paragraph used to name two different windows — a trigger of "below
+   10 ms or above 1000 ms" and a clamp target of "[10 fps, 120 fps]" —
+   which disagree: a 500 ms median gap trips neither trigger and is
+   2 fps, well outside the fps window. The fps window wins, because it is
+   the one that guarantees a file an editor can use. So: **the sample
+   duration is the median gap clamped into [9 ms, 100 ms]**, and the
+   clamped wording appears whenever the clamp actually moved it. 100 ms
+   is exactly the promised 10 fps floor; 9 ms is 111 fps, the fastest
+   whole millisecond inside the promised 120 fps ceiling (8 ms would be
+   125 fps, i.e. outside it) — 120 fps itself is not representable at
+   timescale 1000.
 
 ## The container
 
@@ -150,6 +165,14 @@ as user-verified or NOT VERIFIED.
 - **Name**: `<first stem>-<last stem>.mov` in capture order, e.g.
   `DSC05010-DSC05039.mov`; one frame per stem, so it doubles as the
   frame-range record. Rename templates do not apply (there is one file).
+  Three details settled at implementation time (2026-08-27): the stems
+  are the FIRST AND LAST FRAME IN THE FILE, never a skipped one, or the
+  range would name frames the user cannot find inside it; two equal stems
+  (the same name with two extensions) collapse to `<stem>.mov` rather
+  than `a-a.mov`; and a composed name over **255 bytes** — the per-name
+  limit of every mainstream filesystem, reachable from two long stems —
+  is refused at PLAN time, because discovering it at commit time would
+  cost the user the whole write first.
 - **Destination**: a folder the user chooses, remembered across sessions
   as `clip_dest` in `ui.toml`. **Seeded from the Copy Picks destination
   until a clip folder is first chosen** (persona decision 2026-08-27: on an
@@ -170,11 +193,14 @@ as user-verified or NOT VERIFIED.
   "all checksums verified" appears only when that passed for every frame.
   The `moov` is re-parsed from the finished file by the in-tree reader and
   must describe exactly the samples written.
-- **Free space**: sum of the JPEG lengths + a header allowance, checked at
-  plan time like Copy Picks; a destination whose filesystem cannot hold a
-  file of that size (FAT32 above 4 GB) fails honestly at write time with
-  the OS error and the temp file removed — recorded, not pre-detected
-  (there is no portable way to ask).
+- **Free space**: sum of the JPEG lengths + the header, checked at plan
+  time like Copy Picks. The header is not an allowance but an exact
+  number: every sample size is known before the write, so the size the
+  dialog quotes is the size the file ends up having.
+  A destination whose filesystem cannot hold a file of that size (FAT32
+  above 4 GB) fails honestly at write time with the OS error and the temp
+  file removed — recorded, not pre-detected (there is no portable way to
+  ask).
 
 ## Dialog (minimums)
 
@@ -185,8 +211,10 @@ fire from a fat finger mid `]`/`N` (persona 2026-08-27). Disabled with its
 reason in the status line, never a silent grey item. One dialog in the
 Copy Picks style:
 destination row with a Choose… button and the remembered path; one plan
-line — *"30 frames · 8640×5760 · 30 fps (from the camera's timestamps) ·
-1.0 s · 328 MB → DSC05010-DSC05039.mov · 358 GB free"*; a skipped line
+line — *"30 frames · 8640×5760 · 30.3 fps · 1.0 s · 328 MB →
+DSC05010-DSC05039.mov · 358 GB free"*, whose cadence field carries the
+fallback wording instead of the bare rate when there is one; a skipped
+line
 when there is one; **Export** (Enter, when the plan is clean) and Cancel
 (Esc); progress "n / N" with Cancel while writing; the report with the
 verified line and an Open folder action. No other control. The clash

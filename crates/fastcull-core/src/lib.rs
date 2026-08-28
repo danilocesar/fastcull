@@ -14,6 +14,7 @@
 pub mod burst;
 pub mod cache;
 pub mod catalog;
+pub mod clip;
 pub mod exif;
 pub mod fileops;
 pub mod filter;

@@ -1,0 +1,1297 @@
+//! Export frames as video (specs/modules/video-export.md): the selected
+//! frames' embedded full-res JPEGs, copied byte-for-byte into ONE Motion
+//! JPEG QuickTime file.
+//!
+//! Same two-phase shape as the copy engine (fileops.rs): a PLAN that
+//! reads but never writes, then an EXECUTE on a worker thread with
+//! streaming BLAKE3 verification. It reuses the copy engine's file
+//! primitives on purpose — the unique temp name, the no-clobber commit,
+//! the clash policy — because ADR 0004 gives both operations the same
+//! contract: nothing at the destination is replaced without the user's
+//! Overwrite answer, and no RAW is ever opened for writing.
+//!
+//! This module decides three things the copy engine has no equivalent of:
+//!
+//! 1. **The cadence** — how long each frame is on screen — measured from
+//!    the frames' own capture timestamps (`Cadence`).
+//! 2. **Which frames may share one track** — a Motion JPEG track has ONE
+//!    frame size and ONE display orientation, so anything that does not
+//!    match the first frame is skipped and reported, never scaled.
+//! 3. **Where the JPEG bytes are** — an offset and a length inside each
+//!    RAW, so the write is a byte copy and the samples are never all in
+//!    memory at once.
+
+pub mod qt;
+
+use std::path::{Path, PathBuf};
+
+use crate::fileops::ClashPolicy;
+
+/// Sample duration assumed when the frames carry no usable timing
+/// (video-export.md: "timing not in the files — assumed 15 fps"). 67 ms
+/// is 1/15 s rounded to the movie timescale of 1000.
+const ASSUMED_SAMPLE_MS: u32 = 67;
+
+/// Shortest sample this module will write, in milliseconds — 9 ms is
+/// 111 fps, the fastest whole-millisecond cadence that still sits inside
+/// the spec's [10 fps, 120 fps] window at timescale 1000 (8 ms would be
+/// 125 fps, i.e. outside it).
+const MIN_SAMPLE_MS: u32 = 9;
+
+/// Longest sample this module will write: 100 ms is 10 fps, the spec's
+/// floor. A selection of singles shot minutes apart plays at 10 fps and
+/// says so, rather than becoming a one-frame-per-minute "video".
+const MAX_SAMPLE_MS: u32 = 100;
+
+/// Longest destination file name this module will try to create. Every
+/// mainstream filesystem stops at 255 BYTES per name (ext4, APFS, NTFS,
+/// exFAT), and the name here is built from two of the user's own file
+/// stems, so two long stems can exceed it. Refusing at plan time costs
+/// the user a message; finding out at commit time would cost them the
+/// whole write first (the bytes are already on disk by then).
+const MAX_NAME_BYTES: usize = 255;
+
+/// One frame offered to the export, in any order — [`plan`] sorts.
+#[derive(Clone, Debug)]
+pub struct ClipSource {
+    /// Session image id (the app's own handle on the frame).
+    pub id: usize,
+    pub path: PathBuf,
+    /// The file's name as it is on disk (`DSC05010.ARW`): the output name
+    /// is built from these stems, and it is the tiebreak when two frames
+    /// carry the same timestamp.
+    pub name: String,
+    /// Capture instant in milliseconds, `burst::FrameMeta::time_ms`.
+    /// None = the file carries no usable timestamp.
+    pub time_ms: Option<i64>,
+    /// Did `SubSecTimeOriginal` contribute? Without it the timestamp has
+    /// 1 s granularity and cannot measure a burst's cadence.
+    pub has_subsec: bool,
+}
+
+/// Why a frame is not in the file.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub enum SkipReason {
+    /// No embedded JPEG this app can use (the loupe's "no usable embedded
+    /// preview" case, a 0-byte file, an unreadable one).
+    NoPreview,
+    /// A different frame size from the first frame's. Scaling it would be
+    /// a re-encode and padding it would be an edit, so it is left out.
+    Size { width: u32, height: u32 },
+    /// A different display orientation from the first frame's.
+    Orientation(u16),
+}
+
+impl SkipReason {
+    /// The reason as the dialog and the report say it — one phrase, so
+    /// the two surfaces can never word the same fact differently.
+    pub fn text(&self) -> String {
+        match self {
+            SkipReason::NoPreview => "no usable embedded JPEG".to_string(),
+            SkipReason::Size { width, height } => format!("different size ({width}×{height})"),
+            SkipReason::Orientation(o) => format!("different orientation (EXIF {o})"),
+        }
+    }
+}
+
+#[derive(Clone, Debug)]
+pub struct Skipped {
+    pub id: usize,
+    pub name: String,
+    pub reason: SkipReason,
+}
+
+/// One sample: where its bytes live inside the RAW. The bytes themselves
+/// are never loaded here — the write streams them.
+#[derive(Clone, Debug)]
+pub struct ClipFrame {
+    pub id: usize,
+    pub path: PathBuf,
+    pub name: String,
+    /// Byte offset of the embedded JPEG inside the RAW.
+    pub offset: u64,
+    /// Its length in bytes — this sample's size in the finished file.
+    pub len: u64,
+}
+
+/// Where the frame rate came from. Both the plan line and the report
+/// print [`Cadence::text`], so the user reads the same sentence before
+/// and after (video-export.md: it must be impossible to miss before
+/// Enter).
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum CadenceSource {
+    /// Measured from the frames' own millisecond timestamps.
+    Measured,
+    /// No pair of frames carried millisecond timing: 15 fps assumed.
+    NoTiming,
+    /// Measured, but so far outside a playable range that it was pulled
+    /// into it — two bodies interleaved, or a selection of singles.
+    Clamped { median_ms: i64 },
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct Cadence {
+    /// How long ONE frame is on screen, in milliseconds (the movie
+    /// timescale is 1000, so this is also the sample duration).
+    pub sample_ms: u32,
+    pub source: CadenceSource,
+}
+
+impl Cadence {
+    pub fn fps(&self) -> f64 {
+        1000.0 / f64::from(self.sample_ms.max(1))
+    }
+
+    /// The cadence as ONE phrase for the plan line and the report.
+    ///
+    /// When the cadence was measured this is just the rate. In the two
+    /// fallback cases it says what happened INSTEAD of the bare rate —
+    /// repeating "15 fps" twice in one line reads as a stutter, and the
+    /// phrases the spec pins ("assumed 15 fps", "clamped") are here.
+    pub fn text(&self) -> String {
+        match self.source {
+            CadenceSource::Measured => format!("{} fps", fps_text(self.fps())),
+            CadenceSource::NoTiming => "timing not in the files — assumed 15 fps".to_string(),
+            CadenceSource::Clamped { median_ms } => format!(
+                "gaps of {} — clamped to {} fps",
+                gap_text(median_ms),
+                fps_text(self.fps())
+            ),
+        }
+    }
+}
+
+/// A frame rate with one decimal, trimmed: `30.3`, `10`, `111.1`.
+fn fps_text(fps: f64) -> String {
+    let s = format!("{fps:.1}");
+    s.strip_suffix(".0").unwrap_or(&s).to_string()
+}
+
+/// A gap in the units it is easiest to recognise: `4.0 s`, `250 ms`.
+fn gap_text(ms: i64) -> String {
+    if ms >= 1000 {
+        format!("{:.1} s", ms as f64 / 1000.0)
+    } else {
+        format!("{ms} ms")
+    }
+}
+
+/// What the write will do with the destination name — the copy engine's
+/// `PlanAction`, minus the cases that only exist for a pair of files.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum ClipAction {
+    /// The name is free.
+    Write,
+    /// The name was taken and the user answered "keep both": this lands
+    /// under `_1`, `_2`, …
+    WriteRenamed,
+    /// The name was taken and the user answered "overwrite".
+    Replace,
+    /// The name is taken and nothing has been decided yet
+    /// ([`ClashPolicy::Ask`]). Never executed: it is the question.
+    Clash,
+}
+
+#[derive(Debug, thiserror::Error)]
+pub enum ClipError {
+    #[error("a video needs at least 2 frames; {kept} would be left")]
+    TooFewFrames { kept: usize },
+    #[error("the destination is not a folder")]
+    DestNotADirectory,
+    #[error("not enough free space: need {needed} bytes, {free} available")]
+    InsufficientSpace { needed: u64, free: u64 },
+    #[error("the file name would be {len} bytes long, which no filesystem accepts: {name}")]
+    NameTooLong { name: String, len: usize },
+}
+
+/// The inspectable plan the dialog previews.
+#[derive(Clone, Debug)]
+pub struct ClipPlan {
+    /// The samples, in CAPTURE ORDER — the file's own order, whatever the
+    /// grid was sorted by.
+    pub frames: Vec<ClipFrame>,
+    /// Frame size of every sample (the first frame's; the rest matched it
+    /// or were skipped).
+    pub width: u32,
+    pub height: u32,
+    /// Display orientation carried by the track matrix, already reduced
+    /// to its unmirrored counterpart (1, 3, 6 or 8).
+    pub orientation: u16,
+    /// How many kept frames had a MIRRORED EXIF orientation (2/4/5/7) and
+    /// were treated as their unmirrored counterpart.
+    pub mirrored: usize,
+    pub cadence: Cadence,
+    /// Frames left out, with their reason.
+    pub skipped: Vec<Skipped>,
+    /// The file this plan writes.
+    pub dst: PathBuf,
+    pub action: ClipAction,
+    /// The JPEG bytes alone.
+    pub sample_bytes: u64,
+    /// What the finished file will occupy: samples plus the header, which
+    /// is known exactly because every sample size is known.
+    pub total_bytes: u64,
+    /// None = the free-space query failed ("free space unknown").
+    pub free_bytes: Option<u64>,
+    /// [`ClashPolicy::Ask`] only: the name a "keep both" answer would
+    /// really land under, so the question can name it.
+    pub keep_both_example: Option<String>,
+}
+
+impl ClipPlan {
+    /// Playing time of the finished file, in milliseconds.
+    pub fn duration_ms(&self) -> u64 {
+        self.frames.len() as u64 * u64::from(self.cadence.sample_ms)
+    }
+
+    /// The destination's file name.
+    pub fn file_name(&self) -> String {
+        self.dst
+            .file_name()
+            .map(|n| n.to_string_lossy().into_owned())
+            .unwrap_or_default()
+    }
+
+    /// Skips grouped by reason, most frames first: "2 frames skipped:
+    /// different size (5616×3744)". Empty when nothing was skipped.
+    pub fn skipped_text(&self) -> String {
+        skipped_text(&self.skipped)
+    }
+}
+
+/// The one place skip reasons are turned into a sentence — the plan line
+/// and the report share it so they can never disagree.
+pub fn skipped_text(skipped: &[Skipped]) -> String {
+    if skipped.is_empty() {
+        return String::new();
+    }
+    let mut groups: Vec<(String, usize)> = Vec::new();
+    for s in skipped {
+        let text = s.reason.text();
+        match groups.iter_mut().find(|(t, _)| *t == text) {
+            Some((_, n)) => *n += 1,
+            None => groups.push((text, 1)),
+        }
+    }
+    groups.sort_by_key(|(_, n)| std::cmp::Reverse(*n));
+    let parts: Vec<String> = groups
+        .iter()
+        .map(|(text, n)| format!("{n} frame{}: {text}", if *n == 1 { "" } else { "s" }))
+        .collect();
+    format!("skipped — {}", parts.join(" · "))
+}
+
+/// EXIF orientation reduced to the rotation the track matrix can carry.
+///
+/// A Motion JPEG track has one display transform and QuickTime's matrix
+/// can rotate but not mirror in any way a phone editor honours, so the
+/// four mirrored orientations degrade to their unmirrored counterpart —
+/// the same picture, un-flipped — and the report says how many did
+/// (video-export.md, "Orientation").
+pub fn unmirrored(orientation: u16) -> u16 {
+    match orientation {
+        2 => 1,
+        4 => 3,
+        5 => 8,
+        7 => 6,
+        1 | 3 | 6 | 8 => orientation,
+        // Anything else is not an EXIF orientation at all (a corrupt tag):
+        // treat it as "as stored", which is what the pipeline does.
+        _ => 1,
+    }
+}
+
+/// Bytes the finished file occupies: the samples plus this module's exact
+/// header. Public because the dialog states the file's size before a byte
+/// is written, and "roughly" is not good enough on a 4 GB export.
+pub fn file_bytes(sample_bytes: u64, frames: usize) -> u64 {
+    sample_bytes + qt::header_len(frames, sample_bytes)
+}
+
+/// Measure the cadence from the frames' own capture times.
+///
+/// Only gaps between CONSECUTIVE frames that BOTH carry millisecond
+/// precision are measured: a timestamp without `SubSecTimeOriginal` has
+/// 1 s granularity, so its "gaps" are 0 or 1000 ms and would invent a
+/// cadence out of rounding. With no such pair at all the export falls
+/// back to 15 fps and says so.
+///
+/// The MEDIAN gap, not the mean (video-export.md): two bursts selected
+/// together have one huge gap between them, and a mean would stretch
+/// every frame of both to hide it.
+pub fn cadence(frames: &[ClipSource]) -> Cadence {
+    let mut gaps: Vec<i64> = Vec::new();
+    for pair in frames.windows(2) {
+        if let (Some(a), Some(b)) = (pair[0].time_ms, pair[1].time_ms) {
+            if pair[0].has_subsec && pair[1].has_subsec {
+                gaps.push((b - a).abs());
+            }
+        }
+    }
+    if gaps.is_empty() {
+        return Cadence {
+            sample_ms: ASSUMED_SAMPLE_MS,
+            source: CadenceSource::NoTiming,
+        };
+    }
+    gaps.sort_unstable();
+    let median = gaps[gaps.len() / 2];
+    // `median` is >= 0 and can be enormous (a selection spanning a day),
+    // so the cast is done through the clamp, never before it.
+    let wanted = median.clamp(i64::from(MIN_SAMPLE_MS), i64::from(MAX_SAMPLE_MS)) as u32;
+    Cadence {
+        sample_ms: wanted,
+        source: if i64::from(wanted) == median {
+            CadenceSource::Measured
+        } else {
+            CadenceSource::Clamped { median_ms: median }
+        },
+    }
+}
+
+/// Capture order: timestamp first, file name as the tiebreak, frames
+/// without a timestamp last (the same rule `filter::view` sorts the grid
+/// by, so "capture order" means one thing in this app).
+fn capture_order(sources: &[ClipSource]) -> Vec<ClipSource> {
+    let mut ordered = sources.to_vec();
+    ordered.sort_by(|a, b| match (a.time_ms, b.time_ms) {
+        (Some(x), Some(y)) => x.cmp(&y).then_with(|| a.name.cmp(&b.name)),
+        (Some(_), None) => std::cmp::Ordering::Less,
+        (None, Some(_)) => std::cmp::Ordering::Greater,
+        (None, None) => a.name.cmp(&b.name),
+    });
+    ordered
+}
+
+/// The stem of a file name (`DSC05010.ARW` -> `DSC05010`). A name that is
+/// all extension keeps its whole self, because a name we did not invent
+/// is the user's business (fileops.md's rule, same reasoning).
+fn stem(name: &str) -> &str {
+    match name.rsplit_once('.') {
+        Some((s, _)) if !s.is_empty() => s,
+        _ => name,
+    }
+}
+
+/// `DSC05010-DSC05039.mov` — first and last stem in capture order, so the
+/// name doubles as the frame-range record (video-export.md). Two frames
+/// whose stems are equal (the same name with two extensions) collapse to
+/// one stem rather than producing `a-a.mov`.
+pub fn clip_name(first: &str, last: &str) -> String {
+    let (a, b) = (stem(first), stem(last));
+    if a == b {
+        format!("{a}.mov")
+    } else {
+        format!("{a}-{b}.mov")
+    }
+}
+
+/// The embedded full-res JPEG of one RAW: where it is, how big it is, and
+/// the file's EXIF orientation. `None` when the file has nothing usable —
+/// unreadable, 0 bytes, or previews too small to be the real image.
+fn probe(path: &Path) -> Option<(crate::raw::EmbeddedJpeg, u16)> {
+    let mut file = std::fs::File::open(path).ok()?;
+    let previews = crate::raw::find_embedded_jpegs(&mut file).ok()?;
+    let jpeg = previews.fullres()?.clone();
+    Some((jpeg, previews.orientation))
+}
+
+/// Build the plan. Reads the filesystem (the RAWs' preview tables, the
+/// destination, free space) and changes nothing.
+///
+/// `policy` is the user's answer to the clash question, or
+/// [`ClashPolicy::Ask`] before it has been asked.
+pub fn plan(
+    sources: &[ClipSource],
+    dest: &Path,
+    policy: ClashPolicy,
+) -> Result<ClipPlan, ClipError> {
+    // Free space is advisory-honest: an unreadable query yields None
+    // ("free space unknown" in the dialog), never a fake huge number.
+    let free = fs2::available_space(crate::fileops::existing_ancestor(dest)).ok();
+    plan_with_free(sources, dest, policy, free)
+}
+
+/// [`plan`] with the free-space answer supplied. A seam, not an API: a
+/// full disk cannot be arranged in a unit test, and the refusal it must
+/// produce is the one thing standing between the user and a truncated
+/// 4 GB file.
+fn plan_with_free(
+    sources: &[ClipSource],
+    dest: &Path,
+    policy: ClashPolicy,
+    free_bytes: Option<u64>,
+) -> Result<ClipPlan, ClipError> {
+    // One frame is not a video. Checked before anything is read so a
+    // mis-wired caller cannot spend a preview scan on it.
+    if sources.len() < 2 {
+        return Err(ClipError::TooFewFrames {
+            kept: sources.len(),
+        });
+    }
+    // A destination that EXISTS but is not a folder — a regular file, or
+    // a DANGLING symlink, which `metadata()` cannot see (the fileops.md
+    // finding: both used to reach the write and come back as an
+    // undecodable OS error). Not existing at all is fine: the write
+    // creates the folder.
+    if dest.symlink_metadata().is_ok() && !dest.metadata().is_ok_and(|m| m.is_dir()) {
+        return Err(ClipError::DestNotADirectory);
+    }
+
+    let ordered = capture_order(sources);
+
+    // Uniformity: the first frame WITH a usable JPEG sets the size and the
+    // orientation; everything else matches it or is skipped. Never scaled,
+    // never padded, never rotated (video-export.md "skip, never scale").
+    let mut frames: Vec<ClipFrame> = Vec::with_capacity(ordered.len());
+    let mut kept_sources: Vec<ClipSource> = Vec::with_capacity(ordered.len());
+    let mut skipped: Vec<Skipped> = Vec::new();
+    let mut track: Option<(u32, u32, u16)> = None;
+    let mut mirrored = 0usize;
+    let mut sample_bytes = 0u64;
+    for s in &ordered {
+        let Some((jpeg, orientation)) = probe(&s.path) else {
+            skipped.push(Skipped {
+                id: s.id,
+                name: s.name.clone(),
+                reason: SkipReason::NoPreview,
+            });
+            continue;
+        };
+        let display = unmirrored(orientation);
+        let (w, h, o) = *track.get_or_insert((jpeg.width, jpeg.height, display));
+        if (jpeg.width, jpeg.height) != (w, h) {
+            skipped.push(Skipped {
+                id: s.id,
+                name: s.name.clone(),
+                reason: SkipReason::Size {
+                    width: jpeg.width,
+                    height: jpeg.height,
+                },
+            });
+            continue;
+        }
+        if display != o {
+            skipped.push(Skipped {
+                id: s.id,
+                name: s.name.clone(),
+                reason: SkipReason::Orientation(orientation),
+            });
+            continue;
+        }
+        if display != orientation {
+            mirrored += 1;
+        }
+        sample_bytes += jpeg.len;
+        frames.push(ClipFrame {
+            id: s.id,
+            path: s.path.clone(),
+            name: s.name.clone(),
+            offset: jpeg.offset,
+            len: jpeg.len,
+        });
+        kept_sources.push(s.clone());
+    }
+    let (width, height, orientation) = track.unwrap_or((0, 0, 1));
+    if frames.len() < 2 {
+        return Err(ClipError::TooFewFrames { kept: frames.len() });
+    }
+
+    let cadence = cadence(&kept_sources);
+    let total_bytes = file_bytes(sample_bytes, frames.len());
+
+    // The name, from the frames that are actually IN the file: a range
+    // that names a frame the user will not find in it is worse than no
+    // range at all.
+    let first = frames.first().map(|f| f.name.as_str()).unwrap_or_default();
+    let last = frames.last().map(|f| f.name.as_str()).unwrap_or_default();
+    let name = clip_name(first, last);
+    if name.len() > MAX_NAME_BYTES {
+        return Err(ClipError::NameTooLong {
+            len: name.len(),
+            name,
+        });
+    }
+
+    // The clash question, exactly as Copy Picks asks it (fileops.md): the
+    // disk decides, one answer governs the run, and nothing is replaced
+    // without the Overwrite answer.
+    let natural = dest.join(&name);
+    let mut keep_both_example = None;
+    let (dst, action) = if !crate::fileops::occupied(&natural) {
+        (natural, ClipAction::Write)
+    } else {
+        match policy {
+            ClashPolicy::Ask => {
+                keep_both_example = Some(crate::fileops::first_free_name(dest, &name));
+                (natural, ClipAction::Clash)
+            }
+            ClashPolicy::Overwrite => (natural, ClipAction::Replace),
+            ClashPolicy::CreateCopies => (
+                dest.join(crate::fileops::first_free_name(dest, &name)),
+                ClipAction::WriteRenamed,
+            ),
+        }
+    };
+
+    // A destination that cannot hold a file this big for a reason free
+    // space cannot see — FAT32 above 4 GB — fails at write time with the
+    // OS error and the temp removed; there is no portable way to ask
+    // beforehand (video-export.md, "Free space").
+    //
+    // An overwrite still writes the whole file to a temp first, so the
+    // space has to be there under every answer.
+    if let Some(free) = free_bytes {
+        if total_bytes > free {
+            return Err(ClipError::InsufficientSpace {
+                needed: total_bytes,
+                free,
+            });
+        }
+    }
+
+    Ok(ClipPlan {
+        frames,
+        width,
+        height,
+        orientation,
+        mirrored,
+        cadence,
+        skipped,
+        dst,
+        action,
+        sample_bytes,
+        total_bytes,
+        free_bytes,
+        keep_both_example,
+    })
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::raw::tiff_testutil::{tiny_jpeg, TiffBuilder};
+    use crate::testutil::scratch_dir;
+
+    const TAG_WIDTH: u16 = 0x0100;
+    const TAG_HEIGHT: u16 = 0x0101;
+    const TAG_ORIENTATION: u16 = 0x0112;
+    const TAG_JPEG_OFFSET: u16 = 0x0201;
+    const TAG_JPEG_LENGTH: u16 = 0x0202;
+
+    /// A synthetic RAW: a TIFF container whose IFD0 points at one
+    /// "full-res" JPEG of the given dimensions, padded to `len` bytes so
+    /// tests can give each frame a distinct sample size. The payload is a
+    /// real (tiny) JPEG, so the preview walker accepts it exactly as it
+    /// accepts a camera's.
+    fn raw_with(dir: &Path, name: &str, w: u16, h: u16, orientation: u16, len: usize) -> PathBuf {
+        let mut b = TiffBuilder::new(true);
+        let mut payload = tiny_jpeg(w, h);
+        assert!(len >= payload.len(), "padding only");
+        payload.resize(len, 0x5A);
+        let at = b.add_blob(&payload);
+        let ifd0 = b.add_ifd(
+            &[
+                (TAG_WIDTH, 3, 1, u32::from(w)),
+                (TAG_HEIGHT, 3, 1, u32::from(h)),
+                (TAG_ORIENTATION, 3, 1, u32::from(orientation)),
+                (TAG_JPEG_OFFSET, 4, 1, at),
+                (TAG_JPEG_LENGTH, 4, 1, len as u32),
+            ],
+            0,
+        );
+        b.set_ifd0(ifd0);
+        let path = dir.join(name);
+        std::fs::write(&path, b.cursor().into_inner()).unwrap();
+        path
+    }
+
+    /// A file the scan admits and the preview walker finds nothing in:
+    /// a valid TIFF with dimensions but no JPEG pointer — the loupe's
+    /// "no usable embedded preview" case.
+    fn raw_without_preview(dir: &Path, name: &str) -> PathBuf {
+        let mut b = TiffBuilder::new(true);
+        let ifd0 = b.add_ifd(&[(TAG_WIDTH, 3, 1, 4000), (TAG_HEIGHT, 3, 1, 3000)], 0);
+        b.set_ifd0(ifd0);
+        let path = dir.join(name);
+        std::fs::write(&path, b.cursor().into_inner()).unwrap();
+        path
+    }
+
+    fn source(id: usize, path: &Path, time_ms: Option<i64>, has_subsec: bool) -> ClipSource {
+        ClipSource {
+            id,
+            name: path
+                .file_name()
+                .map(|n| n.to_string_lossy().into_owned())
+                .unwrap_or_default(),
+            path: path.to_path_buf(),
+            time_ms,
+            has_subsec,
+        }
+    }
+
+    /// Sources with no files behind them — enough for the cadence, which
+    /// never touches the disk.
+    fn timed(times: &[Option<i64>], has_subsec: bool) -> Vec<ClipSource> {
+        times
+            .iter()
+            .enumerate()
+            .map(|(i, t)| ClipSource {
+                id: i,
+                path: PathBuf::from(format!("f{i:04}.ARW")),
+                name: format!("f{i:04}.ARW"),
+                time_ms: *t,
+                has_subsec,
+            })
+            .collect()
+    }
+
+    // ---------------------------------------------------------- cadence
+
+    /// A 30 fps A1 burst: ~33 ms between frames, so one frame is on
+    /// screen for 33 ms and the file plays in real time.
+    #[test]
+    fn the_median_gap_is_the_frame_duration() {
+        // 30 frames at 33/34 ms alternating, as a 30 fps camera really
+        // writes them.
+        let times: Vec<Option<i64>> = (0..30).map(|i| Some(1000 + i * 100 / 3)).collect();
+        let c = cadence(&timed(&times, true));
+        assert_eq!(c.sample_ms, 33);
+        assert_eq!(c.source, CadenceSource::Measured);
+        assert_eq!(c.text(), "30.3 fps");
+    }
+
+    /// Two bursts selected together: the pause between them is ONE frame
+    /// step, not a stretch applied to every frame. The mean would be
+    /// 33 ms x 28 + 4000 ms / 29 = ~170 ms — 5x too slow.
+    #[test]
+    fn a_pause_between_two_bursts_does_not_stretch_every_frame() {
+        let mut t = 0i64;
+        let mut times = Vec::new();
+        for i in 0..30 {
+            if i == 15 {
+                t += 4000; // the photographer let go and squeezed again
+            } else if i > 0 {
+                t += 33;
+            }
+            times.push(Some(t));
+        }
+        let c = cadence(&timed(&times, true));
+        assert_eq!(c.sample_ms, 33, "the median ignores the one long gap");
+        assert_eq!(c.source, CadenceSource::Measured);
+    }
+
+    /// Without SubSecTimeOriginal a timestamp has 1 s granularity, so its
+    /// gaps are 0 or 1000 ms — a cadence invented out of rounding. The
+    /// export says so instead of pretending.
+    #[test]
+    fn one_second_granularity_falls_back_to_fifteen_fps() {
+        let times: Vec<Option<i64>> = (0..10).map(|i| Some(i * 1000)).collect();
+        let c = cadence(&timed(&times, false));
+        assert_eq!((c.sample_ms, c.source), (67, CadenceSource::NoTiming));
+        assert_eq!(c.text(), "timing not in the files — assumed 15 fps");
+        // ...and the same for frames with no timestamp at all.
+        let none = cadence(&timed(&[None, None, None], true));
+        assert_eq!(none.source, CadenceSource::NoTiming);
+    }
+
+    /// Gaps outside a playable range are pulled into it AND reported —
+    /// two bodies interleaved (gaps of ~0) or a selection of singles
+    /// (gaps of minutes). Both would otherwise produce a file no editor
+    /// can use.
+    #[test]
+    fn implausible_gaps_are_clamped_and_said_so() {
+        let fast = cadence(&timed(&[Some(0), Some(3), Some(6), Some(9)], true));
+        assert_eq!(fast.sample_ms, MIN_SAMPLE_MS);
+        assert_eq!(fast.source, CadenceSource::Clamped { median_ms: 3 });
+        assert_eq!(fast.text(), "gaps of 3 ms — clamped to 111.1 fps");
+
+        let slow = cadence(&timed(&[Some(0), Some(4000), Some(8000)], true));
+        assert_eq!(slow.sample_ms, MAX_SAMPLE_MS);
+        assert_eq!(slow.source, CadenceSource::Clamped { median_ms: 4000 });
+        assert_eq!(slow.text(), "gaps of 4.0 s — clamped to 10 fps");
+    }
+
+    /// Only frames that BOTH carry millisecond precision measure a gap:
+    /// one whole-second frame dropped into a burst must not add a 1000 ms
+    /// sample to the population.
+    #[test]
+    fn only_millisecond_pairs_measure_a_gap() {
+        let mut frames = timed(&[Some(0), Some(33), Some(66), Some(1066)], true);
+        frames[3].has_subsec = false;
+        let c = cadence(&frames);
+        assert_eq!(c.sample_ms, 33, "the 1000 ms pair does not vote");
+    }
+
+    /// A cadence that was measured explains nothing; the two fallbacks
+    /// always do. This is the persona rule — the wording that warns must
+    /// be identical in the plan line and the report, and there is exactly
+    /// one function producing it.
+    #[test]
+    fn the_cadence_only_explains_itself_when_it_had_to() {
+        let measured = Cadence {
+            sample_ms: 33,
+            source: CadenceSource::Measured,
+        };
+        assert_eq!(measured.text(), "30.3 fps");
+        for c in [
+            Cadence {
+                sample_ms: 67,
+                source: CadenceSource::NoTiming,
+            },
+            Cadence {
+                sample_ms: 100,
+                source: CadenceSource::Clamped { median_ms: 5000 },
+            },
+        ] {
+            assert!(
+                c.text().contains("assumed 15 fps") || c.text().contains("clamped"),
+                "a fallback cadence must say so: {}",
+                c.text()
+            );
+        }
+    }
+
+    // ------------------------------------------------------------ order
+
+    /// Capture order, whatever order the caller hands them over in, with
+    /// the file name breaking ties and untimed frames last (the rule
+    /// `filter::view` sorts the grid by).
+    #[test]
+    fn capture_order_sorts_by_time_then_name_then_the_untimed() {
+        let sources = vec![
+            ClipSource {
+                id: 0,
+                path: "z.ARW".into(),
+                name: "z.ARW".into(),
+                time_ms: Some(200),
+                has_subsec: true,
+            },
+            ClipSource {
+                id: 1,
+                path: "n.ARW".into(),
+                name: "n.ARW".into(),
+                time_ms: None,
+                has_subsec: false,
+            },
+            ClipSource {
+                id: 2,
+                path: "b.ARW".into(),
+                name: "b.ARW".into(),
+                time_ms: Some(100),
+                has_subsec: true,
+            },
+            ClipSource {
+                id: 3,
+                path: "a.ARW".into(),
+                name: "a.ARW".into(),
+                time_ms: Some(100),
+                has_subsec: true,
+            },
+        ];
+        let names: Vec<String> = capture_order(&sources)
+            .iter()
+            .map(|s| s.name.clone())
+            .collect();
+        assert_eq!(names, ["a.ARW", "b.ARW", "z.ARW", "n.ARW"]);
+    }
+
+    // ------------------------------------------------------------ names
+
+    #[test]
+    fn the_name_is_the_frame_range() {
+        assert_eq!(
+            clip_name("DSC05010.ARW", "DSC05039.ARW"),
+            "DSC05010-DSC05039.mov"
+        );
+        // One stem, two extensions: not `a-a.mov`.
+        assert_eq!(clip_name("a.ARW", "a.NEF"), "a.mov");
+        // A name that is all extension is the user's business, kept whole.
+        assert_eq!(clip_name(".hidden", "b.ARW"), ".hidden-b.mov");
+    }
+
+    // ---------------------------------------------------------- reasons
+
+    #[test]
+    fn skips_are_grouped_by_reason_biggest_first() {
+        let s = |id, reason| Skipped {
+            id,
+            name: format!("f{id}.ARW"),
+            reason,
+        };
+        let text = skipped_text(&[
+            s(0, SkipReason::NoPreview),
+            s(
+                1,
+                SkipReason::Size {
+                    width: 5616,
+                    height: 3744,
+                },
+            ),
+            s(
+                2,
+                SkipReason::Size {
+                    width: 5616,
+                    height: 3744,
+                },
+            ),
+        ]);
+        assert_eq!(
+            text,
+            "skipped — 2 frames: different size (5616×3744) · 1 frame: no usable embedded JPEG"
+        );
+        assert!(skipped_text(&[]).is_empty());
+    }
+
+    /// A mirrored EXIF orientation keeps its ROTATION and loses the flip:
+    /// QuickTime's matrix cannot mirror in a way phone editors honour, so
+    /// the alternative to degrading would be skipping the frame.
+    #[test]
+    fn mirrored_orientations_degrade_to_their_rotation() {
+        assert_eq!(unmirrored(2), 1);
+        assert_eq!(unmirrored(4), 3);
+        assert_eq!(unmirrored(5), 8);
+        assert_eq!(unmirrored(7), 6);
+        for straight in [1, 3, 6, 8] {
+            assert_eq!(unmirrored(straight), straight);
+        }
+        assert_eq!(unmirrored(99), 1, "a corrupt tag reads as 'as stored'");
+    }
+
+    // ------------------------------------------------------------- plan
+
+    #[test]
+    fn the_plan_is_in_capture_order_and_names_the_range() {
+        let dir = scratch_dir("clip-plan");
+        let src = dir.join("src");
+        let dest = dir.join("out");
+        std::fs::create_dir_all(&src).unwrap();
+        // Handed over in a deliberately wrong order (the grid was sorted
+        // by name descending).
+        let sources = vec![
+            source(
+                0,
+                &raw_with(&src, "c.ARW", 400, 300, 1, 600),
+                Some(2066),
+                true,
+            ),
+            source(
+                1,
+                &raw_with(&src, "a.ARW", 400, 300, 1, 500),
+                Some(2000),
+                true,
+            ),
+            source(
+                2,
+                &raw_with(&src, "b.ARW", 400, 300, 1, 550),
+                Some(2033),
+                true,
+            ),
+        ];
+        let p = plan(&sources, &dest, ClashPolicy::Ask).unwrap();
+        assert_eq!(
+            p.frames.iter().map(|f| f.name.as_str()).collect::<Vec<_>>(),
+            ["a.ARW", "b.ARW", "c.ARW"],
+            "a video that plays backwards because the grid was sorted \
+             descending is a bug"
+        );
+        assert_eq!(p.file_name(), "a-c.mov");
+        assert_eq!(p.dst, dest.join("a-c.mov"));
+        assert_eq!(p.action, ClipAction::Write);
+        assert_eq!((p.width, p.height), (400, 300));
+        assert_eq!(p.orientation, 1);
+        assert_eq!(p.sample_bytes, 500 + 550 + 600);
+        assert_eq!(
+            p.total_bytes,
+            p.sample_bytes + qt::header_len(3, p.sample_bytes),
+            "the size the dialog quotes is the size the file will have"
+        );
+        assert_eq!(p.cadence.sample_ms, 33);
+        assert!(p.skipped.is_empty());
+        std::fs::remove_dir_all(&dir).ok();
+    }
+
+    /// Uniformity: one track, one frame size, one orientation. Everything
+    /// else is skipped and REPORTED — never scaled (a re-encode), never
+    /// padded (an edit), never silently dropped.
+    #[test]
+    fn frames_that_cannot_share_the_track_are_skipped_and_reported() {
+        let dir = scratch_dir("clip-skip");
+        let src = dir.join("src");
+        let dest = dir.join("out");
+        std::fs::create_dir_all(&src).unwrap();
+        let sources = vec![
+            source(0, &raw_with(&src, "a.ARW", 400, 300, 1, 500), Some(0), true),
+            // A crop-mode shot: different size.
+            source(
+                1,
+                &raw_with(&src, "b.ARW", 380, 285, 1, 500),
+                Some(33),
+                true,
+            ),
+            // A portrait frame among landscapes.
+            source(
+                2,
+                &raw_with(&src, "c.ARW", 400, 300, 6, 500),
+                Some(66),
+                true,
+            ),
+            // Nothing this app can use.
+            source(3, &raw_without_preview(&src, "d.ARW"), Some(99), true),
+            // A 0-byte file (a card pulled mid-write).
+            source(
+                4,
+                &{
+                    let p = src.join("e.ARW");
+                    std::fs::write(&p, []).unwrap();
+                    p
+                },
+                Some(132),
+                true,
+            ),
+            source(
+                5,
+                &raw_with(&src, "f.ARW", 400, 300, 1, 500),
+                Some(165),
+                true,
+            ),
+        ];
+        let p = plan(&sources, &dest, ClashPolicy::Ask).unwrap();
+        assert_eq!(
+            p.frames.iter().map(|f| f.name.as_str()).collect::<Vec<_>>(),
+            ["a.ARW", "f.ARW"]
+        );
+        assert_eq!(p.skipped.len(), 4);
+        let text = p.skipped_text();
+        assert!(text.contains("different size (380×285)"), "{text}");
+        assert!(text.contains("different orientation (EXIF 6)"), "{text}");
+        assert!(text.contains("2 frames: no usable embedded JPEG"), "{text}");
+        std::fs::remove_dir_all(&dir).ok();
+    }
+
+    /// The name must name frames that are IN the file. A skipped first
+    /// or last frame would otherwise put a range on the file that the
+    /// user cannot find inside it — and the name is the frame-range
+    /// record (video-export.md, "Files").
+    #[test]
+    fn the_name_names_only_frames_that_are_in_the_file() {
+        let dir = scratch_dir("clip-namekept");
+        let src = dir.join("src");
+        std::fs::create_dir_all(&src).unwrap();
+        let sources = vec![
+            source(0, &raw_without_preview(&src, "a.ARW"), Some(0), true),
+            source(
+                1,
+                &raw_with(&src, "b.ARW", 400, 300, 1, 500),
+                Some(33),
+                true,
+            ),
+            source(
+                2,
+                &raw_with(&src, "c.ARW", 400, 300, 1, 500),
+                Some(66),
+                true,
+            ),
+            source(3, &raw_without_preview(&src, "d.ARW"), Some(99), true),
+        ];
+        let p = plan(&sources, &dir.join("out"), ClashPolicy::Ask).unwrap();
+        assert_eq!(p.file_name(), "b-c.mov", "a.ARW and d.ARW are not in it");
+        std::fs::remove_dir_all(&dir).ok();
+    }
+
+    /// The FIRST frame with a usable JPEG sets the track — not the first
+    /// frame handed over. A leading unreadable file must not decide that
+    /// nothing matches.
+    #[test]
+    fn the_first_usable_frame_sets_the_track() {
+        let dir = scratch_dir("clip-first");
+        let src = dir.join("src");
+        std::fs::create_dir_all(&src).unwrap();
+        let sources = vec![
+            source(0, &raw_without_preview(&src, "a.ARW"), Some(0), true),
+            source(
+                1,
+                &raw_with(&src, "b.ARW", 400, 300, 6, 500),
+                Some(33),
+                true,
+            ),
+            source(
+                2,
+                &raw_with(&src, "c.ARW", 400, 300, 6, 500),
+                Some(66),
+                true,
+            ),
+        ];
+        let p = plan(&sources, &dir.join("out"), ClashPolicy::Ask).unwrap();
+        assert_eq!(p.frames.len(), 2);
+        assert_eq!(p.orientation, 6, "the portrait pair set the matrix");
+        assert_eq!(
+            (p.width, p.height),
+            (400, 300),
+            "sensor orientation, unrotated"
+        );
+        std::fs::remove_dir_all(&dir).ok();
+    }
+
+    /// A mirrored orientation is kept (degraded to its rotation) and
+    /// counted, so the report can say it — the picture is right, the flip
+    /// is not, and silence about that would be a lie.
+    #[test]
+    fn a_mirrored_frame_is_kept_degraded_and_counted() {
+        let dir = scratch_dir("clip-mirror");
+        let src = dir.join("src");
+        std::fs::create_dir_all(&src).unwrap();
+        let sources = vec![
+            source(0, &raw_with(&src, "a.ARW", 400, 300, 6, 500), Some(0), true),
+            source(
+                1,
+                &raw_with(&src, "b.ARW", 400, 300, 7, 500),
+                Some(33),
+                true,
+            ),
+        ];
+        let p = plan(&sources, &dir.join("out"), ClashPolicy::Ask).unwrap();
+        assert_eq!(p.frames.len(), 2, "7 and 6 are the same rotation");
+        assert_eq!(p.orientation, 6);
+        assert_eq!(p.mirrored, 1);
+        assert!(p.skipped.is_empty());
+        std::fs::remove_dir_all(&dir).ok();
+    }
+
+    /// One frame is not a video, and neither is a selection whose frames
+    /// all turn out to be unusable. Both refuse at PLAN time — before a
+    /// destination is even touched.
+    #[test]
+    fn fewer_than_two_frames_refuses_at_plan_time() {
+        let dir = scratch_dir("clip-few");
+        let src = dir.join("src");
+        std::fs::create_dir_all(&src).unwrap();
+        let one = vec![source(
+            0,
+            &raw_with(&src, "a.ARW", 400, 300, 1, 500),
+            Some(0),
+            true,
+        )];
+        assert!(matches!(
+            plan(&one, &dir.join("out"), ClashPolicy::Ask),
+            Err(ClipError::TooFewFrames { kept: 1 })
+        ));
+        let mismatched = vec![
+            source(0, &raw_with(&src, "b.ARW", 400, 300, 1, 500), Some(0), true),
+            source(
+                1,
+                &raw_with(&src, "c.ARW", 380, 285, 1, 500),
+                Some(33),
+                true,
+            ),
+        ];
+        assert!(matches!(
+            plan(&mismatched, &dir.join("out"), ClashPolicy::Ask),
+            Err(ClipError::TooFewFrames { kept: 1 })
+        ));
+        std::fs::remove_dir_all(&dir).ok();
+    }
+
+    /// A destination that EXISTS and is not a folder is a plan error, not
+    /// a pile of undecodable OS errors after the write — including a
+    /// DANGLING symlink, which `metadata()` cannot see (the fileops.md
+    /// finding, which this module inherits).
+    #[test]
+    fn a_destination_that_is_not_a_folder_refuses_at_plan_time() {
+        let dir = scratch_dir("clip-dest");
+        let src = dir.join("src");
+        std::fs::create_dir_all(&src).unwrap();
+        let sources = vec![
+            source(0, &raw_with(&src, "a.ARW", 400, 300, 1, 500), Some(0), true),
+            source(
+                1,
+                &raw_with(&src, "b.ARW", 400, 300, 1, 500),
+                Some(33),
+                true,
+            ),
+        ];
+        let file = dir.join("a-file");
+        std::fs::write(&file, b"not a folder").unwrap();
+        assert!(matches!(
+            plan(&sources, &file, ClashPolicy::Ask),
+            Err(ClipError::DestNotADirectory)
+        ));
+        #[cfg(unix)]
+        {
+            let dangling = dir.join("dangling");
+            std::os::unix::fs::symlink(dir.join("nowhere"), &dangling).unwrap();
+            assert!(matches!(
+                plan(&sources, &dangling, ClashPolicy::Ask),
+                Err(ClipError::DestNotADirectory)
+            ));
+        }
+        // A folder that does not exist yet is fine — the write creates it.
+        assert!(plan(&sources, &dir.join("new"), ClashPolicy::Ask).is_ok());
+        std::fs::remove_dir_all(&dir).ok();
+    }
+
+    /// The clash question, the copy engine's: the name on disk decides,
+    /// `Ask` refuses to resolve it and names what "keep both" would do,
+    /// and nothing is ever replaced without the Overwrite answer.
+    #[test]
+    fn a_taken_name_raises_the_question_and_each_answer_lands_somewhere_else() {
+        let dir = scratch_dir("clip-clash");
+        let src = dir.join("src");
+        let dest = dir.join("out");
+        std::fs::create_dir_all(&src).unwrap();
+        std::fs::create_dir_all(&dest).unwrap();
+        let sources = vec![
+            source(0, &raw_with(&src, "a.ARW", 400, 300, 1, 500), Some(0), true),
+            source(
+                1,
+                &raw_with(&src, "b.ARW", 400, 300, 1, 500),
+                Some(33),
+                true,
+            ),
+        ];
+        // Nothing there yet.
+        let free = plan(&sources, &dest, ClashPolicy::Ask).unwrap();
+        assert_eq!(free.action, ClipAction::Write);
+        assert!(free.keep_both_example.is_none());
+
+        std::fs::write(dest.join("a-b.mov"), b"yesterday's export").unwrap();
+        let asked = plan(&sources, &dest, ClashPolicy::Ask).unwrap();
+        assert_eq!(asked.action, ClipAction::Clash);
+        assert_eq!(asked.keep_both_example.as_deref(), Some("a-b_1.mov"));
+        assert_eq!(asked.dst, dest.join("a-b.mov"));
+
+        let kept = plan(&sources, &dest, ClashPolicy::CreateCopies).unwrap();
+        assert_eq!(kept.action, ClipAction::WriteRenamed);
+        assert_eq!(kept.dst, dest.join("a-b_1.mov"));
+
+        let over = plan(&sources, &dest, ClashPolicy::Overwrite).unwrap();
+        assert_eq!(over.action, ClipAction::Replace);
+        assert_eq!(over.dst, dest.join("a-b.mov"));
+
+        // `_1` taken too: the question names the number the write will
+        // really use, not the first one it can think of.
+        std::fs::write(dest.join("a-b_1.mov"), b"and the one before").unwrap();
+        let again = plan(&sources, &dest, ClashPolicy::Ask).unwrap();
+        assert_eq!(again.keep_both_example.as_deref(), Some("a-b_2.mov"));
+        std::fs::remove_dir_all(&dir).ok();
+    }
+
+    /// A name built from two very long stems cannot be created on any
+    /// filesystem — and finding that out at commit time would cost the
+    /// user the entire write first.
+    #[test]
+    fn an_impossible_name_refuses_before_anything_is_written() {
+        let dir = scratch_dir("clip-longname");
+        let src = dir.join("src");
+        std::fs::create_dir_all(&src).unwrap();
+        let long = "L".repeat(130);
+        let sources = vec![
+            source(
+                0,
+                &raw_with(&src, &format!("{long}a.ARW"), 400, 300, 1, 500),
+                Some(0),
+                true,
+            ),
+            source(
+                1,
+                &raw_with(&src, &format!("{long}b.ARW"), 400, 300, 1, 500),
+                Some(33),
+                true,
+            ),
+        ];
+        match plan(&sources, &dir.join("out"), ClashPolicy::Ask) {
+            Err(ClipError::NameTooLong { len, .. }) => assert!(len > MAX_NAME_BYTES),
+            other => panic!("expected a refusal, got {other:?}"),
+        }
+        std::fs::remove_dir_all(&dir).ok();
+    }
+
+    /// A destination that cannot hold the file refuses before the write,
+    /// and the number it refuses over is the WHOLE file — samples plus
+    /// header, not the samples alone.
+    #[test]
+    fn a_destination_that_cannot_hold_the_file_refuses_at_plan_time() {
+        let dir = scratch_dir("clip-space");
+        let src = dir.join("src");
+        std::fs::create_dir_all(&src).unwrap();
+        let sources = vec![
+            source(0, &raw_with(&src, "a.ARW", 400, 300, 1, 500), Some(0), true),
+            source(
+                1,
+                &raw_with(&src, "b.ARW", 400, 300, 1, 500),
+                Some(33),
+                true,
+            ),
+        ];
+        let dest = dir.join("out");
+        let sized = plan_with_free(&sources, &dest, ClashPolicy::Ask, Some(u64::MAX)).unwrap();
+        let need = sized.total_bytes;
+        assert!(need > 1000, "samples plus header");
+        // Exactly enough is enough.
+        assert!(plan_with_free(&sources, &dest, ClashPolicy::Ask, Some(need)).is_ok());
+        // One byte short is not — and the header is part of what must fit,
+        // so the sample bytes alone are refused too.
+        for free in [need - 1, sized.sample_bytes] {
+            match plan_with_free(&sources, &dest, ClashPolicy::Ask, Some(free)) {
+                Err(ClipError::InsufficientSpace { needed, free: f }) => {
+                    assert_eq!((needed, f), (need, free));
+                }
+                other => panic!("expected an insufficient-space refusal, got {other:?}"),
+            }
+        }
+        // An unanswerable volume is "unknown", never a fake number.
+        let unknown = plan_with_free(&sources, &dest, ClashPolicy::Ask, None).unwrap();
+        assert_eq!(unknown.free_bytes, None);
+        std::fs::remove_dir_all(&dir).ok();
+    }
+
+    /// The plan never writes anything — not the destination folder, not a
+    /// temp file, and above all not the RAWs it read (ADR 0003).
+    #[test]
+    fn planning_writes_nothing_at_all() {
+        let dir = scratch_dir("clip-readonly");
+        let src = dir.join("src");
+        std::fs::create_dir_all(&src).unwrap();
+        let sources = vec![
+            source(0, &raw_with(&src, "a.ARW", 400, 300, 1, 500), Some(0), true),
+            source(
+                1,
+                &raw_with(&src, "b.ARW", 400, 300, 1, 500),
+                Some(33),
+                true,
+            ),
+        ];
+        let before: Vec<(std::path::PathBuf, Vec<u8>)> = std::fs::read_dir(&src)
+            .unwrap()
+            .map(|e| {
+                let p = e.unwrap().path();
+                let bytes = std::fs::read(&p).unwrap();
+                (p, bytes)
+            })
+            .collect();
+        let dest = dir.join("never-created");
+        plan(&sources, &dest, ClashPolicy::Ask).unwrap();
+        assert!(!dest.exists(), "the plan created the destination folder");
+        for (p, bytes) in before {
+            assert_eq!(std::fs::read(&p).unwrap(), bytes, "the plan touched {p:?}");
+        }
+        std::fs::remove_dir_all(&dir).ok();
+    }
+
+    // -------------------------------------------------------- container
+
+    /// The header size the plan quotes is arithmetic, so it is pinned
+    /// here against the layout it describes; `qt`'s own golden test then
+    /// pins the bytes against this number.
+    #[test]
+    fn the_header_size_follows_the_sample_count() {
+        // 627 fixed bytes + 12 per sample + the mdat header.
+        assert_eq!(qt::header_len(3, 1000), 627 + 36 + 8);
+        assert_eq!(qt::header_len(30, 1000), 627 + 360 + 8);
+        // A payload that needs a 64-bit `mdat` size grows the header by 8.
+        let big = u64::from(u32::MAX);
+        assert_eq!(qt::header_len(3, big), 627 + 36 + 16);
+        assert_eq!(qt::header_len(3, big - 8), 627 + 36 + 8);
+    }
+}

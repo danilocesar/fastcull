@@ -415,7 +415,13 @@ pub fn plan(
             // this needs no question even when the destination is crowded.
             shared_name += 1;
             (
-                dest.join(first_free_suffix(dest, name, &taken, &mut suffix_cursor)),
+                dest.join(first_free_suffix(
+                    dest,
+                    name,
+                    &taken,
+                    &mut suffix_cursor,
+                    |n| Some(xmp_name_of(n)),
+                )),
                 PlanAction::CopyRenamed,
             )
         } else if !clash {
@@ -434,6 +440,7 @@ pub fn plan(
                             name,
                             &taken,
                             &mut suffix_cursor.clone(),
+                            |n| Some(xmp_name_of(n)),
                         ));
                     }
                     (natural, PlanAction::Clash)
@@ -442,7 +449,13 @@ pub fn plan(
                 ClashPolicy::CreateCopies => {
                     renamed += 1;
                     (
-                        dest.join(first_free_suffix(dest, name, &taken, &mut suffix_cursor)),
+                        dest.join(first_free_suffix(
+                            dest,
+                            name,
+                            &taken,
+                            &mut suffix_cursor,
+                            |n| Some(xmp_name_of(n)),
+                        )),
                         PlanAction::CopyRenamed,
                     )
                 }
@@ -540,27 +553,41 @@ pub fn plan(
 /// finding 2026-08-22, architecture rule "the UI thread never blocks on
 /// I/O"). Resuming is sound because `taken` only ever grows: a number
 /// found occupied once can never come free within the same plan.
-fn first_free_suffix(
+///
+/// `companion` names the OTHER file that has to move with this one — the
+/// sidecar here, nothing for a lone file (the video export's one `.mov`,
+/// which has no pair). It is a parameter rather than a hard-coded
+/// `.xmp` so that the rule "a suffix is free only when the whole set of
+/// names is free" is written once and cannot drift between the two
+/// callers.
+pub(crate) fn first_free_suffix(
     dest: &Path,
     name: &str,
     taken: &HashSet<String>,
     cursor: &mut HashMap<String, usize>,
+    companion: impl Fn(&str) -> Option<String>,
 ) -> String {
     let from = cursor.get(name).copied().unwrap_or(0);
     let mut k = from + 1;
     loop {
         let cand = suffixed(name, k);
-        let cand_xmp = xmp_name_of(&cand);
-        if !occupied(&dest.join(&cand))
-            && !taken.contains(&cand)
-            && !occupied(&dest.join(&cand_xmp))
-            && !taken.contains(&cand_xmp)
-        {
+        let mate = companion(&cand);
+        let free = |n: &String| !occupied(&dest.join(n)) && !taken.contains(n);
+        if free(&cand) && mate.as_ref().is_none_or(free) {
             cursor.insert(name.to_string(), k);
             return cand;
         }
         k += 1;
     }
+}
+
+/// The first free `_k` name for a LONE file at `dest`: no sidecar to keep
+/// in lockstep, and no plan-level reservations, because the video export
+/// writes exactly one file per run (video-export.md, "Clash"). The naming
+/// rule itself is this module's, so both exports spell "keep both" the
+/// same way.
+pub(crate) fn first_free_name(dest: &Path, name: &str) -> String {
+    first_free_suffix(dest, name, &HashSet::new(), &mut HashMap::new(), |_| None)
 }
 
 /// Is anything at all sitting under this name? `symlink_metadata`, not
@@ -569,7 +596,7 @@ fn first_free_suffix(
 /// as a regular file does (fileops.md, the clash check). On a
 /// case-insensitive volume the filesystem answers for the case-variant
 /// too, which is the point.
-fn occupied(p: &Path) -> bool {
+pub(crate) fn occupied(p: &Path) -> bool {
     p.symlink_metadata().is_ok()
 }
 
@@ -597,7 +624,7 @@ fn canonicalize_lenient(p: &Path) -> PathBuf {
 }
 
 /// Deepest ancestor that exists (free-space checks on a to-be-created dir).
-fn existing_ancestor(p: &Path) -> &Path {
+pub(crate) fn existing_ancestor(p: &Path) -> &Path {
     let mut cur = p;
     while !cur.exists() {
         match cur.parent() {
@@ -1096,7 +1123,7 @@ fn hash_file(p: &Path, cancel: &AtomicBool) -> std::io::Result<blake3::Hash> {
 
 /// How the verified temp file becomes the final name.
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
-enum Commit {
+pub(crate) enum Commit {
     /// NOTHING is replaced unless the user answered "overwrite everything"
     /// (fileops.md rule 4): a name that got occupied since the plan fails
     /// THIS file honestly instead of eating what is there.
@@ -1187,7 +1214,7 @@ fn copy_verified_with(
 /// overwrite. Everything else goes through `hard_link`, the portable
 /// "create this name only if it is free" — it fails with `AlreadyExists`
 /// instead of destroying what appeared there since the plan was built.
-fn commit_temp(tmp: &Path, dst: &Path, commit: Commit) -> std::io::Result<()> {
+pub(crate) fn commit_temp(tmp: &Path, dst: &Path, commit: Commit) -> std::io::Result<()> {
     if commit == Commit::Replace {
         return std::fs::rename(tmp, dst);
     }
@@ -1231,7 +1258,7 @@ fn commit_without_hard_links(tmp: &Path, dst: &Path) -> std::io::Result<()> {
 /// means an existing name is never opened, let alone truncated. A number
 /// already in use (a leftover from a crashed run, or an alias a failed
 /// unlink left behind) is skipped rather than reused.
-fn create_temp(dir: &Path) -> std::io::Result<(PathBuf, std::fs::File)> {
+pub(crate) fn create_temp(dir: &Path) -> std::io::Result<(PathBuf, std::fs::File)> {
     static SEQ: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
     for _ in 0..1024 {
         let n = SEQ.fetch_add(1, Ordering::Relaxed);
