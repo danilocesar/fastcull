@@ -100,6 +100,14 @@ pub(crate) fn wire(window: &MainWindow, state: &Rc<RefCell<AppState>>) {
         window.on_clip_start(move || {
             let Some(win) = win.upgrade() else { return };
             let mut st = state.borrow_mut();
+            if st.clip.handle.is_some() {
+                // An export is already running. Unreachable through the
+                // UI (the button is gone and Enter does nothing in the
+                // running state), and guarded anyway: starting a second
+                // one would drop the first handle, which cancels and
+                // JOINS it on the UI thread.
+                return;
+            }
             // Replan against the disk as it is NOW: the destination may
             // have gained the name since the dialog opened.
             clip_replan(&win, &mut st);
