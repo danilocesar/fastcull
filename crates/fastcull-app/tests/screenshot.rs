@@ -4534,6 +4534,12 @@ fn the_video_export_asks_before_replacing_a_file() {
     write_synthetic_raw(&src.join("b.ARW"), 400, 300, 1, 5000);
     write_synthetic_raw(&src.join("c.ARW"), 400, 300, 1, 4500);
     write_synthetic_raw(&src.join("d.ARW"), 380, 285, 1, 4096);
+    // A second folder, for the session-swap-under-the-question strand.
+    let other = out_dir().join("clipq-other");
+    std::fs::remove_dir_all(&other).ok();
+    std::fs::create_dir_all(&other).unwrap();
+    write_synthetic_raw(&other.join("x.ARW"), 400, 300, 1, 4096);
+    write_synthetic_raw(&other.join("y.ARW"), 400, 300, 1, 4096);
     let foreign = b"another day's export".to_vec();
     std::fs::write(dest.join("a-c.mov"), &foreign).unwrap();
 
@@ -4543,8 +4549,11 @@ fn the_video_export_asks_before_replacing_a_file() {
          2900:key:return;3100:dump.inert;3300:key:ctrl+o;3500:dump.accel;\
          3700:key:b;5000:dump.kept;5300:key:escape;\
          5600:key:ctrl+shift+e;5900:key:return;6200:key:o;7500:dump.over;\
-         7800:key:escape;8100:dump.end",
-        dest = dest.display()
+         7800:key:escape;8100:dump.end;\
+         8400:key:ctrl+shift+e;8700:key:return;9000:dump.q2;\
+         9200:open:{other};9800:dump.swapped",
+        dest = dest.display(),
+        other = other.display()
     );
     let out = out_dir().join("clip-clash.jpg");
     let stderr = shoot_env_stderr(
@@ -4565,7 +4574,7 @@ fn the_video_export_asks_before_replacing_a_file() {
         .join("a-c_1.mov")
         .is_file()
         .then(|| read_movie_at(&dest.join("a-c_1.mov")));
-    for d in [&src, &dest] {
+    for d in [&src, &dest, &other] {
         std::fs::remove_dir_all(d).ok();
     }
 
@@ -4630,6 +4639,20 @@ fn the_video_export_asks_before_replacing_a_file() {
         dump_field(qedump(&stderr, "end"), "clip"),
         "false",
         "Esc did not close the dialog"
+    );
+
+    // --- a session swap UNDER the question ---------------------------------
+    // The menu bar stays live while the dialog is up, so a folder can be
+    // opened underneath the question — and the answer is a policy that
+    // gets REPLANNED, which would apply "overwrite" to a set of frames
+    // the user never saw named. (The Copy Picks dialog has the same
+    // strand for the same reason.)
+    assert_eq!(dump_field(qedump(&stderr, "q2"), "clipstate"), "3");
+    assert_eq!(
+        dump_field(qedump(&stderr, "swapped"), "clipstate"),
+        "0",
+        "opening a folder under the question left it answerable for frames \
+         that are no longer the session's: {stderr}"
     );
 
     // --- what the disk says -------------------------------------------------
