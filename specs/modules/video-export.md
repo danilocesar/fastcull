@@ -273,12 +273,12 @@ because it is a promise to a user, not an implementation detail:
 - **A cancelled export says "nothing was written"**, not Copy Picks'
   "files that finished remain": this operation produces exactly one
   file and never commits it before it has been verified.
-- **The dialog's key handling is Copy Picks', including its one known
-  hole**: keys the dialog does not handle are rejected and can reach the
-  main scope, so `Ctrl+O` while the dialog is in its plan or report state
-  opens the folder picker. Marks (`Y`/`N`) are contained, and the clash
-  question swallows everything. This is inherited behaviour, unchanged
-  and not widened; changing it is a Copy Picks decision, not an M9 one.
+- **The dialog is keyboard-contained in every state** (issue #42), and
+  this was verified by driving the real app rather than assumed: with the
+  dialog up, `Y`/`N` mark nothing, `Ctrl+O` does not open the folder
+  picker, and `Ctrl+E` does not raise the Copy Picks dialog underneath.
+  The clash question additionally swallows everything that is not `B`,
+  `O` or `Esc`, and says out loud that it is still waiting.
 - **A mirrored frame is kept, not skipped.** EXIF orientations 2/4/5/7
   degrade to their unmirrored rotation (1/3/8/6) and the report says how
   many. Skipping them instead would drop frames over a flip the track

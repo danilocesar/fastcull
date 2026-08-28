@@ -4354,7 +4354,8 @@ fn export_frames_as_video_writes_a_real_motion_jpeg() {
     let script = format!(
         "1600:dump.idle;1900:key:ctrl+shift+e;2200:dump.refused;\
          2500:select-all;2700:clipdest:{dest};2900:key:ctrl+shift+e;\
-         3300:dump.plan;3500:key:return;12000:dump.done;\
+         3100:key:n;3200:key:y;3300:key:ctrl+o;3400:dump.plan;\
+         3500:key:return;12000:dump.done;\
          12400:key:escape;12700:dump.end",
         dest = dest.display()
     );
@@ -4424,6 +4425,16 @@ fn export_frames_as_video_writes_a_real_motion_jpeg() {
         "false",
         "the dialog owns the keyboard while it is up (issues #41/#42): {plan}"
     );
+    // Keyboard CONTAINMENT, not just focus (issue #42): the `N`, `Y` and
+    // `Ctrl+O` sent while the dialog was up must have died in it. A mark
+    // would show in the status counters, and `Ctrl+O` reaching the grid
+    // would open a native folder picker — which blocks the event loop, so
+    // that failure arrives as a hung run rather than a wrong assertion.
+    let status = dump_text(plan, "status");
+    assert!(
+        status.contains("· unmarked") && status.contains("★0 ✕0"),
+        "a key pressed at the export dialog marked a photo behind it: {status}"
+    );
     let summary = dump_text(plan, "clipsummary");
     assert!(
         summary.starts_with("3 frames · 8640×5760 ·"),
@@ -4454,10 +4465,15 @@ fn export_frames_as_video_writes_a_real_motion_jpeg() {
         report.contains("clamped to 10 fps"),
         "the report must repeat the plan's own words: {report}"
     );
+    let end = qedump(&stderr, "end");
     assert_eq!(
-        dump_field(qedump(&stderr, "end"), "clip"),
+        dump_field(end, "clip"),
         "false",
         "Esc did not close the dialog"
+    );
+    assert!(
+        dump_text(end, "status").contains("★0 ✕0"),
+        "the export changed the user's marks: {end}"
     );
 
     // --- what is on the disk ----------------------------------------------
