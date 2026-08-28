@@ -387,6 +387,12 @@ fn drain_kitchen(win: &MainWindow, state: &Rc<RefCell<AppState>>) -> bool {
 pub(crate) fn clip_report_lines(report: &fastcull_core::clip::ClipReport) -> Vec<String> {
     use crate::clip_bridge::{mirrored_note, seconds};
     let mut lines = Vec::new();
+    // THE HEADLINE FIRST, and it is exactly one of four things. A run
+    // that failed used to lead with "skipped — 1 frame: different size",
+    // because the skip note was pushed before anything said what
+    // happened — the Copy Picks rule this report inherits is that the
+    // headline may never contradict the body, and a note about frames
+    // left out is not a headline for a run that wrote nothing.
     if report.frames > 0 && report.path.is_some() {
         lines.push(format!(
             "Exported {} frames · {} · {} · {} → {}{}",
@@ -407,25 +413,23 @@ pub(crate) fn clip_report_lines(report: &fastcull_core::clip::ClipReport) -> Vec
         if report.replaced {
             lines.push("replaced the file that was already there".into());
         }
+    } else if report.cancelled {
+        // Unlike a cancelled copy, there are no "finished files" to keep:
+        // this operation produces exactly one file, and a cancel means it
+        // was never created.
+        lines.push("Cancelled — nothing was written".into());
+    } else if let Some(reason) = &report.failed {
+        lines.push(format!("FAILED: {reason}"));
+    } else {
+        lines.push("Nothing was exported".into());
     }
+    // ...then what else is worth knowing, whichever way it went.
     let skipped = fastcull_core::clip::skipped_text(&report.skipped);
     if !skipped.is_empty() {
         lines.push(skipped);
     }
     if report.mirrored > 0 {
         lines.push(mirrored_note(report.mirrored));
-    }
-    if report.cancelled {
-        // Unlike a cancelled copy, there are no "finished files" to keep:
-        // this operation produces exactly one file, and a cancel means it
-        // was never created.
-        lines.push("Cancelled — nothing was written".into());
-    }
-    if let Some(reason) = &report.failed {
-        lines.push(format!("FAILED: {reason}"));
-    }
-    if lines.is_empty() {
-        lines.push("Nothing was exported".into());
     }
     lines
 }
@@ -594,6 +598,35 @@ mod tests {
             ..Default::default()
         });
         assert_eq!(failed, ["FAILED: Permission denied"]);
+    }
+
+    /// The headline says WHAT HAPPENED, always — a run that failed used
+    /// to lead with a note about the frames it had left out, which reads
+    /// as a report of a successful export with a footnote.
+    #[test]
+    fn a_failed_export_leads_with_the_failure() {
+        let lines = clip_report_lines(&ClipReport {
+            failed: Some("Permission denied (os error 13)".into()),
+            skipped: vec![Skipped {
+                id: 3,
+                name: "d.ARW".into(),
+                reason: SkipReason::Size {
+                    width: 380,
+                    height: 285,
+                },
+            }],
+            ..Default::default()
+        });
+        assert_eq!(lines[0], "FAILED: Permission denied (os error 13)");
+        assert!(lines[1].starts_with("skipped — 1 frame"));
+        // The same for a cancel.
+        let lines = clip_report_lines(&ClipReport {
+            cancelled: true,
+            mirrored: 1,
+            ..Default::default()
+        });
+        assert_eq!(lines[0], "Cancelled — nothing was written");
+        assert!(lines[1].contains("mirrored"));
     }
 
     /// What the plan said it would leave out, the report repeats — in the
