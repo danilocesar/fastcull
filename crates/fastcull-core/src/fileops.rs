@@ -2689,7 +2689,8 @@ mod tests {
         // bound is still ~200x the resuming cost and ~2x under the
         // cheapest failure signature, and it stops flaking a gate.
         //
-        // The RIGHT fix, filed rather than done here (QE, 2026-08-28):
+        // The RIGHT fix, filed as issue #58 rather than done here (QE,
+        // 2026-08-28):
         // assert the invariant instead of the time. The bug is "the
         // suffix walk restarts from _1 each time", which is countable —
         // probes growing linearly rather than quadratically in the number
