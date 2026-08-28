@@ -491,8 +491,10 @@ const MAX_MOOV: u64 = 64 * 1024 * 1024;
 const MAX_DEPTH: usize = 16;
 
 /// Cap on a UNIFORM sample-size table's claimed count — the one table
-/// whose length the file does not bound (see `parse_stsz`).
-const MAX_UNIFORM_SAMPLES: usize = 16 * 1024 * 1024;
+/// whose length the file does not bound (see `parse_stsz`). A million
+/// samples is nine hours at 30 fps, past anything this reader will ever
+/// be pointed at, and it bounds the buffer that count sizes at 8 MB.
+const MAX_UNIFORM_SAMPLES: usize = 1024 * 1024;
 
 /// Parse the header of a QuickTime movie.
 pub fn read_movie<R: std::io::Read + std::io::Seek>(r: &mut R) -> Result<Movie, QtError> {
@@ -815,10 +817,9 @@ fn parse_stsz(body: &[u8], out: &mut Parsed) -> Result<(), QtError> {
     if uniform != 0 {
         // Every sample the same size: NO table follows, so the atom's own
         // length says nothing about the count and it has to be bounded by
-        // hand. `MAX_UNIFORM_SAMPLES` is four hours of 1000 fps video —
-        // far past anything this app writes (it never writes a uniform
-        // table at all), and small enough that the allocation below is
-        // 128 MB rather than 34 GB.
+        // hand — see `MAX_UNIFORM_SAMPLES`, which is past anything this
+        // reader will meet (this module never writes a uniform table at
+        // all) and keeps the allocation below at 8 MB rather than 34 GB.
         if claimed as usize > MAX_UNIFORM_SAMPLES {
             return Err(QtError::Malformed(
                 "a uniform sample-size table claims an implausible number of samples",
