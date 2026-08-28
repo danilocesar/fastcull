@@ -274,6 +274,19 @@ because it is a promise to a user, not an implementation detail:
 - **A cancelled export says "nothing was written"**, not Copy Picks'
   "files that finished remain": this operation produces exactly one
   file and never commits it before it has been verified.
+- **Planning opens every frame, on the UI thread, and that is
+  affordable here.** The plan has to know each frame's embedded-JPEG
+  offset, length and size, which is one file open and a few KB of
+  targeted reads per frame (the same walk the grid pipeline does). Copy
+  Picks could not afford anything like that — its rename field replans on
+  every keystroke, which is exactly how an N² `stat` walk once froze the
+  UI for three seconds per character. THIS dialog has no field: the plan
+  is built when it opens, when the destination changes, and when the user
+  commits — a handful of times, not per keystroke — over a burst of tens
+  of frames. Recorded as an accepted cost, with the shape of the thing
+  that would change it: a text input in this dialog, or a routine
+  thousand-frame selection over a network mount, would move the probe to
+  a worker thread.
 - **Cancel is a BUTTON as well as `Esc`** in the plan state. The Copy
   Picks dialog has no such button, and its scrim swallows clicks without
   dismissing — so a mouse-only user has no way out of it. The spec's
