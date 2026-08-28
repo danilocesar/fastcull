@@ -572,7 +572,11 @@ fn read_atom_header<R: std::io::Read + std::io::Seek>(
     kind.copy_from_slice(&head[4..8]);
     let short_size = u32::from_be_bytes([head[0], head[1], head[2], head[3]]);
     let (size, body) = match short_size {
-        // The `largesize` form: a 64-bit size follows the type.
+        // The `largesize` form: a 64-bit size follows the type. This is
+        // the ONE length in the format that an attacker gets 64 bits of,
+        // so every sum involving it is checked — an unchecked `at + size`
+        // below panicked in debug on a 44-byte file and wrapped to a
+        // bogus offset in release (validator finding, 2026-08-28).
         1 => {
             let mut big = [0u8; 8];
             r.read_exact(&mut big)?;
@@ -582,7 +586,8 @@ fn read_atom_header<R: std::io::Read + std::io::Seek>(
         0 => (end.saturating_sub(at), at + 8),
         n => (u64::from(n), at + 8),
     };
-    if size < body - at || at + size > end {
+    let past_the_end = at.checked_add(size).is_none_or(|e| e > end);
+    if size < body - at || past_the_end {
         return Err(QtError::Malformed(
             "atom size runs past the end of the file",
         ));
@@ -1044,6 +1049,35 @@ mod tests {
             ("an atom claiming the whole address space", {
                 let mut v = good.clone();
                 v[0..4].copy_from_slice(&u32::MAX.to_be_bytes());
+                v
+            }),
+            // The `largesize` form is the only place the format hands a
+            // reader 64 bits of attacker-chosen length, and it needs its
+            // OWN cases: every corruption above rewrites a 32-bit size,
+            // so none of them reached the branch that once panicked on
+            // `at + size` (validator finding, 2026-08-28). Two shapes —
+            // at the very start of the file, and at a NON-ZERO offset,
+            // which is what made the sum overflow rather than merely
+            // exceed the file.
+            ("a largesize atom of u64::MAX at offset 0", {
+                let mut v = vec![0u8; 16];
+                v[0..4].copy_from_slice(&1u32.to_be_bytes());
+                v[4..8].copy_from_slice(b"mdat");
+                v[8..16].copy_from_slice(&u64::MAX.to_be_bytes());
+                v
+            }),
+            ("a largesize atom of u64::MAX after an ftyp", {
+                let mut v = good[..20].to_vec(); // a whole, valid ftyp
+                v.extend_from_slice(&1u32.to_be_bytes());
+                v.extend_from_slice(b"moov");
+                v.extend_from_slice(&u64::MAX.to_be_bytes());
+                v
+            }),
+            ("a largesize atom shorter than its own header", {
+                let mut v = good[..20].to_vec();
+                v.extend_from_slice(&1u32.to_be_bytes());
+                v.extend_from_slice(b"moov");
+                v.extend_from_slice(&8u64.to_be_bytes()); // < the 16 it occupies
                 v
             }),
             ("a zero-sized child atom", {

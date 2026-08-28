@@ -429,6 +429,14 @@ fn capture_order(sources: &[ClipSource]) -> Vec<ClipSource> {
     ordered
 }
 
+/// A path's file name, or the empty string — the plan's own paths always
+/// have one, and an empty name simply fails every length check.
+fn name_of(p: &Path) -> String {
+    p.file_name()
+        .map(|n| n.to_string_lossy().into_owned())
+        .unwrap_or_default()
+}
+
 /// The stem of a file name (`DSC05010.ARW` -> `DSC05010`). A name that is
 /// all extension keeps its whole self, because a name we did not invent
 /// is the user's business (fileops.md's rule, same reasoning).
@@ -576,12 +584,6 @@ fn plan_with_free(
     let first = frames.first().map(|f| f.name.as_str()).unwrap_or_default();
     let last = frames.last().map(|f| f.name.as_str()).unwrap_or_default();
     let name = clip_name(first, last);
-    if name.len() > MAX_NAME_BYTES {
-        return Err(ClipError::NameTooLong {
-            len: name.len(),
-            name,
-        });
-    }
 
     // The clash question, exactly as Copy Picks asks it (fileops.md): the
     // disk decides, one answer governs the run, and nothing is replaced
@@ -603,6 +605,26 @@ fn plan_with_free(
             ),
         }
     };
+
+    // THE NAME LENGTH, on the name that will really be written — not on
+    // the natural one before the clash was resolved. Every mainstream
+    // filesystem stops at 255 BYTES per name, and a `_k` suffix is added
+    // AFTER the natural name is composed, so checking too early accepted
+    // a 255-byte plan that then wrote 257 and failed at the commit —
+    // after the whole file was on disk (validator finding, 2026-08-28).
+    // Under `Ask` the keep-both candidate is checked too: a question that
+    // offers an answer the write cannot honour is worse than a refusal.
+    for candidate in [Some(&name_of(&dst)), keep_both_example.as_ref()]
+        .into_iter()
+        .flatten()
+    {
+        if candidate.len() > MAX_NAME_BYTES {
+            return Err(ClipError::NameTooLong {
+                len: candidate.len(),
+                name: candidate.clone(),
+            });
+        }
+    }
 
     // A destination that cannot hold a file this big for a reason free
     // space cannot see — FAT32 above 4 GB — fails at write time with the
@@ -1714,6 +1736,67 @@ mod tests {
             Err(ClipError::NameTooLong { len, .. }) => assert!(len > MAX_NAME_BYTES),
             other => panic!("expected a refusal, got {other:?}"),
         }
+        std::fs::remove_dir_all(&dir).ok();
+    }
+
+    /// The check has to be on the name that will REALLY be written. A
+    /// `_k` suffix is added after the natural name is composed, so a name
+    /// that fits at 255 bytes can become 257 the moment the destination
+    /// already holds it — and checking too early accepted that plan and
+    /// only failed at the commit, with the whole file already on disk
+    /// (validator finding, 2026-08-28).
+    #[test]
+    fn the_name_check_follows_the_suffix() {
+        let dir = scratch_dir("clip-longsuffix");
+        let src = dir.join("src");
+        let dest = dir.join("out");
+        std::fs::create_dir_all(&src).unwrap();
+        std::fs::create_dir_all(&dest).unwrap();
+        // Two stems that compose to exactly the 255-byte limit:
+        // 125 + 1 + 125 + 4 = 255.
+        let (a, b) = ("A".repeat(125), "B".repeat(125));
+        let sources = vec![
+            source(
+                0,
+                &raw_with(&src, &format!("{a}.ARW"), 400, 300, 1, 500),
+                Some(0),
+                true,
+            ),
+            source(
+                1,
+                &raw_with(&src, &format!("{b}.ARW"), 400, 300, 1, 500),
+                Some(33),
+                true,
+            ),
+        ];
+        let natural = format!("{a}-{b}.mov");
+        assert_eq!(
+            natural.len(),
+            MAX_NAME_BYTES,
+            "the fixture sits on the limit"
+        );
+
+        // Free destination: the natural name fits, so the plan is fine.
+        let p = plan(&sources, &dest, ClashPolicy::Ask).unwrap();
+        assert_eq!(p.file_name(), natural);
+
+        // Now the name is taken. "Keep both" would need `_1`, i.e. 257
+        // bytes, which no filesystem accepts — so the plan refuses rather
+        // than offering an answer the write cannot honour, and refuses
+        // under the answer itself too.
+        std::fs::write(dest.join(&natural), b"yesterday").unwrap();
+        for policy in [ClashPolicy::Ask, ClashPolicy::CreateCopies] {
+            match plan(&sources, &dest, policy) {
+                Err(ClipError::NameTooLong { len, .. }) => {
+                    assert_eq!(len, MAX_NAME_BYTES + 2, "{policy:?}")
+                }
+                other => panic!("{policy:?}: expected a refusal, got {other:?}"),
+            }
+        }
+        // Overwrite writes the natural name, which fits: it still works.
+        let over = plan(&sources, &dest, ClashPolicy::Overwrite).unwrap();
+        assert_eq!(over.file_name(), natural);
+        assert_eq!(over.action, ClipAction::Replace);
         std::fs::remove_dir_all(&dir).ok();
     }
 
