@@ -96,7 +96,11 @@ burst grouping (burst.rs). The export uses that timestamp:
    above 1000 ms (two bodies interleaved, or a selection of singles) →
    clamped to [10 fps, 120 fps] and reported likewise. Duration and fps
    are shown in the plan line before the user confirms, so a wrong cadence
-   is visible before a byte is written.
+   is visible before a byte is written — and the plan line carries the
+   SAME "assumed 15 fps" / "clamped" wording as the report (persona: it
+   must be impossible to miss before Enter). When the cadence was
+   measured, neither line says where it came from; the parenthesis appears
+   only in the fallback cases.
 
 ## The container
 
@@ -147,8 +151,12 @@ as user-verified or NOT VERIFIED.
   `DSC05010-DSC05039.mov`; one frame per stem, so it doubles as the
   frame-range record. Rename templates do not apply (there is one file).
 - **Destination**: a folder the user chooses, remembered across sessions
-  separately from the Copy Picks destination (`clip_dest` in `ui.toml`).
-  Never the RAW folder by default; allowed if chosen (ADR 0004).
+  as `clip_dest` in `ui.toml`. **Seeded from the Copy Picks destination
+  until a clip folder is first chosen** (persona decision 2026-08-27: on an
+  ordinary evening the selects folder is where today's output goes; a
+  second remembered path would land the video in a three-week-old job's
+  folder). Once chosen, remembered separately. Never the RAW folder by
+  default; allowed if chosen (ADR 0004).
 - **Clash**: the same question as Copy Picks (fileops.md "The clash
   question"): a name already there → Keep both (`_1`, `_2`, …) / Overwrite
   / Cancel. Nothing is ever replaced without the Overwrite answer.
@@ -171,7 +179,11 @@ as user-verified or NOT VERIFIED.
 ## Dialog (minimums)
 
 Menu: **File › Export Frames as Video…** (the wording is the user's;
-"video", not "clip", in the menu). One dialog in the Copy Picks style:
+"video", not "clip", in the menu), keystroke **Ctrl+Shift+E** — beside
+Copy Picks' Ctrl+E as "the other exit"; a modifier chord so it cannot
+fire from a fat finger mid `]`/`N` (persona 2026-08-27). Disabled with its
+reason in the status line, never a silent grey item. One dialog in the
+Copy Picks style:
 destination row with a Choose… button and the remembered path; one plan
 line — *"30 frames · 8640×5760 · 30 fps (from the camera's timestamps) ·
 1.0 s · 328 MB → DSC05010-DSC05039.mov · 358 GB free"*; a skipped line
@@ -180,6 +192,16 @@ when there is one; **Export** (Enter, when the plan is clean) and Cancel
 verified line and an Open folder action. No other control. The clash
 question is the same dialog state as Copy Picks. Modal, keyboard-contained
 (issue #42 rules), never marks, never moves the cursor.
+
+## Follow-ups logged, not in M9 (persona 2026-08-27)
+
+- **"Select this burst" / extend the selection to the next burst**
+  (Shift+`]` is the natural pair of `]`): the common case — the burst under
+  the cursor — needs no selection, but "burst 40 plus burst 41" is
+  Shift+arrow over 60 frames today. A burst-grouping/selection change with
+  its own gate; tracked as an issue.
+- **An "exported as video" badge** on the burst, like the Copy Picks
+  checkmark: USEFUL, not must-have; a new badge surface, deferred.
 
 ## Explicitly not built (panel rule, one year from release)
 
@@ -235,7 +257,7 @@ review-only.
       destination that is a file, a dangling-symlink destination, a
       read-only destination, a selection of 1000 frames (plan time, file
       size line, no memory growth — samples stream, never held in RAM).
-- [ ] App: driven test — select a burst, Ctrl+E-style open, Enter, the
+- [ ] App: driven test — stand in a burst, Ctrl+Shift+E, Enter, the
       file lands and ffprobe/in-tree reader confirm it; the item disabled
       with no selection and no burst; marks unchanged after export; the
       dialog owns the keyboard (issue #41/#42 rules).
