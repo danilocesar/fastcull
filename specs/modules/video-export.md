@@ -63,6 +63,13 @@ re-encode, i.e. the first step into the editor.
 - Pick state is irrelevant and untouched: the export reads marks like Copy
   Picks does and never writes them; by definition the frames are usually
   rejects. Filter state is irrelevant (the selection is explicit).
+  **The filter's two halves, settled at implementation time
+  (2026-08-27)**: a SELECTION means the selected frames that are in the
+  view — `Selection`'s own rule, "what you see is what you stamp", and
+  the number the status bar prints — while a BURST means the whole burst,
+  including members the filter is hiding. A selection is a set the user
+  built by pointing at frames they could see; a burst is a fact about
+  capture times, and "this burst" means the burst.
 - **Every frame keeps its whole image.** No crop, no scale, no rotation of
   pixels.
 
