@@ -88,7 +88,12 @@ Everything Copy Picks promises about writing files holds here too:
 - **Nothing is replaced without your Overwrite answer.** If the name is
   already taken you get one question — **B** keep both (`_1`, `_2`, …),
   **O** overwrite, **Esc** write nothing. `Enter` deliberately does
-  nothing on that question.
+  nothing on that question. (The one hair-splitting exception, shared
+  with Copy Picks: on a filesystem with no hard links — a FAT32 or exFAT
+  card, some network mounts — FastCull has to check the name and then
+  write it as two steps instead of one, so a file that appears in that
+  split second is replaced. On any ordinary disk the two are one
+  operation and cannot be raced.)
 - **Never a half-written file under the real name.** The video is
   written under a hidden temporary name, read back and checked, and only
   then given its name. A cancel, a full disk or a crash leaves nothing
@@ -101,12 +106,19 @@ Everything Copy Picks promises about writing files holds here too:
 
 ## On the phone
 
-The file is a standard `.mov`. It has been tested end to end in
-**InShot** on Android with the real thing — thirty untouched 8640×5760
-Sony A1 frames, 328 MB — which imported and played. Other editors and
-other phones read the same format, but they have not been tested;
-neither has whether InShot honours the rotation flag on a portrait
-burst.
+The file is a standard `.mov`. A file of exactly this shape — thirty
+untouched 8640×5760 Sony A1 frames, 328 MB — was imported and played in
+**InShot** on Android, which is why the format was chosen. Be precise
+about what that proves: the file in that test was muxed by ffmpeg, and
+FastCull's own differs from it only by leaving out two optional boxes and
+using the 64-bit offset table. ffmpeg decodes the two to identical
+frames, and the rotation flag reads back correctly — but **nobody has yet
+put a FastCull-made file on a phone.** If you do, the project would like
+to hear about it either way.
+
+Other editors and other phones read the same format; none of them have
+been tested, and neither has whether InShot turns a portrait burst
+upright on import.
 
 If a phone editor stumbles, the likely cause is the sheer frame size
 rather than the format — every phone made in the last few years decodes

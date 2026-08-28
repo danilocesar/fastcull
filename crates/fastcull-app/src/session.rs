@@ -144,6 +144,11 @@ pub(crate) fn open_folder_at(
     state: &Rc<RefCell<AppState>>,
     folder: &std::path::Path,
 ) {
+    // Read BEFORE the swap: `load_folder` replaces the session, which
+    // drops the export handle (cancelling and joining its worker) and
+    // clears this. A worker that committed in that window left a real
+    // file, and the report below must not call that "nothing".
+    let landed_before_the_swap = state.borrow().clip.running_dst.clone();
     match load_folder(state, folder) {
         Ok(()) => {
             // Menu-open behaves like the CLI argument (spec): fresh
@@ -190,13 +195,28 @@ pub(crate) fn open_folder_at(
             // The video export dialog, for exactly the same three
             // reasons — with one difference in the running case: this
             // operation produces ONE file and never commits it until it
-            // has been verified, so a swap that cancels it leaves nothing
-            // behind at all, and the message says that rather than
-            // "files that finished remain".
+            // has been verified, so a swap that cancels it usually leaves
+            // nothing behind at all.
+            //
+            // USUALLY, not always, and the message says which (validator
+            // finding 2026-08-28): the swap cancels by DROPPING the
+            // handle, and a worker that had already passed its last
+            // cancel check finishes and commits. Its report dies with the
+            // receiver, so the only honest way to know is to look at the
+            // destination — which is why the running destination is kept.
             if win.get_clip_visible() {
                 if win.get_clip_state() == 1 {
+                    let landed = landed_before_the_swap.filter(|p| p.is_file());
                     win.set_clip_report(
-                        "Cancelled — the folder was changed. Nothing was written.".into(),
+                        match landed {
+                            Some(p) => format!(
+                                "The folder was changed. The video had already finished: {}",
+                                p.file_name().unwrap_or_default().to_string_lossy()
+                            ),
+                            None => "Cancelled — the folder was changed. Nothing was written."
+                                .to_string(),
+                        }
+                        .into(),
                     );
                     win.set_clip_state(2);
                 } else {

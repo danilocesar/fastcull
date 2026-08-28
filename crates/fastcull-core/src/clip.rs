@@ -744,6 +744,16 @@ impl Drop for ClipHandle {
         // Cancel-then-join, like the copy engine: quitting mid-export
         // must not block on 4 GB of writing, and the temp+commit contract
         // guarantees no partial file under the final name.
+        //
+        // ONE STEP IS NOT INTERRUPTIBLE, and it is worth naming rather
+        // than pretending otherwise (validator finding, 2026-08-28): the
+        // flag is polled between frames and again per sample of the
+        // read-back, but the `sync_all` between them is a single kernel
+        // call with no polling point, so a cancel that arrives during it
+        // waits for the whole flush. On the module's own worst case — a
+        // 4.4 GB export — that is seconds, on the UI thread. Splitting it
+        // would mean fsyncing in pieces, which buys nothing: the data has
+        // to reach the disk before it can be read back and verified.
         self.cancel.store(true, Ordering::Relaxed);
         if let Some(h) = self.handle.take() {
             h.join().ok();

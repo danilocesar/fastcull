@@ -154,6 +154,13 @@ pub(crate) struct ClipState {
     pub(crate) dest: Option<std::path::PathBuf>,
     pub(crate) handle: Option<fastcull_core::clip::ClipHandle>,
     pub(crate) rx: Option<std::sync::mpsc::Receiver<fastcull_core::clip::ClipEvent>>,
+    /// Where the RUNNING export is writing. Kept because a session swap
+    /// drops the handle — which cancels and joins — and the report it
+    /// then writes has to say whether anything landed. A cancel that
+    /// arrives after the commit is a file on disk, and telling the user
+    /// "nothing was written" about it would be a lie (validator finding,
+    /// 2026-08-28).
+    pub(crate) running_dst: Option<std::path::PathBuf>,
     /// A refusal to explain in the status line, and when it was raised.
     /// The export item is disabled when there is nothing to export, and
     /// the spec forbids a silent grey item: pressing the key anyway says

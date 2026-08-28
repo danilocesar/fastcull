@@ -242,6 +242,7 @@ fn clip_sources(st: &AppState) -> Vec<clip::ClipSource> {
 
 /// Hand a plan to the writer and put the dialog in its running state.
 fn start_export(win: &MainWindow, st: &mut AppState, plan: ClipPlan) {
+    st.clip.running_dst = Some(plan.dst.clone());
     let (handle, rx) = clip::execute(plan);
     st.clip.handle = Some(handle);
     st.clip.rx = Some(rx);

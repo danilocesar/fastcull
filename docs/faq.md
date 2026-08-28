@@ -118,10 +118,13 @@ knows what the clip is actually going to be. See
 The file is a standard QuickTime `.mov` holding Motion JPEG, which is
 about as widely readable as video gets — but the frames inside it are
 50-megapixel stills, which is unusual video material. That is the likely
-sticking point, not the format. What has been tested end to end is InShot
-on Android with a real 30-frame 8640×5760 export; other editors, iOS, and
-whether a portrait burst comes out upright are all unverified, and the
-project would like to hear about it either way.
+sticking point, not the format. A file of exactly this shape (thirty
+8640×5760 frames, 328 MB) imported and played in InShot on Android, which
+is why the format was chosen — though that particular file was muxed by
+ffmpeg rather than by FastCull, and nobody has yet put a FastCull-made
+one on a phone. Other editors, iOS, and whether a portrait burst comes
+out upright are all unverified. The project would like to hear about it
+either way.
 
 ---
 

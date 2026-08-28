@@ -153,8 +153,17 @@ orientation. The first frame in capture order sets both.
 - A frame with **no usable embedded JPEG** (the loupe's `no usable embedded
   preview` badge) is skipped and reported.
 - The fullres source is `EmbeddedPreviews::fullres()` — the largest
-  embedded JPEG, the loupe's own source; for CR3/RAF the rawler fallback
-  applies (raw-pipeline.md), whatever it yields.
+  embedded JPEG, the loupe's own source. **Corrected at implementation
+  time (2026-08-28, validator finding)**: this line used to add "for
+  CR3/RAF the rawler fallback applies (raw-pipeline.md), whatever it
+  yields", and that fallback cannot serve this module. It is a half-size
+  RAW *decode* — it produces pixels, and what an export needs is a byte
+  range inside the file. So a container the in-tree preview walker cannot
+  read (CR3 and RAF are ISO-BMFF and Fuji's own format, not TIFF) has no
+  frame here for the same reason it has no picture in the loupe: those
+  frames are skipped and reported as "no usable embedded JPEG", and a
+  selection made entirely of them refuses at plan time. Giving those
+  bodies a video export means giving them a loupe first.
 
 ## Orientation
 
@@ -313,6 +322,16 @@ because it is a promise to a user, not an implementation detail:
   cost column is Copy Picks' own: its answer costs bytes on top of a run
   that was going out anyway, while here there is one file whose size the
   plan line states already.
+- **Two limits of "cancel", named rather than papered over** (validator
+  findings, 2026-08-28). The cancel flag is polled between frames and
+  again per sample of the read-back, but the `fsync` between those two
+  phases is one kernel call with no polling point — so a cancel arriving
+  during it waits out the whole flush, which on a 4.4 GB export is
+  seconds on the UI thread. Splitting the flush buys nothing: the data
+  has to reach the disk before it can be read back at all. And a cancel
+  that arrives after the commit is a FILE, not a nothing: a session swap
+  therefore looks at the destination before reporting, and says "the
+  video had already finished: <name>" rather than "nothing was written".
 - **A mirrored frame is kept, not skipped.** EXIF orientations 2/4/5/7
   degrade to their unmirrored rotation (1/3/8/6) and the report says how
   many. Skipping them instead would drop frames over a flip the track

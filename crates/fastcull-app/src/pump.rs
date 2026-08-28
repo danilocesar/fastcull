@@ -208,6 +208,7 @@ pub(crate) fn start(window: &MainWindow, state: &Rc<RefCell<AppState>>) -> slint
                             ClipEvent::Finished(report) => {
                                 st.clip.handle = None;
                                 st.clip.rx = None;
+                                st.clip.running_dst = None;
                                 if let Some(win) = win.upgrade() {
                                     win.set_clip_report(
                                         clip_report_lines(&report).join("\n").into(),
