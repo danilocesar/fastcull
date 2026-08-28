@@ -304,6 +304,15 @@ because it is a promise to a user, not an implementation detail:
   picker, and `Ctrl+E` does not raise the Copy Picks dialog underneath.
   The clash question additionally swallows everything that is not `B`,
   `O` or `Esc`, and says out loud that it is still waiting.
+- **The clash question's "keep both" row leads with the NUMBER** —
+  "Keep both (_1) — the video lands as …" — and carries no byte-cost
+  column. The number is the part the answer decides and it must survive a
+  long file name eliding inside the row (a name built from two
+  descriptive stems reaches 45 characters easily, and before this it
+  painted straight through the card and out over the grid behind it). The
+  cost column is Copy Picks' own: its answer costs bytes on top of a run
+  that was going out anyway, while here there is one file whose size the
+  plan line states already.
 - **A mirrored frame is kept, not skipped.** EXIF orientations 2/4/5/7
   degrade to their unmirrored rotation (1/3/8/6) and the report says how
   many. Skipping them instead would drop frames over a flip the track
