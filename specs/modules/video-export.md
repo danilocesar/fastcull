@@ -322,6 +322,12 @@ because it is a promise to a user, not an implementation detail:
   cost column is Copy Picks' own: its answer costs bytes on top of a run
   that was going out anyway, while here there is one file whose size the
   plan line states already.
+- **The frame set is probed twice per export** — once when the dialog
+  opens and once when the user commits (the plan built for the preview is
+  never the one that runs, the same rule Copy Picks has). A file that
+  changes between the two is caught by the write's `read_exact`: a frame
+  whose bytes have shrunk fails the export honestly rather than writing a
+  sample shorter than the size already in the header.
 - **Two limits of "cancel", named rather than papered over** (validator
   findings, 2026-08-28). The cancel flag is polled between frames and
   again per sample of the read-back, but the `fsync` between those two
