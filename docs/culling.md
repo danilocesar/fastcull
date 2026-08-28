@@ -37,6 +37,7 @@ which is faster than any undo dialog.
 | Shift+arrows | extend a selection |
 | `Ctrl+A` | select all (of the filtered view) |
 | `Ctrl+E` | Copy Picks… |
+| `Ctrl+Shift+E` | Export Frames as Video… |
 | `Ctrl+O` | Open Folder… |
 | `Ctrl+Q` | quit |
 | `1`–`5`, `0` | reserved for star ratings (a future version) |
@@ -200,7 +201,9 @@ Shift+arrows, Shift+click, Ctrl+click and `Ctrl+A` build a **selection** of
 several photos. The selection is what the **IPTC panel** writes to: commit a
 field, add or remove a keyword, or apply a template, and it lands on every
 selected photo at once. That's how you caption a whole run of frames in one
-go.
+go. It is also what
+[Export Frames as Video](export-video.md) turns into a clip — and there,
+with nothing selected, the burst under the cursor is the selection.
 
 - Selected photos are **tinted blue** in the grid, so a selection reads
   at a glance across the whole page even at 12 columns.
