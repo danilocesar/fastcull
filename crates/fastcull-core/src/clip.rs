@@ -345,7 +345,7 @@ pub fn scope(selected: &[usize], cursor: usize, group_of: &[Option<usize>]) -> V
 pub fn unavailable_reason(frames: usize) -> Option<&'static str> {
     match frames {
         0 => Some("select frames or stand in a burst"),
-        1 => Some("one frame is not a video \u{2014} select more, or stand in a burst"),
+        1 => Some("one frame is not a video — select more, or stand in a burst"),
         _ => None,
     }
 }

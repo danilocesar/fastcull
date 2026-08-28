@@ -235,6 +235,13 @@ impl Builder {
 /// "zero-length" — a wrapped 0 makes a file that some players refuse to
 /// open at all. In practice this cannot trigger (a 4 GB export at 10 fps
 /// is 400 s = 400,000 ticks).
+/// A sample count in the 32-bit field the format gives it. Saturating
+/// like [`ticks32`]: a selection of four billion frames cannot exist, and
+/// a silent wrap would be the worst possible way to find out otherwise.
+fn sample_count(n: usize) -> u32 {
+    u32::try_from(n).unwrap_or(u32::MAX)
+}
+
 fn ticks32(ms: u64) -> u32 {
     u32::try_from(ms).unwrap_or(u32::MAX)
 }
@@ -353,7 +360,7 @@ pub fn write_header<W: std::io::Write>(w: &mut W, spec: &TrackSpec) -> std::io::
                         b.atom(b"stts", |b| {
                             b.full(0, 0);
                             b.u32(1); // ONE entry: every frame lasts the same
-                            b.u32(n as u32);
+                            b.u32(sample_count(n));
                             b.u32(spec.sample_ms);
                         });
                         b.atom(b"stsc", |b| {
@@ -366,14 +373,14 @@ pub fn write_header<W: std::io::Write>(w: &mut W, spec: &TrackSpec) -> std::io::
                         b.atom(b"stsz", |b| {
                             b.full(0, 0);
                             b.u32(0); // 0 = sizes differ, they follow
-                            b.u32(n as u32);
+                            b.u32(sample_count(n));
                             for len in &spec.sample_sizes {
                                 b.u32(u32::try_from(*len).unwrap_or(u32::MAX));
                             }
                         });
                         b.atom(b"co64", |b| {
                             b.full(0, 0);
-                            b.u32(n as u32);
+                            b.u32(sample_count(n));
                             for at in &offsets {
                                 b.u64(*at);
                             }
@@ -479,6 +486,10 @@ const MAX_MOOV: u64 = 64 * 1024 * 1024;
 /// How deep atoms may nest before the reader gives up. The layout this
 /// module writes is six deep (moov/trak/mdia/minf/stbl/stsd/jpeg).
 const MAX_DEPTH: usize = 16;
+
+/// Cap on a UNIFORM sample-size table's claimed count — the one table
+/// whose length the file does not bound (see `parse_stsz`).
+const MAX_UNIFORM_SAMPLES: usize = 16 * 1024 * 1024;
 
 /// Parse the header of a QuickTime movie.
 pub fn read_movie<R: std::io::Read + std::io::Seek>(r: &mut R) -> Result<Movie, QtError> {
@@ -605,16 +616,26 @@ impl Parsed {
         }
         let mut samples = Vec::with_capacity(self.sizes.len());
         let mut next = 0usize; // index into `sizes`
+                               // The sample-to-chunk table is a RUN-LENGTH list: each row says
+                               // "from this chunk on, N samples per chunk". Walking it from the
+                               // start for every chunk would be quadratic, and both tables are
+                               // bounded only by the size of a 64 MB `moov` — millions of rows
+                               // times millions of chunks is a hang, not a parse. So the cursor
+                               // only ever moves forward.
+        let mut row = 0usize;
         for (chunk_index, chunk_offset) in self.offsets.iter().enumerate() {
             let chunk = chunk_index as u32 + 1;
-            // The last stsc row whose first_chunk is at or before this one.
-            let per_chunk = self
+            while self
                 .stsc
-                .iter()
-                .take_while(|(first, _)| *first <= chunk)
-                .last()
-                .map(|(_, per)| *per)
-                .ok_or(QtError::Malformed("sample-to-chunk table starts late"))?;
+                .get(row + 1)
+                .is_some_and(|(first, _)| *first <= chunk)
+            {
+                row += 1;
+            }
+            let (first, per_chunk) = self.stsc[row];
+            if first > chunk {
+                return Err(QtError::Malformed("sample-to-chunk table starts late"));
+            }
             let mut at = *chunk_offset;
             for _ in 0..per_chunk {
                 let Some(size) = self.sizes.get(next) else {
@@ -649,7 +670,7 @@ fn walk(buf: &[u8], out: &mut Parsed, depth: usize) -> Result<(), QtError> {
         let kind: [u8; 4] = [buf[at + 4], buf[at + 5], buf[at + 6], buf[at + 7]];
         // Inside a moov every atom carries a real 32-bit size; the 0 and 1
         // forms are for top-level boxes and would make this loop spin.
-        if size < 8 || at + size > buf.len() {
+        if size < 8 || at.checked_add(size).is_none_or(|end| end > buf.len()) {
             return Err(QtError::Malformed(
                 "child atom size does not fit its parent",
             ));
@@ -789,10 +810,18 @@ fn parse_stsz(body: &[u8], out: &mut Parsed) -> Result<(), QtError> {
     let uniform = be32(body, 4)?;
     let claimed = be32(body, 8)?;
     if uniform != 0 {
-        // Every sample the same size: no table follows, so the count is
-        // not bounded by the atom and has to be bounded by hand.
-        let count = entry_count(body, 12, 1, claimed.min(1 << 24))?;
-        out.sizes = vec![u64::from(uniform); count];
+        // Every sample the same size: NO table follows, so the atom's own
+        // length says nothing about the count and it has to be bounded by
+        // hand. `MAX_UNIFORM_SAMPLES` is four hours of 1000 fps video —
+        // far past anything this app writes (it never writes a uniform
+        // table at all), and small enough that the allocation below is
+        // 128 MB rather than 34 GB.
+        if claimed as usize > MAX_UNIFORM_SAMPLES {
+            return Err(QtError::Malformed(
+                "a uniform sample-size table claims an implausible number of samples",
+            ));
+        }
+        out.sizes = vec![u64::from(uniform); claimed as usize];
         return Ok(());
     }
     let count = entry_count(body, 12, 4, claimed)?;
@@ -1090,6 +1119,74 @@ mod tests {
         // silent short read.
         p.sizes.pop();
         assert!(p.build_samples().is_err());
+    }
+
+    /// The sample-to-chunk table is a RUN-LENGTH list, and reading it
+    /// wrong is silent: every sample lands at a plausible-looking wrong
+    /// offset. This drives a table with a GAP in it (rows for chunk 1 and
+    /// chunk 5, nothing between) and at a size where re-scanning the
+    /// table for every chunk — which is what this reader used to do —
+    /// stops being a parse and becomes a hang.
+    #[test]
+    fn the_chunk_table_is_read_forwards_only() {
+        // A gap: chunks 1-4 hold 2 samples each, chunks 5-6 hold 3.
+        let p = Parsed {
+            sizes: (0..14).map(|i| 10 + i).collect(),
+            offsets: (0..6).map(|c| 1000 * (c + 1)).collect(),
+            stsc: vec![(1, 2), (5, 3)],
+            ..Default::default()
+        };
+        let samples = p.build_samples().unwrap();
+        assert_eq!(samples.len(), 14);
+        assert_eq!(samples[0].offset, 1000);
+        assert_eq!(samples[2].offset, 2000, "chunk 2 starts the third sample");
+        assert_eq!(samples[8].offset, 5000, "chunk 5 starts the ninth");
+        assert_eq!(samples[11].offset, 6000, "and holds three");
+
+        // A table whose first row does not start at chunk 1 describes
+        // nothing for the chunks before it.
+        let late = Parsed {
+            sizes: vec![10; 4],
+            offsets: vec![1000, 2000],
+            stsc: vec![(2, 2)],
+            ..Default::default()
+        };
+        assert!(late.build_samples().is_err());
+
+        // At scale: 20,000 chunks against a 20,000-row table. Re-scanning
+        // the table per chunk is 200 million steps here — the reader must
+        // walk each table once.
+        let n = 20_000usize;
+        let big = Parsed {
+            sizes: vec![8; n],
+            offsets: (0..n as u64).map(|c| 100 + c * 8).collect(),
+            stsc: (0..n as u32).map(|r| (r + 1, 1)).collect(),
+            ..Default::default()
+        };
+        let samples = big.build_samples().unwrap();
+        assert_eq!(samples.len(), n);
+        assert_eq!(samples[n - 1].offset, 100 + (n as u64 - 1) * 8);
+    }
+
+    /// A UNIFORM sample-size table (one size for every sample, no table
+    /// following) is legal QuickTime — this module never writes one, but
+    /// the reader must not reject a real file over it, and must not
+    /// allocate 34 GB when one lies about its count.
+    #[test]
+    fn a_uniform_sample_size_table_is_read_but_bounded() {
+        let mut p = Parsed::default();
+        let mut body = Vec::new();
+        body.extend_from_slice(&0u32.to_be_bytes()); // version + flags
+        body.extend_from_slice(&64u32.to_be_bytes()); // every sample is 64 B
+        body.extend_from_slice(&5u32.to_be_bytes()); // ...and there are 5
+        parse_stsz(&body, &mut p).unwrap();
+        assert_eq!(p.sizes, vec![64u64; 5]);
+
+        body[8..12].copy_from_slice(&u32::MAX.to_be_bytes());
+        assert!(
+            parse_stsz(&body, &mut Parsed::default()).is_err(),
+            "four billion samples of a claimed size is not a file"
+        );
     }
 
     /// The golden file: the exact header bytes for the three A1 reference
