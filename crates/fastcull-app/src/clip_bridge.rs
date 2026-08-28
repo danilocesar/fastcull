@@ -343,6 +343,14 @@ fn clip_replan_with(win: &MainWindow, st: &mut AppState, policy: ClashPolicy) {
                             .strip_prefix("skipped — ")
                             .unwrap_or("they have nothing usable inside them")
                     ),
+                    // Raw byte counts are what core stores; a person
+                    // reading "need 4823456789 bytes" learns nothing
+                    // they can act on.
+                    ClipError::InsufficientSpace { needed, free } => format!(
+                        "This video would be {} and there is {} free at the destination.",
+                        human_bytes(*needed),
+                        human_bytes(*free)
+                    ),
                     other => other.to_string(),
                 }
                 .into(),
