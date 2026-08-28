@@ -109,11 +109,19 @@ impl Selection {
 
     /// How many images the selection covers WITHIN the view — the number the
     /// status bar reports (ui-grid.md "Selection count in the status bar").
-    /// Lives here next to `batch` so the two can never drift: whenever the
-    /// selection is non-empty this is exactly `batch(view, _).len()`, which a
-    /// unit test pins. Returns 0 for an empty selection — where `batch` falls
-    /// back to the cursor alone — because a bare cursor is not a selection and
-    /// the status bar must stay silent for it.
+    /// Lives here next to `batch` so the two can never drift: whenever
+    /// the selection has at least one member IN THE VIEW this is exactly
+    /// `batch(view, _).len()`, which a unit test pins. Returns 0 for an
+    /// empty selection — where `batch` falls back to the cursor alone —
+    /// because a bare cursor is not a selection and the status bar must
+    /// stay silent for it.
+    ///
+    /// The qualifier matters, and the sentence used to lack it (QE
+    /// finding 2026-08-28): a selection that is non-empty but entirely
+    /// FILTERED OUT counts 0 here while `batch` still returns the cursor
+    /// alone, i.e. 1. Reading the old wording as "these two are
+    /// interchangeable" is how the video export's menu item and its
+    /// dialog came to disagree about how many frames there were.
     pub fn count_in_view(&self, view: &[usize]) -> usize {
         // O(1) short-circuit before touching the view: "nothing selected" is
         // the common state, and rescanning a 50k-image view on every refresh
@@ -205,6 +213,21 @@ mod tests {
     /// The status-bar count and the panel's batch must never disagree — the
     /// spec claims they "match `batch()` exactly", so pin it rather than
     /// trusting two copies of the same filter to stay in step.
+    /// The ONE state where the count and the batch differ, pinned so the
+    /// doc comment above cannot drift back into claiming otherwise: a
+    /// selection whose every member is filtered out counts 0, while
+    /// `batch` falls back to the cursor alone and returns 1 (QE finding
+    /// 2026-08-28 — two call sites were written as if these agreed).
+    #[test]
+    fn a_selection_filtered_entirely_out_of_view_counts_zero_but_batches_the_cursor() {
+        let view = vec![1usize, 2, 3];
+        let mut sel = Selection::default();
+        sel.toggle(99); // selected, and not in the view
+        assert!(!sel.is_empty());
+        assert_eq!(sel.count_in_view(&view), 0);
+        assert_eq!(sel.batch(&view, 2), vec![2], "the cursor alone");
+    }
+
     #[test]
     fn count_in_view_agrees_with_batch() {
         let view: Vec<usize> = (0..10).collect();

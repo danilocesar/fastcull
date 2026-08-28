@@ -385,7 +385,7 @@ pub(crate) fn install(window: &MainWindow, state: &Rc<RefCell<AppState>>) -> Rc<
                          soft={} vx={:.1} vy={:.1} pan={:.4},{:.4} zf={:.3} \
                          copynote={:?} report={:?} copystate={} confirm={:?} \
                          clip={} clipstate={} clipavail={} clipsummary={:?} clipskipped={:?} \
-                         cliperror={:?} clipreport={:?} clipconfirm={:?}",
+                         cliperror={:?} clipreport={:?} clipconfirm={:?} clipprogress={:?}",
                         win.get_dbg_keys_focus(),
                         win.get_one2one(),
                         st.grid.zoom,
@@ -428,6 +428,11 @@ pub(crate) fn install(window: &MainWindow, state: &Rc<RefCell<AppState>>) -> Rc<
                         win.get_clip_error().as_str(),
                         win.get_clip_report().as_str(),
                         win.get_clip_confirm().as_str(),
+                        // "Writing 3 / 30 — DSC05012.ARW" and "Verifying
+                        // 137 / 400": the only part of a running export a
+                        // user sees, and no driven test could see it at
+                        // all until this line (QE finding 2026-08-28).
+                        win.get_clip_progress().as_str(),
                     ));
                     return;
                 }

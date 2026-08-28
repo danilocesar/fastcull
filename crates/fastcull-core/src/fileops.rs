@@ -2678,11 +2678,25 @@ mod tests {
         // only) — a smoke bound with two-sided margin, sized from the
         // measurement that found the bug: for these 2,000 names the walk
         // costs 1.7 s (btrfs) to 2.3 s (tmpfs) when it restarts at 1, and
-        // 4-5 ms when it resumes. 300 ms is ~60x the resuming cost and
-        // ~6x under the restarting one, so it stays quiet under load and
-        // still fails on a machine several times faster than this one.
+        // 4-5 ms when it resumes.
+        //
+        // The bound was 300 ms and it was mis-calibrated for a SHARED CI
+        // RUNNER, which is data nobody had when it was written: the
+        // Windows job measured 344 ms on 2026-08-28 and failed, then
+        // passed on a re-run of the same commit. 344 ms is nowhere near
+        // the 1.7 s a restarting walk costs — the walk was resuming
+        // correctly and the stopwatch was simply too tight. At 1 s the
+        // bound is still ~200x the resuming cost and ~2x under the
+        // cheapest failure signature, and it stops flaking a gate.
+        //
+        // The RIGHT fix, filed rather than done here (QE, 2026-08-28):
+        // assert the invariant instead of the time. The bug is "the
+        // suffix walk restarts from _1 each time", which is countable —
+        // probes growing linearly rather than quadratically in the number
+        // of picks — and a count is deterministic on every runner, which
+        // a stopwatch will never be.
         assert!(
-            elapsed < std::time::Duration::from_millis(300),
+            elapsed < std::time::Duration::from_secs(1),
             "planning 2,000 colliding names took {elapsed:?} — the suffix \
              walk is restarting instead of resuming (quadratic, and this \
              runs on the UI thread on every keystroke)"

@@ -348,6 +348,25 @@ because it is a promise to a user, not an implementation detail:
   changes between the two is caught by the write's `read_exact`: a frame
   whose bytes have shrunk fails the export honestly rather than writing a
   sample shorter than the size already in the header.
+- **Three Windows name limits this module does NOT handle, named so
+  nobody assumes it does** (QE, 2026-08-28; none is reachable on the
+  Linux where they were found, so all three are review-only):
+  1. `MAX_NAME_BYTES` counts BYTES; NTFS counts 255 UTF-16 code units.
+     For ASCII the two coincide and this module is merely conservative —
+     never wrongly permissive — but 130 Cyrillic characters are 260 UTF-8
+     bytes and are refused here while NTFS would accept them.
+  2. Windows' 260-character `MAX_PATH` applies to the whole PATH, not the
+     name, so a name this plan accepts can still fail at the commit
+     inside a deep destination without long-path support. That is the
+     same shape as the bug the length check was moved to prevent, and it
+     has no plan-time answer: the destination is the user's.
+  3. Windows reserved names (`CON`, `NUL`, `AUX`, a trailing dot or
+     space) are not checked. The only way to reach one is the equal-stem
+     collapse — two files both named `CON.ARW` would target `CON.mov` —
+     and Windows itself forbids creating `CON.ARW`, so it takes a
+     network share written from another operating system. Deferred with
+     that reason rather than implemented, because the fix cannot be
+     tested where it was found.
 - **A session swap during a running export reports what LANDED, from a
   flag, not from the destination path.** The swap cancels by dropping the
   handle, which cancels and joins; a worker that had already committed

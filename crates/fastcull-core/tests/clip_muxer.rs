@@ -246,6 +246,85 @@ fn ffprobe_sees_the_rotation_of_a_portrait_export() {
     std::fs::remove_dir_all(&dir).ok();
 }
 
+/// A REAL export past 4 GB, which is where `co64` stops being an
+/// abstract precaution: past 2^32 a 32-bit offset table wraps and the
+/// last frames of the file point back into its header.
+///
+/// `#[ignore]`d because it writes 4.58 GB and takes ~8 s on a warm
+/// release build (~20 s in debug) — too much to put in every run, and
+/// too valuable to leave to arithmetic. Run it deliberately:
+///
+/// ```sh
+/// cargo test --release -p fastcull-core --test clip_muxer -- --ignored
+/// ```
+///
+/// Measured on the development laptop 2026-08-28 (QE): 400 frames,
+/// 4,580,827,191 bytes, the file exactly the size the plan quoted, the
+/// last sample at offset 4,568,513,681 and byte-identical to the
+/// camera's JPEG.
+#[test]
+#[ignore = "writes 4.58 GB; run with --ignored when the co64 path changes"]
+fn a_real_export_past_four_gigabytes() {
+    let dir = scratch("bigco64");
+    let raws = raws_dir();
+    // 400 frames cycling over the three references: ~4.58 GB of samples,
+    // and no fixture files to create.
+    let sources: Vec<fastcull_core::clip::ClipSource> = (0..400)
+        .map(|i| fastcull_core::clip::ClipSource {
+            id: i,
+            path: raws.join(REFERENCE_RAWS[i % REFERENCE_RAWS.len()]),
+            name: format!("DSC{:05}.ARW", 10_000 + i),
+            time_ms: Some(i as i64 * 33),
+            has_subsec: true,
+        })
+        .collect();
+    let plan = fastcull_core::clip::plan(&sources, &dir, fastcull_core::fileops::ClashPolicy::Ask)
+        .expect("the plan must build");
+    assert_eq!(plan.frames.len(), 400);
+    assert!(
+        plan.total_bytes > u64::from(u32::MAX),
+        "the fixture must actually cross 4 GB: {} bytes",
+        plan.total_bytes
+    );
+    let (handle, rx) = fastcull_core::clip::execute(plan);
+    let report = rx
+        .into_iter()
+        .find_map(|e| match e {
+            fastcull_core::clip::ClipEvent::Finished(r) => Some(r),
+            _ => None,
+        })
+        .expect("the export must finish");
+    drop(handle);
+    assert!(report.earned_the_green_light(), "{report:?}");
+    let path = report.path.clone().expect("a file landed");
+
+    let mut file = std::fs::File::open(&path).unwrap();
+    let movie = qt::read_movie(&mut file).unwrap();
+    assert!(movie.co64 && movie.moov_before_mdat);
+    assert_eq!(movie.samples.len(), 400);
+    let last = movie.samples.last().unwrap();
+    assert!(
+        last.offset > u64::from(u32::MAX),
+        "the last sample must sit past the 32-bit ceiling: {}",
+        last.offset
+    );
+    // Offsets contiguous across the whole table, and the last sample is
+    // really the camera's JPEG at that >4 GB offset.
+    for pair in movie.samples.windows(2) {
+        assert_eq!(pair[0].offset + pair[0].size, pair[1].offset);
+    }
+    let source = fullres(&raws.join(REFERENCE_RAWS[399 % REFERENCE_RAWS.len()])).0;
+    let mut buf = vec![0u8; last.size as usize];
+    {
+        use std::io::{Read as _, Seek as _};
+        file.seek(std::io::SeekFrom::Start(last.offset)).unwrap();
+        file.read_exact(&mut buf).unwrap();
+    }
+    assert_eq!(blake3::hash(&buf), blake3::hash(&source));
+    assert_eq!(std::fs::metadata(&path).unwrap().len(), report.bytes);
+    std::fs::remove_dir_all(&dir).ok();
+}
+
 /// `ffprobe` on PATH, or nothing. Never an error: a runner without it
 /// still runs every other check in this file.
 fn ffprobe_path() -> Option<PathBuf> {
