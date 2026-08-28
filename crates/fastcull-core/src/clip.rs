@@ -23,7 +23,11 @@
 
 pub mod qt;
 
+use std::io::Read as _;
 use std::path::{Path, PathBuf};
+use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::mpsc::{Receiver, Sender};
+use std::sync::Arc;
 
 use crate::fileops::ClashPolicy;
 
@@ -102,7 +106,7 @@ pub struct Skipped {
 }
 
 /// One sample: where its bytes live inside the RAW. The bytes themselves
-/// are never loaded here — the write streams them.
+/// are never loaded here — [`execute`] streams them.
 #[derive(Clone, Debug)]
 pub struct ClipFrame {
     pub id: usize,
@@ -565,6 +569,358 @@ fn plan_with_free(
         free_bytes,
         keep_both_example,
     })
+}
+
+// ------------------------------------------------------------------ execute
+
+#[derive(Debug)]
+pub enum ClipEvent {
+    /// Before each frame's bytes are copied (1-based).
+    Frame {
+        index: usize,
+        total: usize,
+        name: String,
+    },
+    /// The samples are written; the finished file is being re-read and
+    /// re-hashed. On a 4 GB export this pass is long enough that a silent
+    /// progress line reads as a hang.
+    Verifying,
+    Finished(ClipReport),
+}
+
+#[derive(Debug, Default, Clone)]
+pub struct ClipReport {
+    /// Frames in the finished file.
+    pub frames: usize,
+    /// The file's size on disk.
+    pub bytes: u64,
+    /// Where it landed (None when nothing was written).
+    pub path: Option<PathBuf>,
+    /// The name it landed under — `_1` included, when the user answered
+    /// "keep both".
+    pub name: String,
+    pub duration_ms: u64,
+    pub cadence: Option<Cadence>,
+    /// It replaced a file that was already there (the Overwrite answer).
+    pub replaced: bool,
+    /// Frames left out, with their reasons — the same list the plan line
+    /// showed.
+    pub skipped: Vec<Skipped>,
+    /// Kept frames whose mirrored EXIF orientation was degraded.
+    pub mirrored: usize,
+    /// Every sample was BLAKE3-hashed on the way in AND re-hashed from
+    /// the finished file, and the `moov` re-parse described exactly the
+    /// samples written.
+    pub all_verified: bool,
+    pub cancelled: bool,
+    /// What went wrong, if anything did.
+    pub failed: Option<String>,
+}
+
+impl ClipReport {
+    /// May this run print "all checksums verified"?
+    ///
+    /// The rule lives HERE and not in the dialog that renders it
+    /// (CLAUDE.md rule 5). A run has earned it only when a file actually
+    /// landed, every sample matched on the way back out, and nothing
+    /// failed or was cancelled.
+    pub fn earned_the_green_light(&self) -> bool {
+        self.frames > 0
+            && self.all_verified
+            && self.failed.is_none()
+            && !self.cancelled
+            && self.path.is_some()
+    }
+}
+
+pub struct ClipHandle {
+    cancel: Arc<AtomicBool>,
+    handle: Option<std::thread::JoinHandle<()>>,
+}
+
+impl ClipHandle {
+    /// Cancellation between frames, and inside the long reads (the
+    /// verify pass polls the same flag): a cancel is only as prompt as
+    /// the operation's longest step.
+    pub fn cancel(&self) {
+        self.cancel.store(true, Ordering::Relaxed);
+    }
+}
+
+impl Drop for ClipHandle {
+    fn drop(&mut self) {
+        // Cancel-then-join, like the copy engine: quitting mid-export
+        // must not block on 4 GB of writing, and the temp+commit contract
+        // guarantees no partial file under the final name.
+        self.cancel.store(true, Ordering::Relaxed);
+        if let Some(h) = self.handle.take() {
+            h.join().ok();
+        }
+    }
+}
+
+/// Write the plan on a worker thread.
+pub fn execute(plan: ClipPlan) -> (ClipHandle, Receiver<ClipEvent>) {
+    let (tx, rx) = std::sync::mpsc::channel();
+    let cancel = Arc::new(AtomicBool::new(false));
+    let flag = Arc::clone(&cancel);
+    let handle = std::thread::Builder::new()
+        .name("export-video".into())
+        .spawn(move || run_plan(&plan, &tx, &flag))
+        .expect("spawn video export worker");
+    (
+        ClipHandle {
+            cancel,
+            handle: Some(handle),
+        },
+        rx,
+    )
+}
+
+fn run_plan(plan: &ClipPlan, tx: &Sender<ClipEvent>, cancel: &AtomicBool) {
+    run_plan_with(plan, tx, cancel, |_| {})
+}
+
+/// [`run_plan`] with a test seam. `tamper` runs on the TEMP file after it
+/// is flushed and before it is verified — the only way to drive the
+/// "the disk gave back something else" branch for real, rather than
+/// asserting that two buffers a test just built are equal (the finding
+/// that shaped the copy engine's equivalent seam).
+fn run_plan_with(
+    plan: &ClipPlan,
+    tx: &Sender<ClipEvent>,
+    cancel: &AtomicBool,
+    tamper: impl FnOnce(&Path),
+) {
+    let mut report = ClipReport {
+        skipped: plan.skipped.clone(),
+        mirrored: plan.mirrored,
+        cadence: Some(plan.cadence),
+        duration_ms: plan.duration_ms(),
+        name: plan.file_name(),
+        ..Default::default()
+    };
+    // A plan built before the question is a QUESTION, not an instruction
+    // (fileops.md rule 3, inherited): the app replans with the answer's
+    // policy and executes THAT.
+    if plan.action == ClipAction::Clash {
+        report.failed = Some(
+            "unanswered clash question: this plan was built before the answer and must not run"
+                .into(),
+        );
+        tx.send(ClipEvent::Finished(report)).ok();
+        return;
+    }
+    match write_clip(plan, tx, cancel, tamper) {
+        Ok(Written::Committed { bytes }) => {
+            report.frames = plan.frames.len();
+            report.bytes = bytes;
+            report.path = Some(plan.dst.clone());
+            report.replaced = plan.action == ClipAction::Replace;
+            report.all_verified = true;
+        }
+        Ok(Written::Cancelled) => {
+            report.cancelled = true;
+        }
+        Err(e) => {
+            report.failed = Some(e.to_string());
+        }
+    }
+    tx.send(ClipEvent::Finished(report)).ok();
+}
+
+enum Written {
+    Committed { bytes: u64 },
+    Cancelled,
+}
+
+/// Write the whole file to a unique temp name in the destination folder,
+/// verify it, and only then put it under its final name.
+///
+/// The order is the point. Nothing ever appears under the destination
+/// name until every byte of it has been read back and matched, so a
+/// crash, a full disk or a cancel leaves at most one hidden
+/// `.fastcull-partial-*` file — never a truncated `.mov` the user might
+/// hand to an editor.
+fn write_clip(
+    plan: &ClipPlan,
+    tx: &Sender<ClipEvent>,
+    cancel: &AtomicBool,
+    tamper: impl FnOnce(&Path),
+) -> std::io::Result<Written> {
+    use std::io::Write as _;
+
+    let dir = plan.dst.parent().unwrap_or_else(|| Path::new(""));
+    std::fs::create_dir_all(dir)?;
+    let (tmp, file) = crate::fileops::create_temp(dir)?;
+    let outcome = (|| -> std::io::Result<Written> {
+        let sizes: Vec<u64> = plan.frames.iter().map(|f| f.len).collect();
+        let spec = qt::TrackSpec {
+            width: plan.width,
+            height: plan.height,
+            orientation: plan.orientation,
+            sample_ms: plan.cadence.sample_ms,
+            sample_sizes: sizes,
+        };
+        let mut out = std::io::BufWriter::with_capacity(1 << 20, file);
+        qt::write_header(&mut out, &spec)?;
+        // The samples, streamed: one 1 MB buffer for the whole export, so
+        // a 400-frame selection costs the same memory as a 2-frame one.
+        let mut hashes: Vec<blake3::Hash> = Vec::with_capacity(plan.frames.len());
+        let mut buf = vec![0u8; 1 << 20];
+        for (i, frame) in plan.frames.iter().enumerate() {
+            if cancel.load(Ordering::Relaxed) {
+                return Ok(Written::Cancelled);
+            }
+            tx.send(ClipEvent::Frame {
+                index: i + 1,
+                total: plan.frames.len(),
+                name: frame.name.clone(),
+            })
+            .ok();
+            hashes.push(copy_sample(frame, &mut out, &mut buf)?);
+        }
+        let mut file = out.into_inner().map_err(std::io::Error::other)?;
+        file.flush()?;
+        file.sync_all()?;
+        drop(file);
+
+        if cancel.load(Ordering::Relaxed) {
+            return Ok(Written::Cancelled);
+        }
+        tamper(&tmp);
+        tx.send(ClipEvent::Verifying).ok();
+        verify(&tmp, plan, &spec, &hashes, cancel, &mut buf)?;
+        if cancel.load(Ordering::Relaxed) {
+            return Ok(Written::Cancelled);
+        }
+
+        let bytes = std::fs::metadata(&tmp)?.len();
+        let commit = if plan.action == ClipAction::Replace {
+            crate::fileops::Commit::Replace
+        } else {
+            crate::fileops::Commit::NoClobber
+        };
+        crate::fileops::commit_temp(&tmp, &plan.dst, commit)?;
+        Ok(Written::Committed { bytes })
+    })();
+    // A failure, a cancel, or a panic-free early return: the temp goes.
+    // The one path that must NOT delete it is a successful commit, where
+    // the temp name no longer exists.
+    if !matches!(outcome, Ok(Written::Committed { .. })) {
+        std::fs::remove_file(&tmp).ok();
+    }
+    outcome
+}
+
+/// Copy ONE embedded JPEG from its RAW into the output, hashing it as it
+/// goes. The RAW is opened read-only and never anything else (ADR 0003).
+fn copy_sample<W: std::io::Write>(
+    frame: &ClipFrame,
+    out: &mut W,
+    buf: &mut [u8],
+) -> std::io::Result<blake3::Hash> {
+    use std::io::Seek as _;
+    let mut raw = std::fs::File::open(&frame.path)?;
+    raw.seek(std::io::SeekFrom::Start(frame.offset))?;
+    let mut hasher = blake3::Hasher::new();
+    let mut left = frame.len;
+    while left > 0 {
+        let want = usize::try_from(left.min(buf.len() as u64)).unwrap_or(buf.len());
+        // `read_exact` and not `read`: a short read here means the RAW
+        // shrank or was truncated under us, and a sample that is shorter
+        // than the size already written into `stsz` would make the whole
+        // file misaligned. Better to fail this export honestly.
+        raw.read_exact(&mut buf[..want])?;
+        hasher.update(&buf[..want]);
+        out.write_all(&buf[..want])?;
+        left -= want as u64;
+    }
+    Ok(hasher.finalize())
+}
+
+/// Read the finished file back and prove it is what was planned.
+///
+/// Two independent checks, because they catch different lies. The
+/// per-sample hashes prove the BYTES survived the trip to the disk. The
+/// `moov` re-parse proves the INDEX describes them — a file whose header
+/// says a sample is 12 MB at offset X is unplayable if the bytes are
+/// somewhere else, and every byte of it can still hash correctly.
+fn verify(
+    tmp: &Path,
+    plan: &ClipPlan,
+    spec: &qt::TrackSpec,
+    hashes: &[blake3::Hash],
+    cancel: &AtomicBool,
+    buf: &mut [u8],
+) -> std::io::Result<()> {
+    let mut file = std::fs::File::open(tmp)?;
+    let movie = qt::read_movie(&mut file)
+        .map_err(|e| std::io::Error::other(format!("the finished file did not parse back: {e}")))?;
+    let expected = qt::sample_offsets(spec);
+    if movie.samples.len() != plan.frames.len() {
+        return Err(std::io::Error::other(format!(
+            "the finished file describes {} samples, not {}",
+            movie.samples.len(),
+            plan.frames.len()
+        )));
+    }
+    let describes_this_export = movie.timescale == qt::TIMESCALE
+        && movie.sample_ms == plan.cadence.sample_ms
+        && movie.stts_entries == 1
+        && movie.width == plan.width
+        && movie.height == plan.height
+        && movie.sample_width == plan.width
+        && movie.sample_height == plan.height
+        && movie.format == *b"jpeg"
+        && movie.major_brand == *b"qt  "
+        && movie.co64
+        && movie.moov_before_mdat
+        && movie.matrix == qt::display_matrix(plan.orientation);
+    if !describes_this_export {
+        return Err(std::io::Error::other(
+            "the finished file's moov does not describe this export",
+        ));
+    }
+    for (i, (sample, frame)) in movie.samples.iter().zip(&plan.frames).enumerate() {
+        if cancel.load(Ordering::Relaxed) {
+            return Ok(());
+        }
+        if sample.size != frame.len || Some(&sample.offset) != expected.get(i) {
+            return Err(std::io::Error::other(format!(
+                "sample {} is not where the plan put it",
+                i + 1
+            )));
+        }
+        if hash_range(&mut file, sample.offset, sample.size, buf)? != hashes[i] {
+            return Err(std::io::Error::other(format!(
+                "sample {} does not match the bytes read from {}",
+                i + 1,
+                frame.name
+            )));
+        }
+    }
+    Ok(())
+}
+
+/// BLAKE3 of a byte range of an open file, read in the caller's buffer.
+fn hash_range(
+    file: &mut std::fs::File,
+    offset: u64,
+    len: u64,
+    buf: &mut [u8],
+) -> std::io::Result<blake3::Hash> {
+    use std::io::Seek as _;
+    file.seek(std::io::SeekFrom::Start(offset))?;
+    let mut hasher = blake3::Hasher::new();
+    let mut left = len;
+    while left > 0 {
+        let want = usize::try_from(left.min(buf.len() as u64)).unwrap_or(buf.len());
+        file.read_exact(&mut buf[..want])?;
+        hasher.update(&buf[..want]);
+        left -= want as u64;
+    }
+    Ok(hasher.finalize())
 }
 
 #[cfg(test)]
@@ -1293,5 +1649,447 @@ mod tests {
         let big = u64::from(u32::MAX);
         assert_eq!(qt::header_len(3, big), 627 + 36 + 16);
         assert_eq!(qt::header_len(3, big - 8), 627 + 36 + 8);
+    }
+
+    // ---------------------------------------------------------- execute
+
+    /// Run a plan to completion on THIS thread and collect what it said.
+    /// The worker thread is not the thing under test here — what it does
+    /// to the disk is.
+    fn run(plan: &ClipPlan) -> (ClipReport, Vec<String>) {
+        run_tampered(plan, |_| {})
+    }
+
+    fn run_tampered(plan: &ClipPlan, tamper: impl FnOnce(&Path)) -> (ClipReport, Vec<String>) {
+        let (tx, rx) = std::sync::mpsc::channel();
+        let cancel = AtomicBool::new(false);
+        run_plan_with(plan, &tx, &cancel, tamper);
+        drop(tx);
+        let mut report = None;
+        let mut events = Vec::new();
+        for e in rx {
+            match e {
+                ClipEvent::Frame { index, total, name } => {
+                    events.push(format!("{index}/{total} {name}"))
+                }
+                ClipEvent::Verifying => events.push("verifying".into()),
+                ClipEvent::Finished(r) => report = Some(r),
+            }
+        }
+        (report.expect("a run always finishes"), events)
+    }
+
+    /// Everything at the destination, sorted — including the hidden temp
+    /// files, which is the point of half these assertions.
+    fn listing(dir: &Path) -> Vec<String> {
+        let mut v: Vec<String> = std::fs::read_dir(dir)
+            .map(|it| {
+                it.filter_map(|e| e.ok())
+                    .map(|e| e.file_name().to_string_lossy().into_owned())
+                    .collect()
+            })
+            .unwrap_or_default();
+        v.sort();
+        v
+    }
+
+    /// A fixture folder with three frames of a 30 fps burst.
+    fn burst(dir: &Path) -> Vec<ClipSource> {
+        std::fs::create_dir_all(dir).unwrap();
+        vec![
+            source(0, &raw_with(dir, "a.ARW", 400, 300, 1, 500), Some(0), true),
+            source(1, &raw_with(dir, "b.ARW", 400, 300, 1, 640), Some(33), true),
+            source(2, &raw_with(dir, "c.ARW", 400, 300, 1, 480), Some(66), true),
+        ]
+    }
+
+    /// The bytes of each source's embedded JPEG, in capture order — what
+    /// the samples in the finished file have to be, byte for byte.
+    fn source_samples(plan: &ClipPlan) -> Vec<Vec<u8>> {
+        plan.frames
+            .iter()
+            .map(|f| {
+                let raw = std::fs::read(&f.path).unwrap();
+                raw[f.offset as usize..(f.offset + f.len) as usize].to_vec()
+            })
+            .collect()
+    }
+
+    /// The whole write, end to end: one file lands, the in-tree reader
+    /// agrees it is what the plan described, and every sample in it is
+    /// the camera's own JPEG.
+    #[test]
+    fn an_export_lands_one_file_that_reads_back_as_planned() {
+        let dir = scratch_dir("clip-write");
+        let src = dir.join("src");
+        let dest = dir.join("out");
+        let sources = burst(&src);
+        let plan = plan(&sources, &dest, ClashPolicy::Ask).unwrap();
+        let expect = source_samples(&plan);
+        let (report, events) = run(&plan);
+
+        assert_eq!(report.failed, None, "{report:?}");
+        assert_eq!(report.frames, 3);
+        assert!(report.all_verified && report.earned_the_green_light());
+        assert_eq!(report.path.as_deref(), Some(dest.join("a-c.mov").as_path()));
+        assert_eq!(report.name, "a-c.mov");
+        assert_eq!(report.duration_ms, 99);
+        assert_eq!(report.cadence.map(|c| c.sample_ms), Some(33));
+        assert!(!report.replaced && !report.cancelled);
+        // The progress the dialog shows: one line per frame, in order,
+        // then the verify pass (which on a 4 GB file is long enough that
+        // silence would read as a hang).
+        assert_eq!(events, ["1/3 a.ARW", "2/3 b.ARW", "3/3 c.ARW", "verifying"],);
+        // Nothing but the one file — no `.fastcull-partial-*` left over.
+        assert_eq!(listing(&dest), ["a-c.mov"]);
+
+        let mut file = std::fs::File::open(dest.join("a-c.mov")).unwrap();
+        let movie = qt::read_movie(&mut file).unwrap();
+        assert_eq!(movie.samples.len(), 3);
+        assert!(movie.co64 && movie.moov_before_mdat);
+        assert_eq!(&movie.format, b"jpeg");
+        assert_eq!(movie.sample_ms, 33);
+        assert_eq!((movie.width, movie.height), (400, 300));
+        let bytes = std::fs::read(dest.join("a-c.mov")).unwrap();
+        assert_eq!(bytes.len() as u64, plan.total_bytes, "the quoted size");
+        for (i, sample) in movie.samples.iter().enumerate() {
+            let at = sample.offset as usize;
+            assert_eq!(
+                &bytes[at..at + sample.size as usize],
+                &expect[i][..],
+                "sample {i} is not the camera's JPEG, byte for byte"
+            );
+        }
+        std::fs::remove_dir_all(&dir).ok();
+    }
+
+    /// A byte that changes between the write and the read-back must cost
+    /// the run its file AND its green light. Driven through the real
+    /// verify pass by corrupting the temp file, not by comparing two
+    /// buffers a test just built.
+    #[test]
+    fn a_byte_that_changed_on_the_way_to_disk_is_caught() {
+        let dir = scratch_dir("clip-tamper");
+        let src = dir.join("src");
+        let dest = dir.join("out");
+        let sources = burst(&src);
+        let plan = plan(&sources, &dest, ClashPolicy::Ask).unwrap();
+        let (report, _) = run_tampered(&plan, |tmp| {
+            // Flip one bit in the middle of the second sample.
+            let mut bytes = std::fs::read(tmp).unwrap();
+            let at = bytes.len() / 2;
+            bytes[at] ^= 0xFF;
+            std::fs::write(tmp, bytes).unwrap();
+        });
+        let reason = report.failed.clone().expect("the tamper must be caught");
+        assert!(
+            reason.contains("does not match the bytes read from"),
+            "the failure must name what went wrong: {reason}"
+        );
+        assert!(!report.all_verified && !report.earned_the_green_light());
+        assert_eq!(report.frames, 0);
+        assert_eq!(report.path, None);
+        assert!(
+            listing(&dest).is_empty(),
+            "a file that failed verification must not exist at all: {:?}",
+            listing(&dest)
+        );
+        std::fs::remove_dir_all(&dir).ok();
+    }
+
+    /// The same for the INDEX: bytes that hash correctly are still
+    /// useless if the header says they are somewhere else. This corrupts
+    /// the sample-size table, which every hash in the file survives.
+    #[test]
+    fn a_moov_that_stopped_describing_the_samples_is_caught() {
+        let dir = scratch_dir("clip-moov");
+        let src = dir.join("src");
+        let dest = dir.join("out");
+        let sources = burst(&src);
+        let plan = plan(&sources, &dest, ClashPolicy::Ask).unwrap();
+        let (report, _) = run_tampered(&plan, |tmp| {
+            let mut bytes = std::fs::read(tmp).unwrap();
+            let at = bytes
+                .windows(4)
+                .position(|w| w == b"stsz")
+                .expect("an stsz atom");
+            // Claim the first sample is one byte shorter than it is.
+            let size_at = at + 4 + 8 + 4;
+            let claimed = u32::from_be_bytes(bytes[size_at..size_at + 4].try_into().unwrap());
+            bytes[size_at..size_at + 4].copy_from_slice(&(claimed - 1).to_be_bytes());
+            std::fs::write(tmp, bytes).unwrap();
+        });
+        assert!(report.failed.is_some(), "a lying index must be caught");
+        assert!(!report.earned_the_green_light());
+        assert!(listing(&dest).is_empty());
+        std::fs::remove_dir_all(&dir).ok();
+    }
+
+    /// A source that disappears mid-write: the run fails honestly, the
+    /// destination name is never created, and the temp file goes with it.
+    #[test]
+    fn a_failure_mid_write_leaves_nothing_at_the_destination() {
+        let dir = scratch_dir("clip-midfail");
+        let src = dir.join("src");
+        let dest = dir.join("out");
+        let sources = burst(&src);
+        let plan = plan(&sources, &dest, ClashPolicy::Ask).unwrap();
+        // Truncate the LAST frame's RAW after planning: the write gets
+        // two frames in and then cannot read what it was promised.
+        std::fs::write(&plan.frames[2].path, b"gone").unwrap();
+        let (report, _) = run(&plan);
+        assert!(report.failed.is_some(), "a short read must fail the run");
+        assert_eq!(report.path, None);
+        assert!(!report.earned_the_green_light());
+        assert!(
+            listing(&dest).is_empty(),
+            "a partial export must leave NOTHING behind: {:?}",
+            listing(&dest)
+        );
+        std::fs::remove_dir_all(&dir).ok();
+    }
+
+    /// Cancel: nothing lands, and nothing is left half-written.
+    #[test]
+    fn a_cancelled_export_leaves_nothing_behind() {
+        let dir = scratch_dir("clip-cancel");
+        let src = dir.join("src");
+        let dest = dir.join("out");
+        let sources = burst(&src);
+        let plan = plan(&sources, &dest, ClashPolicy::Ask).unwrap();
+        let (tx, rx) = std::sync::mpsc::channel();
+        let cancel = AtomicBool::new(true); // cancelled before the first frame
+        run_plan(&plan, &tx, &cancel);
+        drop(tx);
+        let report = rx
+            .into_iter()
+            .find_map(|e| match e {
+                ClipEvent::Finished(r) => Some(r),
+                _ => None,
+            })
+            .unwrap();
+        assert!(report.cancelled && report.failed.is_none());
+        assert_eq!(report.path, None);
+        assert!(!report.earned_the_green_light());
+        assert!(listing(&dest).is_empty(), "{:?}", listing(&dest));
+        std::fs::remove_dir_all(&dir).ok();
+    }
+
+    /// A plan built before the clash question was answered is a QUESTION,
+    /// not an instruction: it writes nothing at all, and what is already
+    /// at the destination is untouched (fileops.md rule 3, inherited).
+    #[test]
+    fn an_unanswered_clash_question_writes_nothing() {
+        let dir = scratch_dir("clip-unanswered");
+        let src = dir.join("src");
+        let dest = dir.join("out");
+        let sources = burst(&src);
+        std::fs::create_dir_all(&dest).unwrap();
+        std::fs::write(dest.join("a-c.mov"), b"yesterday's export").unwrap();
+        let plan = plan(&sources, &dest, ClashPolicy::Ask).unwrap();
+        assert_eq!(plan.action, ClipAction::Clash);
+        let (report, events) = run(&plan);
+        assert!(report.failed.is_some() && !report.earned_the_green_light());
+        assert!(events.is_empty(), "not one frame may be read: {events:?}");
+        assert_eq!(
+            std::fs::read(dest.join("a-c.mov")).unwrap(),
+            b"yesterday's export"
+        );
+        std::fs::remove_dir_all(&dir).ok();
+    }
+
+    /// The three answers, on the disk. Nothing at the destination is
+    /// replaced without the Overwrite answer — the promise this module
+    /// inherits from ADR 0004 and never trades away.
+    #[test]
+    fn each_answer_to_the_clash_question_lands_where_it_says() {
+        let dir = scratch_dir("clip-answers");
+        let src = dir.join("src");
+        let dest = dir.join("out");
+        let sources = burst(&src);
+        std::fs::create_dir_all(&dest).unwrap();
+        let foreign = b"another day's export".to_vec();
+        std::fs::write(dest.join("a-c.mov"), &foreign).unwrap();
+
+        // Keep both: a new number, the old file untouched.
+        let kept = plan(&sources, &dest, ClashPolicy::CreateCopies).unwrap();
+        let (report, _) = run(&kept);
+        assert_eq!(report.name, "a-c_1.mov");
+        assert!(report.earned_the_green_light() && !report.replaced);
+        assert_eq!(std::fs::read(dest.join("a-c.mov")).unwrap(), foreign);
+        assert_eq!(listing(&dest), ["a-c.mov", "a-c_1.mov"]);
+
+        // Overwrite: the old file is gone, replaced by a real export.
+        let over = plan(&sources, &dest, ClashPolicy::Overwrite).unwrap();
+        let (report, _) = run(&over);
+        assert!(report.replaced && report.earned_the_green_light());
+        let now = std::fs::read(dest.join("a-c.mov")).unwrap();
+        assert_ne!(now, foreign);
+        assert_eq!(&now[4..8], b"ftyp");
+        assert_eq!(listing(&dest), ["a-c.mov", "a-c_1.mov"]);
+        std::fs::remove_dir_all(&dir).ok();
+    }
+
+    /// ADR 0003, which this module inherits through ADR 0004: the RAWs
+    /// and their sidecars are read and NOTHING else. Byte-compared before
+    /// and after a real export, sidecars included.
+    #[test]
+    fn the_raws_and_their_sidecars_come_out_untouched() {
+        let dir = scratch_dir("clip-adr3");
+        let src = dir.join("src");
+        let dest = dir.join("out");
+        let sources = burst(&src);
+        for s in &sources {
+            std::fs::write(
+                crate::xmp::sidecar_path(&s.path),
+                format!("<x>{}</x>", s.name),
+            )
+            .unwrap();
+        }
+        let before: Vec<(PathBuf, Vec<u8>)> = std::fs::read_dir(&src)
+            .unwrap()
+            .map(|e| {
+                let p = e.unwrap().path();
+                let b = std::fs::read(&p).unwrap();
+                (p, b)
+            })
+            .collect();
+        let plan = plan(&sources, &dest, ClashPolicy::Ask).unwrap();
+        let (report, _) = run(&plan);
+        assert!(report.earned_the_green_light());
+        for (p, bytes) in &before {
+            assert_eq!(
+                &std::fs::read(p).unwrap(),
+                bytes,
+                "the export wrote to {p:?}"
+            );
+        }
+        assert_eq!(
+            std::fs::read_dir(&src).unwrap().count(),
+            before.len(),
+            "the export added or removed a file beside the RAWs"
+        );
+        std::fs::remove_dir_all(&dir).ok();
+    }
+
+    /// The samples STREAM: a 40 MB export must not cost 40 MB of memory,
+    /// or a 400-frame 4.4 GB selection would need 4.4 GB of RAM.
+    ///
+    /// Measured through the process's own resident size, so it is a Linux
+    /// test — the streaming loop it pins is platform-independent, and
+    /// this is the platform where the number is free to read.
+    #[cfg(target_os = "linux")]
+    #[test]
+    fn the_samples_stream_instead_of_piling_up_in_memory() {
+        fn resident_bytes() -> u64 {
+            let statm = std::fs::read_to_string("/proc/self/statm").unwrap();
+            let pages: u64 = statm.split_whitespace().nth(1).unwrap().parse().unwrap();
+            pages * 4096
+        }
+        let dir = scratch_dir("clip-stream");
+        let src = dir.join("src");
+        let dest = dir.join("out");
+        std::fs::create_dir_all(&src).unwrap();
+        // 40 frames of 1 MB: 40 MB of samples, four times any plausible
+        // buffer, and enough that holding them all would be unmissable.
+        let sources: Vec<ClipSource> = (0..40)
+            .map(|i| {
+                source(
+                    i,
+                    &raw_with(&src, &format!("f{i:03}.ARW"), 400, 300, 1, 1 << 20),
+                    Some(i as i64 * 33),
+                    true,
+                )
+            })
+            .collect();
+        let plan = plan(&sources, &dest, ClashPolicy::Ask).unwrap();
+        assert_eq!(plan.sample_bytes, 40 << 20);
+        let before = resident_bytes();
+        let (report, _) = run(&plan);
+        let after = resident_bytes();
+        assert!(report.earned_the_green_light(), "{report:?}");
+        let grew = after.saturating_sub(before);
+        assert!(
+            grew < 16 << 20,
+            "the export grew resident memory by {} MB writing {} MB of samples — \
+             they are being held, not streamed",
+            grew >> 20,
+            plan.sample_bytes >> 20
+        );
+        std::fs::remove_dir_all(&dir).ok();
+    }
+
+    /// What the plan left out travels into the report unchanged, so the
+    /// user reads the same sentence after the export as before it.
+    #[test]
+    fn the_report_carries_the_plans_skips_and_cadence() {
+        let dir = scratch_dir("clip-carry");
+        let src = dir.join("src");
+        let dest = dir.join("out");
+        std::fs::create_dir_all(&src).unwrap();
+        let sources = vec![
+            source(0, &raw_with(&src, "a.ARW", 400, 300, 1, 500), None, false),
+            source(1, &raw_with(&src, "b.ARW", 380, 285, 1, 500), None, false),
+            source(2, &raw_with(&src, "c.ARW", 400, 300, 2, 500), None, false),
+        ];
+        let plan = plan(&sources, &dest, ClashPolicy::Ask).unwrap();
+        assert_eq!(plan.cadence.source, CadenceSource::NoTiming);
+        let (report, _) = run(&plan);
+        assert!(report.earned_the_green_light());
+        assert_eq!(report.frames, 2);
+        assert_eq!(report.mirrored, 1, "c.ARW was orientation 2");
+        assert_eq!(report.skipped.len(), 1);
+        assert_eq!(
+            skipped_text(&report.skipped),
+            "skipped — 1 frame: different size (380×285)"
+        );
+        assert!(
+            report
+                .cadence
+                .map(|c| c.text())
+                .is_some_and(|t| t.contains("assumed 15 fps")),
+            "the report must repeat the plan's own words about the cadence"
+        );
+        std::fs::remove_dir_all(&dir).ok();
+    }
+
+    /// The green light is a rule, not a decoration: it belongs to a run
+    /// that actually landed a verified file and nothing else.
+    #[test]
+    fn the_green_light_is_only_for_a_run_that_earned_it() {
+        let landed = ClipReport {
+            frames: 3,
+            path: Some(PathBuf::from("x.mov")),
+            all_verified: true,
+            ..Default::default()
+        };
+        assert!(landed.earned_the_green_light());
+        for spoiled in [
+            ClipReport {
+                cancelled: true,
+                ..landed.clone()
+            },
+            ClipReport {
+                failed: Some("disk full".into()),
+                ..landed.clone()
+            },
+            ClipReport {
+                all_verified: false,
+                ..landed.clone()
+            },
+            ClipReport {
+                path: None,
+                ..landed.clone()
+            },
+            ClipReport {
+                frames: 0,
+                ..landed.clone()
+            },
+        ] {
+            assert!(
+                !spoiled.earned_the_green_light(),
+                "green light over {spoiled:?}"
+            );
+        }
     }
 }
