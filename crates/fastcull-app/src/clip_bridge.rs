@@ -273,14 +273,22 @@ fn show_clash_question(win: &MainWindow, plan: &ClipPlan) {
         .join("\n")
         .into(),
     );
+    // The NUMBER first, then the name. The number is the part the answer
+    // decides — and the part that must still be readable when the name is
+    // long enough for the row to elide it (a 45-character name from two
+    // descriptive stems does exactly that). The name it will really land
+    // under is core's answer, not `_1` assumed: `_1` may be taken too
+    // (the Copy Picks gate finding, inherited).
     win.set_clip_confirm_keep_both(
         match &plan.keep_both_example {
-            Some(free) => format!("Keep both — the video lands as {free}"),
+            Some(free) => format!(
+                "Keep both ({}) — the video lands as {free}",
+                suffix_of(free, &name)
+            ),
             None => "Keep both — the video lands under a new name".to_string(),
         }
         .into(),
     );
-    win.set_clip_confirm_keep_both_cost(format!("+{}", human_bytes(plan.total_bytes)).into());
     win.set_clip_confirm_overwrite(format!("Overwrite — replace {name}").into());
     win.set_clip_confirm_cancel("Cancel — write nothing".into());
     win.set_clip_confirm_nudge("Pick one: B, O or Esc.".into());
@@ -378,6 +386,18 @@ pub(crate) fn skipped_line(p: &ClipPlan) -> String {
     parts.join(" · ")
 }
 
+/// The `_k` part of a "keep both" name: `a-b_2.mov` against `a-b.mov`
+/// is `_2`. Falls back to the whole name if the two do not share a stem,
+/// which cannot happen today but would be a silent lie if it ever did.
+fn suffix_of(free: &str, taken: &str) -> String {
+    let stem = |n: &str| n.rsplit_once('.').map(|(s, _)| s).unwrap_or(n).to_string();
+    let (free_stem, taken_stem) = (stem(free), stem(taken));
+    free_stem
+        .strip_prefix(&taken_stem)
+        .map(str::to_string)
+        .unwrap_or(free_stem)
+}
+
 /// A mirrored frame keeps its rotation and loses its flip: the picture is
 /// right, the mirroring is not, and the user hears it here rather than
 /// finding out in the editor.
@@ -397,6 +417,16 @@ pub(crate) fn seconds(ms: u64) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// The number a "keep both" answer will really use is the one part of
+    /// that row's label that must survive a long file name eliding.
+    #[test]
+    fn the_keep_both_row_leads_with_the_number() {
+        assert_eq!(suffix_of("a-b_1.mov", "a-b.mov"), "_1");
+        assert_eq!(suffix_of("a-b_12.mov", "a-b.mov"), "_12");
+        // Unrelated names cannot happen, and must not silently print "".
+        assert_eq!(suffix_of("other.mov", "a-b.mov"), "other");
+    }
 
     #[test]
     fn a_duration_reads_in_seconds() {

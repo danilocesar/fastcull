@@ -81,6 +81,13 @@ component AnswerRow inherits Rectangle {
             color: root.label-color;
             font-size: 13px;
             vertical-alignment: center;
+            // The label carries a FILE NAME, and a long one used to paint
+            // straight through the card's right edge and out over the
+            // grid behind it (seen on a 45-character name in the video
+            // export's question). Stretch to the room there is, and
+            // elide inside the row rather than outside the dialog.
+            horizontal-stretch: 1;
+            overflow: elide;
         }
         Text {
             text: root.cost;
@@ -324,7 +331,6 @@ export component MainWindow inherits Window {
     in property <string> clip-report: "";
     in property <string> clip-confirm: "";
     in property <string> clip-confirm-keep-both: "";
-    in property <string> clip-confirm-keep-both-cost: "";
     in property <string> clip-confirm-overwrite: "";
     in property <string> clip-confirm-cancel: "";
     in property <string> clip-confirm-nudge: "";
@@ -1865,7 +1871,12 @@ export component MainWindow inherits Window {
                 x: (parent.width - self.width) / 2;
                 y: (parent.height - self.height) / 2;
                 width: 560px;
-                height: min(400px, parent.height - 40px);
+                // This dialog has ONE plan line and no template field, so
+                // it does not need the Copy Picks card's height — an
+                // 8-line-tall box holding two sentences reads as a dialog
+                // that lost something. The clash question adds three
+                // answer rows, and gets the room for them.
+                height: min(root.clip-state == 3 ? 380px : 260px, parent.height - 40px);
                 border-radius: 8px;
                 background: #202028;
                 border-width: 1px;
@@ -1940,7 +1951,11 @@ export component MainWindow inherits Window {
                         AnswerRow {
                             key: "B";
                             label: root.clip-confirm-keep-both;
-                            cost: root.clip-confirm-keep-both-cost;
+                            // No cost column: this question is about ONE
+                            // file, whose size the plan line above states
+                            // already. Copy Picks needs it because its
+                            // answer costs bytes on top of a run that was
+                            // going out anyway.
                             clicked => { root.clip-answer-keep-both(); }
                         }
                         AnswerRow {
@@ -1991,6 +2006,15 @@ export component MainWindow inherits Window {
                         if root.clip-state == 1: Button {
                             text: "Cancel";
                             clicked => { root.clip-cancel(); }
+                        }
+                        // A real Cancel button in the plan state, which
+                        // the Copy Picks dialog does not have: the scrim
+                        // swallows clicks without dismissing, so without
+                        // this a mouse-only user has no way out of the
+                        // dialog at all. Esc does the same thing.
+                        if root.clip-state == 0: Button {
+                            text: "Cancel";
+                            clicked => { root.clip-close(); }
                         }
                         // No Export button while the question is up: a
                         // greyed fourth control is one more thing to parse

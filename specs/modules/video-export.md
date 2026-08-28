@@ -273,6 +273,10 @@ because it is a promise to a user, not an implementation detail:
 - **A cancelled export says "nothing was written"**, not Copy Picks'
   "files that finished remain": this operation produces exactly one
   file and never commits it before it has been verified.
+- **Cancel is a BUTTON as well as `Esc`** in the plan state. The Copy
+  Picks dialog has no such button, and its scrim swallows clicks without
+  dismissing — so a mouse-only user has no way out of it. The spec's
+  dialog minimums name Export *and* Cancel, so this one has both.
 - **The dialog is keyboard-contained in every state** (issue #42), and
   this was verified by driving the real app rather than assumed: with the
   dialog up, `Y`/`N` mark nothing, `Ctrl+O` does not open the folder
