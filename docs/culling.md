@@ -31,7 +31,7 @@ which is faster than any undo dialog.
 | `+` / `-` | zoom: grid columns → loupe fit → ×1.5 steps → 1:1 |
 | `Z` | fit → 1:1; from 1:1 *or any zoom* → back to fit (from the grid: straight to 1:1) |
 | `G` | back to the grid at your previous grid zoom |
-| `Esc` | back to the grid, **and the selection is cleared** — from anywhere |
+| `Esc` | back to the grid, **and the selection is cleared** — from anywhere but a text field |
 | `[` / `]` | previous / next burst (see below) |
 | Shift+`[` / Shift+`]` | extend the selection by a whole burst (see below) |
 | `Ctrl+Shift+B` | select this burst — the whole one under the cursor (see below) |
@@ -232,7 +232,8 @@ the `· N selected` counter goes with it, leaving you on the photo you
 clicked. **`Esc` clears it too, from anywhere** — inside the loupe as
 well, where nothing is tinted and it is easy to forget that a selection
 is still live; one `Esc` and the next caption lands only on the photo
-you're looking at. `G` from the loupe keeps the selection (so you can go
+you're looking at. (The one place `Esc` does nothing is while you are
+typing in an IPTC field — click the grid or press `Tab` out first.) `G` from the loupe keeps the selection (so you can go
 back to the grid and look at it); at a grid zoom `G` clears it like `Esc`.
 Note that plain arrow navigation does *not* clear a selection: it stays
 live, and stays lit, until you clear it.

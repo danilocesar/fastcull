@@ -1174,7 +1174,7 @@ brightening during wheel scrolling (needs an activity decay timer).
 | double-click (loupe) | 1:1 with the clicked point centered |
 | drag | grid: scroll; loupe above fit: pan the image |
 | `G` | back to the grid at the previous grid zoom (from loupe/1:1); at a grid zoom it is also the deselect gesture (clears the selection); from the loupe it KEEPS the selection — the "go and look at what I selected" exit |
-| `Esc` | back to the grid at the previous grid zoom AND the selection cleared — from anywhere, the loupe included (user decision 2026-08-28, issue #55: the burst chords build a 40-frame selection in the loupe with one press, where no wash shows it, and a stale one would silently take the next IPTC commit; the cancel key must work where the selection was made). Modal popups still take Esc first (they close; the grid never sees it) |
+| `Esc` | back to the grid at the previous grid zoom AND the selection cleared — from anywhere, the loupe included (user decision 2026-08-28, issue #55: the burst chords build a 40-frame selection in the loupe with one press, where no wash shows it, and a stale one would silently take the next IPTC commit; the cancel key must work where the selection was made). Modal popups still take Esc first (they close; the grid never sees it), and with keyboard focus in an IPTC field Esc stays the recorded no-op (Slint LineEdit has no Esc hook — see the panel section; QE 2026-08-28) |
 | `I` | toggle IPTC panel |
 | `K` | focus the keyword field, opening the IPTC panel if needed (persona G3; implemented with the panel step — K is never a dead key) |
 | Shift+arrows | extend selection (span anchor..cursor over view positions; a new span replaces the previous one — shrink/flip works) |
