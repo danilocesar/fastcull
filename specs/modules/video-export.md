@@ -249,50 +249,192 @@ ffprobe exists and are skipped (not failed) elsewhere, and the acceptance
 list says which claims are CI-verified on Windows and which are
 review-only.
 
+## As built (M9, 2026-08-27) — decisions taken during implementation
+
+The user delegated the remaining calls. Each of these is recorded here
+because it is a promise to a user, not an implementation detail:
+
+- **The refusal is a status-line message, not a silent grey item.** The
+  menu entry is disabled when there is nothing to export, but
+  `Ctrl+Shift+E` always works: it appends "Export Frames as Video:
+  select frames or stand in a burst" (or "one frame is not a video —
+  select more, or stand in a burst") to the status bar for six seconds,
+  and the message vanishes the moment it stops being true, so selecting
+  the frames it asked for does not leave the complaint on screen.
+- **`ui.toml` is read-modify-written.** `clip_dest` lives beside
+  `copy_dest` in the same file, and the Copy Picks save path used to
+  rebuild that file from its own two keys — which would have erased the
+  video destination on every folder change.
+- **The report's wording is the plan's wording.** `Cadence::text` and
+  `skipped_text` live in core and both surfaces call them, so the
+  sentence the user agrees to before Enter is the sentence they read
+  afterwards. The "all checksums verified" RULE lives in core too
+  (`ClipReport::earned_the_green_light`), as it does for Copy Picks.
+- **A cancelled export says "nothing was written"**, not Copy Picks'
+  "files that finished remain": this operation produces exactly one
+  file and never commits it before it has been verified.
+- **The dialog's key handling is Copy Picks', including its one known
+  hole**: keys the dialog does not handle are rejected and can reach the
+  main scope, so `Ctrl+O` while the dialog is in its plan or report state
+  opens the folder picker. Marks (`Y`/`N`) are contained, and the clash
+  question swallows everything. This is inherited behaviour, unchanged
+  and not widened; changing it is a Copy Picks decision, not an M9 one.
+- **A mirrored frame is kept, not skipped.** EXIF orientations 2/4/5/7
+  degrade to their unmirrored rotation (1/3/8/6) and the report says how
+  many. Skipping them instead would drop frames over a flip the track
+  matrix cannot express.
+
 ## Acceptance criteria (tests)
 
-- [ ] Muxer golden file: 3 reference frames → a `.mov` whose atom tree
+Every box below names the test that holds it. Unless a line says
+otherwise, the test is hermetic — it needs neither the sample RAWs nor
+ffmpeg — and therefore runs on the Windows runner too. `core:` =
+`fastcull-core` unit test, `muxer:` = `tests/clip_muxer.rs` (needs the
+sample RAWs), `app:` = the driven `tests/screenshot.rs` test.
+
+- [x] Muxer golden file: 3 reference frames → a `.mov` whose atom tree
       matches the pinned golden (ftyp `qt  `, moov-before-mdat, `jpeg`
       sample entry, timescale 1000, `co64`, stts one entry, tkhd identity
       matrix) and which ffprobe reports as `mjpeg, 8640x5760, yuvj422p,
-      30 frames` where ffprobe exists — byte-identical samples proven by
+      3 frames` where ffprobe exists — byte-identical samples proven by
       hashing the mdat ranges against the source JPEGs.
-- [ ] Cadence: 30 frames with 33 ms gaps → 30 fps; a selection of two
+      *(The criterion said "30 frames"; the fixture is the three
+      reference frames, and the count is corrected here.)*
+      → `core: qt::the_container_layout_is_pinned_to_a_golden_file`,
+      `core: qt::the_reader_confirms_what_the_writer_promised`,
+      `muxer: the_real_reference_frames_produce_the_golden_header`,
+      `muxer: every_sample_is_the_camera_jpeg_byte_for_byte`,
+      `muxer: ffprobe_agrees_it_is_motion_jpeg` (skipped without ffprobe).
+- [x] Cadence: 30 frames with 33 ms gaps → 30 fps; a selection of two
       bursts with a 4 s pause → the median, pause dropped, N frames in
       capture order; gaps at 1 s granularity → 15 fps + the report line;
       no timestamps → 15 fps + the report line; interleaved two bodies →
       capture-sorted merge, clamped cadence, reported.
-- [ ] Order: the file is in capture order whatever the grid sort;
+      → `core: the_median_gap_is_the_frame_duration`,
+      `core: a_pause_between_two_bursts_does_not_stretch_every_frame`,
+      `core: one_second_granularity_falls_back_to_fifteen_fps`,
+      `core: only_millisecond_pairs_measure_a_gap`,
+      `core: implausible_gaps_are_clamped_and_said_so`,
+      `core: two_interleaved_bodies_merge_in_capture_order_and_clamp`,
+      `core: the_cadence_only_explains_itself_when_it_had_to`.
+- [x] Order: the file is in capture order whatever the grid sort;
       filename tiebreak for equal timestamps.
-- [ ] Uniformity: a different-size frame, a different-orientation frame,
+      → `core: capture_order_sorts_by_time_then_name_then_the_untimed`,
+      `core: the_plan_is_in_capture_order_and_names_the_range`,
+      `app: export_frames_as_video_writes_a_real_motion_jpeg` (the three
+      fixtures are named so that capture order and name order disagree,
+      and the samples are compared in capture order).
+- [x] Uniformity: a different-size frame, a different-orientation frame,
       and a no-preview frame are skipped and reported; < 2 frames left
       refuses at plan time; a single-frame selection disables the item.
-- [ ] Orientation: portrait frames produce a rotated track matrix ffprobe
+      → `core: frames_that_cannot_share_the_track_are_skipped_and_reported`,
+      `core: the_first_usable_frame_sets_the_track`,
+      `core: fewer_than_two_frames_refuses_at_plan_time`,
+      `core: the_scope_is_the_selection_or_the_burst_under_the_cursor`,
+      `app: export_frames_as_video_writes_a_real_motion_jpeg`
+      (`clipavail=false` on a lone frame).
+- [x] Orientation: portrait frames produce a rotated track matrix ffprobe
       reports as rotate 90/270; mirrored orientations degrade and report.
-- [ ] Files: name from first/last stem; clash question in all three
+      → `core: qt::portrait_frames_turn_the_display_not_the_pixels`,
+      `core: a_mirrored_frame_is_kept_degraded_and_counted`,
+      `muxer: ffprobe_sees_the_rotation_of_a_portrait_export` (skipped
+      without ffprobe; ffprobe 8.x spells it `rotation=-90`, older builds
+      `rotate=270`, and both are accepted).
+- [x] Files: name from first/last stem; clash question in all three
       answers; temp+commit with no partial under the final name after a
       simulated failure and after cancel; never into the RAW folder
       unless chosen; the RAW files and sidecars untouched (the ADR 0003
       tests extend to this module); `co64` offsets correct in a synthetic
       > 4 GB file (sparse fixture) — Windows CI included.
-- [ ] Verified: a tampered byte in the written file is detected and the
+      → `core: the_name_is_the_frame_range`,
+      `core: the_name_names_only_frames_that_are_in_the_file`,
+      `core: a_taken_name_raises_the_question_and_each_answer_lands_somewhere_else`,
+      `core: each_answer_to_the_clash_question_lands_where_it_says`,
+      `core: an_unanswered_clash_question_writes_nothing`,
+      `core: a_failure_mid_write_leaves_nothing_at_the_destination`,
+      `core: a_cancelled_export_leaves_nothing_behind`,
+      `core: the_raw_folder_is_a_legal_destination_when_it_is_chosen`,
+      `core: the_raws_and_their_sidecars_come_out_untouched`,
+      `core: planning_writes_nothing_at_all`,
+      `core: qt::offsets_past_four_gigabytes_are_written_as_64_bit`,
+      `app: the_video_export_asks_before_replacing_a_file`.
+      *Two notes on this line.* The > 4 GB case is proven on the
+      arithmetic AND on the written bytes (a 5.1 GB layout whose `co64`
+      table is decoded out of the header) rather than with a sparse
+      fixture: no test writes 4 GB to a CI runner's disk, and the check
+      is hermetic, so it runs on Windows. And "never into the RAW folder
+      unless chosen" differs from Copy Picks on purpose: the copy engine
+      REFUSES that destination (it would drop copies of the RAWs beside
+      the originals), while this module allows it when the user chooses
+      it, because a `.mov` cannot collide with a RAW and "export the
+      burst next to the shoot" is a real answer. "Not by default" is
+      enforced by there being no destination at all until one is chosen
+      or seeded from Copy Picks'.
+- [x] Verified: a tampered byte in the written file is detected and the
       verified line withheld; the moov re-parse matches.
-- [ ] Free space: refuses at plan time when the sum does not fit; a
+      → `core: a_byte_that_changed_on_the_way_to_disk_is_caught`,
+      `core: a_moov_that_stopped_describing_the_samples_is_caught`,
+      `core: the_green_light_is_only_for_a_run_that_earned_it`,
+      `app (unit): pump::the_verified_line_of_a_video_export_is_earned`.
+      The re-parse checks more than the sample table: the brand, `co64`,
+      `moov`-before-`mdat`, the single `stts` entry, both frame sizes and
+      the display matrix all have to describe THIS export.
+- [x] Free space: refuses at plan time when the sum does not fit; a
       write failure mid-file removes the temp and reports.
-- [ ] Hostile inputs: a JPEG with an EXIF orientation but no dimensions,
+      → `core: a_destination_that_cannot_hold_the_file_refuses_at_plan_time`,
+      `core: a_failure_mid_write_leaves_nothing_at_the_destination`,
+      `core: a_read_only_destination_fails_honestly_and_leaves_nothing`.
+- [x] Hostile inputs: a JPEG with an EXIF orientation but no dimensions,
       a truncated embedded JPEG (the loupe's `no decodable preview` case),
       a 0-byte RAW, a name with spaces/Unicode, a very long name, a
       destination that is a file, a dangling-symlink destination, a
       read-only destination, a selection of 1000 frames (plan time, file
       size line, no memory growth — samples stream, never held in RAM).
-- [ ] App: driven test — stand in a burst, Ctrl+Shift+E, Enter, the
+      → `core: a_preview_with_no_dimensions_is_skipped`,
+      `core: a_truncated_preview_is_copied_as_is_and_a_runaway_one_is_skipped`,
+      `core: frames_that_cannot_share_the_track_are_skipped_and_reported`
+      (the 0-byte RAW),
+      `core: names_with_spaces_and_unicode_survive_into_the_file_name`,
+      `core: an_impossible_name_refuses_before_anything_is_written`,
+      `core: a_destination_that_is_not_a_folder_refuses_at_plan_time`
+      (a file AND a dangling symlink),
+      `core: a_read_only_destination_fails_honestly_and_leaves_nothing`,
+      `core: a_thousand_frames_plan_without_reading_a_single_sample`,
+      `core: the_samples_stream_instead_of_piling_up_in_memory`,
+      `core: qt::hostile_bytes_come_back_as_errors_not_panics`.
+      *Recorded behaviour for the truncated case*: the export does not
+      decode, so a frame whose declared bytes are inside the file is
+      copied AS IS and lands in the video looking exactly as broken as it
+      does in the loupe; a declared length that runs past the end of the
+      RAW is not a frame at all and is skipped. Validating frames by
+      decoding them would be the first step towards being an editor.
+- [x] App: driven test — stand in a burst, Ctrl+Shift+E, Enter, the
       file lands and ffprobe/in-tree reader confirm it; the item disabled
       with no selection and no burst; marks unchanged after export; the
       dialog owns the keyboard (issue #41/#42 rules).
-- [ ] Perf: 30 A1 frames export in < 2 s on the reference laptop (release,
+      → `app: export_frames_as_video_writes_a_real_motion_jpeg`,
+      `app: the_video_export_asks_before_replacing_a_file`.
+      **One deviation, recorded**: the driven test uses a SELECTION, not
+      the burst under the cursor. All three reference RAWs in
+      `testdata/raws` declare Sony `SequenceNumber = 0` — "single shot" —
+      so no burst can be formed from them, and no fixture in the
+      repository carries a burst sequence. The burst-under-cursor scope
+      rule is covered by `core: the_scope_is_the_selection_or_the_burst_
+      under_the_cursor`, and the app strand that proves the wiring reads
+      the same burst index (the disabled-with-a-reason assertion). A
+      driven burst strand needs a burst fixture, which is its own piece
+      of work (a synthetic RAW with a Sony maker note).
+- [x] Perf: 30 A1 frames export in < 2 s on the reference laptop (release,
       idle) — an I/O-bound budget, added to perf_budgets.rs.
+      → `perf: budget_video_export_30_frames_under_2s`; measured 527 ms
+      for 327 MB on the reference laptop, 2026-08-27.
 - [ ] USER-VERIFIED (2026-08-27, not automatable): InShot on the phone
       imports and plays a 2880×1920 MJPEG `.mov` and the untouched
       8640×5760 30-frame file. NOT VERIFIED: portrait rotation honoured by
       InShot; playback on iOS; 4:2:0 or progressive JPEGs from other
-      bodies.
+      bodies. **Still open after M9**: the phone test was run against
+      ffmpeg's own file, and the file this module now writes has the same
+      layout minus `edts`/`udta`/`wide` and with `co64` in place of
+      `stco`. It decodes identically under ffmpeg (verified 2026-08-27:
+      byte-identical frames, correct rotation), but nobody has put THIS
+      file on the phone.

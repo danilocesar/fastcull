@@ -2166,4 +2166,301 @@ mod tests {
             );
         }
     }
+
+    // --------------------------------------------------- hostile inputs
+
+    /// Two bodies shooting at once: the frames interleave in capture
+    /// order, the gaps between consecutive frames of the MERGED sequence
+    /// are far shorter than either camera's own cadence, and the result
+    /// is clamped and reported rather than written as a 300 fps file.
+    #[test]
+    fn two_interleaved_bodies_merge_in_capture_order_and_clamp() {
+        let dir = scratch_dir("clip-twobodies");
+        let src = dir.join("src");
+        std::fs::create_dir_all(&src).unwrap();
+        // Body A at t = 0, 100, 200…; body B 3 ms behind each of them.
+        let mut sources = Vec::new();
+        for i in 0..6 {
+            let t = i as i64 * 100;
+            sources.push(source(
+                i * 2,
+                &raw_with(&src, &format!("A{i:02}.ARW"), 400, 300, 1, 500),
+                Some(t),
+                true,
+            ));
+            sources.push(source(
+                i * 2 + 1,
+                &raw_with(&src, &format!("B{i:02}.ARW"), 400, 300, 1, 500),
+                Some(t + 3),
+                true,
+            ));
+        }
+        let p = plan(&sources, &dir.join("out"), ClashPolicy::Ask).unwrap();
+        // Capture-sorted MERGE, not "all of A then all of B".
+        let names: Vec<&str> = p.frames.iter().map(|f| f.name.as_str()).collect();
+        assert_eq!(&names[..4], ["A00.ARW", "B00.ARW", "A01.ARW", "B01.ARW"]);
+        // Alternating gaps of 3 ms and 97 ms: the median is 3, which is
+        // no cadence at all, so it is clamped AND said out loud.
+        assert!(matches!(p.cadence.source, CadenceSource::Clamped { .. }));
+        assert_eq!(p.cadence.sample_ms, MIN_SAMPLE_MS);
+        assert!(p.cadence.text().contains("clamped"), "{}", p.cadence.text());
+        std::fs::remove_dir_all(&dir).ok();
+    }
+
+    /// ADR 0004: never the RAW folder by DEFAULT, but allowed when the
+    /// user chooses it. The copy engine refuses that destination (it
+    /// would drop copies of the RAWs beside the originals); this one must
+    /// not, because the file it writes is a `.mov` that cannot collide
+    /// with a RAW, and "export the burst next to the shoot" is a real
+    /// answer.
+    #[test]
+    fn the_raw_folder_is_a_legal_destination_when_it_is_chosen() {
+        let dir = scratch_dir("clip-inplace");
+        let src = dir.join("src");
+        std::fs::create_dir_all(&src).unwrap();
+        let sources = vec![
+            source(0, &raw_with(&src, "a.ARW", 400, 300, 1, 500), Some(0), true),
+            source(
+                1,
+                &raw_with(&src, "b.ARW", 400, 300, 1, 500),
+                Some(33),
+                true,
+            ),
+        ];
+        let before: Vec<Vec<u8>> = sources
+            .iter()
+            .map(|s| std::fs::read(&s.path).unwrap())
+            .collect();
+        let p = plan(&sources, &src, ClashPolicy::Ask).unwrap();
+        assert_eq!(p.dst, src.join("a-b.mov"));
+        let (report, _) = run(&p);
+        assert!(report.earned_the_green_light());
+        assert!(src.join("a-b.mov").is_file());
+        // ...and the RAWs it landed beside are byte-identical.
+        for (s, bytes) in sources.iter().zip(&before) {
+            assert_eq!(&std::fs::read(&s.path).unwrap(), bytes, "{:?}", s.path);
+        }
+        std::fs::remove_dir_all(&dir).ok();
+    }
+
+    /// Hostile: a preview the walker cannot size (an EXIF orientation but
+    /// no SOF header in the payload) is not a frame — it is skipped like
+    /// any other unusable one, never exported at a guessed size.
+    #[test]
+    fn a_preview_with_no_dimensions_is_skipped() {
+        let dir = scratch_dir("clip-nodims");
+        let src = dir.join("src");
+        std::fs::create_dir_all(&src).unwrap();
+        // A JPEG signature and an orientation tag, but no SOF: the
+        // walker can find it and cannot size it.
+        let mut b = TiffBuilder::new(true);
+        let payload = b.add_blob(&[0xFF, 0xD8, 0xFF, 0xD9, 0x00, 0x00]);
+        let ifd0 = b.add_ifd(
+            &[
+                (TAG_ORIENTATION, 3, 1, 6),
+                (TAG_JPEG_OFFSET, 4, 1, payload),
+                (TAG_JPEG_LENGTH, 4, 1, 6),
+            ],
+            0,
+        );
+        b.set_ifd0(ifd0);
+        let sizeless = src.join("x.ARW");
+        std::fs::write(&sizeless, b.cursor().into_inner()).unwrap();
+        let sources = vec![
+            source(0, &raw_with(&src, "a.ARW", 400, 300, 1, 500), Some(0), true),
+            source(1, &sizeless, Some(33), true),
+            source(
+                2,
+                &raw_with(&src, "b.ARW", 400, 300, 1, 500),
+                Some(66),
+                true,
+            ),
+        ];
+        let p = plan(&sources, &dir.join("out"), ClashPolicy::Ask).unwrap();
+        assert_eq!(p.frames.len(), 2);
+        assert_eq!(p.skipped.len(), 1);
+        assert_eq!(p.skipped[0].reason, SkipReason::NoPreview);
+        std::fs::remove_dir_all(&dir).ok();
+    }
+
+    /// Hostile: a TRUNCATED embedded JPEG — the loupe's "no decodable
+    /// preview" case. The export does not decode, so a frame whose bytes
+    /// are inside the file is copied AS IS; a declared length that runs
+    /// past the end of the RAW is not a frame at all and is skipped.
+    ///
+    /// This is the recorded behaviour, not an accident: the whole feature
+    /// is "the camera's bytes, untouched", and a decode pass to
+    /// pre-validate them would be the first step towards an editor. A
+    /// half-written frame from a dying card therefore lands in the video
+    /// looking exactly as broken as it does in the loupe.
+    #[test]
+    fn a_truncated_preview_is_copied_as_is_and_a_runaway_one_is_skipped() {
+        let dir = scratch_dir("clip-truncated");
+        let src = dir.join("src");
+        let dest = dir.join("out");
+        std::fs::create_dir_all(&src).unwrap();
+        // A real, sizeable JPEG header whose scan simply stops — inside
+        // the file, so it is a frame.
+        let cut = raw_with(&src, "cut.ARW", 400, 300, 1, 300);
+        // A pointer that claims more bytes than the file holds.
+        let mut b = TiffBuilder::new(true);
+        let payload = b.add_blob(&tiny_jpeg(400, 300));
+        let ifd0 = b.add_ifd(
+            &[
+                (TAG_WIDTH, 3, 1, 400),
+                (TAG_HEIGHT, 3, 1, 300),
+                (TAG_JPEG_OFFSET, 4, 1, payload),
+                (TAG_JPEG_LENGTH, 4, 1, 1_000_000),
+            ],
+            0,
+        );
+        b.set_ifd0(ifd0);
+        let runaway = src.join("runaway.ARW");
+        std::fs::write(&runaway, b.cursor().into_inner()).unwrap();
+        let sources = vec![
+            source(0, &raw_with(&src, "a.ARW", 400, 300, 1, 300), Some(0), true),
+            source(1, &cut, Some(33), true),
+            source(2, &runaway, Some(66), true),
+        ];
+        let p = plan(&sources, &dest, ClashPolicy::Ask).unwrap();
+        assert_eq!(
+            p.frames.len(),
+            2,
+            "the runaway pointer is not a frame; the short one is"
+        );
+        assert_eq!(p.skipped.len(), 1);
+        let (report, _) = run(&p);
+        assert!(report.earned_the_green_light(), "{report:?}");
+        std::fs::remove_dir_all(&dir).ok();
+    }
+
+    /// Hostile: the user's own file names. Spaces, accents, emoji and a
+    /// leading dot all travel into the video's name untouched — they are
+    /// the user's business (fileops.md's rule), and the only thing that
+    /// matters is that the result is a NAME and lands in the chosen
+    /// folder.
+    #[test]
+    fn names_with_spaces_and_unicode_survive_into_the_file_name() {
+        let dir = scratch_dir("clip-unicode");
+        let src = dir.join("src");
+        let dest = dir.join("out");
+        std::fs::create_dir_all(&src).unwrap();
+        let sources = vec![
+            source(
+                0,
+                &raw_with(&src, "café brûlé 01.ARW", 400, 300, 1, 500),
+                Some(0),
+                true,
+            ),
+            source(
+                1,
+                &raw_with(&src, "日本 02 📷.ARW", 400, 300, 1, 500),
+                Some(33),
+                true,
+            ),
+        ];
+        let p = plan(&sources, &dest, ClashPolicy::Ask).unwrap();
+        assert_eq!(p.file_name(), "café brûlé 01-日本 02 📷.mov");
+        assert_eq!(
+            p.dst.parent(),
+            Some(dest.as_path()),
+            "inside the chosen folder"
+        );
+        let (report, _) = run(&p);
+        assert!(report.earned_the_green_light(), "{report:?}");
+        assert!(dest.join("café brûlé 01-日本 02 📷.mov").is_file());
+        std::fs::remove_dir_all(&dir).ok();
+    }
+
+    /// Hostile: a destination the user cannot write to. The plan is happy
+    /// (it is a folder), and the WRITE fails honestly with the operating
+    /// system's own reason, leaving nothing behind.
+    #[cfg(unix)]
+    #[test]
+    fn a_read_only_destination_fails_honestly_and_leaves_nothing() {
+        use std::os::unix::fs::PermissionsExt as _;
+        let dir = scratch_dir("clip-readonly-dest");
+        let src = dir.join("src");
+        let dest = dir.join("out");
+        std::fs::create_dir_all(&dest).unwrap();
+        let sources = burst(&src);
+        let p = plan(&sources, &dest, ClashPolicy::Ask).unwrap();
+        std::fs::set_permissions(&dest, std::fs::Permissions::from_mode(0o555)).unwrap();
+        // Running as root ignores the mode bits; then this proves nothing
+        // and says so rather than passing vacuously.
+        if std::fs::File::create(dest.join(".probe")).is_ok() {
+            std::fs::remove_file(dest.join(".probe")).ok();
+            std::fs::set_permissions(&dest, std::fs::Permissions::from_mode(0o755)).unwrap();
+            std::fs::remove_dir_all(&dir).ok();
+            eprintln!("read-only destination test skipped: this user can write anyway (root?)");
+            return;
+        }
+        let (report, _) = run(&p);
+        let reason = report.failed.clone().expect("a read-only folder must fail");
+        assert!(!report.earned_the_green_light());
+        assert!(
+            reason.to_lowercase().contains("permission")
+                || reason.to_lowercase().contains("denied"),
+            "the failure must carry the OS reason, not a generic one: {reason}"
+        );
+        std::fs::set_permissions(&dest, std::fs::Permissions::from_mode(0o755)).unwrap();
+        assert!(listing(&dest).is_empty(), "{:?}", listing(&dest));
+        std::fs::remove_dir_all(&dir).ok();
+    }
+
+    /// Hostile: a 1,000-frame selection. The plan holds one entry per
+    /// frame and no sample bytes, the quoted size is exact, and the
+    /// header grows by exactly 12 bytes per frame — the arithmetic the
+    /// free-space check and every sample offset depend on.
+    #[test]
+    fn a_thousand_frames_plan_without_reading_a_single_sample() {
+        let dir = scratch_dir("clip-thousand");
+        let src = dir.join("src");
+        std::fs::create_dir_all(&src).unwrap();
+        // Ten files on disk, referenced a hundred times each: the plan
+        // treats them as 1,000 independent frames, and the test does not
+        // create 1,000 files to prove it.
+        let paths: Vec<PathBuf> = (0..10)
+            .map(|i| raw_with(&src, &format!("f{i}.ARW"), 400, 300, 1, 1000 + i))
+            .collect();
+        let sources: Vec<ClipSource> = (0..1000)
+            .map(|i| ClipSource {
+                id: i,
+                path: paths[i % paths.len()].clone(),
+                name: format!("DSC{:05}.ARW", 1000 + i),
+                time_ms: Some(i as i64 * 33),
+                has_subsec: true,
+            })
+            .collect();
+        let p = plan(&sources, &dir.join("out"), ClashPolicy::Ask).unwrap();
+        assert_eq!(p.frames.len(), 1000);
+        assert_eq!(p.file_name(), "DSC01000-DSC01999.mov");
+        assert_eq!(p.cadence.sample_ms, 33);
+        assert_eq!(p.duration_ms(), 33_000);
+        // The size line is exact, and the header is the only part that
+        // depends on the frame count.
+        assert_eq!(
+            p.total_bytes,
+            p.sample_bytes + qt::header_len(1000, p.sample_bytes)
+        );
+        assert_eq!(
+            qt::header_len(1000, p.sample_bytes) - qt::header_len(999, p.sample_bytes),
+            12
+        );
+        // Offsets stay in step across the whole table.
+        let spec = qt::TrackSpec {
+            width: p.width,
+            height: p.height,
+            orientation: p.orientation,
+            sample_ms: p.cadence.sample_ms,
+            sample_sizes: p.frames.iter().map(|f| f.len).collect(),
+        };
+        let offsets = qt::sample_offsets(&spec);
+        assert_eq!(offsets[0], qt::header_len(1000, p.sample_bytes));
+        assert_eq!(
+            *offsets.last().unwrap() + p.frames.last().unwrap().len,
+            p.total_bytes
+        );
+        std::fs::remove_dir_all(&dir).ok();
+    }
 }
