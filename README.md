@@ -67,8 +67,13 @@ I/O, so culling straight off the card mount works too.
 - **Copy Picks** — copy your keepers (and their sidecars) to a destination
   folder, with rename templates and **BLAKE3 checksum verification** on every
   file — the green light you want before formatting a card.
-- **Sidecar-only writes** — all state lives in `<name>.<ext>.xmp` files using
-  the fields darktable, digiKam, and Lightroom read. RAW files stay untouched.
+- **Export frames as video** — turn a burst into one `.mov` of the camera's
+  own full-size frames, untouched and at the speed you actually shot it, for
+  a phone editor. No crop, no re-encode.
+- **Sidecar-only writes** — your RAW files are never opened for writing. All
+  state lives in `<name>.<ext>.xmp` files using the fields darktable, digiKam,
+  and Lightroom read; copies and exports go only where you point them
+  (ADR 0004).
 
 FastCull deliberately does *not* develop or edit RAWs — that's darktable's job.
 It does one thing: get you from a full card to a tagged, verified selects folder
@@ -105,6 +110,7 @@ Open a folder and keep your hands on the keyboard — that's the whole trick.
 | `+` / `-` / `Z` | zoom: grid → loupe → 1:1 |
 | `G` or `Esc` | back to the grid |
 | `Ctrl+E` | Copy Picks… |
+| `Ctrl+Shift+E` | Export Frames as Video… |
 
 That's the survival kit. The **[user guide](docs/index.md)** has the
 rest — the full keyboard map, bursts, metadata templates, and the FAQ —
@@ -142,7 +148,8 @@ recent addition. Expect rough edges and rapid change. The roadmap lives in
 ## Learn more
 
 - **[User guide](docs/index.md)** — install, culling, metadata
-  templates, Copy Picks, and the FAQ, in five short pages.
+  templates, Copy Picks, exporting a burst as video, and the FAQ, in six
+  short pages.
 - **[specs/](specs/)** — the full design documentation. This project is
   developed spec-first, so the specs are current, detailed, and the source of
   truth for every behavior.

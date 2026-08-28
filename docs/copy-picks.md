@@ -142,4 +142,4 @@ offers last session's template as a one-click chip.
 
 ---
 
-Next: [FAQ & troubleshooting](faq.md)
+Next: [Export Frames as Video — a burst you can post](export-video.md)

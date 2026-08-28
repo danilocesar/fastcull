@@ -39,8 +39,8 @@ Three facts before you press a single key:
   from darktable, Photo Mechanic or anything else, FastCull edits only
   the fields it owns and keeps everything else intact.
 - **Nothing is dropped into your photo folders** except those sidecars.
-  The thumbnail cache lives in your user cache directory, not next to
-  your photos.
+  Copies and video exports go only where you point them; the thumbnail
+  cache lives in your user cache directory, not next to your photos.
 
 ## Quick start
 
@@ -51,6 +51,9 @@ Three facts before you press a single key:
 3. Mark keepers with `Y`, rejects with `N` — the cursor auto-advances.
 4. `Ctrl+E` copies your picks (with their sidecars) to a destination
    folder, checksum-verified.
+5. `Ctrl+Shift+E` turns a selected burst into one video file for a phone
+   editor — the camera's own frames, untouched
+   ([Export Frames as Video](export-video.md)).
 
 One thing to know up front: **FastCull reads one folder, not its
 subfolders.** If you open `2026-07-25/` and your files live in

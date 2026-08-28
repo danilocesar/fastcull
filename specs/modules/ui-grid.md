@@ -1180,6 +1180,7 @@ brightening during wheel scrolling (needs an activity decay timer).
 | `Ctrl+O` | Open Folder… (persona accelerator gap, provisional) |
 | `Ctrl+Q` | Quit (persona accelerator gap, provisional) |
 | `Ctrl+E` (menu: Copy picks…) | open copy dialog (`Ctrl+C` stays clipboard-idle: user decision after persona review — never repurpose it) |
+| `Ctrl+Shift+E` (menu: Export Frames as Video…) | open the video export dialog (M9, video-export.md). A CHORD, not a bare letter, so it cannot fire from a fat finger mid `]`/`N` (persona 2026-08-27); it is matched BEFORE `Ctrl+E` because with Shift held the event still arrives as the letter plus modifiers. Disabled — with its reason in the status line, never silently — when there is neither a selection nor a burst under the cursor |
 | `1`–`5`, `0` | reserved (star ratings, v2) — must not conflict |
 
 There is no undo stack in v1 (user decision): a mis-marked frame during
@@ -1205,8 +1206,11 @@ Slim native menu bar (Slint MenuBar); the keyboard remains the fast path —
 menus are discoverability, never a required route:
 
 - **File**: Open Folder… (native picker via `rfd`; replaces CLI-only launch),
-  Copy Picks… (`Ctrl+E`, enabled from M6), Settings… (placeholder entry,
-  disabled until a settings dialog exists — post-v1 candidate), Quit.
+  Copy Picks… (`Ctrl+E`, enabled from M6), Export Frames as Video…
+  (`Ctrl+Shift+E`, from M9 — greyed when there is nothing to export, and
+  the keystroke then explains itself in the status line rather than doing
+  nothing), Settings… (placeholder entry, disabled until a settings dialog
+  exists — post-v1 candidate), Quit.
 - **View**: Zoom In/Out (`+`/`-`), IPTC Panel (`I`, from M5), Filter Bar.
 - **Help**: Keyboard Shortcuts (small popup listing the keyboard map — the
   map in this spec is the source of truth), About.
@@ -1757,6 +1761,15 @@ Documented because they ship in release builds (validator finding):
   bug shipped through, untestable before (fileops.md, "already copied
   means still there"). Same `;` limitation as `open:`; use it BEFORE the
   `Ctrl+E` that should see it (it does not replan an open dialog).
+  `clipdest:PATH` (2026-08-27) is the same thing for the video export's
+  destination (video-export.md): the export writes a NEW KIND of file, and
+  without this the whole flow — plan line, clash question, the `.mov` on
+  disk — is unreachable headlessly. Same `;` limitation and the same
+  "use it before the `Ctrl+Shift+E` that should see it" rule.
+  `key:ctrl+shift+<k>` (2026-08-27) dispatches a real two-modifier chord,
+  which the video export needs: `Ctrl+Shift+E` and `Ctrl+E` are two
+  different actions and differ ONLY by the Shift modifier, so a harness
+  that could not hold Shift could not tell them apart.
   Caveat for script
   authors (QE G2, 2026-08-02): the `--screenshot` readiness gates do not
   re-arm for the swapped-in session — a shutter that was already
@@ -1820,7 +1833,14 @@ Documented because they ship in release builds (validator finding):
   is a STATE of the Copy dialog rather than a second modal (fileops.md),
   so `copy=true` alone cannot tell a plan preview from a question about
   replacing files — without those two fields the one irreversible
-  operation in the app would be assertable only down to "a dialog exists". Keyboard focus was otherwise INVISIBLE to
+  operation in the app would be assertable only down to "a dialog exists".
+  Since 2026-08-27 the same block exists for the video export —
+  `clip=`, `clipstate=` (the same four states), `clipavail=` (is there
+  anything to export), `clipsummary=` (the plan line), `clipskipped=`,
+  `cliperror=`, `clipreport=` and `clipconfirm=` — for the same reason:
+  it is the app's second irreversible file operation, and its plan line
+  is the only place the user is told the frame rate before pressing
+  Enter. Keyboard focus was otherwise INVISIBLE to
   every headless run — a stranded keyboard could not even be asserted.
   It also carries the loupe pan block (`soft`, `vx`/`vy`, the
   fractional pan centre, the desired factor — issue #46): a
@@ -1828,7 +1848,8 @@ Documented because they ship in release builds (validator finding):
   render-time traces (which fire on CHANGE) cannot see it; the dump
   makes the overlay's position observable at a scripted instant.
 - `FASTCULL_NO_CONFIG=1`: makes `ui.toml` (the remembered copy
-  destination/template) unreachable for both load and save — what
+  destination/template and the video export's destination) unreachable
+  for both load and save — what
   `FASTCULL_NO_CACHE` does for the cache (issue #13 gap, surfaced by the
   issue #41 sweep: a driven copy dialog displayed the user's real
   remembered destination). The screenshot test harness sets both
