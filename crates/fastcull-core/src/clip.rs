@@ -198,8 +198,12 @@ pub enum ClipAction {
 
 #[derive(Debug, thiserror::Error)]
 pub enum ClipError {
+    /// Fewer than two frames could share one track. `skipped` carries
+    /// WHY the others could not — without it the dialog can only say
+    /// "not enough frames", which is the one thing the user can already
+    /// see (they selected them).
     #[error("a video needs at least 2 frames; {kept} would be left")]
-    TooFewFrames { kept: usize },
+    TooFewFrames { kept: usize, skipped: Vec<Skipped> },
     #[error("the destination is not a folder")]
     DestNotADirectory,
     #[error("not enough free space: need {needed} bytes, {free} available")]
@@ -469,6 +473,7 @@ fn plan_with_free(
     if sources.len() < 2 {
         return Err(ClipError::TooFewFrames {
             kept: sources.len(),
+            skipped: Vec::new(),
         });
     }
     // A destination that EXISTS but is not a folder — a regular file, or
@@ -536,7 +541,10 @@ fn plan_with_free(
     }
     let (width, height, orientation) = track.unwrap_or((0, 0, 1));
     if frames.len() < 2 {
-        return Err(ClipError::TooFewFrames { kept: frames.len() });
+        return Err(ClipError::TooFewFrames {
+            kept: frames.len(),
+            skipped,
+        });
     }
 
     let cadence = cadence(&kept_sources);
@@ -1505,7 +1513,7 @@ mod tests {
         )];
         assert!(matches!(
             plan(&one, &dir.join("out"), ClashPolicy::Ask),
-            Err(ClipError::TooFewFrames { kept: 1 })
+            Err(ClipError::TooFewFrames { kept: 1, .. })
         ));
         let mismatched = vec![
             source(0, &raw_with(&src, "b.ARW", 400, 300, 1, 500), Some(0), true),
@@ -1516,10 +1524,15 @@ mod tests {
                 true,
             ),
         ];
-        assert!(matches!(
-            plan(&mismatched, &dir.join("out"), ClashPolicy::Ask),
-            Err(ClipError::TooFewFrames { kept: 1 })
-        ));
+        // ...and the refusal carries WHY the others were left out, so
+        // the dialog can say something the user cannot already see.
+        match plan(&mismatched, &dir.join("out"), ClashPolicy::Ask) {
+            Err(ClipError::TooFewFrames { kept: 1, skipped }) => assert_eq!(
+                skipped_text(&skipped),
+                "skipped — 1 frame: different size (380×285)"
+            ),
+            other => panic!("expected a refusal naming the reason, got {other:?}"),
+        }
         std::fs::remove_dir_all(&dir).ok();
     }
 

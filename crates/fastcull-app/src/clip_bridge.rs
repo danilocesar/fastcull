@@ -302,9 +302,16 @@ fn clip_replan_with(win: &MainWindow, st: &mut AppState, policy: ClashPolicy) {
             // and each says which one it is.
             win.set_clip_error(
                 match &e {
-                    ClipError::TooFewFrames { kept } => format!(
-                        "Only {kept} of those frames can share one video — {}",
-                        skipped_reasons(&sources)
+                    // Say WHY the others were left out. "Not enough
+                    // frames" alone tells the user something they can
+                    // already see — they chose them.
+                    ClipError::TooFewFrames { kept, skipped } => format!(
+                        "Only {kept} of these frames can share one video — {}. \
+                         Frames in one video must have the same size and orientation, \
+                         and this export never scales or rotates them.",
+                        clip::skipped_text(skipped)
+                            .strip_prefix("skipped — ")
+                            .unwrap_or("they have nothing usable inside them")
                     ),
                     other => other.to_string(),
                 }
@@ -357,17 +364,6 @@ pub(crate) fn mirrored_note(n: usize) -> String {
         "1 frame was mirrored in the camera — exported un-mirrored".to_string()
     } else {
         format!("{n} frames were mirrored in the camera — exported un-mirrored")
-    }
-}
-
-/// When too few frames can share one track, say WHY rather than just how
-/// many: the reason is the whole message ("they are different sizes").
-fn skipped_reasons(sources: &[clip::ClipSource]) -> String {
-    match sources.len() {
-        0 | 1 => "a video needs at least two frames".to_string(),
-        _ => "they do not share one frame size and orientation, and this export \
-              never scales or rotates pixels"
-            .to_string(),
     }
 }
 
