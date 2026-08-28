@@ -4337,16 +4337,26 @@ fn export_frames_as_video_writes_a_real_motion_jpeg() {
     }
     // What the RAWs and any sidecars look like before the export: ADR
     // 0003/0004 say this operation reads them and writes nothing here.
-    let before: Vec<(String, u64)> = std::fs::read_dir(&src)
-        .unwrap()
-        .map(|e| {
-            let e = e.unwrap();
-            (
-                e.file_name().to_string_lossy().into_owned(),
-                e.metadata().map(|m| m.len()).unwrap_or(0),
-            )
-        })
-        .collect();
+    // SORTED: directory order is not guaranteed stable between two
+    // readings of the same folder, and comparing unsorted lists would be
+    // a flake waiting for a busy runner.
+    let listing = |d: &Path| -> Vec<(String, u64)> {
+        let mut v: Vec<(String, u64)> = std::fs::read_dir(d)
+            .map(|it| {
+                it.filter_map(|e| e.ok())
+                    .map(|e| {
+                        (
+                            e.file_name().to_string_lossy().into_owned(),
+                            e.metadata().map(|m| m.len()).unwrap_or(0),
+                        )
+                    })
+                    .collect()
+            })
+            .unwrap_or_default();
+        v.sort();
+        v
+    };
+    let before = listing(&src);
 
     // 8.5 s for the export itself: it measures ~1.6 s on the development
     // laptop in a DEBUG build (the release screenshot job is faster
@@ -4365,30 +4375,11 @@ fn export_frames_as_video_writes_a_real_motion_jpeg() {
         &[("FASTCULL_TRACE", "1"), ("FASTCULL_DRIVE", script.as_str())],
         &out,
     );
-    let landed: Vec<String> = {
-        let mut v: Vec<String> = std::fs::read_dir(&dest)
-            .map(|it| {
-                it.filter_map(|e| e.ok())
-                    .map(|e| e.file_name().to_string_lossy().into_owned())
-                    .collect()
-            })
-            .unwrap_or_default();
-        v.sort();
-        v
-    };
+    let landed: Vec<String> = listing(&dest).into_iter().map(|(n, _)| n).collect();
     let movie_path = dest.join("c-b.mov");
     let movie = movie_path.is_file().then(|| read_movie_at(&movie_path));
     let movie_bytes = std::fs::read(&movie_path).unwrap_or_default();
-    let after: Vec<(String, u64)> = std::fs::read_dir(&src)
-        .unwrap()
-        .map(|e| {
-            let e = e.unwrap();
-            (
-                e.file_name().to_string_lossy().into_owned(),
-                e.metadata().map(|m| m.len()).unwrap_or(0),
-            )
-        })
-        .collect();
+    let after = listing(&src);
     // In CAPTURE order, which is what the samples must be.
     let sources: Vec<Vec<u8>> = ["c.ARW", "a.ARW", "b.ARW"]
         .iter()
