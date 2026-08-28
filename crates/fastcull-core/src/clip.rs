@@ -312,6 +312,44 @@ pub fn file_bytes(sample_bytes: u64, frames: usize) -> u64 {
     sample_bytes + qt::header_len(frames, sample_bytes)
 }
 
+/// Which frames the export would take (video-export.md, "Scope").
+///
+/// The SELECTION when there is one — the same batch the IPTC panel acts
+/// on. With nothing selected, the BURST under the cursor, whole,
+/// including any of its frames the current filter hides: a burst is a
+/// fact about capture times, not about what the grid is showing, and the
+/// user asking for "this burst" means all of it. Neither → nothing, and
+/// the menu item is disabled with [`unavailable_reason`].
+///
+/// The ids come back in `group_of` order (the session's capture order);
+/// [`plan`] sorts them properly anyway, from the timestamps themselves.
+pub fn scope(selected: &[usize], cursor: usize, group_of: &[Option<usize>]) -> Vec<usize> {
+    if !selected.is_empty() {
+        return selected.to_vec();
+    }
+    let Some(Some(group)) = group_of.get(cursor).copied() else {
+        return Vec::new();
+    };
+    group_of
+        .iter()
+        .enumerate()
+        .filter(|(_, g)| **g == Some(group))
+        .map(|(i, _)| i)
+        .collect()
+}
+
+/// Why the export cannot run, in the words the status line says it —
+/// `None` when it can. The menu item is disabled in both non-None cases,
+/// and pressing the key anyway says this rather than doing nothing
+/// (video-export.md: "never a silent grey item").
+pub fn unavailable_reason(frames: usize) -> Option<&'static str> {
+    match frames {
+        0 => Some("select frames or stand in a burst"),
+        1 => Some("one frame is not a video \u{2014} select more, or stand in a burst"),
+        _ => None,
+    }
+}
+
 /// Measure the cadence from the frames' own capture times.
 ///
 /// Only gaps between CONSECUTIVE frames that BOTH carry millisecond
@@ -1107,6 +1145,42 @@ mod tests {
                 c.text()
             );
         }
+    }
+
+    // ------------------------------------------------------------ scope
+
+    /// What the export takes: the selection when there is one, otherwise
+    /// the WHOLE burst under the cursor — including frames the current
+    /// filter hides, because "this burst" means the burst.
+    #[test]
+    fn the_scope_is_the_selection_or_the_burst_under_the_cursor() {
+        // Frames 0..3 are one burst, 4 is a single, 5..7 another burst.
+        let groups = vec![
+            Some(0),
+            Some(0),
+            Some(0),
+            Some(0),
+            None,
+            Some(1),
+            Some(1),
+            Some(1),
+        ];
+        assert_eq!(scope(&[], 1, &groups), vec![0, 1, 2, 3]);
+        assert_eq!(scope(&[], 6, &groups), vec![5, 6, 7]);
+        // A single: nothing to export, and the menu item says why.
+        assert!(scope(&[], 4, &groups).is_empty());
+        assert_eq!(
+            unavailable_reason(0),
+            Some("select frames or stand in a burst")
+        );
+        // A selection wins over the burst, and can cross bursts.
+        assert_eq!(scope(&[2, 3, 5], 1, &groups), vec![2, 3, 5]);
+        // One selected frame is not a video, and the reason says so.
+        assert_eq!(scope(&[2], 1, &groups), vec![2]);
+        assert!(unavailable_reason(1).is_some_and(|r| r.contains("not a video")));
+        assert_eq!(unavailable_reason(2), None);
+        // A cursor past the end of a (stale) grouping is not a panic.
+        assert!(scope(&[], 99, &groups).is_empty());
     }
 
     // ------------------------------------------------------------ order

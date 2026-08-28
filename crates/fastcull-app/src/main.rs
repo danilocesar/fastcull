@@ -26,6 +26,7 @@
 //! | `pump.rs` | the 33 ms engine tick and texture adoption |
 //! | `iptc_bridge.rs` | the IPTC panel |
 //! | `copy_bridge.rs` | the Copy Picks dialog (and burst regrouping) |
+//! | `clip_bridge.rs` | the Export Frames as Video dialog (M9) |
 //! | `focus.rs` | keyboard focus continuity |
 //! | `shutter.rs` | `--screenshot` readiness gate and shutdown |
 //! | `harness.rs` | the FASTCULL_DRIVE scripted-action interpreter |
@@ -46,6 +47,7 @@
 use std::cell::RefCell;
 use std::rc::Rc;
 
+mod clip_bridge;
 mod copy_bridge;
 mod focus;
 mod harness;
@@ -203,6 +205,7 @@ fn main() {
     focus::wire(&window);
     iptc_bridge::wire(&window, &state);
     copy_bridge::wire(&window, &state);
+    clip_bridge::wire(&window, &state);
     loupe_ctrl::wire(&window, &state);
     pump::wire(&window, &state);
     window.on_quit(|| {

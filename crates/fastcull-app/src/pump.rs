@@ -177,6 +177,56 @@ pub(crate) fn start(window: &MainWindow, state: &Rc<RefCell<AppState>>) -> slint
                             }
                         }
                     }
+                    // Export Frames as Video progress/report (M9).
+                    let clip_events: Vec<_> = st
+                        .clip
+                        .rx
+                        .as_ref()
+                        .map(|rx| rx.try_iter().collect())
+                        .unwrap_or_default();
+                    for event in clip_events {
+                        use fastcull_core::clip::ClipEvent;
+                        match event {
+                            ClipEvent::Frame { index, total, name } => {
+                                if let Some(win) = win.upgrade() {
+                                    win.set_clip_progress(
+                                        format!("Writing {index} / {total} — {name}").into(),
+                                    );
+                                }
+                            }
+                            ClipEvent::Verifying => {
+                                // On a 4 GB export the read-back is long
+                                // enough that a frozen "30 / 30" would
+                                // read as a hang.
+                                if let Some(win) = win.upgrade() {
+                                    win.set_clip_progress("Verifying the file…".into());
+                                }
+                            }
+                            ClipEvent::Finished(report) => {
+                                st.clip.handle = None;
+                                st.clip.rx = None;
+                                if let Some(win) = win.upgrade() {
+                                    win.set_clip_report(
+                                        clip_report_lines(&report).join("\n").into(),
+                                    );
+                                    win.set_clip_state(2);
+                                }
+                                dirty = true;
+                            }
+                        }
+                    }
+                    // A refusal explained in the status line expires on
+                    // its own; the tick that notices has to ask for the
+                    // repaint that removes it.
+                    if st
+                        .clip
+                        .notice
+                        .as_ref()
+                        .is_some_and(|(_, at)| at.elapsed() >= crate::state::CLIP_NOTICE_LIFE)
+                    {
+                        st.clip.notice = None;
+                        dirty = true;
+                    }
                     let loupe_events: Vec<_> = st
                         .loupe_view
                         .rx
@@ -326,6 +376,60 @@ fn drain_kitchen(win: &MainWindow, state: &Rc<RefCell<AppState>>) -> bool {
     true
 }
 
+/// The video export's report lines (video-export.md, "Dialog").
+///
+/// A free function beside its Copy Picks twin, and for the same reason:
+/// the honesty rules get a test of their own. "All checksums verified"
+/// is not a decoration this function may add — the RULE lives in core
+/// (`ClipReport::earned_the_green_light`) and this only decides which
+/// line carries the sentence. The skipped and cadence wording is the
+/// PLAN's own, so what the user reads afterwards is what they agreed to.
+pub(crate) fn clip_report_lines(report: &fastcull_core::clip::ClipReport) -> Vec<String> {
+    use crate::clip_bridge::{mirrored_note, seconds};
+    let mut lines = Vec::new();
+    if report.frames > 0 && report.path.is_some() {
+        lines.push(format!(
+            "Exported {} frames · {} · {} · {} → {}{}",
+            report.frames,
+            seconds(report.duration_ms),
+            report
+                .cadence
+                .map(|c| c.text())
+                .unwrap_or_else(|| "unknown cadence".into()),
+            crate::copy_bridge::human_bytes(report.bytes),
+            report.name,
+            if report.earned_the_green_light() {
+                ", all checksums verified"
+            } else {
+                ""
+            }
+        ));
+        if report.replaced {
+            lines.push("replaced the file that was already there".into());
+        }
+    }
+    let skipped = fastcull_core::clip::skipped_text(&report.skipped);
+    if !skipped.is_empty() {
+        lines.push(skipped);
+    }
+    if report.mirrored > 0 {
+        lines.push(mirrored_note(report.mirrored));
+    }
+    if report.cancelled {
+        // Unlike a cancelled copy, there are no "finished files" to keep:
+        // this operation produces exactly one file, and a cancel means it
+        // was never created.
+        lines.push("Cancelled — nothing was written".into());
+    }
+    if let Some(reason) = &report.failed {
+        lines.push(format!("FAILED: {reason}"));
+    }
+    if lines.is_empty() {
+        lines.push("Nothing was exported".into());
+    }
+    lines
+}
+
 /// The final report's lines, from what the run actually did.
 ///
 /// A free function so the honesty rules have a test of their own: the
@@ -414,8 +518,113 @@ pub(crate) fn report_lines(report: &fastcull_core::fileops::CopyReport) -> Vec<S
 
 #[cfg(test)]
 mod tests {
-    use super::report_lines;
+    use super::{clip_report_lines, report_lines};
+    use fastcull_core::clip::{Cadence, CadenceSource, ClipReport, SkipReason, Skipped};
     use fastcull_core::fileops::CopyReport;
+
+    fn exported() -> ClipReport {
+        ClipReport {
+            frames: 30,
+            bytes: 344 << 20,
+            path: Some(std::path::PathBuf::from("/out/DSC05010-DSC05039.mov")),
+            name: "DSC05010-DSC05039.mov".into(),
+            duration_ms: 990,
+            cadence: Some(Cadence {
+                sample_ms: 33,
+                source: CadenceSource::Measured,
+            }),
+            all_verified: true,
+            ..Default::default()
+        }
+    }
+
+    /// The green light is EARNED. It appears over a run that landed a
+    /// verified file and over nothing else — not a cancel, not a failure,
+    /// not a run that wrote nothing.
+    #[test]
+    fn the_verified_line_of_a_video_export_is_earned() {
+        let lines = clip_report_lines(&exported());
+        assert_eq!(
+            lines,
+            [concat!(
+                "Exported 30 frames · 1.0 s · 30.3 fps · 344.0 MB → ",
+                "DSC05010-DSC05039.mov, all checksums verified"
+            )]
+        );
+        for spoiled in [
+            ClipReport {
+                cancelled: true,
+                ..exported()
+            },
+            ClipReport {
+                failed: Some("No space left on device".into()),
+                ..exported()
+            },
+            ClipReport {
+                all_verified: false,
+                ..exported()
+            },
+        ] {
+            let lines = clip_report_lines(&spoiled);
+            assert!(
+                !lines.iter().any(|l| l.contains("checksums verified")),
+                "green light over a spoiled run: {lines:?}"
+            );
+        }
+    }
+
+    /// A run that wrote nothing says so, and a failure names itself —
+    /// the headline may never contradict the body (the Copy Picks rule,
+    /// which this report inherits).
+    #[test]
+    fn a_video_export_that_wrote_nothing_says_so() {
+        assert_eq!(
+            clip_report_lines(&ClipReport::default()),
+            ["Nothing was exported"]
+        );
+        let cancelled = clip_report_lines(&ClipReport {
+            cancelled: true,
+            ..Default::default()
+        });
+        // "finished files remain" would be a lie here: this operation
+        // writes ONE file and never commits it unverified.
+        assert_eq!(cancelled, ["Cancelled — nothing was written"]);
+        let failed = clip_report_lines(&ClipReport {
+            failed: Some("Permission denied".into()),
+            ..Default::default()
+        });
+        assert_eq!(failed, ["FAILED: Permission denied"]);
+    }
+
+    /// What the plan said it would leave out, the report repeats — in the
+    /// same words, so the user is never told two different stories about
+    /// the same frames.
+    #[test]
+    fn the_report_repeats_the_plans_own_words() {
+        let lines = clip_report_lines(&ClipReport {
+            replaced: true,
+            mirrored: 2,
+            skipped: vec![Skipped {
+                id: 7,
+                name: "DSC05020.ARW".into(),
+                reason: SkipReason::Size {
+                    width: 5616,
+                    height: 3744,
+                },
+            }],
+            cadence: Some(Cadence {
+                sample_ms: 67,
+                source: CadenceSource::NoTiming,
+            }),
+            ..exported()
+        });
+        assert!(lines[0].contains("timing not in the files — assumed 15 fps"));
+        assert!(lines.contains(&"replaced the file that was already there".to_string()));
+        assert!(lines
+            .iter()
+            .any(|l| l == "skipped — 1 frame: different size (5616×3744)"));
+        assert!(lines.iter().any(|l| l.contains("2 frames were mirrored")));
+    }
 
     fn failed(n: usize) -> Vec<(String, String)> {
         (0..n)

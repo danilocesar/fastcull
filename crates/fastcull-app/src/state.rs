@@ -3,7 +3,7 @@
 //!
 //! # The shape
 //!
-//! `AppState` is seven groups and two survivors, not a flat field list.
+//! `AppState` is eight groups and two survivors, not a flat field list.
 //! Each group is the state of ONE thing, so a controller's footprint on the
 //! state is visible at a glance — `st.copy.…` is the copy dialog, and
 //! nothing else is:
@@ -17,6 +17,7 @@
 //! | [`BurstIndex`] | burst grouping outputs, indexed by image id |
 //! | [`IptcPanelState`] | the IPTC dock: its visibility, its model cache, the revert slot |
 //! | [`CopyState`] | the Copy Picks dialog: plan, destination, running worker, what was copied |
+//! | [`ClipState`] | the Export Frames as Video dialog: plan, destination, running writer |
 //!
 //! The two survivors are not state at all: `cells` is the model the window
 //! is bound to, and `kitchen` is a worker thread. Both outlive every
@@ -37,11 +38,11 @@
 //! does it belong at the top level, and then it owes a comment saying why
 //! it survives a session.
 //!
-//! Three groups DO carry something across a swap, and each names it in its
+//! Four groups DO carry something across a swap, and each names it in its
 //! own `begin_session`: the grid keeps the zoom step (the launch flags set
 //! it before the first folder loads) and the filter bar's visibility, the
-//! IPTC panel keeps the dock's visibility, and the copy dialog keeps the
-//! remembered destination (fileops.md). Everything else in those structs
+//! IPTC panel keeps the dock's visibility, and both export dialogs keep
+//! their remembered destination (fileops.md, video-export.md). Everything else in those structs
 //! goes back to its default.
 //!
 //! # Per-image vectors
@@ -137,6 +138,44 @@ pub(crate) struct CopyState {
     /// session; re-checked against the disk by `copy_replan`.
     pub(crate) copies: fastcull_core::fileops::SessionCopies,
 }
+
+/// M9 Export Frames as Video (video-export.md): the previewed plan, the
+/// running writer, and the destination folder — remembered across
+/// sessions like Copy Picks', and SEEDED from the Copy Picks folder until
+/// a video folder is chosen (persona decision 2026-08-27: on an ordinary
+/// evening the selects folder is where today's output goes, and a second
+/// remembered path would put the video in a three-week-old job's folder).
+///
+/// The handle and its receiver are ONE thing — a running export — and
+/// live together so they can never be set or cleared apart.
+#[derive(Default)]
+pub(crate) struct ClipState {
+    pub(crate) plan: Option<fastcull_core::clip::ClipPlan>,
+    pub(crate) dest: Option<std::path::PathBuf>,
+    pub(crate) handle: Option<fastcull_core::clip::ClipHandle>,
+    pub(crate) rx: Option<std::sync::mpsc::Receiver<fastcull_core::clip::ClipEvent>>,
+    /// A refusal to explain in the status line, and when it was raised.
+    /// The export item is disabled when there is nothing to export, and
+    /// the spec forbids a silent grey item: pressing the key anyway says
+    /// why, right where the user is already looking.
+    pub(crate) notice: Option<(String, std::time::Instant)>,
+}
+
+impl ClipState {
+    /// A session swap forgets everything except the destination — the
+    /// same rule and the same reason as [`CopyState::begin_session`].
+    pub(crate) fn begin_session(&mut self) {
+        *self = Self {
+            dest: self.dest.take(),
+            ..Self::default()
+        };
+    }
+}
+
+/// How long a refused-export explanation stays in the status line. Long
+/// enough to read after a keystroke that appeared to do nothing, short
+/// enough that it is gone before the next decision.
+pub(crate) const CLIP_NOTICE_LIFE: std::time::Duration = std::time::Duration::from_secs(6);
 
 /// Burst grouping outputs (M7, burst-grouping.md), all indexed by IMAGE
 /// id and all rebuilt together by `recompute_bursts` — at most once per
@@ -652,6 +691,8 @@ pub(crate) struct AppState {
     pub(crate) iptc_panel: IptcPanelState,
     /// The Copy Picks dialog's state (M6).
     pub(crate) copy: CopyState,
+    /// The Export Frames as Video dialog's state (M9).
+    pub(crate) clip: ClipState,
     /// SURVIVOR: the one VecModel the window binds. It is not session
     /// data at all — replacing it would unbind the grid from the window,
     /// so refresh mutates it in place for the life of the process.
@@ -684,6 +725,7 @@ impl AppState {
             bursts: BurstIndex::default(),
             iptc_panel: IptcPanelState::default(),
             copy: CopyState::default(),
+            clip: ClipState::default(),
             cells,
             kitchen,
         }
@@ -716,6 +758,7 @@ impl AppState {
         self.grid.begin_session();
         self.iptc_panel.begin_session();
         self.copy.begin_session();
+        self.clip.begin_session();
         // SURVIVOR: the kitchen is a worker thread. Retargeting bumps its
         // generation so queued work is dropped and late completions are
         // orphaned, without paying to restart a thread per folder.

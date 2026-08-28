@@ -187,6 +187,25 @@ pub(crate) fn open_folder_at(
                     crate::copy_bridge::copy_replan(win, &mut st);
                 }
             }
+            // The video export dialog, for exactly the same three
+            // reasons — with one difference in the running case: this
+            // operation produces ONE file and never commits it until it
+            // has been verified, so a swap that cancels it leaves nothing
+            // behind at all, and the message says that rather than
+            // "files that finished remain".
+            if win.get_clip_visible() {
+                if win.get_clip_state() == 1 {
+                    win.set_clip_report(
+                        "Cancelled — the folder was changed. Nothing was written.".into(),
+                    );
+                    win.set_clip_state(2);
+                } else {
+                    win.set_clip_state(0);
+                    win.set_clip_confirm("".into());
+                    let mut st = state.borrow_mut();
+                    crate::clip_bridge::clip_replan(win, &mut st);
+                }
+            }
             refresh(win, state);
             // The swap rebuilt the panel's field rows and dropped any
             // editor focus; without this claim the first keystroke on
@@ -234,28 +253,68 @@ fn ui_prefs_path() -> Option<std::path::PathBuf> {
     Some(dirs.config_dir().join("ui.toml"))
 }
 
-pub(crate) fn load_ui_prefs() -> (Option<std::path::PathBuf>, String) {
-    let Some(path) = ui_prefs_path() else {
-        return (None, String::new());
-    };
-    let Ok(content) = std::fs::read_to_string(path) else {
-        return (None, String::new());
-    };
-    let table: toml::Table = content.parse().unwrap_or_default();
-    let dest = table
-        .get("copy_dest")
+/// The remembered preferences as they are on disk, or an empty table.
+///
+/// Every writer below goes through this and then [`write_ui_prefs`], so a
+/// preference one dialog never touches survives the other dialog saving
+/// (the video export's `clip_dest` used to be erased by any Copy Picks
+/// save, because that path rebuilt the whole file from two keys).
+fn read_ui_prefs() -> toml::Table {
+    ui_prefs_path()
+        .and_then(|p| std::fs::read_to_string(p).ok())
+        .and_then(|c| c.parse().ok())
+        .unwrap_or_default()
+}
+
+fn write_ui_prefs(table: &toml::Table) {
+    let Some(path) = ui_prefs_path() else { return };
+    if let Some(parent) = path.parent() {
+        std::fs::create_dir_all(parent).ok();
+    }
+    std::fs::write(&path, toml::to_string_pretty(table).unwrap_or_default()).ok();
+}
+
+fn stored_path(table: &toml::Table, key: &str) -> Option<std::path::PathBuf> {
+    table
+        .get(key)
         .and_then(|v| v.as_str())
-        .map(std::path::PathBuf::from);
+        .map(std::path::PathBuf::from)
+}
+
+pub(crate) fn load_ui_prefs() -> (Option<std::path::PathBuf>, String) {
+    let table = read_ui_prefs();
     let template = table
         .get("copy_template")
         .and_then(|v| v.as_str())
         .unwrap_or_default()
         .to_string();
-    (dest, template)
+    (stored_path(&table, "copy_dest"), template)
+}
+
+/// Where "Export Frames as Video" should land, remembered across
+/// sessions — and SEEDED from the Copy Picks destination until a video
+/// folder has actually been chosen (video-export.md, persona decision
+/// 2026-08-27). Once chosen it is remembered on its own and the two
+/// never move together again.
+pub(crate) fn load_clip_dest() -> Option<std::path::PathBuf> {
+    let table = read_ui_prefs();
+    stored_path(&table, "clip_dest").or_else(|| stored_path(&table, "copy_dest"))
+}
+
+pub(crate) fn save_clip_dest(dest: &std::path::Path) {
+    let mut table = read_ui_prefs();
+    table.insert(
+        "clip_dest".into(),
+        toml::Value::String(dest.to_string_lossy().into_owned()),
+    );
+    write_ui_prefs(&table);
 }
 
 pub(crate) fn save_ui_prefs(dest: Option<&std::path::Path>, template: &str) {
-    let Some(path) = ui_prefs_path() else { return };
+    // Read-modify-write, not rebuild: the file also holds the video
+    // export's own destination, and rebuilding it from two keys erased
+    // that every time the user picked a Copy Picks folder.
+    let mut table = read_ui_prefs();
     // Persist the last NON-EMPTY template (gate N1: the field now opens
     // empty by design, so a template-less copy — or just picking a
     // destination — must not erase yesterday's remembered template).
@@ -264,20 +323,12 @@ pub(crate) fn save_ui_prefs(dest: Option<&std::path::Path>, template: &str) {
     } else {
         template.to_string()
     };
-    let template = template.as_str();
-    let mut table = toml::Table::new();
     if let Some(d) = dest {
         table.insert(
             "copy_dest".into(),
             toml::Value::String(d.to_string_lossy().into_owned()),
         );
     }
-    table.insert(
-        "copy_template".into(),
-        toml::Value::String(template.to_string()),
-    );
-    if let Some(parent) = path.parent() {
-        std::fs::create_dir_all(parent).ok();
-    }
-    std::fs::write(&path, toml::to_string_pretty(&table).unwrap_or_default()).ok();
+    table.insert("copy_template".into(), toml::Value::String(template));
+    write_ui_prefs(&table);
 }

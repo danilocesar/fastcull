@@ -248,7 +248,7 @@ fn plan_sources(st: &AppState) -> Vec<fastcull_core::fileops::PlanSource> {
         .collect()
 }
 
-fn human_bytes(b: u64) -> String {
+pub(crate) fn human_bytes(b: u64) -> String {
     if b >= 1 << 30 {
         format!("{:.1} GB", b as f64 / (1u64 << 30) as f64)
     } else if b >= 1 << 20 {
@@ -268,7 +268,7 @@ fn human_bytes(b: u64) -> String {
 /// this dialog's new job is asking permission to replace files in THIS
 /// folder). The full path is still one click away under "Open
 /// destination".
-fn short_dest(p: &std::path::Path) -> String {
+pub(crate) fn short_dest(p: &std::path::Path) -> String {
     let full = p.to_string_lossy().into_owned();
     if full.chars().count() <= 52 {
         return full;

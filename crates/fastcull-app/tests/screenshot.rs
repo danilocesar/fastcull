@@ -4225,3 +4225,410 @@ fn camera_template_stamps_the_exif_model() {
          hidden `.ARW` names)"
     );
 }
+
+// ---------------------------------------------------------------------------
+// M9, Export Frames as Video (video-export.md). Two driven tests: one over
+// the REAL A1 frames, which is the only place the whole chain — preview
+// discovery, the byte copy, the container, the verification — is exercised
+// on real camera bytes; and one over tiny synthetic RAWs, where the clash
+// question's three answers can be driven quickly.
+//
+// RED pre-change (verified against a worktree at 7b035d6, the commit before
+// the app wiring): `clip=` does not exist in the dump, Ctrl+Shift+E opens
+// the COPY dialog (the Ctrl+E branch matched the letter without looking at
+// Shift), and no `.mov` is ever written.
+// ---------------------------------------------------------------------------
+
+/// A synthetic RAW: a little-endian TIFF whose IFD0 points at one embedded
+/// "full-res" JPEG of the given size. Kilobytes rather than the 60 MB of a
+/// real A1 file, so a test that drives three exports in one run finishes
+/// inside the harness deadline. The app scans it by extension and the
+/// preview walker finds the JPEG exactly as it does in a camera file.
+fn write_synthetic_raw(path: &Path, w: u16, h: u16, orientation: u16, len: usize) {
+    let mut jpeg = vec![0xFF, 0xD8, 0xFF, 0xC0, 0x00, 0x0B, 0x08];
+    jpeg.extend_from_slice(&h.to_be_bytes());
+    jpeg.extend_from_slice(&w.to_be_bytes());
+    jpeg.extend_from_slice(&[0x01, 0x11, 0x00, 0xFF, 0xD9]);
+    assert!(len >= jpeg.len(), "padding only");
+    jpeg.resize(len, 0x5A);
+
+    let mut out: Vec<u8> = b"II".to_vec();
+    out.extend_from_slice(&42u16.to_le_bytes());
+    out.extend_from_slice(&0u32.to_le_bytes()); // IFD0 offset, patched below
+    let jpeg_at = out.len() as u32;
+    out.extend_from_slice(&jpeg);
+    let ifd_at = out.len() as u32;
+    let entries: [(u16, u16, u32); 5] = [
+        (0x0100, 3, u32::from(w)),           // ImageWidth
+        (0x0101, 3, u32::from(h)),           // ImageLength
+        (0x0112, 3, u32::from(orientation)), // Orientation
+        (0x0201, 4, jpeg_at),                // JPEGInterchangeFormat
+        (0x0202, 4, len as u32),             // ...Length
+    ];
+    out.extend_from_slice(&(entries.len() as u16).to_le_bytes());
+    for (tag, typ, value) in entries {
+        out.extend_from_slice(&tag.to_le_bytes());
+        out.extend_from_slice(&typ.to_le_bytes());
+        out.extend_from_slice(&1u32.to_le_bytes());
+        // A SHORT lives in the first two bytes of the value field.
+        if typ == 3 {
+            out.extend_from_slice(&(value as u16).to_le_bytes());
+            out.extend_from_slice(&[0, 0]);
+        } else {
+            out.extend_from_slice(&value.to_le_bytes());
+        }
+    }
+    out.extend_from_slice(&0u32.to_le_bytes()); // no next IFD
+    out[4..8].copy_from_slice(&ifd_at.to_le_bytes());
+    std::fs::write(path, out).unwrap();
+}
+
+/// The one file the export wrote, read back through the in-tree reader —
+/// the check that runs identically on the Windows runner, where there is
+/// no ffprobe.
+fn read_movie_at(path: &Path) -> fastcull_core::clip::qt::Movie {
+    let mut file = std::fs::File::open(path).unwrap_or_else(|e| panic!("open {path:?}: {e}"));
+    fastcull_core::clip::qt::read_movie(&mut file)
+        .unwrap_or_else(|e| panic!("the export did not parse back: {e}"))
+}
+
+/// The embedded full-res JPEG of a RAW, as bytes — what every sample in
+/// the finished file has to be, byte for byte.
+fn embedded_fullres(path: &Path) -> Vec<u8> {
+    let mut file = std::fs::File::open(path).unwrap();
+    let previews = fastcull_core::raw::find_embedded_jpegs(&mut file).unwrap();
+    let jpeg = previews.fullres().expect("a full-res preview").clone();
+    fastcull_core::raw::read_jpeg(&mut file, &jpeg).unwrap()
+}
+
+/// The whole feature over REAL camera frames: select three A1 files,
+/// Ctrl+Shift+E, Enter — and a Motion JPEG `.mov` lands whose samples are
+/// the camera's own JPEGs, byte for byte.
+///
+/// Also the "never a silent grey item" rule (video-export.md): with no
+/// selection and the cursor on a single frame there is nothing to export,
+/// the menu item is disabled — and the KEYSTROKE still answers, in the
+/// status line, instead of doing nothing.
+#[test]
+fn export_frames_as_video_writes_a_real_motion_jpeg() {
+    if !has_display() {
+        eprintln!("screenshot smoke skipped: no display server");
+        return;
+    }
+    let _s = serial();
+    let src = out_dir().join("clip-src");
+    let dest = out_dir().join("clip-dest");
+    for d in [&src, &dest] {
+        std::fs::remove_dir_all(d).ok();
+        std::fs::create_dir_all(d).unwrap();
+    }
+    let raws = raws_dir();
+    // Named so that capture order and NAME order disagree: these three
+    // A1 references were shot at 15:29:13, :40 and :55, and they are
+    // named c, a, b in that order — so a file that came out in the grid's
+    // (name) order would be a.ARW first, and the name would be `a-c.mov`
+    // instead of `c-b.mov`.
+    for (name, fixture) in [
+        ("c.ARW", "A1_full_compressed.ARW"),
+        ("a.ARW", "A1_full_lossless_compressed.ARW"),
+        ("b.ARW", "A1_full_uncompressed.ARW"),
+    ] {
+        place_fixture(&raws.join(fixture), &src.join(name));
+    }
+    // What the RAWs and any sidecars look like before the export: ADR
+    // 0003/0004 say this operation reads them and writes nothing here.
+    let before: Vec<(String, u64)> = std::fs::read_dir(&src)
+        .unwrap()
+        .map(|e| {
+            let e = e.unwrap();
+            (
+                e.file_name().to_string_lossy().into_owned(),
+                e.metadata().map(|m| m.len()).unwrap_or(0),
+            )
+        })
+        .collect();
+
+    // 8.5 s for the export itself: it measures ~1.6 s on the development
+    // laptop in a DEBUG build (the release screenshot job is faster
+    // still), so this is a five-fold margin for a loaded CI runner.
+    let script = format!(
+        "1600:dump.idle;1900:key:ctrl+shift+e;2200:dump.refused;\
+         2500:select-all;2700:clipdest:{dest};2900:key:ctrl+shift+e;\
+         3300:dump.plan;3500:key:return;12000:dump.done;\
+         12400:key:escape;12700:dump.end",
+        dest = dest.display()
+    );
+    let out = out_dir().join("clip-export.jpg");
+    let stderr = shoot_env_stderr(
+        &[src.to_str().unwrap()],
+        &[("FASTCULL_TRACE", "1"), ("FASTCULL_DRIVE", script.as_str())],
+        &out,
+    );
+    let landed: Vec<String> = {
+        let mut v: Vec<String> = std::fs::read_dir(&dest)
+            .map(|it| {
+                it.filter_map(|e| e.ok())
+                    .map(|e| e.file_name().to_string_lossy().into_owned())
+                    .collect()
+            })
+            .unwrap_or_default();
+        v.sort();
+        v
+    };
+    let movie_path = dest.join("c-b.mov");
+    let movie = movie_path.is_file().then(|| read_movie_at(&movie_path));
+    let movie_bytes = std::fs::read(&movie_path).unwrap_or_default();
+    let after: Vec<(String, u64)> = std::fs::read_dir(&src)
+        .unwrap()
+        .map(|e| {
+            let e = e.unwrap();
+            (
+                e.file_name().to_string_lossy().into_owned(),
+                e.metadata().map(|m| m.len()).unwrap_or(0),
+            )
+        })
+        .collect();
+    // In CAPTURE order, which is what the samples must be.
+    let sources: Vec<Vec<u8>> = ["c.ARW", "a.ARW", "b.ARW"]
+        .iter()
+        .map(|n| embedded_fullres(&src.join(n)))
+        .collect();
+    for d in [&src, &dest] {
+        std::fs::remove_dir_all(d).ok();
+    }
+
+    // --- nothing to export: the item is off AND the key explains itself --
+    let idle = qedump(&stderr, "idle");
+    assert_eq!(
+        dump_field(idle, "clipavail"),
+        "false",
+        "a lone unmarked frame is not a video: {idle}"
+    );
+    let refused = qedump(&stderr, "refused");
+    assert_eq!(
+        dump_field(refused, "clip"),
+        "false",
+        "the dialog must not open with nothing to export: {refused}"
+    );
+    assert!(
+        dump_text(refused, "status").contains("select frames or stand in a burst"),
+        "a refused export must say why, where the user is looking: {refused}"
+    );
+
+    // --- the plan, before a byte is written -------------------------------
+    let plan = qedump(&stderr, "plan");
+    assert_eq!(dump_field(plan, "clip"), "true", "{plan}");
+    assert_eq!(dump_field(plan, "clipstate"), "0", "{plan}");
+    assert_eq!(
+        dump_field(plan, "keysfocus"),
+        "false",
+        "the dialog owns the keyboard while it is up (issues #41/#42): {plan}"
+    );
+    let summary = dump_text(plan, "clipsummary");
+    assert!(
+        summary.starts_with("3 frames · 8640×5760 ·"),
+        "the plan line does not describe the file: {summary}"
+    );
+    assert!(
+        summary.contains("c-b.mov"),
+        "the plan line must name the file it will write: {summary}"
+    );
+    // These three frames are 27 s and 15 s apart, which is not a cadence:
+    // the plan says so BEFORE Enter, in the same words the report uses.
+    assert!(
+        summary.contains("clamped to 10 fps"),
+        "the fallback cadence must be visible before Enter: {summary}"
+    );
+
+    // --- what happened ----------------------------------------------------
+    let done = qedump(&stderr, "done");
+    assert_eq!(dump_field(done, "clipstate"), "2", "{done}");
+    let report = dump_text(done, "clipreport");
+    assert!(
+        report.starts_with("Exported 3 frames")
+            && report.contains("all checksums verified")
+            && report.contains("c-b.mov"),
+        "the report does not say a verified file landed: {report}"
+    );
+    assert!(
+        report.contains("clamped to 10 fps"),
+        "the report must repeat the plan's own words: {report}"
+    );
+    assert_eq!(
+        dump_field(qedump(&stderr, "end"), "clip"),
+        "false",
+        "Esc did not close the dialog"
+    );
+
+    // --- what is on the disk ----------------------------------------------
+    assert_eq!(
+        landed,
+        vec!["c-b.mov".to_string()],
+        "exactly one file, and no `.fastcull-partial-*` left behind"
+    );
+    let movie = movie.expect("the export must have landed a file");
+    assert_eq!(movie.samples.len(), 3);
+    assert_eq!(&movie.format, b"jpeg", "Motion JPEG, not something else");
+    assert_eq!(&movie.major_brand, b"qt  ");
+    assert!(movie.co64, "64-bit offsets always");
+    assert!(movie.moov_before_mdat, "it must play while it copies");
+    assert_eq!((movie.width, movie.height), (8640, 5760));
+    assert_eq!(movie.sample_ms, 100, "10 fps, the clamped cadence");
+    assert_eq!(movie.stts_entries, 1, "constant frame rate");
+    // Every sample is the camera's own JPEG — and IN CAPTURE ORDER, which
+    // for these three files is a, b, c, not the grid's name order.
+    for (i, sample) in movie.samples.iter().enumerate() {
+        let at = sample.offset as usize;
+        let end = at + sample.size as usize;
+        assert_eq!(
+            movie_bytes[at..end],
+            sources[i][..],
+            "sample {i} is not frame {} of the capture-ordered burst",
+            i + 1
+        );
+    }
+
+    // --- and the originals are exactly as they were -----------------------
+    assert_eq!(
+        before, after,
+        "the export changed something beside the RAWs (ADR 0003: it may only read them)"
+    );
+}
+
+/// The clash question, end to end, on tiny synthetic RAWs so three exports
+/// fit comfortably inside one driven run: the export must ASK, Enter must
+/// not answer, and each answer must do exactly what it says on the disk.
+#[test]
+fn the_video_export_asks_before_replacing_a_file() {
+    if !has_display() {
+        eprintln!("screenshot smoke skipped: no display server");
+        return;
+    }
+    let _s = serial();
+    let src = out_dir().join("clipq-src");
+    let dest = out_dir().join("clipq-dest");
+    for d in [&src, &dest] {
+        std::fs::remove_dir_all(d).ok();
+        std::fs::create_dir_all(d).unwrap();
+    }
+    // Three frames that can share a track, and one that cannot — a
+    // different frame size, which must be SKIPPED and reported rather
+    // than scaled to fit.
+    write_synthetic_raw(&src.join("a.ARW"), 400, 300, 1, 4096);
+    write_synthetic_raw(&src.join("b.ARW"), 400, 300, 1, 5000);
+    write_synthetic_raw(&src.join("c.ARW"), 400, 300, 1, 4500);
+    write_synthetic_raw(&src.join("d.ARW"), 380, 285, 1, 4096);
+    let foreign = b"another day's export".to_vec();
+    std::fs::write(dest.join("a-c.mov"), &foreign).unwrap();
+
+    let script = format!(
+        "1500:select-all;1700:clipdest:{dest};1900:key:ctrl+shift+e;\
+         2200:dump.plan;2400:key:return;2700:dump.question;\
+         2900:key:return;3100:dump.inert;3300:key:ctrl+o;3500:dump.accel;\
+         3700:key:b;5000:dump.kept;5300:key:escape;\
+         5600:key:ctrl+shift+e;5900:key:return;6200:key:o;7500:dump.over;\
+         7800:key:escape;8100:dump.end",
+        dest = dest.display()
+    );
+    let out = out_dir().join("clip-clash.jpg");
+    let stderr = shoot_env_stderr(
+        &[src.to_str().unwrap()],
+        &[("FASTCULL_TRACE", "1"), ("FASTCULL_DRIVE", script.as_str())],
+        &out,
+    );
+    let mut landed: Vec<String> = std::fs::read_dir(&dest)
+        .map(|it| {
+            it.filter_map(|e| e.ok())
+                .map(|e| e.file_name().to_string_lossy().into_owned())
+                .collect()
+        })
+        .unwrap_or_default();
+    landed.sort();
+    let replaced = std::fs::read(dest.join("a-c.mov")).unwrap_or_default();
+    let kept = dest
+        .join("a-c_1.mov")
+        .is_file()
+        .then(|| read_movie_at(&dest.join("a-c_1.mov")));
+    for d in [&src, &dest] {
+        std::fs::remove_dir_all(d).ok();
+    }
+
+    // --- the plan leaves the odd frame out, and says so -------------------
+    let plan = qedump(&stderr, "plan");
+    assert_eq!(dump_field(plan, "clipstate"), "0", "{plan}");
+    let skipped = dump_text(plan, "clipskipped");
+    assert!(
+        skipped.contains("1 frame: different size (380×285)"),
+        "the plan must name what it is leaving out: {plan}"
+    );
+    assert!(
+        dump_text(plan, "clipsummary").starts_with("3 frames · 400×300 ·"),
+        "{plan}"
+    );
+
+    // --- it asks, and Enter is inert on the question ----------------------
+    let question = qedump(&stderr, "question");
+    assert_eq!(
+        dump_field(question, "clipstate"),
+        "3",
+        "the export replaced a file without asking: {question}"
+    );
+    assert!(
+        dump_text(question, "clipconfirm").contains("a-c.mov"),
+        "the question must name the file it is about: {question}"
+    );
+    assert_eq!(
+        dump_field(qedump(&stderr, "inert"), "clipstate"),
+        "3",
+        "Enter answered the question — Ctrl+Shift+E, Enter, Enter must never replace a file"
+    );
+    // An accelerator reaches this scope as a plain letter plus a modifier;
+    // unguarded, the Open Folder reflex answers with the DESTRUCTIVE one.
+    assert_eq!(
+        dump_field(qedump(&stderr, "accel"), "clipstate"),
+        "3",
+        "Ctrl+O answered the clash question: {stderr}"
+    );
+
+    // --- B: keep both ------------------------------------------------------
+    let kept_dump = qedump(&stderr, "kept");
+    assert_eq!(dump_field(kept_dump, "clipstate"), "2", "{kept_dump}");
+    let kept_report = dump_text(kept_dump, "clipreport");
+    assert!(
+        kept_report.contains("a-c_1.mov") && kept_report.contains("all checksums verified"),
+        "keep-both did not land the video under a fresh name: {kept_report}"
+    );
+    assert!(
+        kept_report.contains("assumed 15 fps"),
+        "synthetic frames carry no timing, and the report must say so: {kept_report}"
+    );
+
+    // --- O: overwrite ------------------------------------------------------
+    let over = qedump(&stderr, "over");
+    let over_report = dump_text(over, "clipreport");
+    assert!(
+        over_report.contains("replaced the file that was already there"),
+        "overwrite did not report what it did: {over_report}"
+    );
+    assert_eq!(
+        dump_field(qedump(&stderr, "end"), "clip"),
+        "false",
+        "Esc did not close the dialog"
+    );
+
+    // --- what the disk says -------------------------------------------------
+    assert_eq!(
+        landed,
+        vec!["a-c.mov".to_string(), "a-c_1.mov".to_string()],
+        "unexpected destination contents (a partial file would show here too)"
+    );
+    let kept = kept.expect("keep-both must have written a-c_1.mov");
+    assert_eq!(kept.samples.len(), 3);
+    assert_eq!(&kept.format, b"jpeg");
+    assert_ne!(replaced, foreign, "overwrite did not replace the old file");
+    assert_eq!(
+        &replaced[4..8],
+        b"ftyp",
+        "the replacement is not a QuickTime file"
+    );
+}

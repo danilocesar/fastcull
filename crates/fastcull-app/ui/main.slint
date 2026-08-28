@@ -307,6 +307,33 @@ export component MainWindow inherits Window {
     // dialog, so the question says what it is waiting for.
     in property <string> copy-confirm-nudge: "";
     in-out property <bool> copy-confirm-nudged: false;
+    // Export Frames as Video dialog (M9, video-export.md). Same states as
+    // the copy dialog — 0 = plan, 1 = writing, 2 = report, 3 = the clash
+    // question — deliberately, so the two exits behave identically under
+    // the keyboard.
+    in-out property <bool> clip-visible: false;
+    in property <int> clip-state: 0;
+    in property <string> clip-dest: "";
+    // The ONE plan line: frames, size, cadence, duration, bytes, name,
+    // free space. Composed in Rust; core owns every rule inside it.
+    in property <string> clip-summary: "";
+    in property <string> clip-skipped: "";
+    in property <string> clip-error: "";
+    in property <bool> clip-ready: false;
+    in property <string> clip-progress: "";
+    in property <string> clip-report: "";
+    in property <string> clip-confirm: "";
+    in property <string> clip-confirm-keep-both: "";
+    in property <string> clip-confirm-keep-both-cost: "";
+    in property <string> clip-confirm-overwrite: "";
+    in property <string> clip-confirm-cancel: "";
+    in property <string> clip-confirm-nudge: "";
+    in-out property <bool> clip-confirm-nudged: false;
+    in-out property <bool> clip-claim-focus: false;
+    // Is there anything to export right now? Drives the menu item's
+    // enabled state; the KEY still works and explains itself in the
+    // status line (video-export.md: never a silent grey item).
+    in property <bool> clip-available: false;
     in property <string> copy-error: "";
     in property <bool> copy-ready: false;
     in property <string> copy-progress: "";
@@ -342,7 +369,11 @@ export component MainWindow inherits Window {
     // focus gain that arrives while a modal covers them (see the
     // changed has-focus handlers) — belt and braces, both deterministic.
     public function focus-keys() {
-        if (root.copy-visible) {
+        // Topmost first: the video export can be opened over nothing, but
+        // both dialogs are modal and only one is ever up.
+        if (root.clip-visible) {
+            root.clip-claim-focus = true;
+        } else if (root.copy-visible) {
             root.copy-claim-focus = true;
         } else {
             keys.focus();
@@ -445,6 +476,16 @@ export component MainWindow inherits Window {
     callback copy-cancel();
     callback copy-close();
     callback copy-open-dest-folder();
+    // Export Frames as Video (M9): the same shape as the copy callbacks.
+    callback clip-open();
+    callback clip-pick-dest();
+    callback clip-start();
+    callback clip-answer-keep-both();
+    callback clip-answer-overwrite();
+    callback clip-answer-cancel();
+    callback clip-cancel();
+    callback clip-close();
+    callback clip-open-dest-folder();
 
     changed vp-y => { root.viewport-changed(); }
     // Alias kept for the Rust G4 paths; routes like focus-keys so no
@@ -468,6 +509,15 @@ export component MainWindow inherits Window {
             MenuItem {
                 title: "Copy Picks… (Ctrl+E)";
                 activated => { root.copy-open(); }
+            }
+            MenuItem {
+                // The user's own wording: "video", not "clip".
+                title: "Export Frames as Video… (Ctrl+Shift+E)";
+                // Greyed when there is nothing to export — but the
+                // keystroke still answers, with the reason, in the status
+                // line (video-export.md).
+                enabled: root.clip-available;
+                activated => { root.clip-open(); }
             }
             MenuItem {
                 title: "Settings… (soon)";
@@ -544,6 +594,15 @@ export component MainWindow inherits Window {
                     if (event.text == "o" || event.text == "O") { root.open-folder(); return accept; }
                     if (event.text == "q" || event.text == "Q") { root.quit(); return accept; }
                     if (event.text == "a" || event.text == "A") { root.nav("select-all"); return accept; }
+                    // Ctrl+Shift+E BEFORE Ctrl+E: with Shift held the
+                    // event still arrives as the letter plus modifiers, so
+                    // without this order the chord would open Copy Picks.
+                    // A chord, not a bare letter, so it cannot fire from a
+                    // fat finger mid `]`/`N` (persona 2026-08-27).
+                    if (event.modifiers.shift && (event.text == "e" || event.text == "E")) {
+                        root.clip-open();
+                        return accept;
+                    }
                     if (event.text == "e" || event.text == "E") { root.copy-open(); return accept; }
                     return reject;
                 }
@@ -1214,7 +1273,7 @@ export component MainWindow inherits Window {
                                         // belongs to (#41 D3, see
                                         // session-gen).
                                         self.edit-gen = root.session-gen;
-                                        if (root.about-visible || root.shortcuts-visible || root.copy-visible) {
+                                        if (root.about-visible || root.shortcuts-visible || root.copy-visible || root.clip-visible) {
                                             // Focus continuity (#41 D2):
                                             // an editor must never hold
                                             // the keyboard behind a
@@ -1343,7 +1402,7 @@ export component MainWindow inherits Window {
                         if (self.has-focus) {
                             // Session stamp (#41 D3, see session-gen).
                             self.edit-gen = root.session-gen;
-                            if (root.about-visible || root.shortcuts-visible || root.copy-visible) {
+                            if (root.about-visible || root.shortcuts-visible || root.copy-visible || root.clip-visible) {
                                 // Focus continuity (#41 D2): bounce a
                                 // focus gain that arrives behind a
                                 // covering surface — same rule and
@@ -1725,8 +1784,244 @@ export component MainWindow inherits Window {
             }
         }
 
-        // MODAL POPUPS — declared AFTER the IPTC panel and the copy
-        // dialog on purpose (validator M1, issue #23): later elements
+        // EXPORT FRAMES AS VIDEO (M9, video-export.md "Dialog"). The Copy
+        // Picks scaffolding, deliberately: same scrim, same key scope as
+        // an ANCESTOR of the card (key events bubble only up the focused
+        // element's chain), same claim-focus watch, same clash question as
+        // a STATE of this dialog rather than a second stacking surface
+        // (issue #42). What differs is the content — one file, one plan
+        // line, no template field, no options at all.
+        //
+        // KNOWN RESIDUAL, inherited: this is the fourth hand-rolled scrim
+        // rather than a `ModalScrim`, for the reason recorded above the
+        // copy dialog — the component takes its children INSIDE the card,
+        // and this focus scope has to wrap it.
+        if root.clip-visible: Rectangle {
+            y: 0;
+            width: 100%;
+            height: parent.height - statusbar.height;
+            background: #000000aa;
+            TouchArea { } // swallow clicks behind the dialog (modal)
+            clip-keys := FocusScope {
+                width: 100%;
+                height: 100%;
+                key-pressed(event) => {
+                    // Modal containment, topmost first (issue #42): About
+                    // or the shortcuts popup can open OVER this dialog,
+                    // and focus lives in THIS scope then.
+                    if (root.about-visible || root.shortcuts-visible) {
+                        if (event.text == Key.Escape) {
+                            if (root.about-visible) {
+                                root.about-visible = false;
+                            } else {
+                                root.shortcuts-visible = false;
+                            }
+                        }
+                        return accept;
+                    }
+                    // The clash question owns every key while it is up:
+                    // the destructive answer must not sit on Y, N or
+                    // Enter, and Ctrl+O (Open Folder) reaches this scope
+                    // as a plain "o" plus a modifier, so bare letters
+                    // only (the 2026-08-21 gate finding, inherited).
+                    if (root.clip-state == 3) {
+                        if (event.text == Key.Escape) {
+                            root.clip-answer-cancel();
+                            return accept;
+                        }
+                        if (!event.modifiers.control && !event.modifiers.alt
+                            && !event.modifiers.meta) {
+                            if (event.text == "b" || event.text == "B") {
+                                root.clip-answer-keep-both();
+                                return accept;
+                            }
+                            if (event.text == "o" || event.text == "O") {
+                                root.clip-answer-overwrite();
+                                return accept;
+                            }
+                        }
+                        // Everything else is swallowed, and the question
+                        // says out loud that it is still waiting.
+                        root.clip-confirm-nudged = true;
+                        return accept;
+                    }
+                    if (event.text == Key.Escape && root.clip-state != 1) {
+                        root.clip-close();
+                        return accept;
+                    }
+                    if (event.text == Key.Return) {
+                        if (root.clip-state == 0 && root.clip-ready) {
+                            root.clip-start();
+                            return accept;
+                        }
+                        if (root.clip-state == 2) {
+                            root.clip-close();
+                            return accept;
+                        }
+                    }
+                    reject
+                }
+            Rectangle {
+                x: (parent.width - self.width) / 2;
+                y: (parent.height - self.height) / 2;
+                width: 560px;
+                height: min(400px, parent.height - 40px);
+                border-radius: 8px;
+                background: #202028;
+                border-width: 1px;
+                border-color: #3a3a44;
+                VerticalLayout {
+                    padding: 18px;
+                    spacing: 10px;
+                    Text {
+                        text: "Export Frames as Video";
+                        color: #ffffff;
+                        font-size: 16px;
+                    }
+                    // Destination, big and unmissable — the same row as
+                    // Copy Picks, seeded from its folder until a video
+                    // folder is chosen.
+                    HorizontalLayout {
+                        spacing: 8px;
+                        Rectangle {
+                            background: #16161a;
+                            border-radius: 4px;
+                            height: 34px;
+                            Text {
+                                x: 10px;
+                                text: root.clip-dest == "" ? "No destination chosen" : root.clip-dest;
+                                color: root.clip-dest == "" ? #b06060 : #e8e8f0;
+                                font-size: 14px;
+                                vertical-alignment: center;
+                                height: 100%;
+                                overflow: elide;
+                                width: parent.width - 20px;
+                            }
+                        }
+                        Button {
+                            text: "Choose…";
+                            enabled: root.clip-state == 0;
+                            clicked => {
+                                root.clip-pick-dest();
+                                clip-keys.focus();
+                            }
+                        }
+                    }
+                    // THE plan line: everything the file will be, before a
+                    // byte is written.
+                    Text {
+                        text: root.clip-summary;
+                        color: #c8c8d0;
+                        font-size: 13px;
+                        wrap: word-wrap;
+                    }
+                    // What is being left out, and why. Plan state only:
+                    // after the run the report carries the same sentence,
+                    // and two copies of it on one screen read as two
+                    // different facts.
+                    if root.clip-skipped != "" && root.clip-state == 0: Text {
+                        text: root.clip-skipped;
+                        color: #ffb84d;
+                        font-size: 12px;
+                        wrap: word-wrap;
+                    }
+                    // THE CLASH QUESTION (clip-state 3), stacked like Copy
+                    // Picks': three outcome-labelled answers in order of
+                    // increasing consequence, Cancel set apart.
+                    if root.clip-state == 3: VerticalLayout {
+                        spacing: 6px;
+                        Text {
+                            text: root.clip-confirm;
+                            color: #e8e8f0;
+                            font-size: 13px;
+                            wrap: word-wrap;
+                        }
+                        Rectangle { height: 2px; }
+                        AnswerRow {
+                            key: "B";
+                            label: root.clip-confirm-keep-both;
+                            cost: root.clip-confirm-keep-both-cost;
+                            clicked => { root.clip-answer-keep-both(); }
+                        }
+                        AnswerRow {
+                            key: "O";
+                            // The one answer that destroys something wears
+                            // the colour; the BOX never does.
+                            label: root.clip-confirm-overwrite;
+                            label-color: #ffb84d;
+                            clicked => { root.clip-answer-overwrite(); }
+                        }
+                        Rectangle { height: 4px; }
+                        AnswerRow {
+                            key: "Esc";
+                            label: root.clip-confirm-cancel;
+                            clicked => { root.clip-answer-cancel(); }
+                        }
+                        if root.clip-confirm-nudged: Text {
+                            text: root.clip-confirm-nudge;
+                            color: #ffb84d;
+                            font-size: 12px;
+                        }
+                    }
+                    if root.clip-error != "": Text {
+                        text: root.clip-error;
+                        color: #ff7a6a;
+                        font-size: 12px;
+                        wrap: word-wrap;
+                    }
+                    if root.clip-state == 1: Text {
+                        text: root.clip-progress;
+                        color: #c8e8c8;
+                        font-size: 13px;
+                    }
+                    if root.clip-state == 2: Text {
+                        text: root.clip-report;
+                        color: #c8e8c8;
+                        font-size: 13px;
+                        wrap: word-wrap;
+                    }
+                    Rectangle { } // spring
+                    HorizontalLayout {
+                        spacing: 8px;
+                        alignment: end;
+                        if root.clip-state == 2: Button {
+                            text: "Open folder";
+                            clicked => { root.clip-open-dest-folder(); }
+                        }
+                        if root.clip-state == 1: Button {
+                            text: "Cancel";
+                            clicked => { root.clip-cancel(); }
+                        }
+                        // No Export button while the question is up: a
+                        // greyed fourth control is one more thing to parse
+                        // at the moment of choosing (persona).
+                        if root.clip-state != 1 && root.clip-state != 3: Button {
+                            text: root.clip-state == 2 ? "Close" : "Export";
+                            enabled: root.clip-state == 2 || root.clip-ready;
+                            clicked => {
+                                if (root.clip-state == 2) {
+                                    root.clip-close();
+                                } else {
+                                    root.clip-start();
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+            }
+            init => { clip-keys.focus(); root.clip-claim-focus = false; }
+            property <bool> claim-focus: root.clip-claim-focus;
+            changed claim-focus => {
+                if (self.claim-focus) {
+                    clip-keys.focus();
+                    root.clip-claim-focus = false;
+                }
+            }
+        }
+
+        // MODAL POPUPS — declared AFTER the IPTC panel and the two export
+        // dialogs on purpose (validator M1, issue #23): later elements
         // render on top, and the scrims must cover EVERY layer — the
         // old order left the panel clickable above an "open" modal.
         // Keyboard-shortcuts popup (Help menu; Esc closes). The keyboard map
@@ -1743,7 +2038,7 @@ export component MainWindow inherits Window {
                 font-size: 16px;
             }
             Text {
-                text: "Arrows / PgUp / PgDn / Home / End   navigate\nY, P or Space   pick (take)\nN or X   reject\nU   clear mark\n+ / -   zoom in / out (grid → loupe fit → ×1.5 steps → 1:1, center held)\nWheel in loupe   zoom, anchored under the pointer (grid: scroll)\nZ   fit → 1:1; zoomed → back to fit (from grid: jump to 1:1)\nClick in loupe   above fit: center on the clicked point\nDouble-click   grid: open in loupe; loupe: 1:1 on the clicked point\nG or Esc   back to the grid\nK   keyword field (opens the IPTC panel)\nI   IPTC panel\nShift+arrows   extend selection\nCtrl+A   select all (filtered set)\n[ / ]   previous / next burst\nCtrl+O   open folder\nCtrl+E   Copy Picks…\nCtrl+Q   quit\n1–5, 0   reserved (star ratings, v2)";
+                text: "Arrows / PgUp / PgDn / Home / End   navigate\nY, P or Space   pick (take)\nN or X   reject\nU   clear mark\n+ / -   zoom in / out (grid → loupe fit → ×1.5 steps → 1:1, center held)\nWheel in loupe   zoom, anchored under the pointer (grid: scroll)\nZ   fit → 1:1; zoomed → back to fit (from grid: jump to 1:1)\nClick in loupe   above fit: center on the clicked point\nDouble-click   grid: open in loupe; loupe: 1:1 on the clicked point\nG or Esc   back to the grid\nK   keyword field (opens the IPTC panel)\nI   IPTC panel\nShift+arrows   extend selection\nCtrl+A   select all (filtered set)\n[ / ]   previous / next burst\nCtrl+O   open folder\nCtrl+E   Copy Picks…\nCtrl+Shift+E   Export Frames as Video…\nCtrl+Q   quit\n1–5, 0   reserved (star ratings, v2)";
                 color: #c8c8d0;
                 font-size: 13px;
             }

@@ -948,9 +948,28 @@ fn write_status_and_chrome(
     } else {
         format!("{loaded}/{count} loaded · sorting by name until loaded")
     };
+    // Is there anything to export as video right now? The menu item's
+    // enabled state follows this; the KEY works either way and explains
+    // itself below (video-export.md: never a silent grey item).
+    let clip_frames = crate::clip_bridge::clip_scope(st).len();
+    win.set_clip_available(fastcull_core::clip::unavailable_reason(clip_frames).is_none());
+    // A refused export explains itself HERE, where the user is already
+    // looking after a keystroke that appeared to do nothing. It expires
+    // on its own (the pump drops it and asks for this repaint).
+    // ...and it disappears the moment it stops being true: selecting the
+    // frames the message asked for must not leave the complaint on
+    // screen (found driving the real app, 2026-08-27).
+    let clip_notice = match &st.clip.notice {
+        Some((text, at))
+            if at.elapsed() < crate::state::CLIP_NOTICE_LIFE && !win.get_clip_available() =>
+        {
+            format!(" — {text}")
+        }
+        _ => String::new(),
+    };
     win.set_status(
         format!(
-            "{} ({}/{}){}{}{}{} — {} — ★{} ✕{}{} — {} column{}",
+            "{} ({}/{}){}{}{}{} — {} — ★{} ✕{}{} — {} column{}{}",
             if cursor_in_view {
                 st.session.labels.get(cursor).cloned().unwrap_or_default()
             } else {
@@ -975,7 +994,8 @@ fn write_status_and_chrome(
                 String::new()
             },
             layout.columns,
-            if layout.columns == 1 { "" } else { "s" }
+            if layout.columns == 1 { "" } else { "s" },
+            clip_notice
         )
         .into(),
     );

@@ -179,6 +179,16 @@ pub(crate) fn install(window: &MainWindow, state: &Rc<RefCell<AppState>>) -> Rc<
                     state.borrow_mut().copy.dest = Some(std::path::PathBuf::from(path));
                     return;
                 }
+                if let Some(path) = key.strip_prefix("clipdest:") {
+                    // clipdest:PATH — the video export's destination
+                    // picker minus the native rfd dialog, exactly like
+                    // `copydest:` and for the same reason: without it the
+                    // whole export flow (plan, clash question, the file on
+                    // disk) is unreachable headlessly, and this is the one
+                    // operation that writes a new kind of file.
+                    state.borrow_mut().clip.dest = Some(std::path::PathBuf::from(path));
+                    return;
+                }
                 if let Some(spec) = key.strip_prefix("key:") {
                     // key:<k> / key:ctrl+<k> — dispatch a REAL key press +
                     // release through `slint::Window::dispatch_event`, i.e.
@@ -193,9 +203,19 @@ pub(crate) fn install(window: &MainWindow, state: &Rc<RefCell<AppState>>) -> Rc<
                     // `ctrl+` synthesizes a held Control around the press,
                     // which Slint folds into `event.modifiers` (issue #13).
                     use slint::platform::{Key, WindowEvent};
-                    let (ctrl, name) = match spec.strip_prefix("ctrl+") {
+                    let (ctrl, rest) = match spec.strip_prefix("ctrl+") {
                         Some(rest) if !rest.is_empty() => (true, rest),
                         _ => (false, spec),
+                    };
+                    // `shift+` after `ctrl+`, so `key:ctrl+shift+e` is a
+                    // real chord: Ctrl+Shift+E (the video export) has to
+                    // be drivable, and it must reach the app the way the
+                    // keyboard sends it — the letter plus BOTH modifiers,
+                    // which is exactly what makes it distinguishable from
+                    // Ctrl+E (Copy Picks).
+                    let (shift, name) = match rest.strip_prefix("shift+") {
+                        Some(rest) if !rest.is_empty() => (true, rest),
+                        _ => (false, rest),
                     };
                     let text: slint::SharedString = match name {
                         "escape" => char::from(Key::Escape).to_string().into(),
@@ -209,15 +229,25 @@ pub(crate) fn install(window: &MainWindow, state: &Rc<RefCell<AppState>>) -> Rc<
                     };
                     let ctrl_text: slint::SharedString =
                         char::from(Key::Control).to_string().into();
+                    let shift_text: slint::SharedString = char::from(Key::Shift).to_string().into();
                     if ctrl {
                         win.window().dispatch_event(WindowEvent::KeyPressed {
                             text: ctrl_text.clone(),
+                        });
+                    }
+                    if shift {
+                        win.window().dispatch_event(WindowEvent::KeyPressed {
+                            text: shift_text.clone(),
                         });
                     }
                     win.window()
                         .dispatch_event(WindowEvent::KeyPressed { text: text.clone() });
                     win.window()
                         .dispatch_event(WindowEvent::KeyReleased { text });
+                    if shift {
+                        win.window()
+                            .dispatch_event(WindowEvent::KeyReleased { text: shift_text });
+                    }
                     if ctrl {
                         win.window()
                             .dispatch_event(WindowEvent::KeyReleased { text: ctrl_text });
@@ -353,7 +383,9 @@ pub(crate) fn install(window: &MainWindow, state: &Rc<RefCell<AppState>>) -> Rc<
                         "QEDUMP {label} keysfocus={} one2one={} zoom={} iptc={} about={} \
                          shortcuts={} copy={} summary={:?} template={:?} revert={:?} status={:?} \
                          soft={} vx={:.1} vy={:.1} pan={:.4},{:.4} zf={:.3} \
-                         copynote={:?} report={:?} copystate={} confirm={:?}",
+                         copynote={:?} report={:?} copystate={} confirm={:?} \
+                         clip={} clipstate={} clipavail={} clipsummary={:?} clipskipped={:?} \
+                         cliperror={:?} clipreport={:?} clipconfirm={:?}",
                         win.get_dbg_keys_focus(),
                         win.get_one2one(),
                         st.grid.zoom,
@@ -382,6 +414,20 @@ pub(crate) fn install(window: &MainWindow, state: &Rc<RefCell<AppState>>) -> Rc<
                         // assertable only down to "a dialog exists".
                         win.get_copy_state(),
                         win.get_copy_confirm().as_str(),
+                        // The video export (M9): the same reasoning as
+                        // the copy block above — this is the second
+                        // operation in the app that writes files the user
+                        // cannot undo, and a driven run must be able to
+                        // see WHICH state its dialog is in, what the plan
+                        // line promised, and what the report said.
+                        win.get_clip_visible(),
+                        win.get_clip_state(),
+                        win.get_clip_available(),
+                        win.get_clip_summary().as_str(),
+                        win.get_clip_skipped().as_str(),
+                        win.get_clip_error().as_str(),
+                        win.get_clip_report().as_str(),
+                        win.get_clip_confirm().as_str(),
                     ));
                     return;
                 }
