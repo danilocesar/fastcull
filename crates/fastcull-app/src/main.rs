@@ -130,6 +130,14 @@ fn main() {
         .position(|a| a == "--start-loupe")
         .map(|i| args.remove(i))
         .is_some();
+    // --bursts: the synthetic session gets Sony-style capture times and
+    // sequence numbers in a fixed pattern, so the burst keys are drivable
+    // (the real test RAWs are three single shots and form no group).
+    let bursts = args
+        .iter()
+        .position(|a| a == "--bursts")
+        .map(|i| args.remove(i))
+        .is_some();
     let launch = match args.as_slice() {
         [] => Launch::Empty,
         [flag, n] if flag == "--synthetic" => {
@@ -137,7 +145,7 @@ fn main() {
                 eprintln!("usage: fastcull-app [<folder> | --synthetic <count>]");
                 std::process::exit(2);
             };
-            Launch::Synthetic(n)
+            Launch::Synthetic { n, bursts }
         }
         [folder] => Launch::Folder(folder.into()),
         _ => {

@@ -255,7 +255,9 @@ question is the same dialog state as Copy Picks. Modal, keyboard-contained
   (Shift+`]` is the natural pair of `]`): the common case — the burst under
   the cursor — needs no selection, but "burst 40 plus burst 41" is
   Shift+arrow over 60 frames today. A burst-grouping/selection change with
-  its own gate; tracked as issue #55.
+  its own gate; tracked as issue #55 — **shipped 2026-08-28** (Shift+`[`/`]`,
+  Ctrl+Shift+B, and Esc clearing the selection from the loupe too; the
+  contract lives in burst-grouping.md's UI contract).
 - **An "exported as video" badge** on the burst, like the Copy Picks
   checkmark: USEFUL, not must-have; a new badge surface, deferred —
   issue #56.

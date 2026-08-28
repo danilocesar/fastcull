@@ -4662,3 +4662,162 @@ fn the_video_export_asks_before_replacing_a_file() {
         "the replacement is not a QuickTime file"
     );
 }
+
+/// Issue #55: Shift+`]` / Shift+`[` extend the selection by WHOLE bursts,
+/// Ctrl+Shift+B selects the burst under the cursor, and Esc clears the
+/// selection — driven through real key events (with the Shift and Control
+/// modifiers held the way a keyboard holds them) over the `--bursts`
+/// synthetic pattern: single 0, burst A = 1..=5, single 6, burst B =
+/// 7..=9, burst C = 10..=17 (`SYNTHETIC_BURST_RUNS`).
+#[test]
+fn burst_keys_select_whole_bursts_and_esc_clears() {
+    if !has_display() {
+        eprintln!("screenshot smoke skipped: no display server");
+        return;
+    }
+    let _s = serial();
+    let out = out_dir().join("burst-select.jpg");
+    let stderr = shoot_env_stderr(
+        &["--synthetic", "40", "--bursts"],
+        &[
+            ("FASTCULL_TRACE", "1"),
+            (
+                "FASTCULL_DRIVE",
+                "600:dump.start;800:key:];1000:dump.b1;\
+                 1200:key:shift+];1400:dump.ext1;1600:key:shift+];1800:dump.ext2;\
+                 2000:key:shift+[;2200:dump.shrink;2400:key:shift+right;2600:dump.frame;\
+                 2800:key:escape;3000:dump.cleared;\
+                 3200:key:right;3400:key:ctrl+shift+b;3600:dump.burst;\
+                 3800:key:ctrl+shift+b;4000:dump.idem;\
+                 4200:key:};4400:dump.brace;4600:key:{;4800:dump.brace2",
+            ),
+        ],
+        &out,
+    );
+    // (cursor image id, selection count) at a dump.
+    let at = |label: &str| -> (usize, usize) {
+        let d = qedump(&stderr, label);
+        (
+            dump_field(d, "cursor").parse().unwrap(),
+            dump_field(d, "selected").parse().unwrap(),
+        )
+    };
+    assert_eq!(at("start"), (0, 0));
+    assert_eq!(at("b1"), (1, 0), "`]` lands on A's opener, selects nothing");
+    // The heron: one press from A's opener takes ALL of A plus the single
+    // it lands on (the next "burst" in `]`'s territory rule).
+    assert_eq!(at("ext1"), (6, 6), "Shift+`]`: A whole plus the single");
+    assert_eq!(
+        at("ext2"),
+        (7, 9),
+        "Shift+`]` again: B whole, cursor on B's opener"
+    );
+    assert_eq!(
+        at("shrink"),
+        (6, 6),
+        "Shift+`[` drops B whole — never half of it"
+    );
+    // Shift+arrow after a burst span is frame-precise from the burst's
+    // edge: "A plus the single plus B's first frame" (persona: one rule).
+    assert_eq!(at("frame"), (7, 7), "Shift+Right adds exactly one frame");
+    assert_eq!(
+        at("cleared"),
+        (7, 0),
+        "Esc clears the selection; cursor stays"
+    );
+    assert_eq!(
+        at("burst"),
+        (8, 3),
+        "Ctrl+Shift+B mid-burst: B whole, cursor unmoved"
+    );
+    assert_eq!(at("idem"), (8, 3), "a double-tap changes nothing");
+    // The shifted characters a US keyboard actually sends.
+    assert_eq!(
+        at("brace"),
+        (10, 11),
+        "`}}` is Shift+`]`: B plus C, cursor on C's opener"
+    );
+    assert_eq!(at("brace2"), (7, 3), "`{{` is Shift+`[`: back to just B");
+    // The status bar tells the same story the count does.
+    assert!(
+        dump_text(qedump(&stderr, "brace"), "status").contains("11 selected"),
+        "{}",
+        qedump(&stderr, "brace")
+    );
+    assert!(
+        !dump_text(qedump(&stderr, "cleared"), "status").contains("selected"),
+        "an empty selection is silent: {}",
+        qedump(&stderr, "cleared")
+    );
+}
+
+/// The burst keys in the LOUPE, where no wash shows a selection — and the
+/// rule that makes them safe there: Esc clears the selection from inside
+/// the loupe (user decision 2026-08-28) while G leaves it alone, the "go
+/// and look at what I selected" exit. Before #55 a loupe selection cost
+/// forty Shift+arrows; now it is one press, so a stale one that took the
+/// next caption would be a daily hazard, not a rare one.
+#[test]
+fn esc_clears_a_burst_selection_from_inside_the_loupe() {
+    if !has_display() {
+        eprintln!("screenshot smoke skipped: no display server");
+        return;
+    }
+    let _s = serial();
+    let out = out_dir().join("burst-select-loupe.jpg");
+    let stderr = shoot_env_stderr(
+        &["--synthetic", "40", "--bursts", "--start-loupe"],
+        &[
+            ("FASTCULL_TRACE", "1"),
+            (
+                "FASTCULL_DRIVE",
+                "600:key:];800:key:shift+];1000:dump.loupe;\
+                 1200:key:g;1400:dump.grid;\
+                 1600:zoom-in;1700:zoom-in;1800:zoom-in;1900:zoom-in;2000:zoom-in;\
+                 2200:dump.back;2400:key:escape;2600:dump.out",
+            ),
+        ],
+        &out,
+    );
+    let loupe = qedump(&stderr, "loupe");
+    let grid = qedump(&stderr, "grid");
+    let back = qedump(&stderr, "back");
+    let out_dump = qedump(&stderr, "out");
+    assert_eq!(dump_field(loupe, "cursor"), "6", "{loupe}");
+    assert_eq!(
+        dump_field(loupe, "selected"),
+        "6",
+        "Shift+`]` works in the loupe: {loupe}"
+    );
+    // G: back to the grid, selection kept.
+    assert_ne!(
+        dump_field(grid, "zoom"),
+        dump_field(loupe, "zoom"),
+        "G left the loupe: {grid}"
+    );
+    assert_eq!(
+        dump_field(grid, "selected"),
+        "6",
+        "G keeps the selection: {grid}"
+    );
+    // Zoom back into the loupe (`+` five times from 8 columns; `Z` needs a
+    // decoded full-res image a synthetic session never has): the
+    // selection is still there.
+    assert_eq!(
+        dump_field(back, "zoom"),
+        dump_field(loupe, "zoom"),
+        "back in the loupe: {back}"
+    );
+    assert_eq!(dump_field(back, "selected"), "6", "{back}");
+    // Esc from inside the loupe: selection gone AND the loupe left.
+    assert_eq!(
+        dump_field(out_dump, "selected"),
+        "0",
+        "Esc clears from the loupe: {out_dump}"
+    );
+    assert_ne!(
+        dump_field(out_dump, "zoom"),
+        dump_field(loupe, "zoom"),
+        "Esc still leaves the loupe: {out_dump}"
+    );
+}

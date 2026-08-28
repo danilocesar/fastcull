@@ -844,8 +844,9 @@ brightening during wheel scrolling (needs an activity decay timer).
 - **Grid click moves the cursor (user requirement 2026-07-25, issue #7 —
   IMPLEMENTED with the panel step)**: a plain click on a cell moves the
   cursor to that image (and claims it, per the untouched-cursor rule) and
-  COLLAPSES any multi-selection (the deselect gesture; Esc/G at a grid
-  zoom also clears the selection). Ctrl+click toggles membership;
+  COLLAPSES any multi-selection (the deselect gesture; Esc clears the
+  selection from anywhere — user decision 2026-08-28 — and G does at a
+  grid zoom). Ctrl+click toggles membership;
   Shift+click spans cursor..clicked in view order. Clicks live in per-cell
   touch areas INSIDE the Flickable, so drag remains scrolling (the
   press+release-without-movement disambiguation comes from the Flickable's
@@ -1109,8 +1110,9 @@ brightening during wheel scrolling (needs an activity decay timer).
   contract.
 - Selection (wash added 2026-07-28 on user request, persona-reviewed
   MUST-HAVE): a translucent **accent-blue wash over the whole cell**, plus
-  the existing accent outline; multi-select via Ctrl/Shift-click and
-  Shift+arrows. Rationale — the selection is what the **IPTC panel** stamps
+  the existing accent outline; multi-select via Ctrl/Shift-click,
+  Shift+arrows, and the burst chords Shift+`[`/`]` and Ctrl+Shift+B
+  (burst-grouping.md, issue #55). Rationale — the selection is what the **IPTC panel** stamps
   (`Selection::batch()`; field commit/clear, keyword add/remove, template
   apply), so it can write metadata across hundreds of images at once, and
   the 2px outline alone was unreadable at 8–12 columns, leaving that reach
@@ -1171,12 +1173,15 @@ brightening during wheel scrolling (needs an activity decay timer).
 | double-click (grid) | open that image in the loupe at fit |
 | double-click (loupe) | 1:1 with the clicked point centered |
 | drag | grid: scroll; loupe above fit: pan the image |
-| `G` or `Esc` | back to the grid at the previous grid zoom (from loupe/1:1) |
+| `G` | back to the grid at the previous grid zoom (from loupe/1:1); at a grid zoom it is also the deselect gesture (clears the selection); from the loupe it KEEPS the selection — the "go and look at what I selected" exit |
+| `Esc` | back to the grid at the previous grid zoom AND the selection cleared — from anywhere, the loupe included (user decision 2026-08-28, issue #55: the burst chords build a 40-frame selection in the loupe with one press, where no wash shows it, and a stale one would silently take the next IPTC commit; the cancel key must work where the selection was made). Modal popups still take Esc first (they close; the grid never sees it) |
 | `I` | toggle IPTC panel |
 | `K` | focus the keyword field, opening the IPTC panel if needed (persona G3; implemented with the panel step — K is never a dead key) |
 | Shift+arrows | extend selection (span anchor..cursor over view positions; a new span replaces the previous one — shrink/flip works) |
 | `Ctrl+A` | select all (filtered set) |
 | `[` / `]` | burst boundary jump (M7): `]` = next frame whose group differs (in a contiguous capture-sorted view that is the next group's first frame; with non-contiguous members it follows view order); `[` = re-anchor on the current group's first visible frame, crossing to the previous group only from there (CD-player convention); claims the cursor; carries loupe zoom/pan persistence; see burst-grouping.md |
+| Shift+`[` / Shift+`]` (also `{` / `}`, the shifted characters a US keyboard sends) | extend the selection by WHOLE bursts (issue #55): the cursor lands where `[`/`]` would, and every whole burst between the anchor's burst and the cursor's is selected; the opposite key drops a burst; a following Shift+arrow is frame-precise from the burst's edge; see burst-grouping.md |
+| `Ctrl+Shift+B` | select this burst (issue #55, user proposal): the burst under the cursor joins the selection, cursor unmoved, additive, idempotent; see burst-grouping.md |
 | `Ctrl+O` | Open Folder… (persona accelerator gap, provisional) |
 | `Ctrl+Q` | Quit (persona accelerator gap, provisional) |
 | `Ctrl+E` (menu: Copy picks…) | open copy dialog (`Ctrl+C` stays clipboard-idle: user decision after persona review — never repurpose it) |
@@ -1633,7 +1638,10 @@ the user confirms, all cheap to change):**
 - [x] Slint screenshot smoke tests (`fastcull-app --screenshot <out>` +
       `tests/screenshot.rs`): grid placeholder (synthetic), loaded thumbnails
       (texture-variance asserted), failed-badge session, loupe fit
-      (`--start-loupe`) and 1:1 (`--start-11`), and the IPTC-panel-open
+      (`--start-loupe`) and 1:1 (`--start-11`), bursts in a synthetic
+      session (`--synthetic N --bursts`: a fixed Sony-style pattern of
+      singles and bursts, since the real test RAWs are three single shots
+      — the burst keys of issue #55 are driven over it), and the IPTC-panel-open
       docking state (issue #12 regression: left edge stays grid content,
       right strip becomes panel; reached via the `FASTCULL_DRIVE`
       `iptc` action). Recorded limitations:

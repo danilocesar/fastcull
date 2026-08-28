@@ -385,7 +385,8 @@ pub(crate) fn install(window: &MainWindow, state: &Rc<RefCell<AppState>>) -> Rc<
                          soft={} vx={:.1} vy={:.1} pan={:.4},{:.4} zf={:.3} \
                          copynote={:?} report={:?} copystate={} confirm={:?} \
                          clip={} clipstate={} clipavail={} clipsummary={:?} clipskipped={:?} \
-                         cliperror={:?} clipreport={:?} clipconfirm={:?} clipprogress={:?}",
+                         cliperror={:?} clipreport={:?} clipconfirm={:?} clipprogress={:?} \
+                         cursor={} selected={}",
                         win.get_dbg_keys_focus(),
                         win.get_one2one(),
                         st.grid.zoom,
@@ -433,6 +434,13 @@ pub(crate) fn install(window: &MainWindow, state: &Rc<RefCell<AppState>>) -> Rc<
                         // user sees, and no driven test could see it at
                         // all until this line (QE finding 2026-08-28).
                         win.get_clip_progress().as_str(),
+                        // The cursor (an image id) and the selection count
+                        // the status bar shows: the burst keys (issue
+                        // #55) are a cursor move plus a selection change,
+                        // and neither was observable to a driven run
+                        // except by parsing the status text.
+                        st.grid.cursor,
+                        st.grid.selection.count_in_view(&st.grid.view),
                     ));
                     return;
                 }

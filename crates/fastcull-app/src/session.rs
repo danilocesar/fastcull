@@ -37,7 +37,12 @@ pub(crate) enum Launch {
     /// #5): open the normal window in the empty state — NEVER a usage
     /// error printed to a terminal nobody sees.
     Empty,
-    Synthetic(usize),
+    /// `--synthetic N`; with `--bursts` the frames carry a fixed burst
+    /// pattern (see `SessionState::seed_synthetic_bursts`).
+    Synthetic {
+        n: usize,
+        bursts: bool,
+    },
     Folder(std::path::PathBuf),
 }
 
@@ -52,7 +57,7 @@ pub(crate) fn dispatch(state: &Rc<RefCell<AppState>>, launch: Launch, start_11: 
             // path handles it).
             recompute_view(&mut state.borrow_mut());
         }
-        Launch::Synthetic(n) => {
+        Launch::Synthetic { n, bursts } => {
             let mut st = state.borrow_mut();
             // Built through the same constructors a real folder uses, so
             // the per-image vectors are sized in ONE place. Not through
@@ -60,6 +65,13 @@ pub(crate) fn dispatch(state: &Rc<RefCell<AppState>>, launch: Launch, start_11: 
             // the launch), and the kitchen has no work to retarget.
             st.session = SessionState::synthetic(n);
             st.bursts = BurstIndex::new(n);
+            if bursts {
+                st.session.seed_synthetic_bursts();
+                // The grouping a real folder gets when its metadata
+                // lands — through the same function, so the badge, the
+                // status position and the bracket keys see one truth.
+                crate::copy_bridge::recompute_bursts(&mut st);
+            }
             recompute_view(&mut st);
         }
         Launch::Folder(path) => {

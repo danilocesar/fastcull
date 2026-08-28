@@ -30,8 +30,11 @@ which is faster than any undo dialog.
 | `U` | clear mark (stays put) |
 | `+` / `-` | zoom: grid columns → loupe fit → ×1.5 steps → 1:1 |
 | `Z` | fit → 1:1; from 1:1 *or any zoom* → back to fit (from the grid: straight to 1:1) |
-| `G` or `Esc` | back to the grid at your previous grid zoom |
+| `G` | back to the grid at your previous grid zoom |
+| `Esc` | back to the grid, **and the selection is cleared** — from anywhere |
 | `[` / `]` | previous / next burst (see below) |
+| Shift+`[` / Shift+`]` | extend the selection by a whole burst (see below) |
+| `Ctrl+Shift+B` | select this burst — the whole one under the cursor (see below) |
 | `I` | IPTC panel |
 | `K` | jump to the keyword field (opens the panel if needed) |
 | Shift+arrows | extend a selection |
@@ -197,8 +200,9 @@ the left and right — that's the frame fitting, not something missing.
 
 ## Working on several photos at once: the selection
 
-Shift+arrows, Shift+click, Ctrl+click and `Ctrl+A` build a **selection** of
-several photos. The selection is what the **IPTC panel** writes to: commit a
+Shift+arrows, Shift+click, Ctrl+click, `Ctrl+A` and the burst keys
+(Shift+`[`/`]`, `Ctrl+Shift+B` — see [Bursts](#bursts)) build a
+**selection** of several photos. The selection is what the **IPTC panel** writes to: commit a
 field, add or remove a keyword, or apply a template, and it lands on every
 selected photo at once. That's how you caption a whole run of frames in one
 go. It is also what
@@ -225,8 +229,13 @@ place to advance to after marking fifty frames at once.
 
 A plain click **clears** the selection outright — the tint disappears and
 the `· N selected` counter goes with it, leaving you on the photo you
-clicked. `Esc` or `G` clears it too. Note that plain arrow navigation does
-*not* clear a selection: it stays live, and stays lit, until you clear it.
+clicked. **`Esc` clears it too, from anywhere** — inside the loupe as
+well, where nothing is tinted and it is easy to forget that a selection
+is still live; one `Esc` and the next caption lands only on the photo
+you're looking at. `G` from the loupe keeps the selection (so you can go
+back to the grid and look at it); at a grid zoom `G` clears it like `Esc`.
+Note that plain arrow navigation does *not* clear a selection: it stays
+live, and stays lit, until you clear it.
 
 ## Knowing where you are: marks in the loupe
 
@@ -257,6 +266,24 @@ it helps:
   cross into the previous burst. Same double-tap habit as a CD player's
   back button.
 - The status bar shows **burst 7/23** while you're inside one.
+- **Shift+`]`** is `]` that also selects: it lands where `]` would and
+  selects every *whole* burst between where you started and where you
+  landed. From a burst's first frame, one press selects that burst plus
+  the next one — the heron taking off in burst 40 and landing in burst
+  41 is one Shift+`]` and then [Export Frames as Video](export-video.md).
+  Press again to add the next burst; **Shift+`[`** drops one again
+  (from the middle of a burst it selects just that burst, landing on its
+  first frame, like `[`). Bursts are never selected by half. On a US
+  keyboard these are the `}` and `{` keys — both spellings work.
+- **`Ctrl+Shift+B`** selects the whole burst under the cursor **without
+  moving the cursor** — the move for captioning a burst from whichever
+  frame you happen to be judging. It *adds* to what is already selected
+  (so "burst 40 plus burst 47" is `Ctrl+Shift+B`, `]` a few times,
+  `Ctrl+Shift+B` again) and pressing it twice changes nothing. Only the
+  frames the current filter shows are selected: filter to Picked first
+  and the rejects stay out.
+- `Esc` clears the selection, in the loupe too — see
+  [the selection](#working-on-several-photos-at-once-the-selection).
 
 Bursts never touch your files or marks — the grouping is a display and
 navigation aid only, and every frame is still culled individually.

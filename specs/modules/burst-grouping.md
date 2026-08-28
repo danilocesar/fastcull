@@ -95,6 +95,56 @@ maker note degrades to it, never to an error).
   loupe zoom/pan persistence exactly like arrows, never marks (G1
   untouched), clamps at the ends. MUST-HAVE — this is the feature: it
   replaces ~18 dead arrow presses per burst, ~120 times an evening.
+- **Shift+`[` / Shift+`]`: extend the selection by whole bursts** (issue
+  #55; persona 2026-08-28, USEFUL, shipped with Ctrl+Shift+B below). One
+  rule: the cursor lands exactly where `[`/`]` would land it, and every
+  WHOLE burst between the anchor's burst and the cursor's burst is
+  selected — a single counts as a one-frame burst, and a burst is never
+  taken by half. From a burst's opener (where `]` leaves you) Shift+`]`
+  selects that burst plus the next territory in one press — "burst 40
+  plus burst 41", the heron taking off and landing. Pressing again adds
+  the next burst; the opposite key drops a whole burst, and flips past
+  the anchor burst like Shift+arrows flip. From mid-burst, Shift+`[`
+  re-anchors on the opener like `[` does, which selects JUST this burst
+  with the cursor on its opener. The anchor arms at the pre-press cursor
+  (or stays where a live Shift gesture put it) and is widened to its
+  burst's far edge, so a Shift+arrow that follows is frame-precise from
+  the burst's edge ("40 plus the first two frames of 41" — persona: one
+  rule for what a Shift extension is, not two). The result is always a
+  view-order RANGE like every other Shift gesture: with interleaved
+  bodies or a non-capture sort the frames between the two bursts come
+  along, as Shift+arrows would take them (exact-member islands would be
+  a selection the wash cannot show honestly). Landing on the opener,
+  not on the selection's last frame, is the persona's call: the `]`
+  rhythm survives releasing Shift, the last frame of a burst is the
+  least interesting one to look at, and "look ahead with `]`, then
+  Shift+`[` to grab the previous burst too" only works with symmetric
+  rules. Keyboard honesty: on a US layout Shift+`]` arrives as `}`, so
+  `{`/`}` are the same keys, with or without a reported Shift modifier.
+  Loupe and grid alike; claims the cursor; carries loupe zoom/pan
+  persistence like `]`. Core: `Selection::extend_bursts`.
+- **Ctrl+Shift+B: select this burst** (user proposal 2026-08-28, persona
+  USEFUL): every frame of the burst under the cursor that is in the
+  current view joins the selection (a single selects itself). The cursor
+  does NOT move — the point of it: from frame 9/23, having just compared
+  it to the opener, one chord selects the burst for a caption without
+  losing the place (Shift+`[` would throw the cursor to the opener).
+  ADDITIVE (a union, like Ctrl+click — that is what makes non-adjacent
+  bursts cheap: Ctrl+Shift+B on 40, `]`×7, Ctrl+Shift+B on 47) and
+  IDEMPOTENT (a second press changes nothing; a toggle on a 23-frame
+  chord would empty the selection on a double-tap). Members hidden by the
+  filter stay unselected — what you see is what you stamp, so a Picked
+  filter stamps the keepers and never the hidden rejects. Arms the Shift
+  anchor on this burst, so Shift+`]` afterwards extends from it. A chord
+  for the reason Ctrl+Shift+E is one: it acts on many frames. Listed in
+  the shortcuts popup; no menu entry (persona: SHRUG — nobody opens a
+  menu at 9 pm for this). Core: `Selection::select_group`.
+- **Esc always clears the selection** — from the loupe too (user decision
+  2026-08-28, the persona's one pre-condition for shipping the chords):
+  the loupe shows no wash, so a one-press 40-frame selection made there
+  and forgotten would silently take the next caption; the cancel key
+  works where the selection was made. Full rule in ui-grid.md's keyboard
+  table (G is unchanged).
 - **Status bar**: "burst 7/23" appended when the cursor is inside a
   group (loupe and grid alike). USEFUL.
 - **Edge strip** (optional polish): a thin 2-3px strip along the BOTTOM
@@ -131,3 +181,24 @@ maker note degrades to it, never to an error).
       over (view, group-of) — pure function tests).
 - [x] Integration: the real A1 test files (single shots) produce zero
       groups.
+- [x] Shift+`[`/`]` (issue #55): from a burst's opener Shift+`]` selects
+      that burst whole plus the next territory; again adds the next burst;
+      the opposite key drops a whole burst, never half; flips past the
+      anchor burst; from mid-burst the anchor's burst is taken whole, and
+      Shift+`[` selects just this burst; a Shift+arrow after a burst span
+      is frame-precise from the burst's edge; interleaved members select
+      the view range; a filtered-out anchor spans nothing (core:
+      `Selection::extend_bursts` tests).
+- [x] Ctrl+Shift+B (issue #55): the burst's members in the view, cursor
+      unmoved, additive with what is held, idempotent, a single selects
+      itself, hidden members stay unselected, a filtered-out cursor
+      selects nothing, and Shift+`]` afterwards extends from it (core:
+      `Selection::select_group` tests).
+- [x] Driven through real key events over `--synthetic N --bursts` (a
+      fixed Sony-style pattern — the real test RAWs are single shots):
+      Shift+`]`/Shift+`[` with the modifier held, the `}`/`{` spellings,
+      the Ctrl+Shift+B chord, Esc clearing the selection at a grid zoom
+      AND from inside the loupe, G from the loupe keeping it; the cursor
+      id and selection count are observable in the QEDUMP line (app:
+      `burst_keys_select_whole_bursts_and_esc_clears`,
+      `esc_clears_a_burst_selection_from_inside_the_loupe`).

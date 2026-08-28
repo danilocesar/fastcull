@@ -68,6 +68,75 @@ impl Selection {
         self.span = view[lo..=hi].iter().copied().collect();
     }
 
+    /// Shift+`[` / Shift+`]` (burst-grouping.md, issue #55): span
+    /// anchor..cursor exactly like [`Selection::extend_to`], then widen BOTH
+    /// ends to whole groups — the anchor's group and the cursor's group are
+    /// taken entirely, never half. `group_of` maps an image id to its group
+    /// (None = a single, which is its own one-frame "group"). The result is
+    /// a plain view-order RANGE like every other Shift gesture (persona
+    /// 2026-08-28): with interleaved bodies or a non-capture sort the frames
+    /// sitting between the two bursts come along, the way Shift+arrows
+    /// would take them.
+    ///
+    /// The anchor is re-armed at its OWN group's far edge — first frame when
+    /// the cursor is after it, last frame when before — so a Shift+arrow
+    /// that follows spans frame-precisely from the burst's edge ("40 plus
+    /// the first two frames of 41"; persona: one rule for what a Shift
+    /// extension is, not two). Each press REPLACES the live span, so the
+    /// opposite key drops a burst and flips past the anchor burst the way
+    /// Shift+arrows flip.
+    pub fn extend_bursts(
+        &mut self,
+        view: &[usize],
+        from: usize,
+        to: usize,
+        group_of: impl Fn(usize) -> Option<usize>,
+    ) {
+        let anchor = *self.anchor.get_or_insert(from);
+        let (Some(a), Some(b)) = (
+            view.iter().position(|id| *id == anchor),
+            view.iter().position(|id| *id == to),
+        ) else {
+            return; // anchor or target filtered out: nothing to span
+        };
+        let (lo, hi) = if a <= b { (a, b) } else { (b, a) };
+        let lo = group_edge(view, lo, &group_of, false);
+        let hi = group_edge(view, hi, &group_of, true);
+        self.span = view[lo..=hi].iter().copied().collect();
+        self.anchor = Some(if a <= b { view[lo] } else { view[hi] });
+    }
+
+    /// Ctrl+Shift+B (issue #55, the user's proposal): select every frame of
+    /// the cursor's group that is IN THE VIEW — a single selects itself.
+    /// Additive (a union, like Ctrl+click: a stale selection is cleared
+    /// with Esc, never silently replaced) and idempotent (a second press
+    /// changes nothing — a toggle on a 23-frame chord would empty the
+    /// selection on a double-tap). The cursor does not move; the Shift
+    /// anchor arms here so a following Shift+`]` extends from this burst.
+    /// Members hidden by the filter stay unselected: what you see is what
+    /// you stamp, and widening the filter later must not reveal a
+    /// selection that was never on screen.
+    pub fn select_group(
+        &mut self,
+        view: &[usize],
+        cursor: usize,
+        group_of: impl Fn(usize) -> Option<usize>,
+    ) {
+        if !view.contains(&cursor) {
+            return; // the cursor is filtered out: nothing under it to select
+        }
+        self.base.extend(self.span.drain());
+        match group_of(cursor) {
+            Some(g) => self
+                .base
+                .extend(view.iter().copied().filter(|id| group_of(*id) == Some(g))),
+            None => {
+                self.base.insert(cursor);
+            }
+        }
+        self.anchor = Some(cursor);
+    }
+
     /// Plain (non-extending) cursor movement resets the range anchor; the
     /// selected set itself is untouched (arrows never deselect — the live
     /// span is committed into the base, Esc/click semantics come with the
@@ -135,6 +204,27 @@ impl Selection {
     /// Session swap / folder change: stale ids must never leak.
     pub fn reset(&mut self) {
         self.clear();
+    }
+}
+
+/// The first (or last) view position sharing `view[pos]`'s group — `pos`
+/// itself for a single. Members need not be contiguous in the view
+/// (interleaved bodies), so this is a scan over the view, the same way
+/// `burst::next_boundary` finds a group's first visible frame.
+fn group_edge(
+    view: &[usize],
+    pos: usize,
+    group_of: &impl Fn(usize) -> Option<usize>,
+    last: bool,
+) -> usize {
+    let Some(g) = group_of(view[pos]) else {
+        return pos;
+    };
+    let same = |p: &usize| group_of(view[*p]) == Some(g);
+    if last {
+        (pos..view.len()).rev().find(same).unwrap_or(pos)
+    } else {
+        (0..=pos).find(same).unwrap_or(pos)
     }
 }
 
@@ -226,6 +316,135 @@ mod tests {
         assert!(!sel.is_empty());
         assert_eq!(sel.count_in_view(&view), 0);
         assert_eq!(sel.batch(&view, 2), vec![2], "the cursor alone");
+    }
+
+    /// Issue #55 fixtures: a contiguous capture-sorted view — the everyday
+    /// case. Ids double as view positions: single 0, burst A = 1..=5,
+    /// single 6, burst B = 7..=9, burst C = 10..=12.
+    fn groups(id: usize) -> Option<usize> {
+        match id {
+            1..=5 => Some(0),
+            7..=9 => Some(1),
+            10..=12 => Some(2),
+            _ => None,
+        }
+    }
+
+    fn ids(r: std::ops::RangeInclusive<usize>) -> Vec<usize> {
+        r.collect()
+    }
+
+    #[test]
+    fn shift_bracket_selects_whole_bursts_and_shrinks_by_burst() {
+        let view = ids(0..=12);
+        let mut sel = Selection::default();
+        // On A's opener (where `]` leaves you), Shift+`]` lands on the
+        // single at 6 and takes ALL of A plus that single: the heron in
+        // one press.
+        sel.extend_bursts(&view, 1, 6, groups);
+        assert_eq!(sel.batch(&view, 6), ids(1..=6));
+        // Again: B, whole.
+        sel.extend_bursts(&view, 6, 7, groups);
+        assert_eq!(sel.batch(&view, 7), ids(1..=9));
+        // Shift+`[` from B's opener lands on the single: B drops whole —
+        // never "A plus the first frame of B".
+        sel.extend_bursts(&view, 7, 6, groups);
+        assert_eq!(sel.batch(&view, 6), ids(1..=6));
+        // Back on A's opener: just A.
+        sel.extend_bursts(&view, 6, 1, groups);
+        assert_eq!(sel.batch(&view, 1), ids(1..=5));
+        // Past the anchor burst: flips, still whole (A plus single 0).
+        sel.extend_bursts(&view, 1, 0, groups);
+        assert_eq!(sel.batch(&view, 0), ids(0..=5));
+    }
+
+    #[test]
+    fn shift_bracket_from_mid_burst_takes_the_whole_anchor_burst() {
+        let view = ids(0..=12);
+        let mut sel = Selection::default();
+        // Frame 3 of A, Shift+`]` → the single at 6: all of A, not 3..5.
+        sel.extend_bursts(&view, 3, 6, groups);
+        assert_eq!(sel.batch(&view, 6), ids(1..=6));
+        // Mid-B, Shift+`[` re-anchors on B's opener (as `[` does): just B
+        // — the "select this burst and go to its opener" move.
+        let mut sel = Selection::default();
+        sel.extend_bursts(&view, 8, 7, groups);
+        assert_eq!(sel.batch(&view, 7), vec![7, 8, 9]);
+        // A second Shift+`[` crosses to the single: B plus 6.
+        sel.extend_bursts(&view, 7, 6, groups);
+        assert_eq!(sel.batch(&view, 6), vec![6, 7, 8, 9]);
+        // At the end of the view `]` clamps: from == to selects the
+        // burst under the cursor, whole.
+        let mut sel = Selection::default();
+        sel.extend_bursts(&view, 11, 12, groups);
+        assert_eq!(sel.batch(&view, 12), vec![10, 11, 12]);
+    }
+
+    #[test]
+    fn shift_arrows_after_a_burst_span_are_frame_precise_from_the_bursts_edge() {
+        let view = ids(0..=12);
+        let mut sel = Selection::default();
+        sel.extend_bursts(&view, 3, 7, groups); // A whole + B whole, cursor 7
+        assert_eq!(sel.batch(&view, 7), ids(1..=9));
+        // Shift+Right: "A plus the first two of B" — anchor..cursor with the
+        // anchor at A's FIRST frame, not at 3 where the gesture started.
+        sel.extend_to(&view, 7, 8);
+        assert_eq!(sel.batch(&view, 8), ids(1..=8));
+        // Backwards the anchor sits at its burst's LAST frame.
+        let mut sel = Selection::default();
+        sel.extend_bursts(&view, 8, 6, groups); // B whole + single 6
+        assert_eq!(sel.batch(&view, 6), vec![6, 7, 8, 9]);
+        sel.extend_to(&view, 6, 5);
+        assert_eq!(sel.batch(&view, 5), ids(5..=9));
+    }
+
+    #[test]
+    fn interleaved_bodies_select_the_view_range_between_the_bursts() {
+        // Body 1's burst (1, 3, 5) interleaved with body 2's (2, 4, 6).
+        let view = ids(0..=7);
+        let g = |id: usize| match id {
+            1 | 3 | 5 => Some(0),
+            2 | 4 | 6 => Some(1),
+            _ => None,
+        };
+        let mut sel = Selection::default();
+        sel.extend_bursts(&view, 3, 7, g);
+        // Group 0 widens to its first member; everything between comes
+        // along — a view range, as Shift+arrows would take it.
+        assert_eq!(sel.batch(&view, 7), ids(1..=7));
+        // A filtered-out anchor spans nothing (same rule as extend_to).
+        let mut sel = Selection::default();
+        sel.extend_bursts(&[0, 2, 4], 3, 4, g);
+        assert!(sel.is_empty());
+    }
+
+    #[test]
+    fn select_group_is_additive_idempotent_and_view_scoped() {
+        let view = ids(0..=12);
+        let mut sel = Selection::default();
+        sel.select_group(&view, 8, groups);
+        assert_eq!(sel.batch(&view, 8), vec![7, 8, 9]);
+        sel.select_group(&view, 8, groups); // a double-tap changes nothing
+        assert_eq!(sel.count_in_view(&view), 3);
+        // A single selects itself; additive with the burst already held.
+        sel.select_group(&view, 0, groups);
+        assert_eq!(sel.batch(&view, 0), vec![0, 7, 8, 9]);
+        // Filtered view: only the visible members (a Picked filter stamps
+        // the keepers, never the hidden rejects).
+        let filtered = vec![0, 1, 3, 5, 7, 9];
+        let mut sel = Selection::default();
+        sel.select_group(&filtered, 3, groups);
+        assert_eq!(sel.batch(&filtered, 3), vec![1, 3, 5]);
+        assert!(!sel.is_selected(2) && !sel.is_selected(4));
+        // The cursor itself filtered out: nothing under it.
+        let mut sel = Selection::default();
+        sel.select_group(&filtered, 2, groups);
+        assert!(sel.is_empty());
+        // Then Shift+`]` extends FROM this burst (the anchor armed here).
+        let mut sel = Selection::default();
+        sel.select_group(&view, 8, groups);
+        sel.extend_bursts(&view, 8, 10, groups);
+        assert_eq!(sel.batch(&view, 10), ids(7..=12));
     }
 
     #[test]

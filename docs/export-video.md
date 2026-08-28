@@ -22,7 +22,9 @@ editor afterwards. FastCull hands frames to an editor; it is never one.
 
 ## What gets exported
 
-- **The frames you selected** (`Shift`+arrows, `Ctrl`+click, `Ctrl+A`).
+- **The frames you selected** (`Shift`+arrows, `Ctrl`+click, `Ctrl+A`,
+  or by whole bursts with Shift+`]`/`[` and `Ctrl+Shift+B` — see
+  [Bursts](culling.md#bursts)).
 - **With nothing selected: the burst under the cursor** — all of it,
   including frames the current filter is hiding.
 - Neither, or a single frame? There is nothing to export: the menu item

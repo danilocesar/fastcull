@@ -184,6 +184,9 @@ fn handle_nav_inner(win: &MainWindow, state: &Rc<RefCell<AppState>>, key: &str) 
             | "end"
             | "burst-prev"
             | "burst-next"
+            | "shift-burst-prev"
+            | "shift-burst-next"
+            | "select-burst"
     ) {
         st.grid.cursor_touched = true;
     }
@@ -242,10 +245,18 @@ fn handle_nav_inner(win: &MainWindow, state: &Rc<RefCell<AppState>>, key: &str) 
                 }
             }
         }
-        "grid" => {
-            if !st.at_loupe() && st.loupe_view.zoom_factor <= 1.0 {
-                // Already at a grid zoom: Esc/G collapses the selection
-                // (the deselect gesture — gate finding).
+        "grid" | "esc" => {
+            if key == "esc" || (!st.at_loupe() && st.loupe_view.zoom_factor <= 1.0) {
+                // Esc ALWAYS clears the selection (user decision
+                // 2026-08-28, issue #55): the burst chords build a
+                // 40-frame selection in the loupe with one press, where
+                // no wash shows it, and a stale one would silently take
+                // the next caption — so the cancel key must work where
+                // the selection was made, not two presses later at a
+                // grid zoom. G keeps its old shape: at a grid zoom it is
+                // the deselect gesture too (gate finding); from the
+                // loupe it leaves the selection alone, the "go and look
+                // at what I selected" exit.
                 st.grid.selection.clear();
             }
             st.exit_loupe();
@@ -295,8 +306,12 @@ fn handle_nav_inner(win: &MainWindow, state: &Rc<RefCell<AppState>>, key: &str) 
         // [ / ]: previous/next burst boundary over the FILTERED view
         // (burst-grouping.md UI contract): first visible frame of the
         // adjacent group; singles are their own territory; clamps.
-        "burst-prev" | "burst-next" => {
+        "burst-prev" | "burst-next" | "shift-burst-prev" | "shift-burst-next" => {
             if !st.grid.view.is_empty() {
+                // One `&mut AppState` so the closures below borrow only
+                // `bursts` while `grid` is being written (2021 closures
+                // capture disjoint fields).
+                let st = &mut *st;
                 let pos = st.cursor_pos().unwrap_or(0);
                 let view = st.grid.view.clone();
                 let group_of = |p: usize| st.bursts.group_of.get(view[p]).copied().flatten();
@@ -304,13 +319,33 @@ fn handle_nav_inner(win: &MainWindow, state: &Rc<RefCell<AppState>>, key: &str) 
                     pos,
                     view.len(),
                     group_of,
-                    key == "burst-next",
+                    key.ends_with("burst-next"),
                 );
+                let from = st.grid.cursor;
                 st.grid.cursor = view[new_pos];
-                // Plain navigation resets the Shift-span anchor, same as
-                // the arrow keys (selection contract, ui-grid.md).
-                st.grid.selection.reset_anchor();
+                if key.starts_with("shift-") {
+                    // Shift+[ / Shift+]: the SAME landing as [ / ], plus
+                    // every whole burst between the anchor's burst and the
+                    // cursor's selected (issue #55, burst-grouping.md).
+                    let group_by_id = |id: usize| st.bursts.group_of.get(id).copied().flatten();
+                    st.grid
+                        .selection
+                        .extend_bursts(&view, from, st.grid.cursor, group_by_id);
+                } else {
+                    // Plain navigation resets the Shift-span anchor, same
+                    // as the arrow keys (selection contract, ui-grid.md).
+                    st.grid.selection.reset_anchor();
+                }
             }
+        }
+        "select-burst" => {
+            // Ctrl+Shift+B (issue #55): the burst under the cursor joins
+            // the selection; the cursor stays where the eye is.
+            let st = &mut *st;
+            let group_by_id = |id: usize| st.bursts.group_of.get(id).copied().flatten();
+            st.grid
+                .selection
+                .select_group(&st.grid.view, st.grid.cursor, group_by_id);
         }
         "select-all" => {
             st.grid.cursor_touched = true;

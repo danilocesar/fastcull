@@ -662,6 +662,41 @@ impl SessionState {
         self.labels.len()
     }
 
+    /// `--synthetic N --bursts`: Sony-style capture times and sequence
+    /// numbers in a FIXED pattern, so driven tests can exercise the burst
+    /// keys. Run lengths cycle through [`SYNTHETIC_BURST_RUNS`] (a run of
+    /// 1 is a single, Seq 0; a run of k is Seq 1..=k): 50 ms between frames
+    /// inside a run, 2 s between runs, one camera. The capture keys follow
+    /// the same clock, so capture order equals name order and the view
+    /// never re-sorts under a test. A test that asserts on the pattern
+    /// reads it from the constant, not from a comment.
+    pub(crate) fn seed_synthetic_bursts(&mut self) {
+        let n = self.labels.len();
+        let mut t_ms: i64 = 0;
+        let mut i = 0;
+        let mut run = 0;
+        while i < n {
+            let len = SYNTHETIC_BURST_RUNS[run % SYNTHETIC_BURST_RUNS.len()];
+            for k in 0..len {
+                if i >= n {
+                    break;
+                }
+                let seq = if len == 1 { 0 } else { k as u32 + 1 };
+                self.frame_meta[i] = fastcull_core::burst::FrameMeta {
+                    time_ms: Some(t_ms),
+                    has_subsec: true,
+                    camera: Some("SYN".into()),
+                    seq: Some(seq),
+                };
+                self.capture_keys[i] = Some(synthetic_capture_key(t_ms));
+                t_ms += 50;
+                i += 1;
+            }
+            t_ms += 2000;
+            run += 1;
+        }
+    }
+
     /// Has every image's metadata job finished? (Issue #25: until it has,
     /// the view is ordered by filename — see `filter::view`.)
     ///
@@ -680,6 +715,22 @@ impl SessionState {
     pub(crate) fn metadata_complete(&self) -> bool {
         self.thumbs_done >= self.labels.len()
     }
+}
+
+/// Run lengths of the `--bursts` synthetic pattern, cycled: singles and
+/// bursts of several sizes, so a driven test meets both a single between
+/// two bursts and two bursts back to back.
+pub(crate) const SYNTHETIC_BURST_RUNS: [usize; 8] = [1, 5, 1, 3, 8, 1, 1, 4];
+
+/// A `filter.rs` sort key ("YYYY:MM:DD HH:MM:SS.mmm") `t_ms` after a
+/// fixed morning — string order equals time order for any session size
+/// a test opens (hours simply keep counting past 23).
+fn synthetic_capture_key(t_ms: i64) -> String {
+    let ms = t_ms % 1000;
+    let s = t_ms / 1000 % 60;
+    let m = t_ms / 60_000 % 60;
+    let h = 10 + t_ms / 3_600_000;
+    format!("2026:01:01 {h:02}:{m:02}:{s:02}.{ms:03}")
 }
 
 pub(crate) struct AppState {
