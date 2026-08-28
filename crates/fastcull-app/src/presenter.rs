@@ -956,15 +956,23 @@ fn write_status_and_chrome(
     // session's burst grouping for a number the status line has already
     // computed. The selection count is `sel_note`'s own; the burst size
     // is the badge's own.
-    let clip_frames = fastcull_core::clip::scope_len(
-        st.grid.selection.count_in_view(&st.grid.view),
-        st.bursts
-            .pos
-            .get(cursor)
-            .copied()
-            .flatten()
-            .map_or(0, |(_, n)| n),
-    );
+    // A synthetic session (`--synthetic`, the render benchmark) has cells
+    // but no files behind them, so there is nothing to export from it —
+    // and without this the menu item would offer an export whose dialog
+    // then says there is nothing to export.
+    let clip_frames = if st.session.paths.is_empty() {
+        0
+    } else {
+        fastcull_core::clip::scope_len(
+            st.grid.selection.count_in_view(&st.grid.view),
+            st.bursts
+                .pos
+                .get(cursor)
+                .copied()
+                .flatten()
+                .map_or(0, |(_, n)| n),
+        )
+    };
     win.set_clip_available(fastcull_core::clip::unavailable_reason(clip_frames).is_none());
     // A refused export explains itself HERE, where the user is already
     // looking after a keystroke that appeared to do nothing. It expires

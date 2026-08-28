@@ -47,7 +47,10 @@ pub(crate) fn wire(window: &MainWindow, state: &Rc<RefCell<AppState>>) {
             // works whether or not the menu item is enabled, and when
             // there is nothing to export it SAYS SO instead of doing
             // nothing visible.
-            let frames = clip_scope(&st).len();
+            // Counted as the PLAN will count them — ids whose file this
+            // session actually has — so the dialog never opens on "there
+            // is nothing to export".
+            let frames = clip_sources(&st).len();
             if let Some(reason) = clip::unavailable_reason(frames) {
                 st.clip.notice = Some((
                     format!("Export Frames as Video: {reason}"),
