@@ -1192,7 +1192,7 @@ brightening during wheel scrolling (needs an activity decay timer).
 | double-click (loupe) | 1:1 with the clicked point centered |
 | drag | grid: scroll; loupe above fit: pan the image |
 | `G` | back to the grid at the previous grid zoom (from loupe/1:1); at a grid zoom it is also the deselect gesture (clears the selection); from the loupe it KEEPS the selection — the "go and look at what I selected" exit |
-| `Esc` | back to the grid at the previous grid zoom AND the selection cleared — from anywhere, the loupe included (user decision 2026-08-28, issue #55: the burst chords build a 40-frame selection in the loupe with one press, where no wash shows it, and a stale one would silently take the next IPTC commit; the cancel key must work where the selection was made). Modal popups still take Esc first (they close; the grid never sees it), and with keyboard focus in an IPTC field Esc stays the recorded no-op (Slint LineEdit has no Esc hook — see the panel section; QE 2026-08-28) |
+| `Esc` | back to the grid at the previous grid zoom AND the selection cleared — from anywhere, the loupe included (user decision 2026-08-28, issue #55: the burst chords build a 40-frame selection in the loupe with one press, where no wash shows it, and a stale one would silently take the next IPTC commit; the cancel key must work where the selection was made). Modal popups still take Esc first (they close; the grid never sees it), and with keyboard focus in an IPTC field Esc stays the recorded no-op (Slint LineEdit has no Esc hook — see the panel section; QE 2026-08-28). Like every nav key it ends in the cursor reveal, so an Esc taken by the grid also scrolls the cursor back into view — that is the reveal rule, not a lost scroll position: only keys that never reach the grid (a modal's Esc) leave a browsing viewport alone |
 | `I` | toggle IPTC panel |
 | `K` | focus the keyword field, opening the IPTC panel if needed (persona G3; implemented with the panel step — K is never a dead key) |
 | Shift+arrows | extend selection (span anchor..cursor over view positions; a new span replaces the previous one — shrink/flip works) |
@@ -1352,6 +1352,24 @@ sibling of that scope and would otherwise keep eating keys, including
 the closing Esc); the scrims swallow wheel events (the grid must not
 scroll under a modal). The MENU BAR stays live while a modal is up
 (File > Quit works) — standard desktop behavior, deliberate.
+**ALL FOUR scrims swallow the wheel (issue #49)**: About and the
+shortcuts popup get it from the shared `ModalScrim`; Copy Picks and
+Export Frames as Video are hand-rolled copies of that scaffolding (the
+focus scope has to WRAP the card, which the component cannot express —
+the migration blocker recorded in `main.slint`), and until 2026-08-29
+their scrim `TouchArea`s had no `scroll-event` arm, so a wheel over
+either dialog fell through to the grid's Flickable behind it and the
+user came back to a different place in the folder (persona: IN-MY-WAY
+when it bites). A hand-rolled scrim must carry the arm. All four scrims
+are driven now — the two copies plus `ModalScrim` itself, whose arm was
+correct but untested: each test wheels the grid once BEFORE the modal
+(so a grid that cannot scroll fails loudly instead of passing
+vacuously), wheels again with the modal up and requires `vpy` unmoved,
+and wheels a third time after Esc as the control that the token still
+reaches the grid. Each also wheels over a CHILD of the card — the copy
+dialog's rename field, About's click-eating `TouchArea` — which is the
+one place where "the card swallowed it" could be a child's doing rather
+than the scrim's.
 **Esc closes the TOPMOST modal only (issue #42)**: with About or the
 shortcuts popup opened over the live copy dialog (the live menu makes
 that reachable), keyboard focus stays in the dialog's scope, whose own
@@ -1770,6 +1788,32 @@ the user confirms, all cheap to change):**
       runs there; each menu test asserts an intermediate state that
       fails loudly if a click misses, so font drift cannot make one pass
       vacuously.
+- [x] **No modal scrolls the grid behind it (issue #49)**: a wheel over
+      any of the four scrims leaves the grid's `vpy` where it was, and all
+      four are now driven. The two hand-rolled scrims (Copy Picks, Export
+      Frames as Video) are pinned by
+      `a_wheel_over_the_copy_dialog_never_scrolls_the_grid_behind_it` and
+      `a_wheel_over_the_export_dialog_never_scrolls_the_grid_behind_it`;
+      the shared `ModalScrim` behind About and the shortcuts popup — never
+      broken, but until now resting on a reading of the component — by
+      `a_wheel_over_the_help_popups_never_scrolls_the_grid_behind_them`.
+      All three were red-run-verified against the same tree with the
+      relevant `scroll-event` arm removed (the `wheeled` dump read
+      `vpy=-360.0` against the required `-180.0`). Each also wheels over a
+      CHILD of the card rather than bare scrim — the rename field (the one
+      `TextInput` in either dialog, after a click and a keystroke prove the
+      pointer is really on it) and About's `card-eats-clicks` `TouchArea` —
+      so "the scrim swallowed it" is measured, not reasoned. Every script
+      pins the window with `resize:1440x900` first: the card coordinates
+      are that geometry and no other (at 1024x768 the card sits higher and the field click lands ~66 px below the field, on the summary line), and the over-the-field strand is not driven off the
+      Linux runners, where the font metrics above the field could drift the
+      click onto the destination picker. The export test runs over a folder
+      of tiny synthetic RAWs rather than a `--synthetic` session, because
+      the export offer is off for a session with no paths, and it needs a
+      grid DEEP enough to scroll — a three-frame folder does not scroll at
+      any zoom, which would make the control vacuous; it asserts the
+      load-settled edge landed before the first wheel, because that edge
+      writes `vp_y` itself.
 - [ ] Manual acceptance (per release): 5,000-file A1 folder (a bad evening, per
       persona review) scrolls at 60 fps after thumbs load; pick→auto-advance→pick
       loop in loupe has no perceived latency.
@@ -1909,6 +1953,15 @@ Documented because they ship in release builds (validator finding):
   wrong-position frame is precisely a state nothing re-renders, so
   render-time traces (which fire on CHANGE) cannot see it; the dump
   makes the overlay's position observable at a scripted instant.
+  Since 2026-08-29 it ends with `vpy=` — the grid Flickable's scroll
+  offset, in Slint's own sign (0 at the top, negative going down).
+  Whether a wheel moved the GRID was observable only at SHUTTER time
+  (the `geometry at shutter` trace carries a `scroll` term), never at a
+  scripted instant, which is how two modal scrims that let the wheel
+  through to the Flickable behind them went unnoticed (issue #49). New
+  fields are APPENDED (`dump_field` finds `name=` by prefix and does not
+  care about order — appending is for the reader and for small diffs,
+  not correctness).
 - `FASTCULL_NO_CONFIG=1`: makes `ui.toml` (the remembered copy
   destination/template and the video export's destination) unreachable
   for both load and save — what

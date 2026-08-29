@@ -1498,7 +1498,7 @@ export component MainWindow inherits Window {
         //   * `copy-keys` is a FocusScope that must be an ANCESTOR of the
         //     whole dialog: key events bubble only up the focused element's
         //     ancestor chain, and this dialog moves focus into its own
-        //     children (dest button, skip toggle, Start). As a sibling,
+        //     children (Choose…, the rename field, Copy). As a sibling,
         //     Enter/Esc died inside whichever child last held focus (PR #43
         //     focus continuity, issue #42 containment). A ModalScrim child
         //     lands INSIDE the card's VerticalLayout via `@children`, i.e.
@@ -1507,7 +1507,6 @@ export component MainWindow inherits Window {
         //   * the scrim TouchArea here swallows clicks WITHOUT dismissing;
         //     ModalScrim's calls `dismissed()`. That one IS expressible
         //     (bind `dismissed => { }`), so it is not the blocker.
-        //   * no `scroll-event` arm — see the NOTE below, issue #49.
         //
         // The card width was the accidental half of the gap and is a
         // property now (57c225c); what is left needs ModalScrim to take the
@@ -1519,12 +1518,15 @@ export component MainWindow inherits Window {
             width: 100%;
             height: parent.height - statusbar.height;
             background: #000000aa;
-            // NOTE: no scroll-event handler here, unlike ModalScrim — a
-            // wheel over this modal still reaches the Flickable behind it
-            // (the validator-M2 bug class). Pre-existing, and fixing it is
-            // a behavior change, so it is filed rather than smuggled into
-            // a behavior-preserving refactor: issue #49.
-            TouchArea { } // swallow clicks behind the dialog (modal)
+            TouchArea {
+                // Clicks are swallowed WITHOUT dismissing (unlike
+                // ModalScrim): this dialog closes on Esc or Cancel only.
+                // The wheel is swallowed too (issue #49) — an unhandled
+                // scroll falls through to the grid's Flickable behind the
+                // scrim, and a modal that scrolls the grid underneath
+                // loses the user's place mid-cull.
+                scroll-event(e) => { return accept; }
+            }
             copy-keys := FocusScope {
                 // ANCESTOR of the whole dialog (gate finding: as a 0x0
                 // sibling, Enter/Esc died inside whichever child last
@@ -1862,7 +1864,12 @@ export component MainWindow inherits Window {
             width: 100%;
             height: parent.height - statusbar.height;
             background: #000000aa;
-            TouchArea { } // swallow clicks behind the dialog (modal)
+            TouchArea {
+                // Same contract as the copy scrim: clicks swallowed without
+                // dismissing, and the wheel swallowed (issue #49) so the
+                // grid's Flickable does not scroll behind the dialog.
+                scroll-event(e) => { return accept; }
+            }
             clip-keys := FocusScope {
                 width: 100%;
                 height: 100%;

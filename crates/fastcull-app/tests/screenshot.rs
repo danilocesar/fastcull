@@ -5369,3 +5369,319 @@ fn esc_clears_a_burst_selection_from_inside_the_loupe() {
         "Esc still leaves the loupe: {out_dump}"
     );
 }
+
+// ---------------------------------------------------------------------------
+// Issue #49: the Copy Picks and Export Frames as Video scrims are hand-rolled
+// copies of `ModalScrim` with no `scroll-event` arm, so a wheel over either
+// fell through to the grid's Flickable behind it and the user came back to a
+// different place in the folder (persona: IN-MY-WAY when it bites).
+//
+// All three tests have the same three parts, and the middle one is the
+// contract:
+//   1. a wheel BEFORE the modal — the grid must really move, or the test
+//      that follows is measuring a grid that cannot scroll at all;
+//   2. the same wheel with the modal up — `vpy` must not budge;
+//   3. the same wheel after Esc — the grid moves again, which is what makes
+//      part 2 an observation about the scrim rather than about a dead token.
+//
+// The third test covers the shared `ModalScrim` itself (About, shortcuts),
+// which nothing else pinned: its arm was never the bug, but a component two
+// call sites rely on should not be the one scrim with no test.
+//
+// RED verified on this tree with the `scroll-event` arms removed — the two
+// hand-rolled ones for the dialog tests, `ModalScrim`'s for the popup test:
+// part 2 fails, `vpy=-360.0` where -180.0 is required.
+// ---------------------------------------------------------------------------
+
+/// Every script pins the window first. The card and field coordinates below
+/// are geometry, not guesses, and they are only that geometry at 1440x900:
+/// at `resize:1024x768` the card sits higher (y 151..631) and the same
+/// click lands ~66 px BELOW the rename field, on the summary line
+/// (measured). The default IS 1440x900, so this asserts the assumption
+/// rather than changing anything (validator, 2026-08-29).
+const PIN_WINDOW: &str = "200:resize:1440x900";
+
+/// One notch is 60 logical px (the `wheel.` contract), so this is three
+/// notches down. Every fixture below is deep enough that no scroll a script
+/// drives lands on the Flickable's bottom clamp — where "unmoved" would mean
+/// "out of room" rather than "swallowed".
+///
+/// The coordinates put the pointer over the CARD, not over bare scrim. At
+/// 1440x900 the modal layer starts under the 40 px menu bar and is
+/// `900 - 40 - 26` = 834 px tall (the status bar is 26 px), so a centred
+/// card of height H spans y `40 + (834 - H) / 2` .. that plus H:
+/// Copy Picks (480) y 217..697, the export dialog (260) y 327..587,
+/// the shortcuts popup (560) y 177..737, About (348) y 283..631.
+/// Cards are 560 px wide (480 for the two popups), centred in 1440.
+const THREE_NOTCHES_DOWN: &str = "wheel.700,400,-180";
+
+/// The rename field's vertical centre inside the Copy Picks card. From the
+/// card top at y=217 above: 18 px padding, the title row, 10 px spacing, the
+/// 34 px destination row, 10 px spacing, then the 28 px field — measured at
+/// y 311..338. Probed, not computed: the title's height is a font metric,
+/// which is also why the strand that uses this is gated on
+/// `menu_clicks_are_calibrated()`.
+const RENAME_FIELD_Y: u32 = 324;
+
+/// The shared assertions. `dialog` is the QEDUMP field that says this
+/// dialog is up (`copy` / `clip`).
+fn assert_wheel_over_the_dialog_is_swallowed(stderr: &str, dialog: &str) {
+    let vpy = |label: &str| dump_field(qedump(stderr, label), "vpy");
+    assert_eq!(
+        vpy("prewheel"),
+        "-180.0",
+        "the wheel never reached the grid, so nothing below proves anything \
+         ({dialog}):\n{stderr}"
+    );
+    assert_eq!(
+        dump_field(qedump(stderr, "open"), dialog),
+        "true",
+        "the {dialog} dialog did not open:\n{stderr}"
+    );
+    assert_eq!(
+        vpy("open"),
+        "-180.0",
+        "opening the {dialog} dialog moved the grid:\n{stderr}"
+    );
+    // The contract.
+    assert_eq!(
+        vpy("wheeled"),
+        "-180.0",
+        "a wheel over the {dialog} dialog scrolled the grid behind it \
+         (issue #49):\n{stderr}"
+    );
+    assert_eq!(
+        dump_field(qedump(stderr, "closed"), dialog),
+        "false",
+        "Esc did not close the {dialog} dialog:\n{stderr}"
+    );
+    assert_eq!(
+        vpy("closed"),
+        "-180.0",
+        "closing the {dialog} dialog replayed the swallowed scroll:\n{stderr}"
+    );
+    // Non-vacuity: the same token, the same coordinates, no dialog.
+    assert_eq!(
+        vpy("control"),
+        "-360.0",
+        "the control wheel did not move the grid either, so the assertions \
+         above are vacuous ({dialog}):\n{stderr}"
+    );
+}
+
+/// Copy Picks: pick a frame, Ctrl+E, wheel. `--synthetic 300` because the
+/// contract is about the scrim, not about the files — 300 cells give the
+/// grid far more room than the two scrolls this drives need. The `y` is
+/// the state a user actually reaches Ctrl+E from; the dialog opens either
+/// way (its emptiness is fileops.md's business, not this test's).
+///
+/// This half also wheels over the RENAME FIELD, the one child of either
+/// card that owns a `TextInput`: over bare card the scrim is provably the
+/// only thing that can swallow a scroll, but over a text input a green
+/// assertion could be the child's doing. The click-then-keystroke before
+/// it is the calibration guard — if the coordinate misses the field, the
+/// character never lands in `template` and the test says so instead of
+/// asserting over the wrong element.
+///
+/// That strand is gated like the menu-click tests (`!cfg!(windows)` —
+/// CI's matrix is Linux and Windows, so in practice Linux only)
+/// and for the same reason: the rows ABOVE the field include a Text whose
+/// height is a font metric, so the field's y drifts with the platform
+/// font. It is not merely gated but not DRIVEN off Linux — a click that
+/// drifted 40 px up would hit "Choose…" and raise the native folder
+/// picker, which no headless run can dismiss. The bare-card contract is
+/// font-independent (deep inside a 480 px centred card) and still runs
+/// everywhere.
+#[test]
+fn a_wheel_over_the_copy_dialog_never_scrolls_the_grid_behind_it() {
+    if !has_display() {
+        eprintln!("screenshot smoke skipped: no display server");
+        return;
+    }
+    let _s = serial();
+    let out = out_dir().join("i49-copy-wheel.jpg");
+    let over_the_field = menu_clicks_are_calibrated();
+    let field_steps = if over_the_field {
+        format!(
+            "4300:click.700,{fy};4500:key:t;4700:dump.field;\
+             5000:wheel.700,{fy},-180;5700:dump.overfield;",
+            fy = RENAME_FIELD_Y
+        )
+    } else {
+        String::new()
+    };
+    let script = format!(
+        "{PIN_WINDOW};1600:key:y;1900:{w};2400:dump.prewheel;\
+         2700:key:ctrl+e;3000:dump.open;\
+         3300:{w};4000:dump.wheeled;\
+         {field_steps}\
+         6000:key:escape;6300:dump.closed;\
+         6600:{w};7300:dump.control",
+        w = THREE_NOTCHES_DOWN
+    );
+    let stderr = shoot_env_stderr(
+        &["--synthetic", "300"],
+        &[("FASTCULL_TRACE", "1"), ("FASTCULL_DRIVE", script.as_str())],
+        &out,
+    );
+    // The bare-card case first: it is the primary contract, and a scrim
+    // that leaks fails HERE rather than in the child case below, where the
+    // message would send the reader after the wrong element.
+    assert_wheel_over_the_dialog_is_swallowed(&stderr, "copy");
+    if !over_the_field {
+        eprintln!("over-the-field strand skipped: uncalibrated card geometry");
+        return;
+    }
+    // The pointer really is on the rename field: the click focused it and
+    // the keystroke landed there rather than in the dialog's key scope.
+    assert_eq!(
+        dump_text(qedump(&stderr, "field"), "template"),
+        "t",
+        "the click missed the rename field, so the wheel below would be \
+         over the wrong element:\n{stderr}"
+    );
+    assert_eq!(
+        dump_field(qedump(&stderr, "overfield"), "vpy"),
+        "-180.0",
+        "a wheel over the rename field scrolled the grid behind the dialog \
+         (issue #49):\n{stderr}"
+    );
+}
+
+/// Export Frames as Video: the same contract on the fourth scrim. A REAL
+/// folder, because the export offer is off for a session with no paths —
+/// 120 tiny synthetic RAWs rather than symlinked A1 files, so the grid is
+/// deep enough to scroll at the default zoom without paying for 120
+/// full-size preview decodes (the three real RAWs of `testdata/raws` fill
+/// less than one screen and do not scroll at ANY zoom, which would make
+/// the control vacuous). Nothing is exported here: the dialog opens with
+/// no destination, which is all the wheel needs to be over.
+///
+/// The settled-sort gate (ui-grid.md) still matters here even though no
+/// positional key is driven: the load-settled edge WRITES `vp_y` itself
+/// (`presenter.rs`, via `grid::scroll_after_resort`), so a re-sort landing
+/// between two dumps would move the very number this test reads. It is
+/// safe by timing, not by luck — these fixtures are kilobytes, and the
+/// "load settled" trace fires at ~160 ms against a first wheel at
+/// 1,900 ms, a ~12x margin. If that trace ever appears after the first
+/// dump, this test's numbers are the re-sort's, not the scrim's.
+#[test]
+fn a_wheel_over_the_export_dialog_never_scrolls_the_grid_behind_it() {
+    if !has_display() {
+        eprintln!("screenshot smoke skipped: no display server");
+        return;
+    }
+    let _s = serial();
+    let src = out_dir().join("i49-clip-src");
+    std::fs::create_dir_all(&src).unwrap();
+    for i in 0..120 {
+        write_synthetic_raw(&src.join(format!("f{i:03}.ARW")), 160, 120, 1, 512);
+    }
+    let out = out_dir().join("i49-clip-wheel.jpg");
+    let script = format!(
+        "{PIN_WINDOW};1600:select-all;1900:{w};2400:dump.prewheel;\
+         2700:key:ctrl+shift+e;3000:dump.open;\
+         3300:{w};4000:dump.wheeled;\
+         4300:key:escape;4600:dump.closed;\
+         4900:{w};5600:dump.control",
+        w = THREE_NOTCHES_DOWN
+    );
+    let stderr = shoot_env_stderr(
+        &[src.to_str().unwrap()],
+        &[("FASTCULL_TRACE", "1"), ("FASTCULL_DRIVE", script.as_str())],
+        &out,
+    );
+    std::fs::remove_dir_all(&src).ok();
+    // The re-sort's own `vp_y` write is behind us before the first wheel.
+    let settled = stderr
+        .lines()
+        .find(|l| l.contains("load settled:"))
+        .and_then(trace_ms)
+        .unwrap_or_else(|| {
+            panic!("the view never settled, so the sort could still move it:\n{stderr}")
+        });
+    assert!(
+        settled < 1_900,
+        "the sort settled at {settled} ms, at or after the first wheel — \
+         `vpy` below would be the re-sort's number, not the scrim's:\n{stderr}"
+    );
+    assert_wheel_over_the_dialog_is_swallowed(&stderr, "clip");
+}
+
+/// The shared `ModalScrim` (About, Keyboard Shortcuts): the arm the two
+/// hand-rolled copies were missing. It was never broken, but nothing
+/// tested it either — so "the other two hold by construction" rested on
+/// reading the component, and a future edit to it would take About and the
+/// shortcuts popup down with no test saying so.
+///
+/// One run covers both call sites and both card shapes: the shortcuts card
+/// (560 px, clicks pass through to the scrim) and About (348 px,
+/// `card-eats-clicks`, whose extra `TouchArea` has no `scroll-event` arm of
+/// its own — the wheel has to fall through it to the scrim below, which is
+/// the same "over a child" question the copy dialog's rename field asks).
+/// `wheel.700,400` is inside both cards at the pinned window size.
+#[test]
+fn a_wheel_over_the_help_popups_never_scrolls_the_grid_behind_them() {
+    if !has_display() {
+        eprintln!("screenshot smoke skipped: no display server");
+        return;
+    }
+    let _s = serial();
+    let out = out_dir().join("i49-popup-wheel.jpg");
+    let script = format!(
+        "{PIN_WINDOW};1600:{w};2100:dump.prewheel;\
+         2400:about;2700:dump.aboutup;3000:{w};3700:dump.aboutwheeled;\
+         4000:key:escape;4300:shortcuts;4600:dump.shortcutsup;\
+         4900:{w};5600:dump.shortcutswheeled;\
+         5900:key:escape;6200:dump.closed;6500:{w};7200:dump.control",
+        w = THREE_NOTCHES_DOWN
+    );
+    let stderr = shoot_env_stderr(
+        &["--synthetic", "300"],
+        &[("FASTCULL_TRACE", "1"), ("FASTCULL_DRIVE", script.as_str())],
+        &out,
+    );
+    let vpy = |label: &str| dump_field(qedump(&stderr, label), "vpy");
+    assert_eq!(
+        vpy("prewheel"),
+        "-180.0",
+        "the wheel never reached the grid, so nothing below proves \
+         anything:\n{stderr}"
+    );
+    for (up, wheeled, flag) in [
+        ("aboutup", "aboutwheeled", "about"),
+        ("shortcutsup", "shortcutswheeled", "shortcuts"),
+    ] {
+        assert_eq!(
+            dump_field(qedump(&stderr, up), flag),
+            "true",
+            "the {flag} popup did not open:\n{stderr}"
+        );
+        assert_eq!(
+            vpy(up),
+            "-180.0",
+            "opening the {flag} popup moved the grid:\n{stderr}"
+        );
+        assert_eq!(
+            vpy(wheeled),
+            "-180.0",
+            "a wheel over the {flag} popup scrolled the grid behind it \
+             (issue #49):\n{stderr}"
+        );
+    }
+    let closed = qedump(&stderr, "closed");
+    assert_eq!(dump_field(closed, "about"), "false", "{closed}");
+    assert_eq!(dump_field(closed, "shortcuts"), "false", "{closed}");
+    assert_eq!(
+        dump_field(closed, "vpy"),
+        "-180.0",
+        "closing the popups replayed a swallowed scroll:\n{stderr}"
+    );
+    // Non-vacuity: the same token, the same coordinates, no popup.
+    assert_eq!(
+        vpy("control"),
+        "-360.0",
+        "the control wheel did not move the grid either, so the assertions \
+         above are vacuous:\n{stderr}"
+    );
+}

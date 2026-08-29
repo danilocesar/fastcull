@@ -72,6 +72,10 @@ grid once everything is closed.
 
 - **Grid**: wheel scrolls, click selects (and moves the cursor),
   double-click opens the image in the loupe, drag scrolls.
+- **While a dialog or popup is open**: the wheel does nothing. About,
+  Keyboard Shortcuts, Copy Picks and Export Frames as Video all block
+  it, so an absent-minded scroll cannot move the grid behind them —
+  close the dialog and you are still where you left off.
 - **Loupe, at fit**: wheel-up zooms in one step, anchored under the
   pointer — aim the wheel at an eye and it stays put. Wheel-down does
   nothing (use `G`/`Esc` to leave). A single click does nothing;
@@ -98,6 +102,12 @@ grid once everything is closed.
 > your carried position silently lost. Flicks no longer coast (release
 > always stops the image), so nothing can drag your zoomed position away
 > between photos.
+
+> **Fixed after 0.12.0**: a wheel over the Copy Picks or Export Frames
+> as Video dialog scrolled the grid behind it. You closed the dialog to
+> find yourself somewhere else in the folder, with no way back to the
+> spot you were culling. Both dialogs now swallow the wheel, like About
+> and Keyboard Shortcuts always did.
 
 ## While the folder is still loading
 

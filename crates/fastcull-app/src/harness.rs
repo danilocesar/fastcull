@@ -387,7 +387,7 @@ pub(crate) fn install(window: &MainWindow, state: &Rc<RefCell<AppState>>) -> Rc<
                          clip={} clipstate={} clipavail={} clipsummary={:?} clipskipped={:?} \
                          cliperror={:?} clipreport={:?} clipconfirm={:?} clipprogress={:?} \
                          cliphint={:?} exported={} curexported={} \
-                         cursor={} selected={}",
+                         cursor={} selected={} vpy={:.1}",
                         win.get_dbg_keys_focus(),
                         win.get_one2one(),
                         st.grid.zoom,
@@ -455,6 +455,9 @@ pub(crate) fn install(window: &MainWindow, state: &Rc<RefCell<AppState>>) -> Rc<
                         // except by parsing the status text.
                         st.grid.cursor,
                         st.grid.selection.count_in_view(&st.grid.view),
+                        // The grid Flickable's scroll offset, in Slint's
+                        // own sign: 0 at the top, negative going down.
+                        win.get_vp_y(),
                     ));
                     return;
                 }
