@@ -249,6 +249,136 @@ verified line and an Open folder action. No other control. The clash
 question is the same dialog state as Copy Picks. Modal, keyboard-contained
 (issue #42 rules), never marks, never moves the cursor.
 
+## Exported badge and hint (issue #56, 2026-08-29)
+
+*"Which of these did I already export?"* — asked at the grid while
+scanning a folder, and again at the dialog with the frames already
+selected. Two surfaces, one memory.
+
+**The memory is SESSION-ONLY, and that is the contract.** It starts empty
+on every folder open, it dies with the process, and it is exactly the ✓
+copied badge's promise: *this run only*. Nothing is written to
+previews.db and nothing to an XMP sidecar.
+
+- **Why not previews.db** (persona verdict IN-MY-WAY, 2026-08-29): the
+  cache is explicitly disposable — it self-heals on a schema-version
+  bump, it is evicted, it is invalidated by a folder move, and
+  `FASTCULL_NO_CACHE` turns it off. A memory that can vanish for reasons
+  the user cannot see is a memory whose ABSENCE cannot be trusted, and a
+  badge nobody can trust is worse than no badge. Session-only has a
+  one-sentence contract instead.
+- **Why not a sidecar property**: ADR 0003 permits sidecar writes, but
+  stamping a FastCull-private flag into 30 XMPs per export — files that
+  are handed to darktable, Lightroom and Bridge — is disproportionate for
+  a hint, and drags other tools' sidecar handling into it. Refused
+  outright.
+- **The dangerous case is already covered.** Re-exporting the same span
+  is caught by the `.mov` name clash question, which asks about what is
+  really on disk. This feature never has to prevent anything, which is
+  why it may be a hint.
+- The user delegated the call (2026-08-29) after the persona gate rated
+  the badge USEFUL (low end) and the hint USEFUL (stronger than the
+  badge).
+
+**Reads, never decides.** `clip::ExportLedger` is the same shape as
+`fileops::SessionCopies` and carries the same rule: it feeds the badge
+and the hint and NOTHING else. It never changes a plan, an answer to the
+clash question, a mark, or which frames the next export takes.
+
+- **What is recorded**: the plan's KEPT frames (the ids actually in the
+  file), against the path the file committed under. Only for a run that
+  landed, and CORE decides that: `ClipReport::frames_to_record` gates on
+  `earned_the_green_light()` — the same question the report's verified
+  line asks, so the badge and the sentence can never disagree — plus the
+  stashed ids having the same count as the file's samples. A cancel and a
+  failure leave nothing on disk to point at, so they record nothing. The
+  app used to re-implement that condition; it does not (validator
+  finding, 2026-08-29).
+- **A skipped frame is never badged.** It is not in the video; a badge
+  saying otherwise is the confident-lie class. The ids handed over are
+  the PLAN's frames, which the uniformity rules have already filtered.
+- **An Overwrite drops what it replaced.** `record` supersedes the entry
+  of the same (canonical) path, so replacing `NAME.mov` with a different
+  frame set takes the badge off the frames of the file that is gone.
+- **Follow the disk, at two moments only**: when an export finishes, and
+  when the export dialog opens. Copy Picks is the precedent but not the
+  same placement, and the difference is deliberate: `SessionCopies` is
+  re-checked inside `copy_replan`, i.e. on EVERY replan — which for that
+  dialog includes a keystroke in its rename field. This dialog has no
+  field, so the re-check sits at the dialog's open instead, which is the
+  better of the two placements and the one to copy if the ✓ memory is
+  ever revisited. NEVER per repaint: the grid asks the ledger once
+  per visible cell on every repaint, and a `stat` there would be a storm
+  while scrolling. An unplugged drive therefore means no badges — a false
+  negative, the safe direction, and it must not be "fixed" by caching a
+  last-known-present flag.
+  The accepted cost, named so it is not rediscovered: the dialog-open
+  re-check is one `stat` per export MADE THIS SESSION, on the UI thread —
+  N round trips on a network destination, where N is how many videos this
+  session wrote (typically one or two, never per frame). The shape that
+  would change it is a session with dozens of exports over a slow mount;
+  the answer then is the same one Copy Picks would need, a worker thread.
+
+**The badge.** `▶` on **every frame that went into a clip**, bottom-left:
+immediately right of the ✓ when there is one (the ✓ keeps `x: 8px`), in
+the ✓'s place when there is not; the `×N` burst pill
+keeps the bottom-right. Per FRAME, not per burst: the export's scope is
+`Selection::batch`, an arbitrary set — an opener-only badge would lie
+about a partially exported burst and would mean nothing at all for a clip
+made of two bursts.
+
+- **Not ✓'s green.** Green means "your files are safe at the
+  destination", a data-safety signal; this is not one. The badge wears
+  the `×N` pill's palette (`#d8d8e0` on `#202028cc`) so a thirty-cell run
+  reads quiet, and because exported frames are usually rejects under the
+  grid's 40 % dim, where a bare glyph washes out.
+- **Visible in the loupe**, like ✓ and ×N and for the same reason
+  (ui-grid.md, "the intended loupe badge policy"): the mark has the pill,
+  and the cell badges carry everything else.
+- **Glyph**: `▶` U+25B6, verified to render MONOCHROME in the app's font
+  on Linux (2026-08-29, from the driven test's own screenshot). `▸`
+  U+25B8 is the recorded fallback if a platform renders it as a colour
+  emoji.
+- Residual, accepted: at the 12-column zoom on a window narrower than
+  ~1200 px the `▶` pill and the `×N` pill can touch. That is the same
+  crowding `✓` and `×N` have always had at that zoom, where the cells are
+  thumbnails; the fix, if it is ever wanted, is one badge row that lays
+  itself out, not a special case.
+
+**The hint.** ONE line in the plan preview, under the plan line and the
+skipped line: *"3 of 30 frames are already in DSC05010-DSC05039.mov"*,
+*"all 30 frames are already in …"*, and when the frames are spread over
+several videos *"5 of 30 frames are already in 3 videos —
+DSC05010-DSC05039.mov and 2 more"*. Never more than one line (this dialog
+has one plan line, one skipped line and no other control).
+
+- **The count binds to the VIDEOS, never to the named one** (architect
+  finding, 2026-08-29). "5 of 30 … in a-d.mov (+2 more)" claims a-d.mov
+  holds five frames when it holds three, and the user cannot check it
+  without opening the file. The multi-video sentence therefore says how
+  many videos, then names one.
+- **One line means ELIDED, not wrapped**, because the card's height is
+  fixed and a two-stem name reaches 45 characters. The name is therefore
+  LAST in every shape and every count comes before it: a long name may
+  cost the user the name, never a number. (`and 2 more` is the one thing
+  allowed behind it — it repeats the video count already stated.)
+- Counted over the SCOPE — the frames the user chose — not over the
+  plan's kept frames, so the line still stands when the plan itself
+  refuses (no destination yet, no room), which is exactly when "you
+  already have these" is worth the most.
+- Plan state only, like the skipped line: the clash question's card
+  stacks three answer rows and has no room for a fourth sentence, and the
+  question it is asking is about the file name.
+- Grey, not amber: nothing here is wrong, and the skipped line above it
+  is a warning that must stay the loudest thing in the card.
+- The wording lives in core (`clip::exported_hint`), like every other
+  sentence this dialog shares with the report.
+
+**Explicitly NOT built** (see also the panel rule below): no clips
+panel or list, no filter or sort by "exported", no auto-reject of
+exported frames, no status-bar count, no cache table, no sidecar
+property.
+
 ## Follow-ups logged, not in M9 (persona 2026-08-27)
 
 - **"Select this burst" / extend the selection to the next burst**
@@ -260,7 +390,9 @@ question is the same dialog state as Copy Picks. Modal, keyboard-contained
   contract lives in burst-grouping.md's UI contract).
 - **An "exported as video" badge** on the burst, like the Copy Picks
   checkmark: USEFUL, not must-have; a new badge surface, deferred —
-  issue #56.
+  issue #56, **shipped 2026-08-29**. Per FRAME rather than per burst, and
+  with a counted dialog hint the persona rated higher than the badge
+  itself; the contract is the "Exported badge and hint" section above.
 
 ## Explicitly not built (panel rule, one year from release)
 
@@ -270,6 +402,11 @@ GIF/WebP, no bundled or downloaded ffmpeg, no H.264/AV1 encoder (revisit
 only on ≥3 unsolicited requests for a re-encoded output after this ships,
 and never without the user's own licence decision). README: one bullet
 under the exports, never the headline.
+
+From issue #56 (2026-08-29), on the export MEMORY: no clips panel or
+list, no filter or sort by "exported", no auto-reject of exported frames,
+no status-bar count of exported frames, no cache table, no sidecar
+property. The memory is one session, two surfaces, and nothing else.
 
 ## Platform
 
@@ -535,6 +672,44 @@ sample RAWs), `app:` = the driven `tests/screenshot.rs` test.
       the same burst index (the disabled-with-a-reason assertion). A
       driven burst strand needs a burst fixture, which is its own piece
       of work (a synthetic RAW with a Sony maker note).
+- [x] Exported badge and hint (#56): a landed export badges exactly the
+      frames that are IN the file and a skipped frame is never among them;
+      a cancel or a failure badges nothing; an Overwrite with a different
+      frame set drops the replaced file's frames; the badge and the hint
+      follow the disk at the two re-check points and NOT per repaint; a
+      session swap forgets every badge; the hint's sentence shapes; and
+      the GRID actually paints the badge, in both of its positions.
+      → `core: only_a_landed_export_hands_the_ledger_anything`
+      (every spoiled variant of a report, and ids that are not the file's
+      samples),
+      `core: a_skipped_frame_is_never_among_the_ids_an_export_records`,
+      `core: the_ledger_badges_only_frames_that_are_in_a_file_that_is_still_there`,
+      `core: overwriting_a_video_drops_the_frames_it_no_longer_holds`,
+      `core: a_name_written_again_supersedes_even_if_it_was_gone_in_between`,
+      `core: the_hint_names_one_video_and_counts_the_others`,
+      `core: the_hint_says_how_many_of_how_many`,
+      `core: a_fresh_ledger_remembers_nothing_from_the_last_one`,
+      `app (unit): state::clip_state_tests::a_session_swap_forgets_every_badge`,
+      `app: an_exported_frame_wears_a_badge_until_its_video_is_gone`
+      (one copy and two real exports, then the `.mov` deleted by a helper
+      thread mid-run: nothing changes until the dialog re-opens, and then
+      only the frame that was in the deleted file loses its badge — plus
+      the PIXEL assertions below).
+      *Two notes on the evidence.* The badge is asserted **in the cells**,
+      not only in the ledger: the driven test's final screenshot carries
+      all three layouts at once (bare, ✓ + stepped `▶`, `▶` alone in the
+      ✓'s slot) and each slot's dark fraction is read against the same
+      rectangle of a cell that has no badge, with the ✓'s greenness read
+      the same way and the `▶` glyph's monochrome rendering mechanized as
+      "bright and neutral strokes" (a colour-emoji bitmap ignores the
+      `color` the UI gives it). Sending `exported: false`, deleting the
+      Slint block, and removing the badge's 28 px step were each confirmed
+      RED against it. And "reads, never decides" is structural in core
+      (`plan` has no ledger parameter, which is what
+      `core: the_ledger_never_changes_what_the_next_export_writes` states
+      and would catch); its BEHAVIOURAL proof is the driven test's second
+      export, which plans all three frames with two of them already
+      badged.
 - [x] Perf: 30 A1 frames export in < 2 s on the reference laptop (release,
       idle) — an I/O-bound budget, added to perf_budgets.rs.
       → `perf: budget_video_export_30_frames_under_2s`; measured 527 ms

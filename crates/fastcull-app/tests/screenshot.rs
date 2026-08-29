@@ -130,6 +130,140 @@ fn region_stats(path: &Path, fx0: f64, fy0: f64, fx1: f64, fy1: f64) -> (f64, f6
     (mean, var)
 }
 
+/// A decoded snapshot plus the grid geometry a PER-CELL badge assertion
+/// needs (issue #56). Columns, gaps and the cell aspect are core
+/// constants, but the row's top is not: the menu bar's height comes from
+/// the platform's font metrics, the same dependency the menu-click tests
+/// calibrate for. So the first row is LOCATED in the picture — the first
+/// bright run down a column the chrome never reaches — and a probe that
+/// finds nothing plausible panics instead of returning a wrong rectangle.
+struct GridShot {
+    w: usize,
+    px: Vec<u8>,
+    cell_w: f64,
+    cell_h: f64,
+    row_top: f64,
+}
+
+fn grid_shot(path: &Path, columns: usize) -> GridShot {
+    let bytes = std::fs::read(path).expect("snapshot file");
+    let mut dec = zune_jpeg::JpegDecoder::new(&bytes);
+    let px = dec.decode().expect("decode snapshot");
+    let (w, h) = dec.dimensions().expect("dims");
+    // Device pixels below are compared against LOGICAL offsets (CELL_GAP,
+    // the 8/28 px badge steps), which is only valid at scale factor 1 —
+    // the harness window is 1440 logical px wide. A HiDPI runner would
+    // put every rectangle in the wrong place (the precedent: a hardcoded
+    // box that missed the star entirely on the Windows runner), so refuse
+    // loudly instead of measuring the wrong pixels.
+    assert_eq!(
+        w, 1440,
+        "grid_shot assumes scale factor 1 (a 1440 px snapshot of the 1440 px window); got {w} px"
+    );
+    let gap = f64::from(fastcull_core::grid::CELL_GAP);
+    let cell_w = (w as f64 - gap * (columns as f64 + 1.0)) / columns as f64;
+    let cell_h = cell_w / f64::from(fastcull_core::grid::CELL_ASPECT);
+    let luma = |x: usize, y: usize| {
+        let i = (y * w + x) * 3;
+        0.299 * f64::from(px[i]) + 0.587 * f64::from(px[i + 1]) + 0.114 * f64::from(px[i + 2])
+    };
+    // Down the middle of the THIRD column: the menu items and the filter
+    // chips both stop well left of it, so the first bright run there is
+    // the top of the first row of thumbnails. Twenty rows, not a handful:
+    // a chip is ~18 px tall, a thumbnail ~180, so a chip that ever reached
+    // the probe column cannot pass for a row.
+    let probe_x = (gap + 2.0 * (cell_w + gap) + cell_w / 2.0) as usize;
+    let mut row_top = None;
+    let mut run = 0usize;
+    for y in 0..h {
+        if luma(probe_x, y) > 60.0 {
+            run += 1;
+            if run >= 20 {
+                row_top = Some((y + 1 - run) as f64);
+                break;
+            }
+        } else {
+            run = 0;
+        }
+    }
+    let row_top = row_top.expect("no row of thumbnails in the snapshot");
+    assert!(
+        (40.0..250.0).contains(&row_top),
+        "the first cell row was located at y={row_top}, which is not under the chrome"
+    );
+    GridShot {
+        w,
+        px,
+        cell_w,
+        cell_h,
+        row_top,
+    }
+}
+
+impl GridShot {
+    /// Every pixel of a CELL-LOCAL rectangle of column `col` in row 0, as
+    /// (r, g, b). Cell-local so a badge's own offsets read the same here
+    /// as they do in `main.slint`.
+    fn cell_px(&self, col: usize, x0: f64, y0: f64, x1: f64, y1: f64) -> Vec<(f64, f64, f64)> {
+        let gap = f64::from(fastcull_core::grid::CELL_GAP);
+        let ox = gap + col as f64 * (self.cell_w + gap);
+        let mut out = Vec::new();
+        for y in (self.row_top + y0) as usize..(self.row_top + y1) as usize {
+            for x in (ox + x0) as usize..(ox + x1) as usize {
+                let i = (y * self.w + x) * 3;
+                out.push((
+                    f64::from(self.px[i]),
+                    f64::from(self.px[i + 1]),
+                    f64::from(self.px[i + 2]),
+                ));
+            }
+        }
+        assert!(!out.is_empty(), "empty badge rectangle in column {col}");
+        out
+    }
+
+    /// What fraction of a cell-local rectangle is DARK — the statistic a
+    /// badge pill answers to. Not the mean: the pill's bright glyph sits
+    /// in the middle of its own dark background and cancels most of it,
+    /// so a mean can barely tell a pill from a photograph. The pill's
+    /// backing is `#202028` at 80 % over the picture, i.e. luma ≈ 48,
+    /// while the riverbank these frames show never gets near that in the
+    /// badge band.
+    fn dark_fraction(&self, col: usize, x0: f64, y0: f64, x1: f64, y1: f64) -> f64 {
+        let px = self.cell_px(col, x0, y0, x1, y1);
+        px.iter()
+            .filter(|(r, g, b)| 0.299 * r + 0.587 * g + 0.114 * b < 60.0)
+            .count() as f64
+            / px.len() as f64
+    }
+
+    /// How much GREENER than its other channels a rectangle is on
+    /// average — the ✓ badge's own signal (`#6ade8a`), read against the
+    /// same rectangle of a cell that has no ✓ rather than against an
+    /// absolute threshold, because the photograph underneath is foliage.
+    fn greenness(&self, col: usize, x0: f64, y0: f64, x1: f64, y1: f64) -> f64 {
+        let px = self.cell_px(col, x0, y0, x1, y1);
+        px.iter().map(|(r, g, b)| g - r.max(*b)).sum::<f64>() / px.len() as f64
+    }
+
+    /// The bright pixels of a rectangle — the glyph strokes — and the
+    /// worst channel spread among them. A text glyph takes the `color`
+    /// the UI gives it (`#d8d8e0`: bright and neutral); a COLOUR EMOJI
+    /// bitmap ignores it, which is the failure this measures.
+    fn bright_spread(&self, col: usize, x0: f64, y0: f64, x1: f64, y1: f64) -> (usize, f64) {
+        let px = self.cell_px(col, x0, y0, x1, y1);
+        let bright: Vec<_> = px
+            .iter()
+            .filter(|(r, g, b)| 0.299 * r + 0.587 * g + 0.114 * b > 150.0)
+            .collect();
+        let worst = bright
+            .iter()
+            .map(|(r, g, b)| r.max(*g).max(*b) - r.min(*g).min(*b))
+            .fold(0.0f64, f64::max);
+        (bright.len(), worst)
+    }
+}
+
 /// Link (unix) or copy (windows) a fixture RAW into a test dir: the
 /// six-copy tests leaked 1.2 GB of tmpfs per suite run and exhausted
 /// the disk quota inside the reaper's grace window — the root cause of
@@ -4502,6 +4636,408 @@ fn export_frames_as_video_writes_a_real_motion_jpeg() {
     );
 }
 
+/// The ▶ exported badge and the dialog's counted hint (issue #56), end to
+/// end on real camera frames — the whole session-only contract in one run,
+/// asserted in the GRID's pixels and not only in the ledger's state.
+///
+/// One frame is copied first (Copy Picks) so the final screenshot carries
+/// all three badge layouts at once: `c` with neither badge, `a` with ✓ and
+/// ▶ side by side (the offset branch), `b` with ▶ alone in the ✓'s slot.
+///
+/// Two exports out of the same three files, so both hint shapes appear for
+/// real: frames 2-3 alone land `a-b.mov`, then all three land `c-b.mov`.
+/// Between them the dialog must say "2 of 3 frames are already in
+/// a-b.mov"; after them, "all 3 frames … in 2 videos — c-b.mov and 1 more".
+///
+/// Then the FOLLOW-THE-DISK half: a helper thread deletes `c-b.mov` while
+/// the app is live (the corrupter's shape — the app must never be told).
+/// Nothing re-checks until the next dialog open, which is the design (no
+/// stat storm per repaint), and that open drops exactly the badge that
+/// stopped being true: `c` loses its ▶ while `a` and `b` keep theirs
+/// through `a-b.mov`.
+#[test]
+fn an_exported_frame_wears_a_badge_until_its_video_is_gone() {
+    if !has_display() {
+        eprintln!("screenshot smoke skipped: no display server");
+        return;
+    }
+    let _s = serial();
+    let src = out_dir().join("badge-src");
+    let dest = out_dir().join("badge-dest");
+    let copied = out_dir().join("badge-copied");
+    for d in [&src, &dest, &copied] {
+        std::fs::remove_dir_all(d).ok();
+        std::fs::create_dir_all(d).unwrap();
+    }
+    let raws = raws_dir();
+    // Shot at 15:29:13, :40 and :55 and named c, a, b IN THAT ORDER, so
+    // the grid (capture order, the default sort) reads c, a, b. `home`
+    // then `right` then `shift-right` therefore selects `a` and `b` —
+    // whose video is `a-b.mov`, a different name from the all-three
+    // `c-b.mov`, so the second export is a fresh write and not a clash
+    // question.
+    for (name, fixture) in [
+        ("c.ARW", "A1_full_compressed.ARW"),
+        ("a.ARW", "A1_full_lossless_compressed.ARW"),
+        ("b.ARW", "A1_full_uncompressed.ARW"),
+    ] {
+        place_fixture(&raws.join(fixture), &src.join(name));
+    }
+    // ADR 0003 guard: the RAWs are read, never written. Sidecars are
+    // allowed and this run makes one (it marks a pick), so the RAW
+    // entries are compared on their own and every ADDITION has to be a
+    // sidecar — a stricter statement than the sibling test's, which marks
+    // nothing and can compare the whole listing.
+    let listing = |d: &Path| -> Vec<(String, u64)> {
+        let mut v: Vec<(String, u64)> = std::fs::read_dir(d)
+            .map(|it| {
+                it.filter_map(|e| e.ok())
+                    .map(|e| {
+                        (
+                            e.file_name().to_string_lossy().into_owned(),
+                            e.metadata().map(|m| m.len()).unwrap_or(0),
+                        )
+                    })
+                    .collect()
+            })
+            .unwrap_or_default();
+        v.sort();
+        v
+    };
+    let raws_only = |v: &[(String, u64)]| -> Vec<(String, u64)> {
+        v.iter()
+            .filter(|(n, _)| n.ends_with(".ARW"))
+            .cloned()
+            .collect()
+    };
+    let before = listing(&src);
+
+    // The deletion has to land AFTER the hint that names `c-b.mov`
+    // (script 34.5 s) and BEFORE the dialog re-opens (46.5 s), and it is
+    // DETERMINISTIC by construction rather than timed hopefully: it fires
+    // 10 s after the victim appears, and the victim's appearance is
+    // bracketed by the script itself. The second export starts at 26.8 s,
+    // so the file cannot appear before then → fire ≥ 36.8 s, past the
+    // 34.5 s hint. And `dump.done2` at 33.3 s asserts the export finished,
+    // so the file cannot appear after 33.3 s → fire ≤ 43.3 s, before the
+    // 46.0 s dump. Anchoring on the FILE rather than on this thread's
+    // clock is what makes both ends hold whatever the process's startup
+    // cost was — the wall clock here starts before the app boots.
+    //
+    // The poll's own deadline is a failure guard, not part of that
+    // argument: it only turns "the export never happened" into a message
+    // instead of a hang, so it is set well past the script's own end.
+    let victim = dest.join("c-b.mov");
+    let deleter = {
+        let victim = victim.clone();
+        std::thread::spawn(move || -> Result<(), String> {
+            let deadline = Instant::now() + Duration::from_secs(60);
+            while !victim.exists() {
+                if Instant::now() > deadline {
+                    return Err("the second export never landed c-b.mov".to_string());
+                }
+                std::thread::sleep(Duration::from_millis(100));
+            }
+            std::thread::sleep(Duration::from_secs(10));
+            // Windows CI runs this file: a scanner or an indexer holding
+            // the freshly written `.mov` open is a sharing violation, not
+            // a product fact, and this test must fail on the ledger or
+            // not at all.
+            let mut last = String::new();
+            for _ in 0..3 {
+                match std::fs::remove_file(&victim) {
+                    Ok(()) => return Ok(()),
+                    Err(e) => last = e.to_string(),
+                }
+                std::thread::sleep(Duration::from_millis(300));
+            }
+            Err(format!("rm c-b.mov: {last}"))
+        })
+    };
+
+    // POSITION-BASED NAVIGATION IS GATED ON THE SETTLED SORT. The view is
+    // in provisional FILENAME order until the last frame's metadata lands
+    // (issue #25), and it then re-sorts to capture order under the script
+    // — which silently turns `right`/`shift-right` into a different
+    // selection (validator finding, 2026-08-29: it selected b+c, whose
+    // video is the SAME name the second export wants, and the run died in
+    // a clash question). `dump.sorted` asserts the settle where it would
+    // break, and the nav sits seconds behind it.
+    let script = format!(
+        "1900:clipdest:{dest};2000:copydest:{copied};\
+         5000:home;5200:dump.sorted;\
+         8000:right;8200:key:y;8400:key:ctrl+e;8600:dump.copyplan;8800:key:return;\
+         17000:dump.copied;17300:key:escape;\
+         17600:home;17800:right;18000:shift-right;\
+         18200:key:ctrl+shift+e;18400:dump.plan1;18600:key:return;\
+         25100:dump.done1;25400:key:escape;25700:dump.badges1;\
+         26000:select-all;26200:key:ctrl+shift+e;26500:dump.plan2;26800:key:return;\
+         33300:dump.done2;33600:key:escape;33900:dump.badges2;\
+         34200:key:ctrl+shift+e;34500:dump.hint2;34800:key:escape;\
+         46000:dump.stale;46500:key:ctrl+shift+e;46800:dump.gone;\
+         47100:key:escape;47400:key:escape;47700:home;48000:dump.end",
+        dest = dest.display(),
+        copied = copied.display()
+    );
+    let out = out_dir().join("clip-badge.jpg");
+    let stderr = shoot_env_stderr(
+        &[src.to_str().unwrap()],
+        &[("FASTCULL_TRACE", "1"), ("FASTCULL_DRIVE", script.as_str())],
+        &out,
+    );
+    let deleted = deleter.join().expect("deleter thread");
+    let mut landed: Vec<String> = std::fs::read_dir(&dest)
+        .map(|it| {
+            it.filter_map(|e| e.ok())
+                .map(|e| e.file_name().to_string_lossy().into_owned())
+                .collect()
+        })
+        .unwrap_or_default();
+    landed.sort();
+    let after = listing(&src);
+    for d in [&src, &dest, &copied] {
+        std::fs::remove_dir_all(d).ok();
+    }
+    assert_eq!(
+        deleted,
+        Ok(()),
+        "the hand deletion did not happen:\n{stderr}"
+    );
+
+    // --- the sort settled before anything counted positions ---------------
+    let sorted = qedump(&stderr, "sorted");
+    let status = dump_text(sorted, "status");
+    assert!(
+        status.contains("3 thumbs loaded"),
+        "the metadata had not all landed, so the view was still in the \
+         provisional filename order and every position below means \
+         something else: {sorted}"
+    );
+    assert!(
+        status.starts_with("c.ARW (1/3)"),
+        "the cursor is not on c.ARW: either the view had not settled into \
+         capture order (c, a, b) when `home` ran, or it re-sorted after — a \
+         position-based script cannot run on it: {sorted}"
+    );
+    assert_eq!(dump_field(sorted, "exported"), "0", "{sorted}");
+    assert_eq!(dump_field(sorted, "curexported"), "false", "{sorted}");
+    assert_eq!(dump_text(sorted, "cliphint"), "", "{sorted}");
+
+    // --- one pick copied, so the ✓ badge is on screen too ------------------
+    let copyplan = qedump(&stderr, "copyplan");
+    assert_eq!(dump_field(copyplan, "copy"), "true", "{copyplan}");
+    assert!(
+        dump_text(copyplan, "summary").contains("1 picked"),
+        "the Y did not mark exactly one frame: {copyplan}"
+    );
+    let done_copy = qedump(&stderr, "copied");
+    assert!(
+        dump_text(done_copy, "report").starts_with("1 copied"),
+        "the copy did not finish: {done_copy}"
+    );
+
+    // --- before anything was exported: no badge, no hint ------------------
+    let plan1 = qedump(&stderr, "plan1");
+    assert_eq!(dump_field(plan1, "clipstate"), "0", "{plan1}");
+    assert_eq!(dump_field(plan1, "selected"), "2", "two frames selected");
+    assert_eq!(
+        dump_text(plan1, "cliphint"),
+        "",
+        "nothing has been exported yet, so the dialog must claim nothing"
+    );
+    assert_eq!(dump_field(plan1, "exported"), "0", "{plan1}");
+    assert!(
+        dump_text(plan1, "clipsummary").starts_with("2 frames · ")
+            && dump_text(plan1, "clipsummary").contains("a-b.mov"),
+        "the selection is not the two frames right of the first: {plan1}"
+    );
+
+    // --- after the first export: two frames badged, cursor included -------
+    let done1 = qedump(&stderr, "done1");
+    assert_eq!(
+        dump_field(done1, "clipstate"),
+        "2",
+        "the first export did not finish: {done1}"
+    );
+    let badges1 = qedump(&stderr, "badges1");
+    assert_eq!(
+        dump_field(badges1, "exported"),
+        "2",
+        "only the two exported frames may wear the badge: {badges1}"
+    );
+    assert_eq!(
+        dump_field(badges1, "curexported"),
+        "true",
+        "the cursor sits on the last exported frame: {badges1}"
+    );
+
+    // --- the counted hint, on the scope the user is about to export -------
+    let plan2 = qedump(&stderr, "plan2");
+    assert_eq!(dump_field(plan2, "selected"), "3", "{plan2}");
+    assert_eq!(
+        dump_text(plan2, "cliphint"),
+        "2 of 3 frames are already in a-b.mov",
+        "the dialog must count what is already in a video: {plan2}"
+    );
+    // READS, NEVER DECIDES: the plan still takes all three frames, with
+    // two of them already in a video (video-export.md).
+    assert!(
+        dump_text(plan2, "clipsummary").starts_with("3 frames · "),
+        "the ledger shrank the next export: {plan2}"
+    );
+
+    // --- after the second: all three, and the hint counts the videos ------
+    let done2 = qedump(&stderr, "done2");
+    assert_eq!(
+        dump_field(done2, "clipstate"),
+        "2",
+        "the second export did not finish: {done2}"
+    );
+    let badges2 = qedump(&stderr, "badges2");
+    assert_eq!(dump_field(badges2, "exported"), "3", "{badges2}");
+    let hint2 = qedump(&stderr, "hint2");
+    assert_eq!(
+        dump_text(hint2, "cliphint"),
+        "all 3 frames are already in 2 videos — c-b.mov and 1 more",
+        "the hint must count the VIDEOS and name one, on one line: {hint2}"
+    );
+
+    // --- the file is gone, and NOTHING noticed until the dialog opened ----
+    // The deleter's window is bracketed by the script (see above), so this
+    // is a real assertion: a badge still standing here is the design, one
+    // that has already dropped means the grid re-stats the disk per
+    // repaint.
+    let stale = qedump(&stderr, "stale");
+    assert_eq!(
+        dump_field(stale, "exported"),
+        "3",
+        "the badge re-stats the disk per repaint — the design says it \
+         re-checks at an export's end and at a dialog open, and nowhere \
+         else: {stale}"
+    );
+    let gone = qedump(&stderr, "gone");
+    assert_eq!(
+        dump_field(gone, "exported"),
+        "2",
+        "opening the dialog did not re-check the disk: {gone}"
+    );
+    assert_eq!(
+        dump_text(gone, "cliphint"),
+        "2 of 3 frames are already in a-b.mov",
+        "the hint still points at the video that was deleted: {gone}"
+    );
+    // Per FRAME, not per burst: the frame that was only ever in the
+    // deleted file is the one that lost its badge.
+    let end = qedump(&stderr, "end");
+    assert_eq!(dump_field(end, "clip"), "false", "Esc did not close: {end}");
+    assert_eq!(
+        dump_field(end, "curexported"),
+        "false",
+        "the first frame is only in the video that was deleted, so it must \
+         have lost its badge while the other two kept theirs: {end}"
+    );
+    assert_eq!(dump_field(end, "exported"), "2", "{end}");
+
+    // --- and the disk agrees ----------------------------------------------
+    assert_eq!(
+        landed,
+        vec!["a-b.mov".to_string()],
+        "the survivor is the video the badges still point at"
+    );
+    assert_eq!(
+        raws_only(&before),
+        raws_only(&after),
+        "a RAW changed (hard rule 1 / ADR 0003: this session may only read them)"
+    );
+    for (name, _) in &after {
+        assert!(
+            before.iter().any(|(n, _)| n == name) || name.ends_with(".xmp"),
+            "{name} appeared beside the RAWs and is not a sidecar: {after:?}"
+        );
+    }
+
+    // --- THE GRID ITSELF --------------------------------------------------
+    // The dump above proves the LEDGER; only pixels prove that the cell
+    // wears the badge. Without this, deleting the Slint block or sending
+    // `exported: false` keeps the whole suite green (validator finding,
+    // 2026-08-29).
+    //
+    // Final state, left by the script: `c` (col 0) has no ✓ (not picked)
+    // and no ▶ (its only video was deleted); `a` (col 1) has both, the ✓
+    // at x 8 and the ▶ pill stepped right to x 28; `b` (col 2) has the ▶
+    // alone, in the ✓'s own slot at x 8. Column 0 is therefore the
+    // photograph-only control for both rectangles.
+    let (w, h, luma) = analyze(&out);
+    assert!(w >= 640 && h >= 480 && luma > 5.0, "{w}x{h} luma {luma:.2}");
+    let shot = grid_shot(&out, 8);
+    // Cell-local rectangles, in the badges' own coordinates: the LEFT
+    // badge slot (x 8, where ✓ lives and where ▶ falls back to) and the
+    // STEPPED ▶ pill's slot (x 28, taken only when a ✓ is in the way).
+    let slot = (10.0, shot.cell_h - 20.0, 26.0, shot.cell_h - 6.0);
+    let step = (30.0, shot.cell_h - 20.0, 46.0, shot.cell_h - 6.0);
+    let check = (8.0, shot.cell_h - 19.0, 20.0, shot.cell_h - 7.0);
+    let dark = |col: usize, r: (f64, f64, f64, f64)| shot.dark_fraction(col, r.0, r.1, r.2, r.3);
+    let green = |col: usize, r: (f64, f64, f64, f64)| shot.greenness(col, r.0, r.1, r.2, r.3);
+
+    // Column 0 is the control: `c` lost its only video, was never copied,
+    // and must be bare in BOTH slots.
+    for (name, r) in [("the ✓ slot", slot), ("the stepped ▶ slot", step)] {
+        assert!(
+            dark(0, r) < 0.15,
+            "{name} of the unbadged frame is not bare picture ({:.2} dark)",
+            dark(0, r)
+        );
+    }
+    // `a` is copied AND exported: the ✓ keeps x 8 and the pill steps right.
+    assert!(
+        dark(1, step) > 0.4,
+        "no ▶ pill beside the ✓ on the exported, copied frame ({:.2} dark)",
+        dark(1, step)
+    );
+    assert!(
+        dark(1, slot) < 0.15,
+        "the ▶ pill did not step past the ✓ — it is sitting on it \
+         ({:.2} dark in the ✓ slot)",
+        dark(1, slot)
+    );
+    assert!(
+        green(1, check) > green(0, check) + 8.0,
+        "the ✓ is gone from the copied frame: greenness {:.1} against \
+         {:.1} on the frame that has none",
+        green(1, check),
+        green(0, check)
+    );
+    // `b` is exported and NOT copied: with no ✓ in the way the pill takes
+    // the left slot — the other half of that one line of layout.
+    assert!(
+        dark(2, slot) > 0.4,
+        "no ▶ pill in the ✓'s slot on the exported, uncopied frame \
+         ({:.2} dark)",
+        dark(2, slot)
+    );
+    assert!(
+        dark(2, step) < 0.15,
+        "the ▶ pill stepped right on a frame that has no ✓ to step past \
+         ({:.2} dark)",
+        dark(2, step)
+    );
+    // MONOCHROME, mechanized: the glyph took the UI's own `#d8d8e0`, so
+    // its strokes are bright and neutral. A colour-emoji bitmap ignores
+    // the `color` property, and U+25B6 is in the emoji-presentation set —
+    // this is the check that says which one the font gave us.
+    let (bright, spread) = shot.bright_spread(1, step.0, step.1, step.2, step.3);
+    assert!(
+        bright >= 12,
+        "no bright glyph strokes inside the ▶ pill — it rendered as a \
+         dark bitmap, not as text in the UI's colour ({bright} px)"
+    );
+    assert!(
+        spread <= 40.0,
+        "the ▶ glyph is not monochrome (worst channel spread {spread:.0}) \
+         — the font gave us a colour emoji; the spec's fallback is ▸ U+25B8"
+    );
+}
+
 /// The clash question, end to end, on tiny synthetic RAWs so three exports
 /// fit comfortably inside one driven run: the export must ASK, Enter must
 /// not answer, and each answer must do exactly what it says on the disk.
@@ -4617,6 +5153,18 @@ fn the_video_export_asks_before_replacing_a_file() {
     assert!(
         kept_report.contains("assumed 15 fps"),
         "synthetic frames carry no timing, and the report must say so: {kept_report}"
+    );
+    // A SKIPPED FRAME IS NEVER BADGED (issue #56): four frames are in the
+    // view and were selected, `d` could not share the track, so three are
+    // in the file — and exactly three may wear the ▶. This is the one
+    // driven run with a non-uniform frame set, which is why the badge
+    // claim is asserted here rather than in the badge test's own uniform
+    // fixtures (validator finding, 2026-08-29).
+    assert_eq!(
+        dump_field(kept_dump, "exported"),
+        "3",
+        "a frame the export SKIPPED wears a badge for a video it is not \
+         in — or a frame that is in it does not: {kept_dump}"
     );
 
     // --- O: overwrite ------------------------------------------------------

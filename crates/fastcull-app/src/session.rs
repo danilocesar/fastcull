@@ -228,11 +228,16 @@ pub(crate) fn open_folder_at(
             // cancel check finishes and commits. Its report dies with the
             // receiver, so the only honest way to know is to look at the
             // destination — which is why the running destination is kept.
+            // The new session has no exports, so it has no #56 hint. The
+            // running branch below never replans (it goes straight to the
+            // report), and a hint left standing there would keep the card
+            // tall for a folder it says nothing about.
+            win.set_clip_exported_hint("".into());
             if win.get_clip_visible() {
                 if win.get_clip_state() == 1 {
                     let landed =
                         swap_landed.is_some_and(|f| f.load(std::sync::atomic::Ordering::Relaxed));
-                    let name = swap_dst.as_deref().map(crate::clip_bridge::file_name_of);
+                    let name = swap_dst.as_deref().map(fastcull_core::clip::file_name_of);
                     win.set_clip_report(
                         crate::clip_bridge::swap_report(landed, name.as_deref()).into(),
                     );

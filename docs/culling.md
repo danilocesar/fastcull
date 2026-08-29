@@ -255,6 +255,26 @@ You never have to zoom out to check a frame's state:
   thumbnail): if you're reconsidering a reject, you get full
   brightness to judge it.
 
+## Badges for what you already did
+
+Two small badges sit in the **bottom-left** corner of a thumbnail, and
+they show in the loupe as well — the pill at the top is your *judgement*,
+these are the *jobs already done*:
+
+- **✓** (green) — this photo has been copied to your destination folder
+  this session. See [Copy Picks](copy-picks.md).
+- **▶** — this frame is in a video you exported this session. See
+  [Export Frames as Video](export-video.md). It is per frame: export half
+  a burst and only that half is badged.
+
+Both are **memory for this session only** — open another folder or quit
+and they are gone — and both **follow the disk**: delete the copy or the
+video and the badge goes with it the next time the matching dialog opens.
+Neither of them ever decides anything for you; the dialogs ask about what
+is really on the disk when it matters.
+
+(The bottom-**right** corner is the burst counter, `×23` — see below.)
+
 ## Bursts
 
 Continuous-drive squeezes are detected automatically and marked where

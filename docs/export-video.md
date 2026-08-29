@@ -106,6 +106,41 @@ Everything Copy Picks promises about writing files holds here too:
   the file's own index was re-read and matched. It is not printed
   otherwise.
 
+## Knowing what you already exported
+
+After an export lands, every frame that went into it wears a small **▶
+badge** in the bottom-left corner of its thumbnail, next to the ✓ that
+Copy Picks leaves. It is on the frames, not on the burst: export half a
+burst and only that half is marked.
+
+Open the export dialog again and it counts them for you, in one line
+under the plan:
+
+> 3 of 30 frames are already in DSC05010-DSC05039.mov
+
+or *"all 30 frames are already in …"*. If the frames are spread over
+several videos it counts those instead, and names the one holding the
+most:
+
+> 5 of 30 frames are already in 3 videos — DSC05010-DSC05039.mov and 2 more
+
+Two things to know about this memory, and they are the same two the ✓
+badge has:
+
+- **It lasts for this session only.** Open another folder, or quit and
+  come back, and the badges are gone. It is a "did I already do this
+  tonight?" aid, not a record. The record is the file name — it is the
+  first and last frame in the video for exactly this reason.
+- **It follows the disk.** Move or delete the `.mov` and the badges for
+  it disappear the next time you open the export dialog. If the drive it
+  went to is unplugged, you get no badges rather than a badge that lies.
+
+It never *decides* anything: it will not skip frames, will not change
+what goes into the next video, and will not touch your marks. If a name
+is already taken you still get the [Overwrite question](#the-file) —
+that question asks about what is really on the disk, which is the check
+that matters.
+
 ## On the phone
 
 The file is a standard `.mov`. A file of exactly this shape — thirty

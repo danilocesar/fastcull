@@ -61,6 +61,14 @@ pub(crate) fn wire(window: &MainWindow, state: &Rc<RefCell<AppState>>) {
                 return;
             }
             st.clip.notice = None;
+            // FOLLOW THE DISK, here and after a finished export only —
+            // never per repaint (video-export.md, "Exported badge and
+            // hint"). One `stat` per export this session, on opening a
+            // dialog the user just asked for. Copy Picks re-checks its ✓
+            // memory inside every replan instead, which for that dialog
+            // includes a keystroke in its rename field; this one has no
+            // field, so the open is the place.
+            st.clip.ledger.refresh();
             if st.clip.dest.is_none() {
                 // Seeded from the Copy Picks folder until a video folder
                 // has been chosen (video-export.md, persona 2026-08-27).
@@ -78,6 +86,12 @@ pub(crate) fn wire(window: &MainWindow, state: &Rc<RefCell<AppState>>) {
             win.set_clip_report("".into());
             win.set_clip_visible(true);
             clip_replan(&win, &mut st);
+            // The re-check above can have DROPPED a ▶ badge (the video is
+            // gone from the disk). The grid is still visible around this
+            // card, so repaint it now rather than leaving a badge that
+            // stopped being true standing until the dialog closes.
+            drop(st);
+            crate::presenter::refresh(&win, &state);
         });
     }
     {
@@ -243,6 +257,12 @@ fn clip_sources(st: &AppState) -> Vec<clip::ClipSource> {
 /// Hand a plan to the writer and put the dialog in its running state.
 fn start_export(win: &MainWindow, st: &mut AppState, plan: ClipPlan) {
     st.clip.running_dst = Some(plan.dst.clone());
+    // WHICH frames this file will hold, for the ▶ badge: the report says
+    // how many landed, never which, and by the time it arrives the
+    // selection may have moved on. The plan's KEPT frames, so a frame the
+    // uniformity rules skipped never gets a badge for a video it is not
+    // in.
+    st.clip.running_frames = plan.frames.iter().map(|f| f.id).collect();
     let (handle, rx) = clip::execute(plan);
     st.clip.handle = Some(handle);
     st.clip.rx = Some(rx);
@@ -314,6 +334,13 @@ fn clip_replan_with(win: &MainWindow, st: &mut AppState, policy: ClashPolicy) {
     win.set_clip_ready(false);
     win.set_clip_skipped("".into());
     st.clip.plan = None;
+    // "3 of 30 frames are already in DSC05010-DSC05039.mov" (issue #56).
+    // Counted over the SCOPE, not the plan's kept frames, so the line
+    // still stands when the plan itself refuses. The wording lives in
+    // core (`clip::exported_hint`), like every other sentence this dialog
+    // shares with the report.
+    let scope: Vec<usize> = sources.iter().map(|s| s.id).collect();
+    win.set_clip_exported_hint(st.clip.ledger.hint(&scope).unwrap_or_default().into());
     let frames = sources.len();
     if let Some(reason) = clip::unavailable_reason(frames) {
         win.set_clip_summary(format!("Nothing to export — {reason}.").into());
@@ -429,13 +456,6 @@ pub(crate) fn swap_report(landed: bool, name: Option<&str>) -> String {
         (true, None) => "The folder was changed. The video had already finished.".to_string(),
         (false, _) => "Cancelled — the folder was changed. Nothing was written.".to_string(),
     }
-}
-
-/// A path's file name as a plain string.
-pub(crate) fn file_name_of(p: &std::path::Path) -> String {
-    p.file_name()
-        .map(|n| n.to_string_lossy().into_owned())
-        .unwrap_or_default()
 }
 
 /// The free-space refusal, in units a person reads. Core stores the

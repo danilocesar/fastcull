@@ -773,6 +773,14 @@ fn fill_grid_cells(
             selected: st.grid.selection.is_selected(index),
             id: index as i32,
             copied: st.copy.copies.is_copied(index),
+            // Set unconditionally, exactly like `copied`: ✓ and ×N show in
+            // the loupe by policy (ui-grid.md, "the intended loupe badge
+            // policy"), and "this one is already in a video" is the same
+            // kind of fact — one channel per fact, the pill for the mark
+            // and the cell badges for the rest. A lookup, never a stat:
+            // the ledger re-checks the disk at export finish and dialog
+            // open only.
+            exported: st.clip.ledger.is_exported(index),
             burst_count: st.bursts.badge.get(index).copied().unwrap_or(0) as i32,
             seed: if st.session.synthetic {
                 index as i32

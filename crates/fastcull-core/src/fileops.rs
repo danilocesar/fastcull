@@ -644,7 +644,10 @@ fn xmp_name_of(raw_name: &str) -> String {
 /// created BY the copy): canonicalize the deepest existing ancestor and
 /// re-append the not-yet-existing remainder, so `src/selects` still
 /// reads as INSIDE `src` before it is created.
-fn canonicalize_lenient(p: &Path) -> PathBuf {
+///
+/// `pub(crate)` for `clip::ExportLedger`, which needs the SAME "is this
+/// the same file?" answer whether or not the file is on disk right now.
+pub(crate) fn canonicalize_lenient(p: &Path) -> PathBuf {
     if let Ok(c) = p.canonicalize() {
         return c;
     }

@@ -19,6 +19,11 @@ export struct CellData {
     selected: bool,
     id: int,
     copied: bool,
+    // #56: this frame is in a video this session exported that is still
+    // on disk. Per FRAME, not per burst — the export's scope is an
+    // arbitrary set, and an opener-only badge would lie about a partial
+    // burst.
+    exported: bool,
     // M7: burst size shown on the group's FIRST frame only (0 = none).
     burst-count: int,
     seed: int,
@@ -325,6 +330,9 @@ export component MainWindow inherits Window {
     // free space. Composed in Rust; core owns every rule inside it.
     in property <string> clip-summary: "";
     in property <string> clip-skipped: "";
+    // #56: "3 of 30 frames are already in DSC05010-DSC05039.mov" — one
+    // line, empty when none of the scope has been exported this session.
+    in property <string> clip-exported-hint: "";
     in property <string> clip-error: "";
     in property <bool> clip-ready: false;
     in property <string> clip-progress: "";
@@ -845,6 +853,33 @@ export component MainWindow inherits Window {
                         font-size: 16px;
                         x: 8px;
                         y: parent.height - 24px;
+                    }
+                    // Exported-as-video badge (#56): bottom-left beside ✓,
+                    // stepping right when the ✓ is there so the two never
+                    // overlap; the ×N pill keeps the bottom-right.
+                    //
+                    // Deliberately NOT ✓'s green: green means "your files
+                    // are safe at the destination", a data-safety signal,
+                    // and this is not one. The ×N pill's palette instead —
+                    // a thirty-cell run of exported rejects has to read
+                    // quiet, and a bare glyph would wash out under the
+                    // 40 % reject dim these frames usually wear.
+                    if cell.exported: Rectangle {
+                        x: cell.copied ? 28px : 8px;
+                        y: parent.height - 22px;
+                        width: t-exp.preferred-width + 10px;
+                        height: 18px;
+                        border-radius: 4px;
+                        background: #202028cc;
+                        t-exp := Text {
+                            text: "▶";
+                            color: #d8d8e0;
+                            font-size: 11px;
+                            horizontal-alignment: center;
+                            vertical-alignment: center;
+                            width: 100%;
+                            height: 100%;
+                        }
                     }
                     // Cursor overlay: LAST child = rendered on top of the image
                     // (spec: the selector must be visible on every cell state).
@@ -1895,8 +1930,16 @@ export component MainWindow inherits Window {
                 // it does not need the Copy Picks card's height — an
                 // 8-line-tall box holding two sentences reads as a dialog
                 // that lost something. The clash question adds three
-                // answer rows, and gets the room for them.
-                height: min(root.clip-state == 3 ? 380px : 260px, parent.height - 40px);
+                // answer rows, and gets the room for them; the #56 hint
+                // adds one line and gets a line's worth, so a long refusal
+                // underneath it cannot squeeze the buttons out. The hint's
+                // condition here is the SAME one the hint Text carries —
+                // the running and report cards must not grow for a line
+                // they do not show.
+                height: min(
+                    root.clip-state == 3 ? 380px
+                        : (root.clip-state == 0 && root.clip-exported-hint != "") ? 286px : 260px,
+                    parent.height - 40px);
                 border-radius: 8px;
                 background: #202028;
                 border-width: 1px;
@@ -1955,6 +1998,25 @@ export component MainWindow inherits Window {
                         color: #ffb84d;
                         font-size: 12px;
                         wrap: word-wrap;
+                    }
+                    // "3 of 30 frames are already in …" (#56). Plan state
+                    // only, like the skipped line: it is a thing to know
+                    // BEFORE Enter, and the clash question's card has no
+                    // room for a fourth sentence above three answer rows.
+                    // Grey, not amber — nothing here is wrong, and the
+                    // amber line above it is a warning that must stay the
+                    // loudest thing in the card.
+                    //
+                    // ELIDED, NEVER WRAPPED — the card's height is fixed and
+                    // a two-stem file name reaches 45 characters, so a
+                    // wrapped second line would push the button row out.
+                    // Core puts the name LAST for exactly this reason: the
+                    // counts survive, the name's tail is what elides.
+                    if root.clip-exported-hint != "" && root.clip-state == 0: Text {
+                        text: root.clip-exported-hint;
+                        color: #9898a4;
+                        font-size: 12px;
+                        overflow: elide;
                     }
                     // THE CLASH QUESTION (clip-state 3), stacked like Copy
                     // Picks': three outcome-labelled answers in order of

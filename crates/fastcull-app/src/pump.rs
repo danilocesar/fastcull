@@ -209,6 +209,21 @@ pub(crate) fn start(window: &MainWindow, state: &Rc<RefCell<AppState>>) -> slint
                                 st.clip.handle = None;
                                 st.clip.rx = None;
                                 st.clip.running_dst = None;
+                                // The ▶ badge (issue #56). CORE decides
+                                // whether this run left a file to point
+                                // at: it is the same question as the
+                                // report's green light, so it has to be
+                                // the same answer. `record` supersedes
+                                // the same path, so an Overwrite with a
+                                // different frame set drops the frames of
+                                // the file it replaced.
+                                let stashed = std::mem::take(&mut st.clip.running_frames);
+                                if let Some((path, frames)) = report.frames_to_record(stashed) {
+                                    st.clip.ledger.record(path, frames);
+                                    // Follow the disk at the second of
+                                    // the two re-check points.
+                                    st.clip.ledger.refresh();
+                                }
                                 if let Some(win) = win.upgrade() {
                                     win.set_clip_report(
                                         clip_report_lines(&report).join("\n").into(),

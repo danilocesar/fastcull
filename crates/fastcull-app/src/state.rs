@@ -166,16 +166,68 @@ pub(crate) struct ClipState {
     /// the spec forbids a silent grey item: pressing the key anyway says
     /// why, right where the user is already looking.
     pub(crate) notice: Option<(String, std::time::Instant)>,
+    /// The image ids the RUNNING export is putting in the file, in file
+    /// order. Stashed at worker launch because the report says how many
+    /// frames landed but not WHICH — and the ▶ badge is per frame.
+    ///
+    /// The PLAN's kept frames, not the whole scope: a frame the plan
+    /// skipped is not in the video and must never wear the badge.
+    pub(crate) running_frames: Vec<usize>,
+    /// Which video each frame of THIS SESSION landed in — the ▶ badge and
+    /// the dialog's "already in NAME.mov" hint (issue #56, core owns the
+    /// rule that a clip counts only while its file is still on disk).
+    pub(crate) ledger: fastcull_core::clip::ExportLedger,
 }
 
 impl ClipState {
     /// A session swap forgets everything except the destination — the
-    /// same rule and the same reason as [`CopyState::begin_session`].
+    /// same rule and the same reason as [`CopyState::begin_session`]. The
+    /// export ledger goes with it: session-only is its whole contract
+    /// (video-export.md, "Exported badge and hint").
     pub(crate) fn begin_session(&mut self) {
         *self = Self {
             dest: self.dest.take(),
             ..Self::default()
         };
+    }
+}
+
+#[cfg(test)]
+mod clip_state_tests {
+    use super::ClipState;
+
+    /// The ▶ badge is SESSION-ONLY (video-export.md): opening another
+    /// folder must leave nothing badged, while the remembered destination
+    /// survives — the same split Copy Picks has.
+    #[test]
+    fn a_session_swap_forgets_every_badge() {
+        let mut st = ClipState {
+            dest: Some(std::path::PathBuf::from("/tmp/videos")),
+            running_frames: vec![1, 2, 3],
+            ..ClipState::default()
+        };
+        // Pid + thread in the name: cargo runs tests in parallel threads,
+        // and two runs sharing one path would race each other.
+        let mov = std::env::temp_dir().join(format!(
+            "fastcull-clipstate-swap-{}-{:?}.mov",
+            std::process::id(),
+            std::thread::current().id()
+        ));
+        std::fs::write(&mov, b"x").unwrap();
+        st.ledger.record(mov.clone(), vec![1, 2, 3]);
+        assert!(st.ledger.is_exported(2));
+        st.begin_session();
+        assert!(
+            !st.ledger.is_exported(2),
+            "a badge survived a folder swap — the ledger is session-only"
+        );
+        assert!(st.running_frames.is_empty());
+        assert_eq!(
+            st.dest,
+            Some(std::path::PathBuf::from("/tmp/videos")),
+            "the destination is remembered across sessions"
+        );
+        std::fs::remove_file(&mov).ok();
     }
 }
 

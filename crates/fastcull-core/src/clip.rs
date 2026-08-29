@@ -726,6 +726,30 @@ impl ClipReport {
             && !self.cancelled
             && self.path.is_some()
     }
+
+    /// What [`ExportLedger::record`] should be given for this run: the
+    /// file, and the ids that are in it — or None when there is nothing
+    /// on disk for a badge to point at.
+    ///
+    /// The RULE lives here and not in the app that calls it (CLAUDE.md
+    /// rule 5, and the same reason `earned_the_green_light` does): the
+    /// app was re-implementing "did this run land a file?" as its own
+    /// four-way condition, which is one edit away from disagreeing with
+    /// the report the user is reading (validator finding, 2026-08-29).
+    /// It is the SAME question, so it is the same answer: only a run that
+    /// earned the green light committed a file under its real name.
+    ///
+    /// `stashed` is the ids the app kept when it launched the worker (the
+    /// plan's frames, in file order). They must BE the file's samples: a
+    /// count that disagrees means the caller stashed something else, and
+    /// the honest answer is then no badge at all. No badge is a gap;
+    /// wrong ids are a lie.
+    pub fn frames_to_record(&self, stashed: Vec<usize>) -> Option<(PathBuf, Vec<usize>)> {
+        if !self.earned_the_green_light() || stashed.len() != self.frames {
+            return None;
+        }
+        Some((self.path.clone()?, stashed))
+    }
 }
 
 pub struct ClipHandle {
@@ -1062,6 +1086,249 @@ fn hash_range(
         left -= want as u64;
     }
     Ok(hasher.finalize())
+}
+
+// ------------------------------------------------------- the export ledger
+
+/// Which video THIS SESSION's exports put each frame into (issue #56).
+///
+/// READS ONLY, exactly like [`crate::fileops::SessionCopies`]: it feeds the
+/// grid's `▶` badge and the dialog's one-line hint and nothing else. It
+/// never changes a plan, an answer to the clash question, a mark, or which
+/// frames go into the next export. A memory that decides is the 2026-08-21
+/// Copy Picks bug (a forced skip over a folder the user had emptied by
+/// hand); this one only says what it saw.
+///
+/// SESSION-ONLY, and that is the whole contract (persona gate 2026-08-29):
+/// it starts empty on every folder open and dies with the process, like
+/// the ✓ badge. Nothing is written to previews.db and nothing to a
+/// sidecar — a memory that can silently vanish on a cache self-heal is a
+/// memory whose ABSENCE cannot be trusted, and a private flag in a file
+/// handed to other tools is too much machinery for a hint.
+///
+/// A clip counts only while its file is still on disk: [`refresh`] re-stats
+/// every recorded path, and [`record`] SUPERSEDES the entry of the same
+/// (canonical) path — so an Overwrite that replaces `NAME.mov` with a
+/// different frame set drops the frames of the file it replaced. A badge
+/// pointing at a file that no longer holds the frame would be a confident
+/// lie, which is worse than no badge.
+///
+/// [`refresh`]: ExportLedger::refresh
+/// [`record`]: ExportLedger::record
+#[derive(Debug, Default, Clone)]
+pub struct ExportLedger {
+    clips: Vec<ExportedClip>,
+    /// Image id → indices into `clips`. The grid asks [`is_exported`] once
+    /// per visible cell per repaint, and must not walk every clip's frame
+    /// list to answer. Rebuilt whenever `clips` changes, which is once per
+    /// finished export.
+    ///
+    /// [`is_exported`]: ExportLedger::is_exported
+    by_id: std::collections::HashMap<usize, Vec<usize>>,
+}
+
+#[derive(Debug, Clone)]
+struct ExportedClip {
+    /// The path as it was written, for the hint's file name.
+    path: PathBuf,
+    /// The same path resolved, for "is this the same file?" — two
+    /// spellings of one destination (a symlinked folder, a trailing
+    /// slash) must supersede each other, not pile up.
+    key: PathBuf,
+    /// The image ids that are IN the file — the plan's kept frames, never
+    /// the whole scope: a skipped frame is not in the video and must not
+    /// wear the badge.
+    frames: Vec<usize>,
+    /// Re-checked by [`ExportLedger::refresh`]. False once the file is
+    /// found missing, so the badge and the hint drop the next time the
+    /// dialog opens.
+    present: bool,
+}
+
+impl ExportLedger {
+    /// An export committed under its final name: `frames` (the plan's kept
+    /// frames, in file order) are now in `path`.
+    ///
+    /// Only ever called for a run that actually landed a file — never on a
+    /// cancel and never on a failure, where there is nothing on disk to
+    /// point at.
+    pub fn record(&mut self, path: PathBuf, frames: Vec<usize>) {
+        let key = canonical_key(&path);
+        self.clips.retain(|c| c.key != key);
+        self.clips.push(ExportedClip {
+            path,
+            key,
+            frames,
+            present: true,
+        });
+        self.reindex();
+    }
+
+    /// Re-stat every recorded clip so the badge and the hint follow the
+    /// disk (one `stat` per export this session).
+    ///
+    /// Called at the two moments the design allows — when an export
+    /// finishes and when the export dialog opens — and NEVER per repaint:
+    /// a stat storm while scrolling a 3,000-frame folder is exactly the
+    /// cost this feature must not have.
+    ///
+    /// An unplugged drive therefore means no badges. That is the SAFE
+    /// direction (a false negative, never a false claim that a video
+    /// holds a frame) and it must not be "fixed" by caching a
+    /// last-known-present flag.
+    pub fn refresh(&mut self) {
+        for c in &mut self.clips {
+            // `is_file`, not `exists`: a FOLDER wearing the video's name
+            // is not the video (QE finding 2026-08-29), and a badge that
+            // survived one would be the confident lie this type prevents.
+            c.present = c.path.is_file();
+        }
+    }
+
+    /// Is this frame in a video this session wrote that is still on disk?
+    /// The grid's `▶` badge, asked once per cell per repaint — a lookup,
+    /// never a filesystem call.
+    pub fn is_exported(&self, id: usize) -> bool {
+        self.by_id.get(&id).is_some_and(|ix| {
+            ix.iter()
+                .any(|&i| self.clips.get(i).is_some_and(|c| c.present))
+        })
+    }
+
+    /// The dialog's one-line hint for a scope, or None when none of these
+    /// frames is in a video that is still there.
+    ///
+    /// The named clip is the one holding the MOST of these frames; ties go
+    /// to the most recent export, because that is the one the user just
+    /// made and is most likely asking about.
+    pub fn hint(&self, scope: &[usize]) -> Option<String> {
+        // Counted through the id index rather than by scanning each
+        // clip's frame list per scope frame: a 1,000-frame selection
+        // against a 1,000-frame clip would otherwise be a million
+        // comparisons every time the dialog replans.
+        let mut per_clip = vec![0usize; self.clips.len()];
+        let mut covered = 0usize;
+        for id in scope {
+            let Some(ix) = self.by_id.get(id) else {
+                continue;
+            };
+            let mut in_any = false;
+            for &i in ix {
+                if self.clips.get(i).is_some_and(|c| c.present) {
+                    per_clip[i] += 1;
+                    in_any = true;
+                }
+            }
+            covered += usize::from(in_any);
+        }
+        if covered == 0 {
+            return None;
+        }
+        let mut best: Option<usize> = None;
+        let mut others = 0usize;
+        for (i, n) in per_clip.iter().enumerate() {
+            if *n == 0 {
+                continue;
+            }
+            match best {
+                Some(b) if *n < per_clip[b] => others += 1,
+                // Not `>`: a tie goes to the LATER record, and `clips` is
+                // in record order — the video the user just made is the
+                // one they are most likely asking about.
+                Some(_) => {
+                    others += 1;
+                    best = Some(i);
+                }
+                None => best = Some(i),
+            }
+        }
+        let clip = self.clips.get(best?)?;
+        Some(exported_hint(
+            covered,
+            scope.len(),
+            &file_name_of(&clip.path),
+            others,
+        ))
+    }
+
+    fn reindex(&mut self) {
+        self.by_id.clear();
+        for (i, clip) in self.clips.iter().enumerate() {
+            for id in &clip.frames {
+                self.by_id.entry(*id).or_default().push(i);
+            }
+        }
+    }
+}
+
+/// The hint's WORDING, alone, so the shapes can be read and tested without
+/// a filesystem — the same reason `swap_report` is a free function in the
+/// bridge (validator finding, 2026-08-28). Private: the app renders the
+/// finished sentence [`ExportLedger::hint`] hands it and composes none of
+/// its own.
+///
+/// `covered` of `total` frames of the current scope are in a video that is
+/// still there; `name` is the one holding the most of them, and `others`
+/// further videos hold some too.
+///
+/// Two rules the wording must keep. The count binds to the VIDEOS, never
+/// to the named one: "5 of 10 … in a-d.mov (+2 more)" claims a-d.mov holds
+/// five frames when it holds three (architect finding, 2026-08-29). And
+/// the name goes LAST, because the line is elided rather than wrapped —
+/// the counts must survive, the name's tail is what may be cut.
+fn exported_hint(covered: usize, total: usize, name: &str, others: usize) -> String {
+    let subject = if covered >= total {
+        // A one-frame scope cannot reach the export dialog (one frame is
+        // not a video), but "all 1 frames" would be a sentence nobody
+        // wrote on purpose if the scope rule ever changes.
+        match total {
+            1 => "this frame is".to_string(),
+            _ => format!("all {total} frames are"),
+        }
+    } else {
+        format!(
+            "{covered} of {total} frames {}",
+            if covered == 1 { "is" } else { "are" }
+        )
+    };
+    if others == 0 {
+        format!("{subject} already in {name}")
+    } else {
+        format!(
+            "{subject} already in {} videos — {name} and {others} more",
+            others + 1
+        )
+    }
+}
+
+/// A path's file name as a plain string ("" when it has none). `pub`
+/// because the app's session swap needs the same answer for the
+/// destination it was writing to (one definition, validator finding
+/// 2026-08-29).
+pub fn file_name_of(p: &Path) -> String {
+    p.file_name()
+        .map(|n| n.to_string_lossy().into_owned())
+        .unwrap_or_default()
+}
+
+/// The identity of a written file, for "is this the same one?".
+///
+/// The FOLDER is canonicalized (leniently) and the file name joined back
+/// on, so the key does not depend on whether the file is on disk at the
+/// moment it is asked. A plain `canonicalize` of the whole path would:
+/// a file deleted between the export and this call falls back to the raw
+/// spelling, a later Overwrite of the same name resolves to the real one,
+/// the two keys differ, nothing is superseded — and the next `refresh`
+/// then marks the OLD entry present again, so its frames badge a file
+/// that holds different ones (architect finding, 2026-08-29). That is the
+/// confident lie this whole type exists to avoid, not mere redundancy.
+fn canonical_key(p: &Path) -> PathBuf {
+    match (p.parent(), p.file_name()) {
+        (Some(dir), Some(name)) => crate::fileops::canonicalize_lenient(dir).join(name),
+        // No parent or no file name is not a file this module wrote; its
+        // own spelling is the best key there is.
+        _ => p.to_path_buf(),
+    }
 }
 
 #[cfg(test)]
@@ -2750,6 +3017,386 @@ mod tests {
             *offsets.last().unwrap() + p.frames.last().unwrap().len,
             p.total_bytes
         );
+        std::fs::remove_dir_all(&dir).ok();
+    }
+
+    // ------------------------------------------------ the export ledger (#56)
+
+    /// A `.mov` that exists, so `record`/`refresh` have something to stat.
+    fn touch_mov(dir: &Path, name: &str) -> PathBuf {
+        let p = dir.join(name);
+        std::fs::write(&p, b"not really a movie").unwrap();
+        p
+    }
+
+    /// The badge's whole contract: a frame that went into a file that is
+    /// still there is badged, one that did not is not, and the memory
+    /// follows the DISK — delete the video and the badge is gone at the
+    /// next re-check.
+    #[test]
+    fn the_ledger_badges_only_frames_that_are_in_a_file_that_is_still_there() {
+        let dir = scratch_dir("ledger-disk");
+        let mov = touch_mov(&dir, "a-c.mov");
+        let mut led = ExportLedger::default();
+        assert!(!led.is_exported(1), "an empty ledger badges nothing");
+        led.record(mov.clone(), vec![1, 2, 3]);
+        for id in [1, 2, 3] {
+            assert!(led.is_exported(id), "frame {id} went into the file");
+        }
+        assert!(!led.is_exported(4), "frame 4 was never exported");
+        // A re-check with the file still there changes nothing.
+        led.refresh();
+        assert!(led.is_exported(2));
+        // Follow the disk: the user moved the video away.
+        std::fs::remove_file(&mov).unwrap();
+        assert!(
+            led.is_exported(2),
+            "the badge must NOT re-stat per repaint — it only follows the \
+             disk at the two re-check points"
+        );
+        led.refresh();
+        for id in [1, 2, 3] {
+            assert!(!led.is_exported(id), "the file is gone; so is the badge");
+        }
+        assert_eq!(led.hint(&[1, 2, 3]), None, "and so is the hint");
+        std::fs::remove_dir_all(&dir).ok();
+    }
+
+    /// The confident-lie case: Overwrite writes a DIFFERENT frame set under
+    /// the same name, so the frames of the file that was replaced are no
+    /// longer in anything and must lose their badge.
+    #[test]
+    fn overwriting_a_video_drops_the_frames_it_no_longer_holds() {
+        let dir = scratch_dir("ledger-overwrite");
+        let mov = touch_mov(&dir, "a-c.mov");
+        let mut led = ExportLedger::default();
+        led.record(mov.clone(), vec![1, 2, 3]);
+        led.record(mov.clone(), vec![7, 8]);
+        for id in [1, 2, 3] {
+            assert!(
+                !led.is_exported(id),
+                "frame {id} is not in the file that now has that name"
+            );
+        }
+        for id in [7, 8] {
+            assert!(led.is_exported(id));
+        }
+        assert_eq!(
+            led.hint(&[7, 8]).as_deref(),
+            Some("all 2 frames are already in a-c.mov")
+        );
+        // A second spelling of the same file is the same file: a symlinked
+        // or trailing-slash destination must supersede, not pile up.
+        let same: PathBuf = dir.join(".").join("a-c.mov");
+        led.record(same, vec![9]);
+        assert!(!led.is_exported(7), "the same file was written again");
+        assert!(led.is_exported(9));
+        assert_eq!(
+            led.hint(&[9]).as_deref(),
+            Some("this frame is already in a-c.mov"),
+            "one file, not two"
+        );
+        std::fs::remove_dir_all(&dir).ok();
+    }
+
+    /// The same name superseded across a moment when the file was NOT on
+    /// disk. A key taken from the whole path would fall back to the raw
+    /// spelling for the first record and to the resolved one for the
+    /// second, leave both entries standing, and let the next `refresh`
+    /// resurrect the first — badging its frames against a file that holds
+    /// other frames (architect finding, 2026-08-29).
+    #[test]
+    fn a_name_written_again_supersedes_even_if_it_was_gone_in_between() {
+        let dir = scratch_dir("ledger-absent");
+        // Spelled with a `.` segment so the two records only agree if the
+        // key really is canonical.
+        let absent = dir.join(".").join("a-c.mov");
+        let mut led = ExportLedger::default();
+        led.record(absent, vec![1, 2, 3]); // nothing on disk yet
+        let real = touch_mov(&dir, "a-c.mov");
+        led.record(real, vec![7, 8]);
+        led.refresh();
+        for id in [1, 2, 3] {
+            assert!(
+                !led.is_exported(id),
+                "frame {id} is not in the file that has that name now"
+            );
+        }
+        assert!(led.is_exported(7) && led.is_exported(8));
+        assert_eq!(
+            led.hint(&[1, 2, 3, 7, 8]).as_deref(),
+            Some("2 of 5 frames are already in a-c.mov"),
+            "one entry, not two"
+        );
+        std::fs::remove_dir_all(&dir).ok();
+    }
+
+    /// A folder that took the video's name is not the video: `refresh`
+    /// asks for a FILE, so the badge and the hint go with the `.mov`.
+    #[test]
+    fn a_folder_wearing_the_video_name_is_not_the_video() {
+        let dir = scratch_dir("ledger-folder");
+        let mov = touch_mov(&dir, "a-c.mov");
+        let mut led = ExportLedger::default();
+        led.record(mov.clone(), vec![1, 2]);
+        led.refresh();
+        assert!(led.is_exported(1));
+        std::fs::remove_file(&mov).unwrap();
+        std::fs::create_dir(&mov).unwrap();
+        led.refresh();
+        assert!(!led.is_exported(1) && !led.is_exported(2));
+        assert_eq!(led.hint(&[1, 2]), None);
+        std::fs::remove_dir_all(&dir).ok();
+    }
+
+    /// Two videos holding frames of the same scope: the hint names the one
+    /// holding the most and counts the rest, on ONE line.
+    #[test]
+    fn the_hint_names_one_video_and_counts_the_others() {
+        let dir = scratch_dir("ledger-hint");
+        let big = touch_mov(&dir, "a-d.mov");
+        let small = touch_mov(&dir, "e-f.mov");
+        let third = touch_mov(&dir, "g-h.mov");
+        let mut led = ExportLedger::default();
+        led.record(small.clone(), vec![9]);
+        led.record(big.clone(), vec![1, 2, 3]);
+        led.record(third.clone(), vec![10]);
+        // The count binds to the VIDEOS, never to the named one: a-d.mov
+        // holds three of these five, and a line that reads as though it
+        // held all five is a lie the user cannot check.
+        assert_eq!(
+            led.hint(&[1, 2, 3, 4, 5, 6, 7, 8, 9, 10]).as_deref(),
+            Some("5 of 10 frames are already in 3 videos — a-d.mov and 2 more")
+        );
+        // Only the clips that hold a frame of THIS scope are counted.
+        assert_eq!(
+            led.hint(&[1, 2, 3, 4]).as_deref(),
+            Some("3 of 4 frames are already in a-d.mov")
+        );
+        // A tie goes to the most recent export.
+        let mut tied = ExportLedger::default();
+        tied.record(big, vec![1]);
+        tied.record(small, vec![2]);
+        assert_eq!(
+            tied.hint(&[1, 2]).as_deref(),
+            Some("all 2 frames are already in 2 videos — e-f.mov and 1 more")
+        );
+        std::fs::remove_dir_all(&dir).ok();
+    }
+
+    /// The sentence shapes, without a filesystem — the wording is what the
+    /// user reads, so it gets its own test (the `swap_report` rule).
+    #[test]
+    fn the_hint_says_how_many_of_how_many() {
+        assert_eq!(
+            exported_hint(3, 30, "DSC05010-DSC05039.mov", 0),
+            "3 of 30 frames are already in DSC05010-DSC05039.mov"
+        );
+        assert_eq!(
+            exported_hint(30, 30, "DSC05010-DSC05039.mov", 0),
+            "all 30 frames are already in DSC05010-DSC05039.mov"
+        );
+        // With more than one video the count is OF THE VIDEOS: the named
+        // one holds some of the frames, not all of them.
+        assert_eq!(
+            exported_hint(3, 30, "DSC05010-DSC05039.mov", 2),
+            "3 of 30 frames are already in 3 videos — DSC05010-DSC05039.mov and 2 more"
+        );
+        assert_eq!(
+            exported_hint(30, 30, "DSC05010-DSC05039.mov", 1),
+            "all 30 frames are already in 2 videos — DSC05010-DSC05039.mov and 1 more"
+        );
+        // One frame, and one other video: both halves count properly.
+        assert_eq!(
+            exported_hint(1, 30, "a.mov", 1),
+            "1 of 30 frames is already in 2 videos — a.mov and 1 more"
+        );
+        // EVERY COUNT COMES BEFORE THE NAME. The line is elided, not
+        // wrapped, and elision eats the tail — so a long two-stem name may
+        // cost the user the name, never a number. Only text that repeats
+        // something already said may sit behind it.
+        for (covered, total, others) in [(3, 30, 0), (30, 30, 0), (3, 30, 2), (1, 30, 1)] {
+            let s = exported_hint(covered, total, "NAME.mov", others);
+            let head = s.split("NAME.mov").next().expect("the name is in it");
+            assert!(
+                head.contains(&total.to_string()),
+                "the scope count would elide away with the name: {s}"
+            );
+            assert!(
+                others == 0 || head.contains(&(others + 1).to_string()),
+                "the video count would elide away with the name: {s}"
+            );
+        }
+    }
+
+    /// A finished export that landed a verified file, for the record gate.
+    fn landed_report(frames: usize, path: &Path) -> ClipReport {
+        ClipReport {
+            frames,
+            bytes: 1234,
+            path: Some(path.to_path_buf()),
+            name: file_name_of(path),
+            all_verified: true,
+            ..Default::default()
+        }
+    }
+
+    /// ONLY a run that left a file on disk is recorded, and the ids given
+    /// must BE that file's samples. The gate lives in core beside the
+    /// green light because it asks the same question (validator finding,
+    /// 2026-08-29) — the app used to re-implement it.
+    #[test]
+    fn only_a_landed_export_hands_the_ledger_anything() {
+        let dir = scratch_dir("record-gate");
+        let mov = touch_mov(&dir, "a-c.mov");
+        let good = landed_report(3, &mov);
+        assert_eq!(
+            good.frames_to_record(vec![1, 2, 3]),
+            Some((mov.clone(), vec![1, 2, 3])),
+            "a run that earned the green light records its frames"
+        );
+        // Every way a run can fail to leave a file behind.
+        for spoiled in [
+            ClipReport {
+                cancelled: true,
+                ..landed_report(3, &mov)
+            },
+            ClipReport {
+                failed: Some("No space left on device".into()),
+                ..landed_report(3, &mov)
+            },
+            ClipReport {
+                all_verified: false,
+                ..landed_report(3, &mov)
+            },
+            ClipReport {
+                path: None,
+                ..landed_report(3, &mov)
+            },
+            landed_report(0, &mov),
+            ClipReport::default(),
+        ] {
+            assert_eq!(
+                spoiled.frames_to_record(vec![1, 2, 3]),
+                None,
+                "a run with nothing on disk handed the ledger frames: {spoiled:?}"
+            );
+            // And it agrees with the sentence the user is reading.
+            assert!(!spoiled.earned_the_green_light());
+        }
+        // Ids that are not this file's samples badge NOTHING: no badge is
+        // a gap, wrong ids are a lie.
+        assert_eq!(good.frames_to_record(vec![1, 2]), None);
+        assert_eq!(good.frames_to_record(vec![1, 2, 3, 4]), None);
+        assert_eq!(good.frames_to_record(Vec::new()), None);
+        std::fs::remove_dir_all(&dir).ok();
+    }
+
+    /// A frame the uniformity rules SKIPPED is not in the video, so it
+    /// can never reach the ledger: the ids an export records are the
+    /// plan's kept frames, and the plan has already dropped it.
+    #[test]
+    fn a_skipped_frame_is_never_among_the_ids_an_export_records() {
+        let dir = scratch_dir("record-skipped");
+        let dest = dir.join("out");
+        std::fs::create_dir_all(&dest).unwrap();
+        let sources = vec![
+            source(0, &raw_with(&dir, "a.ARW", 400, 300, 1, 500), Some(0), true),
+            source(
+                1,
+                &raw_with(&dir, "b.ARW", 400, 300, 1, 520),
+                Some(33),
+                true,
+            ),
+            // A crop-mode frame: different size, so it cannot share the
+            // track and the plan leaves it out.
+            source(
+                2,
+                &raw_with(&dir, "c.ARW", 380, 285, 1, 500),
+                Some(66),
+                true,
+            ),
+        ];
+        let p = plan(&sources, &dest, ClashPolicy::Ask).unwrap();
+        let kept: Vec<usize> = p.frames.iter().map(|f| f.id).collect();
+        assert_eq!(kept, vec![0, 1], "the odd frame is not in the file");
+        assert_eq!(p.skipped.len(), 1);
+        assert_eq!(p.skipped[0].id, 2);
+        // The app stashes exactly these ids, so the gate can only ever
+        // hand the ledger frames that are IN the file.
+        let mov = touch_mov(&dest, "a-b.mov");
+        let (path, frames) = landed_report(kept.len(), &mov)
+            .frames_to_record(kept)
+            .expect("a landed export");
+        let mut led = ExportLedger::default();
+        led.record(path, frames);
+        assert!(led.is_exported(0) && led.is_exported(1));
+        assert!(
+            !led.is_exported(2),
+            "a frame the export SKIPPED wears a badge for a video it is not in"
+        );
+        std::fs::remove_dir_all(&dir).ok();
+    }
+
+    /// SESSION-ONLY, the ✓ rule: the ledger carries no state of its own
+    /// beyond what `record` put there, so the app's session swap — which
+    /// replaces `ClipState` with a default (`ClipState::begin_session`,
+    /// covered by `a_session_swap_forgets_every_badge` in the app crate)
+    /// — leaves nothing badged. Nothing is read back from disk, a cache or
+    /// a sidecar to refill it.
+    #[test]
+    fn a_fresh_ledger_remembers_nothing_from_the_last_one() {
+        let dir = scratch_dir("ledger-session");
+        let mov = touch_mov(&dir, "a-c.mov");
+        let mut led = ExportLedger::default();
+        led.record(mov, vec![1, 2, 3]);
+        assert!(led.is_exported(1));
+        led = ExportLedger::default();
+        assert!(!led.is_exported(1), "a new session starts with no badges");
+        assert_eq!(led.hint(&[1, 2, 3]), None);
+        // And a refresh on the empty one does not resurrect anything from
+        // the file that is still sitting there.
+        led.refresh();
+        assert!(!led.is_exported(1));
+        std::fs::remove_dir_all(&dir).ok();
+    }
+
+    /// The ledger reads and NEVER decides.
+    ///
+    /// STRUCTURAL, KEPT AS DOCUMENTATION: `plan` takes sources, a
+    /// destination and a policy, so there is no way to hand it a ledger
+    /// and this test cannot fail while that stays true — it is here to
+    /// state the rule where the next reader of `plan` will meet it, and to
+    /// go red the day someone adds the parameter. The behavioural proof
+    /// that a full ledger does not shrink the next export is the driven
+    /// `app: an_exported_frame_wears_a_badge_until_its_video_is_gone`,
+    /// whose second export takes all three frames with two of them
+    /// already badged.
+    #[test]
+    fn the_ledger_never_changes_what_the_next_export_writes() {
+        let dir = scratch_dir("ledger-reads-only");
+        let dest = dir.join("out");
+        std::fs::create_dir_all(&dest).unwrap();
+        let sources: Vec<ClipSource> = (0..3)
+            .map(|i| ClipSource {
+                id: i,
+                path: raw_with(&dir, &format!("f{i}.ARW"), 400, 300, 1, 500 + i * 10),
+                name: format!("f{i}.ARW"),
+                time_ms: Some(i as i64 * 33),
+                has_subsec: true,
+            })
+            .collect();
+        let first = plan(&sources, &dest, ClashPolicy::Ask).unwrap();
+        let mut led = ExportLedger::default();
+        led.record(touch_mov(&dest, "f0-f2.mov"), vec![0, 1, 2]);
+        let again = plan(&sources, &dest, ClashPolicy::Ask).unwrap();
+        assert_eq!(
+            first.frames.iter().map(|f| f.id).collect::<Vec<_>>(),
+            again.frames.iter().map(|f| f.id).collect::<Vec<_>>(),
+            "the ledger must not remove frames the user asked for"
+        );
+        assert_eq!(first.total_bytes, again.total_bytes);
+        assert!(led.is_exported(0), "the ledger did see the export");
         std::fs::remove_dir_all(&dir).ok();
     }
 }

@@ -50,15 +50,20 @@ and the whole frame is on screen. Consequences, all intended:
   comparison pair for nothing (persona review).
 - The bars stay pure black — no filmstrip, no histogram, no info panel
   (persona: an instant IN-MY-WAY).
-- The `✓ copied` and `×N burst` cell badges, anchored to the cell bottom,
+- The `✓ copied`, `▶ exported` and `×N burst` cell badges, anchored to the
+  cell bottom,
   become visible in the loupe again; they had been rendering below the fold
   while the app deliberately populated them at `N = 1`. **This is the
   intended loupe badge policy, not an accident of the new geometry**: the
   MARK is suppressed at `N = 1` (`pick: 0`) because the issue #20 pill owns
   state display and the grid's 40% reject dim must stay out of the loupe,
-  while "already copied" and "burst of N" have no pill and are exactly what
+  while "already copied", "already in a video" and "burst of N" have no
+  pill and are exactly what
   a last pass before bed wants to see on the full-screen frame (persona).
-  One channel per fact: pill for the mark, cell badges for the rest.
+  One channel per fact: pill for the mark, cell badges for the rest. The
+  three are set unconditionally in `fill_grid_cells` — the loupe
+  visibility is the POLICY, not an omission (issue #56 extended it to the
+  `▶` badge on the same reasoning).
 - Pre-layout refreshes (issue #4) see a zero/negative viewport height; the
   bound is skipped there rather than collapsing the cell.
 - Residual, accepted: the zoom OVERLAY covers the filter bar while the fit
@@ -752,8 +757,10 @@ before their thumb arrives.
 
 `CellData`: image id, texture, pick state, burst count (`burst-count: int`,
 >0 only on a group's first frame — the "×N" badge; 0 = no badge),
-failed flag, copied flag, selected flag. (Fields arrive with their milestones:
-M2 ships texture/failed/cursor; pick badge M3, copied M6, burst M7.)
+failed flag, copied flag, exported flag, selected flag. (Fields arrive with
+their milestones:
+M2 ships texture/failed/cursor; pick badge M3, copied M6, burst M7,
+exported #56.)
 The `selected` flag drives BOTH the outline and the wash; the window carries
 `selection-wash` (color) and `selection-wash-opacity` (float) so the tint is
 settable from outside the UI without touching the cell model.
@@ -1101,6 +1108,17 @@ brightening during wheel scrolling (needs an activity decay timer).
   appends the cursor's mark in words (" · ★ picked / · ✕ rejected /
   · unmarked") after the position counter whenever the cursor is in
   view — in every view, not only the loupe.
+- **Exported as video (issue #56, 2026-08-29)**: `▶` on every frame that
+  went into a video THIS SESSION whose file is still on disk —
+  bottom-left, immediately right of the `✓` (which keeps `x: 8px`), in
+  the `×N` pill's palette (`#d8d8e0` on `#202028cc`) rather than ✓'s
+  green, because green is the data-safety signal and this is not one, and
+  because a bare glyph washes out under the 40 % reject dim these frames
+  usually wear. Per FRAME, never per burst: the export's scope is an
+  arbitrary set, so an opener-only badge would lie about a partial burst.
+  Visible in the loupe, per the badge policy above. The memory behind it
+  is session-only and reads-never-decides — video-export.md, "Exported
+  badge and hint", owns the contract.
 - **Burst context**: see burst-grouping.md — the ×N badge and "burst
   7/23" status fragment already serve burst position; the state
   indicator composes with them, it does not replace them.
@@ -1136,7 +1154,7 @@ brightening during wheel scrolling (needs an activity decay timer).
     judging pixels"). Note the loupe fit view IS the grid at one column, so
     this requires an explicit gate on `at-fit`/`one2one`, not just placement.
   - Painted above the image and above the 40% reject dim, but BELOW the
-    badges, so ★ / ✕ / ×N / ✓ / ! stay legible on a selected cell.
+    badges, so ★ / ✕ / ×N / ✓ / ▶ / ! stay legible on a selected cell.
   - Hue and strength are **properties, not literals** (`selection-wash`,
     `selection-wash-opacity`; Rust owns the defaults). User decision
     2026-07-28: strength is 25%, chosen by eye against 12% and 18% renders,
@@ -1677,6 +1695,39 @@ the user confirms, all cheap to change):**
       asserting `copystate`, the question's text and what each answer left
       on disk; the badge itself is still asserted only at the state level
       (`SessionCopies::is_copied`), not by pixels.
+      The `▶` exported badge (issue #56) does NOT stop at that limit, and
+      the difference is worth stating because it is the first cell badge
+      that does not. `exported=` (how many frames of the VIEW carry it),
+      `curexported=` (the cursor's own flag) and `cliphint=` went into the
+      QEDUMP line, but those three prove the LEDGER, not the grid: with
+      them alone, sending `exported: false` from the presenter or deleting
+      the badge block from `main.slint` left the whole suite green
+      (validator finding, 2026-08-29). So
+      `an_exported_frame_wears_a_badge_until_its_video_is_gone` also
+      asserts the CELLS, in its own final screenshot: it copies one frame
+      first so all three badge layouts are on screen at once — no badge,
+      ✓ + stepped `▶`, and `▶` alone in the ✓'s slot — locates the first
+      cell row in the picture (the menu bar's height is a font metric, so
+      it is measured, not assumed) and reads each badge slot's DARK
+      FRACTION, plus the ✓'s greenness against the same rectangle of a
+      cell that has none. The `▶` glyph's MONOCHROME rendering is
+      mechanized in the same place: its strokes must be bright and neutral,
+      which is what proves the font gave us text in the UI's own colour
+      rather than a colour-emoji bitmap. Both mutations above were
+      confirmed RED against it, as was removing the badge's 28 px step.
+      **Positional navigation in a drive script must be gated on the
+      settled sort.** The view is in provisional FILENAME order until the
+      last frame's metadata lands and then re-sorts to the user's sort
+      (issue #25), so `home`/`right`/`shift-right` fired during that
+      window silently address different images — which is how the #56
+      badge test selected the wrong pair and died in a clash question one
+      run in two under full-suite load (validator, 2026-08-29). The idiom:
+      dump before the first positional key and assert BOTH that every
+      thumb has loaded (metadata precedes each thumb on the same ordered
+      channel, so all-thumbs implies all-keys) and that the status line
+      names the image the script expects at that position; then leave
+      seconds of slack before the navigation itself. Renaming fixtures
+      does not help — a partially keyed view sorts the keyed ones first.
 - [x] **Focus continuity (issues #41/#42)**: driven through REAL key and
       pointer dispatch (`key:`/`click.` — the nav tokens bypass focus and
       cannot see this class), every bug-strand test red-run-verified
