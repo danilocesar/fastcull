@@ -42,3 +42,14 @@ pub(crate) fn trace_mark(label: &str) {
         eprintln!("fastcull-trace: [{}] {label}", trace_clock());
     }
 }
+
+/// `trace_mark` for PER-ITEM sites: the label is built only if tracing is
+/// on. `trace_mark(&format!(…))` formats first and discards second, which
+/// is free at a handful of call sites and is not at one per image — a
+/// 50,000-file scan would pay 50,000 allocations for output nobody asked
+/// for, against this module's "zero cost when off" promise.
+pub(crate) fn trace_mark_with(label: impl FnOnce() -> String) {
+    if trace_enabled() {
+        eprintln!("fastcull-trace: [{}] {}", trace_clock(), label());
+    }
+}

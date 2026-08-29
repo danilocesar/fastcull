@@ -27,6 +27,31 @@ fn shoot_env(args: &[&str], envs: &[(&str, &str)], out: &Path) {
 /// `Command::output()`/`status()` has no deadline and hangs the harness
 /// (validator M2, re-found on the issue #6 test).
 fn shoot_env_stderr(args: &[&str], envs: &[(&str, &str)], out: &Path) -> String {
+    shoot_env_stderr_watching(args, envs, out, |_| {})
+}
+
+/// `shoot_env_stderr` with a LIVE view of the child's trace: `on_line` is
+/// called on the drain thread for every stderr line as it arrives, before
+/// the run ends. The collected string is identical either way.
+///
+/// The one thing the collected-at-the-end string cannot do is let a helper
+/// thread act ON what the app just said (issue #50): a test that
+/// manufactures a mid-run file corruption has to anchor it to the app's
+/// own progress, or it is guessing at a wall clock that a loaded runner
+/// does not honour.
+///
+/// `on_line` runs ON THE DRAIN THREAD, so it must not block: it is the
+/// only reader of the child's stderr pipe, and an observer that waits on
+/// a lock or a bounded channel stalls the drain until the pipe fills and
+/// the child blocks writing to it — the deadlock this thread exists to
+/// prevent. Signal with something that cannot wait (an unbounded
+/// `mpsc::Sender`, an atomic) and do the waiting elsewhere.
+fn shoot_env_stderr_watching(
+    args: &[&str],
+    envs: &[(&str, &str)],
+    out: &Path,
+    mut on_line: impl FnMut(&str) + Send + 'static,
+) -> String {
     let bin = env!("CARGO_BIN_EXE_fastcull-app");
     let mut cmd = std::process::Command::new(bin);
     cmd.args(args)
@@ -44,11 +69,24 @@ fn shoot_env_stderr(args: &[&str], envs: &[(&str, &str)], out: &Path) -> String 
     let mut child = cmd.spawn().expect("spawn app");
     // Drain stderr on a thread so a chatty child can't fill the pipe and
     // deadlock against our try_wait loop.
-    let mut stderr_pipe = child.stderr.take().expect("stderr piped");
+    let stderr_pipe = child.stderr.take().expect("stderr piped");
     let drain = std::thread::spawn(move || {
-        use std::io::Read;
-        let mut buf = String::new();
-        stderr_pipe.read_to_string(&mut buf).ok();
+        use std::io::BufRead;
+        let mut reader = std::io::BufReader::new(stderr_pipe);
+        let (mut buf, mut line) = (String::new(), String::new());
+        loop {
+            line.clear();
+            // A read error (a non-UTF-8 byte from a native library) ends
+            // the drain, keeping everything read so far — the assertions
+            // then report on a truncated log instead of an empty one.
+            match reader.read_line(&mut line) {
+                Ok(0) | Err(_) => break,
+                Ok(_) => {
+                    on_line(&line);
+                    buf.push_str(&line);
+                }
+            }
+        }
         buf
     });
     // Strictly beyond the app's own 60 s readiness cap (measured from timer
@@ -3828,22 +3866,46 @@ fn overlay_wheel_still_zooms_one_stop_per_notch() {
 /// The shape is UNREACHABLE as a static file (the grid thumb and the
 /// loupe's first rung decode the same grid_source() bytes — they live
 /// or die together; QE, gate round 2), so this test manufactures the
-/// field route: the file dies on disk AFTER its thumb was decoded. A
-/// helper thread zeroes the copy from byte 200,000 to EOF at T+9 s —
-/// after every thumb has landed (~2 s in release), before the first
-/// End-jump focuses the file.
+/// field route: the file dies on disk AFTER its thumb was read. A
+/// helper thread zeroes the copy from byte 200,000 to EOF, anchored to
+/// the app's own `thumb bytes idx 11` trace (the pipeline has the
+/// embedded JPEG) and floored at T+9 s. Both halves matter: corrupting
+/// before the read leaves idx 11 with no thumb at all (verified — the
+/// app then drops on arrival and the masking shape never exists),
+/// corrupting after the first End leaves the file readable.
 ///
-/// Sequence: the FIRST End renders the thumb once (the failure is not
-/// knowable until the decode attempt fails milliseconds later — the
-/// causally unavoidable transient, which also proves non-vacuously
-/// that the masking shape was armed), then drops with the
-/// "(decode failed)" excuse; the SECOND End, failure known, drops in
-/// the same tick with NO thumb render. The script ends on a healthy
-/// cursor because a --start-11 shutter whose final cursor is failed
-/// above fit trips the 60 s readiness cap (recorded limitation).
+/// The thumb path is TWO stages, which is what the old guard got
+/// wrong: the pipeline reads every embedded JPEG at scan time (~0.1 s
+/// here), but the kitchen only decodes one into a texture when its
+/// cell comes near the view — for idx 11 of 12 in a 1-column loupe,
+/// that is the first End itself. So the texture lands at ~15.0 s, the
+/// failed full decode arrives ~17 ms later, and "did the rescue render
+/// once before the failure?" is a same-tick coin flip — ~15 % red
+/// under load, and product-neutral: both orders are correct.
+///
+/// What is NOT a coin flip, and is what this test exists for, is the
+/// SECOND End: the failure is known, the thumb texture is in memory,
+/// and the rescue must NOT render. So armed-ness is asserted as the
+/// texture landing (`thumb landed idx 11`, which must precede the
+/// second End — nothing evicts a thumb texture within a session, so
+/// from there the rescue has one in hand), and the render count is
+/// asserted where it binds: AFTER the `t1` dump it must be zero.
+///
+/// The script ends on a healthy cursor because a --start-11 shutter
+/// whose final cursor is failed above fit trips the 60 s readiness cap
+/// (recorded limitation). The texture still has to land inside the ~2 s
+/// between the two Ends; a `wait:<trace substring>` drive token would
+/// make the second End conditional and close that window outright —
+/// recorded as a follow-up on the issue #13 harness step, which needs
+/// the same token for the click-timing flakes (issue #61).
 ///
 /// RED on the pre-gate build (b2ce1f9): the thumb renders on EVERY
-/// End (count >= 2) and the "(decode failed)" drop never appears.
+/// End (so the after-t1 count is 1) and the "(decode failed)" drop
+/// never appears. That the REWRITE fixed the flake rather than hiding
+/// it was proven the other way round too: with idx 11's thumb decode
+/// deliberately delayed 600 ms so the failure wins the race, the OLD
+/// body fails with the issue's own "never rendered at all" message
+/// while this one passes.
 /// RELEASE ONLY: debug rides the 60 s readiness cap (see the M1 test).
 #[test]
 fn a_decode_failed_cursor_drops_to_fit_instead_of_masking_the_badge() {
@@ -3865,13 +3927,34 @@ fn a_decode_failed_cursor_drops_to_fit_instead_of_masking_the_badge() {
         );
     }
     // A real COPY, never a symlink: the corrupter must not touch the
-    // shared fixture RAW.
+    // shared fixture RAW. The unlink first makes hard rule 1 structural
+    // rather than conventional — copying ONTO a symlink of that name
+    // would write straight through to the fixture.
     let corrupt = dir.join("zz_corrupt.ARW");
+    std::fs::remove_file(&corrupt).ok();
     std::fs::copy(raws_dir().join("A1_full_compressed.ARW"), &corrupt).unwrap();
+    // Corruption timing is the app's to decide, not a wall clock's: the
+    // thread waits for the trace that says idx 11's embedded JPEG is in
+    // memory, so a scan slowed by a loaded runner moves the corruption
+    // with it instead of beating the pipeline to the file. The two real
+    // constraints are that anchor and the first End at 15 s; nothing
+    // reads the file in between. The T+9 s floor protects nothing today
+    // — it is kept only so the corruption lands where this test's
+    // schedule has always put it. The recv deadline is a liveness escape
+    // only: corrupting anyway lets the run finish, and the armed-ness
+    // guard below then names the real problem instead of a bare
+    // "(decode failed) never appeared".
+    let (bytes_tx, bytes_rx) = std::sync::mpsc::channel();
     let corrupter = {
         let path = corrupt.clone();
+        let started = Instant::now();
         std::thread::spawn(move || {
-            std::thread::sleep(Duration::from_secs(9));
+            let _ = bytes_rx.recv_timeout(Duration::from_secs(12));
+            let at = std::cmp::max(
+                Instant::now() + Duration::from_secs(1),
+                started + Duration::from_secs(9),
+            );
+            std::thread::sleep(at.saturating_duration_since(Instant::now()));
             use std::io::{Seek, Write};
             let len = std::fs::metadata(&path).unwrap().len();
             let mut f = std::fs::OpenOptions::new().write(true).open(&path).unwrap();
@@ -3880,7 +3963,7 @@ fn a_decode_failed_cursor_drops_to_fit_instead_of_masking_the_badge() {
         })
     };
     let out = out_dir().join("i46-failgate.jpg");
-    let stderr = shoot_env_stderr(
+    let stderr = shoot_env_stderr_watching(
         &["--start-11", dir.to_str().unwrap()],
         &[
             ("FASTCULL_TRACE", "1"),
@@ -3890,33 +3973,104 @@ fn a_decode_failed_cursor_drops_to_fit_instead_of_masking_the_badge() {
             ),
         ],
         &out,
+        // End-anchored: `idx 11` must not match `idx 110` if this shape
+        // is ever copied to a bigger session.
+        move |line| {
+            if line.trim_end().ends_with("thumb bytes idx 11") {
+                let _ = bytes_tx.send(());
+            }
+        },
     );
     corrupter.join().unwrap();
-    let thumb_renders = stderr.matches("loupe thumb idx 11 ").count();
-    // FLAKE (issue #50): this precondition races. Arming the masking shape
-    // needs the thumb render to win a same-tick contest against the decode
-    // failure; under full parallel load it loses ~15% of the time — measured
-    // at that rate on unmodified main too, so it is this test's design, not
-    // product drift. The guard stays (without it the test passes vacuously);
-    // #50 tracks making the ordering deterministic.
+    // The anchor must have FIRED, not merely timed out into the 9 s floor:
+    // a renamed trace mark would otherwise leave the observer dead and
+    // this test green on the floor alone (QE finding 2026-08-29).
     assert!(
-        thumb_renders >= 1,
-        "the corrupt image's thumb never rendered at all — the masking \
-         shape was never armed and this test proves nothing:\n{stderr}"
+        stderr.contains("thumb bytes idx 11\n"),
+        "the corrupter's anchor `thumb bytes idx 11` never appeared — the \
+         trace mark was renamed, or the pipeline never read the corrupt \
+         copy:\n{stderr}"
+    );
+    // Non-vacuity, deterministic: idx 11's thumb TEXTURE reached memory
+    // before the second End, so the rescue rung had something to render
+    // there and chose not to. This is an ORDERING on one serial trace
+    // stream (~2 s apart in practice), not a same-tick contest — the old
+    // guard demanded a thumb RENDER on the FIRST End, which is exactly
+    // the coin flip issue #50 was filed for.
+    let second_end = stderr
+        .match_indices("drive: end")
+        .nth(1)
+        .unwrap_or_else(|| panic!("the drive script's second End never ran:\n{stderr}"))
+        .0;
+    assert!(
+        stderr[..second_end].contains("thumb landed idx 11\n"),
+        "idx 11's thumb texture never reached memory before the second \
+         End — the masking shape was never armed and this test proves \
+         nothing:\n{stderr}"
     );
     assert!(
         stderr.contains("loupe overlay dropped idx 11 (decode failed)"),
         "a failed cursor never dropped to fit — the thumb rescue is \
          masking the failed badge again:\n{stderr}"
     );
+    // The gate, where it is deterministic: after the t1 dump the failure
+    // is known and the texture is in hand, so the SECOND End must render
+    // no thumb at all. (The total bound keeps the first End honest too:
+    // it may render the transient once, never twice.)
+    //
+    // The two ways this count could be zero for free are both closed by
+    // assertions, not by reasoning: the second End actually landed on
+    // idx 11 with the 1:1 desire intact (`cursor`/`zf` below — a
+    // swallowed key or a dropped pin would otherwise buy the zero), and
+    // the ladder was really re-entered above fit there (the drop
+    // assertion below). Mutant A — the gate branch removed — corroborates
+    // from the other side: it renders the thumb at the second End and
+    // turns this assertion red.
+    let after_t1 = stderr
+        .split_once("QEDUMP t1 ")
+        .unwrap_or_else(|| panic!("no `dump.t1` trace in stderr:\n{stderr}"))
+        .1;
     assert_eq!(
-        thumb_renders, 1,
-        "the thumb rendered again on a KNOWN-failed cursor (the second \
-         End) — the gate is gone:\n{stderr}"
+        after_t1.matches("loupe thumb idx 11 ").count(),
+        0,
+        "the thumb rendered on a KNOWN-failed cursor (the second End) — \
+         the gate is gone:\n{stderr}"
+    );
+    assert!(
+        stderr.matches("loupe thumb idx 11 ").count() <= 1,
+        "the thumb rescue rendered more than the one causally \
+         unavoidable transient on the first End:\n{stderr}"
+    );
+    // The gate's own precondition, asserted: `render_rung` emits the
+    // DecodeFailed drop ONLY when the overlay was wanted AND was up, so
+    // this line IS "the second End re-entered the ladder above fit and
+    // the rung was attempted there". Deterministic — the `home` at 16 s
+    // re-raises the overlay on idx 0, which is healthy and warm.
+    assert!(
+        after_t1.contains("loupe overlay dropped idx 11 (decode failed)"),
+        "the second End never re-entered the zoom ladder on idx 11 — the \
+         zero thumb-render count above proves nothing:\n{stderr}"
     );
     for label in ["t1", "t2"] {
+        let dump = qedump(&stderr, label);
         assert_eq!(
-            dump_field(qedump(&stderr, label), "one2one"),
+            dump_field(dump, "cursor"),
+            "11",
+            "the End at {label} never reached the corrupt image — a \
+             swallowed key makes every count above zero for free:\n{stderr}"
+        );
+        // The 1:1 PIN, which is what makes the rung attempted at all:
+        // `one2one=false` alone is also what a session simply sitting at
+        // fit looks like, and a future "a failed cursor drops the pin
+        // too" would make the render count vacuous without this.
+        assert_eq!(
+            dump_field(dump, "zf"),
+            "inf",
+            "the zoom desire was gone at {label} — the ladder was never \
+             entered, so nothing about the thumb rescue was tested:\n{stderr}"
+        );
+        assert_eq!(
+            dump_field(dump, "one2one"),
             "false",
             "the overlay is still up on the failed cursor at {label} — \
              the fit strip (and its failed badge) is hidden:\n{stderr}"

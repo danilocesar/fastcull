@@ -373,9 +373,14 @@ where it is."
   route that is real — a file that dies on disk (or a stale cache's
   thumb for a since-corrupted file) after its thumb reached memory.
   One causally unavoidable transient is accepted: the first focus of a
-  freshly dead file renders the thumb for the milliseconds until its
+  freshly dead file MAY render the thumb for the milliseconds until its
   decode attempt fails, because the failure does not exist as
-  knowledge yet; the gate binds from the Failed event on.
+  knowledge yet; the gate binds from the Failed event on. Accepted, not
+  required — whether that first focus renders the thumb at all depends
+  on which of the two lands first (the thumb texture or the failure),
+  and both orders are honest. Nothing may be asserted on the order
+  (issue #50: a test that did reddened CI ~15 % of runs); what binds is
+  every focus AFTER the failure is known.
   **Residual HOLD (the recorded exception; persona-reviewed USEFUL with
   the bound demanded and applied)**: when not even the thumb exists (a
   cold-start edge: the thumb pipeline has not served that image yet),
@@ -1555,10 +1560,37 @@ the user confirms, all cheap to change):**
       recovery via the late "landed" dump. The failed-cursor gate is
       pinned by
       `a_decode_failed_cursor_drops_to_fit_instead_of_masking_the_badge`
-      (mid-session corruption — a helper thread kills the file on disk
-      after its thumb reached memory; red-run-verified against the
-      pre-gate build: the thumb rendered on every visit and the
-      `(decode failed)` drop never appeared). The wheel wiring the
+      (mid-session corruption — a helper thread zeroes the file on disk
+      at the later of two moments: the app tracing that its embedded
+      thumb JPEG is in memory (`thumb bytes idx 11`, ~0.3 s) and a T+9 s
+      floor, which is the historical schedule and the one that decides on
+      any normal machine; the anchor engages only when a loaded runner
+      slows the scan past it. Either way, well before the End-jump that
+      focuses the file; red-run-verified against the pre-gate build: the
+      thumb rendered on every visit and the `(decode failed)` drop never
+      appeared). Its
+      non-vacuity guard is the thumb TEXTURE's arrival — `thumb landed
+      idx 11` before the second End-jump — not a thumb RENDER: the
+      texture and the failed full decode land ~17 ms apart inside that
+      first End-jump (the kitchen only decodes a thumb when its cell
+      comes near the view, which for the last image of a 1-column loupe
+      IS the End-jump itself), so
+      demanding a render asks a scheduling coin flip to come up heads,
+      and it reddened CI ~15 % of runs (issue #50, 2026-08-29). Both
+      orders are correct product behaviour. What binds is the SECOND
+      End-jump — failure known, texture in hand — where the rescue must
+      not render at all; the test counts renders only after the `t1`
+      dump, and bounds the whole run at the one unavoidable transient.
+      The zero count's own preconditions are asserted, not reasoned:
+      `cursor=11` and `zf=inf` at both dumps, plus the second End's own
+      `(decode failed)` drop — which `render_rung` emits only when the
+      overlay was wanted AND up, so it IS the proof that the rung was
+      attempted there. Without them a swallowed key, or a session simply
+      sitting at fit, would buy the zero. Recorded residual: the texture must land inside the
+      ~2 s between the two End-jumps, which a `wait:<trace substring>`
+      drive token would close by making the second End conditional —
+      deferred to the issue #13 harness step, which needs the same token
+      for the click-timing flakes (issue #61). The wheel wiring the
       restructure touched is
       pinned by `overlay_wheel_still_zooms_one_stop_per_notch` (real
       dispatched scroll events via the `wheel.` token; a guard — wheel
@@ -1824,7 +1856,15 @@ Documented because they ship in release builds (validator finding):
 
 - `FASTCULL_TRACE=1`: eprintln any UI-thread phase (`handle_nav`, `refresh`
   stages, texture adoption) exceeding 20 ms, plus loupe-ready marks — the
-  evidence channel for hang reports.
+  evidence channel for hang reports. The thumb path is traced at BOTH of
+  its stages, because they are seconds apart and only the first touches
+  the file: `thumb bytes idx N` (the pipeline read the embedded JPEG, at
+  scan time) and `thumb landed idx N` (the kitchen decoded it into a
+  texture — only for cells near the view, and nothing evicts it within a
+  session, so the line is also "the loupe's thumb rescue is armed for N"
+  for the rest of that session). A test that manufactures a mid-session decode failure
+  needs both: the first says the corruption is safe to apply, the second
+  that the rescue rung had a texture to skip (issue #50).
 - `FASTCULL_DRIVE="6000:one2one;9000:grid;12000:quit"`: timed injection of
   nav actions (same names `handle_nav` takes, plus `quit`, `iptc` — the
   panel toggle, issue #12 — `about`/`shortcuts` — the modal toggles,

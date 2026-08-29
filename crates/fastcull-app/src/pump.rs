@@ -16,7 +16,7 @@ use crate::loupe_ctrl::{insert_fullres, route_warm, WarmCtx, WarmJob};
 use crate::nav::recompute_view_keep_cursor;
 use crate::presenter::refresh;
 use crate::state::{AppState, MIDS_CAP};
-use crate::trace::trace_mark;
+use crate::trace::{trace_mark, trace_mark_with};
 use crate::MainWindow;
 
 /// Wire the kitchen's completion nudge: a finished texture is adopted as
@@ -67,6 +67,14 @@ pub(crate) fn start(window: &MainWindow, state: &Rc<RefCell<AppState>>) -> slint
                                 st.textures.thumb_jpegs.insert(index, thumb_jpeg);
                                 st.session.thumbs_done += 1;
                                 dirty = true;
+                                // The thumb path has two stages and only
+                                // this one touches the FILE: the embedded
+                                // JPEG is read here, at scan time, and
+                                // decoded into a texture much later (when
+                                // the cell is near the view). A test that
+                                // corrupts a file mid-run has to know the
+                                // read already happened (issue #50).
+                                trace_mark_with(|| format!("thumb bytes idx {index}"));
                             }
                             SessionEvent::Failed { index, .. } => {
                                 st.textures.failed.insert(index);
@@ -345,6 +353,14 @@ fn drain_kitchen(win: &MainWindow, state: &Rc<RefCell<AppState>>) -> bool {
                 st.textures
                     .images
                     .insert(index, slint::Image::from_rgb8(buf));
+                // The thumb rung's ARMING moment, and the only observable
+                // one: nothing evicts from `st.textures.images` within a
+                // session, so from here on the loupe's thumb rescue has a
+                // texture in hand for this image. The rung trace says the
+                // rescue RENDERED, which is a different question — a test
+                // about the gate that SKIPS the rescue can never see that
+                // line and needs the arming fact separately (issue #50).
+                trace_mark_with(|| format!("thumb landed idx {index}"));
             }
             kitchen::Done::Full { index, buf } => {
                 // The 150 MB texture is only held while the loupe can use

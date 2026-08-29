@@ -128,10 +128,11 @@ pub struct RungInputs {
 ///   1:1 behind a "loading" pill that can never complete, hiding the
 ///   strip's failed badge (validator finding, #46). One transient is
 ///   causally unavoidable and accepted: the first focus of a freshly dead
-///   file renders its thumb for the milliseconds until the decode attempt
-///   fails, because the failure does not exist as knowledge yet. Here that
-///   is simply `cursor_failed: false` — the gate binds from the Failed
-///   event on.
+///   file MAY render its thumb for the milliseconds until the decode
+///   attempt fails, because the failure does not exist as knowledge yet.
+///   Accepted, not required — at the app level either order can win (the
+///   thumb texture or the failure, issue #50); here the rule is simply
+///   `cursor_failed: false`, and the gate binds from the Failed event on.
 /// * the cap is PER CURSOR IMAGE: a hold stamped for a different image
 ///   does not cap this one, it re-starts (`Hold { start: true }`). So the
 ///   same stale pixels can exceed the cap in aggregate across a hold-arrow
