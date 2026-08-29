@@ -110,6 +110,39 @@ before code, validator + QE with the module's hostile-input list, docs
 page `docs/export-video.md` in the same commit as the behaviour, one
 README bullet. Explicitly out for a year: any editing surface.
 
+## v0.12.0 (released 2026-08-29)
+
+One follow-up from the M9 persona gate, issue #55: **selecting by
+bursts** (`modules/burst-grouping.md`, UI contract).
+
+The heron takes off in burst 40 and lands in burst 41, and selecting
+both for a caption or a video was forty Shift+arrows in the loupe.
+Now **Shift+`]`** and **Shift+`[`** are `]` and `[` that also select:
+the cursor lands exactly where the plain key would, and every whole
+burst between the burst the gesture started in and the cursor's burst
+becomes the selection — press again to add a burst, the opposite key
+to drop one, never half a burst in a capture-sorted view. A Shift+arrow
+afterwards stays frame-precise from the burst's edge. On a US keyboard
+the keys arrive as `}` and `{`; both spellings work. **Ctrl+Shift+B**
+(the user's own proposal) selects the whole burst under the cursor
+without moving it — the caption-this-burst move from whichever frame
+is being judged; additive, so two bursts apart are one chord each, and
+a double-tap changes nothing. And **Esc now always clears the
+selection**, from inside the loupe too (the user's decision, and the
+persona's one condition for shipping: the loupe shows no wash, and a
+one-press selection left behind there would silently take the next
+IPTC commit). `G` is unchanged.
+
+The rules live in `fastcull-core` with pure-function tests; the app
+only dispatches. Two driven tests send the real key events over a new
+`--synthetic N --bursts` session (the test RAWs are three single
+shots). Gate: persona before code (both USEFUL, ship both), validator
+(three wording findings, fixed), QE PASS with the old-code proof, and
+a driven run over a real 1,450-frame A1 session in the grid and the
+loupe. Recorded caveat: with two bodies interleaved, a Shift+`]` chain
+selects the view range between the two bursts, so the other body's
+burst can be cut at the edge — Ctrl+Shift+B is the exact tool there.
+
 ## v0.11.0 (released 2026-08-28)
 
 One feature, the first thing FastCull writes that is neither a sidecar
