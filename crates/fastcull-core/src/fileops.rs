@@ -548,11 +548,12 @@ pub fn plan(
 /// — an ordinary hand-typed template has a literal prefix before the
 /// first `{`, so EVERY pick expands to the same name while the field is
 /// mid-word — restarts at 1 for each pick and costs N²/2 `stat` calls:
-/// measured 2 M syscalls / 1.5 s for 2,000 picks, on the UI thread, per
-/// keystroke, and 30 minutes if the destination is a network mount (gate
-/// finding 2026-08-22, architecture rule "the UI thread never blocks on
-/// I/O"). Resuming is sound because `taken` only ever grows: a number
-/// found occupied once can never come free within the same plan.
+/// measured 2 M probes for 2,000 picks, on the UI thread, per keystroke,
+/// and half an hour if the destination is a network mount (gate finding
+/// 2026-08-22, architecture rule "the UI thread never blocks on I/O";
+/// fileops.md keeps the dated wall-clock numbers). Resuming is sound
+/// because `taken` only ever grows: a number found occupied once can
+/// never come free within the same plan.
 ///
 /// `companion` names the OTHER file that has to move with this one — the
 /// sidecar here, nothing for a lone file (the video export's one `.mov`,
@@ -590,6 +591,36 @@ pub(crate) fn first_free_name(dest: &Path, name: &str) -> String {
     first_free_suffix(dest, name, &HashSet::new(), &mut HashMap::new(), |_| None)
 }
 
+#[cfg(test)]
+thread_local! {
+    /// Filesystem probes made by [`occupied`] on THIS thread, so a test can
+    /// assert how a walk SCALES instead of how long it took on some runner.
+    /// Thread-local, not atomic: cargo runs tests in parallel threads, and
+    /// `plan()` probes only on its caller's thread (it starts no worker), so
+    /// each test sees exactly its own probes.
+    ///
+    /// Probes made ELSEWHERE are therefore invisible here — the copy
+    /// executor runs `run_plan` on its own `copy-picks` worker (:927, and
+    /// :1053, :1282 below it), and the video export has its own clash
+    /// check (`clip.rs:593`). Nothing counts them today; a test that
+    /// needs to would have to run on the probing thread.
+    ///
+    /// Compiled out of a real build.
+    static PROBES: std::cell::Cell<u64> = const { std::cell::Cell::new(0) };
+}
+
+/// Forget the probes counted so far on this thread.
+#[cfg(test)]
+fn probes_reset() {
+    PROBES.with(|c| c.set(0));
+}
+
+/// Probes counted on this thread since the last [`probes_reset`].
+#[cfg(test)]
+fn probes() -> u64 {
+    PROBES.with(std::cell::Cell::get)
+}
+
 /// Is anything at all sitting under this name? `symlink_metadata`, not
 /// `exists`: a BROKEN symlink is invisible to `exists()` and still makes
 /// the name unusable, and a directory or a live symlink occupies it just
@@ -597,6 +628,8 @@ pub(crate) fn first_free_name(dest: &Path, name: &str) -> String {
 /// case-insensitive volume the filesystem answers for the case-variant
 /// too, which is the point.
 pub(crate) fn occupied(p: &Path) -> bool {
+    #[cfg(test)]
+    PROBES.with(|c| c.set(c.get() + 1));
     p.symlink_metadata().is_ok()
 }
 
@@ -2639,15 +2672,31 @@ mod tests {
 
     /// The suffix walk RESUMES per base name instead of restarting at 1
     /// (gate finding 2026-08-22: restarting made a plan whose names all
-    /// collapse cost N²/2 stat calls — 2 M syscalls and 1.5 s for 2,000
-    /// picks, on the UI thread, per keystroke while typing a template).
+    /// collapse cost N²/2 stat calls — 2 M probes for 2,000 picks, on the
+    /// UI thread, per keystroke while typing a template).
     /// This asserts the outcome the cursor must not break: every pick
     /// lands on its own consecutive number, in input order.
+    ///
+    /// The cost is asserted as a PROBE COUNT, not a stopwatch: the bug is
+    /// "quadratic in `occupied` calls", which is countable and identical on
+    /// every runner, whereas a time bound measures whatever else a shared
+    /// CI machine was doing (a 300 ms bound flaked on Windows 2026-08-28 at
+    /// 344 ms while the walk was resuming correctly — issue #58).
+    ///
+    /// The exact figure assumes a destination holding NONE of these names,
+    /// which is this fixture's doing: `out/` is never created. Whether it
+    /// exists as an empty folder does not matter (7,998 either way), but a
+    /// stray `same_1.ARW` inside it would add a probe per pick it displaces
+    /// — a red here means the cursor, only because the fixture guarantees
+    /// there is nothing else it could mean.
     #[test]
     fn many_picks_on_one_name_take_consecutive_suffixes() {
         let dir = tmp();
-        let names: Vec<(String, Vec<u8>)> = (0..2000)
-            .map(|i| (format!("f{i:03}.ARW"), b"x".to_vec()))
+        const N: u64 = 2000;
+        // 2N sources, so the same walk can be planned at BOTH sizes below
+        // and the probe formula checked at each.
+        let names: Vec<(String, Vec<u8>)> = (0..2 * N)
+            .map(|i| (format!("f{i:04}.ARW"), b"x".to_vec()))
             .collect();
         let refs: Vec<(&str, &[u8])> = names
             .iter()
@@ -2655,16 +2704,16 @@ mod tests {
             .collect();
         let sources = src_with(&dir, &refs);
         let dest = dir.join("out");
-        let started = std::time::Instant::now();
+        super::probes_reset();
         let p = super::plan(
-            &sources,
+            &sources[..N as usize],
             &dest,
             Some("same.{ext}"),
             ClashPolicy::Ask,
             &SessionCopies::default(),
         )
         .unwrap();
-        let elapsed = started.elapsed();
+        let probes = super::probes();
         assert_eq!(p.jobs[0].dst_raw.file_name().unwrap(), "same.ARW");
         for (i, job) in p.jobs.iter().enumerate().skip(1) {
             assert_eq!(
@@ -2673,34 +2722,52 @@ mod tests {
                 "job {i} did not take its own consecutive number"
             );
         }
-        assert_eq!((p.clashes, p.shared_name), (0, 1999));
-        // Not a perf budget (those live in perf_budgets.rs and are release
-        // only) — a smoke bound with two-sided margin, sized from the
-        // measurement that found the bug: for these 2,000 names the walk
-        // costs 1.7 s (btrfs) to 2.3 s (tmpfs) when it restarts at 1, and
-        // 4-5 ms when it resumes.
+        assert_eq!((p.clashes, p.shared_name), (0, N as usize - 1));
+        // EXACT, not a ceiling: the resuming walk's cost per pick is fixed,
+        // so there is nothing to calibrate, and no slack for a walk that
+        // resumes only PARTLY to hide in. Measured against a mutant that
+        // rewinds the cursor by 5 on every pick: 17,978 probes — a
+        // 10-per-pick ceiling waves that through, this equality does not.
         //
-        // The bound was 300 ms and it was mis-calibrated for a SHARED CI
-        // RUNNER, which is data nobody had when it was written: the
-        // Windows job measured 344 ms on 2026-08-28 and failed, then
-        // passed on a re-run of the same commit. 344 ms is nowhere near
-        // the 1.7 s a restarting walk costs — the walk was resuming
-        // correctly and the stopwatch was simply too tight. At 1 s the
-        // bound is still ~200x the resuming cost and ~2x under the
-        // cheapest failure signature, and it stops flaking a gate.
-        //
-        // The RIGHT fix, filed as issue #58 rather than done here (QE,
-        // 2026-08-28):
-        // assert the invariant instead of the time. The bug is "the
-        // suffix walk restarts from _1 each time", which is countable —
-        // probes growing linearly rather than quadratically in the number
-        // of picks — and a count is deterministic on every runner, which
-        // a stopwatch will never be.
-        assert!(
-            elapsed < std::time::Duration::from_secs(1),
-            "planning 2,000 colliding names took {elapsed:?} — the suffix \
-             walk is restarting instead of resuming (quadratic, and this \
-             runs on the UI thread on every keystroke)"
+        // Asserted BEFORE the 2N plan below: once this has failed the
+        // second plan only burns ~8 M probes proving the same thing.
+        assert_eq!(
+            probes,
+            4 * N - 2,
+            "{probes} probes for {N} colliding names, expected {} — 2 for \
+             the first pick (natural name + sidecar, no walk), then 4 for \
+             each of the other {} (natural name + sidecar, resumed \
+             candidate + its sidecar), with a destination that holds none \
+             of these names (`out/` is never created here; a stray \
+             `same_1.ARW` would add a probe, though an empty `out/` would \
+             not). A walk that restarts at _1 instead of resuming costs \
+             ~{} probes, on the UI thread on every keystroke.",
+            4 * N - 2,
+            N - 1,
+            N * N / 2
+        );
+        // The same closed form at twice the size, which is what rules out a
+        // cost that merely COINCIDES with 4N - 2 at this one N: a quadratic
+        // walk quadruples per doubling, an affine one lands here. The same
+        // destination serves both runs, because `plan` writes nothing —
+        // the second faces the identical empty folder, only with 2N picks.
+        super::probes_reset();
+        super::plan(
+            &sources,
+            &dest,
+            Some("same.{ext}"),
+            ClashPolicy::Ask,
+            &SessionCopies::default(),
+        )
+        .unwrap();
+        let probes_twice = super::probes();
+        assert_eq!(
+            probes_twice,
+            4 * (2 * N) - 2,
+            "{probes} probes for {N} picks but {probes_twice} for {} — the \
+             4N - 2 shape must still hold at twice the size, where a \
+             quadratic walk would cost four times as much, not twice",
+            2 * N
         );
         std::fs::remove_dir_all(&dir).ok();
     }

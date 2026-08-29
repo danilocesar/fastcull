@@ -313,22 +313,42 @@ triggers it is ordinary typing — a hand-typed template has a literal
 prefix before its first `{`, so every pick expands to the same name while
 the field is mid-word, and `plan()` runs on the Slint event-loop thread
 on every keystroke. Measured for 2,000 picks on one name: 2 M `stat`
-calls and 1.7 s (btrfs) to 2.3 s (tmpfs) restarting, versus 4-5 ms
-resuming — and a network destination multiplies the per-`stat` cost by
-three orders of magnitude. `many_picks_on_one_name_take_consecutive_
-suffixes` holds it to 300 ms.
+calls and 1.7 s (btrfs) to 2.3 s (tmpfs) restarting, versus ≈ 10 k stats
+and 4-5 ms resuming — and a network destination multiplies the per-`stat`
+cost by three orders of magnitude.
+`many_picks_on_one_name_take_consecutive_suffixes` holds the PROBE COUNT,
+not the clock: a test-only counter inside `occupied` (compiled out of a
+real build) makes the plan's destination probes countable, and the test
+asserts the EXACT figure — `4N - 2`, i.e. 7,998 for 2,000 colliding
+names. That is the resuming shape written out: 2 probes for the first
+pick (the natural name and its sidecar, no walk), then 4 for each of the
+others (natural name and sidecar, resumed candidate and its sidecar); the
+source sidecar's own `exists()` is a further stat per pick that this
+counter does not see. An equality rather than a ceiling, because a walk
+that resumes only PARTLY stays under a generous ceiling: a cursor rewound
+by 5 on every pick measures 17,978 probes, which a "< 10 per pick" bound
+would have passed. The test then plans the same names at 2N and requires
+the SAME closed form — 15,998 probes for 4,000 picks — which is what
+rules out a cost that merely coincides with `4N - 2` at one N: a
+quadratic walk quadruples per doubling, an affine one lands there. The
+count is the same number on every machine, which a stopwatch is not: the
+earlier 300 ms bound flaked on a shared CI runner at 344 ms while the
+walk was resuming correctly (issue #58).
 
 What that fix does NOT do (gate finding 2026-08-22, recorded rather than
-implied away): `plan()` is still LINEAR in stat calls — roughly three per
-pick — and still runs synchronously on the event-loop thread, once per
-keystroke in the template field, with no debounce. On a local disk that is
-milliseconds for a 2,000-pick plan; on a network or FUSE destination the
-same three-orders-of-magnitude multiplier applies to the linear term and
-it becomes a visible freeze. The eventual fix is a debounce or planning
-off-thread; the 300 ms smoke bound is a debug-build unit test on
-`temp_dir`, not a budget, and `perf_budgets.rs` has no plan-time entry. This also covers a rename template that collapses several images
-onto one name (`same.{ext}` → `same.ARW`, `same_1.ARW`, …), which was a
-blocking plan error until this decision.
+implied away): `plan()` is still LINEAR in stat calls — three per pick,
+five when the name collides — and still runs synchronously on the
+event-loop thread, once per keystroke in the template field, with no
+debounce. On a local disk that is milliseconds for a 2,000-pick plan; on
+a network or FUSE destination the same three-orders-of-magnitude
+multiplier applies to the linear term and it becomes a visible freeze.
+The eventual fix is a debounce or planning off-thread; the probe-count
+test says nothing about wall-clock time — it
+is a debug-build unit test on `temp_dir` guarding the SHAPE of the walk,
+not a budget, and `perf_budgets.rs` has no plan-time entry. This also
+covers a rename template that collapses several images onto one name
+(`same.{ext}` → `same.ARW`, `same_1.ARW`, …), which was a blocking plan
+error until this decision.
 
 **3. The answer is a policy, not a file list.** After the answer the app
 flushes and replans with the chosen policy, and only that fresh plan
@@ -560,9 +580,10 @@ copy at the destination and copy again, or re-import in darktable.
 ## Acceptance criteria (tests)
 
 - [x] Plan: template expansion, in-plan collision RESOLUTION (two picks on
-      one name are suffixed, never refused — including 2,000 of them
-      within the walk's 300 ms smoke bound, and with the free-space check
-      requiring their bytes) —
+      one name are suffixed, never refused — including 2,000 of them whose
+      suffix-walk probe count is counted rather than timed: exactly
+      `4N - 2` probes, and the same closed form again at 2N, and with the
+      free-space check requiring their bytes) —
       many_picks_on_one_name_take_consecutive_suffixes,
       free_space_counts_a_batch_suffixed_pick;
       dest-inside-source rejection (tempdir fixtures) —
