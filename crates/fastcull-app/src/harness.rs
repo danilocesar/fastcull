@@ -262,8 +262,10 @@ fn dispatch(win: &MainWindow, state: &Rc<RefCell<AppState>>, key: &str) {
         // (validator FAIL-1 / QE D1, 2026-07-30). No core test
         // could see it: the machine was always right, the
         // bridge was not. This does NOT inject real pointer
-        // events — which Slint surface receives a press is
-        // still review-verified only (issue #13).
+        // events — it invokes the callbacks — so it says
+        // nothing about which Slint surface receives a press;
+        // that question has its own tests, driven through
+        // `click.` / `press.` / `wheel.` (issue #13).
         if let Some((x, y)) = at.split_once(',') {
             if let (Ok(x), Ok(y)) = (x.parse::<f32>(), y.parse::<f32>()) {
                 if win.get_one2one() {

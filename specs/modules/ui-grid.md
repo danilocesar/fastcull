@@ -1598,7 +1598,15 @@ the user confirms, all cheap to change):**
       dispatched scroll events via the `wheel.` token; a guard — wheel
       SEMANTICS did not change, only the surface wiring — non-vacuous
       because a dead scroll path leaves the factor at 1.0; covers both
-      accumulators and the fit→overlay handoff). Still without a
+      accumulators and the fit→overlay handoff). Since 2026-08-29 that
+      test also pins the NOTCH SIZE (issue #13): 59 logical px fire
+      nothing and the 60th fires exactly one stop, so winit's 60 px per
+      line — a number the accumulator is written against and that was
+      comment-only — fails a test if a backend upgrade changes it,
+      instead of quietly turning every notch into a fraction of a stop.
+      The same pair pins the residue carry (the accumulator subtracts 60
+      rather than zeroing), and a full notch DOWN at fit is asserted
+      inert, the reserved no-op's end-to-end half. Still without a
       deterministic release-profile exercise (recorded, QE gate): the
       `(hold cap)` drop-and-re-raise fires routinely in debug runs and
       the M1 test asserts the recovery whenever it fires, but forcing
@@ -1695,16 +1703,130 @@ the user confirms, all cheap to change):**
       that was deleted); "`+` after a click at fit is still center-anchored"
       holds by construction (a fit click stores nothing at all — it only
       claims the cursor — and the keyboard ladder reads no pointer state).
+      The first two of those are no longer taken on trust: issue #13's
+      `a_grid_drag_scrolls_without_clicking_the_cell_under_it` drives a
+      real four-event drag over the grid (it scrolls, the cursor does not
+      move) and `two_distant_clicks_are_two_clicks_not_a_double_click` two
+      real clicks 600 px apart (two cursor moves, no loupe), with the
+      same-point double-click as its control — two tests, because a click
+      after a fling lands at an offset no script can predict (QE finding
+      2026-08-29: the split retired a debug-only load flake). They
+      are tests of a DEPENDENCY on Slint's semantics rather than of the
+      app's own code, which is exactly why they are worth having: if a
+      Slint upgrade changes either rule, the app has no guard of its own.
 - [x] **Double-click reaches 1:1 from ABOVE fit**, not only from fit
       (`loupe_double_click_above_fit_reaches_one_to_one`). This is the
       gesture that shipped broken through both gates, and it broke in the
       bridge, where no core test could see it: the `FASTCULL_DRIVE`
       `dblclick:x,y` action replays Slint's real ordering (a `clicked` that
       re-centers, then `double-clicked` on the same release) so the class of
-      defect is reachable from a test at all. It does NOT make the pointer
-      ROUTING testable — which Slint surface receives a physical wheel or
-      press is still review-verified only, and remains the case for the
-      pointer-injection harness (issue #13).
+      defect is reachable from a test at all. That token does not
+      hit-test — it invokes the callbacks directly — but the ROUTING it
+      could not reach now has its own tests (issue #13, below).
+- [x] **Pointer ROUTING** (issue #13, closed 2026-08-29): which Slint
+      surface receives a physical click, drag or wheel, driven through real
+      dispatched events and Slint's own hit-testing. Five tests, each with
+      an intermediate assertion that fails loudly and specifically when a
+      click misses, and each pairing every "nothing happened" claim with a
+      control in the same run that proves the same token DOES act when it
+      should — a dead pointer path must never buy a green:
+      `a_click_inside_the_iptc_panel_never_reaches_the_grid` (issue #12's
+      deferral: neither panel chrome nor a panel field fires `cell-clicked`
+      — the cursor and a 300-cell selection survive both — while the field
+      click provably lands ON the field, proven the way a user would: the
+      `t` and the Enter after it COMMIT a Title across the selection and
+      arm the revert slot, which a click that missed cannot do (`t` is not
+      a binding on the main scope). Deliberately NOT proven through
+      `keysfocus`: opening the panel with a real `I` after a real click
+      strands the keyboard about one run in eight — **issue #64**, found
+      here, pre-existing, in the issue #41 family, and never reproducible
+      through the `iptc` nav token, i.e. only when the item tree changes
+      inside a key dispatch — and a pointer-routing test must not go red
+      for a focus bug it is not about. A control click on the grid then
+      moves the cursor and collapses the selection);
+      `the_wheel_routing_table_holds_over_every_surface` (the grid scrolls;
+      the overlay scrollbar, the docked IPTC panel and the fit surface each
+      leave the grid where it was — the panel row also guards issue #12's
+      docking bug, where the Flickable really did extend under the panel);
+      `a_grid_drag_scrolls_without_clicking_the_cell_under_it` and
+      `two_distant_clicks_are_two_clicks_not_a_double_click` (above, and
+      deliberately two runs: sharing one script made every click after the
+      drag land wherever the flick's scroll had stopped, which under load
+      put one in a gutter); and `a_scrollbar_drag_in_the_loupe_claims_the_cursor` — the
+      POSITIVE half of the `sb-activity` claim, which until now had only
+      negative tests ("the claim does not fire") because nothing headless
+      could raise the flag; a `press./move./release.` on the overlay
+      scrollbar can, and the claim fires with the cursor following.
+      Coordinates are calibrated against measured geometry, not guessed:
+      the panel tests read the row rectangles the app traces
+      (`iptc field N laid out at X,Y size WxH`) and assert the point they
+      aimed at was inside, and the grid clicks sit in cell INTERIORS (at
+      8 columns x=900 lands in the 6 px gutter between two columns and hits
+      nothing — measured).
+      Every one is mutation-verified (2026-08-29, in a scratch worktree):
+      the scrollbar's `scroll-event` arm removed reddens the scrollbar row
+      (`vpy=-360` against `-180`); the fit surface's arm made to `reject`
+      reddens the fit row; `grid-width` ignoring `panel-w` — issue #12's
+      docking bug — reddens the panel WHEEL row on its own, and the panel
+      CLICK test together with the containment `TouchArea`'s removal (each
+      alone leaves the click test green: the two are defence in depth, and
+      the test binds on their conjunction — recorded in its comment);
+      `sb_activity` forced to `false` reddens the scrollbar-drag claim;
+      the wheel accumulator's 60 px changed to 50 reddens the notch pin.
+      The two Slint-dependency tests pin a DEPENDENCY rather than app
+      code: no app-side mutation can make a drag click (claiming the
+      cursor from the cell's raw pointer release does nothing, because the
+      Flickable takes the grab and the cell stops receiving events), so the
+      drag test is reddened from the other side — a non-interactive
+      Flickable, or a drag shortened below Slint's 8 px threshold, both
+      fail its "the drag scrolled" precondition — and the double-click rule
+      carries its control in the run (the same cadence on one point DOES
+      open the loupe).
+      All five are also load-verified in DEBUG, which is the profile CI
+      runs on both platforms: 20 runs each under six busy cores, after the
+      gesture spans were compressed to a third of Slint's `DURATION_THRESHOLD`
+      and `click_interval` (a 600 ms drag and a 150 ms click pair fit on an
+      idle machine and lost the race about one run in ten — those windows
+      are measured against a frame clock, which lags under load).
+      **Containment through the real path** — the fidelity trap this issue
+      names, closed in the two tests it bit:
+      `about_dialog_renders_and_contains_the_keyboard` and
+      `shortcuts_popup_contains_the_keyboard` used to open the popup with
+      the `about`/`shortcuts` drive token and press N/P as NAV tokens —
+      and the nav tokens never reach the `keys` FocusScope at all (the
+      harness mirrors the containment with an `if` of its own), so both
+      tests asserted the mirror and the shipped guard could have been
+      deleted with the suite green. They now open through the real Help
+      menu items where the geometry is calibrated, send real key events,
+      assert `keysfocus=true` while the popup is up (a stranded keyboard
+      swallows keys just as thoroughly and means the opposite), and end
+      with the control the mirror never needed: Esc, then the SAME key,
+      which must mark. The tokens themselves do not force focus (they have
+      run the menu item's own `activated` body — set visible +
+      `modal-opened` — since issue #41; unchanged here), so what they skip
+      is only the MenuBar's focus-restore strand, which the click-driven
+      tests cover. The nav-token mirror keeps its own coverage in
+      `a_wheel_over_the_help_popups_never_scrolls_the_grid_behind_them`,
+      which drives two nav actions under a token-opened About and asserts
+      both the `about toggled to true` line and the two
+      "drive swallowed by modal" ones — the assertions the migration
+      moved out of the About test rather than dropped.
+      Verified by mutation, both directions (2026-08-29): with the
+      FocusScope's containment arms cut back to Esc-only — the exact
+      pre-#23 bug the persona reported — the NEW tests fail ("a mark
+      leaked through the modal", `✕1` with the popup up) and the OLD
+      token-driven ones PASS. Demonstrated rather than argued.
+      Decision, recorded: `i-slint-backend-testing` is NOT adopted. Real
+      dispatched events already go through Slint's hit-testing, so its
+      `ElementHandle` would buy element lookup at the price of a dependency
+      on an internal, unstable crate — and would replace calibrated
+      coordinates (which are the same thing a user's pointer has) with
+      element identity, hiding exactly the class of bug where an element is
+      somewhere unexpected. Still out of reach and NOT covered by any of
+      this: the native rfd folder dialog's focus behaviour, OS- or
+      compositor-level focus (native menus on X11/Windows), and Tab-cycling
+      within panel fields (spec G7) — all three need input the app never
+      sees, and remain manual-acceptance items.
 - [x] Slint screenshot smoke tests (`fastcull-app --screenshot <out>` +
       `tests/screenshot.rs`): grid placeholder (synthetic), loaded thumbnails
       (texture-variance asserted), failed-badge session, loupe fit
@@ -1930,7 +2052,19 @@ Documented because they ship in release builds (validator finding):
   keys respect the modal containment exactly like real keypresses
   ("drive swallowed by modal" trace); `quit`/`iptc`/`resize` and the
   modal toggles themselves remain live harness plumbing, like the menu
-  bar.
+  bar. That mirror is CONVENIENCE, not evidence: it is the harness's own
+  `if`, not the FocusScope's, so a test that asserts containment must
+  press a real key (`key:n`), not a nav token — the two containment tests
+  did the latter for months and would have stayed green with the shipped
+  guard deleted (issue #13's fidelity note). The `about`/`shortcuts`
+  toggles are the menu item's own `activated` body — the visibility flag
+  plus `modal-opened` — and nothing else: they do not force focus (that
+  bare `focus-keys()` went away with issue #41), and what they cannot
+  exercise is the MenuBar's post-activation focus restore, which is why
+  the focus-sensitive tests reach the popups by clicking the real Help
+  menu items — a strand gated by `menu_clicks_are_calibrated()`, so on
+  the Windows runner those tests fall back to the token path and the
+  fidelity fix is, in practice, exercised on Linux only (QE 2026-08-29).
   `scroll:N` browses the grid to offset N logical px WITHOUT claiming the
   cursor — what the wheel does natively, and the one gesture the harness
   could not express, which is why a re-anchor that hauled a browsing user's

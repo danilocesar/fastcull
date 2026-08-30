@@ -497,7 +497,9 @@ sweep, now zero); and four acceptance criteria that had no real test —
 every pointer assertion sat at dead centre, where the pointer anchor and
 the centre anchor coincide. A `FASTCULL_DRIVE dblclick:X,Y` action makes
 bridge-level pointer defects reachable from a test for the first time;
-pointer ROUTING remains review-verified only (issue #13).
+pointer ROUTING remains review-verified only (issue #13 — closed
+2026-08-29 by real dispatched pointer events; see ui-grid.md's
+Pointer ROUTING criterion).
 
 ## v0.4.0 (released 2026-07-27)
 

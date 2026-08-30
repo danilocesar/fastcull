@@ -1821,10 +1821,22 @@ fn panel_toggle_at_one_to_one_reanchors_the_crop() {
 }
 
 /// Issue #23: the About dialog renders and the modal contains the
-/// keyboard (user decision: "swallow everything in that screen").
-/// Driven reject/pick with About open must mark NOTHING. Fails on old
-/// code: the `about` drive didn't exist (Help > About routed to the
-/// shortcuts popup), so the marks fire and the counts assert breaks.
+/// keyboard (user decision: "swallow everything in that screen"). Real
+/// N and P keystrokes with About open must mark NOTHING.
+///
+/// Rewritten for issue #13's fidelity note: this used to open About with
+/// the `about` drive token and press N/P as NAV tokens, and both are
+/// replicas of the shipped path rather than the path. The nav tokens
+/// never reach the `keys` FocusScope at all — the harness mirrors the
+/// containment with an `if` of its own — so the test asserted the
+/// mirror, and the real guard (the FocusScope's `about-visible` arm)
+/// could have been deleted with the suite still green. It now opens
+/// About through the REAL Help menu where the geometry is calibrated
+/// (the menu's own focus save/restore is the machinery #41 D2 broke in)
+/// and sends REAL key events, so what swallows them is the shipped
+/// FocusScope. The keyboard's whereabouts is asserted with them: a
+/// stranded keyboard would swallow the keys just as thoroughly and mean
+/// the opposite.
 #[test]
 fn about_dialog_renders_and_contains_the_keyboard() {
     if !has_display() {
@@ -1833,17 +1845,71 @@ fn about_dialog_renders_and_contains_the_keyboard() {
     }
     let _s = serial();
     let out = out_dir().join("about-dialog.jpg");
+    // Off the calibrated runners the popup is opened by the token — it
+    // runs the menu item's own `activated` body (visible + modal-opened),
+    // so the containment under test is reached honestly; only the menu's
+    // focus-restore strand is skipped there.
+    let open = if menu_clicks_are_calibrated() {
+        "600:click.115,19;900:click.180,93"
+    } else {
+        "900:about"
+    };
+    let script = format!(
+        "{open};1300:dump.up;1600:key:n;1900:key:p;2300:dump.contained;\
+         2600:key:escape;2900:dump.closed;3200:key:n;3600:dump.control;\
+         3900:about;4300:dump.shot"
+    );
     let stderr = shoot_env_stderr(
         &["--synthetic", "200"],
-        &[
-            ("FASTCULL_TRACE", "1"),
-            ("FASTCULL_DRIVE", "600:about;900:reject;1200:pick"),
-        ],
+        &[("FASTCULL_TRACE", "1"), ("FASTCULL_DRIVE", script.as_str())],
         &out,
     );
+    // The dialog is up (a missed menu click cannot pass), and the modal —
+    // not some destroyed element — owns the keyboard.
+    let up = qedump(&stderr, "up");
+    assert_eq!(
+        dump_field(up, "about"),
+        "true",
+        "About never opened (the Help menu click missed?):\n{stderr}"
+    );
+    assert_eq!(
+        dump_field(up, "keysfocus"),
+        "true",
+        "the keyboard is not on the main scope with About up — a stranded \
+         keyboard swallows keys too, and would make the containment below \
+         mean nothing (issue #41 D2):\n{stderr}"
+    );
+    // THE containment: two real keystrokes, no mark.
+    let contained = qedump(&stderr, "contained");
+    assert_eq!(
+        dump_field(contained, "about"),
+        "true",
+        "About closed itself under the stray keys:\n{stderr}"
+    );
     assert!(
-        stderr.contains("about toggled to true"),
-        "About never opened:\n{stderr}"
+        dump_text(contained, "status").contains("★0 ✕0"),
+        "a mark leaked through the About modal: {contained}"
+    );
+    // The control: Esc closes it and the SAME key now marks. Without this
+    // the containment assertion also passes on a build where N is simply
+    // dead.
+    assert_eq!(
+        dump_field(qedump(&stderr, "closed"), "about"),
+        "false",
+        "Esc did not close About:\n{stderr}"
+    );
+    let control = qedump(&stderr, "control");
+    assert!(
+        dump_text(control, "status").contains("★0 ✕1"),
+        "the N after About closed did not reject either — the containment \
+         assertion above is vacuous: {control}"
+    );
+    // Re-opened for the shutter: the pixel assertion at the bottom needs
+    // the card on screen, and the closing above is what the control needs.
+    assert_eq!(
+        dump_field(qedump(&stderr, "shot"), "about"),
+        "true",
+        "About was not re-opened for the screenshot:\n{stderr}"
     );
     // The build-composed version reached the dialog property.
     assert!(
@@ -1913,20 +1979,6 @@ fn about_dialog_renders_and_contains_the_keyboard() {
             );
         }
     }
-    assert_eq!(
-        stderr.matches("drive swallowed by modal").count(),
-        2,
-        "reject/pick were not both swallowed by the modal:\n{stderr}"
-    );
-    let status = stderr
-        .lines()
-        .rev()
-        .find_map(|l| l.split("status at shutter: ").nth(1))
-        .expect("no status trace");
-    assert!(
-        status.contains("★0 ✕0"),
-        "a mark leaked through the About modal: {status}"
-    );
     // The card's bright text over the dark backing: the synthetic grid
     // tops out near luma 56 (hsv v=0.22) and its labels at ~130, so
     // >150-luma pixels in the centered card region prove the dialog
@@ -1949,8 +2001,11 @@ fn about_dialog_renders_and_contains_the_keyboard() {
 
 /// Issue #23's persona finding: the shortcuts popup used to swallow
 /// ONLY Esc — pressing N while reading the key list rejected the photo
-/// under the scrim. Same containment as About now. Fails on old code
-/// (no `shortcuts` drive: the popup never opens, the reject fires).
+/// under the scrim. Same containment as About, and driven the same way
+/// after issue #13's fidelity note: the REAL Help > Keyboard Shortcuts
+/// item, a REAL N, and the keyboard's whereabouts asserted alongside the
+/// mark counts (see the About test for why the token-plus-nav version
+/// was testing the harness rather than the app).
 #[test]
 fn shortcuts_popup_contains_the_keyboard() {
     if !has_display() {
@@ -1959,30 +2014,59 @@ fn shortcuts_popup_contains_the_keyboard() {
     }
     let _s = serial();
     let out = out_dir().join("shortcuts-contained.jpg");
+    let open = if menu_clicks_are_calibrated() {
+        "600:click.115,19;900:click.180,61"
+    } else {
+        "900:shortcuts"
+    };
+    let script = format!(
+        "{open};1300:dump.up;1600:key:n;2000:dump.contained;\
+         2300:key:escape;2600:dump.closed;2900:key:n;3300:dump.control;\
+         3600:shortcuts;4000:dump.shot"
+    );
     let stderr = shoot_env_stderr(
         &["--synthetic", "200"],
-        &[
-            ("FASTCULL_TRACE", "1"),
-            ("FASTCULL_DRIVE", "600:shortcuts;900:reject"),
-        ],
+        &[("FASTCULL_TRACE", "1"), ("FASTCULL_DRIVE", script.as_str())],
         &out,
     );
-    assert!(
-        stderr.contains("shortcuts toggled to true"),
-        "shortcuts popup never opened:\n{stderr}"
+    let up = qedump(&stderr, "up");
+    assert_eq!(
+        dump_field(up, "shortcuts"),
+        "true",
+        "the shortcuts popup never opened (the Help menu click missed?):\n{stderr}"
+    );
+    assert_eq!(
+        dump_field(up, "keysfocus"),
+        "true",
+        "the keyboard is not on the main scope with the popup up — a \
+         stranded keyboard would swallow the N for the wrong reason \
+         (issue #41 D2):\n{stderr}"
+    );
+    let contained = qedump(&stderr, "contained");
+    assert_eq!(
+        dump_field(contained, "shortcuts"),
+        "true",
+        "the popup closed itself under the stray key:\n{stderr}"
     );
     assert!(
-        stderr.contains("drive swallowed by modal: reject"),
-        "the reject was not swallowed:\n{stderr}"
+        dump_text(contained, "status").contains("★0 ✕0"),
+        "a mark leaked through the shortcuts modal: {contained}"
     );
-    let status = stderr
-        .lines()
-        .rev()
-        .find_map(|l| l.split("status at shutter: ").nth(1))
-        .expect("no status trace");
+    assert_eq!(
+        dump_field(qedump(&stderr, "closed"), "shortcuts"),
+        "false",
+        "Esc did not close the shortcuts popup:\n{stderr}"
+    );
+    let control = qedump(&stderr, "control");
     assert!(
-        status.contains("★0 ✕0"),
-        "a mark leaked through the shortcuts modal: {status}"
+        dump_text(control, "status").contains("★0 ✕1"),
+        "the N after the popup closed did not reject either — the \
+         containment assertion above is vacuous: {control}"
+    );
+    assert_eq!(
+        dump_field(qedump(&stderr, "shot"), "shortcuts"),
+        "true",
+        "the popup was not re-opened for the screenshot:\n{stderr}"
     );
 }
 
@@ -3950,6 +4034,24 @@ fn paced_taps_over_an_interleaved_session_land_warm() {
 /// accumulate into exactly one stop. A guard (green on both sides of
 /// the #46 fix — wheel SEMANTICS did not change, only its wiring):
 /// non-vacuous because a dead scroll path leaves zf at 1.0.
+///
+/// It also pins the NOTCH SIZE itself (issue #13). "One notch = 60
+/// logical px" is winit's line-delta conversion, and the accumulator in
+/// `main.slint` is written against that number: 59 px must fire nothing
+/// and the 60th px must fire a stop, which is what `d1`/`w1` assert.
+/// The number was comment-only until then — a Slint upgrade that changed
+/// the conversion would have made every wheel notch a fraction of a stop
+/// with nothing to say so. The same pair pins the residue carry (the
+/// accumulator subtracts 60 rather than zeroing) from the other side of
+/// the `w3` half-notch pair.
+///
+/// And the reserved no-op: a wheel DOWN at fit does nothing at all
+/// (pointer contract). Below fit there is no ladder, and browsing by
+/// wheel was taken away on purpose (user decision, issue #11) — the
+/// event must neither zoom nor fall through to the grid behind the fit
+/// surface. That is asserted here on the zoom side (`d0`); the "and it
+/// does not scroll the grid either" half needs a session with somewhere
+/// to scroll and lives in `the_wheel_routing_table_holds_over_every_surface`.
 #[test]
 fn overlay_wheel_still_zooms_one_stop_per_notch() {
     if !has_display() {
@@ -3970,16 +4072,34 @@ fn overlay_wheel_still_zooms_one_stop_per_notch() {
             ("FASTCULL_TRACE", "1"),
             (
                 "FASTCULL_DRIVE",
-                "8000:wheel.700,450,60;9500:dump.w1;10000:wheel.700,450,60;10500:dump.w2;\
+                "6000:wheel.700,450,-60;6400:dump.d0;\
+                 6800:wheel.700,450,59;7200:dump.d1;\
+                 7600:wheel.700,450,1;8000:dump.w1;\
+                 10000:wheel.700,450,60;10500:dump.w2;\
                  11000:wheel.700,450,30;11200:wheel.700,450,30;11700:dump.w3",
             ),
         ],
         &out,
     );
+    // A full notch DOWN at fit: the reserved no-op.
+    assert_eq!(
+        dump_field(qedump(&stderr, "d0"), "zf"),
+        "1.000",
+        "a wheel notch DOWN at fit moved the zoom ladder:\n{stderr}"
+    );
+    // 59 px is not a notch…
+    assert_eq!(
+        dump_field(qedump(&stderr, "d1"), "zf"),
+        "1.000",
+        "59 logical px fired a notch — the accumulator's threshold is not \
+         the 60 px winit delivers per line:\n{stderr}"
+    );
+    // …and the 60th px is.
     assert_eq!(
         dump_field(qedump(&stderr, "w1"), "zf"),
         "1.500",
-        "a wheel notch at fit did not enter the zoom ladder:\n{stderr}"
+        "the 60th px did not complete a notch (or the notch did not enter \
+         the zoom ladder):\n{stderr}"
     );
     assert_eq!(
         dump_field(qedump(&stderr, "w2"), "zf"),
@@ -5917,6 +6037,14 @@ fn a_wheel_over_the_export_dialog_never_scrolls_the_grid_behind_it() {
 /// reading the component, and a future edit to it would take About and the
 /// shortcuts popup down with no test saying so.
 ///
+/// It also keeps the nav-token modal mirror under test (issue #13): the
+/// containment tests moved to real keys and real menu items, and the two
+/// assertions that were about the HARNESS rather than the app — the
+/// `about toggled to true` line and the "drive swallowed by modal" count —
+/// moved here, to the test that still opens a popup by token. Driven nav
+/// actions must keep dying at that mirror, or every token-driven script in
+/// the suite silently starts marking photographs behind a scrim.
+///
 /// One run covers both call sites and both card shapes: the shortcuts card
 /// (560 px, clicks pass through to the scrim) and About (348 px,
 /// `card-eats-clicks`, whose extra `TouchArea` has no `scroll-event` arm of
@@ -5933,7 +6061,8 @@ fn a_wheel_over_the_help_popups_never_scrolls_the_grid_behind_them() {
     let out = out_dir().join("i49-popup-wheel.jpg");
     let script = format!(
         "{PIN_WINDOW};1600:{w};2100:dump.prewheel;\
-         2400:about;2700:dump.aboutup;3000:{w};3700:dump.aboutwheeled;\
+         2400:about;2700:dump.aboutup;2800:reject;2900:pick;\
+         3000:{w};3700:dump.aboutwheeled;\
          4000:key:escape;4300:shortcuts;4600:dump.shortcutsup;\
          4900:{w};5600:dump.shortcutswheeled;\
          5900:key:escape;6200:dump.closed;6500:{w};7200:dump.control",
@@ -5944,7 +6073,29 @@ fn a_wheel_over_the_help_popups_never_scrolls_the_grid_behind_them() {
         &[("FASTCULL_TRACE", "1"), ("FASTCULL_DRIVE", script.as_str())],
         &out,
     );
+    // The nav-token modal mirror, which lives here because this is where
+    // the tokens still legitimately open a popup (issue #13: the two
+    // containment tests moved to real keys, and these two assertions —
+    // the toggle's own trace, and the harness swallowing driven nav
+    // actions while a modal is up — would otherwise have been dropped
+    // rather than moved). It is the MIRROR, not the FocusScope: what the
+    // shipped guard does with a real keystroke is asserted in
+    // `about_dialog_renders_and_contains_the_keyboard`.
+    assert!(
+        stderr.contains("about toggled to true"),
+        "the `about` drive token did not report opening the dialog:\n{stderr}"
+    );
+    assert_eq!(
+        stderr.matches("drive swallowed by modal").count(),
+        2,
+        "the driven reject/pick were not both swallowed while About was \
+         up:\n{stderr}"
+    );
     let vpy = |label: &str| dump_field(qedump(&stderr, label), "vpy");
+    assert!(
+        dump_text(qedump(&stderr, "closed"), "status").contains("★0 ✕0"),
+        "a driven mark leaked through the About modal:\n{stderr}"
+    );
     assert_eq!(
         vpy("prewheel"),
         "-180.0",
@@ -5986,5 +6137,509 @@ fn a_wheel_over_the_help_popups_never_scrolls_the_grid_behind_them() {
         "-360.0",
         "the control wheel did not move the grid either, so the assertions \
          above are vacuous:\n{stderr}"
+    );
+}
+
+// ---------------------------------------------------------------------------
+// Pointer ROUTING (issue #13): which Slint surface receives a physical
+// click, drag or wheel — the question every previous test had to answer by
+// reading the .slint file. The primitives that make it answerable
+// (`click.`, `press./move./release.`, `wheel.`, `dump.`) all exist now, so
+// these four tests drive real dispatched events through Slint's own
+// hit-testing and assert what the app did with them.
+//
+// House rules, all four: the window is pinned first (coordinates are
+// geometry, and geometry is only that geometry at 1440x900); every click
+// that must LAND carries an intermediate assertion that fails loudly and
+// specifically when it misses; every "nothing happened" claim is paired
+// with a control in the same run that proves the same token DOES do
+// something when it should, so a dead pointer path can never buy a green.
+//
+// The panel tests wait on `iptc field 0 laid out at 1150` — the row's x at
+// the pinned width and at no other, so the wait means "the window really
+// is the size these coordinates were measured in, and the panel is laid
+// out in it". A `resize:` is a request to the compositor, which under load
+// takes its time answering (issue #61).
+// ---------------------------------------------------------------------------
+
+/// Issue #12's deferral, finally driven: a click inside the docked IPTC
+/// panel must not reach the grid. The panel's first child is a bare
+/// `TouchArea` whose whole job is to eat clicks that would otherwise fall
+/// through to a cell — where they would move the cursor and collapse a
+/// multi-selection in the middle of keywording it, which is the shape the
+/// issue describes. Nothing tested it: `cell-clicked` fires from Slint's
+/// hit-test, so only a real dispatched press can ask the question.
+///
+/// Two clicks, because the panel has two kinds of surface: bare chrome
+/// (its padding strip) and an editor (the Title field, which must take
+/// the keyboard and still not touch the cursor).
+///
+/// What the chrome click actually discriminates, measured by mutation:
+/// the panel is protected TWICE and the test binds on the conjunction.
+/// Removing the containment `TouchArea` alone leaves it green — the grid's
+/// Flickable is only `grid-width` wide, so there is no cell under the
+/// panel to reach. Extending the grid under the panel alone (issue #12's
+/// docking bug) leaves it green too — the containment `TouchArea` eats the
+/// press. With BOTH, the click lands on a cell and this test fails at the
+/// cursor assertion. That is the honest shape of the guarantee, and worth
+/// knowing: whoever removes one layer will find the other one holding.
+#[test]
+fn a_click_inside_the_iptc_panel_never_reaches_the_grid() {
+    if !has_display() {
+        eprintln!("screenshot smoke skipped: no display server");
+        return;
+    }
+    let _s = serial();
+    let out = out_dir().join("i13-panel-click.jpg");
+    // 300 synthetic cells: the panel docks over what would otherwise be
+    // grid, and a selection of 300 makes a leaked `cell-clicked` unmissable
+    // (a plain click collapses the whole selection).
+    //
+    // The click on a CELL sets the cursor the panel clicks must not move,
+    // and gives the selection something to be collapsed FROM — a plain
+    // cell click clears it, so `select-all` comes after.
+    //
+    // Both cell coordinates are interiors of the PANEL-OPEN layout (grid
+    // 1140 px wide: 8 columns of 135.75 px on a 141.75 px pitch, rows
+    // 90.5 px on 96.5), which is not the same grid as before the panel
+    // docked — 358,318 is cell 18's middle and 783,511 is cell 37's.
+    let script = format!(
+        "{PIN_WINDOW};1200:key:i;1300:wait:iptc field 0 laid out at 1150;\
+         1700:click.358,318;2000:select-all;\
+         2300:dump.before;2600:click.1145,400;3000:dump.chrome;\
+         3300:click.1290,177;3600:key:t;3800:key:return;4100:dump.field;\
+         4400:click.783,511;4800:dump.control"
+    );
+    let stderr = shoot_env_stderr(
+        &["--synthetic", "300"],
+        &[("FASTCULL_TRACE", "1"), ("FASTCULL_DRIVE", script.as_str())],
+        &out,
+    );
+    // The wait really gated the clicks (a dropped token would silently put
+    // the schedule back on the clock).
+    assert!(
+        stderr.contains("wait:iptc field 0 laid out at 1150 (satisfied"),
+        "the `wait:` step never fired — the clicks were timed, not gated:\n{stderr}"
+    );
+    let before = qedump(&stderr, "before");
+    assert_eq!(
+        dump_field(before, "iptc"),
+        "true",
+        "the panel never opened, so no click below is inside it:\n{stderr}"
+    );
+    assert_eq!(
+        dump_field(before, "selected"),
+        "300",
+        "select-all did not select the view, so a leaked grid click would \
+         have nothing to collapse:\n{stderr}"
+    );
+    assert_eq!(
+        dump_text(before, "revert"),
+        "",
+        "something had already armed the revert slot, so the field click's \
+         proof below is not its own:\n{stderr}"
+    );
+    let cursor_before = dump_field(before, "cursor");
+    // Calibration, against the rectangle the app itself reported. The
+    // chrome click is in the panel's own 10 px padding strip, LEFT of every
+    // field row: the one place in the panel where nothing but the
+    // containment TouchArea stands between the pointer and the grid.
+    // Over the field column the fields Flickable and the editors absorb
+    // presses themselves — proven by mutation (removing the containment
+    // TouchArea *and* extending the grid under the panel leaves a click at
+    // x=1200 still absorbed, while this one reaches a cell), so a chrome
+    // click there would assert their doing, not the panel's.
+    let f0 = iptc_field_rect(&stderr, 0, "drive: click.1145,400");
+    assert!(
+        (f0.0 - 10.0..f0.0).contains(&1145.0),
+        "the chrome click at x=1145 is not in the panel's padding strip \
+         (x {}..{}) — the panel padding or dock width changed:\n{stderr}",
+        f0.0 - 10.0,
+        f0.0
+    );
+    assert_click_inside(
+        iptc_field_rect(&stderr, 0, "drive: click.1290,177"),
+        (1290.0, 177.0),
+        "the Title field",
+    );
+    // The contract: neither click moved the cursor or touched the selection.
+    for label in ["chrome", "field"] {
+        let dump = qedump(&stderr, label);
+        assert_eq!(
+            dump_field(dump, "cursor"),
+            cursor_before,
+            "a click on the panel's {label} moved the cursor — it reached a \
+             grid cell (issue #12):\n{stderr}"
+        );
+        assert_eq!(
+            dump_field(dump, "selected"),
+            "300",
+            "a click on the panel's {label} collapsed the selection — it \
+             reached a grid cell (issue #12):\n{stderr}"
+        );
+    }
+    // The other half a cursor assertion cannot tell: the field click landed
+    // ON the field. Proven by what a user would call proof — the `t` and
+    // the Enter after it COMMITTED a Title across the selection, which
+    // arms the revert slot. A click that missed the LineEdit (or was eaten
+    // by the containment TouchArea beneath it) sends those two keys to the
+    // main scope, where `t` is not a binding and nothing arms.
+    //
+    // Deliberately not asserted through `keysfocus`: opening the panel
+    // with a real `I` strands the keyboard about one run in eight under
+    // load (issue #64), and a POINTER-ROUTING test must not go red for a
+    // focus bug it is not about. The commit is immune to it — Enter
+    // returns focus to the grid either way.
+    assert_ne!(
+        dump_text(qedump(&stderr, "field"), "revert"),
+        "",
+        "typing after the Title-field click committed nothing — the click \
+         missed the field:\n{stderr}"
+    );
+    // The control, same token, over the grid: a click there DOES move the
+    // cursor and collapse the selection. Without it every assertion above
+    // would also pass on a build where no click reaches anything.
+    let control = qedump(&stderr, "control");
+    assert_ne!(
+        dump_field(control, "cursor"),
+        cursor_before,
+        "the control click over the grid moved nothing either — the \
+         assertions above are vacuous:\n{stderr}"
+    );
+    assert_eq!(
+        dump_field(control, "selected"),
+        "0",
+        "the control click over the grid did not collapse the selection — \
+         the assertions above are vacuous:\n{stderr}"
+    );
+}
+
+/// The wheel ROUTING table, over the three surfaces that must not scroll
+/// the grid and the one that must. Which element receives a physical wheel
+/// is Slint's hit-test answer, not the app's: the fit surface, the overlay
+/// scrollbar and the docked panel each sit over (or beside) the grid's
+/// Flickable, and the only previous evidence that a wheel over them leaves
+/// the grid alone was a reading of `main.slint`.
+///
+/// The zoom half of the table — one notch up at fit enters the ladder, one
+/// more climbs it — lives in `overlay_wheel_still_zooms_one_stop_per_notch`
+/// (it needs a real RAW's zoom ceiling). What this test adds is where the
+/// wheel does NOT go, plus the inert direction at fit.
+///
+/// `--synthetic 300`: 38 rows of cells, so no scroll a script drives lands
+/// on the Flickable's bottom clamp, where "unmoved" would mean "out of
+/// room". A synthetic session also has no metadata to stream, so the
+/// settled-sort gate the positional-nav idiom demands does not apply here
+/// (the re-sort edge writes `vp_y` itself, and there is no re-sort) —
+/// the same reason the issue #49 dialog tests on `--synthetic` carry no
+/// such guard while the real-folder one does. Each swallowing surface is
+/// compared against a dump taken after
+/// the state change that precedes it, never against the number from before
+/// it — opening the panel legitimately re-anchors the viewport (the pitch
+/// changes with the grid width), and a comparison across that would be
+/// asserting the re-anchor, not the wheel.
+#[test]
+fn the_wheel_routing_table_holds_over_every_surface() {
+    if !has_display() {
+        eprintln!("screenshot smoke skipped: no display server");
+        return;
+    }
+    let _s = serial();
+    let out = out_dir().join("i13-wheel-routing.jpg");
+    let script = format!(
+        "{PIN_WINDOW};1600:{w};2100:dump.grid;\
+         2400:wheel.1430,400,-180;2900:dump.sb;\
+         3200:key:i;3300:wait:iptc field 0 laid out at 1150;3700:dump.panelopen;\
+         4000:wheel.1250,400,-180;4500:dump.panel;\
+         4800:key:i;5100:key:+;5200:key:+;5300:key:+;5400:key:+;5500:key:+;\
+         5900:dump.loupe;6200:{w};6700:dump.fitwheel;\
+         7000:key:g;7400:dump.grid2;7700:{w};8200:dump.control",
+        w = THREE_NOTCHES_DOWN
+    );
+    let stderr = shoot_env_stderr(
+        &["--synthetic", "300"],
+        &[("FASTCULL_TRACE", "1"), ("FASTCULL_DRIVE", script.as_str())],
+        &out,
+    );
+    // The wait really gated the clicks (a dropped token would silently put
+    // the schedule back on the clock).
+    assert!(
+        stderr.contains("wait:iptc field 0 laid out at 1150 (satisfied"),
+        "the `wait:` step never fired — the clicks were timed, not gated:\n{stderr}"
+    );
+    let vpy = |label: &str| dump_field(qedump(&stderr, label), "vpy");
+    // Row 1: over the grid, the wheel scrolls it. Everything below reads
+    // against this — a dead `wheel.` token would make the rest vacuous.
+    assert_eq!(
+        vpy("grid"),
+        "-180.0",
+        "three notches over the grid did not scroll it:\n{stderr}"
+    );
+    // Row 2: over the overlay scrollbar. Its TouchArea swallows the scroll
+    // deliberately (a wheel there is not loupe input and must not fall
+    // through to the fit surface either).
+    assert_eq!(
+        vpy("sb"),
+        "-180.0",
+        "a wheel over the overlay scrollbar scrolled the grid:\n{stderr}"
+    );
+    // Row 3: over the docked IPTC panel. Two things could break this — the
+    // panel letting the wheel through, or the grid extending under the
+    // panel again (issue #12's docking bug, where the Flickable really was
+    // beneath these pixels).
+    assert_eq!(
+        dump_field(qedump(&stderr, "panelopen"), "iptc"),
+        "true",
+        "the panel never opened, so the wheel below was over the grid:\n{stderr}"
+    );
+    assert_eq!(
+        vpy("panel"),
+        vpy("panelopen"),
+        "a wheel over the IPTC panel scrolled the grid beside it:\n{stderr}"
+    );
+    // Row 4: at loupe fit the wheel belongs to the zoom ladder, and DOWN
+    // from fit is the reserved no-op of the pointer contract — it must
+    // neither zoom out nor fall through and browse. At one column the
+    // Flickable underneath has 300 screens of room, so "unmoved" is a real
+    // claim here.
+    let loupe = qedump(&stderr, "loupe");
+    assert_eq!(
+        dump_field(loupe, "zoom"),
+        "6",
+        "five zoom-ins did not reach the loupe (one column):\n{stderr}"
+    );
+    assert_eq!(
+        vpy("fitwheel"),
+        vpy("loupe"),
+        "a wheel down at loupe fit browsed the grid behind the fit \
+         surface:\n{stderr}"
+    );
+    assert_eq!(
+        dump_field(qedump(&stderr, "fitwheel"), "zf"),
+        "1.000",
+        "a wheel down at fit moved the zoom ladder — the reserved no-op \
+         fired:\n{stderr}"
+    );
+    // The control: back at a grid zoom the same token still scrolls, so
+    // none of the three "unmoved" rows above is a dead pointer path.
+    let (grid2, control) = (vpy("grid2"), vpy("control"));
+    assert_ne!(
+        grid2, control,
+        "the control wheel over the grid moved nothing either — the \
+         swallowing assertions above are vacuous:\n{stderr}"
+    );
+}
+
+/// Issue #11, first half: a DRAG over the grid scrolls it without
+/// clicking the cell under it. That is Slint's own `clicked` definition
+/// (press and release with no drag between), which ui-grid.md records as
+/// "enforced by Slint" — a statement no test made until this one, and one
+/// the app depends on completely: a grid drag that also moved the cursor
+/// would silently re-cull the frame the user was only scrolling past.
+///
+/// The control comes FIRST, on purpose: a plain click on a cell moves the
+/// cursor (so the pointer path is provably alive, and the coordinates are
+/// provably cells), and the drag right after it must leave that cursor
+/// exactly where the click put it. Doing it the other way round would
+/// have to click after a drag, i.e. after a flick has scrolled the grid
+/// by an amount no script can predict.
+///
+/// It is a dependency pin rather than a test of app code, which is also
+/// why no app-side mutation can redden the "no click" half: claiming the
+/// cursor from the cell's raw pointer release (`PointerEventKind.up`)
+/// changes nothing, because once the Flickable takes the gesture the cell
+/// stops receiving events at all — the suppression is a grab, not a
+/// filter. What does redden it: making the Flickable non-interactive, and
+/// shortening the drag below Slint's 8 px threshold — both fail the
+/// "it scrolled" precondition, which is the same statement from the other
+/// side.
+#[test]
+fn a_grid_drag_scrolls_without_clicking_the_cell_under_it() {
+    if !has_display() {
+        eprintln!("screenshot smoke skipped: no display server");
+        return;
+    }
+    let _s = serial();
+    let out = out_dir().join("i13-grid-drag.jpg");
+    // The drag is four events over 180 ms: `click.`'s single-tick sequence
+    // has no displacement and no elapsed time, which is why the separately
+    // schedulable phases exist (issue #46) — but the span has to stay well
+    // INSIDE Slint's own window, which is measured against a frame clock
+    // that lags under load. A Flickable takes a gesture only if it passes
+    // DISTANCE_THRESHOLD (8 px) within DURATION_THRESHOLD (500 ms,
+    // `flickable.rs`). A 600 ms drag fits on an idle machine and lost that
+    // race in debug under six spinners (~1 run in 10; release was clean),
+    // so the moves land at +60/+120 ms and the release at +180: a third of
+    // the budget, and still a real multi-event gesture 140 px long.
+    //
+    // 272,260 is the centre of cell 9 at 8 columns and scroll 0 (column
+    // centres at 92.5 + 179.25c, row centres at 138 + 122r in window
+    // coordinates). Centres, not "somewhere in the cell": x=900 sits in
+    // the 6 px gutter between columns 4 and 5 and hits nothing at all —
+    // measured.
+    let script = format!(
+        "{PIN_WINDOW};1200:click.272,260;1500:dump.clicked;\
+         1800:press.630,504;1860:move.630,434;1920:move.630,364;\
+         1980:release.630,364;2900:dump.dragged"
+    );
+    let stderr = shoot_env_stderr(
+        &["--synthetic", "300"],
+        &[("FASTCULL_TRACE", "1"), ("FASTCULL_DRIVE", script.as_str())],
+        &out,
+    );
+    // The control: a click on a cell DOES move the cursor. Without it the
+    // assertion below would also pass on a build where no pointer event
+    // reaches the grid at all.
+    let clicked = qedump(&stderr, "clicked");
+    assert_eq!(
+        dump_field(clicked, "cursor"),
+        "9",
+        "the control click did not land on cell 9 — the pointer path is \
+         dead, or these coordinates are not a cell any more:\n{stderr}"
+    );
+    // The drag really was a drag: the Flickable took the gesture.
+    let dragged = qedump(&stderr, "dragged");
+    assert_ne!(
+        dump_field(dragged, "vpy"),
+        dump_field(clicked, "vpy"),
+        "the press/move/release over the grid did not scroll it, so \
+         'a drag does not click' is asserted about nothing:\n{stderr}"
+    );
+    // The contract: the cell under the press never got its `clicked`.
+    assert_eq!(
+        dump_field(dragged, "cursor"),
+        "9",
+        "a drag over the grid moved the cursor — the drag did not suppress \
+         the click (issue #11):\n{stderr}"
+    );
+}
+
+/// Issue #11, second half: two clicks far apart are two clicks, never a
+/// double-click. Also Slint's, and also load-bearing: the app deliberately
+/// holds NO proximity state of its own (the guard that did was deleted
+/// after it vetoed every double-click above fit), so the whole rule is
+/// `check_repeat` restarting the click count beyond 10 logical px
+/// (`i-slint-core`'s `input.rs`). If a Slint upgrade changes that, the
+/// persona's "eye, then beak, then wingtip" becomes a jump to 1:1 and only
+/// this test says so.
+///
+/// No drag in this run, deliberately: the two rules used to share one
+/// script, and a flick's scroll left every later coordinate landing
+/// somewhere unpredictable — one run in twenty clicked into a gutter and
+/// the far pair "missed the grid entirely". Two runs, two questions.
+///
+/// The near pair is the control and it gets its OWN point: with it reusing
+/// the far pair's second point (three clicks on one cell), the pairing
+/// sometimes did not happen — Slint restarts its click count whenever the
+/// top item changes (`window.rs`), and under a Flickable's delayed
+/// forwarding that identity is not stable across a gap. Both pairs share
+/// the same 100 ms cadence, well inside `click_interval` (500 ms), so the
+/// only difference between them is the distance the rule is about.
+#[test]
+fn two_distant_clicks_are_two_clicks_not_a_double_click() {
+    if !has_display() {
+        eprintln!("screenshot smoke skipped: no display server");
+        return;
+    }
+    let _s = serial();
+    let out = out_dir().join("i13-dblclick.jpg");
+    let script = format!(
+        "{PIN_WINDOW};1500:dump.pre;\
+         1800:click.272,260;1900:click.809,504;2400:dump.far;\
+         2900:click.451,626;3000:click.451,626;3500:dump.near"
+    );
+    let stderr = shoot_env_stderr(
+        &["--synthetic", "300"],
+        &[("FASTCULL_TRACE", "1"), ("FASTCULL_DRIVE", script.as_str())],
+        &out,
+    );
+    let pre = qedump(&stderr, "pre");
+    let far = qedump(&stderr, "far");
+    // Both clicks landed (cell 9, then cell 28) — a pair that missed the
+    // grid would prove nothing about pairing.
+    assert_eq!(
+        dump_field(far, "cursor"),
+        "28",
+        "the second distant click did not land on cell 28 — the pair \
+         missed the grid:\n{stderr}"
+    );
+    // THE rule: 600 px apart, 100 ms apart — two cursor moves, no loupe.
+    assert_eq!(
+        dump_field(far, "zoom"),
+        dump_field(pre, "zoom"),
+        "two clicks 600 px apart opened the loupe — they were folded into \
+         a double-click:\n{stderr}"
+    );
+    // The control: same cadence, one point, and THAT is a double-click.
+    assert_eq!(
+        dump_field(qedump(&stderr, "near"), "zoom"),
+        "6",
+        "two clicks on the same point did not open the loupe — the \
+         double-click path is dead and the distance rule above proves \
+         nothing:\n{stderr}"
+    );
+}
+
+/// The follow-scroll claim (issues #16/#22), asserted POSITIVE for the
+/// first time. At one column the visible image IS the cursor, so scrolling
+/// the loupe moves the cursor — but only on a real scrollbar signal
+/// (`sb-activity`), never on geometry moving underneath. Every existing
+/// test asserts the claim does NOT fire; none could assert that it does,
+/// because the flag is raised by the scrollbar's own `moved`/`clicked`
+/// handlers and nothing headless could reach them. A `press./move./
+/// release.` on the overlay scrollbar can, so this pins the claim's live
+/// half: the trace line, the new cursor, and that the cursor really moved
+/// far (the claim targets the centre row of the new viewport).
+#[test]
+fn a_scrollbar_drag_in_the_loupe_claims_the_cursor() {
+    if !has_display() {
+        eprintln!("screenshot smoke skipped: no display server");
+        return;
+    }
+    let _s = serial();
+    let out = out_dir().join("i13-sb-claim.jpg");
+    // One column over 300 cells: the scrollbar exists (the viewport is one
+    // image tall against 300 images of content) and the cursor's own cell
+    // leaves the viewport long before the thumb reaches mid-track, which
+    // is the claim's precondition.
+    let script = format!(
+        "{PIN_WINDOW};1300:key:+;1400:key:+;1500:key:+;1600:key:+;1700:key:+;\
+         2100:dump.loupe;\
+         2400:press.1430,80;2600:move.1430,300;2800:move.1430,500;\
+         3000:release.1430,500;3400:dump.dragged"
+    );
+    let stderr = shoot_env_stderr(
+        &["--synthetic", "300"],
+        &[("FASTCULL_TRACE", "1"), ("FASTCULL_DRIVE", script.as_str())],
+        &out,
+    );
+    let loupe = qedump(&stderr, "loupe");
+    assert_eq!(
+        dump_field(loupe, "zoom"),
+        "6",
+        "five zoom-ins did not reach the loupe, so the scrollbar drag below \
+         is a GRID scroll and claims nothing:\n{stderr}"
+    );
+    // The drag reached the scrollbar: the viewport moved. (A press outside
+    // it would leave `vpy` alone and the claim would be asserted about a
+    // scroll that never happened.)
+    let dragged = qedump(&stderr, "dragged");
+    assert_ne!(
+        dump_field(dragged, "vpy"),
+        dump_field(loupe, "vpy"),
+        "the scrollbar drag did not scroll the loupe — the press missed the \
+         bar (x 1422..1440 at this window size):\n{stderr}"
+    );
+    // THE claim: scrolling the loupe with the bar moves the cursor with it.
+    assert!(
+        stderr.contains("follow-scroll claim: cursor pos "),
+        "a scrollbar drag at one column never claimed the cursor — the \
+         positive half of the sb-activity gate is dead (issues \
+         #16/#22):\n{stderr}"
+    );
+    assert_ne!(
+        dump_field(dragged, "cursor"),
+        dump_field(loupe, "cursor"),
+        "the follow-scroll claim traced but the cursor did not move:\n{stderr}"
     );
 }

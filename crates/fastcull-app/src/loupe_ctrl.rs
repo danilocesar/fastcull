@@ -397,7 +397,12 @@ fn machine_ctx(
 /// is already enforced by Slint itself: `check_repeat` restarts the click
 /// count unless the second press lands within 10 logical px of the first
 /// (`i-slint-core-1.17.1/input.rs`, `square_length() < 100`), so
-/// `double-clicked` cannot fire for distant presses at all.
+/// `double-clicked` cannot fire for distant presses at all. Anchored to a
+/// test since 2026-08-29 (issue #13): the grid half of that dependency is
+/// driven with real clicks in
+/// `two_distant_clicks_are_two_clicks_not_a_double_click` — two presses
+/// 600 px apart do not pair, the same two on one point do — and the drag
+/// half in `a_grid_drag_scrolls_without_clicking_the_cell_under_it`.
 ///
 /// The check that used to live here was not merely redundant, it VETOED
 /// the gesture it guarded (validator FAIL-1 / QE D1, 2026-07-30). It

@@ -167,11 +167,14 @@ component ModalScrim inherits Rectangle {
 // the wheel (the fit surface and the zoom overlay).
 //
 // One notch = one ladder stop: winit delivers 60px per wheel notch
-// (validated against the backend source); subtracting rather than
-// zeroing keeps the remainder for hi-res devices, and a direction flip
-// resets the residue so a reversal never fires late. `feed` returns
-// +1/-1 when a notch fires (0 otherwise) and also leaves it in `last`,
-// because a callback body cannot hold a local.
+// (validated against the backend source, and PINNED by
+// `overlay_wheel_still_zooms_one_stop_per_notch` — 59 px fires nothing,
+// the 60th px fires a stop, so a backend that changed the conversion
+// fails a test instead of quietly making every notch a fraction of a
+// stop); subtracting rather than zeroing keeps the remainder for hi-res
+// devices, and a direction flip resets the residue so a reversal never
+// fires late. `feed` returns +1/-1 when a notch fires (0 otherwise) and
+// also leaves it in `last`, because a callback body cannot hold a local.
 component WheelNotches {
     property <length> acc: 0;
     out property <int> last: 0;
