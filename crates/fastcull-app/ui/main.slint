@@ -1,4 +1,4 @@
-import { LineEdit, ComboBox, Button, Palette } from "std-widgets.slint";
+import { LineEdit, ComboBox, Button, Palette, ScrollView } from "std-widgets.slint";
 
 // FastCull main window: virtualized zoomable grid (specs/modules/ui-grid.md).
 // The Rust side owns all layout math; `cells` contains ONLY the visible
@@ -414,6 +414,17 @@ export component MainWindow inherits Window {
     // script can `wait:` for the row instead of guessing, and the test can
     // assert afterwards that the point it aimed at was inside the rect.
     callback dbg-field-laid-out(int, length, length, length, length);
+    // The same facility for the two dialog CARDS and their button rows
+    // (issue #62). A card whose height follows its content can no longer
+    // be read off the .slint file — it is a layout outcome, and the
+    // property that matters ("the buttons are inside the card") is a
+    // relation between two rectangles. The string names which one:
+    // "clip card", "clip buttons", "copy card", "copy buttons".
+    callback dbg-card-laid-out(string, length, length, length, length);
+    // Where a dialog's scrolling body currently stands. Nothing else in a
+    // run can see it: the body has no cursor and no selection, so "PgDn
+    // moved the report" is otherwise only checkable by eye.
+    callback dbg-body-scrolled(string, length);
     // Scroll offset (negative Flickable viewport-y); Rust reads and writes it.
     in-out property <length> vp-y: 0px;
     // Geometry the Rust layout math needs (the grid area = flickable size).
@@ -1574,6 +1585,15 @@ export component MainWindow inherits Window {
                 // element's ancestor chain).
                 width: 100%;
                 height: 100%;
+                // Move the report body by `dy`, clamped to what there is
+                // to see. `viewport-y` is 0 at the top and negative going
+                // down; the floor is `height - viewport-height`, which is
+                // 0 when nothing overflows, so an over-large step lands on
+                // the last line instead of scrolling into blank space.
+                function scroll-copy-body(dy: length) {
+                    copy-body.viewport-y = clamp(copy-body.viewport-y + dy,
+                        min(0px, copy-body.height - copy-body.viewport-height), 0px);
+                }
                 key-pressed(event) => {
                     // Modal containment, topmost-first (issue #42): About
                     // or the shortcuts popup can open OVER this dialog
@@ -1593,6 +1613,39 @@ export component MainWindow inherits Window {
                             }
                         }
                         return accept;
+                    }
+                    // THE BODY SCROLLS FROM THE KEYBOARD TOO (issue #62).
+                    // Only while it actually overflows: below that these
+                    // keys keep the meaning they have today (swallowed by
+                    // the question, or rejected), and B/O/Esc/Enter are
+                    // never in this set. This is a keyboard-first app —
+                    // a report the mouse can reach and the keyboard
+                    // cannot is not a report the user can read.
+                    if (copy-body.viewport-height > copy-body.height) {
+                        if (event.text == Key.DownArrow) {
+                            self.scroll-copy-body(-40px);
+                            return accept;
+                        }
+                        if (event.text == Key.UpArrow) {
+                            self.scroll-copy-body(40px);
+                            return accept;
+                        }
+                        if (event.text == Key.PageDown) {
+                            self.scroll-copy-body(-copy-body.height);
+                            return accept;
+                        }
+                        if (event.text == Key.PageUp) {
+                            self.scroll-copy-body(copy-body.height);
+                            return accept;
+                        }
+                        if (event.text == Key.Home) {
+                            self.scroll-copy-body(copy-body.viewport-height);
+                            return accept;
+                        }
+                        if (event.text == Key.End) {
+                            self.scroll-copy-body(-copy-body.viewport-height);
+                            return accept;
+                        }
                     }
                     // The clash question owns every key while it is up
                     // (fileops.md: the destructive answer must not sit on
@@ -1648,12 +1701,33 @@ export component MainWindow inherits Window {
                 x: (parent.width - self.width) / 2;
                 y: (parent.height - self.height) / 2;
                 width: 560px;
-                height: min(480px, parent.height - 40px);
+                // Content-driven between the old constant as a FLOOR and
+                // the window, for the reason the export card carries
+                // (issue #62). This card's unbounded text is the report:
+                // `report_lines` prints one `FAILED name: reason` line per
+                // file that failed, so a destination that goes read-only
+                // mid-run words itself as long as the run was.
+                height: clamp(
+                    copy-card-layout.preferred-height,
+                    min(480px, parent.height - 40px),
+                    parent.height - 40px);
                 border-radius: 8px;
                 background: #202028;
                 border-width: 1px;
                 border-color: #3a3a44;
-                VerticalLayout {
+                init => {
+                    root.dbg-card-laid-out("copy card", self.absolute-position.x,
+                        self.absolute-position.y, self.width, self.height);
+                }
+                changed absolute-position => {
+                    root.dbg-card-laid-out("copy card", self.absolute-position.x,
+                        self.absolute-position.y, self.width, self.height);
+                }
+                changed height => {
+                    root.dbg-card-laid-out("copy card", self.absolute-position.x,
+                        self.absolute-position.y, self.width, self.height);
+                }
+                copy-card-layout := VerticalLayout {
                     padding: 18px;
                     spacing: 10px;
                     Text {
@@ -1741,107 +1815,152 @@ export component MainWindow inherits Window {
                             }
                         }
                     }
-                    if root.copy-preview != "": Text {
-                        text: root.copy-preview;
-                        color: #9898a8;
-                        font-size: 11px;
-                    }
-                    Text {
-                        text: root.copy-summary;
-                        color: #c8c8d0;
-                        font-size: 13px;
-                    }
-                    // Plan-preview state only: "Copy will ask what to do"
-                    // read as a promise ABOUT THE FUTURE while the copy was
-                    // running, and sat above the final report on the one
-                    // screen where the user decides whether to trust what
-                    // just happened to their files (gate finding).
-                    if root.copy-collisions != "" && root.copy-state == 0: Text {
-                        text: root.copy-collisions;
-                        color: #ffb84d;
-                        font-size: 12px;
-                        // Three notes can share this line ("2 will be
-                        // renamed · 1 sidecars will be refreshed · 1 copied
-                        // earlier but gone…"): unwrapped, the part that
-                        // matters most was clipped at the dialog edge (QE).
-                        wrap: word-wrap;
-                    }
-                    // THE CLASH QUESTION (copy-state 3). The rows are
-                    // stacked, not side by side: three outcome-labelled
-                    // answers do not fit across a 560px card (persona
-                    // measurement 2026-08-21), and a vertical list reads
-                    // as what it is — a menu of three choices, in order of
-                    // increasing consequence, with Cancel set apart.
-                    if root.copy-state == 3: VerticalLayout {
-                        spacing: 6px;
-                        Text {
-                            text: root.copy-confirm;
-                            color: #e8e8f0;
-                            font-size: 13px;
-                            wrap: word-wrap;
+                    // THE GROWING TEXT LIVES HERE, and it SCROLLS instead of
+                    // pushing the button row out of the card (issue #62). The card
+                    // grows to fit this body up to the window; past that the body
+                    // is the only row the layout can shrink (`vertical-stretch`,
+                    // no min-height of its own — the header rows and the button
+                    // row cannot give up a pixel), so the deficit lands here and
+                    // the content scrolls. Nothing is ever truncated, and the
+                    // buttons stay inside the card wherever the ceiling can
+                    // still hold the fixed rows above and below it (~300px of
+                    // window height — video-export.md records the measurement
+                    // and the case below it).
+                    //
+                    // `preferred-height` is the content's, so the CARD's
+                    // content-driven height above counts this region at full size
+                    // until the ceiling; `viewport-width` is pinned to the view's
+                    // own width so nothing ever scrolls sideways. A ScrollView
+                    // rather than a bare Flickable: it scrolls the same way and
+                    // its scrollbar is the only thing that says a report was cut
+                    // off at the ceiling (the clip is line-aligned, so without one
+                    // a truncated list looks complete).
+                    copy-body := ScrollView {
+                        vertical-stretch: 1;
+                        min-height: 0px;
+                        changed viewport-y => {
+                            root.dbg-body-scrolled("copy body", self.viewport-y);
                         }
-                        if root.copy-confirm-examples != "": Text {
-                            text: root.copy-confirm-examples;
-                            color: #9898a8;
-                            font-size: 11px;
-                            wrap: word-wrap;
+                        preferred-height: copy-body-content.preferred-height;
+                        viewport-width: self.width;
+                        viewport-height: copy-body-content.preferred-height;
+                        copy-body-content := VerticalLayout {
+                            spacing: 10px;
+                            if root.copy-preview != "": Text {
+                                text: root.copy-preview;
+                                color: #9898a8;
+                                font-size: 11px;
+                            }
+                            Text {
+                                text: root.copy-summary;
+                                color: #c8c8d0;
+                                font-size: 13px;
+                            }
+                            // Plan-preview state only: "Copy will ask what to do"
+                            // read as a promise ABOUT THE FUTURE while the copy was
+                            // running, and sat above the final report on the one
+                            // screen where the user decides whether to trust what
+                            // just happened to their files (gate finding).
+                            if root.copy-collisions != "" && root.copy-state == 0: Text {
+                                text: root.copy-collisions;
+                                color: #ffb84d;
+                                font-size: 12px;
+                                // Three notes can share this line ("2 will be
+                                // renamed · 1 sidecars will be refreshed · 1 copied
+                                // earlier but gone…"): unwrapped, the part that
+                                // matters most was clipped at the dialog edge (QE).
+                                wrap: word-wrap;
+                            }
+                            // THE CLASH QUESTION (copy-state 3). The rows are
+                            // stacked, not side by side: three outcome-labelled
+                            // answers do not fit across a 560px card (persona
+                            // measurement 2026-08-21), and a vertical list reads
+                            // as what it is — a menu of three choices, in order of
+                            // increasing consequence, with Cancel set apart.
+                            if root.copy-state == 3: VerticalLayout {
+                                spacing: 6px;
+                                Text {
+                                    text: root.copy-confirm;
+                                    color: #e8e8f0;
+                                    font-size: 13px;
+                                    wrap: word-wrap;
+                                }
+                                if root.copy-confirm-examples != "": Text {
+                                    text: root.copy-confirm-examples;
+                                    color: #9898a8;
+                                    font-size: 11px;
+                                    wrap: word-wrap;
+                                }
+                                Rectangle { height: 2px; }
+                                AnswerRow {
+                                    key: "B";
+                                    label: root.copy-confirm-keep-both;
+                                    cost: root.copy-confirm-keep-both-cost;
+                                    clicked => { root.copy-answer-keep-both(); }
+                                }
+                                AnswerRow {
+                                    key: "O";
+                                    label: root.copy-confirm-overwrite;
+                                    // The one answer that destroys something wears
+                                    // the colour — the BOX never does. A
+                                    // primary-styled destructive button gets
+                                    // pressed reflexively within a week (persona).
+                                    label-color: #ffb84d;
+                                    clicked => { root.copy-answer-overwrite(); }
+                                }
+                                Rectangle { height: 4px; }
+                                AnswerRow {
+                                    key: "Esc";
+                                    label: root.copy-confirm-cancel;
+                                    clicked => { root.copy-answer-cancel(); }
+                                }
+                                if root.copy-confirm-warning != "": Text {
+                                    text: root.copy-confirm-warning;
+                                    color: #ffb84d;
+                                    font-size: 11px;
+                                    wrap: word-wrap;
+                                }
+                                if root.copy-confirm-nudged: Text {
+                                    text: root.copy-confirm-nudge;
+                                    color: #ffb84d;
+                                    font-size: 12px;
+                                }
+                            }
+                            if root.copy-error != "": Text {
+                                text: root.copy-error;
+                                color: #ff7a6a;
+                                font-size: 12px;
+                                wrap: word-wrap;
+                            }
+                            if root.copy-state == 1: Text {
+                                text: root.copy-progress;
+                                color: #c8e8c8;
+                                font-size: 13px;
+                            }
+                            if root.copy-state == 2: Text {
+                                text: root.copy-report;
+                                color: #c8e8c8;
+                                font-size: 13px;
+                                wrap: word-wrap;
+                            }
                         }
-                        Rectangle { height: 2px; }
-                        AnswerRow {
-                            key: "B";
-                            label: root.copy-confirm-keep-both;
-                            cost: root.copy-confirm-keep-both-cost;
-                            clicked => { root.copy-answer-keep-both(); }
-                        }
-                        AnswerRow {
-                            key: "O";
-                            label: root.copy-confirm-overwrite;
-                            // The one answer that destroys something wears
-                            // the colour — the BOX never does. A
-                            // primary-styled destructive button gets
-                            // pressed reflexively within a week (persona).
-                            label-color: #ffb84d;
-                            clicked => { root.copy-answer-overwrite(); }
-                        }
-                        Rectangle { height: 4px; }
-                        AnswerRow {
-                            key: "Esc";
-                            label: root.copy-confirm-cancel;
-                            clicked => { root.copy-answer-cancel(); }
-                        }
-                        if root.copy-confirm-warning != "": Text {
-                            text: root.copy-confirm-warning;
-                            color: #ffb84d;
-                            font-size: 11px;
-                            wrap: word-wrap;
-                        }
-                        if root.copy-confirm-nudged: Text {
-                            text: root.copy-confirm-nudge;
-                            color: #ffb84d;
-                            font-size: 12px;
-                        }
-                    }
-                    if root.copy-error != "": Text {
-                        text: root.copy-error;
-                        color: #ff7a6a;
-                        font-size: 12px;
-                        wrap: word-wrap;
-                    }
-                    if root.copy-state == 1: Text {
-                        text: root.copy-progress;
-                        color: #c8e8c8;
-                        font-size: 13px;
-                    }
-                    if root.copy-state == 2: Text {
-                        text: root.copy-report;
-                        color: #c8e8c8;
-                        font-size: 13px;
-                        wrap: word-wrap;
                     }
                     Rectangle { } // spring
                     HorizontalLayout {
                         spacing: 8px;
                         alignment: end;
+                        init => {
+                            root.dbg-card-laid-out("copy buttons", self.absolute-position.x,
+                                self.absolute-position.y, self.width, self.height);
+                        }
+                        changed absolute-position => {
+                            root.dbg-card-laid-out("copy buttons", self.absolute-position.x,
+                                self.absolute-position.y, self.width, self.height);
+                        }
+                        changed height => {
+                            root.dbg-card-laid-out("copy buttons", self.absolute-position.x,
+                                self.absolute-position.y, self.width, self.height);
+                        }
                         if root.copy-state == 2: Button {
                             text: "Open destination";
                             clicked => { root.copy-open-dest-folder(); }
@@ -1913,6 +2032,12 @@ export component MainWindow inherits Window {
             clip-keys := FocusScope {
                 width: 100%;
                 height: 100%;
+                // The export dialog's half of the keyboard scrolling —
+                // same contract as `scroll-copy-body` above.
+                function scroll-clip-body(dy: length) {
+                    clip-body.viewport-y = clamp(clip-body.viewport-y + dy,
+                        min(0px, clip-body.height - clip-body.viewport-height), 0px);
+                }
                 key-pressed(event) => {
                     // Modal containment, topmost first (issue #42): About
                     // or the shortcuts popup can open OVER this dialog,
@@ -1926,6 +2051,35 @@ export component MainWindow inherits Window {
                             }
                         }
                         return accept;
+                    }
+                    // The body scrolls from the keyboard too, and only
+                    // while it overflows (issue #62 — see the Copy Picks
+                    // scope for the reasoning).
+                    if (clip-body.viewport-height > clip-body.height) {
+                        if (event.text == Key.DownArrow) {
+                            self.scroll-clip-body(-40px);
+                            return accept;
+                        }
+                        if (event.text == Key.UpArrow) {
+                            self.scroll-clip-body(40px);
+                            return accept;
+                        }
+                        if (event.text == Key.PageDown) {
+                            self.scroll-clip-body(-clip-body.height);
+                            return accept;
+                        }
+                        if (event.text == Key.PageUp) {
+                            self.scroll-clip-body(clip-body.height);
+                            return accept;
+                        }
+                        if (event.text == Key.Home) {
+                            self.scroll-clip-body(clip-body.viewport-height);
+                            return accept;
+                        }
+                        if (event.text == Key.End) {
+                            self.scroll-clip-body(-clip-body.viewport-height);
+                            return accept;
+                        }
                     }
                     // The clash question owns every key while it is up:
                     // the destructive answer must not sit on Y, N or
@@ -1973,25 +2127,54 @@ export component MainWindow inherits Window {
                 x: (parent.width - self.width) / 2;
                 y: (parent.height - self.height) / 2;
                 width: 560px;
-                // This dialog has ONE plan line and no template field, so
-                // it does not need the Copy Picks card's height — an
-                // 8-line-tall box holding two sentences reads as a dialog
-                // that lost something. The clash question adds three
-                // answer rows, and gets the room for them; the #56 hint
-                // adds one line and gets a line's worth, so a long refusal
-                // underneath it cannot squeeze the buttons out. The hint's
-                // condition here is the SAME one the hint Text carries —
-                // the running and report cards must not grow for a line
-                // they do not show.
-                height: min(
-                    root.clip-state == 3 ? 380px
-                        : (root.clip-state == 0 && root.clip-exported-hint != "") ? 286px : 260px,
+                // THE HEIGHT FOLLOWS THE CONTENT, between a floor and the
+                // window (issue #62). It used to be a constant per state,
+                // and a constant cannot know how long a sentence is: a
+                // selection of thirteen frames in twelve sizes produced a
+                // nine-line refusal, the wrapped Text took the room it
+                // asked for, the spring below it collapsed to nothing and
+                // the button row was laid out BELOW the card — drawn over
+                // the scrim (no `clip: true`) and still clickable, because
+                // Slint hit-tests children outside their parent.
+                //
+                // The floor keeps this dialog's proportions in the ordinary
+                // case: one plan line and no template field, so it does not
+                // want the Copy Picks card's height — an 8-line-tall box
+                // holding two sentences reads as a dialog that lost
+                // something. The clash question's three answer rows keep
+                // their own floor, and the #56 hint needs no special case
+                // any more.
+                //
+                // Above the floor the card grows to whatever the layout
+                // asked for. It stops at the window, and THAT is why the
+                // body below scrolls: growing alone would only move the
+                // overflow to the ceiling, where a wrapped Text still
+                // cannot shrink. The row stays inside the card because the
+                // body is the only thing the layout may take height from.
+                height: clamp(
+                    clip-card-layout.preferred-height,
+                    min(root.clip-state == 3 ? 380px : 260px, parent.height - 40px),
                     parent.height - 40px);
                 border-radius: 8px;
                 background: #202028;
                 border-width: 1px;
                 border-color: #3a3a44;
-                VerticalLayout {
+                init => {
+                    root.dbg-card-laid-out("clip card", self.absolute-position.x,
+                        self.absolute-position.y, self.width, self.height);
+                }
+                // Position AND height: the card is centred, so a height
+                // change moves it too, but a card that grew downwards
+                // without moving would still have to report.
+                changed absolute-position => {
+                    root.dbg-card-laid-out("clip card", self.absolute-position.x,
+                        self.absolute-position.y, self.width, self.height);
+                }
+                changed height => {
+                    root.dbg-card-laid-out("clip card", self.absolute-position.x,
+                        self.absolute-position.y, self.width, self.height);
+                }
+                clip-card-layout := VerticalLayout {
                     padding: 18px;
                     spacing: 10px;
                     Text {
@@ -2028,106 +2211,156 @@ export component MainWindow inherits Window {
                             }
                         }
                     }
-                    // THE plan line: everything the file will be, before a
-                    // byte is written.
-                    Text {
-                        text: root.clip-summary;
-                        color: #c8c8d0;
-                        font-size: 13px;
-                        wrap: word-wrap;
-                    }
-                    // What is being left out, and why. Plan state only:
-                    // after the run the report carries the same sentence,
-                    // and two copies of it on one screen read as two
-                    // different facts.
-                    if root.clip-skipped != "" && root.clip-state == 0: Text {
-                        text: root.clip-skipped;
-                        color: #ffb84d;
-                        font-size: 12px;
-                        wrap: word-wrap;
-                    }
-                    // "3 of 30 frames are already in …" (#56). Plan state
-                    // only, like the skipped line: it is a thing to know
-                    // BEFORE Enter, and the clash question's card has no
-                    // room for a fourth sentence above three answer rows.
-                    // Grey, not amber — nothing here is wrong, and the
-                    // amber line above it is a warning that must stay the
-                    // loudest thing in the card.
+                    // THE GROWING TEXT LIVES HERE, and it SCROLLS instead of
+                    // pushing the button row out of the card (issue #62). The card
+                    // grows to fit this body up to the window; past that the body
+                    // is the only row the layout can shrink (`vertical-stretch`,
+                    // no min-height of its own — the header rows and the button
+                    // row cannot give up a pixel), so the deficit lands here and
+                    // the content scrolls. Nothing is ever truncated, and the
+                    // buttons stay inside the card wherever the ceiling can
+                    // still hold the fixed rows above and below it (~300px of
+                    // window height — video-export.md records the measurement
+                    // and the case below it).
                     //
-                    // ELIDED, NEVER WRAPPED — the card's height is fixed and
-                    // a two-stem file name reaches 45 characters, so a
-                    // wrapped second line would push the button row out.
-                    // Core puts the name LAST for exactly this reason: the
-                    // counts survive, the name's tail is what elides.
-                    if root.clip-exported-hint != "" && root.clip-state == 0: Text {
-                        text: root.clip-exported-hint;
-                        color: #9898a4;
-                        font-size: 12px;
-                        overflow: elide;
-                    }
-                    // THE CLASH QUESTION (clip-state 3), stacked like Copy
-                    // Picks': three outcome-labelled answers in order of
-                    // increasing consequence, Cancel set apart.
-                    if root.clip-state == 3: VerticalLayout {
-                        spacing: 6px;
-                        Text {
-                            text: root.clip-confirm;
-                            color: #e8e8f0;
-                            font-size: 13px;
-                            wrap: word-wrap;
+                    // `preferred-height` is the content's, so the CARD's
+                    // content-driven height above counts this region at full size
+                    // until the ceiling; `viewport-width` is pinned to the view's
+                    // own width so nothing ever scrolls sideways. A ScrollView
+                    // rather than a bare Flickable: it scrolls the same way and
+                    // its scrollbar is the only thing that says a report was cut
+                    // off at the ceiling (the clip is line-aligned, so without one
+                    // a truncated list looks complete).
+                    clip-body := ScrollView {
+                        vertical-stretch: 1;
+                        min-height: 0px;
+                        changed viewport-y => {
+                            root.dbg-body-scrolled("clip body", self.viewport-y);
                         }
-                        Rectangle { height: 2px; }
-                        AnswerRow {
-                            key: "B";
-                            label: root.clip-confirm-keep-both;
-                            // No cost column: this question is about ONE
-                            // file, whose size the plan line above states
-                            // already. Copy Picks needs it because its
-                            // answer costs bytes on top of a run that was
-                            // going out anyway.
-                            clicked => { root.clip-answer-keep-both(); }
+                        preferred-height: clip-body-content.preferred-height;
+                        viewport-width: self.width;
+                        viewport-height: clip-body-content.preferred-height;
+                        clip-body-content := VerticalLayout {
+                            spacing: 10px;
+                            // THE plan line: everything the file will be, before a
+                            // byte is written.
+                            Text {
+                                text: root.clip-summary;
+                                color: #c8c8d0;
+                                font-size: 13px;
+                                wrap: word-wrap;
+                            }
+                            // What is being left out, and why. Plan state only:
+                            // after the run the report carries the same sentence,
+                            // and two copies of it on one screen read as two
+                            // different facts.
+                            if root.clip-skipped != "" && root.clip-state == 0: Text {
+                                text: root.clip-skipped;
+                                color: #ffb84d;
+                                font-size: 12px;
+                                wrap: word-wrap;
+                            }
+                            // "3 of 30 frames are already in …" (#56). Plan state
+                            // only, like the skipped line: it is a thing to know
+                            // BEFORE Enter, and the clash question's card has no
+                            // room for a fourth sentence above three answer rows.
+                            // Grey, not amber — nothing here is wrong, and the
+                            // amber line above it is a warning that must stay the
+                            // loudest thing in the card.
+                            //
+                            // ELIDED, NEVER WRAPPED — a two-stem file name reaches
+                            // 45 characters, and this dialog's job is one plan
+                            // line, not a second line of file name. Core puts the
+                            // name LAST for exactly this reason: the counts
+                            // survive, the name's tail is what elides. (It used to
+                            // be forced by the fixed card height; since #62 the
+                            // card would simply grow, so the rule now stands on
+                            // what it is worth reading, not on what fits.)
+                            if root.clip-exported-hint != "" && root.clip-state == 0: Text {
+                                text: root.clip-exported-hint;
+                                color: #9898a4;
+                                font-size: 12px;
+                                overflow: elide;
+                            }
+                            // THE CLASH QUESTION (clip-state 3), stacked like Copy
+                            // Picks': three outcome-labelled answers in order of
+                            // increasing consequence, Cancel set apart.
+                            if root.clip-state == 3: VerticalLayout {
+                                spacing: 6px;
+                                Text {
+                                    text: root.clip-confirm;
+                                    color: #e8e8f0;
+                                    font-size: 13px;
+                                    wrap: word-wrap;
+                                }
+                                Rectangle { height: 2px; }
+                                AnswerRow {
+                                    key: "B";
+                                    label: root.clip-confirm-keep-both;
+                                    // No cost column: this question is about ONE
+                                    // file, whose size the plan line above states
+                                    // already. Copy Picks needs it because its
+                                    // answer costs bytes on top of a run that was
+                                    // going out anyway.
+                                    clicked => { root.clip-answer-keep-both(); }
+                                }
+                                AnswerRow {
+                                    key: "O";
+                                    // The one answer that destroys something wears
+                                    // the colour; the BOX never does.
+                                    label: root.clip-confirm-overwrite;
+                                    label-color: #ffb84d;
+                                    clicked => { root.clip-answer-overwrite(); }
+                                }
+                                Rectangle { height: 4px; }
+                                AnswerRow {
+                                    key: "Esc";
+                                    label: root.clip-confirm-cancel;
+                                    clicked => { root.clip-answer-cancel(); }
+                                }
+                                if root.clip-confirm-nudged: Text {
+                                    text: root.clip-confirm-nudge;
+                                    color: #ffb84d;
+                                    font-size: 12px;
+                                }
+                            }
+                            if root.clip-error != "": Text {
+                                text: root.clip-error;
+                                color: #ff7a6a;
+                                font-size: 12px;
+                                wrap: word-wrap;
+                            }
+                            if root.clip-state == 1: Text {
+                                text: root.clip-progress;
+                                color: #c8e8c8;
+                                font-size: 13px;
+                            }
+                            if root.clip-state == 2: Text {
+                                text: root.clip-report;
+                                color: #c8e8c8;
+                                font-size: 13px;
+                                wrap: word-wrap;
+                            }
                         }
-                        AnswerRow {
-                            key: "O";
-                            // The one answer that destroys something wears
-                            // the colour; the BOX never does.
-                            label: root.clip-confirm-overwrite;
-                            label-color: #ffb84d;
-                            clicked => { root.clip-answer-overwrite(); }
-                        }
-                        Rectangle { height: 4px; }
-                        AnswerRow {
-                            key: "Esc";
-                            label: root.clip-confirm-cancel;
-                            clicked => { root.clip-answer-cancel(); }
-                        }
-                        if root.clip-confirm-nudged: Text {
-                            text: root.clip-confirm-nudge;
-                            color: #ffb84d;
-                            font-size: 12px;
-                        }
-                    }
-                    if root.clip-error != "": Text {
-                        text: root.clip-error;
-                        color: #ff7a6a;
-                        font-size: 12px;
-                        wrap: word-wrap;
-                    }
-                    if root.clip-state == 1: Text {
-                        text: root.clip-progress;
-                        color: #c8e8c8;
-                        font-size: 13px;
-                    }
-                    if root.clip-state == 2: Text {
-                        text: root.clip-report;
-                        color: #c8e8c8;
-                        font-size: 13px;
-                        wrap: word-wrap;
                     }
                     Rectangle { } // spring
                     HorizontalLayout {
                         spacing: 8px;
                         alignment: end;
+                        // The witness for issue #62: whatever the sentences
+                        // above do, this row must stay inside the card.
+                        init => {
+                            root.dbg-card-laid-out("clip buttons", self.absolute-position.x,
+                                self.absolute-position.y, self.width, self.height);
+                        }
+                        changed absolute-position => {
+                            root.dbg-card-laid-out("clip buttons", self.absolute-position.x,
+                                self.absolute-position.y, self.width, self.height);
+                        }
+                        changed height => {
+                            root.dbg-card-laid-out("clip buttons", self.absolute-position.x,
+                                self.absolute-position.y, self.width, self.height);
+                        }
                         if root.clip-state == 2: Button {
                             text: "Open folder";
                             clicked => { root.clip-open-dest-folder(); }

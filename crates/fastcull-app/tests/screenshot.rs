@@ -4497,6 +4497,12 @@ fn copy_picks_rerun_recopies_hand_deleted_files() {
 ///     file, which is the half of Cancel that a second destination folder
 ///     proves on disk at the end of the run.
 ///
+/// One further round is answered with the MOUSE rather than a key, against
+/// a destination of its own so the rounds after it see the disk they always
+/// saw: the answer rows moved inside the dialog's scrolling body in issue
+/// #62, and every other answer here is a keystroke, so nothing else would
+/// notice if a press stopped reaching them.
+///
 /// Fixtures are 2 KB files with RAW extensions (they scan as images and
 /// fail to decode, exactly like `broken.ARW` elsewhere in this file): the
 /// dialog, the answers and the disk are what is under test here, and the
@@ -4516,7 +4522,10 @@ fn copy_picks_asks_once_and_each_answer_does_what_it_says() {
     let src2 = out_dir().join("clash-src2");
     let dest = out_dir().join("clash-dest");
     let dest2 = out_dir().join("clash-dest2");
-    for d in [&src, &src2, &dest, &dest2] {
+    // A destination of its own for the MOUSE round below, so the rounds
+    // that follow see exactly the disk they always saw.
+    let dest0 = out_dir().join("clash-dest0");
+    for d in [&src, &src2, &dest, &dest2, &dest0] {
         std::fs::remove_dir_all(d).ok();
         std::fs::create_dir_all(d).unwrap();
     }
@@ -4528,16 +4537,38 @@ fn copy_picks_asks_once_and_each_answer_does_what_it_says() {
     let foreign = b"another body's frame".to_vec();
     std::fs::write(dest.join("a.ARW"), &foreign).unwrap();
     std::fs::write(dest2.join("a.ARW"), &foreign).unwrap();
+    std::fs::write(dest0.join("a.ARW"), &foreign).unwrap();
 
+    // ONE round answered with the MOUSE, ahead of the keyboard rounds and
+    // against its own destination so nothing below sees a different disk.
+    // Every other answer here is a key press, and the answer rows live
+    // inside the dialog's scrolling body since issue #62 — a change to
+    // Slint's drag threshold, or to what a ScrollView does with a press,
+    // would take mouse answers away silently. `700,483` is the Keep-both
+    // row at the default 1440x900 (probed, 2026-08-30); a coordinate that
+    // drifts off it leaves `copystate` at 3 and the assertion below says
+    // so. Gated like the other coordinate-dependent strands: the rows sit
+    // under a Text whose height is a font metric.
+    let mouse_answer = menu_clicks_are_calibrated();
+    let mouse_round = if mouse_answer {
+        format!(
+            "1900:copydest:{dest0};2100:key:ctrl+e;2400:key:return;2700:dump.qclick;\
+             2900:click.700,483;3600:dump.clicked;3900:key:escape;",
+            dest0 = dest0.display()
+        )
+    } else {
+        String::new()
+    };
     let script = format!(
-        "1500:key:y;1700:key:y;1900:copydest:{dest};2100:key:ctrl+e;2400:dump.preview;\
-         2600:key:return;2900:dump.question;3100:key:return;3300:dump.inert;\
-         3380:key:ctrl+o;3440:dump.accel;\
-         3500:key:b;4300:dump.kept;4600:key:escape;\
-         4800:key:ctrl+e;5100:key:return;5400:dump.q2;5600:key:o;6400:dump.over;\
-         6700:key:escape;6900:copydest:{dest2};7100:key:ctrl+e;7400:key:return;\
-         7700:dump.q3;7900:key:escape;8200:dump.cancelled;8500:key:escape;8800:dump.end;\
-         9000:key:ctrl+e;9300:key:return;9600:dump.q4;9800:open:{src2};10200:dump.swapped",
+        "1500:key:y;1700:key:y;{mouse_round}\
+         4400:copydest:{dest};4600:key:ctrl+e;4900:dump.preview;\
+         5100:key:return;5400:dump.question;5600:key:return;5800:dump.inert;\
+         5880:key:ctrl+o;5940:dump.accel;\
+         6000:key:b;6800:dump.kept;7100:key:escape;\
+         7300:key:ctrl+e;7600:key:return;7900:dump.q2;8100:key:o;8900:dump.over;\
+         9200:key:escape;9400:copydest:{dest2};9600:key:ctrl+e;9900:key:return;\
+         10200:dump.q3;10400:key:escape;10700:dump.cancelled;11000:key:escape;11300:dump.end;\
+         11500:key:ctrl+e;11800:key:return;12100:dump.q4;12300:open:{src2};12700:dump.swapped",
         dest = dest.display(),
         dest2 = dest2.display(),
         src2 = src2.display()
@@ -4566,12 +4597,35 @@ fn copy_picks_asks_once_and_each_answer_does_what_it_says() {
     };
     let on_disk = listing(&dest);
     let cancelled_disk = listing(&dest2);
+    let mouse_disk = listing(&dest0);
     let landed_a = std::fs::read(dest.join("a.ARW")).ok();
     let landed_a1 = std::fs::read(dest.join("a_1.ARW")).ok();
     let landed_a1_xmp = std::fs::read(dest.join("a_1.ARW.xmp")).ok();
     let src_a_xmp = std::fs::read(src.join("a.ARW.xmp")).ok();
-    for d in [&src, &src2, &dest, &dest2] {
+    for d in [&src, &src2, &dest, &dest2, &dest0] {
         std::fs::remove_dir_all(d).ok();
+    }
+
+    // --- the one answer given with the mouse ------------------------------
+    if mouse_answer {
+        assert_eq!(
+            dump_field(qedump(&stderr, "qclick"), "copystate"),
+            "3",
+            "the mouse round never reached the question:\n{stderr}"
+        );
+        assert_eq!(
+            dump_field(qedump(&stderr, "clicked"), "copystate"),
+            "2",
+            "the click on the Keep-both row did not answer the question — \
+             a mouse-only user cannot answer it at all (or the coordinate \
+             drifted off the row):\n{stderr}"
+        );
+        let names: Vec<&str> = mouse_disk.iter().map(|(n, _)| n.as_str()).collect();
+        assert_eq!(
+            names,
+            vec!["a.ARW", "a_1.ARW", "a_1.ARW.xmp", "b.ARW", "b.ARW.xmp"],
+            "the clicked Keep-both did not land the pick under a fresh name: {mouse_disk:?}"
+        );
     }
 
     // --- the question exists, and states the split -----------------------
@@ -5793,6 +5847,415 @@ fn esc_clears_a_burst_selection_from_inside_the_loupe() {
     );
 }
 
+/// Both dialog cards keep their button row inside the card, at every size
+/// and whatever their text says (issue #62).
+///
+/// `card` and `buttons` are the trace prefixes ("clip"/"copy"), `label` the
+/// dump the geometry is read at, `window_h` the window's height at that
+/// moment. Three things are checked, and the third is what the issue is:
+/// the row is below the card's top, the row's bottom is inside the card,
+/// and the card itself is inside the window.
+fn assert_buttons_inside_card(stderr: &str, dialog: &str, label: &str, window_h: f32) {
+    let (_, card_y, _, card_h) = laid_out_at(stderr, &format!("{dialog} card"), label);
+    let (_, btn_y, _, btn_h) = laid_out_at(stderr, &format!("{dialog} buttons"), label);
+    assert!(
+        btn_y >= card_y,
+        "dump.{label}: the {dialog} button row starts above its card:\n{stderr}"
+    );
+    assert!(
+        btn_y + btn_h <= card_y + card_h + 0.5,
+        "dump.{label}: the {dialog} button row ends at {} but the card ends at \
+         {} — the row is outside the card (issue #62):\n{stderr}",
+        btn_y + btn_h,
+        card_y + card_h
+    );
+    assert!(
+        card_y + card_h <= window_h,
+        "dump.{label}: the {dialog} card ends at {} in a {window_h}px window:\n{stderr}",
+        card_y + card_h
+    );
+}
+
+/// The last `<what> laid out at X,Y size WxH` trace before the QEDUMP
+/// labelled `label` — the rectangle as it stood at the moment of the dump.
+///
+/// Scanned in order rather than searched from the end: these marks fire on
+/// every relayout, so the last one in the whole run belongs to whatever
+/// state the app ended in, not to the state the assertion is about.
+fn laid_out_at(stderr: &str, what: &str, label: &str) -> (f32, f32, f32, f32) {
+    let tag = format!("] {what} laid out at ");
+    let dump = format!("QEDUMP {label} ");
+    let mut last: Option<(f32, f32, f32, f32)> = None;
+    for line in stderr.lines() {
+        if let Some((_, rest)) = line.split_once(&tag) {
+            // "X,Y size WxH"
+            let parse = || -> Option<(f32, f32, f32, f32)> {
+                let (xy, wh) = rest.split_once(" size ")?;
+                let (x, y) = xy.split_once(',')?;
+                let (w, h) = wh.split_once('x')?;
+                Some((
+                    x.trim().parse().ok()?,
+                    y.trim().parse().ok()?,
+                    w.trim().parse().ok()?,
+                    h.trim().parse().ok()?,
+                ))
+            };
+            if let Some(rect) = parse() {
+                last = Some(rect);
+            }
+        }
+        if line.contains(&dump) {
+            return last.unwrap_or_else(|| {
+                panic!("no `{what} laid out` trace before dump.{label}:\n{stderr}")
+            });
+        }
+    }
+    panic!("no `dump.{label}` trace in stderr:\n{stderr}")
+}
+
+/// Where a dialog's scrolling body stands at the QEDUMP labelled `label`:
+/// 0 at the top, negative going down (`<what> scrolled to Y`).
+///
+/// Absent means 0 — the mark fires on CHANGE, so a body that has never
+/// been scrolled emits nothing, which is exactly "at the top".
+fn body_scroll_at(stderr: &str, what: &str, label: &str) -> f32 {
+    let tag = format!("] {what} scrolled to ");
+    let dump = format!("QEDUMP {label} ");
+    let mut last = 0.0f32;
+    for line in stderr.lines() {
+        if let Some((_, rest)) = line.split_once(&tag) {
+            if let Ok(y) = rest.trim().parse::<f32>() {
+                last = y;
+            }
+        }
+        if line.contains(&dump) {
+            return last;
+        }
+    }
+    panic!("no `dump.{label}` trace in stderr:\n{stderr}")
+}
+
+/// Issue #62: a refusal that names a dozen frame sizes must not push the
+/// dialog's buttons out of its card — and neither must anything else, at
+/// any window size.
+///
+/// Three mechanisms are under test and this run exercises all of them:
+///
+///   * core bounds the sentence — at most three reasons named, the rest
+///     folded into one tail — so the refusal is two lines instead of nine;
+///   * the card's height follows its content between a floor and the
+///     window, so a longer sentence is given room rather than ignored;
+///   * past the window the card stops growing and the BODY scrolls: the
+///     text region is the only row the layout may shrink, so the deficit
+///     lands there and the button row stays pinned inside the card. The
+///     `small` dump is that case — a 640x300 window, where the ceiling is
+///     below the card's own floor.
+///
+/// The geometry is asserted as a RELATION between two laid-out rectangles,
+/// not against numbers: the card is centred and its height is now an
+/// outcome, so a hard-coded y would be a coincidence. A screenshot cannot
+/// stand in for this — the card does not clip, so an escaped row is drawn
+/// over the scrim looking almost right, and Slint hit-tests it as clickable
+/// either way.
+///
+/// Gated on app facts, not the clock (issue #61): the session swap waits
+/// for `load settled gen 1` — the SECOND folder, since `session-gen` counts
+/// from 0 for the folder the app opened with — the export waits for `clip
+/// export finished`, and the resize waits for the card's own relayout at
+/// the new window width (x = (640 - 560) / 2 = 40, which cannot be the
+/// 1440-wide window's 440).
+///
+/// RED on the parent tree, measured 2026-08-30 (both halves reverted, the
+/// witness kept): at `dump.refusal` the row ended 29 px below the card.
+#[test]
+fn a_long_refusal_keeps_the_export_buttons_inside_the_card() {
+    if !has_display() {
+        eprintln!("screenshot smoke skipped: no display server");
+        return;
+    }
+    let _s = serial();
+    let refuse = out_dir().join("i62-refuse");
+    let export = out_dir().join("i62-export");
+    let dest = out_dir().join("i62-dest");
+    for d in [&refuse, &export, &dest] {
+        std::fs::remove_dir_all(d).ok();
+        std::fs::create_dir_all(d).unwrap();
+    }
+    // THIRTEEN frames, THIRTEEN sizes. The first in order is the one the
+    // track would be built from, so twelve are skipped in twelve groups:
+    // three named and nine folded, which is the sentence asserted below.
+    //
+    // EVERY size stays above `raw::USEFUL_MIN_PIXELS` (100,000): a smaller
+    // preview is not "a different size", it is "no usable embedded JPEG",
+    // and twelve of those are ONE group — the test would then measure a
+    // sentence that was never long. 280x400 = 112,000 is the smallest here.
+    for i in 0..13u32 {
+        write_synthetic_raw(
+            &refuse.join(format!("f{i:02}.ARW")),
+            (400 - i * 10) as u16,
+            400,
+            1,
+            4096,
+        );
+    }
+    // The plan/report fixture: two frames that CAN share a track (so the
+    // export runs and the report card appears) and four that cannot, in
+    // four sizes — the same sentence, bounded, on the report card.
+    //
+    // The two kept frames wear 100-character stems, which is what pushes
+    // the card past its 260 px floor: the output name is built from the
+    // first and last stem, so the plan line carries a 205-character file
+    // name and wraps. Without it the card would sit ON the floor and the
+    // "it grows" half of the fix would be untested (validator finding).
+    let long_a = format!("a{}", "n".repeat(99));
+    let long_z = format!("z{}", "n".repeat(99));
+    write_synthetic_raw(&export.join(format!("{long_a}.ARW")), 400, 400, 1, 4096);
+    write_synthetic_raw(&export.join(format!("{long_z}.ARW")), 400, 400, 1, 4200);
+    for i in 0..4u32 {
+        write_synthetic_raw(
+            &export.join(format!("m{i}.ARW")),
+            (380 - i * 10) as u16,
+            400,
+            1,
+            4096,
+        );
+    }
+
+    // The destination is set BEFORE the first Ctrl+Shift+E: without one
+    // the dialog never plans at all ("13 frames. Choose a destination.")
+    // and there is no refusal to measure.
+    let script = format!(
+        "{PIN_WINDOW};1400:clipdest:{dest};1500:select-all;\
+         1800:key:ctrl+shift+e;2200:dump.refusal;\
+         2500:key:escape;2700:open:{export};2800:wait:load settled gen 1;\
+         3000:select-all;3100:clipdest:{dest};3300:key:ctrl+shift+e;\
+         3600:dump.plan;3900:key:return;4000:wait:clip export finished;\
+         4200:dump.report;\
+         4500:resize:640x300;4600:wait:clip card laid out at 40,;\
+         4900:dump.small;5200:key:escape",
+        export = export.display(),
+        dest = dest.display()
+    );
+    let out = out_dir().join("i62-card-overflow.jpg");
+    let stderr = shoot_env_stderr(
+        &[refuse.to_str().unwrap()],
+        &[("FASTCULL_TRACE", "1"), ("FASTCULL_DRIVE", script.as_str())],
+        &out,
+    );
+    for d in [&refuse, &export, &dest] {
+        std::fs::remove_dir_all(d).ok();
+    }
+
+    // The three gates fired, so nothing below is on a clock (issue #13's
+    // rule: a dropped token must fail the test, not silently re-time it).
+    for gate in [
+        "wait:load settled gen 1 (satisfied",
+        "wait:clip export finished (satisfied",
+        "wait:clip card laid out at 40, (satisfied",
+    ] {
+        assert!(
+            stderr.contains(gate),
+            "the `{gate}…` gate never fired — the steps after it were timed:\n{stderr}"
+        );
+    }
+
+    let refusal = qedump(&stderr, "refusal");
+    assert_eq!(
+        dump_field(refusal, "clip"),
+        "true",
+        "the export dialog did not open:\n{stderr}"
+    );
+
+    // --- THE CONTRACT: the buttons are inside the card, in every state
+    // Asserted before the wording below because this is the failure the
+    // issue is about, and a test that reported the sentence first would
+    // hide it behind a text diff.
+    for label in ["refusal", "plan", "report"] {
+        assert_buttons_inside_card(&stderr, "clip", label, 900.0);
+    }
+    assert_buttons_inside_card(&stderr, "clip", "small", 300.0);
+
+    // --- the card really did GROW, and really was CLAMPED --------------
+    // Without these two the relation above would hold on a card that never
+    // moved off its floor, which is the state the fix is not about.
+    let (_, _, _, report_h) = laid_out_at(&stderr, "clip card", "report");
+    assert!(
+        report_h > 260.0,
+        "the report card measured {report_h}px — at or below the 260px floor, \
+         so the buttons could be inside it without the height following the \
+         content at all:\n{stderr}"
+    );
+    let (_, small_y, _, small_h) = laid_out_at(&stderr, "clip card", "small");
+    assert!(
+        small_h <= 260.0,
+        "the card measured {small_h}px in a 300px-tall window: the ceiling \
+         did not bind, so the scrolling body is untested here:\n{stderr}"
+    );
+    assert!(
+        small_y + small_h <= 300.0,
+        "the card runs past the bottom of a 300px window:\n{stderr}"
+    );
+
+    // --- and the sentence that used to grow is bounded ----------------
+    let error = dump_text(refusal, "cliperror");
+    assert!(
+        error.contains("9 other sizes"),
+        "the refusal must fold the sizes it did not name: {error}\n{stderr}"
+    );
+    assert_eq!(
+        error.matches("different size (").count(),
+        3,
+        "at most three reasons may be named: {error}\n{stderr}"
+    );
+
+    // The report state must be the one that was measured, not a dialog
+    // that closed early and left the plan's rectangles standing.
+    let report = qedump(&stderr, "report");
+    assert_eq!(
+        dump_field(report, "clipstate"),
+        "2",
+        "the export never reached its report card, so the geometry above \
+         was measured on the wrong state:\n{stderr}"
+    );
+    // The report carries the plan's own sentence (video-export.md), so it
+    // is bounded by the same helper: four skipped frames in four sizes,
+    // three named and one folded — singular in both halves of the tail.
+    let report_text = dump_text(report, "clipreport");
+    assert!(
+        report_text.contains("1 more frame in 1 other size"),
+        "the report's skipped sentence must be bounded too: {report_text}\n{stderr}"
+    );
+    assert_eq!(
+        report_text.matches("different size (").count(),
+        3,
+        "the report may name at most three reasons: {report_text}\n{stderr}"
+    );
+}
+
+/// The Copy Picks card's own unbounded text (issue #62): `report_lines`
+/// prints one `FAILED name: reason` line per file that failed, so a
+/// destination that goes read-only mid-run words itself as long as the run
+/// was. Sixty-one picks into a `chmod 555` folder is that report — far
+/// taller than the window, so the card is pinned at its ceiling and the
+/// body has to scroll for the buttons to stay inside it.
+///
+/// RED on the parent tree with THIS fixture (2026-08-30): the card stayed
+/// at its old constant 480 px, ending at y=697, and the row ended at
+/// y=1527 — 830 px below the card and 627 px below the window.
+///
+/// Unix only: the whole point is a destination the process may not write
+/// to, and `chmod` is how that is arranged. On Windows the claim is
+/// review-only, like the other permission-based tests in the suite.
+#[test]
+#[cfg(unix)]
+fn a_failure_report_longer_than_the_window_keeps_the_copy_buttons_inside_the_card() {
+    if !has_display() {
+        eprintln!("screenshot smoke skipped: no display server");
+        return;
+    }
+    use std::os::unix::fs::PermissionsExt;
+    let _s = serial();
+    let src = out_dir().join("i62-copy-src");
+    let dest = out_dir().join("i62-copy-dest");
+    for d in [&src, &dest] {
+        std::fs::remove_dir_all(d).ok();
+        std::fs::create_dir_all(d).unwrap();
+    }
+    const PICKS: usize = 61;
+    for i in 0..PICKS {
+        write_synthetic_raw(&src.join(format!("p{i:02}.ARW")), 400, 400, 1, 4096);
+    }
+    // Readable and searchable, not writable: the plan builds, every copy
+    // fails, and each failure is a line in the report.
+    std::fs::set_permissions(&dest, std::fs::Permissions::from_mode(0o555)).unwrap();
+
+    // `y` marks the CURSOR and auto-advances, so picking the folder is one
+    // keystroke per frame — a selection is not a pick (ui-grid.md).
+    let picks: String = (0..PICKS)
+        .map(|i| format!("{}:key:y;", 1500 + i * 30))
+        .collect();
+    let script = format!(
+        "{PIN_WINDOW};{picks}\
+         3600:copydest:{dest};3900:key:ctrl+e;4200:key:return;\
+         4300:wait:copy finished;4500:dump.failed;\
+         4700:key:pgdn;5000:dump.paged;5300:key:home;5600:dump.homed;\
+         5900:key:escape",
+        dest = dest.display()
+    );
+    let out = out_dir().join("i62-copy-overflow.jpg");
+    let stderr = shoot_env_stderr(
+        &[src.to_str().unwrap()],
+        &[("FASTCULL_TRACE", "1"), ("FASTCULL_DRIVE", script.as_str())],
+        &out,
+    );
+    std::fs::set_permissions(&dest, std::fs::Permissions::from_mode(0o755)).ok();
+    for d in [&src, &dest] {
+        std::fs::remove_dir_all(d).ok();
+    }
+
+    assert!(
+        stderr.contains("wait:copy finished (satisfied"),
+        "the `wait:copy finished` gate never fired — the dump below was \
+         timed, not gated:\n{stderr}"
+    );
+    let failed = qedump(&stderr, "failed");
+    assert_eq!(
+        dump_field(failed, "copystate"),
+        "2",
+        "the copy never reached its report card:\n{stderr}"
+    );
+    // Non-vacuity: a report of two lines would keep the buttons inside any
+    // card. This one has to be the long one. It is also the root guard —
+    // root writes into a 0o555 folder, every copy then SUCCEEDS, and this
+    // assertion fails loudly ("only 0 failures") instead of the geometry
+    // below passing on a two-line report that proves nothing.
+    let report = dump_text(failed, "report");
+    assert!(
+        report.matches("FAILED ").count() > 40,
+        "only {} failures in the report — not the overflowing card this \
+         test is about: {report}\n{stderr}",
+        report.matches("FAILED ").count()
+    );
+
+    assert_buttons_inside_card(&stderr, "copy", "failed", 900.0);
+    // ...and the card is at its ceiling, which is what makes the body the
+    // only thing that could have given way.
+    let (_, card_y, _, card_h) = laid_out_at(&stderr, "copy card", "failed");
+    assert!(
+        card_h > 480.0,
+        "the copy card measured {card_h}px — still on its 480px floor, so \
+         this run never reached the ceiling case:\n{stderr}"
+    );
+    assert!(
+        card_y + card_h <= 860.0,
+        "the copy card ends at {} — past the window's 900px minus the 40px \
+         margin the ceiling keeps:\n{stderr}",
+        card_y + card_h
+    );
+
+    // --- and the KEYBOARD can read the part below the fold ---------------
+    // The scrollbar is for the mouse; this app is driven from the keyboard,
+    // and a report only the mouse can reach is a report the user cannot
+    // read (QE finding 2026-08-30 — before this, PgDn did nothing at all
+    // because the dialog scope swallowed it).
+    assert_eq!(
+        body_scroll_at(&stderr, "copy body", "failed"),
+        0.0,
+        "the report did not start at the top:\n{stderr}"
+    );
+    let paged = body_scroll_at(&stderr, "copy body", "paged");
+    assert!(
+        paged < -100.0,
+        "PgDn moved the report by {paged}px — the lines past the fold are \
+         unreachable without a mouse:\n{stderr}"
+    );
+    assert_eq!(
+        body_scroll_at(&stderr, "copy body", "homed"),
+        0.0,
+        "Home did not return the report to its first line:\n{stderr}"
+    );
+}
+
 // ---------------------------------------------------------------------------
 // Issue #49: the Copy Picks and Export Frames as Video scrims are hand-rolled
 // copies of `ModalScrim` with no `scroll-event` arm, so a wheel over either
@@ -5836,6 +6299,14 @@ const PIN_WINDOW: &str = "200:resize:1440x900";
 /// Copy Picks (480) y 217..697, the export dialog (260) y 327..587,
 /// the shortcuts popup (560) y 177..737, About (348) y 283..631.
 /// Cards are 560 px wide (480 for the two popups), centred in 1440.
+///
+/// The first two numbers are FLOORS since issue #62, not constants: those
+/// cards grow with their content up to the window. These scripts use
+/// neither an error, a hint, nor a report, so both sit on their floor and
+/// the spans above are what they measure (verified by the `card laid out`
+/// traces, 2026-08-30). A wheel over a card now lands on the dialog's own
+/// scrolling body rather than on bare card — which is still not the grid,
+/// which is all these tests claim.
 const THREE_NOTCHES_DOWN: &str = "wheel.700,400,-180";
 
 /// The rename field's vertical centre inside the Copy Picks card. From the
@@ -6018,7 +6489,7 @@ fn a_wheel_over_the_export_dialog_never_scrolls_the_grid_behind_it() {
     // The re-sort's own `vp_y` write is behind us before the first wheel.
     let settled = stderr
         .lines()
-        .find(|l| l.contains("load settled:"))
+        .find(|l| l.contains("load settled gen "))
         .and_then(trace_ms)
         .unwrap_or_else(|| {
             panic!("the view never settled, so the sort could still move it:\n{stderr}")

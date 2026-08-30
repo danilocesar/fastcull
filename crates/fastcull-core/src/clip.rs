@@ -267,25 +267,73 @@ impl ClipPlan {
     }
 }
 
-/// The one place skip reasons are turned into a sentence — the plan line
-/// and the report share it so they can never disagree.
+/// How many reasons the sentence may NAME before it folds the rest into a
+/// tail. Every distinct pixel size is its own reason, so a mixed selection
+/// (thirteen frames, twelve sizes) used to produce twelve clauses — nine
+/// wrapped lines in a dialog card built for one, which pushed the buttons
+/// out of it (issue #62). Three is what fits on two lines at the card's
+/// width and is enough to recognise the pattern; the tail keeps the
+/// arithmetic honest by saying how many frames and how many reasons it
+/// stands for.
+const NAMED_REASONS: usize = 3;
+
+/// The one place skip reasons are turned into a sentence — the plan line,
+/// the refusal and the report share it so they can never disagree.
+///
+/// Bounded by construction: at most [`NAMED_REASONS`] reasons are named,
+/// biggest group first, and anything left folds into one tail clause whose
+/// counts add up to the input. Nothing that reads this function can grow
+/// without limit, whatever a selection contains.
 pub fn skipped_text(skipped: &[Skipped]) -> String {
     if skipped.is_empty() {
         return String::new();
     }
-    let mut groups: Vec<(String, usize)> = Vec::new();
+    // Grouped by the REASON, not by its text: the tail has to know whether
+    // what it folded is all sizes, all orientations, or a mixture, and a
+    // formatted string cannot answer that. The text is a pure function of
+    // the reason either way, so the grouping is the same one as before.
+    let mut groups: Vec<(SkipReason, usize)> = Vec::new();
     for s in skipped {
-        let text = s.reason.text();
-        match groups.iter_mut().find(|(t, _)| *t == text) {
+        match groups.iter_mut().find(|(r, _)| *r == s.reason) {
             Some((_, n)) => *n += 1,
-            None => groups.push((text, 1)),
+            None => groups.push((s.reason.clone(), 1)),
         }
     }
+    // Stable, so groups of equal size keep the order they were skipped in
+    // — the same selection always words itself the same way.
     groups.sort_by_key(|(_, n)| std::cmp::Reverse(*n));
-    let parts: Vec<String> = groups
+    let plural = |n: usize| if n == 1 { "" } else { "s" };
+    let named = if groups.len() > NAMED_REASONS {
+        NAMED_REASONS
+    } else {
+        groups.len()
+    };
+    let mut parts: Vec<String> = groups[..named]
         .iter()
-        .map(|(text, n)| format!("{n} frame{}: {text}", if *n == 1 { "" } else { "s" }))
+        .map(|(reason, n)| format!("{n} frame{}: {}", plural(*n), reason.text()))
         .collect();
+    let tail = &groups[named..];
+    if !tail.is_empty() {
+        let frames: usize = tail.iter().map(|(_, n)| n).sum();
+        let kinds = tail.len();
+        // "in N other sizes" only when the tail IS all sizes; a tail that
+        // mixes kinds says "reasons", because naming one kind for a mixed
+        // remainder would be a wrong fact rather than a shorter one.
+        let what = if tail
+            .iter()
+            .all(|(r, _)| matches!(r, SkipReason::Size { .. }))
+        {
+            format!("in {kinds} other size{}", plural(kinds))
+        } else if tail
+            .iter()
+            .all(|(r, _)| matches!(r, SkipReason::Orientation(_)))
+        {
+            format!("in {kinds} other orientation{}", plural(kinds))
+        } else {
+            format!("for {kinds} other reason{}", plural(kinds))
+        };
+        parts.push(format!("{frames} more frame{} {what}", plural(frames)));
+    }
     format!("skipped — {}", parts.join(" · "))
 }
 
@@ -1669,6 +1717,127 @@ mod tests {
             "skipped — 2 frames: different size (5616×3744) · 1 frame: no usable embedded JPEG"
         );
         assert!(skipped_text(&[]).is_empty());
+    }
+
+    /// Issue #62: the sentence is BOUNDED. Every distinct pixel size is its
+    /// own reason, so a mixed selection could name a dozen of them — nine
+    /// wrapped lines in a dialog card built for one, which is how the
+    /// buttons ended up outside the card. At most three reasons are named
+    /// and the rest fold into one tail.
+    ///
+    /// The tail is not allowed to lose frames: each case below checks that
+    /// the numbers the sentence prints add up to the number skipped, which
+    /// is the property a user could otherwise never verify.
+    #[test]
+    fn a_long_list_of_reasons_is_bounded_and_still_adds_up() {
+        let sized = |id: usize, w: u32| Skipped {
+            id,
+            name: format!("f{id}.ARW"),
+            reason: SkipReason::Size {
+                width: w,
+                height: 1000,
+            },
+        };
+
+        // One group: unchanged, no tail.
+        assert_eq!(
+            skipped_text(&[sized(0, 100)]),
+            "skipped — 1 frame: different size (100×1000)"
+        );
+
+        // Exactly three groups: all named, still no tail.
+        let three = [sized(0, 100), sized(1, 200), sized(2, 200), sized(3, 300)];
+        assert_eq!(
+            skipped_text(&three),
+            "skipped — 2 frames: different size (200×1000) \
+             · 1 frame: different size (100×1000) \
+             · 1 frame: different size (300×1000)"
+        );
+
+        // Twelve groups, thirteen frames — the issue's own selection. Three
+        // named, one tail, nine sizes folded, and 2 + 1 + 1 + 9 = 13.
+        let mut many = vec![sized(0, 100), sized(1, 100)];
+        for i in 1..12 {
+            many.push(sized(i + 1, 100 + i as u32 * 10));
+        }
+        let text = skipped_text(&many);
+        assert_eq!(
+            text,
+            "skipped — 2 frames: different size (100×1000) \
+             · 1 frame: different size (110×1000) \
+             · 1 frame: different size (120×1000) \
+             · 9 more frames in 9 other sizes"
+        );
+        assert_eq!(
+            text.matches("different size (").count(),
+            3,
+            "at most three reasons may be named: {text}"
+        );
+
+        // A tail of exactly one group is still a tail, and says "1 ... 1".
+        let four = [
+            sized(0, 100),
+            sized(1, 100),
+            sized(2, 200),
+            sized(3, 300),
+            sized(4, 400),
+        ];
+        assert_eq!(
+            skipped_text(&four),
+            "skipped — 2 frames: different size (100×1000) \
+             · 1 frame: different size (200×1000) \
+             · 1 frame: different size (300×1000) \
+             · 1 more frame in 1 other size"
+        );
+    }
+
+    /// The tail names the KIND it folded only when the whole tail is that
+    /// kind. A mixed remainder says "reasons" — a shorter sentence may
+    /// never become a wrong one.
+    #[test]
+    fn the_tail_names_a_kind_only_when_the_whole_tail_is_that_kind() {
+        let mut skips: Vec<Skipped> = Vec::new();
+        let mut push = |reason| {
+            skips.push(Skipped {
+                id: skips.len(),
+                name: format!("f{}.ARW", skips.len()),
+                reason,
+            })
+        };
+        // Three big size groups to fill the named slots...
+        for w in [100u32, 200, 300] {
+            push(SkipReason::Size {
+                width: w,
+                height: 1000,
+            });
+            push(SkipReason::Size {
+                width: w,
+                height: 1000,
+            });
+        }
+        // ...then a tail of one orientation and one no-preview.
+        push(SkipReason::Orientation(6));
+        push(SkipReason::NoPreview);
+        let text = skipped_text(&skips);
+        assert!(
+            text.ends_with("2 more frames for 2 other reasons"),
+            "a mixed tail must not claim a kind: {text}"
+        );
+
+        // An all-orientation tail says so.
+        let mut orient = skips[..6].to_vec();
+        for o in [3u16, 6, 8] {
+            orient.push(Skipped {
+                id: orient.len(),
+                name: "x.ARW".into(),
+                reason: SkipReason::Orientation(o),
+            });
+        }
+        let text = skipped_text(&orient);
+        assert!(
+            text.ends_with("3 more frames in 3 other orientations"),
+            "an all-orientation tail names orientations: {text}"
+        );
     }
 
     /// A mirrored EXIF orientation keeps its ROTATION and loses the flip:

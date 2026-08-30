@@ -67,6 +67,23 @@ The usual causes are a crop-mode shot, a second camera body, or a file
 whose full-size JPEG is missing. Fewer than two frames left and the
 export refuses before writing anything.
 
+If a selection is a real jumble — several crops, a second body, a few
+files with nothing usable inside — the line names the three biggest
+groups and counts the rest, rather than listing a dozen sizes:
+
+> skipped — 4 frames: different size (390×400) · 3 frames: different size
+> (380×400) · 2 frames: no usable embedded JPEG · 11 more frames in 9
+> other sizes
+
+The numbers always add up to what was left out — 4 + 3 + 2 + 11 = 20 here
+— so the tail is a count you can trust rather than an "and others".
+
+If the dialog ever has more to say than fits, its text area scrolls —
+wheel, or **PgDn / PgUp**, arrows and Home / End — and the buttons stay
+put at the bottom. On a very short window the *replace or keep both?*
+answers can end up below the fold; **B**, **O** and **Esc** answer from
+the keyboard wherever the text happens to be scrolled.
+
 Portrait bursts are fine: the pixels stay exactly as shot and the file
 carries a rotation flag, the same way a phone records upright video.
 (A frame the camera flagged as *mirrored* is exported un-mirrored, and

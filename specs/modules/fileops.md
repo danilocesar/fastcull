@@ -202,6 +202,33 @@ explicitly deferred to a later discussion; modal dialog accepted)
   Ctrl+E with zero picks opens with "No picked images", never a silent
   no-op. Modal in v1. Cut from v1: per-file mode selectors, speed/ETA
   displays, pause, background copy.
+- **The card's height follows its content and its text region scrolls**,
+  the rule video-export.md records for issue #62: a 480 px floor (the
+  height it always had, so nothing moves in the ordinary case), the window
+  as the ceiling, and the growing text in a `ScrollView` body that takes
+  whatever height is left. This card has an unbounded text of its own —
+  the report prints one `FAILED name: reason` line per file that failed,
+  so a destination that goes read-only mid-run words itself as long as the
+  run was. With a fixed height those lines pushed the button row out of
+  the card, where Slint still draws and still hit-tests it: measured on
+  the parent tree at 1440×900, 61 picks into a read-only folder put the
+  row 830 px below the card and 627 px below the window's bottom edge —
+  drawn over the desktop, not over the dialog. Nothing is truncated and
+  nothing is unreachable — past the ceiling the body scrolls. Its
+  rectangles are traced (`copy card laid out …`, `copy buttons laid out
+  …`), and asserted by
+  `app: a_failure_report_longer_than_the_window_keeps_the_copy_buttons_inside_the_card`
+  (Unix: the read-only destination is a `chmod`). A long report scrolls
+  with the wheel AND with the keyboard — Down/Up, PgDn/PgUp, Home/End,
+  only while it overflows — so the failures past the fold are readable
+  without a mouse; the same test drives PgDn and Home and asserts the
+  body moved and came back. The bound on that
+  promise is video-export.md's: this card's fixed rows want ~190 px, so
+  below ~300 px of window height there is no room for them and the row
+  goes outside again (measured at 640×200: card 560×94, row 90 px below
+  it). Its clash answer rows now sit inside the scrolling body, so one
+  round of `copy_picks_asks_once_and_each_answer_does_what_it_says` is
+  answered with the mouse — every other answer in the suite is a key.
 
 **Rejects are not fileops' business (recorded user decision)**: after copy-picks,
 rejected and unmarked files stay untouched where they are; the user deletes them

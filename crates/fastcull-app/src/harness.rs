@@ -72,6 +72,23 @@ pub(crate) fn install(window: &MainWindow, state: &Rc<RefCell<AppState>>) -> Rc<
     window.on_dbg_field_laid_out(|i, x, y, w, h| {
         trace_mark_with(|| format!("iptc field {i} laid out at {x:.0},{y:.0} size {w:.0}x{h:.0}"));
     });
+    // The dialog cards and their button rows (issue #62). Their heights
+    // follow their content now, so "the buttons are inside the card" is a
+    // relation between two laid-out rectangles rather than something a
+    // reader can check in the .slint file — and a row laid out below the
+    // card is still drawn and still clickable, so no render proves it
+    // either. Same wiring rules as the panel rows above: unconditional,
+    // through `trace_mark_with`.
+    window.on_dbg_card_laid_out(|what, x, y, w, h| {
+        trace_mark_with(|| format!("{what} laid out at {x:.0},{y:.0} size {w:.0}x{h:.0}"));
+    });
+    // A dialog body's scroll offset (issue #62): 0 at the top, negative
+    // going down. The keyboard scrolling has no other witness — the body
+    // holds text, not a cursor, so nothing else in a dump changes when
+    // PgDn moves a report.
+    window.on_dbg_body_scrolled(|what, y| {
+        trace_mark_with(|| format!("{what} scrolled to {y:.0}"));
+    });
     if let Ok(script) = std::env::var("FASTCULL_DRIVE") {
         let mut steps: Vec<Step> = Vec::new();
         for step in script.split(';') {
@@ -398,6 +415,15 @@ fn dispatch(win: &MainWindow, state: &Rc<RefCell<AppState>>, key: &str) {
             "right" => char::from(Key::RightArrow).to_string().into(),
             "up" => char::from(Key::UpArrow).to_string().into(),
             "down" => char::from(Key::DownArrow).to_string().into(),
+            // Added for issue #62 (the dialogs' scrolling bodies answer
+            // to these), and they were never drivable before: the grid
+            // has had PgUp/PgDn/Home/End since M2, and a script could
+            // only reach them through the `nav` tokens, which bypass the
+            // key path entirely.
+            "pgdn" => char::from(Key::PageDown).to_string().into(),
+            "pgup" => char::from(Key::PageUp).to_string().into(),
+            "home" => char::from(Key::Home).to_string().into(),
+            "end" => char::from(Key::End).to_string().into(),
             s => s.into(),
         };
         let ctrl_text: slint::SharedString = char::from(Key::Control).to_string().into();

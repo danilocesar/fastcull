@@ -2042,6 +2042,32 @@ Documented because they ship in release builds (validator finding):
   needed: the instantiation report is the only one rows 0 and 1 ever emit
   (their first computed position is already their last), and the
   move report is what tells a script that a `resize:` has landed.
+  The two dialog cards report the same way (issue #62): `clip card laid
+  out at X,Y size WxH`, `clip buttons laid out …`, and the `copy` pair,
+  from `changed absolute-position` and `changed height`. Their heights
+  follow their content now, so a card's rectangle is a layout outcome
+  rather than a number in the .slint file, and the property that matters
+  — the button row is inside the card — is a relation between the two:
+  `buttons.y + buttons.h <= card.y + card.h`. No screenshot can stand in
+  for it: neither card clips, so a row laid out below its card is drawn
+  over the scrim looking almost right and stays clickable. A card's mark
+  is also the landing witness for a `resize:` while a dialog is up — the
+  card is centred, so its x moves with the window's width.
+  A dialog body that scrolls reports its offset the same way —
+  `clip body scrolled to Y` / `copy body scrolled to Y`, 0 at the top and
+  negative going down, emitted on change — because a body holds text and
+  no cursor, so nothing else in a dump moves when PgDn does. `key:` also
+  understands `pgdn`, `pgup`, `home` and `end` now; before issue #62 the
+  grid's own PgUp/PgDn/Home/End were reachable only through the `nav`
+  tokens, which bypass the key path.
+  Two more marks let a driven run gate on the app instead of the clock
+  (issue #62): `clip export finished` and `copy finished` fire when the
+  respective report card goes up, and `load settled gen N` carries the
+  session generation — `session-gen` counts from 0 for the folder the app
+  opened with, so the second folder a script opens settles as `gen 1`.
+  That generation is what makes the #13 "next occurrence" limitation
+  survivable for a session swap: every session used to settle with the
+  same sentence, so `wait:load settled` could only ever match the first.
 - `FASTCULL_DRIVE="6000:one2one;9000:grid;12000:quit"`: timed injection of
   nav actions (same names `handle_nav` takes, plus `quit`, `iptc` — the
   panel toggle, issue #12 — `about`/`shortcuts` — the modal toggles,
@@ -2175,9 +2201,12 @@ Documented because they ship in release builds (validator finding):
   parsed, so `wait:thumb landed idx 11` is satisfied by a thumb that
   landed ten seconds earlier ("has this happened yet?", never "happen
   next"). Four recorded limitations of that shape: a wait cannot ask for
-  the NEXT occurrence of a mark already emitted once (waiting for the
-  second session's "load settled" is not expressible — find a substring
-  unique to the state you mean, or keep that step on the clock); "past"
+  the NEXT occurrence of a mark already emitted once — find a substring
+  unique to the state you mean, or keep that step on the clock. (Waiting
+  for the second session's settle was the example, and it is now
+  expressible: the mark carries the session generation,
+  `wait:load settled gen 1`, issue #62. That is the pattern for the
+  limitation generally — put the thing that DIFFERS into the mark); "past"
   starts at `harness::install`, which runs AFTER the session dispatch and
   the first refresh, so a mark from the opening scan or the first layout
   is never observed; only the APP is observed, never the harness narrating

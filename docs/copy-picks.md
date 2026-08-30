@@ -90,6 +90,11 @@ in *"already identical — re-verified in place"* **and** appears in the
 failed list with the reason. Nothing there was damaged; only the sidecar
 update was lost.
 
+Every failure gets its own line, so a bad card or a read-only folder can
+make that list long. It never runs off the dialog: the report area scrolls
+inside the card — wheel, or **PgDn / PgUp**, arrows and Home / End — and
+the buttons stay where they are.
+
 The other way round, Overwrite never *deletes* anything at the
 destination: if a pick has no sidecar of its own (its sidecar could not be
 written — a locked card, a full disk), overwriting the RAW leaves the

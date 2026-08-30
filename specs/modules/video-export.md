@@ -148,6 +148,19 @@ orientation. The first frame in capture order sets both.
   different size (5616×3744)"). Scaling would be a re-encode; padding would
   be an edit. If skipping leaves fewer than 2 frames, the export refuses at
   plan time.
+- **The sentence is bounded: at most THREE reasons are named** (issue #62).
+  Every distinct pixel size is its own reason, so a mixed selection —
+  thirteen frames in twelve sizes — used to word itself as twelve clauses,
+  nine wrapped lines in a card built for one. The three biggest groups are
+  named and the rest fold into one tail that keeps the arithmetic honest.
+  Measured from the app, twenty skipped frames in twelve groups (4 + 3 +
+  2 + 11 = 20): *"skipped — 4 frames: different size (390×400) · 3 frames:
+  different size (380×400) · 2 frames: no usable embedded JPEG · 11 more
+  frames in 9 other sizes"*. The tail names the KIND it folded (`in N other sizes`,
+  `in N other orientations`) only when the whole tail is that kind, and
+  says `for N other reasons` otherwise — a shorter sentence may never
+  become a wrong one. `skipped_text` is the one place this happens, so the
+  plan line, the refusal and the report are bounded together.
 - A frame whose **EXIF orientation** differs from the first frame's is
   skipped and reported the same way.
 - A frame with **no usable embedded JPEG** (the loupe's `no usable embedded
@@ -248,6 +261,99 @@ when there is one; **Export** (Enter, when the plan is clean) and Cancel
 verified line and an Open folder action. No other control. The clash
 question is the same dialog state as Copy Picks. Modal, keyboard-contained
 (issue #42 rules), never marks, never moves the cursor.
+
+**The card's height follows its content** (issue #62), between a floor —
+260 px, or 380 px while the clash question is up, so the ordinary dialog
+keeps its proportions and does not read as an 8-line box holding two
+sentences — and the window (`parent.height - 40px`). It used to be a
+constant per state, and a constant cannot know how long a sentence is: a
+thirteen-frame refusal naming twelve sizes wrapped to nine lines, the
+spring above the button row collapsed to nothing, and the row was laid
+out BELOW the card — drawn over the scrim (the card does not clip) and
+still clickable, because Slint hit-tests children outside their parent.
+Measured on the parent tree at 1440×900: the row ended 29 px past the
+card's bottom edge. The same rule applies to the Copy Picks card
+(floor 480 px), whose report prints one line per failed file — 830 px
+past its bottom edge on the same tree.
+
+**Growing is only half of it: past the ceiling the BODY SCROLLS.** A card
+that has reached `parent.height - 40px` cannot grow further, and a wrapped
+`Text` cannot be made shorter, so the growable text — the plan line, the
+skipped line, the hint, the clash question, the error, the progress and
+the report — lives in its own `ScrollView` between the fixed header rows
+(title, destination, and Copy Picks' rename field) and the button row.
+That body is the only row the layout is allowed to shrink: it carries
+`vertical-stretch: 1` and no minimum of its own, while the header rows and
+the button row cannot give up a pixel. So the deficit always lands in the
+body and the content scrolls. Nothing is truncated and nothing becomes
+unreachable, which is why the report may still list one line per failed
+file.
+
+**The bound on that promise**: the buttons stay inside the card wherever
+the card's ceiling can still hold the FIXED rows — about 190 px for Copy
+Picks (padding, title, destination row, rename row, button row), i.e.
+roughly 300 px of window height once the menu bar, the status bar and the
+40 px margin are taken off. Measured 2026-08-30 with 61 failures in the
+report: at 640×300 the card is 560×194 and the row sits at 212…244, inside
+it; at 640×200 the ceiling is 94 px, the fixed rows do not fit, and the
+row is laid out 90 px below the card and 44 px below the window. Below
+that height a 560 px-wide card is not a dialog anyone can use anyway, so
+the failure is left visible rather than papered over.
+
+- **`ScrollView`, not a bare `Flickable`** (decision 2026-08-30): the
+  Flickable version scrolled correctly but showed nothing to say so, and
+  its clip is line-aligned, so a report cut off at the ceiling looked
+  complete. The std-widgets `ScrollView` is a drop-in with the same
+  viewport properties and brings a scrollbar. Adopted only after measuring
+  that it changes no geometry in the ordinary case — export card 560×260
+  at y=327, Copy Picks 560×480 at y=217, byte for byte — and that the
+  issue #49 wheel tests, the wheel routing table and both clash tests
+  (Esc/Enter/B/O containment) stay green.
+
+- A wheel over a dialog scrolls THAT DIALOG'S body when it overflows, and
+  nothing at all otherwise — never the grid behind the scrim (issue #49's
+  contract, which the body inherits by sitting inside the same scrim).
+- **And so does the keyboard**, in both dialog scopes: Down/Up move a line
+  (40 px), PgDn/PgUp a body height, Home/End the ends — clamped to
+  `[height - viewport-height, 0]`, and ONLY while the body overflows, so
+  below that these keys keep the meaning they have today (swallowed by the
+  clash question, otherwise rejected). B, O, Esc and Enter are not in the
+  set and are untouched. This is a keyboard-first app: a report only the
+  mouse can reach is a report the user cannot read (QE finding
+  2026-08-30 — PgDn used to do nothing at all). Witnessed by a
+  `<dialog> body scrolled to Y` mark, since a body holds text and no
+  cursor: nothing else in a dump changes when it moves.
+- **Below ~500 px of window height the clash question's answer rows need
+  a scroll** to come into view (three rows plus the question text exceed
+  what the ceiling leaves). They are reachable — wheel, PgDn, or the B/O/
+  Esc keys, which answer wherever the body happens to stand. On HEAD they
+  were drawn OUTSIDE the card at those sizes, so this is strictly better;
+  it is recorded rather than fixed because a dialog that small is not a
+  size the app is designed for.
+- Bounding the sentence (above) and the layout protect different things:
+  the first keeps THIS text short, the second keeps ANY text inside the
+  card. Neither alone is the fix — measured 2026-08-30 with each half
+  reverted in turn, the layout alone contains a twelve-clause refusal (it
+  scrolls) but leaves it unreadable, and the bounded sentence alone still
+  puts the row 18 px outside the card as soon as a long file name wraps
+  the plan line.
+- Nothing moves in the ordinary case: the floor is the height the card
+  had, and the content sits under it. Measured 2026-08-30 at 1440×900,
+  before and after: plan state 560×260 at y=327, Copy Picks 560×480 at
+  y=217 — the coordinates the issue #49 wheel tests are calibrated
+  against. The one deliberate change is the #56 hint state, which had a
+  286 px special case for exactly this problem and now measures 260 px
+  like every other plan state, hint included.
+- The witness is a trace, not a screenshot: `clip card laid out at X,Y
+  size WxH` and `clip buttons laid out …` (and the `copy` pair), from the
+  `changed absolute-position` / `changed height` handlers, the issue #13
+  idiom. A screenshot cannot see this — an escaped row is drawn looking
+  almost right — and the property is a relation between two rectangles:
+  `buttons.y + buttons.h <= card.y + card.h`.
+- Two marks make the driven test clock-free (issue #62, harness section of
+  ui-grid.md): `clip export finished` fires when the report card goes up,
+  and `load settled gen N` carries the session generation so a script can
+  wait for the SECOND folder it opened.
 
 ## Exported badge and hint (issue #56, 2026-08-29)
 
@@ -357,11 +463,14 @@ has one plan line, one skipped line and no other control).
   holds five frames when it holds three, and the user cannot check it
   without opening the file. The multi-video sentence therefore says how
   many videos, then names one.
-- **One line means ELIDED, not wrapped**, because the card's height is
-  fixed and a two-stem name reaches 45 characters. The name is therefore
-  LAST in every shape and every count comes before it: a long name may
-  cost the user the name, never a number. (`and 2 more` is the one thing
-  allowed behind it — it repeats the video count already stated.)
+- **One line means ELIDED, not wrapped**, and a two-stem name reaches 45
+  characters. The name is therefore LAST in every shape and every count
+  comes before it: a long name may cost the user the name, never a
+  number. (`and 2 more` is the one thing allowed behind it — it repeats
+  the video count already stated.) This used to be forced by a fixed card
+  height; since issue #62 the card grows, so the rule stands on its own
+  merit — a file name is not worth a second line in a dialog whose job is
+  one plan line, and the count that matters is already in front of it.
 - Counted over the SCOPE — the frames the user chose — not over the
   plan's kept frames, so the line still stands when the plan itself
   refuses (no destination yet, no room), which is exactly when "you
@@ -714,6 +823,18 @@ sample RAWs), `app:` = the driven `tests/screenshot.rs` test.
       idle) — an I/O-bound budget, added to perf_budgets.rs.
       → `perf: budget_video_export_30_frames_under_2s`; measured 527 ms
       for 327 MB on the reference laptop, 2026-08-27.
+- [x] The skipped sentence is BOUNDED (at most three reasons named, the
+      rest folded into a tail whose counts add up), and neither dialog's
+      button row can leave its card — at the floor, grown to its content,
+      or clamped at the ceiling with the body scrolling (issue #62).
+      → `core: a_long_list_of_reasons_is_bounded_and_still_adds_up`,
+      `core: the_tail_names_a_kind_only_when_the_whole_tail_is_that_kind`,
+      `app: a_long_refusal_keeps_the_export_buttons_inside_the_card`
+      (refusal, plan, report and a 640×300 window),
+      `app: a_failure_report_longer_than_the_window_keeps_the_copy_buttons_inside_the_card`
+      (the Copy Picks half, Unix — a `chmod 555` destination).
+      RED on the parent tree 2026-08-30: the row ended 29 px outside the
+      export card and 830 px outside the Copy Picks card.
 - [ ] USER-VERIFIED (2026-08-27, not automatable): InShot on the phone
       imports and plays a 2880×1920 MJPEG `.mov` and the untouched
       8640×5760 30-frame file. NOT VERIFIED: portrait rotation honoured by

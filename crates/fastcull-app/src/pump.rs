@@ -181,6 +181,10 @@ pub(crate) fn start(window: &MainWindow, state: &Rc<RefCell<AppState>>) -> slint
                                     win.set_copy_report(lines.join("\n").into());
                                     win.set_copy_state(2);
                                 }
+                                // Same gate as the export's below (issue
+                                // #62): the report card is up, and a script
+                                // waits for it rather than for a clock.
+                                crate::trace::trace_mark("copy finished");
                                 dirty = true; // copied badges
                             }
                         }
@@ -238,6 +242,11 @@ pub(crate) fn start(window: &MainWindow, state: &Rc<RefCell<AppState>>) -> slint
                                     );
                                     win.set_clip_state(2);
                                 }
+                                // The report card is now up: a driven script
+                                // can `wait:clip export finished` instead of
+                                // guessing how long a loaded runner needs to
+                                // copy and verify the samples (issue #62).
+                                crate::trace::trace_mark("clip export finished");
                                 dirty = true;
                             }
                         }

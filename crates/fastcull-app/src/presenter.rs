@@ -188,8 +188,15 @@ fn anchor_the_scroll(win: &MainWindow, st: &mut AppState, pass: &mut Pass) {
         // trace fired solely inside the >=0.5px branch, so a run where the
         // re-sort never occurred was indistinguishable from one where it
         // occurred and correctly changed nothing).
+        // The SESSION GENERATION is in the mark (issues #62/#63): every
+        // session settles with the same sentence, so a script that opens a
+        // second folder cannot `wait:` for the new one — "next occurrence"
+        // matches the old session's line (the #13 limitation, recorded in
+        // ui-grid.md). `session-gen` counts folder opens, so
+        // `wait:load settled gen 2` names one of them.
         trace_mark(&format!(
-            "load settled: cursor pos {cur_pos}, scroll {scroll_y:.0} -> {corrected:.0}  (cursor was {})",
+            "load settled gen {}: cursor pos {cur_pos}, scroll {scroll_y:.0} -> {corrected:.0}  (cursor was {})",
+            win.get_session_gen(),
             if st.grid.last_cursor_visible {
                 "visible"
             } else {

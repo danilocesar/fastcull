@@ -33,10 +33,13 @@ static WATCHING: AtomicBool = AtomicBool::new(false);
 /// For the script author, that is the whole contract and its limits:
 ///
 /// * A wait asks "has this happened yet?", so PAST marks count — but the
-///   NEXT occurrence of a mark already emitted once cannot be asked for:
-///   waiting for the second session's "load settled" is not expressible.
+///   NEXT occurrence of a mark already emitted once cannot be asked for.
 ///   Pick a substring unique to the state you mean (a geometry, an index,
-///   a name) or keep that step on the clock.
+///   a name) or keep that step on the clock. The fix, where the mark is
+///   ours, is to put the thing that DIFFERS into the mark: the second
+///   session's settle used to be the standing example of this limit, and
+///   is now `wait:load settled gen 1` because the mark carries the
+///   session generation (issue #62).
 /// * "Past" starts at `harness::install`, which main.rs runs AFTER the
 ///   session dispatch and the first refresh — a mark emitted in that
 ///   window (the opening scan, the first layout) is never observed, so a
