@@ -60,6 +60,34 @@ fn median(mut samples: Vec<Duration>) -> Duration {
     samples[samples.len() / 2]
 }
 
+/// The build's target directory — where the I/O-touching budgets put their
+/// fixtures, so 1,000 files never land on the development machine's tmpfs
+/// `/tmp` (whose quota this repo has exhausted before). `CARGO_TARGET_DIR`
+/// wins when the caller set one: the gate runs a validator and a QE agent
+/// in their own target dirs, and a fixture written outside them is invisible
+/// to their cleanup. A relative override resolves against the WORKSPACE
+/// root, not the test's cwd — cargo runs a test binary from its package
+/// directory, so a bare `target-qe-1` would otherwise land one level deep.
+fn target_dir() -> PathBuf {
+    let workspace = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../..");
+    // `join` with an absolute path replaces the base, so both forms work.
+    workspace.join(std::env::var_os("CARGO_TARGET_DIR").unwrap_or_else(|| "target".into()))
+}
+
+/// A fixture directory that is deleted even when an assertion panics.
+///
+/// Without it a red budget leaks its 1,000 files under the target
+/// directory, which nothing else cleans up (`cargo clean` aside).
+struct Fixture {
+    dir: PathBuf,
+}
+
+impl Drop for Fixture {
+    fn drop(&mut self) {
+        std::fs::remove_dir_all(&self.dir).ok();
+    }
+}
+
 /// Budget: open + EXIF read < 1 ms per file. Tightened from 10 ms
 /// after the 2026-07-27 perf fix (in-tree walker, ~5 µs measured):
 /// anything near the old budget means a whole-file read or mmap snuck
@@ -147,6 +175,89 @@ fn budget_fullres_decode_under_350ms() {
     );
 }
 
+/// Budget: scanning a 1,000-entry folder < 50 ms (catalog-cache.md).
+///
+/// Moved here from `catalog::tests::thousand_entry_scan_is_fast`, which
+/// asserted this wall clock inside the DEBUG unit-test run and so measured
+/// the runner: it needed an 8x carve-out on Windows CI for Defender, the
+/// same shared-runner flake class issue #58 removed from the suffix walk
+/// (issue #59). The structural half of the old criterion — 1,000
+/// placeholders, no file contents read — is now clock-free in
+/// `catalog::tests::thousand_entry_scan_yields_placeholders_without_reading_them`.
+///
+/// What the scan does is one `read_dir` plus two `stat`s per RAW-extension
+/// entry (one per unpaired JPEG, none for anything else), so this row is a
+/// throughput witness for the syscall count staying LINEAR — an O(N^2) walk
+/// or a per-entry re-sort shows up here immediately. What it does NOT catch,
+/// measured 2026-08-30: adding an `open` + 4-byte read per entry only
+/// roughly doubles the median (2.5 ms -> ~5 ms), nowhere near the threshold,
+/// because opening a 4-byte stub on a warm page cache costs ~3 us. The
+/// structural claim "no file contents are read" is therefore owned by
+/// `catalog::tests::thousand_entry_scan_yields_placeholders_without_reading_them`
+/// (which fails on that same mutant), not by this clock. The threshold keeps
+/// the number the spec criterion always carried.
+///
+/// What is being timed is WARM-CACHE metadata throughput: the untimed
+/// warm-up scan below pulls the whole directory and its 1,000 inodes into
+/// the page cache, so the timed region is syscalls, not storage — measured
+/// 2026-08-30 over 14 alternating rounds, tmpfs and the btrfs `target/`
+/// stay under ~1.5 ms apart, immaterial against the 50 ms threshold (the
+/// number does not depend on which one it ran on). The fixture still lives
+/// under the target directory rather than `/tmp`, but for a housekeeping
+/// reason, not a measurement one: `/tmp` is a RAM filesystem on the
+/// development machine, this repo has exhausted its quota before, and
+/// 1,000 files have no business landing there. Creation and deletion are
+/// outside the timed region either way.
+#[test]
+fn budget_folder_scan_1000_entries_under_50ms() {
+    let Some(_serial) = measure_serially() else {
+        return;
+    };
+    // Scoped by process AND thread, like the video-export fixture: the gate
+    // runs a validator and a QE agent in parallel, and one shared path here
+    // means one run's `remove_dir_all` deleting the other's fixture
+    // mid-measurement.
+    let fixture = Fixture {
+        dir: target_dir().join(format!(
+            "perf-scan-{}-{:?}",
+            std::process::id(),
+            std::thread::current().id()
+        )),
+    };
+    let dir = &fixture.dir;
+    std::fs::remove_dir_all(dir).ok();
+    std::fs::create_dir_all(dir).unwrap();
+    for i in 0..1000 {
+        std::fs::write(dir.join(format!("DSC{i:05}.ARW")), b"stub").unwrap();
+    }
+
+    // Untimed warm-up: the first scan pays for 1,000 inodes still cold from
+    // the writes above, which is fixture cost, not scan cost.
+    let warm = fastcull_core::catalog::Session::open(dir).expect("the fixture must scan");
+    assert_eq!(
+        warm.images.len(),
+        1000,
+        "the fixture must hold 1,000 images"
+    );
+    drop(warm);
+
+    let samples: Vec<Duration> = (0..5)
+        .map(|_| {
+            let t = Instant::now();
+            let session = fastcull_core::catalog::Session::open(dir).expect("the scan must work");
+            let elapsed = t.elapsed();
+            std::hint::black_box(session);
+            elapsed
+        })
+        .collect();
+    let med = median(samples);
+    eprintln!("BUDGET-MEDIAN {:.1} ms", med.as_secs_f64() * 1000.0);
+    assert!(
+        med < Duration::from_millis(50),
+        "1,000-entry folder scan median {med:?} (budget 50 ms)"
+    );
+}
+
 /// Budget: cold pipeline throughput > 60 files/sec on all cores.
 #[test]
 fn budget_pipeline_throughput_over_60_per_sec() {
@@ -207,13 +318,11 @@ fn budget_video_export_30_frames_under_2s() {
     // different target dirs, and one shared path here means one run's
     // `remove_dir_all` deleting the other's 327 MB export mid-measurement
     // (validator finding, 2026-08-28).
-    let dir = PathBuf::from(env!("CARGO_MANIFEST_DIR"))
-        .join("../../target")
-        .join(format!(
-            "perf-clip-{}-{:?}",
-            std::process::id(),
-            std::thread::current().id()
-        ));
+    let dir = target_dir().join(format!(
+        "perf-clip-{}-{:?}",
+        std::process::id(),
+        std::thread::current().id()
+    ));
     std::fs::remove_dir_all(&dir).ok();
     std::fs::create_dir_all(&dir).unwrap();
     let sources: Vec<fastcull_core::clip::ClipSource> = (0..30)

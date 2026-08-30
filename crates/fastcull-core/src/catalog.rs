@@ -108,9 +108,7 @@ impl Session {
         for entry in entries.iter().flatten() {
             let path = entry.path();
             if has_raw_extension(&path)
-                && std::fs::metadata(&path)
-                    .map(|m| m.is_file())
-                    .unwrap_or(false)
+                && entry_metadata(&path).map(|m| m.is_file()).unwrap_or(false)
             {
                 if let Some(stem) = path.file_stem().and_then(|s| s.to_str()) {
                     raw_stems.insert(stem.to_ascii_lowercase());
@@ -141,7 +139,7 @@ impl Session {
             // Failed, not dropped: the user must see that the file exists
             // and could not be used. Directories (or things resolving to
             // non-files: fifos, sockets) named like RAWs are skipped.
-            let (size, mtime, state) = match std::fs::metadata(&path) {
+            let (size, mtime, state) = match entry_metadata(&path) {
                 Ok(md) if md.is_file() => (md.len(), md.modified().ok(), LoadState::Placeholder),
                 Ok(_) => continue,
                 Err(e) => (0, None, LoadState::Failed(format!("unreadable entry: {e}"))),
@@ -162,6 +160,40 @@ impl Session {
             scan_errors,
         })
     }
+}
+
+#[cfg(test)]
+thread_local! {
+    /// Metadata probes made by [`entry_metadata`] on THIS thread, so a test
+    /// can assert the scan's SHAPE — stats per entry — instead of how long
+    /// it took on some runner (issue #59, the same reasoning as
+    /// `fileops::PROBES`). Thread-local, not atomic: cargo runs tests on
+    /// parallel threads and `Session::open` probes only on its caller's
+    /// thread (it starts no worker), so each test sees exactly its own
+    /// probes. Compiled out of a real build.
+    static METADATA_PROBES: std::cell::Cell<u64> = const { std::cell::Cell::new(0) };
+}
+
+/// Forget the probes counted so far on this thread.
+#[cfg(test)]
+fn metadata_probes_reset() {
+    METADATA_PROBES.with(|c| c.set(0));
+}
+
+/// Probes counted on this thread since the last [`metadata_probes_reset`].
+#[cfg(test)]
+fn metadata_probes() -> u64 {
+    METADATA_PROBES.with(std::cell::Cell::get)
+}
+
+/// The scan's only look at a file: `stat` (follows symlinks), never an
+/// open — file contents are never read at scan time (catalog-cache.md).
+/// Every metadata call in [`Session::open`] goes through here so the count
+/// is assertable.
+fn entry_metadata(path: &Path) -> std::io::Result<std::fs::Metadata> {
+    #[cfg(test)]
+    METADATA_PROBES.with(|c| c.set(c.get() + 1));
+    std::fs::metadata(path)
 }
 
 /// True if the path has an extension rawler can decode (case-insensitive).
@@ -189,6 +221,33 @@ fn has_jpeg_extension(path: &Path) -> bool {
 mod tests {
     use super::*;
 
+    /// A fixture directory that cleans itself up even when an assertion
+    /// panics — restoring permissions first, because the 1,000-entry test
+    /// denies itself read access on purpose and must not leave a pile of
+    /// unreadable stubs in the scratch directory.
+    struct Fixture {
+        dir: PathBuf,
+    }
+
+    impl Drop for Fixture {
+        fn drop(&mut self) {
+            #[cfg(unix)]
+            {
+                use std::os::unix::fs::PermissionsExt;
+                if let Ok(entries) = std::fs::read_dir(&self.dir) {
+                    for entry in entries.flatten() {
+                        std::fs::set_permissions(
+                            entry.path(),
+                            std::fs::Permissions::from_mode(0o644),
+                        )
+                        .ok();
+                    }
+                }
+            }
+            std::fs::remove_dir_all(&self.dir).ok();
+        }
+    }
+
     fn make_folder(files: &[&str]) -> PathBuf {
         let dir = crate::testutil::scratch_dir("catalog");
         for f in files {
@@ -202,7 +261,9 @@ mod tests {
         let dir = make_folder(&[
             "b.ARW", "a.arw", "c.Arw", "d.CR3", "e.nef", "x.jpg", "y.txt", "z.xmp",
         ]);
+        metadata_probes_reset();
         let session = Session::open(&dir).unwrap();
+        let probes = metadata_probes();
         let names: Vec<String> = session
             .images
             .iter()
@@ -213,6 +274,14 @@ mod tests {
             names,
             ["a.arw", "b.ARW", "c.Arw", "d.CR3", "e.nef", "x.jpg"]
         );
+        // The scan's cost on a MIXED folder, as a count rather than a clock
+        // (issue #59): 2 stats for each of the 5 RAW-extension entries (the
+        // stem pass must know whether the entry is a real file, the record
+        // pass wants size + mtime), 1 for the unpaired x.jpg (record pass
+        // only — the stem pass never stats a JPEG), and 0 for y.txt and
+        // z.xmp, which no pass looks at. See the 1,000-entry test for what
+        // these constants freeze.
+        assert_eq!(probes, 5 * 2 + 1, "5 RAWs x2 + 1 unpaired JPEG + 0 others");
         assert!(session
             .images
             .iter()
@@ -364,23 +433,104 @@ mod tests {
         std::fs::remove_dir_all(&dir).ok();
     }
 
-    /// Spec acceptance: a 1,000-entry folder scans in < 50 ms.
+    /// Spec acceptance (catalog-cache.md): a 1,000-entry folder yields
+    /// 1,000 placeholders and reads no file contents.
+    ///
+    /// Clock-free on purpose. The wall-clock half of the old criterion is
+    /// now `budget_folder_scan_1000_entries_under_50ms` in
+    /// `tests/perf_budgets.rs` (release-only): a time bound in this debug
+    /// unit run measured whatever else the runner was doing — the same
+    /// flake class issue #58 removed from the suffix walk, and the reason
+    /// this test needed an 8x Windows carve-out for Defender (issue #59).
+    ///
+    /// "Reads no contents" is asserted structurally, two ways:
+    ///
+    /// * every stub is made unreadable (mode 0o000) before the scan, so an
+    ///   `open` for reading in the scan path fails and the record turns
+    ///   `Failed` instead of `Placeholder`. `stat` needs no read permission
+    ///   on the file, only search permission on the directory, so the
+    ///   metadata pass is untouched. Unix only (the pipeline's
+    ///   reopen-from-cache test uses the same trick); on Windows the
+    ///   placeholder half still runs and the no-read claim is review-only.
+    /// * the probe count pins the SHAPE: exactly two stats per RAW-extension
+    ///   entry — one in the stem pass (the paired-JPEG rule must know the
+    ///   entry is a real file) and one in the record pass (size + mtime) —
+    ///   so a per-file open cannot hide as extra metadata calls. The mixed
+    ///   fixture in `scan_keeps_raw_extensions_case_insensitively_and_unpaired_jpegs`
+    ///   pins the other two rates (one stat per unpaired JPEG, none for
+    ///   paired JPEGs and non-images).
+    ///
+    /// Both constants freeze TODAY's two-pass shape. Reusing the stem pass's
+    /// metadata in the record pass is a legitimate optimisation — it would
+    /// halve the RAW rate — but it is a deliberate change: it updates these
+    /// two constants and the sentence in `specs/01-architecture.md` that
+    /// states the rates. A silent drop to one stat per entry is not what
+    /// this asserts.
+    ///
+    /// Known blind spot: a scan that opened each file and SWALLOWED the
+    /// error keeps its placeholders and slips past both halves. The perf
+    /// budget does not cover it either — measured 2026-08-30, an added
+    /// open + 4-byte read per entry only roughly doubles that median
+    /// (2.5 ms -> ~5 ms). That budget's fixture is 4-byte stubs, so it
+    /// cannot see a content read of any size; the cost would only appear
+    /// on a real folder. So
+    /// this test is the discriminator for the shipped shape, and an
+    /// error-swallowing open stays a review matter.
     #[test]
-    fn thousand_entry_scan_is_fast() {
+    fn thousand_entry_scan_yields_placeholders_without_reading_them() {
         let names: Vec<String> = (0..1000).map(|i| format!("DSC{i:05}.ARW")).collect();
         let refs: Vec<&str> = names.iter().map(String::as_str).collect();
-        let dir = make_folder(&refs);
-        let t = std::time::Instant::now();
-        let session = Session::open(&dir).unwrap();
-        let elapsed = t.elapsed();
+        // The guard restores the permissions and deletes the folder even if
+        // an assertion below panics.
+        let fixture = Fixture {
+            dir: make_folder(&refs),
+        };
+        let dir = &fixture.dir;
+
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::PermissionsExt;
+            for name in &names {
+                std::fs::set_permissions(dir.join(name), std::fs::Permissions::from_mode(0o000))
+                    .unwrap();
+            }
+            // Root ignores the permission bits, which would make the
+            // discriminating half of this test silently vacuous. This one
+            // fails loud rather than skipping with a note the way
+            // `clip::tests::a_read_only_destination_fails_honestly_and_leaves_nothing`
+            // does: that test checks how an error is REPORTED and can be
+            // skipped, while this one is structural — silently proving
+            // nothing is the outcome it exists to prevent.
+            assert!(
+                std::fs::File::open(dir.join(&names[0])).is_err(),
+                "the 0o000 trick must actually deny reads (running as root?)"
+            );
+        }
+
+        metadata_probes_reset();
+        let session = Session::open(dir).unwrap();
+        let probes = metadata_probes();
+
         assert_eq!(session.images.len(), 1000);
-        // Windows CI budget is looser: Defender scans the 1,000 fresh
-        // tempdir files (recorded in catalog-cache.md).
-        let budget_ms = if cfg!(windows) { 400 } else { 50 };
-        assert!(
-            elapsed.as_millis() < budget_ms,
-            "scan took {elapsed:?} (budget {budget_ms} ms)"
+        assert_eq!(
+            session.scan_errors, 0,
+            "no entry may be lost to the listing"
         );
-        std::fs::remove_dir_all(&dir).ok();
+        assert!(
+            session
+                .images
+                .iter()
+                .all(|i| i.state == LoadState::Placeholder),
+            "an unreadable-but-stattable file is a placeholder, not a Failed record: {:?}",
+            session
+                .images
+                .iter()
+                .find(|i| i.state != LoadState::Placeholder)
+        );
+        assert_eq!(
+            probes, 2000,
+            "the scan must cost two stats per RAW entry (stem pass + record \
+             pass), linear in the entry count"
+        );
     }
 }

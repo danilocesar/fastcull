@@ -127,9 +127,12 @@ meaningless. Numbers for humans: criterion benches in
 
 Thresholds were set ~2× looser than the decode-bound baselines to absorb
 variance (the EXIF row has huge headroom on purpose — anything near 1 ms
-means a whole-file read or mmap snuck back). The original baselines were
-measured on a 32-thread machine retired 2026-07-28; since then the
-development machine is an i7-8665U laptop (4 cores / 8 threads). Both
+means a whole-file read or mmap snuck back; the folder-scan row sits 20×
+above its idle median, keeping the number the catalog-cache criterion always
+carried — what it can and cannot prove is spelled out under the table). The
+original baselines were measured on a 32-thread machine retired 2026-07-28;
+since then the development machine is an i7-8665U laptop (4 cores /
+8 threads). Both
 columns are kept: the historical baseline for provenance, the laptop idle
 medians as the numbers a gate round actually compares against today. The
 thresholds themselves are untouched by this rewrite (the last one to
@@ -146,14 +149,51 @@ path); the 130–150 ms baseline predates that and timed the decode alone.
 | full-res 8640×5760 decode+rotate | 130–150 ms (decode only) | 250–280 ms | < 350 ms |
 | pipeline throughput (all cores) | ~1,500 files/s (post-2026-07-27 EXIF fix; was ~300 mmap-capped) | ~265 files/s | > 60 files/s (4-core runner) |
 | video export, 30 A1 frames (327 MB) | — (M9, 2026-08-27) | ~527 ms | < 2 s |
+| folder scan, 1,000-entry dir (placeholders) | — (moved here 2026-08-30, issue #59) | ~2.5 ms | < 50 ms |
 
-The video-export row is the only I/O-BOUND budget in the table, and it is
-there to catch a change of KIND rather than a slow drift: the export
-copies embedded JPEGs byte for byte and decodes nothing, so a number
-walking towards the threshold means something started decoding, scaling
-or buffering the frames — which is exactly what video-export.md forbids.
+The video-export and folder-scan rows measure whole operations that decode
+nothing at all (unlike the open+EXIF row, which is decode-free but times one
+step of the decode path). Each guards a change of KIND rather than a slow
+drift, and each states below exactly which kind, because a wall clock proves
+less than it looks like it does.
+
+The video-export row is I/O-BOUND: the export copies embedded JPEGs byte
+for byte and decodes nothing, so a number walking towards the threshold
+means something started decoding, scaling or buffering the frames — which
+is exactly what video-export.md forbids.
 It writes into `target/` on purpose; `/tmp` is a RAM filesystem on the
 development machine and would measure nothing.
+
+The folder-scan row is FILESYSTEM-METADATA-bound: `Session::open` is one
+`read_dir` plus two `stat`s per RAW-extension entry, one per unpaired JPEG
+and none for anything else, so the number is the runner's syscall throughput
+and the row's job is to keep that count LINEAR — an O(N²) walk or a
+per-entry re-sort misses the threshold at once. It is deliberately NOT the
+guard for "no file contents are read": measured 2026-08-30, adding an open +
+4-byte read per entry only roughly doubles the median (2.5 ms → ~5 ms),
+because a 4-byte stub opens in ~3 µs on a warm cache. That claim belongs to
+the clock-free unit test named below, which fails on that same mutant.
+
+What the budget times is WARM-CACHE metadata throughput: its own untimed
+warm-up scan pulls the directory and its 1,000 inodes into the page cache
+first, so the timed region is syscalls rather than storage (tmpfs and btrfs
+measured under ~1.5 ms apart on 2026-08-30 — immaterial against the 50 ms
+threshold). Its fixture is created and deleted outside the timed region and
+lives under `target/` for housekeeping, not for a disk measurement: `/tmp`
+is a RAM filesystem on the development machine whose quota this repo has
+exhausted before.
+
+The row moved here on 2026-08-30 (issue #59) from
+`catalog::tests::thousand_entry_scan_is_fast`, which asserted the same wall
+clock inside the DEBUG unit run and therefore needed an 8× carve-out on
+Windows CI for Defender: shared-runner flake, the class issue #58 removed
+from the suffix walk. Only the clock moved — the structural claim (1,000
+placeholders, no file contents read, the exact stat count) is asserted
+clock-free in
+`catalog::tests::thousand_entry_scan_yields_placeholders_without_reading_them`,
+which runs in every debug workspace test run including CI's, except that its
+no-read half is `cfg(unix)`-gated and so compiles out on the Windows job,
+where that claim stays review-only.
 
 ## Shutdown policy (recorded 2026-07-25)
 
