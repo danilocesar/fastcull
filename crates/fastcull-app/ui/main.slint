@@ -402,6 +402,15 @@ export component MainWindow inherits Window {
     // token). Keyboard focus was otherwise invisible to headless runs —
     // a stranded keyboard could not be asserted, so it shipped.
     out property <bool> dbg-keys-focus: keys.has-focus;
+    // Debug facility (issues #13/#61, documented in ui-grid.md): a panel
+    // field row reports its own laid-out rectangle in WINDOW coordinates,
+    // which the harness traces. A driven click on a field is a click at a
+    // point the script chose before the app existed; whether the field is
+    // THERE yet is a layout outcome, and on a loaded machine the layout
+    // pass can be seconds late — the flake issue #61 records. With this a
+    // script can `wait:` for the row instead of guessing, and the test can
+    // assert afterwards that the point it aimed at was inside the rect.
+    callback dbg-field-laid-out(int, length, length, length, length);
     // Scroll offset (negative Flickable viewport-y); Rust reads and writes it.
     in-out property <length> vp-y: 0px;
     // Geometry the Rust layout math needs (the grid area = flickable size).
@@ -1315,6 +1324,34 @@ export component MainWindow inherits Window {
                                 placeholder-text: row.mixed ? "‹multiple values›" : "";
                                 font-size: 12px;
                                 height: 26px;
+                                // Harness observability only (issues
+                                // #13/#61) — the row announces where the
+                                // layout put it, so a driven click can
+                                // wait for it and prove it hit. BOTH
+                                // hooks, and neither is redundant: `init`
+                                // runs when the conditional panel's items
+                                // are instantiated, which is the moment
+                                // the row becomes hit-testable at all
+                                // (the property is set synchronously, the
+                                // item tree catches up in the next
+                                // layout pass — that gap IS the flake);
+                                // `changed` catches the rows a second
+                                // layout pass moves afterwards, which is
+                                // most of them but measurably not rows 0
+                                // and 1, whose first computed position is
+                                // already their last.
+                                init => {
+                                    root.dbg-field-laid-out(i,
+                                        self.absolute-position.x,
+                                        self.absolute-position.y,
+                                        self.width, self.height);
+                                }
+                                changed absolute-position => {
+                                    root.dbg-field-laid-out(i,
+                                        self.absolute-position.x,
+                                        self.absolute-position.y,
+                                        self.width, self.height);
+                                }
                                 accepted(text) => {
                                     root.iptc-field-committed(i, text, true);
                                     keys.focus(); // G4: Enter returns to grid, cursor stays

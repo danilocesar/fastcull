@@ -2664,6 +2664,60 @@ fn menu_clicks_are_calibrated() -> bool {
     !cfg!(windows)
 }
 
+/// Where the IPTC panel's field row `i` was last laid out BEFORE the trace
+/// line `before` — the app's own report (`iptc field N laid out at X,Y
+/// size WxH`, the same mark a script's `wait:` gates a field click on), in
+/// window-logical px. A driven field click is calibrated against this
+/// instead of against a comment: the row's y rides on the platform's font
+/// metrics, and a coordinate that drifts off the field has to fail as "the
+/// click was outside the field" rather than as whatever the wrong element
+/// happened to do (issues #13/#61).
+fn iptc_field_rect(stderr: &str, i: usize, before: &str) -> (f32, f32, f32, f32) {
+    let head = stderr
+        .split_once(before)
+        .unwrap_or_else(|| panic!("no `{before}` line in stderr:\n{stderr}"))
+        .0;
+    // Anchored on the trace prefix's `]`: a script that `wait:`s on this
+    // very text puts the substring in the log too, and the mark is the one
+    // that starts the line's message.
+    let tag = format!("] iptc field {i} laid out at ");
+    let geom = head
+        .lines()
+        .filter_map(|l| l.split_once(&tag))
+        .next_back()
+        .unwrap_or_else(|| {
+            panic!("panel field {i} never reported a layout before `{before}`:\n{stderr}")
+        })
+        .1;
+    let parse = || -> Option<(f32, f32, f32, f32)> {
+        let (pos, size) = geom.split_once(" size ")?;
+        let (x, y) = pos.split_once(',')?;
+        let (w, h) = size.trim().split_once('x')?;
+        Some((
+            x.parse().ok()?,
+            y.parse().ok()?,
+            w.parse().ok()?,
+            h.parse().ok()?,
+        ))
+    };
+    parse().unwrap_or_else(|| panic!("malformed field-layout trace: {geom:?}"))
+}
+
+/// Assert that a driven click's coordinates are inside a rectangle the app
+/// reported — the calibration guard the menu tests express as "an
+/// intermediate assertion that fails loudly if a click missed", here
+/// against measured geometry rather than an outcome.
+fn assert_click_inside(rect: (f32, f32, f32, f32), click: (f32, f32), what: &str) {
+    let (x, y, w, h) = rect;
+    assert!(
+        click.0 >= x && click.0 <= x + w && click.1 >= y && click.1 <= y + h,
+        "the click at {click:?} is outside {what} (x {x}..{}, y {y}..{}) — \
+         the scripted coordinate has drifted off the element",
+        x + w,
+        y + h
+    );
+}
+
 /// Issue #41 D1, the user's live hit, at 1:1 (priority repro — RUN12):
 /// with the keyword field focused (K), closing the IPTC panel via
 /// View > IPTC Panel destroys the focused editor; the menu's own focus
@@ -2870,10 +2924,33 @@ fn session_swap_mid_field_edit_discards_and_keeps_the_keyboard() {
         &dir_b.join("two.ARW"),
     );
     let out = out_dir().join("focus-d3.jpg");
-    // resize first: the Title field is clicked at fixed coordinates
-    // inside the right-docked panel, so the window size must be pinned.
+    // The Title field is clicked at fixed coordinates inside the
+    // right-docked panel, so the window size has to be known. It is PINNED
+    // at the default (`PIN_WINDOW`), not changed: this script used to ask
+    // for 1200x800, and a `resize:` is a REQUEST to the compositor, which
+    // under load goes unanswered for the life of the run. That, not a slow
+    // layout, is the cause of issue #61's flake (17 of 20 runs under six
+    // busy cores). Measured on this tree with the old script and six
+    // spinners, 9 runs of 10: no `iptc field 0 laid out at 910` ever
+    // appears, `geometry at shutter` reads `grid 1140x800`, and the
+    // snapshot the app takes 12 s later is 1440 px wide — the window never
+    // became 1200 while anything was watching. So the panel's left edge
+    // stayed at 1140 instead of 900 (the row itself at 1150 instead of
+    // 910, a 240 px shift), and the click at x=1050 fell 90 px short of
+    // the panel onto the grid, which the test then reported as "the field
+    // never took focus". Asking for the size it already has cannot go
+    // unanswered in a way that matters.
+    //
+    // The `wait:` then gates the click on the Title row's own layout
+    // report INCLUDING its x — `at 1150` is where that row is in a 1440 px
+    // window and nowhere else — so the click happens in exactly the state
+    // these coordinates were measured in: the panel laid out, at this
+    // width. If the window is ever some third size, the wait ends the run
+    // with that sentence instead of a click landing somewhere surprising.
+    // The steps after it keep the gaps written here.
     let drive = format!(
-        "150:resize:1200x800;2500:key:i;3000:click.1050,177;3200:dump.focused;\
+        "{PIN_WINDOW};2500:key:i;2600:wait:iptc field 0 laid out at 1150;\
+         3000:click.1290,177;3200:dump.focused;\
          3400:key:w;3500:key:i;3600:key:p;4000:open:{};5200:dump.swapped;\
          5400:key:+;5800:dump.end",
         dir_b.display()
@@ -2882,6 +2959,21 @@ fn session_swap_mid_field_edit_discards_and_keeps_the_keyboard() {
         &[dir_a.to_str().unwrap()],
         &[("FASTCULL_TRACE", "1"), ("FASTCULL_DRIVE", &drive)],
         &out,
+    );
+    // The wait really gated the click (a dropped token would silently put
+    // the schedule back on the clock that issue #61 is about).
+    assert!(
+        stderr.contains("wait:iptc field 0 laid out at 1150 (satisfied"),
+        "the `wait:` step never fired — the click below was timed, not \
+         gated:\n{stderr}"
+    );
+    // The coordinate is calibrated against the geometry the app reported
+    // for that row at that window size, so a font-metric drift fails here
+    // — before the outcome assertions, and naming the real cause.
+    assert_click_inside(
+        iptc_field_rect(&stderr, 0, "drive: click.1290,177"),
+        (1290.0, 177.0),
+        "the Title field",
     );
     // The Title-field click really took focus (anti-vacuity, gate
     // finding: a missed click would type the `p` as a real grid PICK
@@ -3091,6 +3183,24 @@ fn esc_over_stacked_modals_closes_the_topmost_first() {
 /// keyboard had no discoverable recovery at 1:1. RED pre-fix:
 /// keysfocus=false after the click. Additive: the click still re-centers
 /// (user decision — click semantics unchanged).
+///
+/// The click is gated (`wait:`) on the overlay actually being UP — any
+/// rung, which is what `idx 0 factor` matches — because the surface it
+/// must hit exists only then: before the first rung the same point belongs
+/// to the fit surface, whose click ALSO claims the keyboard, so the test
+/// would go green having exercised the wrong element. Under load that is
+/// what the run captured (issue #61: `one2one=false` at the clicked dump).
+/// Not the sharp rung: a debug-build 50 MP decode on a loaded machine
+/// legitimately takes tens of seconds (the recorded reason the M1 tests
+/// are release-only), and the claim under test is the overlay's, not the
+/// top rung's.
+///
+/// The click lands at 800,500 — inside the image rect of even the smallest
+/// rung the overlay can show (the 320 px thumb, centred) and deliberately
+/// OFF its centre, so the re-centre it produces is visible in `pan`. That
+/// is the assertion that says the press reached the overlay's own
+/// TouchArea: a click that fell through to the cell behind it would claim
+/// the keyboard too, and leave the pan at dead centre.
 #[test]
 fn one_to_one_click_claims_the_keyboard() {
     if !has_display() {
@@ -3111,11 +3221,17 @@ fn one_to_one_click_claims_the_keyboard() {
             ("FASTCULL_TRACE", "1"),
             (
                 "FASTCULL_DRIVE",
-                "3500:key:k;4000:dump.k;4400:click.400,400;4800:dump.clicked;\
-                 5000:key:g;5400:dump.end",
+                "2000:wait:idx 0 factor;2500:key:k;3000:dump.k;\
+                 3400:click.800,500;3800:dump.clicked;4000:key:g;4400:dump.end",
             ),
         ],
         &out,
+    );
+    // The wait really gated the click (see the session-swap test).
+    assert!(
+        stderr.contains("wait:idx 0 factor (satisfied"),
+        "the `wait:` step never fired — the click below was timed, not \
+         gated:\n{stderr}"
     );
     // K parked the keyboard in the keyword field (the stranded-adjacent
     // state), all at 1:1.
@@ -3124,12 +3240,31 @@ fn one_to_one_click_claims_the_keyboard() {
         k.contains("keysfocus=false") && k.contains("one2one=true") && k.contains("iptc=true"),
         "K did not focus the keyword field at 1:1: {k}"
     );
-    // The click on the zoomed image claimed the keyboard back…
+    // The press really landed on the OVERLAY (not on the cell behind it):
+    // only that surface re-centres, and the click was off centre.
     let clicked = qedump(&stderr, "clicked");
+    assert_ne!(
+        dump_field(clicked, "pan"),
+        "0.5000,0.5000",
+        "the loupe click did not re-centre — it missed the zoom overlay's \
+         own surface, so the focus claim below is some other element's: \
+         {clicked}"
+    );
+    // The click on the zoomed image claimed the keyboard back…
+    //
+    // If this fails while the assertion above passed, the click DID reach
+    // the overlay and the CLAIM is what failed — the shipped
+    // `keys.focus()` in the overlay's `clicked` handler did not stick,
+    // which is issue #64's family (a focus claim made while the item tree
+    // is being rebuilt under the same dispatch). Seen once in a full debug
+    // suite, with the panel open and a soft rung up; the test is telling
+    // the truth there and must not be quieted.
     assert!(
         clicked.contains("keysfocus=true") && clicked.contains("one2one=true"),
         "a 1:1 loupe click did not claim the keyboard (issue #41 defense \
-         in depth): {clicked}"
+         in depth; the re-centre above proves the click reached the \
+         overlay, so this is the claim failing — issue #64's family): \
+         {clicked}"
     );
     // …and the next keystroke works: `G` exits to the grid (G, not `-`,
     // for the profile-independence reason in the panel-close 1:1 test).
@@ -3893,11 +4028,12 @@ fn overlay_wheel_still_zooms_one_stop_per_notch() {
 ///
 /// The script ends on a healthy cursor because a --start-11 shutter
 /// whose final cursor is failed above fit trips the 60 s readiness cap
-/// (recorded limitation). The texture still has to land inside the ~2 s
-/// between the two Ends; a `wait:<trace substring>` drive token would
-/// make the second End conditional and close that window outright —
-/// recorded as a follow-up on the issue #13 harness step, which needs
-/// the same token for the click-timing flakes (issue #61).
+/// (recorded limitation). The ~2 s window the texture used to have to
+/// land in is closed: the second End is held by `wait:thumb landed idx
+/// 11` (issue #13's token), so a runner slow enough to take longer moves
+/// the End with it instead of losing the arming. The assertion on that
+/// same line stays — the wait proves the texture landed, the assertion
+/// proves the ordering the count below is read against.
 ///
 /// RED on the pre-gate build (b2ce1f9): the thumb renders on EVERY
 /// End (so the after-t1 count is 1) and the "(decode failed)" drop
@@ -3969,7 +4105,8 @@ fn a_decode_failed_cursor_drops_to_fit_instead_of_masking_the_badge() {
             ("FASTCULL_TRACE", "1"),
             (
                 "FASTCULL_DRIVE",
-                "15000:end;15250:dump.t1;16000:home;17000:end;17150:dump.t2;18000:home",
+                "15000:end;15250:dump.t1;16000:home;\
+                 16500:wait:thumb landed idx 11;17000:end;17150:dump.t2;18000:home",
             ),
         ],
         &out,
@@ -3982,6 +4119,14 @@ fn a_decode_failed_cursor_drops_to_fit_instead_of_masking_the_badge() {
         },
     );
     corrupter.join().unwrap();
+    // The gate was really in force: a `wait:` reports when it fires, so
+    // this is the difference between "the token held the second End" and
+    // "the token was a typo the parser dropped".
+    assert!(
+        stderr.contains("wait:thumb landed idx 11 (satisfied"),
+        "the `wait:thumb landed idx 11` step never fired — the second End \
+         was not gated on anything:\n{stderr}"
+    );
     // The anchor must have FIRED, not merely timed out into the 9 s floor:
     // a renamed trace mark would otherwise leave the observer dead and
     // this test green on the floor alone (QE finding 2026-08-29).
@@ -3996,7 +4141,11 @@ fn a_decode_failed_cursor_drops_to_fit_instead_of_masking_the_badge() {
     // there and chose not to. This is an ORDERING on one serial trace
     // stream (~2 s apart in practice), not a same-tick contest — the old
     // guard demanded a thumb RENDER on the FIRST End, which is exactly
-    // the coin flip issue #50 was filed for.
+    // the coin flip issue #50 was filed for. The script's own
+    // `wait:thumb landed idx 11` makes the ordering causal rather than
+    // scheduled (a renamed mark ends the run loudly at the wait's own
+    // cap); this assertion reads the same fact off the log, and is what
+    // still binds if the wait is ever taken out of the script.
     let second_end = stderr
         .match_indices("drive: end")
         .nth(1)

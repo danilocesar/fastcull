@@ -1586,11 +1586,13 @@ the user confirms, all cheap to change):**
       `(decode failed)` drop — which `render_rung` emits only when the
       overlay was wanted AND up, so it IS the proof that the rung was
       attempted there. Without them a swallowed key, or a session simply
-      sitting at fit, would buy the zero. Recorded residual: the texture must land inside the
-      ~2 s between the two End-jumps, which a `wait:<trace substring>`
-      drive token would close by making the second End conditional —
-      deferred to the issue #13 harness step, which needs the same token
-      for the click-timing flakes (issue #61). The wheel wiring the
+      sitting at fit, would buy the zero. The residual that was recorded
+      here — the texture had to land inside the ~2 s between the two
+      End-jumps — is closed (issue #13, 2026-08-29): the second End-jump
+      is held by `wait:thumb landed idx 11`, so a runner slow enough to
+      take longer moves the End with it instead of losing the arming, and
+      the `thumb landed` assertion stays as the reading of that ordering
+      off the log. The wheel wiring the
       restructure touched is
       pinned by `overlay_wheel_still_zooms_one_stop_per_notch` (real
       dispatched scroll events via the `wheel.` token; a guard — wheel
@@ -1820,6 +1822,46 @@ the user confirms, all cheap to change):**
       runs there; each menu test asserts an intermediate state that
       fails loudly if a click misses, so font drift cannot make one pass
       vacuously.
+      **Gated on state, not on the clock (issue #61, 2026-08-29):** two of
+      these strands clicked at a script timestamp and failed under load —
+      `session_swap_mid_field_edit_discards_and_keeps_the_keyboard` 17 runs
+      in 20 under six busy cores, `one_to_one_click_claims_the_keyboard` 14
+      in 20 under 24. Both now `wait:` for what the click needs. The first
+      was not a layout race at all: it asked for a 1200x800 window and the
+      compositor did not answer for the life of the run, so the click at
+      x=1050 fell 90 px short of a panel still docked at the 1440 px
+      window's edge, onto the grid. Measured with the old script under six
+      spinners, 9 runs in 10: no `iptc field 0 laid out at 910` at all,
+      `geometry at shutter: grid 1140x800`, and a 1440 px-wide snapshot
+      12 s after the request — the row sat at 1150 instead of 910, a
+      240 px shift. It now pins the window at the size it already has and
+      waits on the Title row's layout report INCLUDING its x (`iptc field
+      0 laid out at 1150`), which is that row's place at that width and no
+      other — so the click happens in the state its coordinates were
+      measured in, or the run ends saying so. The second waits for the
+      zoom overlay to be UP at all (any
+      rung — `idx 0 factor`), because before the first rung that point
+      belongs to the fit surface, whose click also claims the keyboard: the
+      test went green having exercised the wrong element. Both keep the
+      preconditions they used to fail on, and both gained one: the field
+      click is checked against the rectangle the app reported, and the
+      loupe click is off-centre so the re-centre it produces proves it
+      reached the overlay's own surface rather than the cell behind it.
+      That sharper aim also made the 1:1 test able to fail for the right
+      reason: in one full debug suite it went red with the re-centre
+      assertion PASSING and `keysfocus=false` — the click reached the
+      overlay and the shipped `keys.focus()` did not stick, which is
+      **issue #64**'s family (a focus claim made while the panel's field
+      rows are rebuilt under the same dispatch), not a timing miss. It is
+      telling the truth when it does that; do not quiet it.
+      Residual, filed as **issue #63**: under six spinners the session-swap
+      test is 20/20, but with a full-core build running on top of them it
+      is 18/20 — and those two failures are a DIFFERENT assertion, the
+      post-swap `keysfocus` (the #41 D3 contract) 1.2 s after the swap,
+      with the new session still scanning. That is the product's claim
+      failing under load, not the click's timing, and it is not expressible
+      as a `wait:` today (the mark that would gate it, `load settled`,
+      reads identically for the old session and the new one).
 - [x] **No modal scrolls the grid behind it (issue #49)**: a wheel over
       any of the four scrims leaves the grid's `vpy` where it was, and all
       four are now driven. The two hand-rolled scrims (Copy Picks, Export
@@ -1865,6 +1907,19 @@ Documented because they ship in release builds (validator finding):
   for the rest of that session). A test that manufactures a mid-session decode failure
   needs both: the first says the corruption is safe to apply, the second
   that the rescue rung had a texture to skip (issue #50).
+  The IPTC panel's field rows report their own geometry the same way:
+  `iptc field N laid out at X,Y size WxH`, in window-logical px, emitted
+  whenever the layout moves row N — and once per row when the conditional
+  panel's items are instantiated, which is the moment the row becomes
+  hit-testable at all (issues #13/#61). A driven click on a panel field is
+  a point chosen before the app existed, and whether the field is THERE
+  yet is a layout outcome a loaded machine can be seconds late with — so a
+  script `wait:`s for the row and the test asserts afterwards that the
+  point it aimed at was inside the rectangle, which is also the
+  calibration guard for the platform's font metrics. Both hooks are
+  needed: the instantiation report is the only one rows 0 and 1 ever emit
+  (their first computed position is already their last), and the
+  move report is what tells a script that a `resize:` has landed.
 - `FASTCULL_DRIVE="6000:one2one;9000:grid;12000:quit"`: timed injection of
   nav actions (same names `handle_nav` takes, plus `quit`, `iptc` — the
   panel toggle, issue #12 — `about`/`shortcuts` — the modal toggles,
@@ -1969,6 +2024,65 @@ Documented because they ship in release builds (validator finding):
   terms were all review-verified only. `delta_x` is dispatched as 0 —
   horizontal scroll is undrivable until the token grows a fourth
   field (recorded limitation; nothing in the app consumes it today).
+  `wait:<trace substring>` (issue #13, 2026-08-29) holds the REST of the
+  script until a trace mark whose label contains the substring has been
+  emitted. Every other step is an absolute single-shot timer, i.e. a
+  guess about how long the app will take: three tests hand-rolled the
+  missing primitive with observer threads and channels, and two clicked
+  at a timestamp a loaded machine did not honour (issue #61 — the panel
+  field was not laid out yet; the 1:1 texture was not up yet, so the
+  point belonged to a different surface). The steps after a `wait:` keep
+  the GAPS the script wrote, measured from the moment it fires (their
+  timestamps are rebased on the wait's own), so a wait already satisfied
+  when it comes due changes the schedule not at all and a late one shifts
+  the tail bodily. Matching is against the mark's LABEL, not the
+  `fastcull-trace: [ms]` prefix, and includes marks emitted BEFORE the
+  wait's own step: the substrings are registered when the script is
+  parsed, so `wait:thumb landed idx 11` is satisfied by a thumb that
+  landed ten seconds earlier ("has this happened yet?", never "happen
+  next"). Four recorded limitations of that shape: a wait cannot ask for
+  the NEXT occurrence of a mark already emitted once (waiting for the
+  second session's "load settled" is not expressible — find a substring
+  unique to the state you mean, or keep that step on the clock); "past"
+  starts at `harness::install`, which runs AFTER the session dispatch and
+  the first refresh, so a mark from the opening scan or the first layout
+  is never observed; only the APP is observed, never the harness narrating
+  its own script (the `drive: <action>` echo, the pointer/wheel echoes,
+  the modal-swallow line and the wait reports are all emitted unobserved,
+  because each quotes the script's own text and would otherwise let a wait
+  fire on a later step's echo — `QEDUMP` lines stay observable, being app
+  state); and a substring cannot contain `;`, the step separator, which
+  splits it first (the same limitation `open:PATH` carries).
+  Because it is a plain substring, a wait can pin the GEOMETRY a
+  script's coordinates were measured in — `wait:iptc field 0 laid out at
+  1150` is satisfied only in a 1440 px-wide window — which matters because
+  `resize:` is a REQUEST to the compositor, and under load it can go
+  unanswered for the whole run: that is the other half of issue #61 (the
+  click was fine, the window was never resized, and the panel was 240 px
+  from where the script thought). A script that needs a non-default size
+  must therefore wait for evidence of it, and one that only needs a KNOWN
+  size should ask for the default it already has. A step whose timestamp
+  is EARLIER than the wait's fires immediately when the wait is satisfied
+  (the rebase saturates at zero); it does not run before the wait, and
+  timestamps below the wait's own carry no meaning beyond their order.
+  It does NOT require
+  `FASTCULL_TRACE=1` — the switch decides
+  what is printed, not what the app may observe about itself — though
+  every test that waits also traces, because the failure below is a trace
+  line. A wait that is never satisfied never lets the rest of the script
+  through silently: its own step holds the shutter, and after 30 s
+  (bounded under the screenshot harness's 90 s watchdog, so the app is
+  still alive to say why) it prints `drive: wait never satisfied:
+  <substring>` on the trace and on bare stderr and exits non-zero. Two
+  budgets bound how long a wait may reasonably take: that 30 s buys the
+  diagnostic only for a wait whose step comes due before ~60 s (later, the
+  harness watchdog's generic timeout wins), and the shutter's own 60 s
+  readiness cap runs from `shutter::arm` and is NOT paused while a drive
+  step is pending — a wait that takes 25 s leaves ~35 s for the cursor's
+  texture to arrive, which in a debug build over a 50 MP frame is a real
+  margin. An
+  empty substring would match the next mark whatever it is, so
+  `wait:` with nothing after it is dropped like any other malformed step.
   `dump.<label>` traces the focus/surface state for test assertions:
   `keysfocus` (the main key scope's real `has-focus`, via the
   `dbg-keys-focus` debug property), loupe/zoom state, panel and modal
