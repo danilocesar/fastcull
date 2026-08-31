@@ -2327,7 +2327,14 @@ the user confirms, all cheap to change):**
       was not a layout race at all: it asked for a 1200x800 window and the
       compositor did not answer for the life of the run, so the click at
       x=1050 fell 90 px short of a panel still docked at the 1440 px
-      window's edge, onto the grid. Measured with the old script under six
+      window's edge, onto the grid. That measurement is what issue #65
+      later generalised: `resize:` is a request, and every script that
+      CHANGES the geometry now gates on `wait:window geometry WxH` (see
+      the harness section for what a satisfied one does and does not
+      promise). The 16 `PIN_WINDOW` scripts are not in that set by
+      design: they ask for the size the window already has and gate on
+      their own layout waits.
+      Measured with the old script under six
       spinners, 9 runs in 10: no `iptc field 0 laid out at 910` at all,
       `geometry at shutter: grid 1140x800`, and a 1440 px-wide snapshot
       12 s after the request — the row sat at 1150 instead of 910, a
@@ -2514,6 +2521,52 @@ Documented because they ship in release builds (validator finding):
     moment an editor can take focus without any click.
   Read together they answer "who held the keyboard, what destroyed it,
   who asked for it back, and when the claim landed" from one log.
+  **`window geometry WxH grid GWxGH` (issue #65)** — emitted from
+  `presenter::detect_drift` when the geometry it compares has changed
+  (and once at the first laid-out refresh), i.e. at the instant a new
+  geometry reaches the layout. Narrower than "every relayout", and
+  deliberately: a PANEL TOGGLE relayouts the grid but emits no mark,
+  because that path consumes the geometry change before `detect_drift`
+  gets to compare. The upshot is a feature — no panel toggle can satisfy
+  a geometry wait, so a script waiting for a window size cannot be fooled
+  by a dock opening — but it is a carve-out, not a general rule, and a
+  script that wants to gate on a toggle must wait on a panel mark
+  instead. It is the acknowledgement `resize:` never had: `geometry at
+  shutter` is the only other geometry witness and it fires once, at the
+  end. **Both terms are LOGICAL pixels** — `Window::size()` is physical,
+  so a HiDPI runner at scale 2 would report `2400x1600` and never match
+  the `1200x800` a script asked for; the window size is divided by the
+  scale factor and the grid terms are logical already.
+  The wait is an EXACT substring match on a `{:.0}`-rounded logical size,
+  which bounds where that holds: a fractional-scale runner (1.25, 1.5)
+  can grant a non-integer logical size that rounds to a neighbour —
+  `1200x800` requested, `1199x800` announced — and the wait then hangs
+  its full 30 s and ends the run. The signature is a `never satisfied`
+  line on an otherwise healthy machine, with a `window geometry` mark in
+  the log one pixel away from the one asked for; the fix is to ask for a
+  size that survives the runner's scale, not to loosen the match.
+  **What a satisfied `wait:window geometry WxH` promises, exactly:** the
+  app's LAYOUT reached that geometry — the relayout path ran, columns and
+  cell sizes were recomputed for it, and the re-anchor logic saw it. It
+  does NOT promise the window is still that size when the run ends.
+  Whether the window STAYS is seat- and size-dependent, which is exactly
+  why no test may assume it. On the development seat `resize:1200x800`
+  measured 10 runs of 10 where the layout reached it and the compositor
+  reverted the window to 1440x900 some 31-38 ms later, so `geometry at
+  shutter` read `grid 1440x800` — while `1440x700`, `1000x700` and
+  `1300x750` stuck on that same seat, and the validator's seat did not
+  revert `1200x800` at all. The practical consequence, worth knowing
+  when reading these tests: on a reverting seat the three tests that ask
+  for `1200x800` (`grid_resize_shrink_keeps_content_anchored`, whose
+  control run makes four scripts, `grid_resize_grow_at_bottom_stays_at_
+  bottom` and `grid_resize_at_top_stays_at_top`) run their post-resize
+  steps at 1440x900, so the grow case is really 1440 -> 1500. The
+  relayout path they exercise is genuine either way; the geometry they
+  exercise it AT is the compositor's choice. That is the honest limit of a request-with-no-reply,
+  and it is enough for what the resize tests assert (the app's REACTION
+  to a geometry change); a test that needs "and it stayed" must read
+  `geometry at shutter` instead. See also the issue #61 paragraph in the
+  test ledger, which is the same fact seen from the other side.
   **`keysfocus` IS NOT "the keyboard is alive" (issue #63, 2026-08-30) —
   every focus test must assert by ACTING or by the token.** Slint sends a
   `FocusOut` when the WINDOW is deactivated
@@ -2557,7 +2610,25 @@ Documented because they ship in release builds (validator finding):
   issue #23 — and `resize:WxH` in logical pixels, issue #16: the
   wrong-photo-after-resize bug class needs real window resizes
   drivable or it ships regression-blind) for headless reproduction and
-  QE runs — Wayland offers no external input automation. Driven NAV
+  QE runs — Wayland offers no external input automation.
+  **`resize:` is a REQUEST, and a script must assert its landing with
+  `wait:window geometry WxH` (issue #65).** The token calls
+  `Window::set_size` and returns; the compositor is free to answer late,
+  to answer with a different size, or never to answer at all — the issue
+  #61 investigation measured 9 loaded runs in 10 where a `resize:1200x800`
+  went unanswered for the life of the run. A test that does not wait is
+  testing the DEFAULT geometry, and three of the six resize tests passed
+  with the token neutered because their invariants hold at 1440x900 too.
+  All six gate on the mark now; with the token neutered they are 6/6 red
+  at the wait, naming the geometry that never arrived.
+  Note which failure each half catches. An UNSATISFIED wait ends the run
+  through the app's own `exit(1)` after the 30 s cap, so a compositor
+  that never answers is loud on its own and needs no assertion. The
+  `stderr.contains("wait:… (satisfied")` guards in the three tests whose
+  invariants hold at any geometry catch the other failure: a wait step
+  that was never REGISTERED — a dropped or misspelled token, a `;` eaten
+  by an edit — where the app exits 0 and the run is back on the clock
+  with nothing complaining. Driven NAV
   keys respect the modal containment exactly like real keypresses
   ("drive swallowed by modal" trace); `quit`/`iptc`/`resize` and the
   modal toggles themselves remain live harness plumbing, like the menu

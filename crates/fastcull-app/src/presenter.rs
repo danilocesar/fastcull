@@ -104,6 +104,37 @@ fn detect_drift(win: &MainWindow, st: &mut AppState, geom: (GridLayout, f32, f32
     let prev_geom = st.grid.last_view_geometry;
     let relayout = prev_geom.is_some_and(|g| g != geom_now);
     st.grid.last_view_geometry = Some(geom_now);
+    // THE MOMENT A RESIZE LANDS (issue #65). `resize:WxH` is a REQUEST to
+    // the compositor and nothing acknowledged it — under load the issue
+    // #61 investigation measured 9 runs in 10 where it was never answered
+    // for the life of the run, and three tests asserted invariants that
+    // hold at the default size too, so they passed having exercised
+    // nothing. This comparison flipping true IS the landing, so it is the
+    // honest place to announce it, and a script can gate on it with
+    // `wait:window geometry WxH`.
+    //
+    // LOGICAL pixels, both terms: `Window::size()` is PHYSICAL, so a
+    // HiDPI runner at scale 2 would report 2400x1600 and never match the
+    // 1200x800 a script asked for. `grid_width` and the viewport height
+    // are already logical.
+    //
+    // `trace_mark_with` because this runs on every refresh; it costs
+    // nothing unless tracing is on or a script is waiting.
+    // Only once there IS a layout: the first refreshes run before the
+    // window has been laid out and report junk (`140x40 grid 140x-60`),
+    // which would be noise in the log and a substring a script could
+    // accidentally wait on.
+    if viewport_h > 0.0 && (relayout || prev_geom.is_none()) {
+        let window = win.window();
+        let size = window.size().to_logical(window.scale_factor());
+        let grid_w = geom_now.0;
+        crate::trace::trace_mark_with(|| {
+            format!(
+                "window geometry {:.0}x{:.0} grid {:.0}x{:.0}",
+                size.width, size.height, grid_w, viewport_h
+            )
+        });
+    }
     // A view that mutated since the last refresh (metadata re-sort
     // during load, live filter removal) displaces the cursor without
     // any scrolling — the follow-scroll claim must re-anchor instead

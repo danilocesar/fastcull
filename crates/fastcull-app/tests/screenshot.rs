@@ -552,10 +552,24 @@ fn loupe_survives_a_vertical_resize_with_one_whole_frame() {
                 // correction. The About modal changes no grid geometry, so
                 // it holds the shutter and nothing else.
                 "FASTCULL_DRIVE",
-                "1500:home;1800:right;3000:resize:1440x700;3600:about;4000:about",
+                "1500:home;1800:right;3000:resize:1440x700;\
+                 3050:wait:window geometry 1440x700;3600:about;4000:about",
             ),
         ],
         &out,
+    );
+    // THE ANTI-VACUITY GUARD (issue #65). Everything below also holds at
+    // the default 1440x900, so without this a run whose resize the
+    // compositor ignored passes having exercised nothing — measured: with
+    // the `resize:` token neutered this test stayed green. The wait means
+    // "the app's LAYOUT reached that geometry", which is what the
+    // relayout path under test needs; see ui-grid.md on what it does and
+    // does not promise about the window afterwards.
+    assert!(
+        stderr.contains("wait:window geometry 1440x700 (satisfied"),
+        "the resize never reached the layout — this run measured the \
+         default geometry, where the assertions below hold anyway \
+         (issue #65):\n{stderr}"
     );
     let (cell_h, grid_h, scroll, cursor_top) = shutter_geometry(&stderr);
     // The cursor's WHOLE cell must lie inside the scrolled viewport. When
@@ -1162,6 +1176,17 @@ fn panel_toggle_at_one_to_one_keeps_the_photo() {
 /// window — the same photo must still be shown. Uses the new
 /// FASTCULL_DRIVE resize action; the relayout re-anchor path must fire
 /// (proving the resize was seen as geometry, not scrolling).
+///
+/// KNOWN INTERMITTENT under load on an 8-core seat, and NOT about the
+/// resize (measured 2026-08-31, validator + QE): this is the heaviest
+/// script in the suite — six 50 MP frames decoded at 1:1 — and it races
+/// the shutter's 60 s texture-readiness cap, so a loaded runner times out
+/// before the cursor's texture arrives. HEAD failed 3/3 to 4/5 under six
+/// spinners with the same symptom, and the issue #65 wait is satisfied in
+/// 0-184 ms in every failing run, so the geometry gate is innocent and
+/// the new script is if anything marginally better. When it fails, look
+/// for the shutter's readiness timeout, not for the resize; do not blame
+/// the wait and do not quiet the test.
 #[test]
 fn window_resize_keeps_the_photo() {
     if !has_display() {
@@ -1193,7 +1218,16 @@ fn window_resize_keeps_the_photo() {
             // shutter waits for the full script, so the gap is free.
             (
                 "FASTCULL_DRIVE",
-                "1500:home;1650:right;1800:right;1950:right;2100:right;2500:resize:1000x700;6500:resize:1440x900",
+                // The RESTORE at 6500 is deliberately ungated (issue #65):
+                // it asks for the DEFAULT geometry, which the app already
+                // announced at its first layout, and a `wait:` asks "has
+                // this happened yet" — past marks count, so the wait would
+                // be satisfied by that startup line without the restore
+                // having landed. It gates nothing, so it claims nothing.
+                // The first resize is the one under test and it is gated.
+                "1500:home;1650:right;1800:right;1950:right;2100:right;\
+                 2500:resize:1000x700;2550:wait:window geometry 1000x700;\
+                 6500:resize:1440x900",
             ),
         ],
         &out,
@@ -1291,7 +1325,8 @@ fn grid_resize_shrink_keeps_content_anchored() {
             ("FASTCULL_TRACE", "1"),
             (
                 "FASTCULL_DRIVE",
-                "150:resize:1200x800;500:end;700:pgup;800:pgup;900:pgup;1000:pgup",
+                "150:resize:1200x800;200:wait:window geometry 1200x800;\
+                 500:end;700:pgup;800:pgup;900:pgup;1000:pgup",
             ),
         ],
         &control_out,
@@ -1309,7 +1344,9 @@ fn grid_resize_shrink_keeps_content_anchored() {
             ("FASTCULL_TRACE", "1"),
             (
                 "FASTCULL_DRIVE",
-                "150:resize:1200x800;500:end;700:pgup;800:pgup;900:pgup;1000:pgup;1150:resize:900x800",
+                "150:resize:1200x800;200:wait:window geometry 1200x800;\
+                 500:end;700:pgup;800:pgup;900:pgup;1000:pgup;\
+                 1150:resize:900x800;1200:wait:window geometry 900x800",
             ),
         ],
         &out,
@@ -1364,7 +1401,9 @@ fn grid_resize_grow_at_bottom_stays_at_bottom() {
             ("FASTCULL_TRACE", "1"),
             (
                 "FASTCULL_DRIVE",
-                "150:resize:1200x800;500:end;1000:resize:1500x800",
+                "150:resize:1200x800;200:wait:window geometry 1200x800;\
+                 500:end;1000:resize:1500x800;\
+                 1050:wait:window geometry 1500x800",
             ),
         ],
         &out,
@@ -1417,10 +1456,29 @@ fn grid_resize_fits_to_overflow_stays_at_top() {
             ("FASTCULL_TRACE", "1"),
             (
                 "FASTCULL_DRIVE",
-                "150:resize:900x800;400:down;500:down;600:down;700:down;1000:resize:1600x800",
+                "150:resize:900x800;200:wait:window geometry 900x800;\
+                 400:down;500:down;600:down;700:down;\
+                 1000:resize:1600x800;1050:wait:window geometry 1600x800",
             ),
         ],
         &out,
+    );
+    // THE ANTI-VACUITY GUARDS (issue #65). Both assertions below are ABSENCES — no re-anchor, cursor still
+    // visible — and both hold at the default geometry, so a dropped
+    // resize made this test green while exercising nothing.
+    assert!(
+        stderr.contains("wait:window geometry 900x800 (satisfied"),
+        "the resize to 900x800 never reached the layout — this run measured \
+         a geometry where the assertions below hold anyway, which is how \
+         this test passed with the `resize:` token neutered (issue \
+         #65):\n{stderr}"
+    );
+    assert!(
+        stderr.contains("wait:window geometry 1600x800 (satisfied"),
+        "the resize to 1600x800 never reached the layout — this run measured \
+         a geometry where the assertions below hold anyway, which is how \
+         this test passed with the `resize:` token neutered (issue \
+         #65):\n{stderr}"
     );
     // Pre-fix trace: "grid relayout re-anchor: scroll 0 -> 385" — the
     // fixed code writes no correction at scroll 0.
@@ -1462,9 +1520,29 @@ fn grid_resize_at_top_stays_at_top() {
         &["--synthetic", "300"],
         &[
             ("FASTCULL_TRACE", "1"),
-            ("FASTCULL_DRIVE", "150:resize:1200x800;800:resize:900x800"),
+            (
+                "FASTCULL_DRIVE",
+                "150:resize:1200x800;200:wait:window geometry 1200x800;\
+                 800:resize:900x800;850:wait:window geometry 900x800",
+            ),
         ],
         &out,
+    );
+    // THE ANTI-VACUITY GUARDS (issue #65). The assertion below is an ABSENCE that holds at any geometry, so
+    // without these the test passed with the `resize:` token neutered.
+    assert!(
+        stderr.contains("wait:window geometry 1200x800 (satisfied"),
+        "the resize to 1200x800 never reached the layout — this run measured \
+         a geometry where the assertions below hold anyway, which is how \
+         this test passed with the `resize:` token neutered (issue \
+         #65):\n{stderr}"
+    );
+    assert!(
+        stderr.contains("wait:window geometry 900x800 (satisfied"),
+        "the resize to 900x800 never reached the layout — this run measured \
+         a geometry where the assertions below hold anyway, which is how \
+         this test passed with the `resize:` token neutered (issue \
+         #65):\n{stderr}"
     );
     // Scroll 0 must stay 0: no re-anchor scroll write may fire (the
     // trace only appears when the offset actually changes — validator:
