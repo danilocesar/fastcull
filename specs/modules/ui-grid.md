@@ -1426,7 +1426,11 @@ restore — see Focus continuity in the Filter & sort bar section.
   recovery), and a modal opened over a focused field was un-dismissable
   while every keystroke landed invisibly in the field — committable as
   metadata. Text disposition: a DESTROYED editor DISCARDS its
-  un-committed text (user decision 2026-08-03: no commit-on-destroy); a
+  un-committed text (user decision 2026-08-03: no commit-on-destroy —
+  unchanged, and DETERMINISTIC since 2026-08-30: it used to depend on
+  whether Slint happened to deliver a `FocusOut` before dropping the
+  item, and a rebuild-generation stamp now decides it, see the owner
+  invariant below); a
   COVERED editor exits like click-away — the text commits. The covered
   case is NOT a new decision: it preserves the G7 semantics that
   already shipped (opening a menu blurred the field and committed
@@ -1449,6 +1453,273 @@ restore — see Focus continuity in the Filter & sort bar section.
   keyboard like every other click surface (defense in depth; the click
   still re-centers — grid and loupe click semantics are unchanged, by
   user decision).
+- **The owner invariant (issues #63/#64, 2026-08-30)**: *a destroyed
+  editor never keeps the focus token, and the keyboard goes back where
+  the user had it.* The mechanism the earlier fixes worked around without
+  naming: Slint's window holds a WEAK reference to its focus item
+  (`WindowInner::focus_item`), so an editor destroyed by a model
+  replacement delivers NO `FocusOut`, nothing reassigns focus, and the
+  reference simply dangles — every key event afterwards dies on an
+  `upgrade()` that returns `None`. Instrumented and measured, not
+  inferred: in 18 of 20 runs the dying editor never announced a loss at
+  all, and a `key:y` sent inside the window is provably lost (it lands on
+  a tree with the reclaim and is dropped on one without).
+  The app therefore carries the token itself, a root `focus-owner`
+  int — `0` the main key scope, `1..=N` panel field row i (written
+  `i + 1`), `N+1` the keyword field, `-1` a dialog's own scope.
+  **Only a GAIN ever writes it, never a loss**, for two measured reasons:
+  `changed has-focus` handlers run on the next event-loop iteration and
+  the GAINER's runs first here (click Title then Description: `iptc field
+  1 gained` at [3733], `iptc field 0 lost` at [3735]), so a loss-write
+  would land after the new owner's and blank it; and a row destroyed by a
+  rebuild shares its id with the row RECREATED in its place, so the dying
+  item's late blur cannot be told from the live one's ([3762] the new row
+  claims, [3835] the old one finally announces its loss — a
+  compare-and-clear was tried and zeroed a live token exactly there).
+  Every claim writes the token SYNCHRONOUSLY at the site — inside
+  `focus-keys()`, beside every bare `keys.focus()`, and in the rows' and
+  the keyword field's `init`-time claims (an `init` focus gain fires no
+  `changed has-focus` at all, the same Slint behaviour `edit-gen` already
+  works around; leaving it out is what made the `K` flow read
+  `focus-owner == 0` while the keyword editor held the keyboard, and made
+  a dialog scope read a panel row while the dialog owned the keys).
+  Leaving a claim unrecorded is not cosmetic: a rebuild in the gap reads
+  the stale EDITOR id and pulls the keyboard back out of the grid, which
+  measurably undid the shipped G4 "Enter returns to the grid" rule until
+  the writes were made synchronous.
+  The remaining staleness is focus leaving for something Slint owns — a
+  menu popup, or the WINDOW being deactivated — and staleness is the SAFE
+  direction: the reclaim then hands the keyboard back to the field the
+  user was editing, where it was. Clearing would strand it.
+  Reclaim points:
+  - **the field-rows rebuild — back to the SAME ROW**, armed immediately
+    after `set_iptc_fields` replaces the model and only when the token
+    names a field row. Rust cannot name a repeater's child, so it arms a
+    root `iptc-refocus-row` and the RECREATED row's `init` focuses itself
+    and clears the flag — the `iptc-focus-keywords` pattern.
+    **The flag is armed one event-loop iteration LATE, and must be** (QE
+    2026-08-30): `self.focus()` called from a repeater row's `init` DOES
+    NOT TAKE EFFECT in Slint 1.17. It silently does nothing — proven both
+    ways, 10/10 dead with the claim in `init`, 10/10 alive with only the
+    flag write deferred — so a row can take the keyboard only from a
+    `changed` handler, once it is alive to the window, and the flag has
+    to arrive after the repeater has rebuilt. A `changed
+    absolute-position` belt was tried and does not rescue it: that
+    handler never fires for rows 0 and 1, whose first computed position
+    is already their last (0/6). **So this path leaves a real gap, and it
+    is not the 0 ms the swap path gets** — measured from the rebuild to
+    the claim, per profile, because the difference is large and only the
+    release figures describe what ships:
+
+    | build / load | min | median | max |
+    | --- | --- | --- | --- |
+    | **release, idle** | 5 ms | 5 ms | 6 ms |
+    | **release, six spinners** | 11 ms | 12 ms | 35 ms |
+    | debug, idle | 95 ms | 102 ms | 117 ms |
+    | debug, six spinners | 193 ms | 206 ms | 230 ms |
+
+    (QE measured the same shape independently at 5-10 ms release-idle and
+    12-31 ms release-loaded.) **A keystroke inside the gap is NOT lost**:
+    it is queued in the same event-loop batch and delivered to the
+    recreated editor after the claim, in order — measured 12/12 by the
+    validator and 20/20 by QE, and an earlier draft of this paragraph
+    claiming otherwise was wrong. The loss case is "no claim at all",
+    which is what the FAIL-1 family was and is now closed.
+    The arm that actually DELIVERS is the deferred RE-ASSERT
+    (`restore -> row N`), not the SameRow arm queued beside it: 40/40
+    observed runs across the three profiles above. The SameRow arm is
+    still the one that names the row, and it is what makes the re-assert
+    find a field-row token to re-assert.
+    The gap is the price of going back to the ROW rather than to the
+    grid, which is the right trade — a claim on `keys` in between makes
+    the next caption character a cull command — but it is a residual, not
+    a clean win, and closing it needs either an in-place row update (the
+    follow-up below) or a Slint that can focus from `init`.
+    **An arm that fires before its row exists must SURVIVE** (QE
+    2026-08-30). A zero-length arm timer can beat the repeater update; the
+    flag is then already set when the row is born, so `want-refocus` is
+    true from its first evaluation, `changed` never fires, and the request
+    is armed, matched and silently never claimed — 3 runs in 20 under six
+    spinners in a debug build, ownerless for good. Two things fix it
+    together: the flag is cleared ONLY by an actual claim (never by an arm
+    firing), and each row assigns a `settled` property in its `init` so
+    `want-refocus` has a false→true EDGE after creation to fire on. With
+    both, 20/20 debug under six spinners, 10/10 release under six
+    spinners, 5/5 on the mixed-value shape.
+    **The flag also carries a GENERATION (validator FAIL-1,
+    2026-08-30).** A Slint repeater does not tear its children down when
+    the model is replaced; they die at its next update. So the DOOMED row
+    instance is still alive, still watching the flag, and its `changed
+    want-refocus` runs FIRST: armed with the index alone and
+    SYNCHRONOUSLY, it consumed the flag in the rebuild's own millisecond,
+    focused itself, cleared the flag and then died — the recreated row
+    saw nothing, `focus-owner` still read that row, and no element owned
+    the keyboard. Measured dead 10 runs in 10 on a cursor-move rebuild.
+    The blur-triggered rebuild hid it (there the commit runs inside the
+    blur, so the timing differs), which is why every probe written before
+    this one missed it. So `iptc-refocus-row` is armed together with
+    `iptc-refocus-gen` = the current `iptc-rebuild-gen`, each row stamps
+    its own `born-gen` in `init`, and a row claims only if it was born
+    for the generation the flag names.
+    **Which of these is load-bearing on the shipped tree, honestly.** The
+    DEFERRAL is: make the arm synchronous again and the cursor shape is
+    0/10 dead, every time. The generation stamp is NOT independently
+    demonstrable any more — with the arm deferred the doomed instance is
+    gone before the flag arrives, and removing the stamp still measures
+    15/15 alive (validator). It stays as the belt for the ordering the
+    deferral cannot promise: a timer that beats the repeater update, which
+    is exactly the case the `settled` edge above now handles by
+    construction. Two mechanisms guarding one hazard from opposite sides,
+    and the spec says which one the campaigns actually exercise rather
+    than quoting a mutant number that no longer reproduces.
+    **Not to the grid**, which an earlier cut did and which is a HIGH
+    defect: the panel is a captioning surface, "focus stays where
+    clicked" is a shipped rule (iptc-templates.md), and the blur commit
+    of clicking from Title to Description itself rebuilds the rows — so
+    reclaiming to `keys` there made the very next character a cull
+    command. Measured: `x` rejected the photo and wrote a sidecar.
+    Synchronous is safe *here* precisely where it is not safe for the
+    menu: a rebuild runs in app code (a `refresh` pass), not inside the
+    MenuBar's activation dispatch, so no post-activation focus restore
+    follows it to override the claim.
+  - **a session SWAP — SYNCHRONOUS, to the topmost scope.** The same
+    rebuild, answered the other way, because the field's MEANING went
+    with the folder (#41 D3): there is no "same row" to go back to. The
+    panel cache carries the session generation it was built for, which is
+    how the two cases are told apart. A swap ALWAYS reaches this branch:
+    `IptcPanelState::begin_session` clears the row cache, so the next
+    refresh replaces the model even when the two folders' rows are
+    identical (both un-captioned) — verified 6/6.
+    The deferred re-assert additionally captures the session generation
+    when it is QUEUED and falls back to `focus-keys()` if a swap landed
+    before it fired (validator FAIL-4): the token would otherwise name a
+    field of a folder that is gone. Reachable only as menu-activation
+    then swap, i.e. File > Open Folder — which the harness cannot drive
+    (the native rfd dialog blocks the loop), so this guard is verified by
+    inspection and by the swap probes around it, not end to end.
+  - **panel CLOSE — SYNCHRONOUS *and* deferred**, the range covering the
+    keyword field too, because closing destroys the whole panel. The
+    deferred claim is the one that matters and it stays: while an editor
+    holds the keyboard the panel can only be closed from the MENU (`I`
+    types an `i` into the field — focus containment), and the MenuBar
+    restores focus to the destroyed editor after the activation returns,
+    which nothing synchronous can undo. So the close path is a few tens
+    of milliseconds (21-53 ms measured) BY DESIGN, and docs/culling.md
+    says so rather than claiming it is immediate. The synchronous half
+    covers the non-menu routes (the `iptc` drive token today).
+  - **the rebuild's own deferred re-assert**, queued behind the flag as a
+    belt: it re-reads the token when it fires, so it also routes to a
+    dialog that took over in between. Traced as `restore -> …`, where the
+    menu path is `menu -> …`, so a reader can tell which queued it.
+  - **any MENU ITEM — DEFERRED, and it re-asserts the TOKEN** rather than
+    claiming `keys` (QE finding 2026-08-30). Activating any item blurs a
+    focused field, the blur COMMITS it (G7), the commit rebuilds the rows
+    and destroys the editor, and then the MenuBar's restore hands focus
+    to the destroyed item: measured dead 5 times in 5 through View >
+    Filter Bar, which unlike View > IPTC Panel queued no claim of its
+    own. Every item now fires `menu-activated` first. It re-asserts the
+    token — a field row through `iptc-refocus-row`, the keyword field
+    through `iptc-focus-keywords`, anything else through `focus-keys()` —
+    because after a menu action the keyboard belongs where it belonged
+    before; blanket-claiming `keys` took it off the live keyword editor
+    and broke the shipped RUN17 behaviour on the first cut.
+  - **the other menu-driven paths — DEFERRED, unchanged**: a modal
+    opening, and the swap's own belt claim.
+  - **panel OPEN — DEFERRED, a belt**: queued when the panel opened and
+    `iptc-focus-keywords` was false on entry. Gated on that flag because
+    with `K` the keyword field's `init` claims focus during instantiation
+    and an unconditional claim would steal it straight back.
+  - **NOT after the keyword-chip or template model replacements.** Neither
+    holds an editor, and the keyword `LineEdit` is their SIBLING rather
+    than their child, so a reclaim there would fire while the editor it
+    "rescued" was alive and focused — taking the keyboard away from a
+    user mid-word every time another image's sidecar landed a keyword.
+    The rows model is the only one whose replacement destroys a focus
+    holder.
+  **The discard rule is unchanged and now deterministic.** "A DESTROYED
+  editor DISCARDS its un-committed text" (user decision 2026-08-03)
+  stands exactly as written. It used to hold by accident — the dying
+  editor usually got no `FocusOut`, so its blur handler simply never ran,
+  except in the 2 runs of 20 where it did and the text was committed
+  instead. It now holds by construction: Rust bumps a root
+  `iptc-rebuild-gen` immediately before every rows replacement, each
+  editor stamps that generation on focus gain, and the blur commits only
+  if the stamp still matches. A rebuild between gain and blur therefore
+  discards, every time; a real click-away or Tab (no rebuild in between)
+  commits, exactly as before. Measured on the same-session probe — type
+  into Title, then grow the batch so the row goes mixed — 9 of 9 clean
+  runs discard. Note how easily that rebuild is reached: it is ANY change
+  to what a row should show, the CURSOR image's own IPTC landing in a
+  single-image folder with nothing selected included (QE saw a title
+  committed with no Enter twice in ten runs on the pre-fix tree). Both
+  the docs and this spec therefore say "any rows rebuild", never "another
+  image of the selection". A boolean "suppress the next blur commit" could not do
+  this: `changed has-focus` is deferred, so a flag set and cleared around
+  the reclaim is already false when the handler reads it, and one held
+  for a whole refresh tick would swallow real click-away commits.
+  **Not done here, recorded as a follow-up**: updating changed rows IN
+  PLACE (`VecModel::set_row_data`) instead of replacing the model would
+  keep the editors alive and remove the hazard at its root. It is not a
+  drop-in. The row's `text` is a BINDING on `row.value`, and Slint drops
+  a binding permanently the first time a handler assigns `self.text` —
+  which every exit path here does — so today only the model replacement,
+  by re-creating the item, restores it; in place, an edited-then-blurred
+  field would sit on a stale value for the rest of the session. It would
+  also change what `session_swap_mid_field_edit_discards_and_keeps_the_
+  keyboard` proves: the editor would survive the swap, leaving the D3
+  discard resting entirely on the generation stamp and `changed seen-gen`
+  rather than on destruction. The owner-token reclaim is the fix; this is
+  an optimisation, and it needs its own step with those two questions
+  answered.
+  **A menu DISMISSED without activating anything** (validator FAIL-3,
+  2026-08-30) — the nastiest shape in the family, and closed by the same
+  deferral. Opening a menu over a focused field blurs it, the blur
+  commits (G7), the commit rebuilds the rows and destroys the editor;
+  then the menu is dismissed — a click elsewhere, Esc, a missed item —
+  and the MenuBar restores focus to the destroyed instance. Nothing
+  announces it: no `activated` fires, so the `menu-activated` claim never
+  runs, and Slint 1.17 exposes no menu open/dismiss callback to hang one
+  on. Measured dead 10/10 while the reclaim's flag was armed
+  synchronously. It needed no new claim in the end: armed one event-loop
+  iteration late (see the rebuild bullet), the flag lands on a row that
+  is alive and can actually take focus, and that claim survives the
+  restore. 15/15 alive on the Esc route and 5/5 on the click-elsewhere
+  route, against 0/10 on a tree with the arming made synchronous again.
+  A third "route" measured at the time — clicking the menu bar again —
+  was WITHDRAWN: it RE-OPENS the menu rather than dismissing it, so those
+  runs measured containment while a menu is up, not recovery after a
+  dismissal (validator, from the screenshots). Pinned by
+  `a_dismissed_menu_over_a_focused_field_row_keeps_the_keyboard`, which
+  drives the unambiguous Esc route.
+  **Open, found while measuring this (NOT fixed here)**: deactivating the
+  WINDOW mid-edit — alt-tab away with a half-typed caption — delivers a
+  real `FocusOut` to the live editor, whose blur handler then COMMITS,
+  exactly as a click-away would. It is pre-existing, it is invisible to
+  `keysfocus` reasoning, and it is the best current explanation for the
+  intermittent leak recorded against
+  `session_swap_mid_keyword_edit_never_writes_into_the_new_session`
+  (#54): measured here at 1 leak in 10 probe runs, correlating 1:1 with a
+  lone `focus: … lost` that no gain follows, and reproduced on the
+  unmodified tree at 1 failing group run in 6. QE's independent A/B puts
+  it at 3/10 on this tree against 4/10 with the reclaim removed, trace
+  shape identical — i.e. unchanged by this step, as it must be: the blur
+  arrives from OUTSIDE and commits BEFORE any rebuild, so the
+  rebuild-generation stamp that enforces the discard rule never gets to
+  see it. Telling a deactivation
+  blur from a click-away blur needs the window's activation state, which
+  Slint 1.17 exposes only through `i-slint-core`'s internal
+  `WindowInner::active()` — so it needs its own step and a decision about
+  that dependency. Until then `docs/metadata.md` tells users plainly that
+  a window switch mid-word commits, and points at Revert.
+  **It makes every "no sidecar was written" assertion seat-sensitive**,
+  not just the two tests that name it: any script that leaves a field
+  focused with text and later reads the folder can be hit. Observed once
+  in a full suite run on `copy_picks_from_the_menu_over_a_focused_field_
+  owns_the_keyboard`, which is 0/8 in isolation and 0/6 when its script
+  is driven by hand. Those assertions now print the child's trace, so the
+  next occurrence can be read rather than guessed at: the signature is a
+  lone `focus: … lost` with no `gained` after it and no `focus-keys (…)`
+  before it.
 - Per-image keywording is a same-evening flow (user decision): a focus-jump
   key into the keyword field, comma-separated entry, Enter commits + returns
   to the grid. Batch-apply perf target: picks-scale (hundreds), not
@@ -1736,14 +2007,22 @@ the user confirms, all cheap to change):**
       click provably lands ON the field, proven the way a user would: the
       `t` and the Enter after it COMMIT a Title across the selection and
       arm the revert slot, which a click that missed cannot do (`t` is not
-      a binding on the main scope). Deliberately NOT proven through
-      `keysfocus`: opening the panel with a real `I` after a real click
-      strands the keyboard about one run in eight — **issue #64**, found
-      here, pre-existing, in the issue #41 family, and never reproducible
+      a binding on the main scope). The landing is still proven through
+      the COMMIT and not through `keysfocus` — they are different
+      questions, and only the commit says the pointer hit THIS field —
+      but the `keysfocus=true` assertion at the `before` dump is back
+      since the owner-invariant fix (2026-08-30). It was left out while
+      opening the panel with a real `I` after a real click stranded the
+      keyboard about one run in eight — **issue #64**, found here,
+      pre-existing, in the issue #41 family, and never reproducible
       through the `iptc` nav token, i.e. only when the item tree changes
-      inside a key dispatch — and a pointer-routing test must not go red
-      for a focus bug it is not about. A control click on the grid then
-      moves the cursor and collapses the selection);
+      inside a key dispatch — because a pointer-routing test must not go
+      red for a focus bug it is not about. What the restored assertion
+      pins is bounded and stated in the test: the cell click before that
+      dump claims the keyboard itself, so it says "nothing between the
+      `I` and here left the keyboard ownerless", not "the `I` alone kept
+      it". A control click on the grid then moves the cursor and
+      collapses the selection);
       `the_wheel_routing_table_holds_over_every_surface` (the grid scrolls;
       the overlay scrollbar, the docked IPTC panel and the fit surface each
       leave the grid where it was — the panel row also guards issue #12's
@@ -1923,7 +2202,14 @@ the user confirms, all cheap to change):**
       the clash-question work; interleaved A/B runs of 6 gave 2/6 failures
       before that change and 1/6 after, so nothing in that change caused
       or worsened it. Needs a real fix — this is the one guard standing
-      between a half-typed keyword and someone else's photograph**); Esc
+      between a half-typed keyword and someone else's photograph.
+      RE-MEASURED 2026-08-30 with the issue #63/#64 owner invariant, 20
+      runs of its script under six spinners on the fixed tree and 20 on
+      a tree with the reclaim disabled: 0 leaked sidecars on both sides,
+      so the race did not reproduce at all this time and the change
+      neither fixed nor worsened it. The recorded rate stands unrefuted,
+      not confirmed — do not quiet this test on the strength of 40 green
+      runs**); Esc
       over stacked modals
       closes the topmost first with the copy dialog's plan surviving
       verbatim (`esc_over_stacked_modals_closes_the_topmost_first`); a
@@ -1944,6 +2230,95 @@ the user confirms, all cheap to change):**
       runs there; each menu test asserts an intermediate state that
       fails loudly if a click misses, so font drift cannot make one pass
       vacuously.
+      **The owner-invariant campaigns (issues #63/#64, 2026-08-30)**, all
+      driving the real binary with the focus marks on, every log kept:
+      the session-swap script 20x under six spinners plus a full-core
+      build loop, asserting the post-swap keystroke ACTS (20/20); the
+      ownerless window on the SWAP path measured from the marks at
+      **0 ms** (min 0, median 0, max 1) against **199/254/479 ms** on the
+      same tree with only the reclaim removed — the same-session ROW path
+      keeps a smaller residual of its own (5-6 ms release-idle, 11-35 ms
+      release-loaded), tabulated in the owner-invariant section; the 1:1 loupe-click script 30x under 24 spinners; the
+      issue #64 repro 30x under six spinners (0 stranded, 0/90 with phase
+      3a's 60); the issue #13 panel-click script 10x under six spinners;
+      issue #54's script 20x on each side; and three A/B probes that are
+      the real behavioural evidence — the F3 probe (click Title, type,
+      click Description, press `x`: `x` must TYPE; 10/10 under six
+      spinners with focus staying in Description, where the earlier cut
+      REJECTED the photo and wrote a sidecar); the cursor-move probe
+      (validator FAIL-1 and QE's shape both: type, then rebuild the rows
+      without the editor's own blur causing it — once by moving the
+      cursor onto a titled image, once by growing the batch until the row
+      goes mixed — then type + Enter + `y`. 10/10 alive on each shape,
+      0/10 with the generation stamp removed, 0/10 with the flag armed
+      synchronously, 0/6 with the claim made from the row's `init`); and the
+      discard probe (type into Title, grow the batch so the row goes
+      mixed), which now asserts the KEYBOARD as well as the disk: the
+      text vanishes 10/10, the row holds the keyboard 10/10, and three
+      further keystrokes commit and mark 10/10. Asserting only the disk
+      was the hole FAIL-1 slipped through — a dead keyboard writes no
+      sidecar either.
+      The D3 test carries a KNOWN INTERMITTENT banner for the
+      deactivation-commit defect (below); it fails on the DISCARD
+      assertion only, with a lone `focus: … lost` in the trace, and must
+      not be quieted. `a_cursor_move_rebuild_keeps_the_keyboard_in_the_
+      field` INHERITS that intermittent: the same fingerprint appeared
+      ~2 times in 35 select-all probe runs (`Revert: … on 1 image(s)`,
+      ★0, a stale owner token), and QE caught a release-IDLE instance
+      that settles the attribution — a partial `n` committed with the
+      `lost` arriving 28 ms after the keystroke and the rebuild only
+      AFTER that, i.e. the blur came from outside and beat the rebuild
+      entirely.
+      The dismiss and cursor-move shapes are pinned by their own acting
+      tests, and every one of these numbers was re-measured with a FRESH
+      fixture per run after an earlier round reported false reds from a
+      fixture whose pick counts accumulated (the `★1` check silently
+      stopped matching). A campaign that reuses a fixture across runs
+      must reset it or assert a delta.
+      **What kills the mutant, and what does not.** The post-swap
+      keystroke is the user's contract but a WEAK mutant-killer, and the
+      measurement says so: with the reclaim removed it still passes 19
+      runs in 20 idle and 19 in 20 under load. Both the claim it races
+      and the drive step that sends it are zero-length timers on the same
+      event loop, so the claim usually wins the 50 ms anyway — and under
+      load the drive timer itself slips 300-700 ms, which moves the
+      keystroke clean out of the window. The assertion that fails 20/20
+      on the mutant, and passes 40/40 on the fixed tree idle and loaded,
+      is on the ORDER of the marks: the reclaim must be the FIRST claim
+      after the rows rebuild that destroyed the editor — 20/0 on the
+      fixed tree, 0/20 on the mutant, idle and loaded. Both are in the
+      test; a scripted keystroke alone would have let this regress.
+      **And an assertion on the DISK alone proves nothing about the
+      keyboard** — the hole FAIL-1 hid in for a whole round. "No sidecar
+      was written" is equally true of a dead keyboard, so the discard
+      probes now assert the keyboard by ACTING as well: after the
+      rebuild the row holds the token, typing reaches it, Enter commits
+      and the key after that marks. Re-verified deliberately once the
+      refocus worked, because the earlier "9/9 discarded" was measured in
+      a state where the keyboard was dead and therefore said nothing
+      about the discard's interaction with a LIVE refocused editor:
+      10/10 idle and 10/10 under six spinners, all four properties at
+      once (row holds the keyboard, revert not armed, no sidecar, the
+      keyboard acts).
+      **Campaign pass rates are SEAT-SENSITIVE — read them with that in
+      mind.** Any campaign counted on `keysfocus` measures the desktop
+      seat as much as the app: on a seat where something else takes the
+      window focus, QE recorded 18/20 and 14/20 for scripts that ran
+      10/10 and 12/12 on a quiet one, with the keyboard alive in every
+      "failing" run. The rates above are from a quiet seat. The
+      action probe (`key:+` must zoom) and the mark-order assertion are
+      the contract, and neither can be moved by a deactivation; a
+      `keysfocus` count is context, never a verdict.
+      The range gate — "the keyword field is not in the destroyed range,
+      so a rows rebuild must not pull the keyboard out of it" — was NOT
+      evidenced by the first `K` campaign, and an earlier draft of this
+      section wrongly claimed it was: `K` takes the keyboard during
+      `init`, which at the time wrote no token, so the campaign passed
+      because the token read `0` and no reclaim was ever considered. It
+      is evidenced now, by the same campaign re-run after the `init`
+      claims were fixed: `focusowner=12` at the post-`K` dump in all 30
+      runs under 24 spinners — the token really does reach `N+1` — and
+      the rebuilds in those runs leave that editor alone.
       **Gated on state, not on the clock (issue #61, 2026-08-29):** two of
       these strands clicked at a script timestamp and failed under load —
       `session_swap_mid_field_edit_discards_and_keeps_the_keyboard` 17 runs
@@ -1976,14 +2351,59 @@ the user confirms, all cheap to change):**
       **issue #64**'s family (a focus claim made while the panel's field
       rows are rebuilt under the same dispatch), not a timing miss. It is
       telling the truth when it does that; do not quiet it.
-      Residual, filed as **issue #63**: under six spinners the session-swap
-      test is 20/20, but with a full-core build running on top of them it
-      is 18/20 — and those two failures are a DIFFERENT assertion, the
-      post-swap `keysfocus` (the #41 D3 contract) 1.2 s after the swap,
-      with the new session still scanning. That is the product's claim
-      failing under load, not the click's timing, and it is not expressible
-      as a `wait:` today (the mark that would gate it, `load settled`,
-      reads identically for the old session and the new one).
+      **Issue #64 does not reproduce on this tree** (measured 2026-08-30,
+      instrumented): its own repro — a real click, then a real `I` — ran
+      0 stranded in 90 runs (30 idle and 30 under six spinners in phase
+      3a, 30 more under six spinners after the fix), and the traces say
+      why rather than leaving it to luck: with `I` (not `K`)
+      `iptc-focus-keywords` stays false, so no editor ever takes focus,
+      `keys` holds the keyboard from startup and never emits a `lost`,
+      and the rebuild destroys eleven `LineEdit`s that were holding
+      nothing. The 1-in-8 was measured on 2026-08-29 and the tree has
+      moved through issues #13 and #62 since, both of which changed the
+      harness's key and focus paths. The second signature — the 1:1 test
+      above, where `K` really does park the keyboard in an editor before
+      the click — is the one the family fix covers by construction: the
+      owner token names that editor, and any rebuild that destroys a
+      field row reclaims in the same pass. Recorded, not closed by
+      assertion: the campaigns are in the issue. And the same caveat as
+      #63 applies to its evidence — the reported `keysfocus=false`
+      readings cannot distinguish a stranded keyboard from a deactivated
+      window, so the 1-in-8 was never established as a strand in the
+      first place.
+      **Issue #63, 2026-08-30: the ownerless window is closed; the
+      reported symptom was a different thing.** Two findings, and they
+      must not be conflated.
+      (1) The REPORTED reds — `keysfocus=false` at a dump 1.2 s after the
+      swap — are window-DEACTIVATION artifacts of the assertion, not
+      stranded keyboards: every one of those runs went on to zoom with a
+      `+`, and the harness section above records why `keysfocus` cannot
+      answer this question at all. The test now asserts by acting, so it
+      can no longer go red for that reason.
+      (2) The ownerless window it led us to is separately real and
+      separately measured. Instrumented, the rebuild destroyed the
+      focused editor with no `FocusOut` and nothing owned the keyboard
+      until the deferred claim's zero-length timer ran: **199 ms minimum,
+      254 ms median, 479 ms maximum** over 20 runs under six spinners
+      plus a full-core build loop, on 100 % of runs (A/B against this
+      tree with only the reclaim removed; an earlier run of the same
+      campaign, recomputed by the validator, gave 178/215/269). What that costs the
+      user is a lost keystroke, and it is provable in one A/B: a `key:+`
+      50 ms after the swap zooms on the fixed tree and is dropped on the
+      unmodified one. With the synchronous reclaim the window is **0 ms
+      in every run** (min 0, median 0, max 1) and the post-swap keystroke
+      acts 20/20. That 0 ms is the SWAP path only, where the reclaim goes
+      straight to the topmost scope; the same-session row refocus cannot
+      be synchronous (Slint cannot focus a row from `init`) and keeps the
+      residual tabulated in the owner-invariant section. The window, not the keystroke, is the measurement that
+      discriminates — see "what kills the mutant" in the test ledger.
+      The test also gained the gate this issue asked for — `wait:load
+      settled gen 1`, which the session generation in that mark finally
+      made expressible (`load settled` read identically for both
+      sessions, the #13 "next occurrence" limitation) — but it gates the
+      DISCARD dumps only. Putting the keyboard assertion behind it was a
+      mistake: it moved that dump seconds later and widened the
+      deactivation exposure, which is how it was caught.
 - [x] **No modal scrolls the grid behind it (issue #49)**: a wheel over
       any of the four scrims leaves the grid's `vpy` where it was, and all
       four are now driven. The two hand-rolled scrims (Copy Picks, Export
@@ -2068,6 +2488,69 @@ Documented because they ship in release builds (validator finding):
   That generation is what makes the #13 "next occurrence" limitation
   survivable for a session swap: every session used to settle with the
   same sentence, so `wait:load settled` could only ever match the first.
+  **Focus, as it moves (issues #63/#64)**: `keysfocus` at a dump is one
+  sample of a value that changes several times inside a single input
+  dispatch, which is how a stranded keyboard shipped twice — a run could
+  say the keyboard was lost, never by what. Four marks make the whole
+  path readable, all through `trace_mark_with` so they cost nothing when
+  tracing is off:
+  - `focus: <what> gained|lost` — from the `changed has-focus` handler of
+    the main key scope (`keys`), each panel field row (`iptc field N`),
+    the keyword field, and each dialog scope (`copy dialog`, `clip
+    dialog`). A `gained` with no matching `lost` from the previous holder
+    is the dangling-weak signature, printed.
+  - `focus-keys (<reason>)` — a claim was MADE, tagged at every call
+    site: `swap`, `panel-open`, `panel-close`, `modal`, `rebuild`,
+    `deferred`, `copy-dialog`, `clip-dialog`, `cell-click`, `fit-click`,
+    `overlay-click`, `template-apply`, `revert`, `field-clear`,
+    `field-accepted`, `keyword-removed`, `keyword-accepted`,
+    `keyword-init`, `keyword-watch`, and the two behind-a-cover bounces.
+    `deferred` is the one that says a queued claim has ARRIVED, which is
+    not the same event as the caller queuing it — the gap between those
+    two lines is exactly what issue #63 turned out to be.
+  - `iptc rows rebuilt (gen G)` — the item-tree mutation itself, emitted
+    just before `set_iptc_fields` replaces the field-rows model.
+  - `iptc keyword field created` — the keyword editor's `init`, the other
+    moment an editor can take focus without any click.
+  Read together they answer "who held the keyboard, what destroyed it,
+  who asked for it back, and when the claim landed" from one log.
+  **`keysfocus` IS NOT "the keyboard is alive" (issue #63, 2026-08-30) —
+  every focus test must assert by ACTING or by the token.** Slint sends a
+  `FocusOut` when the WINDOW is deactivated
+  (`WindowInner::set_active(false)`), but `WindowInner::focus_item` is
+  untouched and keeps routing key events to the same scope. So an
+  unfocused window reads `keysfocus=false` with a perfectly live
+  keyboard: proven in a driven run with no clicks at all — `keysfocus`
+  went false on its own, and the next `key:+` zoomed the grid. Both of
+  the reds originally reported for issues #63 and #64 read
+  `keysfocus=false` at a dump whose run went on to zoom with a `+`, so
+  the SYMPTOM those issues reported is this artifact; the ownerless
+  window they led to is separately real and separately measured. A
+  keystroke that acts cannot be faked by a deactivation, so
+  `session_swap_mid_field_edit_discards_and_keeps_the_keyboard` now sends
+  `key:+` 50 ms after the swap and requires the zoom, and the other focus
+  tests assert `focusowner=` instead.
+  That field is the fourth thing a dump carries about focus (appended
+  2026-08-30): the owner token itself — `0` the main key scope, `1..=N` a
+  panel field row, `N+1` the keyword field, `-1` a dialog's own scope. It
+  answers "WHICH element does the app believe holds the keyboard", which
+  is a different and stronger question than `keysfocus`'s "is the main
+  scope's `has-focus` set". **Every `keysfocus` assertion in the
+  screenshot suite was converted to it** (20 of them, 2026-08-30): the
+  `=true` ones were false-REDS waiting to happen — two fired in release
+  suites the same afternoon, one with `zoom` proving the menu action and
+  the following `+` both worked, one in a run whose EVERY dump read
+  `keysfocus=false` including those taken with no dialog up at all — and
+  the `=false` ones were weak besides, since "not the main scope" is
+  equally true of a stranded keyboard. `keysfocus` stays in the dump: it is still the only
+  reading of the real `has-focus`, and comparing it against the token is
+  how a deactivation is recognised.
+  `winactive=` was considered and NOT added: Slint 1.17 exposes window
+  activation only through `i-slint-core`'s internal `WindowInner::active`
+  (the `.slint` language has no `Window.active`), and `fastcull-app` does
+  not depend on that crate. The artifact is already readable in a trace
+  as a `focus: … lost` that no `gained` follows and no `focus-keys (…)`
+  precedes.
 - `FASTCULL_DRIVE="6000:one2one;9000:grid;12000:quit"`: timed injection of
   nav actions (same names `handle_nav` takes, plus `quit`, `iptc` — the
   panel toggle, issue #12 — `about`/`shortcuts` — the modal toggles,

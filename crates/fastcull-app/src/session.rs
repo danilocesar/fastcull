@@ -253,6 +253,7 @@ pub(crate) fn open_folder_at(
             // The swap rebuilt the panel's field rows and dropped any
             // editor focus; without this claim the first keystroke on
             // the fresh session is dead.
+            win.invoke_dbg_focus_claim("swap".into());
             refocus_topmost_deferred(win);
         }
         Err(e) => {

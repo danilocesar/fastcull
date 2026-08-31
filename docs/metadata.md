@@ -47,6 +47,19 @@ anywhere (opening the panel if needed).
   committed. (There is no abandon-edit gesture in this version — if
   you mangled a field, correct it and commit again, or use Revert
   after an apply.)
+- The panel rebuilds its fields whenever what they should show changes —
+  as the folder's metadata arrives (including the metadata of the very
+  image you are on), when the selection changes, when templates reload.
+  If a rebuild is what interrupts you mid-word, the un-committed text is
+  **discarded** — the same rule as closing the panel — and the keyboard
+  stays in the field you were typing in, so you can simply type it
+  again. Until 0.12.0 this was a coin flip: sometimes the half-typed
+  text was committed instead, with no Enter and nothing to show for it.
+- **A window switch mid-word still commits.** Alt-tab away (or let
+  anything else take the window's focus) with a half-typed field and
+  FastCull treats it exactly like clicking away: the text is committed.
+  That is a known defect, not the intended rule, and it is being worked
+  on; **Revert last apply** undoes it.
 
 ## Templates (`templates.toml`)
 

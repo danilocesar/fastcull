@@ -1873,11 +1873,13 @@ fn about_dialog_renders_and_contains_the_keyboard() {
         "About never opened (the Help menu click missed?):\n{stderr}"
     );
     assert_eq!(
-        dump_field(up, "keysfocus"),
-        "true",
+        dump_field(up, "focusowner"),
+        "0",
         "the keyboard is not on the main scope with About up — a stranded \
          keyboard swallows keys too, and would make the containment below \
-         mean nothing (issue #41 D2):\n{stderr}"
+         mean nothing (issue #41 D2). Read through the owner token, not \
+         `keysfocus`: a deactivated window reads false there with the \
+         keyboard alive (issue #63):\n{stderr}"
     );
     // THE containment: two real keystrokes, no mark.
     let contained = qedump(&stderr, "contained");
@@ -2036,11 +2038,12 @@ fn shortcuts_popup_contains_the_keyboard() {
         "the shortcuts popup never opened (the Help menu click missed?):\n{stderr}"
     );
     assert_eq!(
-        dump_field(up, "keysfocus"),
-        "true",
+        dump_field(up, "focusowner"),
+        "0",
         "the keyboard is not on the main scope with the popup up — a \
          stranded keyboard would swallow the N for the wrong reason \
-         (issue #41 D2):\n{stderr}"
+         (issue #41 D2). Through the owner token, not `keysfocus`, for \
+         the deactivation reason in issue #63:\n{stderr}"
     );
     let contained = qedump(&stderr, "contained");
     assert_eq!(
@@ -2838,7 +2841,9 @@ fn panel_close_from_the_menu_at_one_to_one_keeps_the_keyboard() {
     // keyboard NOT on the main scope — the dangerous state is armed).
     let k = qedump(&stderr, "k");
     assert!(
-        k.contains("iptc=true") && k.contains("keysfocus=false") && k.contains("one2one=true"),
+        k.contains("iptc=true")
+            && dump_field(k, "focusowner") == "12"
+            && k.contains("one2one=true"),
         "K did not open the panel and focus the keyword field at 1:1: {k}"
     );
     // The menu clicks really closed the panel (a missed click cannot pass).
@@ -2849,7 +2854,7 @@ fn panel_close_from_the_menu_at_one_to_one_keeps_the_keyboard() {
     );
     // THE fix: focus returned to the main key scope…
     assert!(
-        closed.contains("keysfocus=true"),
+        dump_field(closed, "focusowner") == "0",
         "keyboard stranded after panel close from the menu (issue #41 D1): {closed}"
     );
     // …and the next keystroke works: `G` left the loupe for the grid.
@@ -2888,7 +2893,7 @@ fn panel_close_from_the_menu_keeps_the_keyboard_in_the_grid() {
     );
     let k = qedump(&stderr, "k");
     assert!(
-        k.contains("iptc=true") && k.contains("keysfocus=false"),
+        k.contains("iptc=true") && dump_field(k, "focusowner") == "12",
         "K did not open the panel and focus the keyword field: {k}"
     );
     let closed = qedump(&stderr, "closed");
@@ -2897,7 +2902,7 @@ fn panel_close_from_the_menu_keeps_the_keyboard_in_the_grid() {
         "the View > IPTC Panel click missed (panel still open): {closed}"
     );
     assert!(
-        closed.contains("keysfocus=true"),
+        dump_field(closed, "focusowner") == "0",
         "keyboard stranded after panel close from the menu (issue #41 D1): {closed}"
     );
     let end = qedump(&stderr, "end");
@@ -2949,7 +2954,7 @@ fn modal_over_a_focused_field_owns_the_keyboard_and_writes_nothing() {
     );
     // THE fix: the modal's keyboard steal survived the menu focus restore.
     assert!(
-        about.contains("keysfocus=true"),
+        dump_field(about, "focusowner") == "0",
         "a hidden field still owns the keyboard behind the About scrim \
          (issue #41 D2): {about}"
     );
@@ -2985,9 +2990,28 @@ fn modal_over_a_focused_field_owns_the_keyboard_and_writes_nothing() {
 
 /// Issue #41 D3 (RUN8): a session swap while a panel FIELD owns the
 /// keyboard rebuilds the field rows, destroying the focused editor. RED
-/// pre-fix: the keyboard is dead on the fresh session (keysfocus=false,
-/// `+` inert). The mid-edit text is DISCARDED (user decision: no
-/// commit-on-destroy) — asserted on disk: no sidecar in either folder.
+/// pre-fix: the keyboard is dead on the fresh session (the `+` is inert).
+/// The mid-edit text is DISCARDED (user decision: no commit-on-destroy) —
+/// asserted on disk: no sidecar in either folder.
+///
+/// KNOWN INTERMITTENT FAILURE, on the DISCARD assertion only (measured
+/// 2026-08-30, ~1 group run in 6 on a busy desktop seat; reproduced
+/// identically on the unmodified tree, so it is not this change): if the
+/// WINDOW is deactivated while the field holds half-typed text — anything
+/// else taking focus, which on a developer's seat happens on its own —
+/// Slint delivers a real `FocusOut` to the live editor, and its blur
+/// handler COMMITS, exactly as a click-away would. A sidecar then appears
+/// in folder A and this test fails saying the abandoned text was
+/// committed. The signature in the trace is a lone `focus: iptc field N
+/// lost` that no `gained` follows and no `focus-keys (…)` precedes,
+/// BEFORE the rebuild — the blur commits first, so the rebuild-generation
+/// stamp that enforces the discard rule cannot catch it. That is the
+/// pre-existing deactivation-commit defect recorded in ui-grid.md (the
+/// same one that best explains issue #54's leak), not a regression of the
+/// focus reclaim — the keyboard assertions above it stay green when it
+/// fires, and QE measured it at 3/10 on this tree against 4/10 on a tree
+/// with the reclaim removed, with an identical trace shape. Do NOT quiet
+/// this test; when it fails it is telling the truth about a real bug.
 #[test]
 fn session_swap_mid_field_edit_discards_and_keeps_the_keyboard() {
     if !has_display() {
@@ -3032,10 +3056,28 @@ fn session_swap_mid_field_edit_discards_and_keeps_the_keyboard() {
     // width. If the window is ever some third size, the wait ends the run
     // with that sentence instead of a click landing somewhere surprising.
     // The steps after it keep the gaps written here.
+    // THE CONTRACT IS ASSERTED BY ACTING (issue #63): `key:+` 50 ms after
+    // the swap, and the grid must zoom. `keysfocus` cannot carry this
+    // test — Slint sends a FocusOut on window DEACTIVATION while
+    // `WindowInner::focus_item` keeps routing keys to the same scope, so
+    // an unfocused window reads `keysfocus=false` with a perfectly live
+    // keyboard (proven with no clicks at all: `keysfocus=false`, then a
+    // `+` zoomed). Both of this test's recorded reds were that artifact,
+    // and gating the dump on `load settled` only widened the exposure by
+    // moving it seconds later. A keystroke that ACTS cannot be faked by a
+    // deactivation.
+    //
+    // The `wait:` stays, but only for the LATER dumps: the discard
+    // assertions want a settled new session, and `load settled gen 1` is
+    // the second folder (`session-gen` counts from 0 for the one on the
+    // command line). The keystroke probe fires before it, immediately
+    // after the swap, which is where the ownerless window was.
     let drive = format!(
         "{PIN_WINDOW};2500:key:i;2600:wait:iptc field 0 laid out at 1150;\
          3000:click.1290,177;3200:dump.focused;\
-         3400:key:w;3500:key:i;3600:key:p;4000:open:{};5200:dump.swapped;\
+         3400:key:w;3500:key:i;3600:key:p;4000:open:{};\
+         4050:key:+;4400:dump.after;\
+         4500:wait:load settled gen 1;5200:dump.swapped;\
          5400:key:+;5800:dump.end",
         dir_b.display()
     );
@@ -3062,11 +3104,59 @@ fn session_swap_mid_field_edit_discards_and_keeps_the_keyboard() {
     // The Title-field click really took focus (anti-vacuity, gate
     // finding: a missed click would type the `p` as a real grid PICK
     // and fail this test later with a false "committed the abandoned
-    // text" diagnosis — a miss must be loud and unambiguous).
+    // text" diagnosis — a miss must be loud and unambiguous). Asserted
+    // through the OWNER TOKEN, not `keysfocus`: `focusowner=1` names the
+    // Title row positively, where `keysfocus=false` only says "not the
+    // main scope" and a deactivated window says that too.
     let focused = qedump(&stderr, "focused");
+    assert_eq!(
+        dump_field(focused, "focusowner"),
+        "1",
+        "the Title-field click missed — the Title row never took the \
+         keyboard (issue #63): {focused}"
+    );
+    // THE CONTRACT (issue #41 D3, issue #63): a keystroke 50 ms after the
+    // swap ACTS. This is the assertion the whole test exists for, and it
+    // is a keystroke rather than a focus reading for the reason above the
+    // script.
+    let after = qedump(&stderr, "after");
     assert!(
-        focused.contains("keysfocus=false"),
-        "the Title-field click missed — the field never took focus: {focused}"
+        after.contains("zoom=2"),
+        "the first keystroke on the fresh session was DEAD — the keyboard \
+         was stranded by the swap (issue #41 D3, the ownerless window of \
+         issue #63): {after}"
+    );
+    // …and the window in which nobody owned the keyboard is closed BY
+    // CONSTRUCTION, which is the half a scripted keystroke cannot prove.
+    // The probe above is the user's contract but a weak mutant-killer:
+    // the deferred claim it races is a zero-length timer, and the drive
+    // step that sends the `+` is a timer too, so on an idle machine the
+    // claim usually wins anyway (measured: a tree with the reclaim
+    // removed still passes that assertion 19 runs in 20). This is the
+    // assertion that fails 20/20 on such a tree — the reclaim must be
+    // the FIRST claim after the rebuild that destroyed the editor,
+    // i.e. in the rebuild's own pass rather than an event loop later.
+    let rebuilt = stderr
+        .find("iptc rows rebuilt (gen 1)")
+        .unwrap_or_else(|| panic!("the swap never rebuilt the panel rows:\n{stderr}"));
+    let first_claim = stderr[rebuilt..]
+        .split("focus-keys (")
+        .nth(1)
+        .and_then(|s| s.split(')').next())
+        .unwrap_or("<none>");
+    assert_eq!(
+        first_claim, "rebuild -> keys",
+        "the keyboard was not reclaimed in the rebuild's own pass — the \
+         first claim after the swap's rows rebuild was `{first_claim}`, \
+         so there is an ownerless window again (issue #63):\n{stderr}"
+    );
+    // The new session really settled before the discard dumps below
+    // (issue #63): those read the revert slot and the disk, and a folder
+    // still scanning has not finished writing anything.
+    assert!(
+        stderr.contains("wait:load settled gen 1 (satisfied"),
+        "the post-swap `wait:` never fired — the discard assertions below \
+         were timed against a session that may still be loading:\n{stderr}"
     );
     // The swap really happened (anti-vacuity).
     let swapped = qedump(&stderr, "swapped");
@@ -3074,15 +3164,13 @@ fn session_swap_mid_field_edit_discards_and_keeps_the_keyboard() {
         swapped.contains("two.ARW"),
         "the open: swap never landed: {swapped}"
     );
-    // THE fix: the first keystroke on the fresh session is alive.
-    assert!(
-        swapped.contains("keysfocus=true"),
-        "keyboard stranded after a session swap mid-edit (issue #41 D3): {swapped}"
-    );
+    // Still alive once the new session has settled — the deferred claim
+    // that follows the swap must not have stranded it afterwards. Acting
+    // again, for the same reason.
     let end = qedump(&stderr, "end");
     assert!(
-        end.contains("zoom=2"),
-        "the `+` after the swap was dead: {end}"
+        end.contains("zoom=3"),
+        "the keyboard died between the swap and the settled session: {end}"
     );
     // Discard-on-destroy: the half-typed \"wip\" went NOWHERE.
     for dir in [&dir_a, &dir_b] {
@@ -3154,9 +3242,16 @@ fn session_swap_mid_keyword_edit_never_writes_into_the_new_session() {
         swapped.contains("two.ARW"),
         "the open: swap never landed: {swapped}"
     );
-    assert!(
-        swapped.contains("keysfocus=true"),
-        "keyboard stranded after a swap mid-keyword-edit (issue #41 D3): {swapped}"
+    // Asserted through the token and, below, by ACTING: `keysfocus` reads
+    // false on window deactivation while keys still route (issue #63 —
+    // see the harness section of ui-grid.md), so it cannot carry a
+    // keyboard-liveness claim. After a swap the reclaim routes to the
+    // topmost scope, which is `focusowner=0`.
+    assert_eq!(
+        dump_field(swapped, "focusowner"),
+        "0",
+        "the keyboard did not return to the grid after a swap \
+         mid-keyword-edit (issue #41 D3): {swapped}"
     );
     assert!(
         qedump(&stderr, "end").contains("zoom=2"),
@@ -3211,7 +3306,7 @@ fn esc_over_stacked_modals_closes_the_topmost_first() {
     // The dialog opened with a real Ctrl+E and owns the keyboard.
     let opened = qedump(&stderr, "opened");
     assert!(
-        opened.contains("copy=true") && opened.contains("keysfocus=false"),
+        opened.contains("copy=true") && dump_field(opened, "focusowner") == "-1",
         "Ctrl+E did not open the copy dialog with its own key scope: {opened}"
     );
     // The plan summary as it stood when the dialog opened ("N picked
@@ -3251,7 +3346,7 @@ fn esc_over_stacked_modals_closes_the_topmost_first() {
     // Second Esc: the dialog itself closes and the keyboard returns.
     let esc2 = qedump(&stderr, "esc2");
     assert!(
-        esc2.contains("copy=false") && esc2.contains("keysfocus=true"),
+        esc2.contains("copy=false") && dump_field(esc2, "focusowner") == "0",
         "the second Esc did not close the copy dialog and restore the \
          keyboard: {esc2}"
     );
@@ -3321,7 +3416,9 @@ fn one_to_one_click_claims_the_keyboard() {
     // state), all at 1:1.
     let k = qedump(&stderr, "k");
     assert!(
-        k.contains("keysfocus=false") && k.contains("one2one=true") && k.contains("iptc=true"),
+        dump_field(k, "focusowner") == "12"
+            && k.contains("one2one=true")
+            && k.contains("iptc=true"),
         "K did not focus the keyword field at 1:1: {k}"
     );
     // The press really landed on the OVERLAY (not on the cell behind it):
@@ -3344,7 +3441,7 @@ fn one_to_one_click_claims_the_keyboard() {
     // suite, with the panel open and a soft rung up; the test is telling
     // the truth there and must not be quieted.
     assert!(
-        clicked.contains("keysfocus=true") && clicked.contains("one2one=true"),
+        dump_field(clicked, "focusowner") == "0" && clicked.contains("one2one=true"),
         "a 1:1 loupe click did not claim the keyboard (issue #41 defense \
          in depth; the re-centre above proves the click reached the \
          overlay, so this is the claim failing — issue #64's family): \
@@ -3388,7 +3485,7 @@ fn menu_activation_with_keys_focused_stays_clean() {
         "View > Zoom In via the menu did not fire (missed click?): {zoomed}"
     );
     assert!(
-        zoomed.contains("keysfocus=true"),
+        dump_field(zoomed, "focusowner") == "0",
         "menu activation stole the keyboard from the main scope: {zoomed}"
     );
     assert!(
@@ -3431,7 +3528,7 @@ fn keyword_enter_commit_still_writes_and_returns_focus() {
     );
     let committed = qedump(&stderr, "committed");
     assert!(
-        committed.contains("keysfocus=true"),
+        dump_field(committed, "focusowner") == "0",
         "Enter did not return the keyboard to the grid (G4): {committed}"
     );
     assert!(
@@ -3477,17 +3574,321 @@ fn copy_dialog_esc_returns_the_keyboard() {
     );
     let opened = qedump(&stderr, "opened");
     assert!(
-        opened.contains("copy=true") && opened.contains("keysfocus=false"),
+        opened.contains("copy=true") && dump_field(opened, "focusowner") == "-1",
         "Ctrl+E did not open the copy dialog with its own key scope: {opened}"
     );
     let closed = qedump(&stderr, "closed");
     assert!(
-        closed.contains("copy=false") && closed.contains("keysfocus=true"),
+        closed.contains("copy=false") && dump_field(closed, "focusowner") == "0",
         "Esc did not close the dialog and hand the keyboard back: {closed}"
     );
     assert!(
         qedump(&stderr, "end").contains("zoom=2"),
         "the `+` after the dialog closed was dead:\n{stderr}"
+    );
+}
+
+/// Issue #63 FAIL-1 (validator finding 2026-08-30): a rows rebuild that is
+/// NOT triggered by the editor's own blur — here a cursor move, the
+/// commonest one in real use as sidecars land — used to strand the
+/// keyboard, 10 runs in 10.
+///
+/// The mechanism, and why nothing else in the suite catches it: a Slint
+/// repeater does not tear its children down when the model is replaced,
+/// they die at its next update. So the DOOMED row instance is still alive
+/// and still watching `iptc-refocus-row`, and its `changed want-refocus`
+/// runs first — it consumed the flag in the rebuild's own millisecond,
+/// focused itself, cleared the flag, and then died. The recreated row saw
+/// nothing, and `focus-owner` still read that row while no element owned
+/// the keyboard at all. The blur-triggered path hid it: there the commit
+/// runs inside the blur, so the timing differs. The fix stamps the flag
+/// with the item-tree generation it was armed for, and a row claims only
+/// if it was BORN for that generation.
+///
+/// Asserted by ACTING, three keystrokes deep, because the previous probes
+/// for this family asserted only the DISK — and a dead keyboard satisfies
+/// "no sidecar was written" perfectly.
+///
+/// KNOWN INTERMITTENT, inherited: this test leaves a field focused with
+/// half-typed text, so it carries the same window-deactivation exposure
+/// as `session_swap_mid_field_edit_discards_and_keeps_the_keyboard` (see
+/// that test's banner). The fingerprint appeared ~2 times in 35 runs of
+/// the equivalent probe — `Revert: … on 1 image(s)` with ★0 and a stale
+/// owner token, from a lone `focus: … lost` that no `gained` follows.
+/// That is the pre-existing deactivation-commit defect, not this change:
+/// QE caught a release-idle instance where the `lost` arrived 28 ms after
+/// the keystroke and the rebuild only afterwards, so the blur came from
+/// outside the app and beat the rebuild entirely. Do NOT quiet it.
+#[test]
+fn a_cursor_move_rebuild_keeps_the_keyboard_in_the_field() {
+    if !has_display() {
+        eprintln!("screenshot smoke skipped: no display server");
+        return;
+    }
+    let _s = serial();
+    let dir = out_dir().join("focus-rowgen");
+    std::fs::create_dir_all(&dir).unwrap();
+    for name in ["a.ARW", "b.ARW"] {
+        place_fixture(&raws_dir().join("A1_full_compressed.ARW"), &dir.join(name));
+    }
+    let out = out_dir().join("focus-rowgen.jpg");
+    // Seed b.ARW with a Title first (3000-3600) so that moving the cursor
+    // onto it later really CHANGES a row and rebuilds the model — the
+    // whole point is a rebuild the focused editor did not cause. Then
+    // focus a.ARW's Title, type, and move the cursor with a nav token
+    // (which bypasses focus, exactly as a sidecar landing would).
+    let stderr = shoot_env_stderr(
+        &[dir.to_str().unwrap()],
+        &[
+            ("FASTCULL_TRACE", "1"),
+            (
+                "FASTCULL_DRIVE",
+                &format!(
+                    "{PIN_WINDOW};2500:key:i;2600:wait:iptc field 0 laid out at 1150;\
+                     3000:right;3300:click.1290,177;3500:key:z;3600:key:return;\
+                     4000:left;4400:click.1290,177;4600:key:q;\
+                     4900:right;5100:dump.rebuilt;\
+                     5300:key:w;5500:key:return;5800:key:y;6200:dump.after;\
+                     6500:click.1290,177;6700:key:v;7000:select-all;\
+                     7300:dump.mixed;7500:key:u;7700:key:return;8100:dump.mixedafter"
+                ),
+            ),
+        ],
+        &out,
+    );
+    assert!(
+        stderr.contains("wait:iptc field 0 laid out at 1150 (satisfied"),
+        "the `wait:` never fired — the clicks were timed, not gated:\n{stderr}"
+    );
+    assert_click_inside(
+        iptc_field_rect(&stderr, 0, "drive: click.1290,177"),
+        (1290.0, 177.0),
+        "the Title field",
+    );
+    // The cursor move really rebuilt the rows (anti-vacuity): without the
+    // seeded Title the two images look identical to the panel, no model is
+    // replaced, and this test would prove nothing.
+    let after_move = stderr
+        .rfind("drive: right")
+        .map(|i| &stderr[i..])
+        .unwrap_or("");
+    assert!(
+        after_move.contains("iptc rows rebuilt"),
+        "the cursor move did not rebuild the panel rows — the seeded \
+         Title is missing, so there is no rebuild to survive:\n{stderr}"
+    );
+    // The RECREATED row took the keyboard, not the doomed instance.
+    assert!(
+        after_move.contains("row 0 (gen"),
+        "no row claimed the keyboard after the rebuild — the flag was \
+         consumed by the dying instance (issue #63 FAIL-1):\n{stderr}"
+    );
+    let rebuilt = qedump(&stderr, "rebuilt");
+    assert_eq!(
+        dump_field(rebuilt, "focusowner"),
+        "1",
+        "the Title row does not own the keyboard after the rebuild: {rebuilt}"
+    );
+    // THE CONTRACT, by acting: type into the field that came back, commit
+    // it, and mark with the key the grid gets afterwards. On the pre-fix
+    // tree all three are dead and nothing marks.
+    let after = qedump(&stderr, "after");
+    assert!(
+        after.contains("★1"),
+        "the keyboard was stranded by a cursor-move rebuild — the typing, \
+         the Enter and the `y` after it were all dead (issue #63 \
+         FAIL-1): {after}"
+    );
+    // THE SECOND REBUILD SHAPE, which is how QE reproduced the same
+    // defect: no cursor move at all — `select-all` grows the batch, the
+    // Title row goes ‹multiple values› and the model is replaced for that
+    // reason alone. The two shapes reach the rebuild by different routes
+    // and both have to be covered; neither is exotic, since any sidecar
+    // landing for the batch does the same thing.
+    let mixed = qedump(&stderr, "mixed");
+    assert_eq!(
+        dump_field(mixed, "selected"),
+        "2",
+        "select-all did not grow the batch, so the row never went mixed \
+         and there is no second rebuild to survive:\n{stderr}"
+    );
+    assert_eq!(
+        dump_field(mixed, "focusowner"),
+        "1",
+        "the Title row does not own the keyboard after a mixed-value \
+         rebuild (issue #63 FAIL-1, QE's shape): {mixed}"
+    );
+    // Acting again: typing and Enter must commit across the grown batch,
+    // which only a live editor can do.
+    assert!(
+        dump_text(qedump(&stderr, "mixedafter"), "revert").contains("2 image(s)"),
+        "the keyboard was stranded by a mixed-value rebuild — the typing \
+         and the Enter after it committed nothing (issue #63 FAIL-1):\n{stderr}"
+    );
+}
+
+/// Issue #63 (QE finding 2026-08-30): a menu ITEM activated while a panel
+/// FIELD ROW holds half-typed text used to strand the keyboard outright —
+/// 5 runs in 5. The chain is three shipped rules colliding: opening the
+/// menu blurs the field, the blur COMMITS it (G7), the commit rebuilds
+/// the field rows and destroys the editor — and then the MenuBar restores
+/// focus to that destroyed item, after the activation has returned, where
+/// no synchronous reclaim can undo it. View > Filter Bar is the probe
+/// because it queues no claim of its own, unlike View > IPTC Panel.
+///
+/// Asserted by ACTING, twice over, and deliberately not through
+/// `keysfocus` (see the harness notes in ui-grid.md): Enter must commit
+/// and hand the keyboard to the grid, and the `y` after it must MARK the
+/// photo. On the pre-fix tree both keys die and the mark count stays 0.
+/// The keyboard landing back in the FIELD rather than on the grid is the
+/// point of the fix, so the probe cannot be a bare `y` — that would type
+/// a `y` into the Title, which is correct behaviour and marks nothing.
+#[test]
+fn a_menu_item_over_a_focused_field_row_keeps_the_keyboard() {
+    if !has_display() || !menu_clicks_are_calibrated() {
+        eprintln!("skipped: no display or uncalibrated menu geometry");
+        return;
+    }
+    let _s = serial();
+    let dir = out_dir().join("focus-menurow");
+    std::fs::create_dir_all(&dir).unwrap();
+    place_fixture(
+        &raws_dir().join("A1_full_compressed.ARW"),
+        &dir.join("one.ARW"),
+    );
+    let out = out_dir().join("focus-menurow.jpg");
+    let stderr = shoot_env_stderr(
+        &[dir.to_str().unwrap()],
+        &[
+            ("FASTCULL_TRACE", "1"),
+            (
+                "FASTCULL_DRIVE",
+                &format!(
+                    "{PIN_WINDOW};2500:key:i;2600:wait:iptc field 0 laid out at 1150;\
+                     3000:click.1290,177;3200:key:a;3300:key:b;\
+                     3600:click.72,19;4000:click.128,157;4400:dump.menu;\
+                     4600:key:return;4900:key:y;5300:dump.after"
+                ),
+            ),
+        ],
+        &out,
+    );
+    assert!(
+        stderr.contains("wait:iptc field 0 laid out at 1150 (satisfied"),
+        "the `wait:` never fired — the field click was timed, not gated:\n{stderr}"
+    );
+    assert_click_inside(
+        iptc_field_rect(&stderr, 0, "drive: click.1290,177"),
+        (1290.0, 177.0),
+        "the Title field",
+    );
+    // The menu really acted (anti-vacuity): the filter bar toggled, so
+    // the clicks at 72,19 and 128,157 hit the View menu and its item.
+    // Without this a missed menu click would leave the keyboard happily
+    // in the field and the assertions below would pass having tested
+    // nothing.
+    let menu = qedump(&stderr, "menu");
+    assert_eq!(
+        dump_field(menu, "focusowner"),
+        "1",
+        "after the menu item the keyboard is not in the Title row — \
+         either the menu click missed, or the row was left stranded \
+         (issue #63):\n{stderr}"
+    );
+    // THE CONTRACT, by acting: Enter commits and returns to the grid…
+    // …and `y` marks the photo there. Both keys die on the pre-fix tree.
+    let after = qedump(&stderr, "after");
+    assert!(
+        after.contains("★1"),
+        "the keyboard was stranded by the menu activation — Enter and \
+         the `y` after it were both dead (issue #63): {after}"
+    );
+}
+
+/// Issue #63 FAIL-3 (validator finding 2026-08-30): a menu opened over a
+/// focused field row and then DISMISSED without choosing anything.
+///
+/// It is the nastiest shape in the family because nothing announces it:
+/// opening the menu blurs the field, the blur COMMITS it (G7), the commit
+/// rebuilds the rows and destroys the editor — and then the menu is
+/// dismissed and Slint's MenuBar restores focus to the destroyed
+/// instance. No `activated` fires, so the `menu-activated` claim never
+/// runs, and Slint 1.17 exposes no menu open/dismiss callback to hang one
+/// on. Measured dead 10 runs in 10 before the fix.
+///
+/// What rescues it is not a new claim but the DEFERRAL of the rebuild
+/// reclaim's flag write (FAIL-1's fix): armed one event-loop iteration
+/// late, it lands on a row that is alive and can actually take focus, and
+/// it survives the restore. Esc is the probe because it needs no
+/// coordinates beyond the menu-bar click; the click-elsewhere and
+/// click-the-menu-bar-again routes measure the same, 5/5 each.
+#[test]
+fn a_dismissed_menu_over_a_focused_field_row_keeps_the_keyboard() {
+    if !has_display() || !menu_clicks_are_calibrated() {
+        eprintln!("skipped: no display or uncalibrated menu geometry");
+        return;
+    }
+    let _s = serial();
+    let dir = out_dir().join("focus-menudismiss");
+    std::fs::create_dir_all(&dir).unwrap();
+    place_fixture(
+        &raws_dir().join("A1_full_compressed.ARW"),
+        &dir.join("one.ARW"),
+    );
+    let out = out_dir().join("focus-menudismiss.jpg");
+    let stderr = shoot_env_stderr(
+        &[dir.to_str().unwrap()],
+        &[
+            ("FASTCULL_TRACE", "1"),
+            (
+                "FASTCULL_DRIVE",
+                &format!(
+                    "{PIN_WINDOW};2500:key:i;2600:wait:iptc field 0 laid out at 1150;\
+                     3000:click.1290,177;3200:key:q;\
+                     3600:click.72,19;4000:key:escape;4400:dump.dismissed;\
+                     4600:key:return;4900:key:y;5300:dump.after"
+                ),
+            ),
+        ],
+        &out,
+    );
+    assert!(
+        stderr.contains("wait:iptc field 0 laid out at 1150 (satisfied"),
+        "the `wait:` never fired — the field click was timed, not gated:\n{stderr}"
+    );
+    assert_click_inside(
+        iptc_field_rect(&stderr, 0, "drive: click.1290,177"),
+        (1290.0, 177.0),
+        "the Title field",
+    );
+    // The menu really opened and the field's blur really rebuilt the rows
+    // (anti-vacuity): without both there is nothing for the dismiss to
+    // strand, and this test would pass on a build where the menu click
+    // missed entirely.
+    let after_menu = stderr
+        .find("drive: click.72,19")
+        .map(|i| &stderr[i..])
+        .unwrap_or("");
+    assert!(
+        after_menu.contains("iptc rows rebuilt"),
+        "opening the menu did not blur-and-rebuild the panel rows — there \
+         is no destroyed editor to recover from:\n{stderr}"
+    );
+    let dismissed = qedump(&stderr, "dismissed");
+    assert_eq!(
+        dump_field(dismissed, "focusowner"),
+        "1",
+        "after the menu was dismissed the Title row does not own the \
+         keyboard (issue #63 FAIL-3): {dismissed}"
+    );
+    // THE CONTRACT, by acting: Enter commits and hands the keyboard to
+    // the grid, and the `y` marks there. Both die on the pre-fix tree.
+    let after = qedump(&stderr, "after");
+    assert!(
+        after.contains("★1"),
+        "the keyboard was stranded by dismissing a menu over a focused \
+         field — the Enter and the `y` after it were both dead (issue \
+         #63 FAIL-3): {after}"
     );
 }
 
@@ -3534,11 +3935,11 @@ fn filter_bar_toggle_mid_edit_commits_and_keeps_the_field_coherent() {
     );
     // The menu restore put the keyboard back in the still-alive field.
     assert!(
-        toggled.contains("keysfocus=false"),
+        dump_field(toggled, "focusowner") == "12",
         "the field lost the keyboard across the filter-bar toggle: {toggled}"
     );
     assert!(
-        qedump(&stderr, "after").contains("keysfocus=true"),
+        dump_field(qedump(&stderr, "after"), "focusowner") == "0",
         "Enter did not return the keyboard to the grid:\n{stderr}"
     );
     assert!(
@@ -3589,14 +3990,14 @@ fn copy_picks_from_the_menu_over_a_focused_field_owns_the_keyboard() {
         "the File > Copy Picks click missed (dialog never opened): {opened}"
     );
     assert!(
-        opened.contains("keysfocus=false"),
+        dump_field(opened, "focusowner") == "-1",
         "the main key scope holds the keys behind the copy dialog — N/Y \
          would fire at the hidden grid: {opened}"
     );
     // Esc closed the dialog and the keyboard returned…
     let closed = qedump(&stderr, "closed");
     assert!(
-        closed.contains("copy=false") && closed.contains("keysfocus=true"),
+        closed.contains("copy=false") && dump_field(closed, "focusowner") == "0",
         "Esc did not close the dialog and restore the keyboard: {closed}"
     );
     // …the blind `x` never became metadata…
@@ -3611,7 +4012,8 @@ fn copy_picks_from_the_menu_over_a_focused_field_owns_the_keyboard() {
         .collect();
     assert!(
         sidecars.is_empty(),
-        "blind typing behind the copy dialog produced a sidecar: {sidecars:?}"
+        "blind typing behind the copy dialog produced a sidecar: \
+         {sidecars:?}\n{stderr}"
     );
     // …and the next keystroke works.
     assert!(
@@ -5023,9 +5425,11 @@ fn export_frames_as_video_writes_a_real_motion_jpeg() {
     assert_eq!(dump_field(plan, "clip"), "true", "{plan}");
     assert_eq!(dump_field(plan, "clipstate"), "0", "{plan}");
     assert_eq!(
-        dump_field(plan, "keysfocus"),
-        "false",
-        "the dialog owns the keyboard while it is up (issues #41/#42): {plan}"
+        dump_field(plan, "focusowner"),
+        "-1",
+        "the dialog owns the keyboard while it is up (issues #41/#42); \
+         through the owner token, which names the dialog scope rather \
+         than merely denying the main one (issue #63): {plan}"
     );
     // Keyboard CONTAINMENT, not just focus (issue #42): the `N`, `Y` and
     // `Ctrl+O` sent while the dialog was up must have died in it. A mark
@@ -6710,6 +7114,22 @@ fn a_click_inside_the_iptc_panel_never_reaches_the_grid() {
         "something had already armed the revert slot, so the field click's \
          proof below is not its own:\n{stderr}"
     );
+    // Re-enabled with the issue #63/#64 fix (it was left out while opening
+    // the panel with a real `I` stranded the keyboard about one run in
+    // eight, so a POINTER-ROUTING test would have gone red for a focus bug
+    // it is not about) — but through the OWNER TOKEN, never `keysfocus`:
+    // that property reads false whenever the WINDOW is deactivated, with
+    // the keyboard perfectly alive, and planting it here would trade one
+    // borrowed flake for another. What it pins is bounded and worth
+    // stating: the cell click at 358,318 above claims the keyboard
+    // itself, so this says "nothing between the `I` and here left the
+    // keyboard on a destroyed editor", not "the `I` alone kept it".
+    assert_eq!(
+        dump_field(before, "focusowner"),
+        "0",
+        "the keyboard is not on the main scope with the panel open — an \
+         editor or a destroyed row holds it (issue #41 family, #63/#64):\n{stderr}"
+    );
     let cursor_before = dump_field(before, "cursor");
     // Calibration, against the rectangle the app itself reported. The
     // chrome click is in the panel's own 10 px padding strip, LEFT of every
@@ -6756,11 +7176,12 @@ fn a_click_inside_the_iptc_panel_never_reaches_the_grid() {
     // by the containment TouchArea beneath it) sends those two keys to the
     // main scope, where `t` is not a binding and nothing arms.
     //
-    // Deliberately not asserted through `keysfocus`: opening the panel
-    // with a real `I` strands the keyboard about one run in eight under
-    // load (issue #64), and a POINTER-ROUTING test must not go red for a
-    // focus bug it is not about. The commit is immune to it — Enter
-    // returns focus to the grid either way.
+    // Proven through the COMMIT rather than through `keysfocus`, and it
+    // stays that way now that the keyboard assertion is back at the
+    // `before` dump: these two are different questions. `keysfocus` says
+    // some element owns the keyboard; only the commit says the pointer
+    // landed on THIS field. The commit is also immune to the focus
+    // question — Enter returns focus to the grid either way.
     assert_ne!(
         dump_text(qedump(&stderr, "field"), "revert"),
         "",

@@ -388,18 +388,110 @@ export component MainWindow inherits Window {
     public function focus-keys() {
         // Topmost first: the video export can be opened over nothing, but
         // both dialogs are modal and only one is ever up.
+        //
+        // The owner token is written HERE, synchronously, and not left to
+        // the gaining scope's `changed has-focus` (issue #63): that
+        // handler runs an event-loop iteration later, and a rows rebuild
+        // in between would read the stale EDITOR id and pull the keyboard
+        // straight back out of the grid — measured undoing the shipped G4
+        // rule that Enter commits and returns to the grid.
         if (root.clip-visible) {
             root.clip-claim-focus = true;
+            root.focus-owner = -1;
         } else if (root.copy-visible) {
             root.copy-claim-focus = true;
+            root.focus-owner = -1;
         } else {
             keys.focus();
+            root.focus-owner = 0;
         }
     }
     // The copy dialog watches this flag and claims its scope (same
     // pattern as iptc-focus-keywords: a root flag observed by a
     // conditional child).
     in-out property <bool> copy-claim-focus: false;
+    // WHO OWNS THE KEYBOARD (issues #63/#64) — the token that makes "a
+    // destroyed editor never keeps the focus token" checkable from Rust:
+    //
+    //   0     the main key scope (`keys`), or nothing app-owned
+    //   1..N  panel field row i, written as i + 1
+    //   N+1   the keyword field
+    //   -1    a dialog's own key scope (Copy Picks / Export Frames)
+    //
+    // Slint's window holds a WEAK reference to its focus item, so an
+    // editor destroyed by a model replacement delivers NO FocusOut and
+    // nothing reassigns focus — measured: the keyboard was ownerless for
+    // 17-525 ms after every session swap mid-edit, until a zero-length
+    // timer happened to run. Rust reads this token immediately after such
+    // a mutation and reclaims in the same pass (focus::
+    // reclaim_destroyed_editors).
+    //
+    // Only a GAIN ever writes it — never a loss. Two measured reasons,
+    // both of which a clear-on-loss gets wrong:
+    //
+    //  * `changed has-focus` handlers run on the next event-loop
+    //    iteration, and the GAINER's runs first on this tree (click Title
+    //    then Description: `iptc field 1 gained` at [3733], `iptc field 0
+    //    lost` at [3735]) — so a loss-write would land after the new
+    //    owner's and blank it.
+    //  * a row destroyed by a rebuild and the row RECREATED in its place
+    //    share the same id, so the dying item's late blur cannot be told
+    //    apart from the live one's ([3762] the new row 1 claims, [3835]
+    //    the old row 1 finally announces its loss).
+    //
+    // The cost is a token that goes stale when focus leaves for something
+    // Slint owns — a menu popup, or the WINDOW being deactivated, which
+    // sends a FocusOut while keys still route (see the harness section on
+    // `keysfocus`). Staleness is the safe direction: the reclaim then
+    // hands the keyboard back to the field the user was editing, which is
+    // where it was. Clearing would strand it instead.
+    in-out property <int> focus-owner: 0;
+    // WHICH ROW GETS THE KEYBOARD BACK after a rows rebuild destroyed the
+    // editor that had it (issue #63 F3): the row index, or -1 for "nobody
+    // asked". Rust sets it in the same pass as the model replacement; the
+    // RECREATED row observes it, focuses itself and clears it — the same
+    // root-flag-watched-by-a-child pattern as `iptc-focus-keywords`,
+    // because a repeater's children cannot be named from Rust.
+    //
+    // The keyboard goes back to the FIELD, never to the grid: the panel is
+    // a captioning surface, iptc-templates.md's "focus stays where
+    // clicked" is a shipped rule, and a rebuild that lands the keys on the
+    // grid turns the next character of a caption into a cull command —
+    // `x` rejects the photo and writes a sidecar. Only a session SWAP
+    // reclaims to the grid instead, because there the field's meaning is
+    // gone with the folder (#41 D3).
+    in-out property <int> iptc-refocus-row: -1;
+    // WHICH GENERATION OF THAT ROW (issue #63 FAIL-1). Arming the index
+    // alone is not enough and was a live defect: a repeater's children
+    // are NOT torn down when the model is replaced — they die at the next
+    // update — so the DOOMED instance is still alive, still watching, and
+    // its `changed want-refocus` runs first. It consumed the flag in the
+    // rebuild's own millisecond, focused itself, cleared the flag, and
+    // then died; the recreated row never saw anything, and the keyboard
+    // was on a destroyed item with `focus-owner` still reading that row.
+    // Measured 10/10 dead on a cursor-move rebuild.
+    //
+    // So the flag carries the `iptc-rebuild-gen` it was armed for, and a
+    // row claims only if it was BORN for that generation. The doomed
+    // instance carries the previous one and cannot consume. The
+    // menu-reassert path arms with the CURRENT generation, which is the
+    // live row's own, so that path still works through the same watch.
+    in-out property <int> iptc-refocus-gen: -1;
+    // REBUILD GENERATION (issue #63 F2), the `session-gen` pattern applied
+    // to the item tree: Rust bumps it immediately before every field-rows
+    // model replacement. An editor stamps it on focus gain, and its blur
+    // handler commits only if the stamp still matches — so an editor whose
+    // row was destroyed under it DISCARDS its in-flight text, which is the
+    // recorded 2026-08-03 rule (no commit-on-destroy), while a real
+    // click-away or Tab (no rebuild in between) still commits exactly as
+    // before.
+    //
+    // A plain "suppress the next blur commit" boolean cannot do this job:
+    // `changed has-focus` is deferred, so a flag set and cleared around
+    // the reclaim is already back to false by the time the handler reads
+    // it, and one left set for a whole refresh tick would swallow real
+    // click-away commits. A generation compare needs no timing at all.
+    in-out property <int> iptc-rebuild-gen: 0;
     // Debug facility (issue #41, documented in ui-grid.md): the main key
     // scope's REAL focus state, readable from the drive harness (`dump.`
     // token). Keyboard focus was otherwise invisible to headless runs —
@@ -425,6 +517,30 @@ export component MainWindow inherits Window {
     // run can see it: the body has no cursor and no selection, so "PgDn
     // moved the report" is otherwise only checkable by eye.
     callback dbg-body-scrolled(string, length);
+    // FOCUS OBSERVABILITY (issues #63/#64). Keyboard focus was invisible
+    // to every headless run except as `keysfocus` at a dump — one sample,
+    // long after the fact — which is how a stranded keyboard shipped
+    // twice. These two say who holds it and who asked for it:
+    //
+    //   dbg-focus-changed("keys"|"iptc field N"|"keyword field"|
+    //                     "copy dialog"|"clip dialog", gained)
+    //   dbg-focus-claim("swap"|"cell-click"|…)  — a claim was MADE, which
+    //   is not the same as a claim that landed and stayed.
+    //
+    // Every element that reports here also writes `focus-owner` on a
+    // gain, so the trace and the token can never disagree about who took
+    // the keyboard.
+    //
+    // Traced through `trace_mark_with`, so they cost nothing when tracing
+    // is off; a focus change is rare enough that even the formatting
+    // would not matter.
+    callback dbg-focus-changed(string, bool);
+    callback dbg-focus-claim(string);
+    // A plain note from the .slint side, traced verbatim: used for the
+    // item-tree events that are neither a focus change nor a claim ("the
+    // keyword editor now exists"), which is exactly what a run needs to
+    // read a focus loss caused by a rebuild.
+    callback dbg-note(string);
     // Scroll offset (negative Flickable viewport-y); Rust reads and writes it.
     in-out property <length> vp-y: 0px;
     // Geometry the Rust layout math needs (the grid area = flickable size).
@@ -531,6 +647,22 @@ export component MainWindow inherits Window {
     // Fired by the Help menu items: the Rust side answers with the
     // deferred re-focus that survives the menu's focus restore (#41 D2).
     callback modal-opened();
+    // Fired FIRST by every menu item, whatever it does (issue #63, QE
+    // finding 2026-08-30). Activating any item blurs a focused panel
+    // field, which COMMITS it (G7) — and a commit rebuilds the field
+    // rows, destroying the editor. The MenuBar then restores focus to
+    // that destroyed item AFTER the activation returns, so the keyboard
+    // lands on nothing and no synchronous reclaim can survive it:
+    // measured dead 5 times in 5 through View > Filter Bar, which unlike
+    // View > IPTC Panel had no deferred claim of its own.
+    //
+    // The Rust side answers by RE-ASSERTING THE OWNER TOKEN one event
+    // loop later, rather than by grabbing the keys: after a menu action
+    // the keyboard belongs wherever it belonged before, which for a panel
+    // field is that field (iptc-templates.md "focus stays where
+    // clicked"). Blanket-claiming `keys` here would be the same defect as
+    // reclaiming a rebuild to the grid.
+    callback menu-activated();
     changed width => { root.viewport-changed(); }
     changed height => { root.viewport-changed(); }
 
@@ -541,11 +673,11 @@ export component MainWindow inherits Window {
             title: "File";
             MenuItem {
                 title: "Open Folder…";
-                activated => { root.open-folder(); }
+                activated => { root.menu-activated(); root.open-folder(); }
             }
             MenuItem {
                 title: "Copy Picks… (Ctrl+E)";
-                activated => { root.copy-open(); }
+                activated => { root.menu-activated(); root.copy-open(); }
             }
             MenuItem {
                 // The user's own wording: "video", not "clip".
@@ -554,7 +686,7 @@ export component MainWindow inherits Window {
                 // keystroke still answers, with the reason, in the status
                 // line (video-export.md).
                 enabled: root.clip-available;
-                activated => { root.clip-open(); }
+                activated => { root.menu-activated(); root.clip-open(); }
             }
             MenuItem {
                 title: "Settings… (soon)";
@@ -562,26 +694,26 @@ export component MainWindow inherits Window {
             }
             MenuItem {
                 title: "Quit";
-                activated => { root.quit(); }
+                activated => { root.menu-activated(); root.quit(); }
             }
         }
         Menu {
             title: "View";
             MenuItem {
                 title: "Zoom In (+)";
-                activated => { root.nav("zoom-in"); }
+                activated => { root.menu-activated(); root.nav("zoom-in"); }
             }
             MenuItem {
                 title: "Zoom Out (-)";
-                activated => { root.nav("zoom-out"); }
+                activated => { root.menu-activated(); root.nav("zoom-out"); }
             }
             MenuItem {
                 title: "IPTC Panel (I)";
-                activated => { root.iptc-toggle(); }
+                activated => { root.menu-activated(); root.iptc-toggle(); }
             }
             MenuItem {
                 title: "Filter Bar";
-                activated => { root.toggle-filter-bar(); }
+                activated => { root.menu-activated(); root.toggle-filter-bar(); }
             }
         }
         Menu {
@@ -592,11 +724,11 @@ export component MainWindow inherits Window {
                 // focus AFTER activation, overriding any steal made here
                 // (issue #41 D2 — the un-dismissable modal + blind typing
                 // into the field hidden behind the scrim).
-                activated => { root.shortcuts-visible = true; root.modal-opened(); }
+                activated => { root.menu-activated(); root.shortcuts-visible = true; root.modal-opened(); }
             }
             MenuItem {
                 title: "About FastCull";
-                activated => { root.about-visible = true; root.modal-opened(); }
+                activated => { root.menu-activated(); root.about-visible = true; root.modal-opened(); }
             }
         }
     }
@@ -610,6 +742,13 @@ export component MainWindow inherits Window {
             y: 0;
             width: 100%;
             height: parent.height - statusbar.height;
+            // The main scope's own focus, as it changes (issues #63/#64),
+            // and the owner token: `keys` holding the keyboard is the
+            // state in which no rebuild has anything to reclaim.
+            changed has-focus => {
+                root.dbg-focus-changed("keys", self.has-focus);
+                if (self.has-focus) { root.focus-owner = 0; }
+            }
 
             key-pressed(event) => {
                 // Modal containment (issue #23, user decision 2026-07-27:
@@ -787,7 +926,9 @@ export component MainWindow inherits Window {
                             root.cell-clicked(
                                 cell.id, self.pressed-x, self.pressed-y,
                                 self.mod-ctrl, self.mod-shift);
+                            root.dbg-focus-claim("cell-click");
                             keys.focus(); // clicking the grid claims the keyboard
+                            root.focus-owner = 0; // #63: record the claim now, not a tick later
                         }
                         // Grid double-click opens the loupe at fit (issue
                         // #11; the first click already moved the cursor).
@@ -960,7 +1101,9 @@ export component MainWindow inherits Window {
                     // Click at fit does nothing to the view (spec Q5) — it
                     // only claims the cursor and the keyboard.
                     root.fit-clicked();
+                    root.dbg-focus-claim("fit-click");
                     keys.focus();
+                    root.focus-owner = 0; // #63: record the claim now, not a tick later
                 }
                 double-clicked => {
                     root.fit-double-clicked(self.mouse-x, self.mouse-y + root.bar-h);
@@ -1151,6 +1294,7 @@ export component MainWindow inherits Window {
                         root.loupe-clicked(
                             self.pressed-x / max(1px, self.width),
                             self.pressed-y / max(1px, self.height));
+                        root.dbg-focus-claim("overlay-click");
                         // Focus claim, same as the grid-cell and fit
                         // surfaces (issue #41 defense in depth): at 1:1
                         // this was the ONE click surface that did not
@@ -1158,6 +1302,7 @@ export component MainWindow inherits Window {
                         // no discoverable recovery in the loupe. Additive
                         // — the click still re-centers exactly as before.
                         keys.focus();
+                        root.focus-owner = 0; // #63: record the claim now, not a tick later
                     }
                 }
                 // Wheel above fit walks the zoom ladder, anchored
@@ -1290,7 +1435,9 @@ export component MainWindow inherits Window {
                         enabled: root.iptc-templates.length > 0;
                         clicked => {
                             root.iptc-apply-template(max(tplbox.current-index, 0));
+                            root.dbg-focus-claim("template-apply");
                             keys.focus();
+                            root.focus-owner = 0; // #63: record the claim now, not a tick later
                         }
                     }
                 }
@@ -1299,7 +1446,9 @@ export component MainWindow inherits Window {
                     enabled: root.iptc-revert-enabled;
                     clicked => {
                         root.iptc-revert();
+                        root.dbg-focus-claim("revert");
                         keys.focus();
+                        root.focus-owner = 0; // #63: record the claim now, not a tick later
                     }
                 }
                 // Field rows: LineEdit + tri-state affordance. state 0 =
@@ -1329,7 +1478,9 @@ export component MainWindow inherits Window {
                                     }
                                     clicked => {
                                         root.iptc-field-clear(i);
+                                        root.dbg-focus-claim("field-clear");
                                         keys.focus();
+                                        root.focus-owner = 0; // #63: record the claim now, not a tick later
                                     }
                                 }
                             }
@@ -1355,22 +1506,69 @@ export component MainWindow inherits Window {
                                 // and 1, whose first computed position is
                                 // already their last.
                                 init => {
+                                    // BEFORE `settled` below: the claim is
+                                    // gated on this stamp (#63 FAIL-1).
+                                    self.born-gen = root.iptc-rebuild-gen;
                                     root.dbg-field-laid-out(i,
                                         self.absolute-position.x,
                                         self.absolute-position.y,
                                         self.width, self.height);
+                                    // NO focus() here, deliberately (#63
+                                    // FAIL-1): `self.focus()` from a
+                                    // repeater row's `init` does not take
+                                    // effect in Slint 1.17, it silently
+                                    // does nothing. What this does instead
+                                    // is give `want-refocus` an EDGE to
+                                    // fire on — see `settled`.
+                                    self.settled = true;
                                 }
+                                // The edge that makes an EARLY arm land
+                                // (#63, QE 2026-08-30). A zero-length arm
+                                // timer can fire before the repeater has
+                                // recreated this row; the flag is then
+                                // already set when the row is born, so
+                                // `want-refocus` is true from its first
+                                // evaluation and `changed` never fires —
+                                // the request was armed, matched, and
+                                // silently never claimed (3 runs in 20
+                                // under six spinners, ownerless for good).
+                                // Assigning `settled` in `init` moves the
+                                // property from false to true AFTER
+                                // creation, so the edge exists and the
+                                // claim happens from a `changed` handler,
+                                // on a row that is alive and can focus.
+                                // The flag itself is cleared ONLY by an
+                                // actual claim, so an early arm survives
+                                // until its row exists to answer it.
+                                property <bool> settled: false;
+                                // The laid-out belt for the same request:
+                                // if the flag was armed before this row
+                                // could watch it (a timer beating the
+                                // repeater update), `changed want-refocus`
+                                // never fires, because the value was
+                                // already true at creation. This handler
+                                // does fire — the layout places the row
+                                // after it exists — and by then focusing
+                                // works.
                                 changed absolute-position => {
                                     root.dbg-field-laid-out(i,
                                         self.absolute-position.x,
                                         self.absolute-position.y,
                                         self.width, self.height);
+                                    if (self.want-refocus) { self.claim-refocus(); }
                                 }
                                 accepted(text) => {
                                     root.iptc-field-committed(i, text, true);
+                                    root.dbg-focus-claim("field-accepted");
                                     keys.focus(); // G4: Enter returns to grid, cursor stays
+                                    root.focus-owner = 0; // #63: record the claim now, not a tick later
                                 }
                                 property <int> edit-gen: -1;
+                                // The item-tree generation this edit
+                                // belongs to (#63 F2, see
+                                // iptc-rebuild-gen): stamped wherever
+                                // edit-gen is, checked by the blur.
+                                property <int> edit-rebuild: -1;
                                 // Session swap: in-flight text belongs to
                                 // the OLD session — re-sync to the (new)
                                 // stored value immediately (#41 D3),
@@ -1379,12 +1577,49 @@ export component MainWindow inherits Window {
                                 changed seen-gen => {
                                     self.text = row.mixed ? "" : row.value;
                                 }
+                                // The keyboard coming BACK to this row
+                                // after a rebuild destroyed its previous
+                                // instance (#63 F3). Both arms, for the
+                                // reason `kwedit` documents below: `init`
+                                // is the one that fires when the repeater
+                                // recreates this row, and it fires no
+                                // `changed has-focus`, so the stamps and
+                                // the owner token are written HERE.
+                                // Which item-tree generation THIS instance
+                                // was created for (#63 FAIL-1). Stamped in
+                                // `init`, so the doomed instance keeps the
+                                // old value and can never consume a flag
+                                // armed for the rebuild that kills it.
+                                property <int> born-gen: -1;
+                                property <bool> want-refocus: self.settled
+                                    && root.iptc-refocus-row == i && root.iptc-refocus-gen == self.born-gen;
+                                function claim-refocus() {
+                                    root.dbg-focus-claim("row " + i + " (gen " + self.born-gen + ")");
+                                    self.focus();
+                                    self.edit-gen = root.session-gen;
+                                    self.edit-rebuild = root.iptc-rebuild-gen;
+                                    root.focus-owner = i + 1;
+                                    root.iptc-refocus-row = -1;
+                                }
+                                changed want-refocus => {
+                                    if (self.want-refocus) { self.claim-refocus(); }
+                                }
                                 changed has-focus => {
+                                    root.dbg-focus-changed("iptc field " + i, self.has-focus);
                                     if (self.has-focus) {
                                         // Stamp the session this edit
                                         // belongs to (#41 D3, see
                                         // session-gen).
                                         self.edit-gen = root.session-gen;
+                                        self.edit-rebuild = root.iptc-rebuild-gen;
+                                        // Claim the owner token (#63):
+                                        // this editor dies with the next
+                                        // rows-model replacement, and
+                                        // the token is what tells Rust
+                                        // the keyboard needs rescuing —
+                                        // and which row to give it back
+                                        // to.
+                                        root.focus-owner = i + 1;
                                         if (root.about-visible || root.shortcuts-visible || root.copy-visible || root.clip-visible) {
                                             // Focus continuity (#41 D2):
                                             // an editor must never hold
@@ -1403,9 +1638,10 @@ export component MainWindow inherits Window {
                                             // Picks over a focused
                                             // field held only by
                                             // init-timing luck).
+                                            root.dbg-focus-claim("bounce (field behind a cover)");
                                             root.focus-keys();
                                         }
-                                    } else if (root.iptc-visible && self.edit-gen == root.session-gen && self.text != row.value) {
+                                    } else if (root.iptc-visible && self.edit-gen == root.session-gen && self.edit-rebuild == root.iptc-rebuild-gen && self.text != row.value) {
                                         // G7: click-away from a half-typed
                                         // field COMMITS (no focus return);
                                         // a modal covering the field exits
@@ -1467,7 +1703,9 @@ export component MainWindow inherits Window {
                             }
                             clicked => {
                                 root.iptc-keyword-removed(i);
+                                root.dbg-focus-claim("keyword-removed");
                                 keys.focus();
+                                root.focus-owner = 0; // #63: record the claim now, not a tick later
                             }
                         }
                     }
@@ -1481,18 +1719,30 @@ export component MainWindow inherits Window {
                     // stamp stale and the blur path silently DISCARDED
                     // committable text (found while verifying #41).
                     property <bool> want-focus: root.iptc-focus-keywords;
+                    // The owner token is written HERE and not left to
+                    // `changed has-focus` (issue #63 F5): a focus gain made
+                    // during `init` fires no change handler at all, the
+                    // same Slint behaviour `edit-gen` above works around.
+                    // Leaving it out is what made the `K` flow read
+                    // `focus-owner == 0` while this editor held the
+                    // keyboard.
+                    function claim-keywords() {
+                        self.focus();
+                        self.edit-gen = root.session-gen;
+                        root.focus-owner = root.iptc-fields.length + 1;
+                        root.iptc-focus-keywords = false;
+                    }
                     init => {
+                        root.dbg-note("iptc keyword field created");
                         if (self.want-focus) {
-                            self.focus();
-                            self.edit-gen = root.session-gen;
-                            root.iptc-focus-keywords = false;
+                            root.dbg-focus-claim("keyword-init");
+                            self.claim-keywords();
                         }
                     }
                     changed want-focus => {
                         if (self.want-focus) {
-                            self.focus();
-                            self.edit-gen = root.session-gen;
-                            root.iptc-focus-keywords = false;
+                            root.dbg-focus-claim("keyword-watch");
+                            self.claim-keywords();
                         }
                     }
                     // Session swap while this editor holds text: the text
@@ -1507,18 +1757,29 @@ export component MainWindow inherits Window {
                     accepted(text) => {
                         root.iptc-keyword-added(text);
                         self.text = "";
+                        root.dbg-focus-claim("keyword-accepted");
                         keys.focus(); // G4: commit returns to grid
+                        root.focus-owner = 0; // #63: record the claim now, not a tick later
                     }
                     property <int> edit-gen: -1;
                     changed has-focus => {
+                        root.dbg-focus-changed("keyword field", self.has-focus);
                         if (self.has-focus) {
                             // Session stamp (#41 D3, see session-gen).
                             self.edit-gen = root.session-gen;
+                            // Owner token (#63/#64), one past the last
+                            // field row. This editor outlives a rows
+                            // rebuild — it is not inside that model, which
+                            // is why it carries no `edit-rebuild` stamp —
+                            // but it dies with the panel, and the token
+                            // has to name it either way.
+                            root.focus-owner = root.iptc-fields.length + 1;
                             if (root.about-visible || root.shortcuts-visible || root.copy-visible || root.clip-visible) {
                                 // Focus continuity (#41 D2): bounce a
                                 // focus gain that arrives behind a
                                 // covering surface — same rule and
                                 // routing as the field rows above.
+                                root.dbg-focus-claim("bounce (keyword behind a cover)");
                                 root.focus-keys();
                             }
                         } else if (root.iptc-visible && self.edit-gen == root.session-gen && self.text != "") {
@@ -1585,6 +1846,14 @@ export component MainWindow inherits Window {
                 // element's ancestor chain).
                 width: 100%;
                 height: 100%;
+                // Owner token (#63): a dialog scope is -1, which no
+                // rebuild reclaim ever matches — while this dialog is up
+                // the keyboard is ITS business, and a panel rebuild
+                // underneath must not pull focus out of it.
+                changed has-focus => {
+                    root.dbg-focus-changed("copy dialog", self.has-focus);
+                    if (self.has-focus) { root.focus-owner = -1; }
+                }
                 // Move the report body by `dy`, clamped to what there is
                 // to see. `viewport-y` is 0 at the top and negative going
                 // down; the floor is `height - viewport-height`, which is
@@ -1989,8 +2258,18 @@ export component MainWindow inherits Window {
             }
             // The init claim also clears any claim flag left from a
             // previous dialog instance, so the watch below can always
-            // observe a fresh false→true edge.
-            init => { copy-keys.focus(); root.copy-claim-focus = false; }
+            // observe a fresh false→true edge. The owner token is written
+            // HERE as well as in `changed has-focus` (issue #63 F5): this
+            // gain happens during instantiation and fires no change
+            // handler, and without it the token still named a panel field
+            // while the dialog held the keyboard — a rebuild underneath
+            // the dialog then reclaimed, which is exactly what the -1
+            // scope is supposed to forbid.
+            init => {
+                copy-keys.focus();
+                root.focus-owner = -1;
+                root.copy-claim-focus = false;
+            }
             // Focus routing (issue #41): focus-keys() cannot name a
             // conditional child, so it raises this root flag and the
             // dialog claims its own scope — the same watch pattern as
@@ -2032,6 +2311,11 @@ export component MainWindow inherits Window {
             clip-keys := FocusScope {
                 width: 100%;
                 height: 100%;
+                // Owner token (#63), same rule as the copy dialog's scope.
+                changed has-focus => {
+                    root.dbg-focus-changed("clip dialog", self.has-focus);
+                    if (self.has-focus) { root.focus-owner = -1; }
+                }
                 // The export dialog's half of the keyboard scrolling —
                 // same contract as `scroll-copy-body` above.
                 function scroll-clip-body(dy: length) {
@@ -2396,7 +2680,13 @@ export component MainWindow inherits Window {
                 }
             }
             }
-            init => { clip-keys.focus(); root.clip-claim-focus = false; }
+            // Owner token from `init` too, for the reason recorded on the
+            // copy dialog's init (issue #63 F5).
+            init => {
+                clip-keys.focus();
+                root.focus-owner = -1;
+                root.clip-claim-focus = false;
+            }
             property <bool> claim-focus: root.clip-claim-focus;
             changed claim-focus => {
                 if (self.claim-focus) {

@@ -110,11 +110,30 @@ pub(crate) fn clamp_wash_opacity(v: f32) -> f32 {
 
 /// Last-set IPTC panel model contents (field rows, keyword chips,
 /// template names): models rebuild ONLY when these change.
-#[derive(Default, PartialEq)]
+#[derive(PartialEq)]
 pub(crate) struct PanelCache {
     pub(crate) rows: Vec<(String, String, bool)>,
     pub(crate) chips: Vec<(String, String)>,
     pub(crate) names: Vec<String>,
+    /// The session generation the cached rows were built for (issues
+    /// #63/#64). A rows rebuild that destroys the focused editor is
+    /// answered differently depending on this: within ONE session the
+    /// keyboard goes back to the same field (the row is recreated, and G7
+    /// says focus stays where the user put it), but across a SWAP the
+    /// field's meaning is gone and it goes to the grid (#41 D3).
+    /// `-1` = nothing cached yet.
+    pub(crate) seen_gen: i32,
+}
+
+impl Default for PanelCache {
+    fn default() -> Self {
+        Self {
+            rows: Vec::new(),
+            chips: Vec::new(),
+            names: Vec::new(),
+            seen_gen: -1,
+        }
+    }
 }
 
 /// M6 Copy Picks (fileops.md): the previewed plan, the running worker, and

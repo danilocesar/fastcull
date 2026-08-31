@@ -27,6 +27,7 @@ pub(crate) fn wire(window: &MainWindow, state: &Rc<RefCell<AppState>>) {
             // finding: this menu route survived only by init-timing luck,
             // the RUN14 note; the deferred claim routes to the dialog's
             // own scope via focus-keys once copy-visible is set below).
+            win.invoke_dbg_focus_claim("copy-dialog".into());
             refocus_topmost_deferred(&win);
             {
                 let mut st = state.borrow_mut();
@@ -182,6 +183,7 @@ pub(crate) fn wire(window: &MainWindow, state: &Rc<RefCell<AppState>>) {
             // as soon as it is visible again (persona: "the six are the
             // badge-less cells in the Picked view").
             crate::presenter::refresh(&win, &state);
+            win.invoke_dbg_focus_claim("copy-close".into());
             win.invoke_focus_grid();
         });
     }

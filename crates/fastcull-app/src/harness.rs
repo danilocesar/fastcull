@@ -89,6 +89,20 @@ pub(crate) fn install(window: &MainWindow, state: &Rc<RefCell<AppState>>) -> Rc<
     window.on_dbg_body_scrolled(|what, y| {
         trace_mark_with(|| format!("{what} scrolled to {y:.0}"));
     });
+    // Focus, as it moves (issues #63/#64). `keysfocus` at a dump is one
+    // sample of a value that changes many times inside a single input
+    // dispatch, which is why a keyboard could be stranded twice without
+    // any run being able to say by what. These two are the whole story:
+    // who holds it, and who asked for it.
+    window.on_dbg_focus_changed(|what, gained| {
+        trace_mark_with(|| format!("focus: {what} {}", if gained { "gained" } else { "lost" }));
+    });
+    window.on_dbg_focus_claim(|reason| {
+        trace_mark_with(|| format!("focus-keys ({reason})"));
+    });
+    window.on_dbg_note(|note| {
+        trace_mark_with(|| note.to_string());
+    });
     if let Ok(script) = std::env::var("FASTCULL_DRIVE") {
         let mut steps: Vec<Step> = Vec::new();
         for step in script.split(';') {
@@ -583,7 +597,7 @@ fn dispatch(win: &MainWindow, state: &Rc<RefCell<AppState>>, key: &str) {
                          clip={} clipstate={} clipavail={} clipsummary={:?} clipskipped={:?} \
                          cliperror={:?} clipreport={:?} clipconfirm={:?} clipprogress={:?} \
                          cliphint={:?} exported={} curexported={} \
-                         cursor={} selected={} vpy={:.1}",
+                         cursor={} selected={} vpy={:.1} focusowner={}",
             win.get_dbg_keys_focus(),
             win.get_one2one(),
             st.grid.zoom,
@@ -654,6 +668,19 @@ fn dispatch(win: &MainWindow, state: &Rc<RefCell<AppState>>, key: &str) {
             // The grid Flickable's scroll offset, in Slint's
             // own sign: 0 at the top, negative going down.
             win.get_vp_y(),
+            // WHO owns the keyboard, not merely whether the main
+            // scope's `has-focus` is set (issues #63/#64). The
+            // two are different questions and `keysfocus` is the
+            // weaker one: Slint sends FocusOut on window
+            // DEACTIVATION, so an unfocused window reads
+            // `keysfocus=false` while `WindowInner::focus_item`
+            // still routes every key to the same scope — a
+            // driven run proved it with no clicks at all, and
+            // then zoomed with a `+`. This field says which
+            // element the app believes holds the keyboard: 0 the
+            // main scope, 1..=N a panel field row, N+1 the
+            // keyword field, -1 a dialog's own scope.
+            win.get_focus_owner(),
         ));
         return;
     }

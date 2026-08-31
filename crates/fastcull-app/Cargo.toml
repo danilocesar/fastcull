@@ -18,6 +18,25 @@ fastcull-core.workspace = true
 # `changed` callbacks are deferred (verified against i-slint-core 1.17.1). A
 # Slint release that runs change handlers synchronously silently invalidates
 # that proof — re-read that comment before raising this bound.
+# SECOND CANARY (issues #63/#64, same 1.17.1). Four measured Slint
+# behaviours that the focus machinery depends on, none of them documented
+# upstream — if any changes, a silent focus bug comes back:
+#   1. `changed has-focus` is deferred, and the GAINER's handler runs
+#      before the loser's, which is why the focus-owner token is written
+#      by gains only.
+#   2. A destroyed focus item delivers no FocusOut (a dangling
+#      `ItemWeak`) — the whole reason a reclaim is needed.
+#   3. A repeater does NOT tear its children down when the model is
+#      replaced; the doomed instances live until its next update, still
+#      watching root properties. Hence the generation stamp on
+#      `iptc-refocus-row`.
+#   4. `self.focus()` called from a repeater row's `init` DOES NOT TAKE
+#      EFFECT — it silently does nothing, and `changed absolute-position`
+#      does not fire for rows whose first computed position is their last
+#      (rows 0 and 1). A row can only claim from `changed want-refocus`,
+#      which is why that flag is armed one event-loop iteration late.
+# Re-read the owner-invariant section of specs/modules/ui-grid.md before
+# raising this bound.
 slint = { version = "1", default-features = false, features = [
     "std",
     "backend-winit",

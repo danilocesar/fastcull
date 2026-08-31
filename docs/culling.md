@@ -59,9 +59,28 @@ outside closes them. `Esc` always closes the thing on top: if a popup
 is open over the Copy Picks dialog, the first `Esc` closes the popup
 and the dialog — destination, plan and all — survives underneath.
 The keyboard itself never dies: closing the IPTC panel, opening one of
-these popups, or switching folders while you are typing in a panel
-field always hands the keys back — to the popup while it is up, to the
-grid once everything is closed.
+these popups, switching folders, or opening a menu and changing your
+mind about it — all while you are typing in a panel field — always hand
+the keys back. To the popup while it is up, to the field you were typing
+in when the panel merely refreshed under you, to the grid once
+everything is closed.
+
+> **Fixed after 0.12.0**: **switching folders** used to hand the keys
+> back a moment late — a fifth of a second on a busy machine, sometimes
+> more — and a key pressed inside that gap did nothing at all. That one
+> is immediate now. If you ever hit "the first keystroke after switching
+> folders is ignored", that was this.
+>
+> Closing the panel from the **menu** still hands them back on the next
+> turn of the event loop (tens of milliseconds), and has to: the menu
+> puts focus back where it was *after* it runs your click, so the app
+> has to wait for that and then take the keys. You will not out-type it,
+> but it is not the same "immediate" as the folder swap.
+
+If the fields refresh while you are typing in one — the panel rebuilds
+itself as a folder's metadata arrives — the keyboard stays **in that
+field**, not on the grid. It has to: on the grid your next letter would
+be a cull command.
 
 ## The mouse
 

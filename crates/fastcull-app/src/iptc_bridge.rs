@@ -22,6 +22,11 @@ pub(crate) fn wire(window: &MainWindow, state: &Rc<RefCell<AppState>>) {
         let win = window.as_weak();
         window.on_iptc_toggle(move || {
             let Some(win) = win.upgrade() else { return };
+            // Read BEFORE the toggle: `K` raises this flag and then calls
+            // us, and the keyword field clears it again when its `init`
+            // takes focus — by the time the panel is up the flag says
+            // nothing about which key opened it (issue #64).
+            let wants_keywords = win.get_iptc_focus_keywords();
             {
                 let mut st = state.borrow_mut();
                 st.iptc_panel.visible = !st.iptc_panel.visible;
@@ -42,9 +47,38 @@ pub(crate) fn wire(window: &MainWindow, state: &Rc<RefCell<AppState>>) {
             // D1 — the user's live hit, via View > IPTC Panel; the menu's
             // own restore targets the destroyed editor and strands the
             // keys). The mid-edit text is discarded with the editor (user
-            // decision). Close only: on OPEN the K path may just have
-            // landed focus in the keyword field, which must keep it.
+            // decision). The OPEN half is gated instead of skipped
+            // (issue #64): with `K` the keyword field must keep the
+            // focus its own `init` just took, but every other open has
+            // nobody to protect.
             if !win.get_iptc_visible() {
+                // BOTH claims, and neither is redundant. The synchronous
+                // one closes the ownerless window for the keyboard route
+                // (`I`), where nothing follows to override it — measured
+                // at 19-22 ms before this. The deferred one is the only
+                // one that survives the MENU route, where Slint's MenuBar
+                // restores focus to the destroyed editor after the
+                // activation returns. The range covers the keyword field
+                // as well as the rows: closing destroys the whole panel.
+                win.invoke_dbg_focus_claim("panel-close".into());
+                crate::focus::reclaim_destroyed_editors(
+                    &win,
+                    1..=crate::focus::FIELD_ROWS + 1,
+                    crate::focus::Reclaim::TopmostScope,
+                );
+                refocus_topmost_deferred(&win);
+            } else if !wants_keywords {
+                // A BELT for the #41 family, not the diagnosed cause: the
+                // measured strand is the rows rebuild, and the reclaim
+                // above closes it synchronously. This covers whatever
+                // else an open may leave holding nothing — an `I` from a
+                // real key dispatch mutates the item tree from inside
+                // Slint's own delivery to the focus item, which is where
+                // the 1-in-8 of issue #64 was first seen. Gated on the
+                // flag because with `K` the keyword field's `init` claims
+                // focus during instantiation and this claim would steal
+                // it straight back.
+                win.invoke_dbg_focus_claim("panel-open".into());
                 refocus_topmost_deferred(&win);
             }
         });
@@ -92,6 +126,7 @@ pub(crate) fn wire(window: &MainWindow, state: &Rc<RefCell<AppState>>) {
                 }
             }
             if return_focus {
+                win.invoke_dbg_focus_claim("field-commit".into());
                 win.invoke_focus_grid(); // G4: cursor stays, grid gets keys
             }
             refresh(&win, &state);
@@ -405,7 +440,23 @@ pub(crate) fn refresh_iptc_panel(win: &MainWindow, st: &mut AppState) {
         .map(|t| t.name.clone())
         .collect();
 
+    let session_gen = win.get_session_gen();
     if st.iptc_panel.cache.rows != rows {
+        // THE ITEM-TREE MUTATION (issues #63/#64): replacing the model
+        // destroys all eleven `LineEdit`s and builds eleven new ones, so
+        // whichever of them held the keyboard stops existing. Slint's
+        // window keeps a WEAK reference to its focus item and nothing
+        // reassigns it, so the keyboard is stranded until someone claims
+        // it. This mark is the "when" of that; the `focus:` marks around
+        // it say who was holding it.
+        crate::trace::trace_mark_with(|| format!("iptc rows rebuilt (gen {session_gen})"));
+        // Bumped BEFORE the replacement (issue #63 F2): an editor stamps
+        // this on focus gain, and a blur that finds the stamp stale knows
+        // its row was destroyed under it and DISCARDS the in-flight text
+        // — the recorded 2026-08-03 rule, now enforced by a compare
+        // instead of by whether Slint happened to deliver a FocusOut
+        // before dropping the item.
+        win.set_iptc_rebuild_gen(win.get_iptc_rebuild_gen().wrapping_add(1));
         win.set_iptc_fields(slint::ModelRc::new(VecModel::from(
             rows.iter()
                 .map(|(label, value, mixed)| IptcFieldRow {
@@ -415,8 +466,39 @@ pub(crate) fn refresh_iptc_panel(win: &MainWindow, st: &mut AppState) {
                 })
                 .collect::<Vec<_>>(),
         )));
+        // …and the rescue, in the SAME pass, so the window in which
+        // nobody owns the keyboard is zero-length. The row ids are
+        // `1..=IptcField::ALL.len()` (the editor writes `i + 1` on focus
+        // gain); the keyword field's id is one past them and is
+        // deliberately NOT in this range — it survives this replacement.
+        //
+        // WHERE the keyboard goes is the whole question. Within one
+        // session it goes back to the same row: the user is captioning,
+        // and "focus stays where clicked" (iptc-templates.md) is a
+        // shipped rule — sending it to the grid instead makes the next
+        // caption character a cull command. Across a session SWAP the
+        // field's meaning went with the folder, so it goes to the grid,
+        // which is the #41 D3 contract.
+        crate::focus::reclaim_destroyed_editors(
+            win,
+            1..=crate::focus::FIELD_ROWS,
+            if st.iptc_panel.cache.seen_gen == session_gen {
+                crate::focus::Reclaim::SameRow
+            } else {
+                crate::focus::Reclaim::TopmostScope
+            },
+        );
         st.iptc_panel.cache.rows = rows;
     }
+    st.iptc_panel.cache.seen_gen = session_gen;
+    // No reclaim after these two replacements, deliberately (#63/#64): the
+    // chip repeater holds Text and TouchArea items and the template model
+    // feeds a ComboBox — neither owns an editor, and the keyword LineEdit
+    // is a SIBLING of both, not a child. A reclaim here would fire while
+    // the editor it "rescued" was still alive and focused, taking the
+    // keyboard away from a user mid-word every time another image's
+    // sidecar landed a keyword. The rows model is the only one whose
+    // replacement destroys a focus holder.
     if st.iptc_panel.cache.chips != chips {
         win.set_iptc_keywords(slint::ModelRc::new(VecModel::from(
             chips

@@ -36,6 +36,7 @@ pub(crate) fn wire(window: &MainWindow, state: &Rc<RefCell<AppState>>) {
             let Some(win) = win.upgrade() else { return };
             // Opening COVERS any focused panel field — the same focus
             // continuity rule as the Copy Picks dialog (issue #41).
+            win.invoke_dbg_focus_claim("clip-dialog".into());
             refocus_topmost_deferred(&win);
             let mut st = state.borrow_mut();
             if st.clip.handle.is_some() {
@@ -191,6 +192,7 @@ pub(crate) fn wire(window: &MainWindow, state: &Rc<RefCell<AppState>>) {
             }
             win.set_clip_visible(false);
             crate::presenter::refresh(&win, &state);
+            win.invoke_dbg_focus_claim("clip-close".into());
             win.invoke_focus_grid();
         });
     }

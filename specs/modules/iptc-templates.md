@@ -129,10 +129,18 @@ Panel-step ledger (updated after the panel gate, 2026-07-25):
   grid), click-away (G7 commit, focus stays where clicked), a covering
   surface — a Help modal or the copy dialog — which commits like
   click-away (preserving the shipped G7 semantics; the covering scope
-  takes the keyboard — issue #41), and destruction — panel close or
-  session swap — which
+  takes the keyboard — issue #41), and destruction — panel close, session
+  swap, or the panel's field rows being REBUILT under the editor as the
+  folder's metadata lands — which
   DISCARDS the un-committed text (issue #41, user decision 2026-08-03:
   no commit-on-destroy; a swap also generation-stamps edits so the old
-  session's text can never land on the new session's images). Focus
+  session's text can never land on the new session's images).
+  Deterministic since 2026-08-30 (issue #63): the rebuild case used to be
+  a timing coin flip — the dying editor's blur handler ran, and committed,
+  in 2 runs of 20 — and a rebuild generation stamped on focus gain now
+  decides it outright. The same fix keeps "focus stays where clicked"
+  true across a rebuild: the keyboard goes back to the SAME field row,
+  not to the grid, so the next character of a caption can never become a
+  cull command. Focus
   continuity across all of these is specified in ui-grid.md; recorded
   deviation on Esc stands.
