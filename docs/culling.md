@@ -65,7 +65,7 @@ the keys back. To the popup while it is up, to the field you were typing
 in when the panel merely refreshed under you, to the grid once
 everything is closed.
 
-> **Fixed after 0.12.0**: **switching folders** used to hand the keys
+> **Fixed in 0.13.0**: **switching folders** used to hand the keys
 > back a moment late — a fifth of a second on a busy machine, sometimes
 > more — and a key pressed inside that gap did nothing at all. That one
 > is immediate now. If you ever hit "the first keystroke after switching
@@ -122,7 +122,7 @@ be a cull command.
 > always stops the image), so nothing can drag your zoomed position away
 > between photos.
 
-> **Fixed after 0.12.0**: a wheel over the Copy Picks or Export Frames
+> **Fixed in 0.13.0**: a wheel over the Copy Picks or Export Frames
 > as Video dialog scrolled the grid behind it. You closed the dialog to
 > find yourself somewhere else in the folder, with no way back to the
 > spot you were culling. Both dialogs now swallow the wheel, like About

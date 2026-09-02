@@ -110,6 +110,70 @@ before code, validator + QE with the module's hostile-input list, docs
 page `docs/export-video.md` in the same commit as the behaviour, one
 README bullet. Explicitly out for a year: any editing surface.
 
+## v0.13.0 (released 2026-09-01)
+
+One feature, three fixes a user can feel, and a testing round that turned
+several "review-verified only" claims into tests.
+
+**Exported as video, at a glance** (issue #56, `modules/video-export.md`).
+Copy Picks has always left a ✓ on the frames it copied; a burst turned into
+a `.mov` left nothing, so the next morning there was no way to see which
+frames were already in a clip. Every frame that went into a video this
+session now wears a small ▶ pill beside the ✓, and the export dialog says
+what it already knows: "2 of 3 frames are already in c-b.mov", or "all 30
+frames are already in 3 videos — NAME.mov and 2 more". Both follow the
+disk: delete the file and the badge and the line go with it. Session-only,
+like ✓ — the persona gate rated persisting it in the cache IN-MY-WAY,
+because a memory that vanishes on a schema self-heal or a folder move is a
+memory whose ABSENCE cannot be trusted, and the dangerous case (exporting
+the same span twice) is already caught by the file-name clash.
+
+**Three fixes.** A wheel over the Copy Picks or Export Frames as Video
+dialog scrolled the grid behind it, so closing the dialog left you
+somewhere else in the folder (#49). A dialog with a lot to say pushed its
+own buttons off the card — 29 px on the export card, 830 px and off the
+bottom of the window on Copy Picks with a read-only destination — and the
+skip sentence could name a dozen frame sizes (#62): the sentence now names
+at most three reasons and counts the rest, both cards size to their content
+between a floor and the window, and the text scrolls inside the card by
+wheel or PgDn while the buttons stay put. And the keyboard could be
+ownerless for a fifth of a second after a folder swap or a panel rebuild —
+a key pressed in that gap did nothing at all (#63, #64): a destroyed editor
+now never keeps the focus, the swap path reclaims synchronously (0 ms), and
+a same-session rebuild puts the keyboard back in the field you were typing
+in, not on the grid.
+
+**The testing round.** Pointer ROUTING stopped being review-verified only
+(#13): four driven tests through real dispatched events now cover a click
+inside the IPTC panel, the wheel-routing table over every surface, drag
+versus click, and the scrollbar's cursor claim — each one red under a named
+mutation. Scripts gained `wait:<trace substring>` (#61), so a driven test
+waits for an app fact instead of guessing a timestamp; that retired two
+click-timing flakes, made the failed-cursor gate assert an ordering rather
+than a coin flip (#50), and let the resize tests wait for the geometry to
+land — three of them had been passing without ever resizing anything (#65).
+Two wall-clock guards became counts of what they actually guard: the Copy
+Picks suffix walk asserts its probe count (#58, a mutant the old stopwatch
+passed reads 17,978 probes against 7,998), and the folder scan's clock
+moved to the release perf budgets while the functional test proves
+structurally that a scan reads no file contents (#59).
+
+Two findings outgrew their tickets and are recorded rather than folklore:
+`keys.has-focus` reads false when the WINDOW is deactivated even though
+keystrokes still arrive, so every focus assertion in the suite now asserts
+by acting or by an owner token; and a window switch mid-word still commits
+half-typed metadata, which is the likely root cause of the recorded
+1-in-4 keyword-swap intermittent — filed as issue #68 with its measured
+signature, not fixed here.
+
+Gate: every step went through an architect review plus the validator and
+qe-engineer agents. Three of them came back FAIL and were redone — the
+first focus fix made typing destructive (a caption key rejected photos),
+the second never landed the keyboard at all, and a dialog fix left the
+buttons off-screen at the ceiling. Three false readings (a dirty fixture,
+a mis-derived arithmetic, a gesture that re-opened the menu it was meant to
+dismiss) are recorded next to the numbers they produced.
+
 ## v0.12.0 (released 2026-08-29)
 
 One follow-up from the M9 persona gate, issue #55: **selecting by
