@@ -266,6 +266,8 @@ fn start_export(win: &MainWindow, st: &mut AppState, plan: ClipPlan) {
     // in.
     st.clip.running_frames = plan.frames.iter().map(|f| f.id).collect();
     let (handle, rx) = clip::execute(plan);
+    // Numbered here for the same reason as the copy's (copy_bridge.rs).
+    st.clip.runs = st.clip.runs.saturating_add(1);
     st.clip.handle = Some(handle);
     st.clip.rx = Some(rx);
     win.set_clip_state(1);

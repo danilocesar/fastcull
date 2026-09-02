@@ -101,19 +101,44 @@ fn shoot_env_stderr_watching(
     loop {
         if let Some(status) = child.try_wait().expect("wait") {
             let stderr = drain.join().unwrap_or_default();
+            let trace = write_trace(out, &stderr);
             assert!(
                 status.success(),
-                "app exited with {status}; stderr:\n{stderr}"
+                "app exited with {status}; trace: {}; stderr:\n{stderr}",
+                trace.display()
             );
             return stderr;
         }
         if Instant::now() >= deadline {
             child.kill().ok();
-            drain.join().ok();
-            panic!("screenshot run timed out (no exit within 90 s)");
+            // The buffer is KEPT on this path (it used to be dropped): a
+            // child killed by the watchdog is the one run whose trace
+            // nobody can reconstruct afterwards, and on CI the panic
+            // message is all a reader gets.
+            let stderr = drain.join().unwrap_or_default();
+            let trace = write_trace(out, &stderr);
+            panic!(
+                "screenshot run timed out (no exit within 90 s); trace: {}; stderr:\n{stderr}",
+                trace.display()
+            );
         }
         std::thread::sleep(Duration::from_millis(200));
     }
+}
+
+/// Write a run's stderr next to its shot as `<name>.trace.log`, and
+/// return that path.
+///
+/// Unconditional and BEFORE any panic: a red run on a remote runner is
+/// read from the uploaded shots directory, and the assertions here quote
+/// a rectangle or a dump line, never the whole app trace that explains it
+/// (issue #70 — three Windows failures whose geometry had no witness in
+/// the CI log). A failed write is ignored on purpose: losing the
+/// diagnostic must never turn a green run red, nor mask the real panic.
+fn write_trace(out: &Path, stderr: &str) -> PathBuf {
+    let path = out.with_extension("trace.log");
+    std::fs::write(&path, stderr).ok();
+    path
 }
 
 /// Decode the snapshot and return (width, height, mean_luma).
@@ -786,18 +811,17 @@ fn one_to_one_entry_is_center_anchored() {
     }
     let _s = serial();
     let out = out_dir().join("center-anchor.jpg");
-    let bin = env!("CARGO_BIN_EXE_fastcull-app");
-    let output = std::process::Command::new(bin)
-        .arg("--start-11")
-        .arg(raws_dir())
-        .arg("--screenshot")
-        .arg(&out)
-        .env("FASTCULL_NO_CACHE", "1")
-        .env("FASTCULL_TRACE", "1")
-        .output()
-        .expect("run app");
-    assert!(output.status.success(), "app exited with {}", output.status);
-    let stderr = String::from_utf8_lossy(&output.stderr);
+    // Through the shared helper like every other test (QE 2026-09-02):
+    // a bare `Command::output()` has no 90 s watchdog — the failure mode
+    // validator M2 exists to prevent — writes no `center-anchor.trace.log`
+    // beside the shot for the CI artifact, and, missing
+    // `FASTCULL_NO_CONFIG`, read the user's real ui.toml.
+    let raws = raws_dir();
+    let stderr = shoot_env_stderr(
+        &["--start-11", raws.to_str().unwrap()],
+        &[("FASTCULL_TRACE", "1")],
+        &out,
+    );
     let line = stderr
         .lines()
         .rfind(|l| l.contains("loupe idx"))
@@ -2819,25 +2843,28 @@ fn qedump<'a>(stderr: &'a str, label: &str) -> &'a str {
 
 /// The menu-path tests click the in-window MenuBar at fixed logical
 /// coordinates (File 22, View 72, Help 115 in the bar; items on a 32 px
-/// grid from y=61). Item geometry follows the platform's font metrics;
-/// these coordinates are calibrated for the Linux runners (DejaVu Sans).
+/// grid from y=61). On Windows there is no in-window MenuBar to click:
+/// `i-slint-backend-winit` reports `supports_native_menu_bar()` there
+/// (the `muda` dependency), so the menus are the OS menu bar, outside the
+/// client area and unreachable by a dispatched pointer event — not a font
+/// drift, which is what this comment used to say. The in-window bar these
+/// coordinates address is the `fluent` style's, 40 px tall, on the Linux
+/// runners (item geometry within it does follow the platform's font
+/// metrics, DejaVu Sans there).
+///
 /// The focus machinery under test is platform-independent Slint core, and
 /// every non-menu strand still runs on Windows. Each menu test asserts an
 /// intermediate state that FAILS LOUDLY if a click missed its target, so
-/// a font drift can never make one pass vacuously.
+/// no drift can make one pass vacuously.
 fn menu_clicks_are_calibrated() -> bool {
     !cfg!(windows)
 }
 
-/// Where the IPTC panel's field row `i` was last laid out BEFORE the trace
-/// line `before` — the app's own report (`iptc field N laid out at X,Y
-/// size WxH`, the same mark a script's `wait:` gates a field click on), in
-/// window-logical px. A driven field click is calibrated against this
-/// instead of against a comment: the row's y rides on the platform's font
-/// metrics, and a coordinate that drifts off the field has to fail as "the
-/// click was outside the field" rather than as whatever the wrong element
-/// happened to do (issues #13/#61).
-fn iptc_field_rect(stderr: &str, i: usize, before: &str) -> (f32, f32, f32, f32) {
+/// Where a self-reporting element (`iptc field N`, `copy card`, `clip
+/// buttons`) was last laid out BEFORE the trace line `before` — the app's
+/// own report (`<what> laid out at X,Y size WxH`, the same mark a script's
+/// `wait:` gates a click on), in window-logical px.
+fn laid_out_rect(stderr: &str, what: &str, before: &str) -> (f32, f32, f32, f32) {
     let head = stderr
         .split_once(before)
         .unwrap_or_else(|| panic!("no `{before}` line in stderr:\n{stderr}"))
@@ -2845,14 +2872,12 @@ fn iptc_field_rect(stderr: &str, i: usize, before: &str) -> (f32, f32, f32, f32)
     // Anchored on the trace prefix's `]`: a script that `wait:`s on this
     // very text puts the substring in the log too, and the mark is the one
     // that starts the line's message.
-    let tag = format!("] iptc field {i} laid out at ");
+    let tag = format!("] {what} laid out at ");
     let geom = head
         .lines()
         .filter_map(|l| l.split_once(&tag))
         .next_back()
-        .unwrap_or_else(|| {
-            panic!("panel field {i} never reported a layout before `{before}`:\n{stderr}")
-        })
+        .unwrap_or_else(|| panic!("{what} never reported a layout before `{before}`:\n{stderr}"))
         .1;
     let parse = || -> Option<(f32, f32, f32, f32)> {
         let (pos, size) = geom.split_once(" size ")?;
@@ -2868,16 +2893,63 @@ fn iptc_field_rect(stderr: &str, i: usize, before: &str) -> (f32, f32, f32, f32)
     parse().unwrap_or_else(|| panic!("malformed field-layout trace: {geom:?}"))
 }
 
-/// Assert that a driven click's coordinates are inside a rectangle the app
-/// reported — the calibration guard the menu tests express as "an
-/// intermediate assertion that fails loudly if a click missed", here
-/// against measured geometry rather than an outcome.
-fn assert_click_inside(rect: (f32, f32, f32, f32), click: (f32, f32), what: &str) {
-    let (x, y, w, h) = rect;
+/// [`laid_out_rect`] for the IPTC panel's field row `i`.
+fn iptc_field_rect(stderr: &str, i: usize, before: &str) -> (f32, f32, f32, f32) {
+    laid_out_rect(stderr, &format!("iptc field {i}"), before)
+}
+
+/// Assert that a `click:<element>` step resolved, and that the point it
+/// resolved to is inside the rectangle the app reported for that element.
+///
+/// The calibration guard, now read off the harness's own echo (`drive ptr
+/// click X,Y (<element>)`) instead of a coordinate repeated in the test.
+/// A scripted point was measured on ONE platform's layout: the Windows
+/// runner draws no in-window menu bar (the OS one lives outside the client
+/// area), so every in-window y sits ~40 px higher there and three of these
+/// clicks landed 43 px below the Title field's centre (issue #70). What is
+/// left to check is that the click happened at all and against a real
+/// laid-out rectangle — a missing echo means the element never reported
+/// itself and the run was abandoned, which is loud on its own.
+///
+/// The LAST resolution is the one checked: these scripts click the same
+/// field several times, and a rebuild between two clicks moves the
+/// rectangle. The anchor is the STEP echo (`drive: click:<element>`), not
+/// the pointer echo the click emits afterwards: the rectangle compared is
+/// the last one reported BEFORE the step — the one the harness resolved —
+/// and the point is the first pointer echo AFTER it, so a relayout the
+/// click itself triggers cannot be mistaken for the resolved rectangle
+/// (validator 2026-09-02).
+fn assert_click_resolved(stderr: &str, element: &str) {
+    let step = format!("] drive: click:{element}");
+    let step_line = stderr
+        .lines()
+        .rfind(|l| l.ends_with(&step))
+        .unwrap_or_else(|| panic!("no `drive: click:{element}` step in the trace:\n{stderr}"));
+    let after = stderr
+        .rfind(step_line)
+        .map(|at| &stderr[at + step_line.len()..])
+        .unwrap_or("");
+    let tag = format!(" ({element})");
+    let line = after
+        .lines()
+        .find(|l| l.contains("] drive ptr click ") && l.ends_with(&tag))
+        .unwrap_or_else(|| {
+            panic!(
+                "no `drive ptr click … ({element})` echo after the click:{element} \
+                 step — it never resolved:\n{stderr}"
+            )
+        });
+    let point = || -> Option<(f32, f32)> {
+        let at = line.split_once("drive ptr click ")?.1;
+        let (x, y) = at.split_once(' ')?.0.split_once(',')?;
+        Some((x.parse().ok()?, y.parse().ok()?))
+    };
+    let (cx, cy) = point().unwrap_or_else(|| panic!("malformed click echo: {line:?}"));
+    let (x, y, w, h) = laid_out_rect(stderr, element, step_line);
     assert!(
-        click.0 >= x && click.0 <= x + w && click.1 >= y && click.1 <= y + h,
-        "the click at {click:?} is outside {what} (x {x}..{}, y {y}..{}) — \
-         the scripted coordinate has drifted off the element",
+        cx >= x && cx <= x + w && cy >= y && cy <= y + h,
+        "the click resolved to ({cx}, {cy}), outside the {element} rectangle \
+         the app reported (x {x}..{}, y {y}..{}):\n{stderr}",
         x + w,
         y + h
     );
@@ -3110,8 +3182,11 @@ fn session_swap_mid_field_edit_discards_and_keeps_the_keyboard() {
         &dir_b.join("two.ARW"),
     );
     let out = out_dir().join("focus-d3.jpg");
-    // The Title field is clicked at fixed coordinates inside the
-    // right-docked panel, so the window size has to be known. It is PINNED
+    // The Title field is clicked BY NAME (`click:iptc field 0`, issue
+    // #70), so the point is the app's own rectangle rather than a number
+    // measured on one platform's layout. The window size still has to be
+    // known — the `wait:` below pins the geometry the panel's width and
+    // the grid-cell coordinates were measured in. It is PINNED
     // at the default (`PIN_WINDOW`), not changed: this script used to ask
     // for 1200x800, and a `resize:` is a REQUEST to the compositor, which
     // under load goes unanswered for the life of the run. That, not a slow
@@ -3129,11 +3204,12 @@ fn session_swap_mid_field_edit_discards_and_keeps_the_keyboard() {
     //
     // The `wait:` then gates the click on the Title row's own layout
     // report INCLUDING its x — `at 1150` is where that row is in a 1440 px
-    // window and nowhere else — so the click happens in exactly the state
-    // these coordinates were measured in: the panel laid out, at this
-    // width. If the window is ever some third size, the wait ends the run
-    // with that sentence instead of a click landing somewhere surprising.
-    // The steps after it keep the gaps written here.
+    // window and nowhere else — so the run happens at the width the rest
+    // of this script's coordinates were measured at, and the row the
+    // click resolves against is laid out before it is asked for. If the
+    // window is ever some third size, the wait ends the run with that
+    // sentence instead of the script proceeding at a width nothing here
+    // was measured for. The steps after it keep the gaps written here.
     // THE CONTRACT IS ASSERTED BY ACTING (issue #63): `key:+` 50 ms after
     // the swap, and the grid must zoom. `keysfocus` cannot carry this
     // test — Slint sends a FocusOut on window DEACTIVATION while
@@ -3152,7 +3228,7 @@ fn session_swap_mid_field_edit_discards_and_keeps_the_keyboard() {
     // after the swap, which is where the ownerless window was.
     let drive = format!(
         "{PIN_WINDOW};2500:key:i;2600:wait:iptc field 0 laid out at 1150;\
-         3000:click.1290,177;3200:dump.focused;\
+         3000:click:iptc field 0;3200:dump.focused;\
          3400:key:w;3500:key:i;3600:key:p;4000:open:{};\
          4050:key:+;4400:dump.after;\
          4500:wait:load settled gen 1;5200:dump.swapped;\
@@ -3171,14 +3247,10 @@ fn session_swap_mid_field_edit_discards_and_keeps_the_keyboard() {
         "the `wait:` step never fired — the click below was timed, not \
          gated:\n{stderr}"
     );
-    // The coordinate is calibrated against the geometry the app reported
-    // for that row at that window size, so a font-metric drift fails here
-    // — before the outcome assertions, and naming the real cause.
-    assert_click_inside(
-        iptc_field_rect(&stderr, 0, "drive: click.1290,177"),
-        (1290.0, 177.0),
-        "the Title field",
-    );
+    // The click resolved against the rectangle the app reported for that
+    // row, and landed inside it — before the outcome assertions, so a
+    // click that never happened fails as itself.
+    assert_click_resolved(&stderr, "iptc field 0");
     // The Title-field click really took focus (anti-vacuity, gate
     // finding: a missed click would type the `p` as a real grid PICK
     // and fail this test later with a false "committed the abandoned
@@ -3736,12 +3808,12 @@ fn a_cursor_move_rebuild_keeps_the_keyboard_in_the_field() {
             (
                 "FASTCULL_DRIVE",
                 &format!(
-                    "{PIN_WINDOW};2500:key:i;2600:wait:iptc field 0 laid out at 1150;\
-                     3000:right;3300:click.1290,177;3500:key:z;3600:key:return;\
-                     4000:left;4400:click.1290,177;4600:key:q;\
-                     4900:right;5100:dump.rebuilt;\
+                    "{PIN_WINDOW};2400:wait:load settled gen 0;2500:key:i;2600:wait:iptc field 0 laid out at 1150;\
+                     3000:right;3300:click:iptc field 0;3500:key:z;3600:key:return;\
+                     4000:left;4400:click:iptc field 0;4600:key:q;\
+                     4900:right;4950:wait:row 0 (gen 4);5100:dump.rebuilt;\
                      5300:key:w;5500:key:return;5800:key:y;6200:dump.after;\
-                     6500:click.1290,177;6700:key:v;7000:select-all;\
+                     6500:click:iptc field 0;6700:key:v;7000:select-all;\
                      7300:dump.mixed;7500:key:u;7700:key:return;8100:dump.mixedafter"
                 ),
             ),
@@ -3752,11 +3824,50 @@ fn a_cursor_move_rebuild_keeps_the_keyboard_in_the_field() {
         stderr.contains("wait:iptc field 0 laid out at 1150 (satisfied"),
         "the `wait:` never fired — the clicks were timed, not gated:\n{stderr}"
     );
-    assert_click_inside(
-        iptc_field_rect(&stderr, 0, "drive: click.1290,177"),
-        (1290.0, 177.0),
-        "the Title field",
+    // …and the keys after the rebuild are gated on the RECLAIM, not on a
+    // timestamp (issue #69): the dump and the `w` used to fire 200 and
+    // 400 ms after the cursor move, and on a seat lagging past ~400 ms a
+    // frame they landed inside the gap between the rebuild and the row's
+    // claim — the keystrokes went nowhere and the test blamed the
+    // reclaim. `gen 4` is what makes that wait mean the claim from THIS
+    // rebuild: the mark is `focus-keys (row 0 (gen K))` and K is
+    // `iptc-rebuild-gen` at the row's birth, i.e. the number of
+    // content-changing rows rebuilds so far. This script forces exactly
+    // four before the move (panel open, the seeding Enter, `left`,
+    // `right`), and a wait cannot ask for the NEXT occurrence of a mark
+    // it has already seen — the "put what differs into the mark" idiom of
+    // ui-grid.md's harness section, `wait:load settled gen 1` being the
+    // other instance. If a future edit adds or removes a rebuild before
+    // the move, this wait is never satisfied and the app ends the run
+    // naming the substring: re-read K from the trace, do not delete the
+    // wait.
+    // A `wait never satisfied: row 0 (gen 4)` has TWO readings and the
+    // trace tells them apart: either the script's rebuild count changed
+    // (there IS a `row 0 (gen N)` claim with another N — K is wrong,
+    // re-read it), or no claim came at all (the trace shows the arms,
+    // `rebuild -> row 0` / `restore -> row 0`, and no `row 0 (gen N)`
+    // anywhere after them) — which is the reclaim itself failing, the
+    // pre-existing #63/#68 family, seen once in 80 runs behind a 5.9 s
+    // load settle. The second is a real defect and must not be quieted by
+    // moving the wait.
+    // K = 4 is a property of the script only if the panel opens AFTER the
+    // metadata landed: a rebuild the load adds after `key:i` would shift
+    // every later generation by one and turn the wait below into a 30 s
+    // red on a slow runner. The script waits for `load settled gen 0`
+    // before opening the panel, and this guard keeps that wait from being
+    // tidied away without the reason on record (validator 2026-09-02).
+    assert!(
+        stderr.contains("wait:load settled gen 0 (satisfied"),
+        "the panel opened before the load settled, so the rebuild count \
+         below is not the script's:\n{stderr}"
     );
+    assert!(
+        stderr.contains("wait:row 0 (gen 4) (satisfied"),
+        "the reclaim `wait:` never fired — the keys after the rebuild were \
+         timed, not gated (issue #69), or the rebuild count before the \
+         cursor move has changed:\n{stderr}"
+    );
+    assert_click_resolved(&stderr, "iptc field 0");
     // The cursor move really rebuilt the rows (anti-vacuity): without the
     // seeded Title the two images look identical to the panel, no model is
     // replaced, and this test would prove nothing.
@@ -3784,7 +3895,7 @@ fn a_cursor_move_rebuild_keeps_the_keyboard_in_the_field() {
     // take the keyboard from the editor in there.
     let click_to_move = stderr
         .find("drive: key:q")
-        .map(|q| stderr[..q].rfind("drive: click.").unwrap_or(q))
+        .map(|q| stderr[..q].rfind("drive: click:").unwrap_or(q))
         .zip(stderr.rfind("drive: right"))
         .filter(|(from, mv)| from < mv)
         .map(|(from, mv)| &stderr[from..mv])
@@ -3891,8 +4002,9 @@ fn a_menu_item_over_a_focused_field_row_keeps_the_keyboard() {
                 "FASTCULL_DRIVE",
                 &format!(
                     "{PIN_WINDOW};2500:key:i;2600:wait:iptc field 0 laid out at 1150;\
-                     3000:click.1290,177;3200:key:a;3300:key:b;\
-                     3600:click.72,19;4000:click.128,157;4400:dump.menu;\
+                     3000:click:iptc field 0;3200:key:a;3300:key:b;\
+                     3600:click.72,19;4000:click.128,157;\
+                     4300:wait:menu -> row 0;4400:dump.menu;\
                      4600:key:return;4900:key:y;5300:dump.after"
                 ),
             ),
@@ -3903,11 +4015,19 @@ fn a_menu_item_over_a_focused_field_row_keeps_the_keyboard() {
         stderr.contains("wait:iptc field 0 laid out at 1150 (satisfied"),
         "the `wait:` never fired — the field click was timed, not gated:\n{stderr}"
     );
-    assert_click_inside(
-        iptc_field_rect(&stderr, 0, "drive: click.1290,177"),
-        (1290.0, 177.0),
-        "the Title field",
+    // #69's shape, menu flavour: the keys after the item activation wait
+    // for the claim that activation causes, not for the clock. The mark is
+    // `menu -> row 0` — emitted once, only after the activation — because
+    // the row's own `row 0 (gen 2)` claim carries the SAME generation as
+    // the one the menu-open blur produced, so waiting on it would be
+    // satisfied by the earlier mark and gate nothing (validator
+    // 2026-09-02).
+    assert!(
+        stderr.contains("wait:menu -> row 0 (satisfied"),
+        "the menu item's own claim never came, so the keys after it ran on \
+         the clock:\n{stderr}"
     );
+    assert_click_resolved(&stderr, "iptc field 0");
     // The menu really acted (anti-vacuity): the filter bar toggled, so
     // the clicks at 72,19 and 128,157 hit the View menu and its item.
     // Without this a missed menu click would leave the keyboard happily
@@ -3948,6 +4068,13 @@ fn a_menu_item_over_a_focused_field_row_keeps_the_keyboard() {
 /// it survives the restore. Esc is the probe because it needs no
 /// coordinates beyond the menu-bar click; the click-elsewhere and
 /// click-the-menu-bar-again routes measure the same, 5/5 each.
+/// The keys after the Esc stay on the clock, deliberately (validator
+/// 2026-09-02): a dismissed menu produces NO claim mark to wait for — the
+/// rescue is the deferred flag write, whose only trace is the `row 0
+/// (gen 2)` claim the menu-open blur already emitted — so there is no
+/// mark that differs, and `wait:` would be satisfied by the past one. The
+/// menu-item test has one (`menu -> row 0`) and waits on it. Linux-only
+/// either way.
 #[test]
 fn a_dismissed_menu_over_a_focused_field_row_keeps_the_keyboard() {
     if !has_display() || !menu_clicks_are_calibrated() {
@@ -3970,7 +4097,7 @@ fn a_dismissed_menu_over_a_focused_field_row_keeps_the_keyboard() {
                 "FASTCULL_DRIVE",
                 &format!(
                     "{PIN_WINDOW};2500:key:i;2600:wait:iptc field 0 laid out at 1150;\
-                     3000:click.1290,177;3200:key:q;\
+                     3000:click:iptc field 0;3200:key:q;\
                      3600:click.72,19;4000:key:escape;4400:dump.dismissed;\
                      4600:key:return;4900:key:y;5300:dump.after"
                 ),
@@ -3982,11 +4109,7 @@ fn a_dismissed_menu_over_a_focused_field_row_keeps_the_keyboard() {
         stderr.contains("wait:iptc field 0 laid out at 1150 (satisfied"),
         "the `wait:` never fired — the field click was timed, not gated:\n{stderr}"
     );
-    assert_click_inside(
-        iptc_field_rect(&stderr, 0, "drive: click.1290,177"),
-        (1290.0, 177.0),
-        "the Title field",
-    );
+    assert_click_resolved(&stderr, "iptc field 0");
     // The menu really opened and the field's blur really rebuilt the rows
     // (anti-vacuity): without both there is nothing for the dismiss to
     // strand, and this test would pass on a build where the menu click
@@ -5079,21 +5202,42 @@ fn copy_picks_asks_once_and_each_answer_does_what_it_says() {
     // under a Text whose height is a font metric.
     let mouse_answer = menu_clicks_are_calibrated();
     let mouse_round = if mouse_answer {
+        // The dump waits for the copy this click starts (QE 2026-09-02):
+        // 700 ms is tighter than the 800 ms the keyboard round used, which
+        // is what went red on Windows, and a 900 ms copy reddens it on
+        // either tree. This is the ONE answer given with the pointer, so
+        // the click can also miss — and then the wait ends the run after
+        // 30 s naming `copy finished run 1`, which says the same thing the
+        // `copystate` assertion below would have: the click answered
+        // nothing and no copy ever ran.
         format!(
             "1900:copydest:{dest0};2100:key:ctrl+e;2400:key:return;2700:dump.qclick;\
-             2900:click.700,483;3600:dump.clicked;3900:key:escape;",
+             2900:click.700,483;3000:wait:copy finished run 1;\
+             3600:dump.clicked;3900:key:escape;",
             dest0 = dest0.display()
         )
     } else {
         String::new()
     };
+    // Which copy of this PROCESS each answer below starts: the mouse round
+    // ran one already. The two dumps that read a finished copy wait for
+    // THAT run's report card instead of allowing it 800 ms — a budget the
+    // Windows runner does not keep (issue #70: `copystate` read 1, the
+    // copy was still going), and one no runner is obliged to keep.
+    let n = if mouse_answer { 2 } else { 1 };
+    let (n2, kept_wait, over_wait) = (
+        n + 1,
+        format!("wait:copy finished run {n} (satisfied"),
+        format!("wait:copy finished run {} (satisfied", n + 1),
+    );
     let script = format!(
         "1500:key:y;1700:key:y;{mouse_round}\
          4400:copydest:{dest};4600:key:ctrl+e;4900:dump.preview;\
          5100:key:return;5400:dump.question;5600:key:return;5800:dump.inert;\
          5880:key:ctrl+o;5940:dump.accel;\
-         6000:key:b;6800:dump.kept;7100:key:escape;\
-         7300:key:ctrl+e;7600:key:return;7900:dump.q2;8100:key:o;8900:dump.over;\
+         6000:key:b;6100:wait:copy finished run {n};6800:dump.kept;7100:key:escape;\
+         7300:key:ctrl+e;7600:key:return;7900:dump.q2;8100:key:o;\
+         8200:wait:copy finished run {n2};8900:dump.over;\
          9200:key:escape;9400:copydest:{dest2};9600:key:ctrl+e;9900:key:return;\
          10200:dump.q3;10400:key:escape;10700:dump.cancelled;11000:key:escape;11300:dump.end;\
          11500:key:ctrl+e;11800:key:return;12100:dump.q4;12300:open:{src2};12700:dump.swapped",
@@ -5140,6 +5284,11 @@ fn copy_picks_asks_once_and_each_answer_does_what_it_says() {
             dump_field(qedump(&stderr, "qclick"), "copystate"),
             "3",
             "the mouse round never reached the question:\n{stderr}"
+        );
+        assert!(
+            stderr.contains("wait:copy finished run 1 (satisfied"),
+            "the mouse round's `wait:` never fired — its dump was timed, \
+             not gated:\n{stderr}"
         );
         assert_eq!(
             dump_field(qedump(&stderr, "clicked"), "copystate"),
@@ -5193,6 +5342,14 @@ fn copy_picks_asks_once_and_each_answer_does_what_it_says() {
         "Ctrl+O answered the clash question: {stderr}"
     );
     // --- B: keep both -----------------------------------------------------
+    // The dump below reads a FINISHED copy because the script waited for
+    // one, not because 800 ms was thought to be enough (a dropped or
+    // misnumbered token would put it back on that clock silently).
+    assert!(
+        stderr.contains(&kept_wait),
+        "the `wait:copy finished run {n}` step never fired — the keep-both \
+         dump was timed, not gated:\n{stderr}"
+    );
     let kept = qedump(&stderr, "kept");
     assert_eq!(dump_field(kept, "copystate"), "2", "{kept}");
     let kept_report = dump_text(kept, "report");
@@ -5211,6 +5368,11 @@ fn copy_picks_asks_once_and_each_answer_does_what_it_says() {
     assert!(
         dump_text(q2, "confirm").contains("2 of your 2 picks"),
         "{q2}"
+    );
+    assert!(
+        stderr.contains(&over_wait),
+        "the `wait:copy finished run {n2}` step never fired — the overwrite \
+         dump was timed, not gated:\n{stderr}"
     );
     let over = qedump(&stderr, "over");
     let over_report = dump_text(over, "report");
@@ -6081,8 +6243,10 @@ fn the_video_export_asks_before_replacing_a_file() {
         "1500:select-all;1700:clipdest:{dest};1900:key:ctrl+shift+e;\
          2200:dump.plan;2400:key:return;2700:dump.question;\
          2900:key:return;3100:dump.inert;3300:key:ctrl+o;3500:dump.accel;\
-         3700:key:b;5000:dump.kept;5300:key:escape;\
-         5600:key:ctrl+shift+e;5900:key:return;6200:key:o;7500:dump.over;\
+         3700:key:b;3800:wait:clip export finished run 1;5000:dump.kept;\
+         5300:key:escape;\
+         5600:key:ctrl+shift+e;5900:key:return;6200:key:o;\
+         6300:wait:clip export finished run 2;7500:dump.over;\
          7800:key:escape;8100:dump.end;\
          8400:key:ctrl+shift+e;8700:key:return;9000:dump.q2;\
          9200:open:{other};9800:dump.swapped",
@@ -6150,6 +6314,15 @@ fn the_video_export_asks_before_replacing_a_file() {
     );
 
     // --- B: keep both ------------------------------------------------------
+    // Gated on the export's own report card, not on the 1.3 s the write
+    // and its verify pass used to be given (issue #70): the run number is
+    // what lets the second answer below wait for ITS export rather than
+    // being satisfied by the first one's mark.
+    assert!(
+        stderr.contains("wait:clip export finished run 1 (satisfied"),
+        "the keep-both `wait:` never fired — the dump was timed, not \
+         gated:\n{stderr}"
+    );
     let kept_dump = qedump(&stderr, "kept");
     assert_eq!(dump_field(kept_dump, "clipstate"), "2", "{kept_dump}");
     let kept_report = dump_text(kept_dump, "clipreport");
@@ -6175,6 +6348,11 @@ fn the_video_export_asks_before_replacing_a_file() {
     );
 
     // --- O: overwrite ------------------------------------------------------
+    assert!(
+        stderr.contains("wait:clip export finished run 2 (satisfied"),
+        "the overwrite `wait:` never fired — the dump was timed, not \
+         gated:\n{stderr}"
+    );
     let over = qedump(&stderr, "over");
     let over_report = dump_text(over, "clipreport");
     assert!(
@@ -7217,7 +7395,7 @@ fn a_click_inside_the_iptc_panel_never_reaches_the_grid() {
         "{PIN_WINDOW};1200:key:i;1300:wait:iptc field 0 laid out at 1150;\
          1700:click.358,318;2000:select-all;\
          2300:dump.before;2600:click.1145,400;3000:dump.chrome;\
-         3300:click.1290,177;3600:key:t;3800:key:return;4100:dump.field;\
+         3300:click:iptc field 0;3600:key:t;3800:key:return;4100:dump.field;\
          4400:click.783,511;4800:dump.control"
     );
     let stderr = shoot_env_stderr(
@@ -7283,11 +7461,7 @@ fn a_click_inside_the_iptc_panel_never_reaches_the_grid() {
         f0.0 - 10.0,
         f0.0
     );
-    assert_click_inside(
-        iptc_field_rect(&stderr, 0, "drive: click.1290,177"),
-        (1290.0, 177.0),
-        "the Title field",
-    );
+    assert_click_resolved(&stderr, "iptc field 0");
     // The contract: neither click moved the cursor or touched the selection.
     for label in ["chrome", "field"] {
         let dump = qedump(&stderr, label);

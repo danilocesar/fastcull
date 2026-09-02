@@ -351,9 +351,12 @@ the failure is left visible rather than papered over.
   almost right — and the property is a relation between two rectangles:
   `buttons.y + buttons.h <= card.y + card.h`.
 - Two marks make the driven test clock-free (issue #62, harness section of
-  ui-grid.md): `clip export finished` fires when the report card goes up,
-  and `load settled gen N` carries the session generation so a script can
-  wait for the SECOND folder it opened.
+  ui-grid.md): `clip export finished run N` fires when the report card
+  goes up — N counting the exports this process started, so a script that
+  exports twice can wait for the second one (issue #70) — and `load
+  settled gen N` carries the session generation so a script can wait for
+  the SECOND folder it opened. An export CANCELLED by a session swap
+  emits no mark: cancelled is not finished.
 
 ## Exported badge and hint (issue #56, 2026-08-29)
 

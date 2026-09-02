@@ -45,7 +45,9 @@ which is faster than any undo dialog.
 | `Ctrl+Q` | quit |
 | `1`–`5`, `0` | reserved for star ratings (a future version) |
 
-The same map lives in **Help > Keyboard Shortcuts** inside the app.
+The same map lives in **Help > Keyboard Shortcuts** inside the app. On
+Windows those menus are the system menu bar Windows draws for the window,
+not a bar inside it — the same menus either way.
 
 **Help > About** shows the version, license, and project link. When
 filing a bug, include the version string from there. Development builds

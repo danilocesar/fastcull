@@ -156,6 +156,15 @@ pub(crate) struct CopyState {
     /// Image id -> the RAW path(s) it landed at, per destination, this
     /// session; re-checked against the disk by `copy_replan`.
     pub(crate) copies: fastcull_core::fileops::SessionCopies,
+    /// How many copies this PROCESS has started, 1-based once the first
+    /// one runs. It numbers the `copy finished run N` mark, so a driven
+    /// script can wait for the second copy of a run instead of guessing a
+    /// duration for it (a wait cannot ask for the next occurrence of a
+    /// mark it has already seen — ui-grid.md's harness section). Carried
+    /// across a session swap like `dest`: it counts runs of the app, not
+    /// of the folder, and a number that restarted would make two
+    /// different copies wait on the same mark.
+    pub(crate) runs: u32,
 }
 
 /// M9 Export Frames as Video (video-export.md): the previewed plan, the
@@ -196,16 +205,22 @@ pub(crate) struct ClipState {
     /// the dialog's "already in NAME.mov" hint (issue #56, core owns the
     /// rule that a clip counts only while its file is still on disk).
     pub(crate) ledger: fastcull_core::clip::ExportLedger,
+    /// How many exports this PROCESS has started — the number in
+    /// `clip export finished run N`, with the same contract and the same
+    /// reason as [`CopyState::runs`].
+    pub(crate) runs: u32,
 }
 
 impl ClipState {
-    /// A session swap forgets everything except the destination — the
-    /// same rule and the same reason as [`CopyState::begin_session`]. The
+    /// A session swap forgets everything except the destination and the
+    /// run counter — the same rule and the same reasons as
+    /// [`CopyState::begin_session`]. The
     /// export ledger goes with it: session-only is its whole contract
     /// (video-export.md, "Exported badge and hint").
     pub(crate) fn begin_session(&mut self) {
         *self = Self {
             dest: self.dest.take(),
+            runs: self.runs,
             ..Self::default()
         };
     }
@@ -213,7 +228,7 @@ impl ClipState {
 
 #[cfg(test)]
 mod clip_state_tests {
-    use super::ClipState;
+    use super::{ClipState, CopyState};
 
     /// The ▶ badge is SESSION-ONLY (video-export.md): opening another
     /// folder must leave nothing badged, while the remembered destination
@@ -248,6 +263,26 @@ mod clip_state_tests {
         );
         std::fs::remove_file(&mov).ok();
     }
+
+    /// The run counters number a mark a driven script waits on (`copy
+    /// finished run N`, ui-grid.md's harness section), so they count runs
+    /// of the PROCESS: a counter that restarted with the folder would let
+    /// two different copies answer the same wait.
+    #[test]
+    fn a_session_swap_keeps_counting_runs() {
+        let mut copy = CopyState {
+            runs: 2,
+            ..CopyState::default()
+        };
+        copy.begin_session();
+        assert_eq!(copy.runs, 2, "the copy run counter restarted on a swap");
+        let mut clip = ClipState {
+            runs: 3,
+            ..ClipState::default()
+        };
+        clip.begin_session();
+        assert_eq!(clip.runs, 3, "the export run counter restarted on a swap");
+    }
 }
 
 /// How long a refused-export explanation stays in the status line. Long
@@ -276,14 +311,16 @@ pub(crate) struct BurstIndex {
 
 impl CopyState {
     /// Everything a session swap must forget — which is everything EXCEPT
-    /// the destination. fileops.md remembers that across sessions (the
-    /// user copies a card at a time into the same shoot folder), so it is
-    /// carried explicitly. Written as "replace the struct, naming what
+    /// the destination and the run counter. fileops.md remembers the
+    /// destination across sessions (the user copies a card at a time into
+    /// the same shoot folder) and `runs` counts the process, not the
+    /// folder, so both are carried explicitly. Written as "replace the struct, naming what
     /// survives" rather than "clear four fields" so that a field added
     /// later is forgotten by default: forgetting is the safe direction.
     pub(crate) fn begin_session(&mut self) {
         *self = Self {
             dest: self.dest.take(),
+            runs: self.runs,
             ..Self::default()
         };
     }

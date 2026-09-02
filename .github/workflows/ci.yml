@@ -18,6 +18,34 @@ jobs:
     steps:
       - uses: actions/checkout@v4
 
+      # The screenshot tests write their shots, traces AND fixture copies
+      # under the system temp dir (`std::env::temp_dir()`), and the upload
+      # step at the end has to name that place. Two constraints decide it:
+      # the `runner` context is not available in a job-level `env:` (only
+      # in steps), so the choice is made here and exported; and on Windows
+      # `place_fixture` COPIES the 63 MB RAW where unix symlinks it — some
+      # 80 copies per suite run, twice per job — which must not land on the
+      # runner's small D: work drive next to two target dirs (validator
+      # 2026-09-02). So Windows gets a folder on C:, Linux the runner temp.
+      # The free-space readout is what makes an ENOSPC red legible.
+      - name: Point the temp dir at an uploadable, roomy place
+        shell: bash
+        run: |
+          if [ "$RUNNER_OS" = "Windows" ]; then
+            evidence='C:/fastcull-tmp'
+          else
+            evidence="$RUNNER_TEMP/fastcull-tmp"
+          fi
+          mkdir -p "$evidence"
+          {
+            echo "TMPDIR=$evidence"
+            echo "TEMP=$evidence"
+            echo "TMP=$evidence"
+            echo "FASTCULL_EVIDENCE=$evidence"
+          } >> "$GITHUB_ENV"
+          echo "temp dir: $evidence"
+          df -h || true
+
       - uses: dtolnay/rust-toolchain@stable
         with:
           components: clippy, rustfmt
@@ -57,6 +85,27 @@ jobs:
       - name: Screenshot smoke tests (Windows)
         if: runner.os == 'Windows'
         run: cargo test --release -p fastcull-app --test screenshot
+
+      # The shots and the per-run `<name>.trace.log` beside them. Uploaded
+      # on EVERY run, not only on failure: a Windows red is read by
+      # comparing it against the same test's Linux green (geometry marks,
+      # badge pixels), so the green run's evidence has to exist too.
+      #
+      # The two file patterns, never the whole directory: the tests place
+      # fixture RAWs in sub-folders of it, and `place_fixture` COPIES on
+      # Windows where it symlinks on unix — a 63 MB frame per copy, some
+      # gigabyte of artifact for evidence that is a few MB of JPEG and
+      # text. Shots are written at the top level, fixtures never are.
+      - name: Upload screenshot evidence
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: screenshot-evidence-${{ matrix.os }}
+          path: |
+            ${{ env.FASTCULL_EVIDENCE }}/fastcull-shots-*/*.jpg
+            ${{ env.FASTCULL_EVIDENCE }}/fastcull-shots-*/*.trace.log
+          if-no-files-found: ignore
+          retention-days: 7
 
       # Advisory only (user decision 2026-07-25): shared virtualized runners
       # cannot gate wall-clock budgets; enforcement happens on an idle run

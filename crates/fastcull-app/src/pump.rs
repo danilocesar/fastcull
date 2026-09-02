@@ -184,7 +184,15 @@ pub(crate) fn start(window: &MainWindow, state: &Rc<RefCell<AppState>>) -> slint
                                 // Same gate as the export's below (issue
                                 // #62): the report card is up, and a script
                                 // waits for it rather than for a clock.
-                                crate::trace::trace_mark("copy finished");
+                                // NUMBERED (issue #70): a script that copies
+                                // twice cannot wait for the second one on a
+                                // mark it has already seen, and the 800 ms it
+                                // guessed instead was the Windows runner's
+                                // red.
+                                crate::trace::trace_mark(&format!(
+                                    "copy finished run {}",
+                                    st.copy.runs
+                                ));
                                 dirty = true; // copied badges
                             }
                         }
@@ -245,8 +253,13 @@ pub(crate) fn start(window: &MainWindow, state: &Rc<RefCell<AppState>>) -> slint
                                 // The report card is now up: a driven script
                                 // can `wait:clip export finished` instead of
                                 // guessing how long a loaded runner needs to
-                                // copy and verify the samples (issue #62).
-                                crate::trace::trace_mark("clip export finished");
+                                // copy and verify the samples (issue #62),
+                                // and the run number tells two exports of one
+                                // script apart (issue #70).
+                                crate::trace::trace_mark(&format!(
+                                    "clip export finished run {}",
+                                    st.clip.runs
+                                ));
                                 dirty = true;
                             }
                         }
