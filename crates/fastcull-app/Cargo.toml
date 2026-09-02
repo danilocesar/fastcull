@@ -33,8 +33,16 @@ fastcull-core.workspace = true
 #   4. `self.focus()` called from a repeater row's `init` DOES NOT TAKE
 #      EFFECT — it silently does nothing, and `changed absolute-position`
 #      does not fire for rows whose first computed position is their last
-#      (rows 0 and 1). A row can only claim from `changed want-refocus`,
-#      which is why that flag is armed one event-loop iteration late.
+#      (rows 0 and 1). A row can only claim from a handler that runs
+#      after it exists, which is why the refocus flag is armed one
+#      event-loop iteration late.
+#   5. A component's `changed` handlers CANNOT see a value written in its
+#      own `init` (found by CI 2026-09-01): the generated `user_init`
+#      runs the `init` statements first and calls `change_tracker*.init`
+#      afterwards, so whatever `init` wrote is the tracker's BASELINE.
+#      An `init` flip therefore cannot manufacture an edge for a row born
+#      into an already-armed refocus request — a per-row `Timer` tick is
+#      what claims in that case.
 # Re-read the owner-invariant section of specs/modules/ui-grid.md before
 # raising this bound.
 slint = { version = "1", default-features = false, features = [

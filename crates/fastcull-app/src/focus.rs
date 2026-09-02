@@ -148,26 +148,33 @@ fn arm_row_refocus(win: &MainWindow, row: i32) {
 }
 
 /// Arm it one event-loop iteration from now (issue #63 FAIL-1, QE
-/// 2026-08-30). Two independent reasons, and only both together work:
+/// 2026-08-30). Two reasons it is deferred rather than written at once:
 ///
 ///  * `self.focus()` called from a repeater row's `init` DOES NOT TAKE
 ///    EFFECT in Slint 1.17 — proven by QE, 10 runs in 10 dead, and by
 ///    the trace of the first cut here: the recreated row's `init` claimed
 ///    at [3359] and the keyboard was still on nothing until an unrelated
 ///    deferred claim re-armed the flag at [3491]. A row can only take
-///    focus once it is alive to the window, i.e. from a `changed`
-///    handler, so the flag has to be armed AFTER the repeater has rebuilt
-///    rather than before.
+///    focus from an event-loop callback that runs once it is alive to
+///    the window, so a flag that arrives AFTER the repeater has rebuilt
+///    is the one the recreated row can answer at once, from `changed
+///    want-refocus`.
 ///  * the still-alive DOOMED instance watches the same flag and its
 ///    `changed want-refocus` runs first, so an immediate write is
 ///    consumed by the row that is about to die (validator FAIL-1).
 ///
-/// Deferring answers both, and the generation stamp in `arm_row_refocus`
-/// stays as the belt for the case where the timer beats the repeater
-/// update. The cost is the ownerless gap this step exists to close, so it
-/// is measured and reported rather than assumed: one event-loop
-/// iteration, not the ~200 ms the DEFERRED CLAIM used to take, because
-/// nothing is racing it — but not zero either.
+/// Deferring makes that LATE ordering the likely one; it does not
+/// guarantee it (CI on the v0.13.0 commit, 2026-09-01: on a 2-core
+/// headless runner this timer fired inside the model swap's own
+/// millisecond and the rows were recreated 16 ms later). The ordering it
+/// cannot promise is covered by two belts in main.slint, one per hazard:
+/// the generation stamp in `arm_row_refocus` against the doomed instance
+/// consuming an early flag, and the row's own `Timer` against a live
+/// instance born with the flag already true and therefore never seeing
+/// a `changed` edge. The cost of deferring is the ownerless gap this
+/// step exists to close, so it is measured and reported rather than
+/// assumed: one event-loop iteration, not the ~200 ms the DEFERRED CLAIM
+/// used to take, because nothing is racing it — but not zero either.
 fn arm_row_refocus_deferred(win: &MainWindow, row: i32) {
     let win = win.as_weak();
     slint::Timer::single_shot(std::time::Duration::ZERO, move || {

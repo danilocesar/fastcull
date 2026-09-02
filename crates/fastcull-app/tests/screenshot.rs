@@ -3696,7 +3696,21 @@ fn copy_dialog_esc_returns_the_keyboard() {
 /// That is the pre-existing deactivation-commit defect, not this change:
 /// QE caught a release-idle instance where the `lost` arrived 28 ms after
 /// the keystroke and the rebuild only afterwards, so the blur came from
-/// outside the app and beat the rebuild entirely. Do NOT quiet it.
+/// outside the app and beat the rebuild entirely. Do NOT quiet it — the
+/// assertion below names it, so a run that hits it says #68 instead of
+/// blaming the reclaim.
+///
+/// AND DO NOT ASSUME A RED RUN IS THAT ONE. This test went red on CI at
+/// v0.13.0 and the cause was the reclaim after all: the arm timers beat
+/// the repeater's own update, the recreated rows were born into an
+/// already-armed flag, and `changed want-refocus` cannot fire for a
+/// value that was already true at birth (see the owner-invariant section
+/// of ui-grid.md). The two look alike in a dump — a committed field and
+/// a dead keyboard both leave `revert=…` standing — and they are told
+/// apart only in the trace: deactivation is a lone `focus: … lost`
+/// BEFORE the rebuild with no claim before it, the reclaim residual is a
+/// rebuild with no claim AFTER it. Here the `revert` line is this
+/// script's own seeding Enter and appears in every green run too.
 #[test]
 fn a_cursor_move_rebuild_keeps_the_keyboard_in_the_field() {
     if !has_display() {
@@ -3755,11 +3769,40 @@ fn a_cursor_move_rebuild_keeps_the_keyboard_in_the_field() {
         "the cursor move did not rebuild the panel rows — the seeded \
          Title is missing, so there is no rebuild to survive:\n{stderr}"
     );
+    // Which defect a missing claim IS (issue #68 vs issue #63). The
+    // editor losing the keyboard BEFORE the rebuild, with nothing having
+    // claimed it, is the window being deactivated mid-edit — the blur
+    // commits the half-typed text and there is no editor left for the
+    // rebuild to rescue. That is a real defect and this still FAILS, but
+    // it must fail under its own name: the run never reached the property
+    // below, and reading it as a reclaim regression sends the next reader
+    // to the wrong mechanism (it nearly did, on the CI red at v0.13.0).
+    // The window runs from the click that focused Title to the cursor
+    // move (validator 2026-09-01: from `key:q` it missed a blur landing
+    // between the click and the first character, which loses the `q`
+    // silently and lets the run pass). Nothing but a deactivation can
+    // take the keyboard from the editor in there.
+    let click_to_move = stderr
+        .find("drive: key:q")
+        .map(|q| stderr[..q].rfind("drive: click.").unwrap_or(q))
+        .zip(stderr.rfind("drive: right"))
+        .filter(|(from, mv)| from < mv)
+        .map(|(from, mv)| &stderr[from..mv])
+        .unwrap_or("");
+    assert!(
+        !click_to_move.contains("focus: iptc field 0 lost"),
+        "the Title editor lost the keyboard between the click that \
+         focused it and the cursor move — the window was deactivated \
+         mid-edit and the blur committed the half-typed text (issue #68). \
+         Not this test's property, and not a reclaim failure:\n{stderr}"
+    );
     // The RECREATED row took the keyboard, not the doomed instance.
     assert!(
         after_move.contains("row 0 (gen"),
-        "no row claimed the keyboard after the rebuild — the flag was \
-         consumed by the dying instance (issue #63 FAIL-1):\n{stderr}"
+        "no row claimed the keyboard after the rebuild — either the flag \
+         was consumed by the dying instance, or the recreated row was \
+         born into an already-armed flag and never saw a `changed` edge \
+         (issue #63 FAIL-1 and its 2026-09-01 CI residual):\n{stderr}"
     );
     let rebuilt = qedump(&stderr, "rebuilt");
     assert_eq!(
@@ -3773,9 +3816,14 @@ fn a_cursor_move_rebuild_keeps_the_keyboard_in_the_field() {
     let after = qedump(&stderr, "after");
     assert!(
         after.contains("★1"),
-        "the keyboard was stranded by a cursor-move rebuild — the typing, \
-         the Enter and the `y` after it were all dead (issue #63 \
-         FAIL-1): {after}"
+        "the typing, the Enter and the `y` after the cursor-move rebuild \
+         were all dead although a row claimed (asserted above). Compare \
+         the `row 0 (gen` claim's time with `drive: key:w` in the trace: \
+         a claim AFTER the keys is this script's fixed-time keys falling \
+         inside the reclaim gap on a seat lagging past ~400 ms per frame \
+         (issue #69, 1 in 20 under six spinners plus a build loop in \
+         debug); a claim BEFORE them that still left the keys dead is a \
+         real strand (issue #63 FAIL-1): {after}\n{stderr}"
     );
     // THE SECOND REBUILD SHAPE, which is how QE reproduced the same
     // defect: no cursor move at all — `select-all` grows the batch, the

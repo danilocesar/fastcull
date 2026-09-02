@@ -1495,15 +1495,25 @@ restore — see Focus continuity in the Filter & sort bar section.
   - **the field-rows rebuild — back to the SAME ROW**, armed immediately
     after `set_iptc_fields` replaces the model and only when the token
     names a field row. Rust cannot name a repeater's child, so it arms a
-    root `iptc-refocus-row` and the RECREATED row's `init` focuses itself
-    and clears the flag — the `iptc-focus-keywords` pattern.
-    **The flag is armed one event-loop iteration LATE, and must be** (QE
-    2026-08-30): `self.focus()` called from a repeater row's `init` DOES
-    NOT TAKE EFFECT in Slint 1.17. It silently does nothing — proven both
-    ways, 10/10 dead with the claim in `init`, 10/10 alive with only the
-    flag write deferred — so a row can take the keyboard only from a
-    `changed` handler, once it is alive to the window, and the flag has
-    to arrive after the repeater has rebuilt. A `changed
+    root `iptc-refocus-row` and the RECREATED row claims the keyboard and
+    clears the flag — the `iptc-focus-keywords` pattern, except that the
+    row cannot do it from `init` (see below), so it claims from a
+    `changed` handler or, when there was no edge to see, from its
+    `Timer`.
+    **The flag is armed one event-loop iteration LATE** (QE 2026-08-30;
+    that text read "and must be", which was true of the tree it
+    described and is no longer the whole story — see the early-arm
+    paragraph below). What stands: `self.focus()` called from a repeater
+    row's `init` DOES NOT TAKE EFFECT in Slint 1.17. It silently does
+    nothing — proven both ways, 10/10 dead with the claim in `init`,
+    10/10 alive with only the flag write deferred — so a row can take
+    the keyboard only from an event-loop callback that runs once it is
+    alive to the window: a `changed` handler, or its `Timer` tick. The
+    deferral is what makes the LATE ordering — the flag arriving after
+    the repeater has rebuilt, so the recreated row sees an edge and the
+    doomed one is already gone — the likely one; it is not a guarantee,
+    and the ordering it cannot promise is what the generation stamp and
+    the `Timer` answer. A `changed
     absolute-position` belt was tried and does not rescue it: that
     handler never fires for rows 0 and 1, whose first computed position
     is already their last (0/6). **So this path leaves a real gap, and it
@@ -1519,33 +1529,75 @@ restore — see Focus continuity in the Filter & sort bar section.
     | debug, six spinners | 193 ms | 206 ms | 230 ms |
 
     (QE measured the same shape independently at 5-10 ms release-idle and
-    12-31 ms release-loaded.) **A keystroke inside the gap is NOT lost**:
-    it is queued in the same event-loop batch and delivered to the
-    recreated editor after the claim, in order — measured 12/12 by the
-    validator and 20/20 by QE, and an earlier draft of this paragraph
-    claiming otherwise was wrong. The loss case is "no claim at all",
-    which is what the FAIL-1 family was and is now closed.
+    12-31 ms release-loaded.) **A keystroke inside the gap is not lost
+    when the claim runs before it in the iteration** — the common case,
+    measured 12/12 by the validator and 20/20 by QE at 2026-08-30's
+    loads: the key is queued in the same event-loop batch and delivered
+    to the recreated editor after the claim, in order. It IS dropped when
+    the key is processed before the claim callback (QE 2026-09-02, issue
+    #69): under six spinners plus a build loop in a debug build the
+    iteration is one frame of 200-500 ms, the claim landed 190-540 ms
+    after the rebuild, and a `drive: key:w` at [5936] was lost to a
+    claim at [5937]. The cursor-move test's fixed-time keys after the
+    move fell in that gap once in 20 on that seat; its acting assertion
+    now names both readings, and #69 proposes waiting for the claim mark
+    instead of the clock. The loss case the FAIL-1 family was — "no
+    claim at all" — is closed on both orderings; a key inside the gap is
+    the residual the table above prices.
     The arm that actually DELIVERS is the deferred RE-ASSERT
     (`restore -> row N`), not the SameRow arm queued beside it: 40/40
     observed runs across the three profiles above. The SameRow arm is
     still the one that names the row, and it is what makes the re-assert
-    find a field-row token to re-assert.
+    find a field-row token to re-assert. (Both are zero-length timers
+    queued in the same refresh, so they run in the same event-loop turn —
+    which is why, on the seat where that turn beats the repeater update,
+    NEITHER delivered and the row's `Timer` had to. See the early-arm
+    paragraph below.)
     The gap is the price of going back to the ROW rather than to the
     grid, which is the right trade — a claim on `keys` in between makes
     the next caption character a cull command — but it is a residual, not
     a clean win, and closing it needs either an in-place row update (the
     follow-up below) or a Slint that can focus from `init`.
-    **An arm that fires before its row exists must SURVIVE** (QE
-    2026-08-30). A zero-length arm timer can beat the repeater update; the
-    flag is then already set when the row is born, so `want-refocus` is
-    true from its first evaluation, `changed` never fires, and the request
-    is armed, matched and silently never claimed — 3 runs in 20 under six
-    spinners in a debug build, ownerless for good. Two things fix it
-    together: the flag is cleared ONLY by an actual claim (never by an arm
-    firing), and each row assigns a `settled` property in its `init` so
-    `want-refocus` has a false→true EDGE after creation to fire on. With
-    both, 20/20 debug under six spinners, 10/10 release under six
-    spinners, 5/5 on the mixed-value shape.
+    **An arm that fires before its row exists must SURVIVE — and the
+    `settled` edge that was meant to make it survive never could**
+    (CI red on the v0.13.0 commit, diagnosed 2026-09-01). A zero-length
+    arm timer can beat the repeater update; the flag is then already set
+    when the row is born, so `want-refocus` is true from its first
+    evaluation, `changed want-refocus` never fires, and the request is
+    armed, matched and silently never claimed — ownerless for good, with
+    every keystroke after it dead.
+    The first answer was half right: the flag is cleared ONLY by an
+    actual claim (never by an arm firing), so an early arm does survive
+    until its row exists. The other half — a `settled` property assigned
+    in the row's `init` to manufacture a false→true EDGE — **cannot
+    work**, and the generated Slint code says why: `user_init` runs the
+    `init` statements FIRST and installs the row's change trackers
+    AFTERWARDS, so anything written in `init` is the tracker's baseline,
+    not a change it can ever see. The 2026-08-30 campaigns did not catch
+    this because they never produced the early ordering; `settled` is
+    removed rather than left looking load-bearing.
+    **Which ordering a seat gets is not the app's to choose.** On the
+    developer's GPU-composited seat the repeater recreates the rows ~3 ms
+    after the model swap and the arm timer fires only ~87 ms later (LATE
+    arm — the path that always worked, and the only one the campaigns
+    ever measured). On the 2-core headless CI runner both arms fired
+    inside the model swap's own millisecond and the rows were recreated
+    16 ms afterwards (EARLY arm), and the keyboard was stranded for the
+    rest of the run.
+    **What answers both orderings is a per-row `Timer`** (1 ms, `running:
+    want-refocus`, the claim re-checked on the tick). A timer tick is the
+    one hook that runs after the change trackers are installed however
+    the race went, and a row CAN focus from it — unlike from `init`. It
+    costs nothing on the ordering that already worked: there the fast
+    path claims in the arm's own iteration, clearing the flag, so
+    `running` goes false and the timer never ticks.
+    Measured, with the arm forced early to make the CI ordering
+    deterministic (`arm_row_refocus` called synchronously and the
+    deferred re-assert removed): 0/5 claimed before the `Timer`, 10/10
+    after; the test itself 0/10 red before (the identical panic and line
+    CI reported) and 10/10 green after, under `taskset -c 0,1` plus four
+    spinners. On the unforced developer seat: 20/20 green before and
+    after — which is exactly why only CI could find this.
     **The flag also carries a GENERATION (validator FAIL-1,
     2026-08-30).** A Slint repeater does not tear its children down when
     the model is replaced; they die at its next update. So the DOOMED row
@@ -1561,17 +1613,35 @@ restore — see Focus continuity in the Filter & sort bar section.
     `iptc-refocus-gen` = the current `iptc-rebuild-gen`, each row stamps
     its own `born-gen` in `init`, and a row claims only if it was born
     for the generation the flag names.
-    **Which of these is load-bearing on the shipped tree, honestly.** The
-    DEFERRAL is: make the arm synchronous again and the cursor shape is
-    0/10 dead, every time. The generation stamp is NOT independently
-    demonstrable any more — with the arm deferred the doomed instance is
-    gone before the flag arrives, and removing the stamp still measures
-    15/15 alive (validator). It stays as the belt for the ordering the
-    deferral cannot promise: a timer that beats the repeater update, which
-    is exactly the case the `settled` edge above now handles by
-    construction. Two mechanisms guarding one hazard from opposite sides,
-    and the spec says which one the campaigns actually exercise rather
-    than quoting a mutant number that no longer reproduces.
+    **Which of these is load-bearing on the shipped tree, honestly**
+    (re-measured 2026-09-01, because the 2026-08-30 answer was written
+    from the LATE ordering only). The DEFERRAL is not the guarantee it
+    was taken for — it decides which ordering is *likely*, not which one
+    happens, and CI got the other one. On this developer seat the arm is
+    late, so: making the arm synchronous again is 0/10 dead without the
+    `Timer` and 10/10 alive with it, and the generation stamp is not
+    independently demonstrable at all (the doomed instance is gone before
+    a late flag arrives; removing the stamp measures 15/15 alive,
+    validator 2026-08-30, and 6/6 alive here).
+    Force the EARLY ordering, which is what a 2-core headless seat
+    actually does, and both belts become load-bearing and measurable:
+    without the `Timer` 0/10, without the generation stamp 0/6 (the
+    still-alive doomed instance consumes the flag, FAIL-1's original
+    shape), with both 10/10. So the honest statement is that the arm's
+    timing is a race the app does not control, and the two belts —
+    generation stamp against a doomed instance claiming, `Timer` against
+    a live instance never getting an edge — are what make the claim
+    ordering-independent.
+    **Decision (validator 2026-09-01): the deferral is no longer a
+    mutation-tested invariant.** Of the three 2026-08-30 mutants the gate
+    kept (`.qe-scratch/dev/focus/3b/`), the synchronous-arm one is GREEN
+    by design with the `Timer` — that is the fix working, not the mutant
+    escaping — and the no-stamp one is red only under the forced EARLY
+    ordering (6/6 alive unforced on this seat, 0/6 forced); only the
+    disabled-synchronous-reclaim one is red on either ordering. The
+    deferral stays because it makes the fast path the likely one and
+    keeps the gap in the table above small, not because anything would
+    strand without it.
     **Not to the grid**, which an earlier cut did and which is a HIGH
     defect: the panel is a captioning surface, "focus stays where
     clicked" is a shipped rule (iptc-templates.md), and the blur commit
@@ -1720,6 +1790,14 @@ restore — see Focus continuity in the Filter & sort bar section.
   next occurrence can be read rather than guessed at: the signature is a
   lone `focus: … lost` with no `gained` after it and no `focus-keys (…)`
   before it.
+  **Do not read a standing `revert=…` in a dump as this defect** (learned
+  the expensive way on the 2026-09-01 CI red): a committed field and a
+  dead keyboard leave the same dumps from there on, and a script that
+  commits something earlier carries the line into every later dump
+  anyway. Only the TRACE separates them — this defect is a `lost` BEFORE
+  the rebuild with no claim preceding it; a stranded reclaim is a rebuild
+  with no `row N (gen …)` claim AFTER it. The cursor-move test now
+  asserts the two separately so a red run names the right one.
 - Per-image keywording is a same-evening flow (user decision): a focus-jump
   key into the keyword field, comma-separated entry, Enter commits + returns
   to the grid. Batch-apply perf target: picks-scale (hundreds), not
@@ -2269,6 +2347,46 @@ the user confirms, all cheap to change):**
       `lost` arriving 28 ms after the keystroke and the rebuild only
       AFTER that, i.e. the blur came from outside and beat the rebuild
       entirely.
+      **That banner is not what turned CI red on the v0.13.0 commit**
+      (run 33578204067: 2026-09-01 on the local clock, 2026-09-02T01:08Z
+      on GitHub's; ubuntu-latest, first run after the merge), and the
+      difference is worth keeping because the two look alike in a dump.
+      The deactivation fingerprint is a lone `focus: … lost` with no
+      claim before it. The CI trace has NO such `lost` between the click
+      that focused Title and the rebuild; its `revert="Revert: Title on
+      1 image(s)"` is the test's own seeding Enter three steps earlier
+      and is present in every GREEN run too. What the trace does show is
+      both arms firing in the rebuild's own millisecond and the rows
+      recreated 16 ms later with no claim after them — the EARLY-arm
+      ordering above, i.e. a live residual of FAIL-1's class, not #68.
+      Reading `revert` as a deactivation commit would have quieted a real
+      strand: on a dump, a committed field and a dead keyboard differ
+      only in whether a claim mark follows the rebuild.
+      **The exposure sweep for that ordering (2026-09-01)**, because one
+      red test is never the whole class: the WHOLE screenshot suite run
+      under `taskset -c 0,1` with the arm forced early and the row
+      `Timer` removed — the runner's ordering, made deterministic —
+      is **71 passed, 3 failed**, and the three are exactly the tests
+      that need a field ROW to reclaim after a rebuild:
+      `a_cursor_move_rebuild_keeps_the_keyboard_in_the_field`,
+      `a_menu_item_over_a_focused_field_row_keeps_the_keyboard`,
+      `a_dismissed_menu_over_a_focused_field_row_keeps_the_keyboard`.
+      Nothing else in the suite is exposed, and in particular the tests
+      that carry focus banners of their own are NOT: a session swap and a
+      panel close reclaim to the topmost SCOPE synchronously and never
+      arm the row flag, so `session_swap_mid_field_edit_discards_and_
+      keeps_the_keyboard`, `session_swap_mid_keyword_edit_never_writes_
+      into_the_new_session`, `modal_over_a_focused_field_owns_the_
+      keyboard_and_writes_nothing` and both `panel_close_from_the_menu_*`
+      all pass on that tree. Only the cursor-move test went red on the
+      real runner because the two menu tests get a THIRD arm from
+      `reassert_owner_deferred("menu")`, queued in a LATER dispatch than
+      the rebuild and therefore landing after the repeater update; the
+      sweep removes that arm, so it overstates their real-world exposure
+      while still naming them as the class. All three are green with the
+      `Timer` on the same forced ordering: 10/10 for the cursor-move
+      shape, 5/5 for each menu shape, under `taskset -c 0,1` plus four
+      spinners.
       The dismiss and cursor-move shapes are pinned by their own acting
       tests, and every one of these numbers was re-measured with a FRESH
       fixture per run after an earlier round reported false reds from a

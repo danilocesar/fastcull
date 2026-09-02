@@ -1506,8 +1506,9 @@ export component MainWindow inherits Window {
                                 // and 1, whose first computed position is
                                 // already their last.
                                 init => {
-                                    // BEFORE `settled` below: the claim is
-                                    // gated on this stamp (#63 FAIL-1).
+                                    // The generation this instance was
+                                    // born for — the whole gate on the
+                                    // claim below (#63 FAIL-1).
                                     self.born-gen = root.iptc-rebuild-gen;
                                     root.dbg-field-laid-out(i,
                                         self.absolute-position.x,
@@ -1517,39 +1518,28 @@ export component MainWindow inherits Window {
                                     // FAIL-1): `self.focus()` from a
                                     // repeater row's `init` does not take
                                     // effect in Slint 1.17, it silently
-                                    // does nothing. What this does instead
-                                    // is give `want-refocus` an EDGE to
-                                    // fire on — see `settled`.
-                                    self.settled = true;
+                                    // does nothing. And no flag flip here
+                                    // either to manufacture a `changed`
+                                    // edge: Slint installs this row's
+                                    // change trackers AFTER this body has
+                                    // run, so anything written here is
+                                    // already the tracker's baseline. The
+                                    // `Timer` below is what answers a
+                                    // request that was armed before this
+                                    // row existed.
                                 }
-                                // The edge that makes an EARLY arm land
-                                // (#63, QE 2026-08-30). A zero-length arm
-                                // timer can fire before the repeater has
-                                // recreated this row; the flag is then
-                                // already set when the row is born, so
-                                // `want-refocus` is true from its first
-                                // evaluation and `changed` never fires —
-                                // the request was armed, matched, and
-                                // silently never claimed (3 runs in 20
-                                // under six spinners, ownerless for good).
-                                // Assigning `settled` in `init` moves the
-                                // property from false to true AFTER
-                                // creation, so the edge exists and the
-                                // claim happens from a `changed` handler,
-                                // on a row that is alive and can focus.
-                                // The flag itself is cleared ONLY by an
-                                // actual claim, so an early arm survives
-                                // until its row exists to answer it.
-                                property <bool> settled: false;
                                 // The laid-out belt for the same request:
                                 // if the flag was armed before this row
                                 // could watch it (a timer beating the
                                 // repeater update), `changed want-refocus`
                                 // never fires, because the value was
                                 // already true at creation. This handler
-                                // does fire — the layout places the row
-                                // after it exists — and by then focusing
-                                // works.
+                                // does fire when a second layout pass
+                                // moves the row — but NOT for a rebuild
+                                // that puts every row back where it was,
+                                // which is the common case and the one CI
+                                // hit, so it is a belt and never the
+                                // guarantee. The `Timer` below is.
                                 changed absolute-position => {
                                     root.dbg-field-laid-out(i,
                                         self.absolute-position.x,
@@ -1591,8 +1581,8 @@ export component MainWindow inherits Window {
                                 // old value and can never consume a flag
                                 // armed for the rebuild that kills it.
                                 property <int> born-gen: -1;
-                                property <bool> want-refocus: self.settled
-                                    && root.iptc-refocus-row == i && root.iptc-refocus-gen == self.born-gen;
+                                property <bool> want-refocus:
+                                    root.iptc-refocus-row == i && root.iptc-refocus-gen == self.born-gen;
                                 function claim-refocus() {
                                     root.dbg-focus-claim("row " + i + " (gen " + self.born-gen + ")");
                                     self.focus();
@@ -1668,6 +1658,56 @@ export component MainWindow inherits Window {
                                         // value, never the abandoned text.
                                         self.text = row.mixed ? "" : row.value;
                                     }
+                                }
+                            }
+                            // THE BELT THAT ACTUALLY CATCHES AN EARLY ARM
+                            // (#63 FAIL-1 residual, found by CI on
+                            // v0.13.0 and reproduced 5 runs in 5 by
+                            // forcing the arm to be early).
+                            //
+                            // Two orderings exist between the arm timer
+                            // and the repeater's own update, and the app
+                            // controls neither. LATE arm (this developer
+                            // seat, GPU-composited): the rows are
+                            // recreated first and `changed want-refocus`
+                            // above fires on a live row — that path is
+                            // unchanged and still the one that claims.
+                            // EARLY arm (the 2-core headless runner): the
+                            // zero-length timer wins, so this row is BORN
+                            // with `want-refocus` already true — and then
+                            // `changed want-refocus` NEVER fires, because
+                            // Slint installs a row's change trackers
+                            // AFTER its `init` body has run (generated
+                            // `user_init`: the `init` statements first,
+                            // then `change_tracker0.init(...)`), so the
+                            // tracker's baseline IS the already-true
+                            // value and there is no edge left to see. A
+                            // `settled: false` property flipped in `init`
+                            // was written to manufacture that edge and
+                            // cannot, for exactly that reason; it is
+                            // removed rather than left looking load-
+                            // bearing.
+                            //
+                            // A `Timer` tick is the one hook that runs
+                            // after the trackers are installed whatever
+                            // the ordering was, and a row CAN focus from
+                            // it (it is an event-loop callback on a live
+                            // row, like a `changed` handler — unlike
+                            // `init`, where `self.focus()` silently does
+                            // nothing in Slint 1.17). It costs nothing on
+                            // the ordering that already worked: the claim
+                            // clears the flag in the arm's own iteration,
+                            // `running` goes false, and the timer never
+                            // ticks.
+                            Timer {
+                                interval: 1ms;
+                                running: fld.want-refocus;
+                                triggered => {
+                                    // Re-checked: `running` and this tick
+                                    // are one event-loop iteration apart,
+                                    // and the fast path may have claimed
+                                    // (and cleared the flag) in between.
+                                    if (fld.want-refocus) { fld.claim-refocus(); }
                                 }
                             }
                         }
