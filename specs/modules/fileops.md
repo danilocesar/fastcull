@@ -218,7 +218,14 @@ explicitly deferred to a later discussion; modal dialog accepted)
   rectangles are traced (`copy card laid out …`, `copy buttons laid out
   …`), and asserted by
   `app: a_failure_report_longer_than_the_window_keeps_the_copy_buttons_inside_the_card`
-  (Unix: the read-only destination is a `chmod`). A long report scrolls
+  (Unix: the read-only destination is a `chmod`). **A `#[cfg(unix)]` test
+  takes its private helpers with it**: `body_scroll_at` is called only
+  from here, so on Windows it is dead code and `cargo clippy
+  --all-targets -- -D warnings` — which CI runs on windows-latest —
+  refuses to build the test target at all (red on the v0.13.0 commit).
+  The helper carries the same gate as its callers; helpers shared with a
+  platform-neutral test (`laid_out_at`, `assert_buttons_inside_card`) must
+  NOT be gated. A long report scrolls
   with the wheel AND with the keyboard — Down/Up, PgDn/PgUp, Home/End,
   only while it overflows — so the failures past the fold are readable
   without a mouse; the same test drives PgDn and Home and asserts the

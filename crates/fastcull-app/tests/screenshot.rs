@@ -6400,6 +6400,15 @@ fn laid_out_at(stderr: &str, what: &str, label: &str) -> (f32, f32, f32, f32) {
 ///
 /// Absent means 0 — the mark fires on CHANGE, so a body that has never
 /// been scrolled emits nothing, which is exactly "at the top".
+///
+/// `#[cfg(unix)]` to match its only callers: the Copy Picks overflow test
+/// below arranges its long failure report with `chmod`, so it is unix-only
+/// and this helper is dead code on Windows — where `cargo clippy
+/// --all-targets -- -D warnings` turns "never used" into a build failure
+/// (CI, windows-latest, v0.13.0). `laid_out_at` and
+/// `assert_buttons_inside_card` above need no such gate: the clip-report
+/// test calls them on every platform.
+#[cfg(unix)]
 fn body_scroll_at(stderr: &str, what: &str, label: &str) -> f32 {
     let tag = format!("] {what} scrolled to ");
     let dump = format!("QEDUMP {label} ");
