@@ -1241,12 +1241,20 @@ Linux there is none and Slint draws the bar in-window, 40 px tall in the
 `fluent` style. Everything below the bar should therefore sit about
 40 px higher on Windows. That mechanism is read from the backend source
 (`i-slint-backend-winit` 1.17.1: `supports_native_menu_bar` is true under
-`cfg(muda)`, and `muda` is active for Windows in Cargo.lock); the one
-Windows measurement so far is the Title field 43 px higher (issue #70,
-3 px of it font metrics), and the Windows `window geometry` mark in the
-CI artifact — `grid 1440x840` against Linux's `1440x800` — is what
-confirms the number (pending the first artifact, 2026-09-02). Either
-way no driven test may click an in-window element at a coordinate
+`cfg(muda)`, and `muda` is active for Windows in Cargo.lock), and the
+first Windows artifact (PR #71, run 33675396904, 2026-09-02) measured it:
+`window geometry 1440x900 grid 1440x840` against ubuntu's `grid
+1440x800`, the Title field at `1150,121` against `1150,161` — the same
+`280x26` row, **exactly 40 px** apart, the menu bar and nothing else —
+and `click:iptc field 0` resolving to `1290,134` inside it. The 43 px
+this section used to name is a different distance and was never 40 + 3
+of font metrics (corrected 2026-09-02): it is how far the old hard-coded
+click at y=177 fell BELOW the Windows field's centre (177 − 134), and
+those 3 px are that click sitting 3 px low on the ubuntu runner too —
+the development seat lays the row at y=164 and ubuntu-latest at y=161,
+which is font metrics between two LINUX seats, not between platforms. No
+driven test may click an
+in-window element at a coordinate
 measured on the other platform (harness section, `click:<element>`),
 and the menu-click strands are Linux-only: a dispatched pointer event
 cannot reach an OS menu.
@@ -2267,13 +2275,43 @@ the user confirms, all cheap to change):**
       first so all three badge layouts are on screen at once — no badge,
       ✓ + stepped `▶`, and `▶` alone in the ✓'s slot — locates the first
       cell row in the picture (the menu bar's height is a font metric, so
-      it is measured, not assumed) and reads each badge slot's DARK
-      FRACTION, plus the ✓'s greenness against the same rectangle of a
-      cell that has none. The `▶` glyph's MONOCHROME rendering is
-      mechanized in the same place: its strokes must be bright and neutral,
-      which is what proves the font gave us text in the UI's own colour
-      rather than a colour-emoji bitmap. Both mutations above were
-      confirmed RED against it, as was removing the badge's 28 px step.
+      it is measured, not assumed) and MEASURES each pill's horizontal
+      extent in the badge band, plus the ✓'s greenness against the same
+      rectangle of a cell that has none. The `▶` glyph's MONOCHROME
+      rendering is mechanized in the same place: its strokes must be
+      bright and neutral, which is what proves the font gave us text in
+      the UI's own colour rather than a colour-emoji bitmap. Both
+      mutations above were confirmed RED against it, as was removing the
+      badge's 28 px step — all three against the ORIGINAL, dark-fraction
+      form of the criterion (2026-08-29). Against the edge form below,
+      what has been re-run is the pixel-equivalent pair: a shot with the
+      uncopied frame's pill moved 20 px out of its slot, and one with the
+      copied frame's pill removed.
+      **The criterion is the pill's LEFT EDGE, not the rectangle it fills
+      (issue #70, 2026-09-02).** A pill is found by scanning cell-local
+      x 0..70 across the band `cell_h-20 .. cell_h-6`, calling a pixel
+      column dark at a 0.3 dark fraction, merging runs separated by ≤ 4 px
+      (the glyph's own bright strokes split it) and taking the first
+      merged run ≥ 8 px: column 0 must have none, the uncopied frame's
+      pill must START at x 6..=12 (the ✓'s slot), the copied frame's at
+      x 26..=32 with nothing before x 20 (the ✓'s slot stays free), and
+      both spans must be 14..=34 px wide. That bound says "a pill, not the
+      photograph" at the bottom and "not two pills run together, and not
+      a badge drawn at twice its size" at the top — the widest measured
+      pill plus 8 px, which the fixed rectangle it replaces used to catch
+      incidentally (validator 2026-09-02). It cannot be tighter, because
+      the WIDTH is the font's: the Windows runner draws `▶` from a face
+      that BOXES it, so measured on PR #71's two CI artifacts the same
+      pills run x 9..28 / 28..47 on ubuntu and x 9..35 / 28..54 on Windows
+      — identical left edges, 19 px against 26 px, with the development
+      seat's own Linux face at 21 px. The fixed `x 30..46` control the
+      criterion replaced
+      read 0.26 dark on Windows against a `< 0.15` bound and was that
+      run's only red: a font difference, not a layout defect. The
+      criterion lives in `assert_badge_pixels`, which takes a decoded shot
+      so it can be replayed over a CI artifact from either platform; it
+      passes on both of them and fails on a mutant with the uncopied
+      frame's pill shifted 20 px right, or the copied frame's removed.
       **Positional navigation in a drive script must be gated on the
       settled sort.** The view is in provisional FILENAME order until the
       last frame's metadata lands and then re-sorts to the user's sort
@@ -2914,9 +2952,10 @@ Documented because they ship in release builds (validator finding):
   A literal point is measured on one platform's layout and lands silently
   somewhere else on another. The measurement that made this a rule: on
   Windows the menu bar is the OS menu bar, outside the client area (see
-  "Window chrome"), so every in-window y should sit about 40 px higher
-  than under the Linux `fluent` bar's 40 px band (source-verified; the
-  number is pending the Windows artifact, see "Window chrome"), and the
+  "Window chrome"), so every in-window y sits 40 px higher than under the
+  Linux `fluent` bar's 40 px band — source-verified, and measured exactly
+  that between the two CI runners on the first Windows artifact (see
+  "Window chrome") — and the
   seven clicks, in five tests, that hit the Title field at `1290,177`
   were landing 43 px below its centre on Windows — three reds at v0.13.0
   (issue #70; the coordinate appeared 12 times in the file, seven script

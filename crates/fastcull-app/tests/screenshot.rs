@@ -250,9 +250,20 @@ fn grid_shot(path: &Path, columns: usize) -> GridShot {
         }
     }
     let row_top = row_top.expect("no row of thumbnails in the snapshot");
+    // A SANITY CHECK on the probe, not a layout assertion: it says the
+    // bright run found is a row of thumbnails and not a piece of chrome
+    // (or the whole window). The chrome above row 0 is platform-dependent
+    // and MUST stay free to move — measured 80 on the Linux runners (a
+    // 40 px in-window menu bar plus the chip bar) and exactly 40 on
+    // Windows, where the menu bar is the OS one and only the 34 px chip
+    // bar and the 6 px gap are left. The lower bound therefore sits well
+    // under the Windows value: a font-metric px in the chip bar must not
+    // redden every grid_shot test on one platform (validator 2026-09-02).
     assert!(
-        (40.0..250.0).contains(&row_top),
-        "the first cell row was located at y={row_top}, which is not under the chrome"
+        (24.0..250.0).contains(&row_top),
+        "the probe found its first bright run at y={row_top}, which is no \
+         plausible first cell row — it locked onto the chrome, or onto \
+         nothing"
     );
     GridShot {
         w,
@@ -307,6 +318,39 @@ impl GridShot {
     fn greenness(&self, col: usize, x0: f64, y0: f64, x1: f64, y1: f64) -> f64 {
         let px = self.cell_px(col, x0, y0, x1, y1);
         px.iter().map(|(r, g, b)| g - r.max(*b)).sum::<f64>() / px.len() as f64
+    }
+
+    /// Where the first badge PILL of column `col` starts and ends in the
+    /// badge band `y0..y1`, cell-local x, or `None` when the band is bare
+    /// picture.
+    ///
+    /// One pixel column at a time across x 0..70: a column belongs to a
+    /// pill when at least 30 % of its band is dark (`dark_fraction`'s own
+    /// threshold), runs separated by 4 px or less are MERGED — the glyph's
+    /// bright strokes cut the pill into two or three runs — and the first
+    /// merged run at least 8 px wide is the answer.
+    ///
+    /// What a badge test may assert is this LEFT EDGE. The width is the
+    /// font's: the Windows runner draws ▶ from a face that boxes it, so
+    /// the same pill measures 26 px there against 19 px on the ubuntu
+    /// runner (and 21 px on the development seat: the Linux face is not
+    /// one thing either) —
+    /// which is why the fixed 30..46 rectangle this replaced read 0.26
+    /// dark on Windows and failed a `< 0.15` control (issue #70, measured
+    /// on PR #71's two CI artifacts). The layout is right on both; only
+    /// the old assertion assumed one platform's glyph metrics.
+    fn pill_span(&self, col: usize, y0: f64, y1: f64) -> Option<(usize, usize)> {
+        let mut runs: Vec<(usize, usize)> = Vec::new();
+        for x in 0..70usize {
+            if self.dark_fraction(col, x as f64, y0, x as f64 + 1.0, y1) < 0.3 {
+                continue;
+            }
+            match runs.last_mut() {
+                Some(last) if x - last.1 <= 4 => last.1 = x + 1,
+                _ => runs.push((x, x + 1)),
+            }
+        }
+        runs.into_iter().find(|(x0, x1)| x1 - x0 >= 8)
     }
 
     /// The bright pixels of a rectangle — the glyph strokes — and the
@@ -5805,6 +5849,105 @@ fn export_frames_as_video_writes_a_real_motion_jpeg() {
     );
 }
 
+/// The badge PIXEL criterion of the test below, factored out so it can be
+/// replayed over a CI artifact — a `clip-badge.jpg` from either runner —
+/// and not only over a shot this machine just took (issue #70).
+///
+/// It asserts the pill's LEFT EDGE, never a rectangle it must fill. The
+/// ▶ glyph comes from a different face on Windows, which draws it BOXED:
+/// `pill_span` over PR #71's two artifacts reports the pill in the ✓'s
+/// slot at x 9..28 on Linux against 9..35 on Windows, and the stepped one
+/// at 28..47 against 28..54 — the SAME left edge, 19 px against 26 px of
+/// width. A font difference, not a defect; the fixed `x 30..46` control
+/// this replaced read 0.26 dark on Windows (against a `< 0.15` bound)
+/// because the wider pill's right end reached into it.
+fn assert_badge_pixels(shot: &GridShot) {
+    // The badge band, in the badges' own cell-local coordinates: the ✓
+    // lives at x 8 and the ▶ falls back to that slot, stepping to x 28
+    // only when a ✓ is in the way.
+    let (band0, band1) = (shot.cell_h - 20.0, shot.cell_h - 6.0);
+    let check = (8.0, shot.cell_h - 19.0, 20.0, shot.cell_h - 7.0);
+    let span = |col: usize| shot.pill_span(col, band0, band1);
+    let green = |col: usize, r: (f64, f64, f64, f64)| shot.greenness(col, r.0, r.1, r.2, r.3);
+
+    // Column 0 is the control: `c` lost its only video and was never
+    // copied, so nothing in its band may read as a pill at all.
+    assert!(
+        span(0).is_none(),
+        "the unbadged frame carries a pill at x {:?} — `c` has no ✓ and no \
+         ▶, so its badge band must be bare picture",
+        span(0)
+    );
+    // `b` is exported and NOT copied: with no ✓ in the way the pill takes
+    // the left slot — one half of that one line of layout.
+    let b = span(2).unwrap_or_else(|| {
+        panic!("no ▶ pill at all on the exported, uncopied frame — its badge band is bare")
+    });
+    assert!(
+        (6..=12).contains(&b.0),
+        "the ▶ pill of the exported, uncopied frame starts at x {} — with \
+         no ✓ to step past it belongs in the ✓'s own slot at x 8",
+        b.0
+    );
+    // `a` is copied AND exported: the ✓ keeps x 8 and the pill steps right.
+    let a = span(1).unwrap_or_else(|| {
+        panic!("no ▶ pill beside the ✓ on the exported, copied frame — its badge band is bare")
+    });
+    assert!(
+        a.0 >= 20,
+        "the ▶ pill did not step past the ✓ — the first pill of the copied, \
+         exported frame starts at x {}, inside the ✓'s slot",
+        a.0
+    );
+    assert!(
+        (26..=32).contains(&a.0),
+        "the ▶ pill of the copied, exported frame starts at x {} — the step \
+         past the ✓ puts it at x 28",
+        a.0
+    );
+    // The WIDTH is bounded on both sides: loosely, because it is the
+    // font's — 19 px on the ubuntu runner, 21 px on the development seat,
+    // 26 px on Windows, where the glyph is boxed — but not open-ended.
+    // The upper bound is the widest measured pill plus 8 px, which is
+    // what still catches a pill drawn twice its size or two pills merged
+    // into one run (the fixed rectangle this replaced caught that
+    // incidentally; validator 2026-09-02).
+    for (what, (x0, x1)) in [("stepped past the ✓", a), ("in the ✓'s slot", b)] {
+        let width = x1 - x0;
+        assert!(
+            (14..=34).contains(&width),
+            "the ▶ pill {what} spans x {x0}..{x1}, {width} px — a pill \
+             measures 19-26 px across the runners (26 with Windows's boxed \
+             glyph), so this is the photograph, two pills run together, or \
+             a badge drawn at the wrong size"
+        );
+    }
+    assert!(
+        green(1, check) > green(0, check) + 8.0,
+        "the ✓ is gone from the copied frame: greenness {:.1} against \
+         {:.1} on the frame that has none",
+        green(1, check),
+        green(0, check)
+    );
+    // MONOCHROME, mechanized: the glyph took the UI's own `#d8d8e0`, so
+    // its strokes are bright and neutral. A colour-emoji bitmap ignores
+    // the `color` property, and U+25B6 is in the emoji-presentation set —
+    // this is the check that says which one the font gave us. Read over
+    // the pill this run MEASURED, not over a fixed rectangle: on Windows
+    // the strokes of the boxed glyph reach past x 46.
+    let (bright, spread) = shot.bright_spread(1, a.0 as f64, band0, a.1 as f64, band1);
+    assert!(
+        bright >= 12,
+        "no bright glyph strokes inside the ▶ pill — it rendered as a \
+         dark bitmap, not as text in the UI's colour ({bright} px)"
+    );
+    assert!(
+        spread <= 40.0,
+        "the ▶ glyph is not monochrome (worst channel spread {spread:.0}) \
+         — the font gave us a colour emoji; the spec's fallback is ▸ U+25B8"
+    );
+}
+
 /// The ▶ exported badge and the dialog's counted hint (issue #56), end to
 /// end on real camera frames — the whole session-only contract in one run,
 /// asserted in the GRID's pixels and not only in the ledger's state.
@@ -6135,76 +6278,17 @@ fn an_exported_frame_wears_a_badge_until_its_video_is_gone() {
     // and no ▶ (its only video was deleted); `a` (col 1) has both, the ✓
     // at x 8 and the ▶ pill stepped right to x 28; `b` (col 2) has the ▶
     // alone, in the ✓'s own slot at x 8. Column 0 is therefore the
-    // photograph-only control for both rectangles.
+    // photograph-only control.
+    //
+    // What is asserted is each pill's LEFT EDGE, not a rectangle it fills:
+    // the Windows runner's ▶ comes from a face that draws it BOXED, so the
+    // pill is 26 px wide there against 19 px on the ubuntu runner (a font
+    // difference, not a defect — see `assert_badge_pixels`, which is also
+    // replayable over a CI artifact from either platform: it passes on
+    // both of PR #71's `clip-badge.jpg` files unchanged).
     let (w, h, luma) = analyze(&out);
     assert!(w >= 640 && h >= 480 && luma > 5.0, "{w}x{h} luma {luma:.2}");
-    let shot = grid_shot(&out, 8);
-    // Cell-local rectangles, in the badges' own coordinates: the LEFT
-    // badge slot (x 8, where ✓ lives and where ▶ falls back to) and the
-    // STEPPED ▶ pill's slot (x 28, taken only when a ✓ is in the way).
-    let slot = (10.0, shot.cell_h - 20.0, 26.0, shot.cell_h - 6.0);
-    let step = (30.0, shot.cell_h - 20.0, 46.0, shot.cell_h - 6.0);
-    let check = (8.0, shot.cell_h - 19.0, 20.0, shot.cell_h - 7.0);
-    let dark = |col: usize, r: (f64, f64, f64, f64)| shot.dark_fraction(col, r.0, r.1, r.2, r.3);
-    let green = |col: usize, r: (f64, f64, f64, f64)| shot.greenness(col, r.0, r.1, r.2, r.3);
-
-    // Column 0 is the control: `c` lost its only video, was never copied,
-    // and must be bare in BOTH slots.
-    for (name, r) in [("the ✓ slot", slot), ("the stepped ▶ slot", step)] {
-        assert!(
-            dark(0, r) < 0.15,
-            "{name} of the unbadged frame is not bare picture ({:.2} dark)",
-            dark(0, r)
-        );
-    }
-    // `a` is copied AND exported: the ✓ keeps x 8 and the pill steps right.
-    assert!(
-        dark(1, step) > 0.4,
-        "no ▶ pill beside the ✓ on the exported, copied frame ({:.2} dark)",
-        dark(1, step)
-    );
-    assert!(
-        dark(1, slot) < 0.15,
-        "the ▶ pill did not step past the ✓ — it is sitting on it \
-         ({:.2} dark in the ✓ slot)",
-        dark(1, slot)
-    );
-    assert!(
-        green(1, check) > green(0, check) + 8.0,
-        "the ✓ is gone from the copied frame: greenness {:.1} against \
-         {:.1} on the frame that has none",
-        green(1, check),
-        green(0, check)
-    );
-    // `b` is exported and NOT copied: with no ✓ in the way the pill takes
-    // the left slot — the other half of that one line of layout.
-    assert!(
-        dark(2, slot) > 0.4,
-        "no ▶ pill in the ✓'s slot on the exported, uncopied frame \
-         ({:.2} dark)",
-        dark(2, slot)
-    );
-    assert!(
-        dark(2, step) < 0.15,
-        "the ▶ pill stepped right on a frame that has no ✓ to step past \
-         ({:.2} dark)",
-        dark(2, step)
-    );
-    // MONOCHROME, mechanized: the glyph took the UI's own `#d8d8e0`, so
-    // its strokes are bright and neutral. A colour-emoji bitmap ignores
-    // the `color` property, and U+25B6 is in the emoji-presentation set —
-    // this is the check that says which one the font gave us.
-    let (bright, spread) = shot.bright_spread(1, step.0, step.1, step.2, step.3);
-    assert!(
-        bright >= 12,
-        "no bright glyph strokes inside the ▶ pill — it rendered as a \
-         dark bitmap, not as text in the UI's colour ({bright} px)"
-    );
-    assert!(
-        spread <= 40.0,
-        "the ▶ glyph is not monochrome (worst channel spread {spread:.0}) \
-         — the font gave us a colour emoji; the spec's fallback is ▸ U+25B8"
-    );
+    assert_badge_pixels(&grid_shot(&out, 8));
 }
 
 /// The clash question, end to end, on tiny synthetic RAWs so three exports
