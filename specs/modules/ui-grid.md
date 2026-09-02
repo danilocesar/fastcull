@@ -1231,7 +1231,35 @@ one image, always.
 ## Window chrome (menu bar — user-requested 2026-07-24, lands M5)
 
 Slim native menu bar (Slint MenuBar); the keyboard remains the fast path —
-menus are discoverability, never a required route:
+menus are discoverability, never a required route.
+
+**Where that bar is drawn is the platform's choice, and it differs**
+(recorded 2026-09-02, issue #70 — existing behaviour, not a change): on
+Windows the winit backend supports a NATIVE menu bar (`muda`), so the
+menus belong to the OS window frame and sit outside the client area; on
+Linux there is none and Slint draws the bar in-window, 40 px tall in the
+`fluent` style. Everything below the bar should therefore sit about
+40 px higher on Windows. That mechanism is read from the backend source
+(`i-slint-backend-winit` 1.17.1: `supports_native_menu_bar` is true under
+`cfg(muda)`, and `muda` is active for Windows in Cargo.lock), and the
+first Windows artifact (PR #71, run 33675396904, 2026-09-02) measured it:
+`window geometry 1440x900 grid 1440x840` against ubuntu's `grid
+1440x800`, the Title field at `1150,121` against `1150,161` — the same
+`280x26` row, **exactly 40 px** apart, the menu bar and nothing else —
+and `click:iptc field 0` resolving to `1290,134` inside it. The 43 px
+this section used to name is a different distance and was never 40 + 3
+of font metrics (corrected 2026-09-02): it is how far the old hard-coded
+click at y=177 fell BELOW the Windows field's centre (177 − 134), and
+those 3 px are that click sitting 3 px low on the ubuntu runner too —
+the development seat lays the row at y=164 and ubuntu-latest at y=161,
+which is font metrics between two LINUX seats, not between platforms. No
+driven test may click an
+in-window element at a coordinate
+measured on the other platform (harness section, `click:<element>`),
+and the menu-click strands are Linux-only: a dispatched pointer event
+cannot reach an OS menu.
+
+The menus:
 
 - **File**: Open Folder… (native picker via `rfd`; replaces CLI-only launch),
   Copy Picks… (`Ctrl+E`, enabled from M6), Export Frames as Video…
@@ -1540,8 +1568,11 @@ restore — see Focus continuity in the Filter & sort bar section.
     after the rebuild, and a `drive: key:w` at [5936] was lost to a
     claim at [5937]. The cursor-move test's fixed-time keys after the
     move fell in that gap once in 20 on that seat; its acting assertion
-    now names both readings, and #69 proposes waiting for the claim mark
-    instead of the clock. The loss case the FAIL-1 family was — "no
+    now names both readings, and the keys no longer run on the clock: the
+    script waits for the claim itself (`wait:row 0 (gen K)`, issue #69 —
+    the harness section's `wait:` paragraph says why the gen has to be in
+    the substring). The gap the table prices is unchanged; what closed is
+    a driven run's exposure to it. The loss case the FAIL-1 family was — "no
     claim at all" — is closed on both orderings; a key inside the gap is
     the residual the table above prices.
     The arm that actually DELIVERS is the deferred RE-ASSERT
@@ -2139,8 +2170,13 @@ the user confirms, all cheap to change):**
       fail its "the drag scrolled" precondition — and the double-click rule
       carries its control in the run (the same cadence on one point DOES
       open the loupe).
-      All five are also load-verified in DEBUG, which is the profile CI
-      runs on both platforms: 20 runs each under six busy cores, after the
+      All five are also load-verified in DEBUG, which on the Windows
+      runner is a profile CI really runs the screenshot suite in
+      (corrected 2026-09-02, issue #70): `has_display()` is
+      `cfg!(windows)` there, so `cargo test --workspace` runs the suite in
+      debug and the release step runs it a second time, while on Linux the
+      debug step has no display and only the xvfb release step runs it.
+      In debug: 20 runs each under six busy cores, after the
       gesture spans were compressed to a third of Slint's `DURATION_THRESHOLD`
       and `click_interval` (a 600 ms drag and a 150 ms click pair fit on an
       idle machine and lost the race about one run in ten — those windows
@@ -2239,13 +2275,43 @@ the user confirms, all cheap to change):**
       first so all three badge layouts are on screen at once — no badge,
       ✓ + stepped `▶`, and `▶` alone in the ✓'s slot — locates the first
       cell row in the picture (the menu bar's height is a font metric, so
-      it is measured, not assumed) and reads each badge slot's DARK
-      FRACTION, plus the ✓'s greenness against the same rectangle of a
-      cell that has none. The `▶` glyph's MONOCHROME rendering is
-      mechanized in the same place: its strokes must be bright and neutral,
-      which is what proves the font gave us text in the UI's own colour
-      rather than a colour-emoji bitmap. Both mutations above were
-      confirmed RED against it, as was removing the badge's 28 px step.
+      it is measured, not assumed) and MEASURES each pill's horizontal
+      extent in the badge band, plus the ✓'s greenness against the same
+      rectangle of a cell that has none. The `▶` glyph's MONOCHROME
+      rendering is mechanized in the same place: its strokes must be
+      bright and neutral, which is what proves the font gave us text in
+      the UI's own colour rather than a colour-emoji bitmap. Both
+      mutations above were confirmed RED against it, as was removing the
+      badge's 28 px step — all three against the ORIGINAL, dark-fraction
+      form of the criterion (2026-08-29). Against the edge form below,
+      what has been re-run is the pixel-equivalent pair: a shot with the
+      uncopied frame's pill moved 20 px out of its slot, and one with the
+      copied frame's pill removed.
+      **The criterion is the pill's LEFT EDGE, not the rectangle it fills
+      (issue #70, 2026-09-02).** A pill is found by scanning cell-local
+      x 0..70 across the band `cell_h-20 .. cell_h-6`, calling a pixel
+      column dark at a 0.3 dark fraction, merging runs separated by ≤ 4 px
+      (the glyph's own bright strokes split it) and taking the first
+      merged run ≥ 8 px: column 0 must have none, the uncopied frame's
+      pill must START at x 6..=12 (the ✓'s slot), the copied frame's at
+      x 26..=32 with nothing before x 20 (the ✓'s slot stays free), and
+      both spans must be 14..=34 px wide. That bound says "a pill, not the
+      photograph" at the bottom and "not two pills run together, and not
+      a badge drawn at twice its size" at the top — the widest measured
+      pill plus 8 px, which the fixed rectangle it replaces used to catch
+      incidentally (validator 2026-09-02). It cannot be tighter, because
+      the WIDTH is the font's: the Windows runner draws `▶` from a face
+      that BOXES it, so measured on PR #71's two CI artifacts the same
+      pills run x 9..28 / 28..47 on ubuntu and x 9..35 / 28..54 on Windows
+      — identical left edges, 19 px against 26 px, with the development
+      seat's own Linux face at 21 px. The fixed `x 30..46` control the
+      criterion replaced
+      read 0.26 dark on Windows against a `< 0.15` bound and was that
+      run's only red: a font difference, not a layout defect. The
+      criterion lives in `assert_badge_pixels`, which takes a decoded shot
+      so it can be replayed over a CI artifact from either platform; it
+      passes on both of them and fails on a mutant with the uncopied
+      frame's pill shifted 20 px right, or the copied frame's removed.
       **Positional navigation in a drive script must be gated on the
       settled sort.** The view is in provisional FILENAME order until the
       last frame's metadata lands and then re-sorts to the user's sort
@@ -2466,7 +2532,10 @@ the user confirms, all cheap to change):**
       belongs to the fit surface, whose click also claims the keyboard: the
       test went green having exercised the wrong element. Both keep the
       preconditions they used to fail on, and both gained one: the field
-      click is checked against the rectangle the app reported, and the
+      click is RESOLVED against the rectangle the app reported (issue #70
+      — the script names the element and the test asserts the resolved
+      point is inside the rect; it used to name a coordinate and check
+      that), and the
       loupe click is off-centre so the re-centre it produces proves it
       reached the overlay's own surface rather than the cell behind it.
       That sharper aim also made the 1:1 test able to fail for the right
@@ -2581,9 +2650,10 @@ Documented because they ship in release builds (validator finding):
   hit-testable at all (issues #13/#61). A driven click on a panel field is
   a point chosen before the app existed, and whether the field is THERE
   yet is a layout outcome a loaded machine can be seconds late with — so a
-  script `wait:`s for the row and the test asserts afterwards that the
-  point it aimed at was inside the rectangle, which is also the
-  calibration guard for the platform's font metrics. Both hooks are
+  script clicks it BY NAME (`click:iptc field 0`) and the test asserts
+  afterwards that the point the harness resolved was inside the rectangle
+  — the calibration guard, which since issue #70 reads that resolution
+  instead of a coordinate the test repeats. Both hooks are
   needed: the instantiation report is the only one rows 0 and 1 ever emit
   (their first computed position is already their last), and the
   move report is what tells a script that a `resize:` has landed.
@@ -2606,13 +2676,25 @@ Documented because they ship in release builds (validator finding):
   grid's own PgUp/PgDn/Home/End were reachable only through the `nav`
   tokens, which bypass the key path.
   Two more marks let a driven run gate on the app instead of the clock
-  (issue #62): `clip export finished` and `copy finished` fire when the
-  respective report card goes up, and `load settled gen N` carries the
-  session generation — `session-gen` counts from 0 for the folder the app
+  (issue #62): `clip export finished run N` and `copy finished run N` fire
+  when the respective report card goes up, and `load settled gen N`
+  carries the session generation — `session-gen` counts from 0 for the folder the app
   opened with, so the second folder a script opens settles as `gen 1`.
   That generation is what makes the #13 "next occurrence" limitation
   survivable for a session swap: every session used to settle with the
   same sentence, so `wait:load settled` could only ever match the first.
+  The `run N` on the two finish marks is the same idiom against the same
+  limitation (issue #70): N counts the copies (respectively exports) this
+  PROCESS has started, 1-based, incremented where the worker is launched
+  and carried across a session swap like the remembered destination — so
+  a script's second copy waits on `copy finished run 2` instead of being
+  satisfied by the first one's mark, which is what the two clash tests
+  replaced with an 800 ms and a 1.3 s guess (the copy one was a Windows
+  red at v0.13.0: `copystate` read 1, the copy was still running). A bare
+  `wait:copy finished` still matches, being a substring. A run CANCELLED
+  by a session swap emits no mark at all — cancelled is not finished, and
+  the dialog's report says which — so a wait for that run's number ends
+  the script, correctly: nothing it waits for will happen.
   **Focus, as it moves (issues #63/#64)**: `keysfocus` at a dump is one
   sample of a value that changes several times inside a single input
   dispatch, which is how a stranded keyboard shipped twice — a run could
@@ -2763,6 +2845,14 @@ Documented because they ship in release builds (validator finding):
   menu items — a strand gated by `menu_clicks_are_calibrated()`, so on
   the Windows runner those tests fall back to the token path and the
   fidelity fix is, in practice, exercised on Linux only (QE 2026-08-29).
+  That gate is NOT about font metrics, which is what this paragraph and
+  the helper's own comment used to say (corrected 2026-09-02, issue #70):
+  on Windows there is no in-window MenuBar to click at all — the winit
+  backend reports `supports_native_menu_bar()` there (its `muda`
+  dependency) and the menus are the OS menu bar, outside the client area,
+  where no dispatched pointer event can reach them. Within the Linux
+  in-window bar the item geometry does follow the platform's font
+  metrics, which is what the coordinates are calibrated for.
   `scroll:N` browses the grid to offset N logical px WITHOUT claiming the
   cursor — what the wheel does natively, and the one gesture the harness
   could not express, which is why a re-anchor that hauled a browsing user's
@@ -2833,6 +2923,45 @@ Documented because they ship in release builds (validator finding):
   save/restore machinery, plus panel fields and modal scrims. (Spelled
   with a dot: the visual break from the step's `MS:ACTION` colon keeps
   scripts readable.)
+  `click:<element>` (issue #70) is the same click at the CENTRE of the
+  rectangle the app last reported for a self-reporting element — the
+  names of the layout marks above: `iptc field N`, `copy card`, `copy
+  buttons`, `clip card`, `clip buttons`. The harness keeps those
+  rectangles in a table written by the same callbacks that emit the marks,
+  UNCONDITIONALLY (a resolved click must not depend on whether the run
+  also asked for a trace log), and resolves the name AT DISPATCH TIME, so
+  the point is the layout this run produced rather than one measured
+  elsewhere. It echoes `drive ptr click X,Y (<element>)`, unobserved like
+  the other pointer echoes, and that echo is what a test reads to assert
+  the click landed inside the rectangle. A name with no layout mark yet is
+  never a click into nowhere: the step traces `drive: click: no layout
+  mark for <element> — abandoning the run`, prints the same sentence on
+  bare stderr and exits non-zero — the `wait:` cap's shape, and for its
+  reason (the step holds the shutter, so the silent alternative is a
+  half-driven run photographed anyway).
+  What the table cannot know is whether the element is still THERE: a
+  mark is never retracted (Slint has no destroy hook to retract it
+  from), so a name whose element has since gone — the panel closed, the
+  dialog dismissed — resolves to its LAST rectangle and clicks whatever
+  is under it now, silently (validator 2026-09-02: `key:i`, `key:i`,
+  `click:iptc field 0` → a click into the grid, exit 0). A script names
+  only elements it has just put on screen, and its outcome assertion —
+  `focus: iptc field 0 gained`, the dialog's answer — is what catches
+  the stale case; `assert_click_resolved` alone does not.
+  **The rule: a traced element is clicked by NAME, never by coordinate.**
+  A literal point is measured on one platform's layout and lands silently
+  somewhere else on another. The measurement that made this a rule: on
+  Windows the menu bar is the OS menu bar, outside the client area (see
+  "Window chrome"), so every in-window y sits 40 px higher than under the
+  Linux `fluent` bar's 40 px band — source-verified, and measured exactly
+  that between the two CI runners on the first Windows artifact (see
+  "Window chrome") — and the
+  seven clicks, in five tests, that hit the Title field at `1290,177`
+  were landing 43 px below its centre on Windows — three reds at v0.13.0
+  (issue #70; the coordinate appeared 12 times in the file, seven script
+  steps and five assertion markers). Coordinates remain right for what
+  reports no rectangle: grid cells (derived from the column geometry), the
+  menu bar, the panel's padding strip, the dialog answer rows.
   `press.X,Y` / `move.X,Y` / `release.X,Y` (issue #46; promoted from QE
   instrumentation like `key:`/`click.` before them, the PR #43
   precedent) are `click.`'s three phases as separately SCHEDULABLE
@@ -2878,7 +3007,25 @@ Documented because they ship in release builds (validator finding):
   for the second session's settle was the example, and it is now
   expressible: the mark carries the session generation,
   `wait:load settled gen 1`, issue #62. That is the pattern for the
-  limitation generally — put the thing that DIFFERS into the mark); "past"
+  limitation generally — put the thing that DIFFERS into the mark. The
+  second instance is the rebuild reclaim, `wait:row 0 (gen K)` from
+  `focus-keys (row 0 (gen K))`, where K is `iptc-rebuild-gen` at the
+  row's birth, i.e. the number of content-changing rows rebuilds so far:
+  it is what lets a script hold its keys until THIS rebuild's claim has
+  landed instead of trusting a timestamp against the reclaim gap the
+  owner-invariant table prices — issue #69. K is a property of the
+  script, so a script that gains or loses a rebuild must re-read it; the
+  failure is the loud one, a wait that is never satisfied. Two
+  corollaries (validator 2026-09-02): the cursor-move script opens the
+  panel only after `wait:load settled gen 0`, so a slow runner whose
+  metadata lands after the panel opened cannot add a rebuild and shift
+  K; and where the row's `gen` does NOT differ, the re-assert's own mark
+  does — `focus-keys (<why> -> row N)`, `menu -> row 0` once a menu item
+  has activated, `restore -> row 0` after a rebuild — which is what the
+  menu-item strand waits on before its keys. A DISMISSED menu emits no
+  claim mark of its own, so that strand stays on the clock, and its test
+  says so. The third
+  instance is `run N` on the copy/export finish marks); "past"
   starts at `harness::install`, which runs AFTER the session dispatch and
   the first refresh, so a mark from the opening scan or the first layout
   is never observed; only the APP is observed, never the harness narrating

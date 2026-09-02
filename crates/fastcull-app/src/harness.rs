@@ -3,6 +3,7 @@
 //! events, session swaps, window resizes, and the QEDUMP state dumps).
 
 use std::cell::{Cell, RefCell};
+use std::collections::HashMap;
 use std::rc::Rc;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Arc;
@@ -48,6 +49,15 @@ const WAIT_CAP: Duration = Duration::from_secs(30);
 /// wrote" holds to within a frame.
 const WAIT_POLL: Duration = Duration::from_millis(5);
 
+/// Where the layout last put each element that reports itself (panel field
+/// rows, dialog cards and button rows), in window-logical px: the table
+/// `click:<element>` resolves against.
+///
+/// Written from the layout callbacks UNCONDITIONALLY — independent of
+/// `trace_mark_with`'s "is anyone listening" gate — because a resolved
+/// click must not depend on whether the run also asked for a trace log.
+type LayoutMap = Rc<RefCell<HashMap<String, (f32, f32, f32, f32)>>>;
+
 /// Schedule every step of the FASTCULL_DRIVE script (a no-op when the
 /// variable is unset). Returns the not-yet-fired counter the screenshot
 /// shutter waits on, so a scripted run means the same thing in every
@@ -61,6 +71,11 @@ pub(crate) fn install(window: &MainWindow, state: &Rc<RefCell<AppState>>) -> Rc<
     // late-scheduled actions fire, capturing a half-driven state — the
     // same script must mean the same shot in every profile.
     let drives_pending = Rc::new(std::cell::Cell::new(0usize));
+    // Where the layout last put each self-reporting element, for
+    // `click:<element>` (issue #70). The TABLE is written on every
+    // report; the trace line beside it still costs nothing when nobody
+    // is listening.
+    let layout: LayoutMap = Rc::new(RefCell::new(HashMap::new()));
     // Layout observability for the panel fields (issues #13/#61): the rows
     // report where the layout put them, and the trace is what a script's
     // `wait:` and a test's did-the-click-hit assertion both read. Wired
@@ -69,7 +84,10 @@ pub(crate) fn install(window: &MainWindow, state: &Rc<RefCell<AppState>>) -> Rc<
     // `trace_mark_with`, because this fires once per ROW per relayout (a
     // window-resize drag with the panel open would otherwise allocate
     // eleven strings a frame for output nobody asked for).
-    window.on_dbg_field_laid_out(|i, x, y, w, h| {
+    let rows = Rc::clone(&layout);
+    window.on_dbg_field_laid_out(move |i, x, y, w, h| {
+        rows.borrow_mut()
+            .insert(format!("iptc field {i}"), (x, y, w, h));
         trace_mark_with(|| format!("iptc field {i} laid out at {x:.0},{y:.0} size {w:.0}x{h:.0}"));
     });
     // The dialog cards and their button rows (issue #62). Their heights
@@ -79,7 +97,9 @@ pub(crate) fn install(window: &MainWindow, state: &Rc<RefCell<AppState>>) -> Rc<
     // card is still drawn and still clickable, so no render proves it
     // either. Same wiring rules as the panel rows above: unconditional,
     // through `trace_mark_with`.
-    window.on_dbg_card_laid_out(|what, x, y, w, h| {
+    let cards = Rc::clone(&layout);
+    window.on_dbg_card_laid_out(move |what, x, y, w, h| {
+        cards.borrow_mut().insert(what.to_string(), (x, y, w, h));
         trace_mark_with(|| format!("{what} laid out at {x:.0},{y:.0} size {w:.0}x{h:.0}"));
     });
     // A dialog body's scroll offset (issue #62): 0 at the top, negative
@@ -139,6 +159,7 @@ pub(crate) fn install(window: &MainWindow, state: &Rc<RefCell<AppState>>) -> Rc<
             &window.as_weak(),
             state,
             &drives_pending,
+            &layout,
         );
     }
     drives_pending
@@ -157,27 +178,34 @@ fn schedule_from(
     window: &slint::Weak<MainWindow>,
     state: &Rc<RefCell<AppState>>,
     pending: &Rc<Cell<usize>>,
+    layout: &LayoutMap,
 ) {
     for (idx, step) in steps.iter().enumerate().skip(from) {
         let delay = Duration::from_millis(step.ms.saturating_sub(base_ms));
         if step.wait.is_some() {
-            let (steps, win, state, pending) = (
+            let (steps, win, state, pending, layout) = (
                 Rc::clone(steps),
                 window.clone(),
                 Rc::clone(state),
                 Rc::clone(pending),
+                Rc::clone(layout),
             );
             slint::Timer::single_shot(delay, move || {
-                poll_wait(&steps, idx, Instant::now(), &win, &state, &pending);
+                poll_wait(&steps, idx, Instant::now(), &win, &state, &pending, &layout);
             });
             return; // the rest is scheduled when the wait fires
         }
         let key = step.action.clone();
-        let (win, state, pending) = (window.clone(), Rc::clone(state), Rc::clone(pending));
+        let (win, state, pending, layout) = (
+            window.clone(),
+            Rc::clone(state),
+            Rc::clone(pending),
+            Rc::clone(layout),
+        );
         slint::Timer::single_shot(delay, move || {
             pending.set(pending.get().saturating_sub(1));
             let Some(win) = win.upgrade() else { return };
-            dispatch(&win, &state, &key);
+            dispatch(&win, &state, &key, &layout);
         });
     }
 }
@@ -191,6 +219,7 @@ fn poll_wait(
     window: &slint::Weak<MainWindow>,
     state: &Rc<RefCell<AppState>>,
     pending: &Rc<Cell<usize>>,
+    layout: &LayoutMap,
 ) {
     let step = &steps[idx];
     let satisfied = step
@@ -204,7 +233,7 @@ fn poll_wait(
             step.action,
             since.elapsed().as_millis()
         ));
-        schedule_from(steps, idx + 1, step.ms, window, state, pending);
+        schedule_from(steps, idx + 1, step.ms, window, state, pending, layout);
         return;
     }
     if since.elapsed() >= WAIT_CAP {
@@ -226,20 +255,40 @@ fn poll_wait(
         );
         std::process::exit(1);
     }
-    let (steps, win, state, pending) = (
+    let (steps, win, state, pending, layout) = (
         Rc::clone(steps),
         window.clone(),
         Rc::clone(state),
         Rc::clone(pending),
+        Rc::clone(layout),
     );
     slint::Timer::single_shot(WAIT_POLL, move || {
-        poll_wait(&steps, idx, since, &win, &state, &pending);
+        poll_wait(&steps, idx, since, &win, &state, &pending, &layout);
+    });
+}
+
+/// One real pointer click at window-logical (x, y) — move, press,
+/// release, in the order Slint delivers a physical click. Shared by
+/// `click.X,Y` and `click:<element>` so the two tokens differ only in how
+/// the point is arrived at.
+fn click_at(win: &MainWindow, x: f32, y: f32) {
+    use slint::platform::{PointerEventButton, WindowEvent};
+    let pos = slint::LogicalPosition::new(x, y);
+    win.window()
+        .dispatch_event(WindowEvent::PointerMoved { position: pos });
+    win.window().dispatch_event(WindowEvent::PointerPressed {
+        position: pos,
+        button: PointerEventButton::Left,
+    });
+    win.window().dispatch_event(WindowEvent::PointerReleased {
+        position: pos,
+        button: PointerEventButton::Left,
     });
 }
 
 /// Execute one scripted action — the interpreter proper, called from a
 /// step's timer (and from a `wait:`'s rebased schedule).
-fn dispatch(win: &MainWindow, state: &Rc<RefCell<AppState>>, key: &str) {
+fn dispatch(win: &MainWindow, state: &Rc<RefCell<AppState>>, key: &str, layout: &LayoutMap) {
     // Unobserved, like every line the harness writes about its own script:
     // this one QUOTES the step's action text, so a `wait:` whose substring
     // matched a later step would be satisfied by that step's echo instead
@@ -466,6 +515,43 @@ fn dispatch(win: &MainWindow, state: &Rc<RefCell<AppState>>, key: &str) {
         }
         return;
     }
+    if let Some(element) = key.strip_prefix("click:") {
+        // click:<element> — the same real click as `click.X,Y`, at the
+        // CENTRE of the rectangle the app last reported for a
+        // self-reporting element (`iptc field 0`, `copy card`,
+        // `clip buttons`), resolved when the step FIRES rather than when
+        // the script was written. A traced element is clicked by name,
+        // never by coordinate: a literal point is measured on one
+        // platform's layout and lands silently somewhere else on another
+        // — on Windows the menu bar is the OS one, outside the client
+        // area, so every in-window y sits ~40 px higher than under the
+        // in-window Linux bar, which is three tests clicking above the
+        // Title field (issue #70).
+        let element = element.trim();
+        let rect = layout.borrow().get(element).copied();
+        let Some((x, y, w, h)) = rect else {
+            // The wait-cap shape, and for the same reason: this step
+            // holds the shutter, so the silent alternative is a script
+            // that clicked nothing and a run photographed anyway. Loud on
+            // both channels and a non-zero exit, which the screenshot
+            // harness reports with the whole stderr attached.
+            trace_mark_unobserved(&format!(
+                "drive: click: no layout mark for {element} — abandoning the run"
+            ));
+            eprintln!(
+                "fastcull: FASTCULL_DRIVE click: no layout mark for {element} \
+                 — abandoning the run"
+            );
+            std::process::exit(1);
+        };
+        let (cx, cy) = (x + w / 2.0, y + h / 2.0);
+        click_at(win, cx, cy);
+        // Echoed like the `press./move./release.` pointer steps, and with
+        // the element named: this line is what a test reads to check the
+        // resolved point really landed inside the reported rectangle.
+        trace_mark_unobserved(&format!("drive ptr click {cx:.0},{cy:.0} ({element})"));
+        return;
+    }
     if let Some(at) = key.strip_prefix("click.") {
         // click.X,Y — a REAL pointer move + press + release at
         // window-logical coordinates, hit-tested by Slint like
@@ -478,18 +564,7 @@ fn dispatch(win: &MainWindow, state: &Rc<RefCell<AppState>>, key: &str) {
         // stays visually unambiguous in scripts.
         if let Some((x, y)) = at.split_once(',') {
             if let (Ok(x), Ok(y)) = (x.parse::<f32>(), y.parse::<f32>()) {
-                use slint::platform::{PointerEventButton, WindowEvent};
-                let pos = slint::LogicalPosition::new(x, y);
-                win.window()
-                    .dispatch_event(WindowEvent::PointerMoved { position: pos });
-                win.window().dispatch_event(WindowEvent::PointerPressed {
-                    position: pos,
-                    button: PointerEventButton::Left,
-                });
-                win.window().dispatch_event(WindowEvent::PointerReleased {
-                    position: pos,
-                    button: PointerEventButton::Left,
-                });
+                click_at(win, x, y);
             }
         }
         return;

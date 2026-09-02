@@ -286,6 +286,10 @@ pub(crate) fn short_dest(p: &std::path::Path) -> String {
 /// Hand a plan to the copy worker and put the dialog in its running state.
 fn start_copy(win: &MainWindow, st: &mut AppState, plan: fastcull_core::fileops::CopyPlan) {
     let (handle, rx) = fastcull_core::fileops::execute(plan);
+    // Numbered from here, not from the report: the mark this feeds is
+    // "the Nth copy has finished", and N must already be this run's when
+    // the events start arriving.
+    st.copy.runs = st.copy.runs.saturating_add(1);
     st.copy.handle = Some(handle);
     st.copy.rx = Some(rx);
     win.set_copy_state(1);

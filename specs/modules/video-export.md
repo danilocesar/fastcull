@@ -351,9 +351,12 @@ the failure is left visible rather than papered over.
   almost right — and the property is a relation between two rectangles:
   `buttons.y + buttons.h <= card.y + card.h`.
 - Two marks make the driven test clock-free (issue #62, harness section of
-  ui-grid.md): `clip export finished` fires when the report card goes up,
-  and `load settled gen N` carries the session generation so a script can
-  wait for the SECOND folder it opened.
+  ui-grid.md): `clip export finished run N` fires when the report card
+  goes up — N counting the exports this process started, so a script that
+  exports twice can wait for the second one (issue #70) — and `load
+  settled gen N` carries the session generation so a script can wait for
+  the SECOND folder it opened. An export CANCELLED by a session swap
+  emits no mark: cancelled is not finished.
 
 ## Exported badge and hint (issue #56, 2026-08-29)
 
@@ -807,13 +810,25 @@ sample RAWs), `app:` = the driven `tests/screenshot.rs` test.
       *Two notes on the evidence.* The badge is asserted **in the cells**,
       not only in the ledger: the driven test's final screenshot carries
       all three layouts at once (bare, ✓ + stepped `▶`, `▶` alone in the
-      ✓'s slot) and each slot's dark fraction is read against the same
-      rectangle of a cell that has no badge, with the ✓'s greenness read
-      the same way and the `▶` glyph's monochrome rendering mechanized as
-      "bright and neutral strokes" (a colour-emoji bitmap ignores the
-      `color` the UI gives it). Sending `exported: false`, deleting the
-      Slint block, and removing the badge's 28 px step were each confirmed
-      RED against it. And "reads, never decides" is structural in core
+      ✓'s slot) and each pill's horizontal extent is MEASURED in the badge
+      band, with the ✓'s greenness read against the same rectangle of a
+      cell that has no badge and the `▶` glyph's monochrome rendering
+      mechanized as "bright and neutral strokes" (a colour-emoji bitmap
+      ignores the `color` the UI gives it). What is asserted is the pill's
+      LEFT EDGE — x 8's slot, or x 28 when a ✓ is in the way — plus a
+      14..=34 px width — "a pill, not the photograph", and not two of them
+      run together — because the width belongs to the FONT: the Windows
+      runner draws `▶` boxed, so the same pills measure 19 px on the
+      ubuntu runner, 21 px on the development seat and 26 px there (PR
+      #71's two artifacts, x 9..28 / 28..47 against x 9..35 / 28..54 — the
+      same left edges). The fixed rectangle this replaced was that run's
+      only red (issue #70); the rule is in ui-grid.md's test ledger.
+      Sending `exported: false`, deleting the Slint block and removing the
+      badge's 28 px step were each confirmed RED against the criterion's
+      ORIGINAL dark-fraction form; against the edge form, the mutants
+      re-run are the pixel-equivalent ones — a pill shifted 20 px out of
+      its slot, and a pill removed. And "reads, never decides" is
+      structural in core
       (`plan` has no ledger parameter, which is what
       `core: the_ledger_never_changes_what_the_next_export_writes` states
       and would catch); its BEHAVIOURAL proof is the driven test's second

@@ -101,19 +101,44 @@ fn shoot_env_stderr_watching(
     loop {
         if let Some(status) = child.try_wait().expect("wait") {
             let stderr = drain.join().unwrap_or_default();
+            let trace = write_trace(out, &stderr);
             assert!(
                 status.success(),
-                "app exited with {status}; stderr:\n{stderr}"
+                "app exited with {status}; trace: {}; stderr:\n{stderr}",
+                trace.display()
             );
             return stderr;
         }
         if Instant::now() >= deadline {
             child.kill().ok();
-            drain.join().ok();
-            panic!("screenshot run timed out (no exit within 90 s)");
+            // The buffer is KEPT on this path (it used to be dropped): a
+            // child killed by the watchdog is the one run whose trace
+            // nobody can reconstruct afterwards, and on CI the panic
+            // message is all a reader gets.
+            let stderr = drain.join().unwrap_or_default();
+            let trace = write_trace(out, &stderr);
+            panic!(
+                "screenshot run timed out (no exit within 90 s); trace: {}; stderr:\n{stderr}",
+                trace.display()
+            );
         }
         std::thread::sleep(Duration::from_millis(200));
     }
+}
+
+/// Write a run's stderr next to its shot as `<name>.trace.log`, and
+/// return that path.
+///
+/// Unconditional and BEFORE any panic: a red run on a remote runner is
+/// read from the uploaded shots directory, and the assertions here quote
+/// a rectangle or a dump line, never the whole app trace that explains it
+/// (issue #70 — three Windows failures whose geometry had no witness in
+/// the CI log). A failed write is ignored on purpose: losing the
+/// diagnostic must never turn a green run red, nor mask the real panic.
+fn write_trace(out: &Path, stderr: &str) -> PathBuf {
+    let path = out.with_extension("trace.log");
+    std::fs::write(&path, stderr).ok();
+    path
 }
 
 /// Decode the snapshot and return (width, height, mean_luma).
@@ -225,9 +250,20 @@ fn grid_shot(path: &Path, columns: usize) -> GridShot {
         }
     }
     let row_top = row_top.expect("no row of thumbnails in the snapshot");
+    // A SANITY CHECK on the probe, not a layout assertion: it says the
+    // bright run found is a row of thumbnails and not a piece of chrome
+    // (or the whole window). The chrome above row 0 is platform-dependent
+    // and MUST stay free to move — measured 80 on the Linux runners (a
+    // 40 px in-window menu bar plus the chip bar) and exactly 40 on
+    // Windows, where the menu bar is the OS one and only the 34 px chip
+    // bar and the 6 px gap are left. The lower bound therefore sits well
+    // under the Windows value: a font-metric px in the chip bar must not
+    // redden every grid_shot test on one platform (validator 2026-09-02).
     assert!(
-        (40.0..250.0).contains(&row_top),
-        "the first cell row was located at y={row_top}, which is not under the chrome"
+        (24.0..250.0).contains(&row_top),
+        "the probe found its first bright run at y={row_top}, which is no \
+         plausible first cell row — it locked onto the chrome, or onto \
+         nothing"
     );
     GridShot {
         w,
@@ -282,6 +318,39 @@ impl GridShot {
     fn greenness(&self, col: usize, x0: f64, y0: f64, x1: f64, y1: f64) -> f64 {
         let px = self.cell_px(col, x0, y0, x1, y1);
         px.iter().map(|(r, g, b)| g - r.max(*b)).sum::<f64>() / px.len() as f64
+    }
+
+    /// Where the first badge PILL of column `col` starts and ends in the
+    /// badge band `y0..y1`, cell-local x, or `None` when the band is bare
+    /// picture.
+    ///
+    /// One pixel column at a time across x 0..70: a column belongs to a
+    /// pill when at least 30 % of its band is dark (`dark_fraction`'s own
+    /// threshold), runs separated by 4 px or less are MERGED — the glyph's
+    /// bright strokes cut the pill into two or three runs — and the first
+    /// merged run at least 8 px wide is the answer.
+    ///
+    /// What a badge test may assert is this LEFT EDGE. The width is the
+    /// font's: the Windows runner draws ▶ from a face that boxes it, so
+    /// the same pill measures 26 px there against 19 px on the ubuntu
+    /// runner (and 21 px on the development seat: the Linux face is not
+    /// one thing either) —
+    /// which is why the fixed 30..46 rectangle this replaced read 0.26
+    /// dark on Windows and failed a `< 0.15` control (issue #70, measured
+    /// on PR #71's two CI artifacts). The layout is right on both; only
+    /// the old assertion assumed one platform's glyph metrics.
+    fn pill_span(&self, col: usize, y0: f64, y1: f64) -> Option<(usize, usize)> {
+        let mut runs: Vec<(usize, usize)> = Vec::new();
+        for x in 0..70usize {
+            if self.dark_fraction(col, x as f64, y0, x as f64 + 1.0, y1) < 0.3 {
+                continue;
+            }
+            match runs.last_mut() {
+                Some(last) if x - last.1 <= 4 => last.1 = x + 1,
+                _ => runs.push((x, x + 1)),
+            }
+        }
+        runs.into_iter().find(|(x0, x1)| x1 - x0 >= 8)
     }
 
     /// The bright pixels of a rectangle — the glyph strokes — and the
@@ -786,18 +855,17 @@ fn one_to_one_entry_is_center_anchored() {
     }
     let _s = serial();
     let out = out_dir().join("center-anchor.jpg");
-    let bin = env!("CARGO_BIN_EXE_fastcull-app");
-    let output = std::process::Command::new(bin)
-        .arg("--start-11")
-        .arg(raws_dir())
-        .arg("--screenshot")
-        .arg(&out)
-        .env("FASTCULL_NO_CACHE", "1")
-        .env("FASTCULL_TRACE", "1")
-        .output()
-        .expect("run app");
-    assert!(output.status.success(), "app exited with {}", output.status);
-    let stderr = String::from_utf8_lossy(&output.stderr);
+    // Through the shared helper like every other test (QE 2026-09-02):
+    // a bare `Command::output()` has no 90 s watchdog — the failure mode
+    // validator M2 exists to prevent — writes no `center-anchor.trace.log`
+    // beside the shot for the CI artifact, and, missing
+    // `FASTCULL_NO_CONFIG`, read the user's real ui.toml.
+    let raws = raws_dir();
+    let stderr = shoot_env_stderr(
+        &["--start-11", raws.to_str().unwrap()],
+        &[("FASTCULL_TRACE", "1")],
+        &out,
+    );
     let line = stderr
         .lines()
         .rfind(|l| l.contains("loupe idx"))
@@ -2819,25 +2887,28 @@ fn qedump<'a>(stderr: &'a str, label: &str) -> &'a str {
 
 /// The menu-path tests click the in-window MenuBar at fixed logical
 /// coordinates (File 22, View 72, Help 115 in the bar; items on a 32 px
-/// grid from y=61). Item geometry follows the platform's font metrics;
-/// these coordinates are calibrated for the Linux runners (DejaVu Sans).
+/// grid from y=61). On Windows there is no in-window MenuBar to click:
+/// `i-slint-backend-winit` reports `supports_native_menu_bar()` there
+/// (the `muda` dependency), so the menus are the OS menu bar, outside the
+/// client area and unreachable by a dispatched pointer event — not a font
+/// drift, which is what this comment used to say. The in-window bar these
+/// coordinates address is the `fluent` style's, 40 px tall, on the Linux
+/// runners (item geometry within it does follow the platform's font
+/// metrics, DejaVu Sans there).
+///
 /// The focus machinery under test is platform-independent Slint core, and
 /// every non-menu strand still runs on Windows. Each menu test asserts an
 /// intermediate state that FAILS LOUDLY if a click missed its target, so
-/// a font drift can never make one pass vacuously.
+/// no drift can make one pass vacuously.
 fn menu_clicks_are_calibrated() -> bool {
     !cfg!(windows)
 }
 
-/// Where the IPTC panel's field row `i` was last laid out BEFORE the trace
-/// line `before` — the app's own report (`iptc field N laid out at X,Y
-/// size WxH`, the same mark a script's `wait:` gates a field click on), in
-/// window-logical px. A driven field click is calibrated against this
-/// instead of against a comment: the row's y rides on the platform's font
-/// metrics, and a coordinate that drifts off the field has to fail as "the
-/// click was outside the field" rather than as whatever the wrong element
-/// happened to do (issues #13/#61).
-fn iptc_field_rect(stderr: &str, i: usize, before: &str) -> (f32, f32, f32, f32) {
+/// Where a self-reporting element (`iptc field N`, `copy card`, `clip
+/// buttons`) was last laid out BEFORE the trace line `before` — the app's
+/// own report (`<what> laid out at X,Y size WxH`, the same mark a script's
+/// `wait:` gates a click on), in window-logical px.
+fn laid_out_rect(stderr: &str, what: &str, before: &str) -> (f32, f32, f32, f32) {
     let head = stderr
         .split_once(before)
         .unwrap_or_else(|| panic!("no `{before}` line in stderr:\n{stderr}"))
@@ -2845,14 +2916,12 @@ fn iptc_field_rect(stderr: &str, i: usize, before: &str) -> (f32, f32, f32, f32)
     // Anchored on the trace prefix's `]`: a script that `wait:`s on this
     // very text puts the substring in the log too, and the mark is the one
     // that starts the line's message.
-    let tag = format!("] iptc field {i} laid out at ");
+    let tag = format!("] {what} laid out at ");
     let geom = head
         .lines()
         .filter_map(|l| l.split_once(&tag))
         .next_back()
-        .unwrap_or_else(|| {
-            panic!("panel field {i} never reported a layout before `{before}`:\n{stderr}")
-        })
+        .unwrap_or_else(|| panic!("{what} never reported a layout before `{before}`:\n{stderr}"))
         .1;
     let parse = || -> Option<(f32, f32, f32, f32)> {
         let (pos, size) = geom.split_once(" size ")?;
@@ -2868,16 +2937,63 @@ fn iptc_field_rect(stderr: &str, i: usize, before: &str) -> (f32, f32, f32, f32)
     parse().unwrap_or_else(|| panic!("malformed field-layout trace: {geom:?}"))
 }
 
-/// Assert that a driven click's coordinates are inside a rectangle the app
-/// reported — the calibration guard the menu tests express as "an
-/// intermediate assertion that fails loudly if a click missed", here
-/// against measured geometry rather than an outcome.
-fn assert_click_inside(rect: (f32, f32, f32, f32), click: (f32, f32), what: &str) {
-    let (x, y, w, h) = rect;
+/// [`laid_out_rect`] for the IPTC panel's field row `i`.
+fn iptc_field_rect(stderr: &str, i: usize, before: &str) -> (f32, f32, f32, f32) {
+    laid_out_rect(stderr, &format!("iptc field {i}"), before)
+}
+
+/// Assert that a `click:<element>` step resolved, and that the point it
+/// resolved to is inside the rectangle the app reported for that element.
+///
+/// The calibration guard, now read off the harness's own echo (`drive ptr
+/// click X,Y (<element>)`) instead of a coordinate repeated in the test.
+/// A scripted point was measured on ONE platform's layout: the Windows
+/// runner draws no in-window menu bar (the OS one lives outside the client
+/// area), so every in-window y sits ~40 px higher there and three of these
+/// clicks landed 43 px below the Title field's centre (issue #70). What is
+/// left to check is that the click happened at all and against a real
+/// laid-out rectangle — a missing echo means the element never reported
+/// itself and the run was abandoned, which is loud on its own.
+///
+/// The LAST resolution is the one checked: these scripts click the same
+/// field several times, and a rebuild between two clicks moves the
+/// rectangle. The anchor is the STEP echo (`drive: click:<element>`), not
+/// the pointer echo the click emits afterwards: the rectangle compared is
+/// the last one reported BEFORE the step — the one the harness resolved —
+/// and the point is the first pointer echo AFTER it, so a relayout the
+/// click itself triggers cannot be mistaken for the resolved rectangle
+/// (validator 2026-09-02).
+fn assert_click_resolved(stderr: &str, element: &str) {
+    let step = format!("] drive: click:{element}");
+    let step_line = stderr
+        .lines()
+        .rfind(|l| l.ends_with(&step))
+        .unwrap_or_else(|| panic!("no `drive: click:{element}` step in the trace:\n{stderr}"));
+    let after = stderr
+        .rfind(step_line)
+        .map(|at| &stderr[at + step_line.len()..])
+        .unwrap_or("");
+    let tag = format!(" ({element})");
+    let line = after
+        .lines()
+        .find(|l| l.contains("] drive ptr click ") && l.ends_with(&tag))
+        .unwrap_or_else(|| {
+            panic!(
+                "no `drive ptr click … ({element})` echo after the click:{element} \
+                 step — it never resolved:\n{stderr}"
+            )
+        });
+    let point = || -> Option<(f32, f32)> {
+        let at = line.split_once("drive ptr click ")?.1;
+        let (x, y) = at.split_once(' ')?.0.split_once(',')?;
+        Some((x.parse().ok()?, y.parse().ok()?))
+    };
+    let (cx, cy) = point().unwrap_or_else(|| panic!("malformed click echo: {line:?}"));
+    let (x, y, w, h) = laid_out_rect(stderr, element, step_line);
     assert!(
-        click.0 >= x && click.0 <= x + w && click.1 >= y && click.1 <= y + h,
-        "the click at {click:?} is outside {what} (x {x}..{}, y {y}..{}) — \
-         the scripted coordinate has drifted off the element",
+        cx >= x && cx <= x + w && cy >= y && cy <= y + h,
+        "the click resolved to ({cx}, {cy}), outside the {element} rectangle \
+         the app reported (x {x}..{}, y {y}..{}):\n{stderr}",
         x + w,
         y + h
     );
@@ -3110,8 +3226,11 @@ fn session_swap_mid_field_edit_discards_and_keeps_the_keyboard() {
         &dir_b.join("two.ARW"),
     );
     let out = out_dir().join("focus-d3.jpg");
-    // The Title field is clicked at fixed coordinates inside the
-    // right-docked panel, so the window size has to be known. It is PINNED
+    // The Title field is clicked BY NAME (`click:iptc field 0`, issue
+    // #70), so the point is the app's own rectangle rather than a number
+    // measured on one platform's layout. The window size still has to be
+    // known — the `wait:` below pins the geometry the panel's width and
+    // the grid-cell coordinates were measured in. It is PINNED
     // at the default (`PIN_WINDOW`), not changed: this script used to ask
     // for 1200x800, and a `resize:` is a REQUEST to the compositor, which
     // under load goes unanswered for the life of the run. That, not a slow
@@ -3129,11 +3248,12 @@ fn session_swap_mid_field_edit_discards_and_keeps_the_keyboard() {
     //
     // The `wait:` then gates the click on the Title row's own layout
     // report INCLUDING its x — `at 1150` is where that row is in a 1440 px
-    // window and nowhere else — so the click happens in exactly the state
-    // these coordinates were measured in: the panel laid out, at this
-    // width. If the window is ever some third size, the wait ends the run
-    // with that sentence instead of a click landing somewhere surprising.
-    // The steps after it keep the gaps written here.
+    // window and nowhere else — so the run happens at the width the rest
+    // of this script's coordinates were measured at, and the row the
+    // click resolves against is laid out before it is asked for. If the
+    // window is ever some third size, the wait ends the run with that
+    // sentence instead of the script proceeding at a width nothing here
+    // was measured for. The steps after it keep the gaps written here.
     // THE CONTRACT IS ASSERTED BY ACTING (issue #63): `key:+` 50 ms after
     // the swap, and the grid must zoom. `keysfocus` cannot carry this
     // test — Slint sends a FocusOut on window DEACTIVATION while
@@ -3152,7 +3272,7 @@ fn session_swap_mid_field_edit_discards_and_keeps_the_keyboard() {
     // after the swap, which is where the ownerless window was.
     let drive = format!(
         "{PIN_WINDOW};2500:key:i;2600:wait:iptc field 0 laid out at 1150;\
-         3000:click.1290,177;3200:dump.focused;\
+         3000:click:iptc field 0;3200:dump.focused;\
          3400:key:w;3500:key:i;3600:key:p;4000:open:{};\
          4050:key:+;4400:dump.after;\
          4500:wait:load settled gen 1;5200:dump.swapped;\
@@ -3171,14 +3291,10 @@ fn session_swap_mid_field_edit_discards_and_keeps_the_keyboard() {
         "the `wait:` step never fired — the click below was timed, not \
          gated:\n{stderr}"
     );
-    // The coordinate is calibrated against the geometry the app reported
-    // for that row at that window size, so a font-metric drift fails here
-    // — before the outcome assertions, and naming the real cause.
-    assert_click_inside(
-        iptc_field_rect(&stderr, 0, "drive: click.1290,177"),
-        (1290.0, 177.0),
-        "the Title field",
-    );
+    // The click resolved against the rectangle the app reported for that
+    // row, and landed inside it — before the outcome assertions, so a
+    // click that never happened fails as itself.
+    assert_click_resolved(&stderr, "iptc field 0");
     // The Title-field click really took focus (anti-vacuity, gate
     // finding: a missed click would type the `p` as a real grid PICK
     // and fail this test later with a false "committed the abandoned
@@ -3736,12 +3852,12 @@ fn a_cursor_move_rebuild_keeps_the_keyboard_in_the_field() {
             (
                 "FASTCULL_DRIVE",
                 &format!(
-                    "{PIN_WINDOW};2500:key:i;2600:wait:iptc field 0 laid out at 1150;\
-                     3000:right;3300:click.1290,177;3500:key:z;3600:key:return;\
-                     4000:left;4400:click.1290,177;4600:key:q;\
-                     4900:right;5100:dump.rebuilt;\
+                    "{PIN_WINDOW};2400:wait:load settled gen 0;2500:key:i;2600:wait:iptc field 0 laid out at 1150;\
+                     3000:right;3300:click:iptc field 0;3500:key:z;3600:key:return;\
+                     4000:left;4400:click:iptc field 0;4600:key:q;\
+                     4900:right;4950:wait:row 0 (gen 4);5100:dump.rebuilt;\
                      5300:key:w;5500:key:return;5800:key:y;6200:dump.after;\
-                     6500:click.1290,177;6700:key:v;7000:select-all;\
+                     6500:click:iptc field 0;6700:key:v;7000:select-all;\
                      7300:dump.mixed;7500:key:u;7700:key:return;8100:dump.mixedafter"
                 ),
             ),
@@ -3752,11 +3868,50 @@ fn a_cursor_move_rebuild_keeps_the_keyboard_in_the_field() {
         stderr.contains("wait:iptc field 0 laid out at 1150 (satisfied"),
         "the `wait:` never fired — the clicks were timed, not gated:\n{stderr}"
     );
-    assert_click_inside(
-        iptc_field_rect(&stderr, 0, "drive: click.1290,177"),
-        (1290.0, 177.0),
-        "the Title field",
+    // …and the keys after the rebuild are gated on the RECLAIM, not on a
+    // timestamp (issue #69): the dump and the `w` used to fire 200 and
+    // 400 ms after the cursor move, and on a seat lagging past ~400 ms a
+    // frame they landed inside the gap between the rebuild and the row's
+    // claim — the keystrokes went nowhere and the test blamed the
+    // reclaim. `gen 4` is what makes that wait mean the claim from THIS
+    // rebuild: the mark is `focus-keys (row 0 (gen K))` and K is
+    // `iptc-rebuild-gen` at the row's birth, i.e. the number of
+    // content-changing rows rebuilds so far. This script forces exactly
+    // four before the move (panel open, the seeding Enter, `left`,
+    // `right`), and a wait cannot ask for the NEXT occurrence of a mark
+    // it has already seen — the "put what differs into the mark" idiom of
+    // ui-grid.md's harness section, `wait:load settled gen 1` being the
+    // other instance. If a future edit adds or removes a rebuild before
+    // the move, this wait is never satisfied and the app ends the run
+    // naming the substring: re-read K from the trace, do not delete the
+    // wait.
+    // A `wait never satisfied: row 0 (gen 4)` has TWO readings and the
+    // trace tells them apart: either the script's rebuild count changed
+    // (there IS a `row 0 (gen N)` claim with another N — K is wrong,
+    // re-read it), or no claim came at all (the trace shows the arms,
+    // `rebuild -> row 0` / `restore -> row 0`, and no `row 0 (gen N)`
+    // anywhere after them) — which is the reclaim itself failing, the
+    // pre-existing #63/#68 family, seen once in 80 runs behind a 5.9 s
+    // load settle. The second is a real defect and must not be quieted by
+    // moving the wait.
+    // K = 4 is a property of the script only if the panel opens AFTER the
+    // metadata landed: a rebuild the load adds after `key:i` would shift
+    // every later generation by one and turn the wait below into a 30 s
+    // red on a slow runner. The script waits for `load settled gen 0`
+    // before opening the panel, and this guard keeps that wait from being
+    // tidied away without the reason on record (validator 2026-09-02).
+    assert!(
+        stderr.contains("wait:load settled gen 0 (satisfied"),
+        "the panel opened before the load settled, so the rebuild count \
+         below is not the script's:\n{stderr}"
     );
+    assert!(
+        stderr.contains("wait:row 0 (gen 4) (satisfied"),
+        "the reclaim `wait:` never fired — the keys after the rebuild were \
+         timed, not gated (issue #69), or the rebuild count before the \
+         cursor move has changed:\n{stderr}"
+    );
+    assert_click_resolved(&stderr, "iptc field 0");
     // The cursor move really rebuilt the rows (anti-vacuity): without the
     // seeded Title the two images look identical to the panel, no model is
     // replaced, and this test would prove nothing.
@@ -3784,7 +3939,7 @@ fn a_cursor_move_rebuild_keeps_the_keyboard_in_the_field() {
     // take the keyboard from the editor in there.
     let click_to_move = stderr
         .find("drive: key:q")
-        .map(|q| stderr[..q].rfind("drive: click.").unwrap_or(q))
+        .map(|q| stderr[..q].rfind("drive: click:").unwrap_or(q))
         .zip(stderr.rfind("drive: right"))
         .filter(|(from, mv)| from < mv)
         .map(|(from, mv)| &stderr[from..mv])
@@ -3891,8 +4046,9 @@ fn a_menu_item_over_a_focused_field_row_keeps_the_keyboard() {
                 "FASTCULL_DRIVE",
                 &format!(
                     "{PIN_WINDOW};2500:key:i;2600:wait:iptc field 0 laid out at 1150;\
-                     3000:click.1290,177;3200:key:a;3300:key:b;\
-                     3600:click.72,19;4000:click.128,157;4400:dump.menu;\
+                     3000:click:iptc field 0;3200:key:a;3300:key:b;\
+                     3600:click.72,19;4000:click.128,157;\
+                     4300:wait:menu -> row 0;4400:dump.menu;\
                      4600:key:return;4900:key:y;5300:dump.after"
                 ),
             ),
@@ -3903,11 +4059,19 @@ fn a_menu_item_over_a_focused_field_row_keeps_the_keyboard() {
         stderr.contains("wait:iptc field 0 laid out at 1150 (satisfied"),
         "the `wait:` never fired — the field click was timed, not gated:\n{stderr}"
     );
-    assert_click_inside(
-        iptc_field_rect(&stderr, 0, "drive: click.1290,177"),
-        (1290.0, 177.0),
-        "the Title field",
+    // #69's shape, menu flavour: the keys after the item activation wait
+    // for the claim that activation causes, not for the clock. The mark is
+    // `menu -> row 0` — emitted once, only after the activation — because
+    // the row's own `row 0 (gen 2)` claim carries the SAME generation as
+    // the one the menu-open blur produced, so waiting on it would be
+    // satisfied by the earlier mark and gate nothing (validator
+    // 2026-09-02).
+    assert!(
+        stderr.contains("wait:menu -> row 0 (satisfied"),
+        "the menu item's own claim never came, so the keys after it ran on \
+         the clock:\n{stderr}"
     );
+    assert_click_resolved(&stderr, "iptc field 0");
     // The menu really acted (anti-vacuity): the filter bar toggled, so
     // the clicks at 72,19 and 128,157 hit the View menu and its item.
     // Without this a missed menu click would leave the keyboard happily
@@ -3948,6 +4112,13 @@ fn a_menu_item_over_a_focused_field_row_keeps_the_keyboard() {
 /// it survives the restore. Esc is the probe because it needs no
 /// coordinates beyond the menu-bar click; the click-elsewhere and
 /// click-the-menu-bar-again routes measure the same, 5/5 each.
+/// The keys after the Esc stay on the clock, deliberately (validator
+/// 2026-09-02): a dismissed menu produces NO claim mark to wait for — the
+/// rescue is the deferred flag write, whose only trace is the `row 0
+/// (gen 2)` claim the menu-open blur already emitted — so there is no
+/// mark that differs, and `wait:` would be satisfied by the past one. The
+/// menu-item test has one (`menu -> row 0`) and waits on it. Linux-only
+/// either way.
 #[test]
 fn a_dismissed_menu_over_a_focused_field_row_keeps_the_keyboard() {
     if !has_display() || !menu_clicks_are_calibrated() {
@@ -3970,7 +4141,7 @@ fn a_dismissed_menu_over_a_focused_field_row_keeps_the_keyboard() {
                 "FASTCULL_DRIVE",
                 &format!(
                     "{PIN_WINDOW};2500:key:i;2600:wait:iptc field 0 laid out at 1150;\
-                     3000:click.1290,177;3200:key:q;\
+                     3000:click:iptc field 0;3200:key:q;\
                      3600:click.72,19;4000:key:escape;4400:dump.dismissed;\
                      4600:key:return;4900:key:y;5300:dump.after"
                 ),
@@ -3982,11 +4153,7 @@ fn a_dismissed_menu_over_a_focused_field_row_keeps_the_keyboard() {
         stderr.contains("wait:iptc field 0 laid out at 1150 (satisfied"),
         "the `wait:` never fired — the field click was timed, not gated:\n{stderr}"
     );
-    assert_click_inside(
-        iptc_field_rect(&stderr, 0, "drive: click.1290,177"),
-        (1290.0, 177.0),
-        "the Title field",
-    );
+    assert_click_resolved(&stderr, "iptc field 0");
     // The menu really opened and the field's blur really rebuilt the rows
     // (anti-vacuity): without both there is nothing for the dismiss to
     // strand, and this test would pass on a build where the menu click
@@ -5079,21 +5246,42 @@ fn copy_picks_asks_once_and_each_answer_does_what_it_says() {
     // under a Text whose height is a font metric.
     let mouse_answer = menu_clicks_are_calibrated();
     let mouse_round = if mouse_answer {
+        // The dump waits for the copy this click starts (QE 2026-09-02):
+        // 700 ms is tighter than the 800 ms the keyboard round used, which
+        // is what went red on Windows, and a 900 ms copy reddens it on
+        // either tree. This is the ONE answer given with the pointer, so
+        // the click can also miss — and then the wait ends the run after
+        // 30 s naming `copy finished run 1`, which says the same thing the
+        // `copystate` assertion below would have: the click answered
+        // nothing and no copy ever ran.
         format!(
             "1900:copydest:{dest0};2100:key:ctrl+e;2400:key:return;2700:dump.qclick;\
-             2900:click.700,483;3600:dump.clicked;3900:key:escape;",
+             2900:click.700,483;3000:wait:copy finished run 1;\
+             3600:dump.clicked;3900:key:escape;",
             dest0 = dest0.display()
         )
     } else {
         String::new()
     };
+    // Which copy of this PROCESS each answer below starts: the mouse round
+    // ran one already. The two dumps that read a finished copy wait for
+    // THAT run's report card instead of allowing it 800 ms — a budget the
+    // Windows runner does not keep (issue #70: `copystate` read 1, the
+    // copy was still going), and one no runner is obliged to keep.
+    let n = if mouse_answer { 2 } else { 1 };
+    let (n2, kept_wait, over_wait) = (
+        n + 1,
+        format!("wait:copy finished run {n} (satisfied"),
+        format!("wait:copy finished run {} (satisfied", n + 1),
+    );
     let script = format!(
         "1500:key:y;1700:key:y;{mouse_round}\
          4400:copydest:{dest};4600:key:ctrl+e;4900:dump.preview;\
          5100:key:return;5400:dump.question;5600:key:return;5800:dump.inert;\
          5880:key:ctrl+o;5940:dump.accel;\
-         6000:key:b;6800:dump.kept;7100:key:escape;\
-         7300:key:ctrl+e;7600:key:return;7900:dump.q2;8100:key:o;8900:dump.over;\
+         6000:key:b;6100:wait:copy finished run {n};6800:dump.kept;7100:key:escape;\
+         7300:key:ctrl+e;7600:key:return;7900:dump.q2;8100:key:o;\
+         8200:wait:copy finished run {n2};8900:dump.over;\
          9200:key:escape;9400:copydest:{dest2};9600:key:ctrl+e;9900:key:return;\
          10200:dump.q3;10400:key:escape;10700:dump.cancelled;11000:key:escape;11300:dump.end;\
          11500:key:ctrl+e;11800:key:return;12100:dump.q4;12300:open:{src2};12700:dump.swapped",
@@ -5140,6 +5328,11 @@ fn copy_picks_asks_once_and_each_answer_does_what_it_says() {
             dump_field(qedump(&stderr, "qclick"), "copystate"),
             "3",
             "the mouse round never reached the question:\n{stderr}"
+        );
+        assert!(
+            stderr.contains("wait:copy finished run 1 (satisfied"),
+            "the mouse round's `wait:` never fired — its dump was timed, \
+             not gated:\n{stderr}"
         );
         assert_eq!(
             dump_field(qedump(&stderr, "clicked"), "copystate"),
@@ -5193,6 +5386,14 @@ fn copy_picks_asks_once_and_each_answer_does_what_it_says() {
         "Ctrl+O answered the clash question: {stderr}"
     );
     // --- B: keep both -----------------------------------------------------
+    // The dump below reads a FINISHED copy because the script waited for
+    // one, not because 800 ms was thought to be enough (a dropped or
+    // misnumbered token would put it back on that clock silently).
+    assert!(
+        stderr.contains(&kept_wait),
+        "the `wait:copy finished run {n}` step never fired — the keep-both \
+         dump was timed, not gated:\n{stderr}"
+    );
     let kept = qedump(&stderr, "kept");
     assert_eq!(dump_field(kept, "copystate"), "2", "{kept}");
     let kept_report = dump_text(kept, "report");
@@ -5211,6 +5412,11 @@ fn copy_picks_asks_once_and_each_answer_does_what_it_says() {
     assert!(
         dump_text(q2, "confirm").contains("2 of your 2 picks"),
         "{q2}"
+    );
+    assert!(
+        stderr.contains(&over_wait),
+        "the `wait:copy finished run {n2}` step never fired — the overwrite \
+         dump was timed, not gated:\n{stderr}"
     );
     let over = qedump(&stderr, "over");
     let over_report = dump_text(over, "report");
@@ -5643,6 +5849,105 @@ fn export_frames_as_video_writes_a_real_motion_jpeg() {
     );
 }
 
+/// The badge PIXEL criterion of the test below, factored out so it can be
+/// replayed over a CI artifact — a `clip-badge.jpg` from either runner —
+/// and not only over a shot this machine just took (issue #70).
+///
+/// It asserts the pill's LEFT EDGE, never a rectangle it must fill. The
+/// ▶ glyph comes from a different face on Windows, which draws it BOXED:
+/// `pill_span` over PR #71's two artifacts reports the pill in the ✓'s
+/// slot at x 9..28 on Linux against 9..35 on Windows, and the stepped one
+/// at 28..47 against 28..54 — the SAME left edge, 19 px against 26 px of
+/// width. A font difference, not a defect; the fixed `x 30..46` control
+/// this replaced read 0.26 dark on Windows (against a `< 0.15` bound)
+/// because the wider pill's right end reached into it.
+fn assert_badge_pixels(shot: &GridShot) {
+    // The badge band, in the badges' own cell-local coordinates: the ✓
+    // lives at x 8 and the ▶ falls back to that slot, stepping to x 28
+    // only when a ✓ is in the way.
+    let (band0, band1) = (shot.cell_h - 20.0, shot.cell_h - 6.0);
+    let check = (8.0, shot.cell_h - 19.0, 20.0, shot.cell_h - 7.0);
+    let span = |col: usize| shot.pill_span(col, band0, band1);
+    let green = |col: usize, r: (f64, f64, f64, f64)| shot.greenness(col, r.0, r.1, r.2, r.3);
+
+    // Column 0 is the control: `c` lost its only video and was never
+    // copied, so nothing in its band may read as a pill at all.
+    assert!(
+        span(0).is_none(),
+        "the unbadged frame carries a pill at x {:?} — `c` has no ✓ and no \
+         ▶, so its badge band must be bare picture",
+        span(0)
+    );
+    // `b` is exported and NOT copied: with no ✓ in the way the pill takes
+    // the left slot — one half of that one line of layout.
+    let b = span(2).unwrap_or_else(|| {
+        panic!("no ▶ pill at all on the exported, uncopied frame — its badge band is bare")
+    });
+    assert!(
+        (6..=12).contains(&b.0),
+        "the ▶ pill of the exported, uncopied frame starts at x {} — with \
+         no ✓ to step past it belongs in the ✓'s own slot at x 8",
+        b.0
+    );
+    // `a` is copied AND exported: the ✓ keeps x 8 and the pill steps right.
+    let a = span(1).unwrap_or_else(|| {
+        panic!("no ▶ pill beside the ✓ on the exported, copied frame — its badge band is bare")
+    });
+    assert!(
+        a.0 >= 20,
+        "the ▶ pill did not step past the ✓ — the first pill of the copied, \
+         exported frame starts at x {}, inside the ✓'s slot",
+        a.0
+    );
+    assert!(
+        (26..=32).contains(&a.0),
+        "the ▶ pill of the copied, exported frame starts at x {} — the step \
+         past the ✓ puts it at x 28",
+        a.0
+    );
+    // The WIDTH is bounded on both sides: loosely, because it is the
+    // font's — 19 px on the ubuntu runner, 21 px on the development seat,
+    // 26 px on Windows, where the glyph is boxed — but not open-ended.
+    // The upper bound is the widest measured pill plus 8 px, which is
+    // what still catches a pill drawn twice its size or two pills merged
+    // into one run (the fixed rectangle this replaced caught that
+    // incidentally; validator 2026-09-02).
+    for (what, (x0, x1)) in [("stepped past the ✓", a), ("in the ✓'s slot", b)] {
+        let width = x1 - x0;
+        assert!(
+            (14..=34).contains(&width),
+            "the ▶ pill {what} spans x {x0}..{x1}, {width} px — a pill \
+             measures 19-26 px across the runners (26 with Windows's boxed \
+             glyph), so this is the photograph, two pills run together, or \
+             a badge drawn at the wrong size"
+        );
+    }
+    assert!(
+        green(1, check) > green(0, check) + 8.0,
+        "the ✓ is gone from the copied frame: greenness {:.1} against \
+         {:.1} on the frame that has none",
+        green(1, check),
+        green(0, check)
+    );
+    // MONOCHROME, mechanized: the glyph took the UI's own `#d8d8e0`, so
+    // its strokes are bright and neutral. A colour-emoji bitmap ignores
+    // the `color` property, and U+25B6 is in the emoji-presentation set —
+    // this is the check that says which one the font gave us. Read over
+    // the pill this run MEASURED, not over a fixed rectangle: on Windows
+    // the strokes of the boxed glyph reach past x 46.
+    let (bright, spread) = shot.bright_spread(1, a.0 as f64, band0, a.1 as f64, band1);
+    assert!(
+        bright >= 12,
+        "no bright glyph strokes inside the ▶ pill — it rendered as a \
+         dark bitmap, not as text in the UI's colour ({bright} px)"
+    );
+    assert!(
+        spread <= 40.0,
+        "the ▶ glyph is not monochrome (worst channel spread {spread:.0}) \
+         — the font gave us a colour emoji; the spec's fallback is ▸ U+25B8"
+    );
+}
+
 /// The ▶ exported badge and the dialog's counted hint (issue #56), end to
 /// end on real camera frames — the whole session-only contract in one run,
 /// asserted in the GRID's pixels and not only in the ledger's state.
@@ -5973,76 +6278,17 @@ fn an_exported_frame_wears_a_badge_until_its_video_is_gone() {
     // and no ▶ (its only video was deleted); `a` (col 1) has both, the ✓
     // at x 8 and the ▶ pill stepped right to x 28; `b` (col 2) has the ▶
     // alone, in the ✓'s own slot at x 8. Column 0 is therefore the
-    // photograph-only control for both rectangles.
+    // photograph-only control.
+    //
+    // What is asserted is each pill's LEFT EDGE, not a rectangle it fills:
+    // the Windows runner's ▶ comes from a face that draws it BOXED, so the
+    // pill is 26 px wide there against 19 px on the ubuntu runner (a font
+    // difference, not a defect — see `assert_badge_pixels`, which is also
+    // replayable over a CI artifact from either platform: it passes on
+    // both of PR #71's `clip-badge.jpg` files unchanged).
     let (w, h, luma) = analyze(&out);
     assert!(w >= 640 && h >= 480 && luma > 5.0, "{w}x{h} luma {luma:.2}");
-    let shot = grid_shot(&out, 8);
-    // Cell-local rectangles, in the badges' own coordinates: the LEFT
-    // badge slot (x 8, where ✓ lives and where ▶ falls back to) and the
-    // STEPPED ▶ pill's slot (x 28, taken only when a ✓ is in the way).
-    let slot = (10.0, shot.cell_h - 20.0, 26.0, shot.cell_h - 6.0);
-    let step = (30.0, shot.cell_h - 20.0, 46.0, shot.cell_h - 6.0);
-    let check = (8.0, shot.cell_h - 19.0, 20.0, shot.cell_h - 7.0);
-    let dark = |col: usize, r: (f64, f64, f64, f64)| shot.dark_fraction(col, r.0, r.1, r.2, r.3);
-    let green = |col: usize, r: (f64, f64, f64, f64)| shot.greenness(col, r.0, r.1, r.2, r.3);
-
-    // Column 0 is the control: `c` lost its only video, was never copied,
-    // and must be bare in BOTH slots.
-    for (name, r) in [("the ✓ slot", slot), ("the stepped ▶ slot", step)] {
-        assert!(
-            dark(0, r) < 0.15,
-            "{name} of the unbadged frame is not bare picture ({:.2} dark)",
-            dark(0, r)
-        );
-    }
-    // `a` is copied AND exported: the ✓ keeps x 8 and the pill steps right.
-    assert!(
-        dark(1, step) > 0.4,
-        "no ▶ pill beside the ✓ on the exported, copied frame ({:.2} dark)",
-        dark(1, step)
-    );
-    assert!(
-        dark(1, slot) < 0.15,
-        "the ▶ pill did not step past the ✓ — it is sitting on it \
-         ({:.2} dark in the ✓ slot)",
-        dark(1, slot)
-    );
-    assert!(
-        green(1, check) > green(0, check) + 8.0,
-        "the ✓ is gone from the copied frame: greenness {:.1} against \
-         {:.1} on the frame that has none",
-        green(1, check),
-        green(0, check)
-    );
-    // `b` is exported and NOT copied: with no ✓ in the way the pill takes
-    // the left slot — the other half of that one line of layout.
-    assert!(
-        dark(2, slot) > 0.4,
-        "no ▶ pill in the ✓'s slot on the exported, uncopied frame \
-         ({:.2} dark)",
-        dark(2, slot)
-    );
-    assert!(
-        dark(2, step) < 0.15,
-        "the ▶ pill stepped right on a frame that has no ✓ to step past \
-         ({:.2} dark)",
-        dark(2, step)
-    );
-    // MONOCHROME, mechanized: the glyph took the UI's own `#d8d8e0`, so
-    // its strokes are bright and neutral. A colour-emoji bitmap ignores
-    // the `color` property, and U+25B6 is in the emoji-presentation set —
-    // this is the check that says which one the font gave us.
-    let (bright, spread) = shot.bright_spread(1, step.0, step.1, step.2, step.3);
-    assert!(
-        bright >= 12,
-        "no bright glyph strokes inside the ▶ pill — it rendered as a \
-         dark bitmap, not as text in the UI's colour ({bright} px)"
-    );
-    assert!(
-        spread <= 40.0,
-        "the ▶ glyph is not monochrome (worst channel spread {spread:.0}) \
-         — the font gave us a colour emoji; the spec's fallback is ▸ U+25B8"
-    );
+    assert_badge_pixels(&grid_shot(&out, 8));
 }
 
 /// The clash question, end to end, on tiny synthetic RAWs so three exports
@@ -6081,8 +6327,10 @@ fn the_video_export_asks_before_replacing_a_file() {
         "1500:select-all;1700:clipdest:{dest};1900:key:ctrl+shift+e;\
          2200:dump.plan;2400:key:return;2700:dump.question;\
          2900:key:return;3100:dump.inert;3300:key:ctrl+o;3500:dump.accel;\
-         3700:key:b;5000:dump.kept;5300:key:escape;\
-         5600:key:ctrl+shift+e;5900:key:return;6200:key:o;7500:dump.over;\
+         3700:key:b;3800:wait:clip export finished run 1;5000:dump.kept;\
+         5300:key:escape;\
+         5600:key:ctrl+shift+e;5900:key:return;6200:key:o;\
+         6300:wait:clip export finished run 2;7500:dump.over;\
          7800:key:escape;8100:dump.end;\
          8400:key:ctrl+shift+e;8700:key:return;9000:dump.q2;\
          9200:open:{other};9800:dump.swapped",
@@ -6150,6 +6398,15 @@ fn the_video_export_asks_before_replacing_a_file() {
     );
 
     // --- B: keep both ------------------------------------------------------
+    // Gated on the export's own report card, not on the 1.3 s the write
+    // and its verify pass used to be given (issue #70): the run number is
+    // what lets the second answer below wait for ITS export rather than
+    // being satisfied by the first one's mark.
+    assert!(
+        stderr.contains("wait:clip export finished run 1 (satisfied"),
+        "the keep-both `wait:` never fired — the dump was timed, not \
+         gated:\n{stderr}"
+    );
     let kept_dump = qedump(&stderr, "kept");
     assert_eq!(dump_field(kept_dump, "clipstate"), "2", "{kept_dump}");
     let kept_report = dump_text(kept_dump, "clipreport");
@@ -6175,6 +6432,11 @@ fn the_video_export_asks_before_replacing_a_file() {
     );
 
     // --- O: overwrite ------------------------------------------------------
+    assert!(
+        stderr.contains("wait:clip export finished run 2 (satisfied"),
+        "the overwrite `wait:` never fired — the dump was timed, not \
+         gated:\n{stderr}"
+    );
     let over = qedump(&stderr, "over");
     let over_report = dump_text(over, "clipreport");
     assert!(
@@ -7217,7 +7479,7 @@ fn a_click_inside_the_iptc_panel_never_reaches_the_grid() {
         "{PIN_WINDOW};1200:key:i;1300:wait:iptc field 0 laid out at 1150;\
          1700:click.358,318;2000:select-all;\
          2300:dump.before;2600:click.1145,400;3000:dump.chrome;\
-         3300:click.1290,177;3600:key:t;3800:key:return;4100:dump.field;\
+         3300:click:iptc field 0;3600:key:t;3800:key:return;4100:dump.field;\
          4400:click.783,511;4800:dump.control"
     );
     let stderr = shoot_env_stderr(
@@ -7283,11 +7545,7 @@ fn a_click_inside_the_iptc_panel_never_reaches_the_grid() {
         f0.0 - 10.0,
         f0.0
     );
-    assert_click_inside(
-        iptc_field_rect(&stderr, 0, "drive: click.1290,177"),
-        (1290.0, 177.0),
-        "the Title field",
-    );
+    assert_click_resolved(&stderr, "iptc field 0");
     // The contract: neither click moved the cursor or touched the selection.
     for label in ["chrome", "field"] {
         let dump = qedump(&stderr, label);
