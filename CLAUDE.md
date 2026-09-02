@@ -64,6 +64,18 @@ Rules of the gate:
 - The gate applies to implementation steps (code, specs, CI); trivial fixups
   (typos, comment wording) are exempt.
 
+## Calling for help on a hard defect
+
+**senior-developer** (`.claude/agents/senior-developer.md`) is available to any
+implementer, and to the reviewing agents when a finding needs a mechanism
+rather than a hypothesis. Call it when a defect will not reproduce, a fix
+keeps coming back, a test is red only on CI, or a dependency behaves in a way
+its documentation does not explain — and BEFORE a second speculative fix
+attempt, not after the third. It diagnoses by measurement (reproduce,
+instrument, bisect, mutate), names the mechanism, and hands back the smallest
+provable fix; it never commits, so the caller still owns the change and the
+gate above.
+
 ## Conventions
 
 - Rust 2021, `cargo fmt` formatting, clippy clean at `-D warnings`.
