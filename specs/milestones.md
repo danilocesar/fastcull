@@ -110,6 +110,66 @@ before code, validator + QE with the module's hostile-input list, docs
 page `docs/export-video.md` in the same commit as the behaviour, one
 README bullet. Explicitly out for a year: any editing surface.
 
+## v0.13.1 (released 2026-09-02)
+
+A fix a user can feel, and the CI round it uncovered. No new features.
+
+**The keyboard is never ownerless after a panel rebuild — on any machine**
+(#63's residual, `modules/ui-grid.md`). 0.13.0 promised that a rebuild of
+the IPTC field rows puts the keyboard back in the field you were typing
+in. On some machines it did; on others the hand-back lost a race and the
+keyboard was simply dead until the next click — no typing, no Y/N,
+nothing but the mouse. It depended on how fast the machine drew the
+panel, so it hit one computer every time and another never, which is why
+only CI found it. The mechanism: the request to reclaim can be armed
+BEFORE the rows exist, and a row born with the request already standing
+never sees the change it was waiting for — Slint installs a row's change
+trackers after its `init` body has run, so the property flip 0.13.0 used
+to manufacture that signal could never work. Each row now also claims
+from a 1 ms timer, the one hook that runs after the trackers exist
+whichever way the race went. Measured on the ordering the CI runner
+produces: 0 of 10 runs claimed before, 10 of 10 after.
+
+**Windows CI had been blind since v0.12.0.** The Windows job died at a
+clippy error — a helper used only by a `#[cfg(unix)]` test is dead code
+there, and `-D warnings` refuses to build the test target — so the whole
+v0.12.0→v0.13.0 round was tested on Linux only. With that fixed the
+suite ran there and five tests failed, none of them a product defect:
+three clicked a coordinate measured on Linux, one read a dump on a clock
+the slower runner missed, one measured a pixel rectangle sized to a Linux
+glyph. What they exposed instead is worth writing down: on Windows the
+menu bar is the OS one, outside the client area, while Slint draws its
+own 40 px bar in-window on Linux, so every in-window y differs by exactly
+that (`grid 1440x840` against `1440x800`, confirmed from the runner's own
+trace); and the ▶ badge glyph comes from a different font there, 26 px
+wide against 19.
+
+**So the suite stopped assuming one platform's layout** (#70). A driven
+click now names its target — `click:iptc field 0` resolves at dispatch
+time to the centre of the rectangle the app itself reported — and the
+rule is in the spec: a traced element is clicked by NAME, never by
+coordinate. The copy and export finish marks carry a run number, so a
+script waits for ITS copy instead of a stopwatch. The badge test asserts
+the pill's left edge, which is identical on every platform, instead of a
+width that is not. And every run now writes its trace next to its
+screenshot, with both uploaded as CI artifacts on green runs too, because
+a Windows red is read by comparing it against the same test's Linux
+green — this release's own diagnosis was done that way.
+
+Also #69: the cursor-move test's keys waited on a clock that, under heavy
+load, could fire before the reclaim it depends on — 19 runs in 20 with
+the margin measured at 6 ms. It waits for the claim mark now.
+
+Gate: a design review before the code, then the validator and
+qe-engineer agents on each step, with both Windows failure classes
+reproduced locally first — the click miss by deleting the in-window menu
+bar, the copy race by slowing the copy — and the new badge criterion
+replayed against both runners' real screenshots plus five mutant images.
+Three findings were caught that would have re-reddened CI: a temp-dir
+redirect onto the runner's small work drive, a sanity bound sitting
+exactly on the Windows value, and a width tolerance loose enough to
+accept two pills.
+
 ## v0.13.0 (released 2026-09-01)
 
 One feature, three fixes a user can feel, and a testing round that turned

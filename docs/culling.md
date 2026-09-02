@@ -84,7 +84,7 @@ itself as a folder's metadata arrives — the keyboard stays **in that
 field**, not on the grid. It has to: on the grid your next letter would
 be a cull command.
 
-> **Fixed after 0.13.0**: on some machines that hand-back could lose a
+> **Fixed in 0.13.1**: on some machines that hand-back could lose a
 > race and simply not happen — the panel refreshed, and from then on the
 > keyboard was dead: no typing, no `Y`/`N`, nothing but the mouse. It
 > depended on how fast the machine drew the panel, so it could hit one
