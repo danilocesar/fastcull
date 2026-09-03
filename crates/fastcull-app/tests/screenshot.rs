@@ -383,6 +383,23 @@ fn place_fixture(src: &Path, dst: &Path) {
     std::fs::copy(src, dst).map(|_| ()).unwrap();
 }
 
+/// One app child at a time. Every test takes this lock as its first
+/// statement (after its skip guard) and holds it to the end, so the suite
+/// is serial no matter how cargo is invoked — two driven `fastcull-app`
+/// processes would race each other for the machine and for the shot dir.
+///
+/// It also means libtest's default thread pool runs NOTHING in parallel
+/// here: all the pool ever did was start each test's clock when it was
+/// QUEUED rather than when it ran, which is where the 39 "has been
+/// running for over 60 seconds" warnings of the v0.13.1 CI run
+/// (33694019447) came from — a test whose own work is under a second
+/// warned after 60 s of lock-wait — and why the per-test times in those
+/// logs were wait, not work. CI therefore runs the suite with
+/// `--test-threads=1` (ci.yml, 2026-09-03); delete that flag and the
+/// warnings come back — nothing else changes. Nothing is hidden by it
+/// either: the pool only ever overlapped core's own test binaries, whose
+/// scratch paths are unique per process and thread, so there is no
+/// cross-test race here for the flag to mask.
 static SERIAL: std::sync::Mutex<()> = std::sync::Mutex::new(());
 
 fn serial() -> std::sync::MutexGuard<'static, ()> {

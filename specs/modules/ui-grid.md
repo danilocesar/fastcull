@@ -2181,6 +2181,40 @@ the user confirms, all cheap to change):**
       and `click_interval` (a 600 ms drag and a 150 ms click pair fit on an
       idle machine and lost the race about one run in ten — those windows
       are measured against a frame clock, which lags under load).
+      Both screenshot invocations, and the `cargo test --workspace` step
+      on either OS, pass `--test-threads=1` and run under
+      `RUST_BACKTRACE=1` (2026-09-03, CI audit item 3). Every test in
+      `tests/screenshot.rs` takes one process-wide mutex as its first
+      statement and holds it to the end (core's `tests/loupe.rs` and
+      `tests/perf_budgets.rs` guard themselves the same way), so
+      libtest's default pool ran nothing in parallel there; all it did
+      was start each test's clock when it was QUEUED, which produced 39
+      `has been running for over 60 seconds` warnings in the v0.13.1 run
+      (33694019447: 34 on windows-latest, 5 on ubuntu-latest) for tests
+      whose own work is under a second — `two_distant_clicks…` warned at
+      60 s and finished 2.2 s later — and made every per-test time in
+      the log a lock-wait rather than a duration. Serial costs the
+      screenshot suite nothing (one app child at a time already: 74
+      libtest slots summing 497 s against 459 s of child lifetime in the
+      same step's uploaded traces; measured again locally, 892.5 →
+      892.8 s) and the rest of the workspace ~24 s — loupe.rs +14 s (its
+      one unguarded test, `decode_oriented_actually_rotates`, no longer
+      overlaps the guarded eight), pipeline.rs +7 s, core's lib tests
+      +3 s, a debug workspace run 1031 → 1057 s. It hides no cross-test
+      race: the pool only ever overlapped core's own test binaries,
+      whose scratch paths are unique per process and thread, and the two
+      contention-sensitive ones keep their concurrency inside a single
+      test — what the flag removes is CPU contention, not a detector.
+      The warnings were also the log's only heartbeat through these
+      silent steps; what replaces them is the harness's 90 s child
+      watchdog, the app's 30 s `wait:` cap and the shutter's 60 s
+      readiness cap, each of which names its own failure.
+      `RUST_BACKTRACE` is `1`, not `full`: the symbolised trace with the
+      test frame on top, +17 lines per failure against `full`'s +90
+      lines of runtime internals, which at 74 screenshot tests would
+      bury the assertion they explain. The app children inherit it and
+      the harness writes each child's stderr to `<shot>.trace.log`, so
+      an app panic now reaches the uploaded evidence with its backtrace.
       **Containment through the real path** — the fidelity trap this issue
       names, closed in the two tests it bit:
       `about_dialog_renders_and_contains_the_keyboard` and

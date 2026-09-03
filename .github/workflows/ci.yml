@@ -7,6 +7,17 @@ on:
 
 env:
   CARGO_TERM_COLOR: always
+  # A red on a remote runner is read from its log alone. Without this a
+  # panic prints its message and then "note: run with `RUST_BACKTRACE=1`
+  # environment variable to display a backtrace" -- advice nobody can act
+  # on once the runner is gone. `1` is the symbolised trace with the test
+  # frame on top: +17 lines per failure (measured here on rustc 1.98)
+  # against +90 for `full`, whose runtime internals bury the assertion
+  # they are meant to explain. The screenshot harness spawns its
+  # fastcull-app children without clearing the environment and writes
+  # each child's stderr to `<shot>.trace.log`, so an APP panic now
+  # reaches the uploaded evidence with its backtrace too.
+  RUST_BACKTRACE: 1
 
 jobs:
   test:
@@ -76,15 +87,43 @@ jobs:
       - name: Clippy
         run: cargo clippy --workspace --all-targets -- -D warnings
 
+      # `--test-threads=1`: every test in
+      # fastcull-app/tests/screenshot.rs takes ONE process-wide mutex as
+      # its first statement and holds it to the end (core's
+      # tests/loupe.rs and tests/perf_budgets.rs guard themselves the
+      # same way), so libtest's default pool never ran two of them in
+      # parallel. All it did was start each test's clock when it was
+      # QUEUED, which is where the 39 "has been running for over 60
+      # seconds" warnings of the v0.13.1 run (33694019447) came from --
+      # 34 on windows-latest, 5 on ubuntu-latest, one of them
+      # `two_distant_clicks...`, which warned at 60 s and finished 2.2 s
+      # later -- and why the per-test times in the log were lock-wait,
+      # not work. Windows runs the screenshot suite in THIS step too
+      # (`has_display()` is `cfg!(windows)`), so the flag belongs here
+      # as well; 6 of those warnings come from core's tests/loupe.rs,
+      # which the `--workspace` form covers. Nothing is hidden by it:
+      # the pool only ever overlapped core's own test binaries, whose
+      # scratch paths are unique per process and thread, and the two
+      # contention-sensitive ones keep their concurrency INSIDE one test
+      # -- there is no cross-test race for the flag to mask. Cost,
+      # measured on an 8-core laptop: the binaries that really
+      # parallelise lose ~24 s (loupe.rs +14 s -- its one unguarded test
+      # stops overlapping the guarded eight -- pipeline.rs +7 s, core's
+      # lib tests +3 s) while the screenshot binary does not move (892.5
+      # -> 892.8 s), so a debug workspace run goes 1031 s -> 1057 s. The
+      # warnings were also the log's only heartbeat during this step;
+      # what replaces it is the harness's 90 s child watchdog, the app's
+      # 30 s `wait:` cap and the shutter's 60 s readiness cap, each of
+      # which names its own failure.
       - name: Tests
-        run: cargo test --workspace
+        run: cargo test --workspace -- --test-threads=1
 
       - name: Screenshot smoke tests (Linux, headless X)
         if: runner.os == 'Linux'
-        run: xvfb-run -a cargo test --release -p fastcull-app --test screenshot
+        run: xvfb-run -a cargo test --release -p fastcull-app --test screenshot -- --test-threads=1
       - name: Screenshot smoke tests (Windows)
         if: runner.os == 'Windows'
-        run: cargo test --release -p fastcull-app --test screenshot
+        run: cargo test --release -p fastcull-app --test screenshot -- --test-threads=1
 
       # The shots and the per-run `<name>.trace.log` beside them. Uploaded
       # on EVERY run, not only on failure: a Windows red is read by
