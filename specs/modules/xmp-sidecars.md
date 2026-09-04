@@ -43,6 +43,19 @@ Owned by the dedicated sidecar-writer thread (`01-architecture.md`): mutations a
 debounced ≤1 s per image, flushed on session close and on copy-picks start (a copy
 plan must never race a pending sidecar write).
 
+The session-close flush is OBSERVABLE from the app (2026-09-03):
+`SidecarWriter::close` shuts the writer down and returns how many writes its
+final drain performed — the marks still inside their debounce when the session
+went away — and a session swap traces that number as `sidecar writer closed
+gen N: K pending flushed` (harness section of ui-grid.md). It exists so a
+driven session swap can assert a structural fact about the writer instead of
+timing the pick against the swap with a stopwatch.
+The count is WRITES, not marks: re-marks on one image coalesced into one
+pending entry count once, and a failed write counts too (its failure has its
+own channel). Dropping the writer drains identically and reports nothing, so
+the mark means "a swap closed it". The debounce constant itself is 700 ms
+(`sidecar_writer::DEBOUNCE`), inside the ≤1 s the paragraph above promises.
+
 ## M3/M5 scope split (recorded and APPROVED by the user 2026-07-25)
 
 M3 ships pick/reject only: `xmp:Rating` write (attribute form; legacy element

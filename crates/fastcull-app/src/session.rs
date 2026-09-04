@@ -89,8 +89,14 @@ pub(crate) fn dispatch(state: &Rc<RefCell<AppState>>, launch: Launch, start_11: 
 
 /// Swap the session to `folder` (startup CLI path and File > Open Folder
 /// share this — spec: identical behavior). Drops the old engines first:
-/// pipeline/loupe workers stop, the old sidecar writer flushes on drop.
-fn load_folder(state: &Rc<RefCell<AppState>>, folder: &std::path::Path) -> Result<(), String> {
+/// pipeline/loupe workers stop, the old sidecar writer is closed and its
+/// pending marks flushed.
+///
+/// Returns how many sidecar writes that close had to flush — the marks
+/// still inside their debounce window when the session went away. Zero on
+/// the startup path, which has no writer to close; [`open_folder_at`]
+/// traces the number.
+fn load_folder(state: &Rc<RefCell<AppState>>, folder: &std::path::Path) -> Result<usize, String> {
     let session = Session::open(folder).map_err(|e| e.to_string())?;
     let labels: Vec<String> = session
         .images
@@ -112,9 +118,18 @@ fn load_folder(state: &Rc<RefCell<AppState>>, folder: &std::path::Path) -> Resul
     // folder is replaced, the survivors (the kitchen worker, the bound
     // cell model, the zoom step, the two panel visibilities, the
     // remembered copy destination) are named in `begin_session` itself.
-    // This is where the previous session's sidecar writer is dropped, and
-    // dropping it flushes its pending marks — the barrier the new writer
-    // below is started on the far side of.
+    //
+    // The previous session's sidecar writer goes down FIRST and BY HAND,
+    // so its shutdown drain can be reported: `close` returns how many
+    // writes were still inside their debounce window when the session went
+    // away and were flushed by it — the number the swap-flush test reads
+    // where it used to time the pick against the swap on two harness
+    // echoes. `begin_session` would drop the writer to the same effect and
+    // still does for anything else old; the ordering is unchanged
+    // (everything old goes down before anything new comes up), the drain
+    // is still the barrier the new writer below is started on the far side
+    // of, and the startup path has no writer to close.
+    let flushed = st.session.writer.take().map_or(0, |w| w.close());
     st.begin_session(labels, paths.clone());
     // templates.toml: read at session open (spec: live-reload = re-read
     // here and on panel toggle, no watcher). Errors/warnings surface in
@@ -142,7 +157,7 @@ fn load_folder(state: &Rc<RefCell<AppState>>, folder: &std::path::Path) -> Resul
     st.session.pipeline_rx = Some(rx);
     st.loupe_view.rx = Some(loupe_rx);
     recompute_view(&mut st);
-    Ok(())
+    Ok(flushed)
 }
 
 /// The Open Folder ACTION — everything the menu entry does after the native
@@ -174,7 +189,7 @@ pub(crate) fn open_folder_at(
         )
     };
     match load_folder(state, folder) {
-        Ok(()) => {
+        Ok(flushed) => {
             // Menu-open behaves like the CLI argument (spec): fresh
             // grid zoom, cursor at the first image.
             let mut st = state.borrow_mut();
@@ -182,6 +197,15 @@ pub(crate) fn open_folder_at(
             st.grid.last_grid_zoom = 1;
             drop(st);
             win.set_vp_y(0.0);
+            // The old session's writer is gone and its pending marks are on
+            // disk (`load_folder` closed it): say so with the CLOSED
+            // session's generation — this side of the bump below — and with
+            // the number of writes the close had to flush. A driven test
+            // reads that count where it used to read a stopwatch.
+            crate::trace::trace_mark(&format!(
+                "sidecar writer closed gen {}: {flushed} pending flushed",
+                win.get_session_gen()
+            ));
             // Invalidate every in-flight edit BEFORE any focus movement
             // (issue #41 D3): editors stamp this generation on focus
             // gain, and a blur commit from a stale stamp discards — the

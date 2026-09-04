@@ -7,6 +7,17 @@ on:
 
 env:
   CARGO_TERM_COLOR: always
+  # A red on a remote runner is read from its log alone. Without this a
+  # panic prints its message and then "note: run with `RUST_BACKTRACE=1`
+  # environment variable to display a backtrace" -- advice nobody can act
+  # on once the runner is gone. `1` is the symbolised trace with the test
+  # frame on top: +17 lines per failure (measured here on rustc 1.98)
+  # against +90 for `full`, whose runtime internals bury the assertion
+  # they are meant to explain. The screenshot harness spawns its
+  # fastcull-app children without clearing the environment and writes
+  # each child's stderr to `<shot>.trace.log`, so an APP panic now
+  # reaches the uploaded evidence with its backtrace too.
+  RUST_BACKTRACE: 1
 
 jobs:
   test:
@@ -76,15 +87,44 @@ jobs:
       - name: Clippy
         run: cargo clippy --workspace --all-targets -- -D warnings
 
+      # `--test-threads=1`: every test in
+      # fastcull-app/tests/screenshot.rs takes ONE process-wide mutex as
+      # its first statement and holds it to the end (core's
+      # tests/loupe.rs and tests/perf_budgets.rs guard themselves the
+      # same way), so libtest's default pool never ran two of them in
+      # parallel. All it did was start each test's clock when it was
+      # QUEUED, which is where the 39 "has been running for over 60
+      # seconds" warnings of the v0.13.1 run (33694019447) came from --
+      # 34 on windows-latest, 5 on ubuntu-latest, one of them
+      # `two_distant_clicks...`, which warned at 60 s and finished 2.2 s
+      # later -- and why the per-test times in the log were lock-wait,
+      # not work. Windows runs the screenshot suite in THIS step too
+      # (`has_display()` is `cfg!(windows)`), so the flag belongs here
+      # as well; 6 of those warnings come from core's tests/loupe.rs,
+      # which the `--workspace` form covers. Nothing is hidden by it:
+      # the pool only ever overlapped core's own test binaries, whose
+      # scratch paths are unique per process and thread, and the two
+      # contention-sensitive ones keep their concurrency INSIDE one test
+      # -- there is no cross-test race for the flag to mask. Cost, twice
+      # measured on an 8-core laptop: the screenshot binary does not move
+      # (892.5 -> 892.8 s, and 872.0 -> 870.6 s in the second round), and
+      # the rest of the workspace loses between 12 s and 24 s. The two
+      # rounds disagree on WHICH binary pays -- loupe.rs +14 s in one and
+      # +0.8 s in the other -- so only the total is quotable, and even it
+      # is noise-dominated at this size. The
+      # warnings were also the log's only heartbeat during this step;
+      # what replaces it is the harness's 90 s child watchdog, the app's
+      # 30 s `wait:` cap and the shutter's 60 s readiness cap, each of
+      # which names its own failure.
       - name: Tests
-        run: cargo test --workspace
+        run: cargo test --workspace -- --test-threads=1
 
       - name: Screenshot smoke tests (Linux, headless X)
         if: runner.os == 'Linux'
-        run: xvfb-run -a cargo test --release -p fastcull-app --test screenshot
+        run: xvfb-run -a cargo test --release -p fastcull-app --test screenshot -- --test-threads=1
       - name: Screenshot smoke tests (Windows)
         if: runner.os == 'Windows'
-        run: cargo test --release -p fastcull-app --test screenshot
+        run: cargo test --release -p fastcull-app --test screenshot -- --test-threads=1
 
       # The shots and the per-run `<name>.trace.log` beside them. Uploaded
       # on EVERY run, not only on failure: a Windows red is read by
@@ -111,9 +151,22 @@ jobs:
       # cannot gate wall-clock budgets; enforcement happens on an idle run
       # of the development machine in every gate round (issue #27 decision,
       # specs/01-architecture.md).
+      # `--test-threads=1` here for the same reason as the steps above
+      # (QE 2026-09-03; the REASON corrected 2026-09-04): every test in
+      # perf_budgets.rs takes a process-wide mutex, so the pool queues
+      # them, and a test's 60 s warning timer starts when libtest QUEUES
+      # it rather than when the mutex lets it run -- the same queued-clock
+      # exposure the flag removes in the steps above. It is NOT about the
+      # measurements: each budget test takes the guard as its FIRST
+      # statement and starts its own Instant inside the guarded region,
+      # so a lock-wait never entered a budget number (the note that stood
+      # here said one could, and that was wrong). No warning has been
+      # observed from this step, and serialising tests that already
+      # serialise themselves costs it nothing, so uniformity across the
+      # four invocations is the whole case for the flag here.
       - name: Performance budgets (release, advisory)
         continue-on-error: true
-        run: cargo test --release -p fastcull-core --test perf_budgets
+        run: cargo test --release -p fastcull-core --test perf_budgets -- --test-threads=1
 
       # ---------------------------------------------------------------
       # Windows test build. These steps sit last in the job, so the .exe

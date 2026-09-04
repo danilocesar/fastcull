@@ -913,8 +913,10 @@ impl AppState {
     /// The old session's engines stop here and its sidecar writer is
     /// dropped — which FLUSHES its pending marks (xmp-sidecars.md) — so
     /// the caller's `SidecarWriter::start()` afterwards is on the far side
-    /// of that barrier. The loupe engine and the writer have no ordering
-    /// between them: they share nothing.
+    /// of that barrier. (`session::load_folder` closes the writer by hand
+    /// just before this call, to report the flush count; the drop here is
+    /// the fallback for any other caller.) The loupe engine and the writer
+    /// have no ordering between them: they share nothing.
     pub(crate) fn begin_session(&mut self, labels: Vec<String>, paths: Vec<std::path::PathBuf>) {
         let count = labels.len();
         self.session = SessionState::new(labels, paths);

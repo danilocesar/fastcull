@@ -22,10 +22,14 @@ enum Msg {
     Flush(SyncSender<()>),
 }
 
-/// Handle to the writer thread. Dropping flushes everything and joins.
+/// Handle to the writer thread. Dropping flushes everything and joins;
+/// [`SidecarWriter::close`] is that same shutdown with the drain's count
+/// handed back.
 pub struct SidecarWriter {
     tx: Option<Sender<Msg>>,
-    handle: Option<std::thread::JoinHandle<()>>,
+    /// The thread's join value is what its final drain wrote — the count
+    /// `close` reports.
+    handle: Option<std::thread::JoinHandle<usize>>,
 }
 
 /// A failed sidecar write, surfaced to the UI (a cull that silently does
@@ -92,6 +96,24 @@ impl SidecarWriter {
             }
         }
     }
+
+    /// Shut the writer down and report how many writes its final drain
+    /// performed — the marks still inside their debounce window when the
+    /// session went away. Dropping does the same drain silently; this is
+    /// the observable form, which the app traces on a session swap
+    /// (`sidecar writer closed gen N: K pending flushed`, ui-grid.md).
+    ///
+    /// The count is WRITES, not marks: a burst of re-marks on one image
+    /// coalesced into one pending entry counts once. A write that FAILED
+    /// counts too — the failure has its own channel — and a writer thread
+    /// that died reports 0, which is the same answer a lost count gives.
+    ///
+    /// Both fields are taken here, so the `Drop` that runs on the way out
+    /// of this function finds nothing left to close and nothing to join.
+    pub fn close(mut self) -> usize {
+        drop(self.tx.take()); // channel close = shutdown signal
+        self.handle.take().and_then(|h| h.join().ok()).unwrap_or(0)
+    }
 }
 
 impl Drop for SidecarWriter {
@@ -110,7 +132,7 @@ enum PendingWrite {
     Iptc(Box<IptcData>),
 }
 
-fn writer_loop(rx: Receiver<Msg>, err_tx: Sender<WriteFailure>) {
+fn writer_loop(rx: Receiver<Msg>, err_tx: Sender<WriteFailure>) -> usize {
     // Latest value per (path, property) + its write deadline; later
     // mutations supersede. Picks and keywords are separate entries so a
     // keyword edit never delays a pick write past its window.
@@ -158,25 +180,30 @@ fn writer_loop(rx: Receiver<Msg>, err_tx: Sender<WriteFailure>) {
                 drain(&mut pending, /*only_due=*/ true, &err_tx);
             }
             Err(RecvTimeoutError::Disconnected) => {
-                // Shutdown: nothing may be lost.
-                drain(&mut pending, false, &err_tx);
-                return;
+                // Shutdown: nothing may be lost. What this last drain
+                // writes is the writer's own account of the marks that
+                // were still inside their debounce when the session went
+                // away — `close` hands the count to its caller.
+                return drain(&mut pending, false, &err_tx);
             }
         }
     }
 }
 
+/// Write every entry that is due (or all of them), and return how many
+/// writes that was — the shutdown path is the one caller that reports it.
 fn drain(
     pending: &mut HashMap<(PathBuf, u8), (PendingWrite, Instant)>,
     only_due: bool,
     err_tx: &Sender<WriteFailure>,
-) {
+) -> usize {
     let now = Instant::now();
     let due: Vec<(PathBuf, u8)> = pending
         .iter()
         .filter(|(_, (_, deadline))| !only_due || *deadline <= now)
         .map(|(k, _)| k.clone())
         .collect();
+    let written = due.len();
     for key in due {
         if let Some((write, _)) = pending.remove(&key) {
             let path = &key.0;
@@ -198,6 +225,7 @@ fn drain(
             }
         }
     }
+    written
 }
 
 #[cfg(test)]
@@ -313,6 +341,81 @@ mod tests {
                 "{raw:?}"
             );
         }
+        std::fs::remove_dir_all(&dir).ok();
+    }
+
+    /// `close` is `drop` with the drain's count returned, and the count is
+    /// what a session swap reports (`sidecar writer closed gen N: K pending
+    /// flushed`). It counts WRITES, so re-marks that coalesced into one
+    /// pending entry count once and a value already on disk counts zero —
+    /// the two ends the app's swap-flush assertion distinguishes.
+    ///
+    /// ACCEPTED TIMING RISK (validator F4, 2026-09-04). The first two
+    /// blocks need their marks to be still PENDING when `close()` runs,
+    /// i.e. `mark(...)` and `close()` inside one `DEBOUNCE` (700 ms).
+    /// Past it the writer's own timeout drain writes first and the close
+    /// truthfully reports 0. `DEBOUNCE` is a private const with no
+    /// injection point, and none is being added for a test, so the risk
+    /// is taken with open eyes: a machine that spends 700 ms between two
+    /// adjacent statements turns this red. The sibling
+    /// `debounce_writes_without_flush_within_window` could be written in
+    /// the robust direction — it waits for something to HAPPEN, and a
+    /// poll loop with a 10 s deadline is slow-machine-proof — while this
+    /// one needs something to have NOT happened yet, which no amount of
+    /// waiting can make true. Both counts below therefore name both
+    /// readings in their message, so a red here is not misread as a
+    /// product defect.
+    #[test]
+    fn close_reports_the_writes_its_shutdown_drain_performed() {
+        let dir = tmp();
+        // One mark, still inside the 700 ms debounce: the close is what
+        // writes it, and it says so.
+        let raw = dir.join("c.ARW");
+        let (writer, _errs) = SidecarWriter::start();
+        writer.mark(raw.clone(), PickState::Picked);
+        assert_eq!(
+            writer.close(),
+            1,
+            "the pending mark was not reported by the close — either the \
+             drain's count is wrong, or this machine spent longer than the \
+             writer's 700 ms debounce between the mark and the close and \
+             the timeout drain wrote it first (see the note on this test)"
+        );
+        assert_eq!(
+            read_sidecar(&sidecar_path(&raw)).unwrap().pick,
+            PickState::Picked,
+            "reported as flushed but not on disk"
+        );
+        // Three images, one of them re-marked: three WRITES, four marks.
+        let raws: Vec<PathBuf> = (0..3).map(|i| dir.join(format!("m{i}.ARW"))).collect();
+        let (writer, _errs) = SidecarWriter::start();
+        for raw in &raws {
+            writer.mark(raw.clone(), PickState::Picked);
+        }
+        writer.mark(raws[0].clone(), PickState::Rejected);
+        assert_eq!(
+            writer.close(),
+            3,
+            "the count is not the number of writes the drain performed — \
+             either the coalescing or the count is wrong, or this machine \
+             spent longer than the writer's 700 ms debounce between the \
+             marks and the close and the timeout drain wrote them first \
+             (see the note on this test)"
+        );
+        assert_eq!(
+            read_sidecar(&sidecar_path(&raws[0])).unwrap().pick,
+            PickState::Rejected,
+            "the coalesced entry kept the wrong value"
+        );
+        // Nothing left after a flush: the close drains an empty table.
+        let (writer, _errs) = SidecarWriter::start();
+        writer.mark(raw.clone(), PickState::Rejected);
+        writer.flush();
+        assert_eq!(
+            writer.close(),
+            0,
+            "a writer with nothing pending reported a flush"
+        );
         std::fs::remove_dir_all(&dir).ok();
     }
 

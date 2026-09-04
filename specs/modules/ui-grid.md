@@ -1928,9 +1928,17 @@ the user confirms, all cheap to change):**
       only — a debug build decodes a mid slower than the cadence, so
       the test skips that one assertion there (the perf_budgets
       precedent) while its no-drop and `one2one` assertions still
-      bind; the M1 test and the failed-cursor gate test run in RELEASE
-      only outright — in debug both ride the app's own 60 s
-      screenshot-readiness cap (the cursor's 50 MP debug decode landed
+      bind, and the window that pin is judged over is the log after the
+      first tap's own `drive: right` echo rather than a trace-clock
+      comparison against the scripted offset (2026-09-03 — the Windows
+      debug runner fired that tap 1480 ms late); the M3 drag test runs
+      in BOTH profiles and gates its pointer
+      work on the sharp render's own mark (`wait:loupe idx 0 factor`,
+      scheduled at 20 s — the harness section's `wait:` paragraph says why
+      that placement is the cap arithmetic), where until 2026-09-03 it led
+      with a fixed 45 s sized for the debug decode; the M1 test and the
+      failed-cursor gate test run in RELEASE only outright — in debug
+      both ride the app's own 60 s screenshot-readiness cap (the cursor's 50 MP debug decode landed
       at 58.5 s on a loaded 8-core laptop; a 2-vCPU CI runner under
       the cook hold has no margin at all — validator, gate round 2),
       while the debug profile keeps its no-drop coverage through
@@ -2181,6 +2189,58 @@ the user confirms, all cheap to change):**
       and `click_interval` (a 600 ms drag and a 150 ms click pair fit on an
       idle machine and lost the race about one run in ten — those windows
       are measured against a frame clock, which lags under load).
+      All FOUR test invocations — the two screenshot steps, the
+      `cargo test --workspace` step on either OS, and the advisory
+      release `perf_budgets` step — pass `--test-threads=1`, and the job
+      runs under `RUST_BACKTRACE=1` (2026-09-03, CI audit item 3; the
+      fourth invocation named here 2026-09-04). Every test in
+      `tests/screenshot.rs` takes one process-wide mutex as its first
+      statement and holds it to the end (core's `tests/loupe.rs` and
+      `tests/perf_budgets.rs` guard themselves the same way), so
+      libtest's default pool ran nothing in parallel there; all it did
+      was start each test's clock when it was QUEUED, which produced 39
+      `has been running for over 60 seconds` warnings in the v0.13.1 run
+      (33694019447: 34 on windows-latest, 5 on ubuntu-latest) for tests
+      whose own work is under a second — `two_distant_clicks…` warned at
+      60 s and finished 2.2 s later — and made every per-test time in
+      the log a lock-wait rather than a duration. Serial costs the
+      screenshot suite nothing (one app child at a time already: 74
+      libtest slots summing 497 s against 459 s of child lifetime in the
+      same step's uploaded traces; measured again locally, 892.5 →
+      892.8 s, and 872.0 → 870.6 s in a second round) and the rest of the
+      workspace between 12 s and 24 s, a debug workspace run 1031 →
+      1057 s. Only the total is quotable: the two rounds disagree on
+      which binary pays — core's `loupe.rs`, whose one unguarded test
+      `decode_oriented_actually_rotates` stops overlapping the guarded
+      eight, measured +14 s once and +0.8 s the next time — so the
+      per-binary attribution is noise at this size and is not a number to
+      defend. The `perf_budgets` step is on that list for the WARNINGS,
+      not for the numbers (corrected 2026-09-04, validator F2): every
+      budget test takes the same process-wide lock as its FIRST
+      statement and starts its own `Instant` inside the guarded region,
+      so a lock-wait never entered a budget — the first note here said
+      one could, and that was wrong. What the step does share is the
+      queued clock: libtest starts a test's 60 s warning timer when it
+      QUEUES the test, not when the mutex lets it run, so six budget
+      tests that serialise themselves can still warn about work they
+      have not begun. No warning has been observed from that step, and
+      serialising tests that already serialise themselves costs it
+      nothing — uniformity across the four invocations is the whole
+      case. It hides no cross-test
+      race: the pool only ever overlapped core's own test binaries,
+      whose scratch paths are unique per process and thread, and the two
+      contention-sensitive ones keep their concurrency inside a single
+      test — what the flag removes is CPU contention, not a detector.
+      The warnings were also the log's only heartbeat through these
+      silent steps; what replaces them is the harness's 90 s child
+      watchdog, the app's 30 s `wait:` cap and the shutter's 60 s
+      readiness cap, each of which names its own failure.
+      `RUST_BACKTRACE` is `1`, not `full`: the symbolised trace with the
+      test frame on top, +17 lines per failure against `full`'s +90
+      lines of runtime internals, which at 74 screenshot tests would
+      bury the assertion they explain. The app children inherit it and
+      the harness writes each child's stderr to `<shot>.trace.log`, so
+      an app panic now reaches the uploaded evidence with its backtrace.
       **Containment through the real path** — the fidelity trap this issue
       names, closed in the two tests it bit:
       `about_dialog_renders_and_contains_the_keyboard` and
@@ -2322,9 +2382,22 @@ the user confirms, all cheap to change):**
       dump before the first positional key and assert BOTH that every
       thumb has loaded (metadata precedes each thumb on the same ordered
       channel, so all-thumbs implies all-keys) and that the status line
-      names the image the script expects at that position; then leave
-      seconds of slack before the navigation itself. Renaming fixtures
-      does not help — a partially keyed view sorts the keyed ones first.
+      names the image the script expects at that position; then GATE the
+      first positional key on the settle itself — `wait:load settled gen
+      N`, with the dump kept as the proof of what it meant (2026-09-03).
+      Seconds of slack were the pre-#61 form of this and the badge test
+      carried them until the CI audit; slack is still a clock, and a
+      loaded runner outruns it (that test's settle landed at 1.5 s on the
+      Windows debug runner against a 5 s `home`, while the six-copy
+      fixtures elsewhere in the suite settle at 4.7-5.7 s there). The
+      gate is available only above one column — the one-column strip re-anchors through its
+      own block and emits no settle — so a `--start-11`/`--start-loupe`
+      script keeps the slack and says so. Renaming fixtures does not
+      help — a partially keyed view sorts the keyed ones first. And the
+      settle gates the KEY, not the picture: a script whose assertion
+      reads rendered pixels needs `wait:thumb landed idx N` on top of it
+      (the two selection-wash tests and the panel-dock test do exactly
+      that — see the item-6 ledger below).
 - [x] **Focus continuity (issues #41/#42)**: driven through REAL key and
       pointer dispatch (`key:`/`click.` — the nav tokens bypass focus and
       cannot see this class), every bug-strand test red-run-verified
@@ -2598,6 +2671,157 @@ the user confirms, all cheap to change):**
       DISCARD dumps only. Putting the keyboard assertion behind it was a
       mistake: it moved that dump seconds later and widened the
       deactivation exposure, which is how it was caught.
+      **The remaining clock-gated steps (2026-09-03, CI audit item 6):** a
+      script step that waits for a variable-cost operation now waits for
+      that operation's own mark. The shape rule is fixed: keep the
+      absolute step as a harmless backstop, insert the wait in FRONT of
+      the consumer, and assert the `(satisfied` echo, so a satisfied-
+      instantly wait leaves the schedule untouched and a dropped token
+      cannot put a script back on the clock in silence. The audit's two
+      named sites went first. The issue #46 M3 drag test gates its
+      pointer work on `wait:loupe idx 0 factor` and is the one site
+      RE-TIMED rather than backstopped: the wait sits at 20 s and the
+      whole tail moved up by 24.9 s with every authored gap intact,
+      because a wait at 20 s with the tail left at 45 s would have landed
+      `dump.predrag` 25 s after the mark. Its 45 s lead is gone — 25 s
+      back on a release runner (the sharp render lands at 352 ms there),
+      and on the Windows debug runner the run ends at ~32.5 s instead of
+      47.4 s, leaving ~27 s of the shutter's 60 s readiness cap where it
+      had 12.9 s. The swap-flush test's `gap < 700` stopwatch could not
+      become a wait at all — it asserts that the debounce had NOT fired,
+      and a wait only answers "has this happened yet" — so it reads the
+      writer's own close count instead (`sidecar writer closed gen 0: 1
+      pending flushed`), with a settle wait moving the load work out of
+      the 300 ms the debounce premise depends on (that pick fired 246 ms
+      BEFORE the settle on the Windows debug runner, putting a re-sort and
+      a full refresh inside the window). Two more scripts followed the
+      same rule. The #56 badge test gates its positional nav, its copy and
+      both exports (`load settled gen 0`, `copy finished run 1`, `clip
+      export finished run 1/2`), which is what makes the ENDS of its
+      helper thread's deletion window causal rather than hoped for; the
+      early end holds while the second export takes under 8.7 s, and a
+      slower one now fails at `dump.hint2` with the victim already gone
+      rather than at `dump.done2`. The hand-deletion re-run puts
+      `wait:copy finished run 1` right AFTER its trigger instead of before
+      its consumer, so the 8.7 s the script leaves for the helper's four
+      unlinks survives a slow copy too — CI run 98735565222 (Windows,
+      2026-08-28) is that failure, this suite's one proven red of the
+      shape — and the helper's own 11 s deadline becomes a 60 s liveness
+      escape, since the script's wait now ends a stalled copy long before
+      it. Kept on the clock on purpose in these four, each test saying so:
+      the M3 fling pair's +100/+400 ms samples and its 16 ms flick cadence
+      (the timing IS the property — "stops dead" is a statement about
+      elapsed time, and no event occurs; the block moved bodily with its
+      gaps), and the badge deleter's 10 s offset, an authored position
+      inside a window whose ends these waits make causal.
+      The rest of the audit's list is insert-only, one token in front of
+      one consumer, each with its `(satisfied` guard: the camera-template
+      copy and the video export wait for their own report cards
+      (`copy finished run 1`, `clip export finished run 1` — a refused
+      Ctrl+Shift+E starts no export, so the number still names the one
+      the Enter began); the swap re-arm test holds the shutter on
+      `load settled gen 1` rather than on a trailing zoom key; the
+      export-dialog wheel test waits for `load settled gen 0` before its
+      first wheel, because the settle WRITES `vp_y` itself and would
+      otherwise move the very number the test reads — and its
+      `settled < 1900` stopwatch became an ORDERING on the log (settle
+      line before the first wheel's echo), since the old form would have
+      gone red on exactly the loaded runner the wait exists for. Eight
+      focus-family scripts open the metadata panel behind the settle: a
+      rows rebuild the load adds after the `K`/`I` is indistinguishable
+      from the blur, menu and swap rebuilds those tests count, and the
+      margin was 1.1 s on the Windows debug runner. None of these
+      shortens a run — a wait polls from its OWN timestamp, so a
+      satisfied-instantly wait leaves every later step where the script
+      put it; what changes is that a slower runner now shifts the tail
+      instead of reading a half-finished operation.
+      Two of the conversions changed what is proven, and say so. The
+      1:1 panel-reanchor test gates its toggles on the sharp render's own
+      mark in RELEASE only (`wait:loupe idx 0 factor`, satisfied in
+      0.4 s there): its release-strength assertion used to double as a
+      timing claim — a runner too slow to decode 50 MP in 2 s failed
+      here — and behind the wait that half belongs to the perf budgets,
+      which measure the decode directly. DEBUG keeps the clock, because
+      the same mark lands at 28.3 s on the Windows debug runner and the
+      30 s cap runs from the step; the two scripts are one schedule and
+      must be edited together. And the paced-tap warm-landing pin splits
+      its log at the first tap's own `drive: right` echo instead of
+      filtering trace clocks against the scripted 8000 ms: the window is
+      then wherever the tap actually fired (that runner fired it at
+      9480 ms, 1480 ms late), and the shared `trace_ms` helper, whose
+      last two callers were these two stopwatches, is gone.
+      **A settle is not a texture (2026-09-03).** Three shots assert on
+      RENDERED pixels — the two selection-wash tests compare a blue-bias
+      difference over the same cells across two processes, and the
+      panel-dock test reads left-edge photo variance — and at grid zoom
+      the shutter has no texture gate of its own, it fires on its 1.5 s
+      floor. `load settled gen N` says every thumb's BYTES were drained
+      (`metadata_complete()` is `thumbs_done >= labels.len()`), not that
+      any texture was adopted: measured on this tree under six spinners,
+      the LAST `thumb landed` line follows the settle by 44-49 ms in all
+      four wash runs, and the Windows debug artifacts show 36-110 ms. Gating those shots on
+      the settle alone would therefore have moved them from a
+      consistently texture-free state (both Windows wash shots read
+      `0/3 loaded · sorting by name until loaded`) INTO the adoption
+      window, one run on each side of it. They wait for the textures they
+      read instead — `wait:thumb landed idx 0/1/2` as the final steps of
+      every run, the settle wait kept in front as the positional-key
+      premise — and under six spinners those waits held the panel-dock
+      shots for 1042 and 1096 ms, with all four wash shots reporting
+      `3 thumbs loaded` where the placeholders used to be. That token
+      carries NO session generation, no index terminator and no RETARGET
+      generation, so it is only usable in a single-session script over a
+      three-file fixture, and it says a texture EXISTS rather than that
+      it was cooked at the current cell size: `thumb_waits_from` in
+      tests/screenshot.rs is where those limits are written down. The
+      third one bites in the panel-dock pair (recorded 2026-09-04,
+      validator F6): its open run toggles the panel at 600 ms and waits
+      at 1000-1002 ms, and on a fast seat the pre-toggle adoptions
+      satisfy all three — two release runs here landed them at 42-46 ms
+      with every wait `satisfied after 0 ms`, while the cell went 173x116
+      to 136x90. What holds the shot 903 ms behind the toggle is still the
+      shutter's 1.5 s floor, i.e. the clock; the waits keep the shots off
+      placeholders, which is what they were added for, and claim nothing
+      about the re-cook.
+      **Deferred, with the measurements that decided it:** a one-column
+      `load settled` mark in the presenter, and the six settle-then-pin
+      scripts that would need it — `selection_wash_never_reaches_the_
+      loupe`, `window_resize_keeps_the_photo`,
+      `panel_toggle_at_one_to_one_keeps_the_photo`, `loupe_survives_a_
+      vertical_resize_with_one_whole_frame`, `engine_events_after_
+      loading_never_move_an_untouched_cursor` and `panel_close_from_the_
+      menu_at_one_to_one_keeps_the_keyboard`. Order-neutrality is half a
+      reason and it covers half the list (corrected 2026-09-04,
+      validator F1 — the first wording claimed it for all six): the two
+      resize/toggle scripts place six copies of
+      `A1_full_compressed.ARW` and the focus script places one file, so
+      those three fixtures carry ONE capture key and cannot re-sort —
+      there the gate would protect nothing. The other three have
+      DISTINCT capture times and can re-sort: the wash and the vertical
+      resize open a/b/c or the three fetched references, and
+      `engine_events…` is ABOUT the flip. What defers those is cost
+      against measured margin. Cost, on the Windows debug runner: the
+      six-copy settle lands at 4.7-5.7 s (`thumb bytes idx 5` at
+      4717 ms in `panel-cursor.trace.log`, `thumb bytes idx 4` at
+      5732 ms in `resize-cursor.trace.log`), 3.2-4.2 s behind the
+      1500 ms pin a gate would sit in front of, so each script's tail
+      moves that much further into the shutter's 60 s readiness cap —
+      and `window_resize_keeps_the_photo` is the KNOWN INTERMITTENT
+      whose recorded mechanism is exactly that cap. Margin, for the
+      three that can re-sort: the three references sort the same way by
+      NAME as by capture time (15:29:13 compressed, 15:29:40 lossless-
+      compressed, 15:29:55 uncompressed), so in the two that open them
+      under those names the re-sort moves nothing today — a coincidence,
+      recorded here and in `selection_wash_tints_the_grid_and_status_
+      counts`, not a guarantee; and `engine_events…`, the one script
+      that inverts the order on purpose, settles at 1884 ms
+      (`thumb bytes idx 1`) against its first drive step at 3004 ms in
+      `cursor-order.trace.log` — 1.1 s — and asserts the flip it depends
+      on (`2 thumbs loaded` and `(2/2)`), so a run that lost that race
+      fails loudly instead of measuring the wrong cell. Deferred, not
+      done: those scripts keep their clocks and their existing comments,
+      and the day one of those coincidences breaks is the day the
+      one-column mark is worth building.
 - [x] **No modal scrolls the grid behind it (issue #49)**: a wheel over
       any of the four scrims leaves the grid's `vpy` where it was, and all
       four are now driven. The two hand-rolled scrims (Copy Picks, Export
@@ -2633,8 +2857,24 @@ the user confirms, all cheap to change):**
 Documented because they ship in release builds (validator finding):
 
 - `FASTCULL_TRACE=1`: eprintln any UI-thread phase (`handle_nav`, `refresh`
-  stages, texture adoption) exceeding 20 ms, plus loupe-ready marks — the
-  evidence channel for hang reports. The thumb path is traced at BOTH of
+  stages, texture adoption) exceeding 20 ms, plus the loupe's own rungs — the
+  evidence channel for hang reports. The rungs are three sentences a `wait:`
+  can tell apart: `loupe ready idx N long L` (the DECODE arrived — L its long
+  edge, at or below `MID_RUNG_MAX_LONG` (2048) a mid rung, above it the
+  full-res), `loupe soft idx N factor …` / `loupe thumb idx N factor …` (a
+  TRANSIT rung is what is on screen) and `loupe idx N factor F extent WxH …`
+  (the SHARP render: the full-res texture is the one on screen and the soft
+  flag is cleared). `wait:loupe idx N factor` is therefore the
+  full-res-on-screen gate: every other `loupe …` line carries its own word
+  between `loupe` and `idx` (`ready`, `soft`, `thumb`, `hold`, `overlay
+  dropped`), so not one of them contains that substring — where the bare
+  `idx N factor` that `one_to_one_click_claims_the_keyboard` uses on purpose
+  matches any rung (its own comment says why: the claim under test is the
+  overlay's,
+  which every rung has). Keep the trailing ` factor` so `idx 1` cannot match
+  `idx 10`; the sharp line re-fires on every pan of the same frame, so it
+  answers "has this frame gone sharp yet", never "again".
+  The thumb path is traced at BOTH of
   its stages, because they are seconds apart and only the first touches
   the file: `thumb bytes idx N` (the pipeline read the embedded JPEG, at
   scan time) and `thumb landed idx N` (the kitchen decoded it into a
@@ -2642,7 +2882,14 @@ Documented because they ship in release builds (validator finding):
   session, so the line is also "the loupe's thumb rescue is armed for N"
   for the rest of that session). A test that manufactures a mid-session decode failure
   needs both: the first says the corruption is safe to apply, the second
-  that the rescue rung had a texture to skip (issue #50).
+  that the rescue rung had a texture to skip (issue #50). Since 2026-09-03
+  the landing is also what a shot GATES on when its assertion reads
+  rendered content, which puts two of that mark's properties on the
+  critical path: it carries no session generation, so an old session's
+  landing satisfies a new session's wait and only a single-session script
+  may wait on it; and it has no index terminator, so `idx 1` is satisfied
+  by `idx 10`. Both are why the three shots gated this way run over
+  three-file fixtures — view indices 0-2, one session each.
   The IPTC panel's field rows report their own geometry the same way:
   `iptc field N laid out at X,Y size WxH`, in window-logical px, emitted
   whenever the layout moves row N — and once per row when the conditional
@@ -2695,6 +2942,44 @@ Documented because they ship in release builds (validator finding):
   by a session swap emits no mark at all — cancelled is not finished, and
   the dialog's report says which — so a wait for that run's number ends
   the script, correctly: nothing it waits for will happen.
+  What the SETTLE means is the metadata predicate itself, not a moment in
+  the render: `metadata_complete()` is `self.thumbs_done >= self.labels.len()`
+  (state.rs), so `load settled gen N` says by DEFINITION that every image's
+  thumb work FINISHED — a dump taken behind `wait:load settled gen N` reads
+  `N thumbs loaded` by construction, not by a same-tick coincidence a
+  pipeline change could break in silence. Finished is not the same as
+  arrived, and the counter says which (QE 2026-09-03): `thumbs_done` is
+  incremented at TWO sites in the pump — the `ThumbReady` arm, which also
+  traces `thumb bytes idx N`, and the `Failed` arm, which traces nothing.
+  A folder of malformed RAWs therefore settles with fewer `thumb bytes`
+  lines than images, and the dump still reads `N thumbs loaded` because the
+  presenter clamps the count to the image count. So the settle is the right
+  gate for "the load is over" and the wrong one for "every thumb exists". Three limits an author has to know
+  (2026-09-03). It is the bytes, not the pixels: the thumb TEXTURES are
+  adopted afterwards, `thumb landed idx N` is that mark, and the Windows
+  debug runner's clip-badge trace puts its three landings 36, 75 and 110 ms
+  behind the settle — so a shot whose claim is RENDERED content gates on the
+  landings, never on the settle alone. It is unobservable in a `--synthetic`
+  session: that settle fires inside the first refresh, BEFORE
+  `harness::install`, so a wait for it is never satisfied, burns the full 30 s
+  cap and ends the run — only folder sessions may wait on it. And at ONE
+  column there is no settle mark at all: the re-anchor it reports is the
+  multi-column one (the strip re-anchors through its own block, issue #16),
+  so a `--start-11` or `--start-loupe` script has nothing to wait for and
+  stays on the clock.
+  `sidecar writer closed gen N: K pending flushed` (2026-09-03) is traced by
+  a session SWAP once the old session's writer has drained: N is the CLOSED
+  session's generation (read before the bump) and K how many writes were
+  still inside their debounce window and were flushed by the close
+  (`SidecarWriter::close`, xmp-sidecars.md). It is the observable behind
+  "flushed on session close": since 2026-09-03 the swap-flush test asserts
+  the structural fact — `K == 1` for a mark still inside its debounce —
+  where it used to measure the pick-to-swap gap between two harness echoes
+  against the 700 ms debounce with a stopwatch (the issue #58 shape). A
+  `wait:` could not serve there in any case: the claim is that the debounce had NOT fired, and
+  a wait only ever answers "has this happened yet". The startup path closes
+  no writer and process exit goes through the drop, so neither traces it: the
+  mark means "a swap closed it".
   **Focus, as it moves (issues #63/#64)**: `keysfocus` at a dump is one
   sample of a value that changes several times inside a single input
   dispatch, which is how a stranded keyboard shipped twice — a run could
@@ -3062,7 +3347,41 @@ Documented because they ship in release builds (validator finding):
   readiness cap runs from `shutter::arm` and is NOT paused while a drive
   step is pending — a wait that takes 25 s leaves ~35 s for the cursor's
   texture to arrive, which in a debug build over a 50 MP frame is a real
-  margin. An
+  margin. The 30 s runs from the STEP, not from install, which is what lets
+  a wait target an event slower than the cap itself and makes a wait's
+  PLACEMENT part of its budget — but SCRIPT time is not that budget
+  (corrected 2026-09-04, validator F3): the steps behind a satisfied wait
+  are rebased on the moment it fired, so in a multi-wait script the last
+  wait INSTALLS later than its authored timestamp by whatever the waits
+  ahead of it burned. The latest AUTHORED wait step in the suite is the
+  clip-badge test's `wait:clip export finished run 2` at 33.2 s, in the
+  script that also carries the most waits (four — 4.9 s, 16.9 s, 25.0 s,
+  33.2 s — with a tail ending at 48.0 s), so its bound is not 33.2 + 30 but
+  the harness's 90 s watchdog against that 48.0 s tail: 42 s of TOTAL wait
+  time across the four, room enough for one of them to spend its whole
+  30 s cap. Measured in release on the development machine 2026-09-04, all
+  four are satisfied after 0 ms and the test takes 48.3 s. Past the 42 s
+  the watchdog kills the child and the run reports a bare timeout, WITHOUT
+  the `wait never satisfied: <substring>` line the 30 s cap exists to buy.
+  The issue #46 M3 drag test's `wait:loupe idx 0 factor` is the cap-placed
+  one, and since 2026-09-04 it is profile-split like
+  `panel_toggle_at_one_to_one_reanchors_the_crop`: 20 s in DEBUG, because
+  the sharp render it waits for lands at 26-40 s on the Windows debug
+  runner (measured 2026-09-02 across that job's uploaded traces; 30.3 s in
+  that test's own run, 18.1 s on the development machine), so its cap
+  reaches 50 s where a step at 0 s would have ended those runs at 30 s and
+  the fixed 45 s lead it replaced reached only 45; 1.5 s in RELEASE, where
+  the same mark lands at 0.38-0.46 s (three runs) and its cap still reaches
+  31.5 s. The gaps after the wait are identical in both forms — a wait's
+  tail is written in gaps, not offsets — and the 18.5 s the split takes
+  off that one test is visible in the whole step: the release screenshot
+  suite, serial, measured 451.5 s against the 468.8 s of the run before
+  it (development machine, 2026-09-04). The
+  corollary for authors: the steps after a wait keep their gaps from the
+  wait's OWN timestamp, so gating a late-scheduled block means moving the
+  block UP to the wait, not leaving it where the clock had it — a wait at
+  20 s with a tail still written at 45 s lands that tail 25 s AFTER the mark
+  it was supposed to follow. An
   empty substring would match the next mark whatever it is, so
   `wait:` with nothing after it is dropped like any other malformed step.
   `dump.<label>` traces the focus/surface state for test assertions:
