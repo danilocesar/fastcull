@@ -1611,10 +1611,29 @@ restore — see Focus continuity in the Filter & sort bar section.
     developer's GPU-composited seat the repeater recreates the rows ~3 ms
     after the model swap and the arm timer fires only ~87 ms later (LATE
     arm — the path that always worked, and the only one the campaigns
-    ever measured). On the 2-core headless CI runner both arms fired
-    inside the model swap's own millisecond and the rows were recreated
-    16 ms afterwards (EARLY arm), and the keyboard was stranded for the
-    rest of the run.
+    ever measured). On the headless CI runner both arms fired inside the
+    model swap's own millisecond and the rows were recreated 16 ms
+    afterwards (EARLY arm), and the keyboard was stranded for the rest of
+    the run.
+    **What that runner is, corrected** (CI audit, 2026-09-04). This
+    paragraph and the two below it called it a "2-core" seat when the
+    finding was written on 2026-09-01. It is not, and was not: both CI
+    seats are 4 vCPU with ~16 GB — `ubuntu-24.04` and `windows-2025`
+    behind the workflow's `ubuntu-latest`/`windows-latest` labels. The
+    ORDERING FINDING IS UNCHANGED, because the core count was never its
+    evidence: the two arms firing inside one millisecond and the repeater
+    recreating the rows 16 ms later were READ OFF the failing run's own
+    timestamps, and the fix was then proven against the ordering itself
+    (0/5 claimed before the `Timer`, 10/10 after) rather than against a
+    machine size. What the wrong number did buy was a wrong INTUITION —
+    "few cores, therefore serialised, therefore early arm" — which is not
+    an inference anybody should draw again from this text; a 4-vCPU seat
+    with no GPU compositor produced the early ordering just as readily.
+    The `taskset -c 0,1` in the reproduction below is a local FORCING
+    device, not a model of the runner. Since 2026-09-04 the job writes
+    its own CPU count, memory, image and `rustc -vV` into the run summary
+    (ci.yml, `Record the runner's environment`), so the next reader does
+    not have to believe this paragraph either.
     **What answers both orderings is a per-row `Timer`** (1 ms, `running:
     want-refocus`, the claim re-checked on the tick). A timer tick is the
     one hook that runs after the change trackers are installed however
@@ -1654,8 +1673,11 @@ restore — see Focus continuity in the Filter & sort bar section.
     independently demonstrable at all (the doomed instance is gone before
     a late flag arrives; removing the stamp measures 15/15 alive,
     validator 2026-08-30, and 6/6 alive here).
-    Force the EARLY ordering, which is what a 2-core headless seat
-    actually does, and both belts become load-bearing and measurable:
+    Force the EARLY ordering, which is what the headless CI seat actually
+    did (4 vCPU, not the 2 this paragraph used to claim — see the
+    correction above; forcing it is how it is made deterministic HERE, on
+    a GPU-composited developer machine that will not produce it on its
+    own), and both belts become load-bearing and measurable:
     without the `Timer` 0/10, without the generation stamp 0/6 (the
     still-alive doomed instance consumes the flag, FAIL-1's original
     shape), with both 10/10. So the honest statement is that the arm's
@@ -1939,8 +1961,12 @@ the user confirms, all cheap to change):**
       with a fixed 45 s sized for the debug decode; the M1 test and the
       failed-cursor gate test run in RELEASE only outright — in debug
       both ride the app's own 60 s screenshot-readiness cap (the cursor's 50 MP debug decode landed
-      at 58.5 s on a loaded 8-core laptop; a 2-vCPU CI runner under
-      the cook hold has no margin at all — validator, gate round 2),
+      at 58.5 s on a loaded 8-core laptop; a 4-vCPU CI runner under
+      the cook hold has half those cores and no margin worth the risk —
+      validator, gate round 2, the vCPU count corrected from 2 to the
+      measured 4 by the CI audit of 2026-09-04, which changes the size of
+      the gap and not the decision: what the deferral rests on is 58.5 s
+      against a 60 s cap on a machine with MORE cores than CI has),
       while the debug profile keeps its no-drop coverage through
       `paced_taps` and `transit_at_zoom_stays_soft`; the M1 test
       allows the spec'd reason-carrying drops (failure/hold-cap) while
@@ -2241,6 +2267,31 @@ the user confirms, all cheap to change):**
       bury the assertion they explain. The app children inherit it and
       the harness writes each child's stderr to `<shot>.trace.log`, so
       an app panic now reaches the uploaded evidence with its backtrace.
+      **Four workflow facts a test author needs** (ci.yml, CI audit
+      2026-09-04). *Concurrency*: runs are grouped per workflow and ref,
+      and `cancel-in-progress` is true for `pull_request` only — a second
+      push to a PR branch kills the first job mid-suite, so a run that
+      vanishes without a verdict is a cancel and not a hang, while a push
+      to main always finishes. *Timeout*: the job is capped at 75 minutes
+      against a 60.9-minute record and a 65.7-minute cold-cache run, so a
+      test that adds more than ~9 minutes of wall clock to the Windows
+      job is spending headroom that is measured, not spare. *The headless
+      seat is a constant*: the Linux screenshot step runs under
+      `xvfb-run -a --server-args="-screen 0 1920x1200x24"`, which
+      contains the 1440x900 default window and both driven resizes
+      (1440x700, 1200x800) with room over. Before 2026-09-04 it took
+      xvfb-run's own default, `-screen 0 1280x1024x24` — 160 px NARROWER
+      than the window the suite drives — so a test that drives a larger
+      geometry must now raise the screen in the same commit rather than
+      discover the ceiling by a red. *Evidence*: the
+      two suite passes now write to separate temp dirs, so the
+      `screenshot-evidence-<os>` artifact opens as `debug/` and
+      `release/` — the debug pass is the `cargo test --workspace` step
+      (Windows only; Linux has no display there) and the release pass is
+      the screenshot step. The artifact keeps only `*.jpg` and
+      `*.trace.log`, never the fixture RAWs beside them, and is retained
+      30 days against the binaries' 14, because an intermittent is often
+      only recognised as one when it comes back a fortnight later.
       **Containment through the real path** — the fidelity trap this issue
       names, closed in the two tests it bit:
       `about_dialog_renders_and_contains_the_keyboard` and
