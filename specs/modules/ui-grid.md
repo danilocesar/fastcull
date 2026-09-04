@@ -1928,7 +1928,11 @@ the user confirms, all cheap to change):**
       only — a debug build decodes a mid slower than the cadence, so
       the test skips that one assertion there (the perf_budgets
       precedent) while its no-drop and `one2one` assertions still
-      bind; the M3 drag test runs in BOTH profiles and gates its pointer
+      bind, and the window that pin is judged over is the log after the
+      first tap's own `drive: right` echo rather than a trace-clock
+      comparison against the scripted offset (2026-09-03 — the Windows
+      debug runner fired that tap 1480 ms late); the M3 drag test runs
+      in BOTH profiles and gates its pointer
       work on the sharp render's own mark (`wait:loupe idx 0 factor`,
       scheduled at 20 s — the harness section's `wait:` paragraph says why
       that placement is the cap arithmetic), where until 2026-09-03 it led
@@ -2371,7 +2375,11 @@ the user confirms, all cheap to change):**
       gate is available only above one column — the one-column strip re-anchors through its
       own block and emits no settle — so a `--start-11`/`--start-loupe`
       script keeps the slack and says so. Renaming fixtures does not
-      help — a partially keyed view sorts the keyed ones first.
+      help — a partially keyed view sorts the keyed ones first. And the
+      settle gates the KEY, not the picture: a script whose assertion
+      reads rendered pixels needs `wait:thumb landed idx N` on top of it
+      (the two selection-wash tests and the panel-dock test do exactly
+      that — see the item-6 ledger below).
 - [x] **Focus continuity (issues #41/#42)**: driven through REAL key and
       pointer dispatch (`key:`/`click.` — the nav tokens bypass focus and
       cannot see this class), every bug-strand test red-run-verified
@@ -2688,6 +2696,83 @@ the user confirms, all cheap to change):**
       elapsed time, and no event occurs; the block moved bodily with its
       gaps), and the badge deleter's 10 s offset, an authored position
       inside a window whose ends these waits make causal.
+      The rest of the audit's list is insert-only, one token in front of
+      one consumer, each with its `(satisfied` guard: the camera-template
+      copy and the video export wait for their own report cards
+      (`copy finished run 1`, `clip export finished run 1` — a refused
+      Ctrl+Shift+E starts no export, so the number still names the one
+      the Enter began); the swap re-arm test holds the shutter on
+      `load settled gen 1` rather than on a trailing zoom key; the
+      export-dialog wheel test waits for `load settled gen 0` before its
+      first wheel, because the settle WRITES `vp_y` itself and would
+      otherwise move the very number the test reads — and its
+      `settled < 1900` stopwatch became an ORDERING on the log (settle
+      line before the first wheel's echo), since the old form would have
+      gone red on exactly the loaded runner the wait exists for. Eight
+      focus-family scripts open the metadata panel behind the settle: a
+      rows rebuild the load adds after the `K`/`I` is indistinguishable
+      from the blur, menu and swap rebuilds those tests count, and the
+      margin was 1.1 s on the Windows debug runner. None of these
+      shortens a run — a wait polls from its OWN timestamp, so a
+      satisfied-instantly wait leaves every later step where the script
+      put it; what changes is that a slower runner now shifts the tail
+      instead of reading a half-finished operation.
+      Two of the conversions changed what is proven, and say so. The
+      1:1 panel-reanchor test gates its toggles on the sharp render's own
+      mark in RELEASE only (`wait:loupe idx 0 factor`, satisfied in
+      0.4 s there): its release-strength assertion used to double as a
+      timing claim — a runner too slow to decode 50 MP in 2 s failed
+      here — and behind the wait that half belongs to the perf budgets,
+      which measure the decode directly. DEBUG keeps the clock, because
+      the same mark lands at 28.3 s on the Windows debug runner and the
+      30 s cap runs from the step; the two scripts are one schedule and
+      must be edited together. And the paced-tap warm-landing pin splits
+      its log at the first tap's own `drive: right` echo instead of
+      filtering trace clocks against the scripted 8000 ms: the window is
+      then wherever the tap actually fired (that runner fired it at
+      9480 ms, 1480 ms late), and the shared `trace_ms` helper, whose
+      last two callers were these two stopwatches, is gone.
+      **A settle is not a texture (2026-09-03).** Three shots assert on
+      RENDERED pixels — the two selection-wash tests compare a blue-bias
+      difference over the same cells across two processes, and the
+      panel-dock test reads left-edge photo variance — and at grid zoom
+      the shutter has no texture gate of its own, it fires on its 1.5 s
+      floor. `load settled gen N` says every thumb's BYTES were drained
+      (`metadata_complete()` is `thumbs_done >= labels.len()`), not that
+      any texture was adopted: measured on this tree under six spinners,
+      the LAST `thumb landed` line follows the settle by 44-49 ms in all
+      four wash runs, and the Windows debug artifacts show 36-110 ms. Gating those shots on
+      the settle alone would therefore have moved them from a
+      consistently texture-free state (both Windows wash shots read
+      `0/3 loaded · sorting by name until loaded`) INTO the adoption
+      window, one run on each side of it. They wait for the textures they
+      read instead — `wait:thumb landed idx 0/1/2` as the final steps of
+      every run, the settle wait kept in front as the positional-key
+      premise — and under six spinners those waits held the panel-dock
+      shots for 1042 and 1096 ms, with all four wash shots reporting
+      `3 thumbs loaded` where the placeholders used to be. That token
+      carries NO session generation and no index terminator, so it is
+      only usable in a single-session script over a three-file fixture:
+      `thumb_waits_from` in tests/screenshot.rs is where that limit is
+      written down.
+      **Deferred, with the measurements that decided it:** a one-column
+      `load settled` mark in the presenter, and the six settle-then-pin
+      scripts that would need it — `selection_wash_never_reaches_the_
+      loupe`, `window_resize_keeps_the_photo`,
+      `panel_toggle_at_one_to_one_keeps_the_photo`, `loupe_survives_a_
+      vertical_resize_with_one_whole_frame`, `engine_events_after_
+      loading_never_move_an_untouched_cursor` and `panel_close_from_the_
+      menu_at_one_to_one_keeps_the_keyboard`. Those fixtures are copies
+      of ONE reference file, so every frame carries the same capture key
+      and the provisional order cannot re-sort: the gate would protect
+      nothing there. Its cost is not nothing — on the Windows debug
+      runner the six-copy settle lands at 4.7-5.7 s (`thumb bytes idx 4`
+      at 5732 ms in the resize test's own trace), not the 1.7-2.2 s a
+      first reading of those traces suggests, so the wait would shift
+      each script's tail by 3.3-4.3 s into the shutter's 60 s readiness
+      cap — and `window_resize_keeps_the_photo` is the KNOWN INTERMITTENT
+      whose recorded mechanism is exactly that cap. Deferred, not done:
+      those scripts keep their clocks and their existing comments.
 - [x] **No modal scrolls the grid behind it (issue #49)**: a wheel over
       any of the four scrims leaves the grid's `vpy` where it was, and all
       four are now driven. The two hand-rolled scrims (Copy Picks, Export
@@ -2748,7 +2833,14 @@ Documented because they ship in release builds (validator finding):
   session, so the line is also "the loupe's thumb rescue is armed for N"
   for the rest of that session). A test that manufactures a mid-session decode failure
   needs both: the first says the corruption is safe to apply, the second
-  that the rescue rung had a texture to skip (issue #50).
+  that the rescue rung had a texture to skip (issue #50). Since 2026-09-03
+  the landing is also what a shot GATES on when its assertion reads
+  rendered content, which puts two of that mark's properties on the
+  critical path: it carries no session generation, so an old session's
+  landing satisfies a new session's wait and only a single-session script
+  may wait on it; and it has no index terminator, so `idx 1` is satisfied
+  by `idx 10`. Both are why the three shots gated this way run over
+  three-file fixtures — view indices 0-2, one session each.
   The IPTC panel's field rows report their own geometry the same way:
   `iptc field N laid out at X,Y size WxH`, in window-logical px, emitted
   whenever the layout moves row N — and once per row when the conditional

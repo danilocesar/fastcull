@@ -983,6 +983,27 @@ fn engine_events_after_loading_never_move_an_untouched_cursor() {
     );
 }
 
+/// The three `wait:thumb landed idx N` steps of a THREE-FILE fixture, from
+/// `ms` and 1 ms apart — one segment per index, because the textures land in
+/// any order and a wait can only ask "has this one landed yet". Placed LAST
+/// in a script, they hold the shutter (its pending-step count stands while a
+/// wait is unsatisfied) until every thumbnail a pixel assertion reads is
+/// actually on screen.
+///
+/// Two limits live in the mark itself. It carries NO session generation, so
+/// in a two-session script the old session's landing satisfies the new
+/// session's wait — only single-session shots may use it. And it has no
+/// index terminator, so `idx 1` is satisfied by `idx 10`: three files, view
+/// indices 0-2, is what makes the token unambiguous here.
+fn thumb_waits_from(ms: u32) -> String {
+    format!(
+        "{ms}:wait:thumb landed idx 0;{}:wait:thumb landed idx 1;\
+         {}:wait:thumb landed idx 2",
+        ms + 1,
+        ms + 2
+    )
+}
+
 /// Issue #12 regression: opening the IPTC panel must DOCK it — the grid
 /// stays pinned to the left edge (Slint centers an element whose width is
 /// bound but whose x is not, which shifted the grid right by panel-w/2 and
@@ -1000,12 +1021,43 @@ fn iptc_panel_docks_without_gutter() {
     let raws = raws_dir();
     let closed = out_dir().join("panel-closed.jpg");
     let open = out_dir().join("panel-open.jpg");
-    shoot(&[raws.to_str().unwrap()], &closed);
-    shoot_env(
+    // Three real thumbnails must be ON SCREEN in both shots: the left-edge
+    // variance below is photo content, and at grid zoom the shutter has no
+    // texture gate of its own — it fires on its bare 1.5 s floor, which is
+    // exactly where those textures land on the Windows debug runner (a
+    // sibling run over the same three A1 references adopted them at 1554,
+    // 1593 and 1628 ms). So each run ends on `thumb_waits_from`, by index
+    // because they land in any order; the fixture is the three fetched
+    // RAWs and each shot spawns ONE session, which is what makes that
+    // token safe here (see the helper). Measured under six spinners in a
+    // debug build, the waits held these two shots for 1042 and 1096 ms —
+    // without them the floor would have fired with two of the three cells
+    // still placeholders. The toggle keeps its 600 ms and stays FIRST:
+    // putting the waits in front of it would let the shot follow the panel
+    // by a single 250 ms poll, where today it has ≥900 ms to reflow. Both
+    // runs are traced, so the waits have a witness — these two shots used
+    // to write an empty trace log.
+    let thumbs = thumb_waits_from(1000);
+    let closed_err = shoot_env_stderr(
         &[raws.to_str().unwrap()],
-        &[("FASTCULL_DRIVE", "600:iptc")],
+        &[("FASTCULL_TRACE", "1"), ("FASTCULL_DRIVE", &thumbs)],
+        &closed,
+    );
+    let open_err = shoot_env_stderr(
+        &[raws.to_str().unwrap()],
+        &[
+            ("FASTCULL_TRACE", "1"),
+            ("FASTCULL_DRIVE", &format!("600:iptc;{thumbs}")),
+        ],
         &open,
     );
+    for (name, err) in [("closed", &closed_err), ("open", &open_err)] {
+        assert!(
+            err.contains("wait:thumb landed idx 2 (satisfied"),
+            "the {name} run's thumb waits never fired — the shot was timed, \
+             not gated, and the variance below may be reading placeholders:\n{err}"
+        );
+    }
     // Sample the FIRST ROW of cells (the 3 A1 fixtures land in columns
     // 1-3 of 8; lower strips are empty background in both shots). The
     // band starts BELOW the filter-bar pills: a band overlapping them
@@ -1904,12 +1956,24 @@ fn panel_toggle_at_one_to_one_reanchors_the_crop() {
         );
     }
     let out = out_dir().join("panel-reanchor.jpg");
+    // The two scripts are the same schedule; only RELEASE gates the
+    // toggles on the sharp baseline the release-strength half asserts
+    // below (`wait:loupe idx 0 factor` — the full-res render's own line;
+    // the soft and thumb rungs carry their own word between `loupe` and
+    // `idx` and cannot satisfy it). It lands at 374 ms on the Linux
+    // release runner, so the wait is free there. DEBUG keeps the clock on
+    // purpose: the same mark lands at 28.3 s on the Windows debug runner
+    // and the harness's 30 s wait cap runs from the STEP, so a wait at
+    // 1600 would end those runs at ~31.6 s — while the debug half asserts
+    // only post-close stability and is content in the soft regime. Edit
+    // the two consts together: they must stay one schedule.
+    #[cfg(not(debug_assertions))]
+    const DRIVE: &str = "1500:home;1600:wait:loupe idx 0 factor;2000:iptc;2600:iptc";
+    #[cfg(debug_assertions)]
+    const DRIVE: &str = "1500:home;2000:iptc;2600:iptc";
     let stderr = shoot_env_stderr(
         &["--start-11", dir.to_str().unwrap()],
-        &[
-            ("FASTCULL_TRACE", "1"),
-            ("FASTCULL_DRIVE", "1500:home;2000:iptc;2600:iptc"),
-        ],
+        &[("FASTCULL_TRACE", "1"), ("FASTCULL_DRIVE", DRIVE)],
         &out,
     );
     assert!(
@@ -1958,9 +2022,19 @@ fn panel_toggle_at_one_to_one_reanchors_the_crop() {
     // these are the teeth that actually run there — the debug half
     // above cannot detect a stable-but-WRONG anchor (validator note:
     // don't drop the release CI run thinking debug covers this). In
-    // release the teeth may never silently skip: a runner too slow to
-    // have the sharp view up before the 2000 ms toggle must FAIL
-    // loudly here, not pass vacuously forever.
+    // release the toggles WAIT for the sharp view, so the teeth can only
+    // be skipped if the wait was dropped or the mark renamed — and then
+    // this must FAIL loudly, not pass vacuously forever. What the wait
+    // took away is the other half of the old assertion: a release runner
+    // whose 50 MP decode took 20 s used to fail here, and now waits. That
+    // decode's budget belongs to `perf_budgets`, which measures it
+    // directly rather than inferring it from a screenshot schedule.
+    #[cfg(not(debug_assertions))]
+    assert!(
+        stderr.contains("wait:loupe idx 0 factor (satisfied"),
+        "the `wait:loupe idx 0 factor` step never fired — the toggles were \
+         timed, not gated:\n{stderr}"
+    );
     let before = sharp_offs(0..open_at);
     #[cfg(not(debug_assertions))]
     assert!(
@@ -2261,6 +2335,10 @@ fn region_blue_bias(path: &Path, fx0: f64, fy0: f64, fx1: f64, fy1: f64) -> f64 
 /// Three fixtures with DISTINCT capture times, so view order is deterministic
 /// and the same photo lands in cell 1 on every run — the wash assertions
 /// compare the same region across two processes.
+///
+/// Three files also means view indices 0, 1 and 2 and nothing higher, which
+/// is what lets these scripts gate their shots on `thumb_waits_from` — see
+/// that helper for the token's small print.
 fn place_three_distinct(dir: &Path) {
     for (name, src) in [
         ("a.ARW", "A1_full_compressed.ARW"),
@@ -2288,14 +2366,41 @@ fn selection_wash_tints_the_grid_and_status_counts() {
     place_three_distinct(&dir);
     let folder = dir.to_str().unwrap();
     // Cell 1's interior at 8 columns. Both runs `home` first so the cursor is
-    // pinned on the SETTLED view before anything is selected (the capture-sort
-    // churn that bit the #20 badge tests lands well before 700 ms).
+    // pinned on the SETTLED view before anything is selected — waited for
+    // since 2026-09-03 rather than assumed, because on the Windows debug
+    // runner the settle lands at ~1.5 s, AFTER the old 700 ms `home`, and
+    // `place_three_distinct`'s filename order happening to equal its capture
+    // order is all that kept the two runs addressing the same cells.
+    //
+    // The settle is the ordering premise, not the gate. What these two shots
+    // compare is RENDERED PIXELS in one region across two processes, and the
+    // settle means every thumb's BYTES were drained, not that any texture is
+    // on screen: on the Windows debug runner the textures land 36-660 ms
+    // behind the bytes, and at grid zoom the shutter has no texture gate of
+    // its own (it fires on its 1.5 s floor). Both of today's Windows shots
+    // read `0/3 loaded · sorting by name until loaded`, i.e. the pair is
+    // comparable only because both sit on the same side of adoption; gating
+    // on the settle alone would have moved them INTO that window, one on
+    // each side. So each run ends by waiting for the three textures the
+    // samples read, by index because they land in any order, and LAST so the
+    // shutter's pending-step count holds the shot until they are in. The
+    // distinction is measurable on any seat: under six spinners in a debug
+    // build the settle here fired 1.6-1.8 s late and the LAST of the three
+    // textures landed 47-49 ms after it, with both shots then reporting
+    // `3 thumbs loaded` instead of the Windows runner's `0/3`.
+    let thumbs = thumb_waits_from(800);
     let (fx0, fy0, fx1, fy1) = (0.02, 0.11, 0.10, 0.20);
 
     let plain = out_dir().join("sel-wash-none.jpg");
     let plain_err = shoot_env_stderr(
         &[folder],
-        &[("FASTCULL_TRACE", "1"), ("FASTCULL_DRIVE", "700:home")],
+        &[
+            ("FASTCULL_TRACE", "1"),
+            (
+                "FASTCULL_DRIVE",
+                &format!("600:wait:load settled gen 0;700:home;{thumbs}"),
+            ),
+        ],
         &plain,
     );
     let sel = out_dir().join("sel-wash-some.jpg");
@@ -2305,11 +2410,28 @@ fn selection_wash_tints_the_grid_and_status_counts() {
             ("FASTCULL_TRACE", "1"),
             (
                 "FASTCULL_DRIVE",
-                "700:home;900:shift-right;1000:shift-right",
+                &format!(
+                    "600:wait:load settled gen 0;700:home;900:shift-right;\
+                     1000:shift-right;{}",
+                    thumb_waits_from(1100)
+                ),
             ),
         ],
         &sel,
     );
+    for (name, err) in [("plain", &plain_err), ("selected", &sel_err)] {
+        assert!(
+            err.contains("wait:load settled gen 0 (satisfied"),
+            "the {name} run's `wait:load settled gen 0` never fired — its \
+             `home` was timed, not gated:\n{err}"
+        );
+        assert!(
+            err.contains("wait:thumb landed idx 2 (satisfied"),
+            "the {name} run's thumb waits never fired — the shot was timed, \
+             not gated, and the two runs can photograph different mixes of \
+             placeholder and photo:\n{err}"
+        );
+    }
     let status_of = |s: &str| {
         s.lines()
             .rev()
@@ -2437,13 +2559,28 @@ fn selection_wash_stays_below_the_pick_badge() {
     let search = (0.0, 0.06, 0.09, 0.20);
     let box_size = (0.022, 0.037);
 
-    // Picked but NOT selected: `pick` marks the cursor image and advances.
+    // Same two gates as `selection_wash_tints_the_grid_and_status_counts`,
+    // for the same reasons: `wait:load settled gen 0` before the positional
+    // `home` (the Windows debug settle lands at ~1.5 s, after the old 700 ms
+    // step, and `pick` marks whichever image the current order puts under
+    // the cursor), and the three `thumb landed` waits LAST, because the
+    // star search runs over rendered pixels — `region_glyph_yellowness`
+    // counts pixels with `r >= 180 && r - b >= 60`, a set that changes with
+    // the background under the star, so a photo in one shot and a
+    // placeholder in the other is a difference the 40-point threshold
+    // cannot tell from a washed badge.
     let picked = out_dir().join("sel-badge-plain.jpg");
-    shoot_env_stderr(
+    let picked_err = shoot_env_stderr(
         &[folder],
         &[
             ("FASTCULL_TRACE", "1"),
-            ("FASTCULL_DRIVE", "700:home;900:pick"),
+            (
+                "FASTCULL_DRIVE",
+                &format!(
+                    "600:wait:load settled gen 0;700:home;900:pick;{}",
+                    thumb_waits_from(1000)
+                ),
+            ),
         ],
         &picked,
     );
@@ -2455,11 +2592,28 @@ fn selection_wash_stays_below_the_pick_badge() {
             ("FASTCULL_TRACE", "1"),
             (
                 "FASTCULL_DRIVE",
-                "700:home;900:pick;1100:home;1300:shift-right",
+                &format!(
+                    "600:wait:load settled gen 0;700:home;900:pick;1100:home;\
+                     1300:shift-right;{}",
+                    thumb_waits_from(1400)
+                ),
             ),
         ],
         &both,
     );
+    for (name, err) in [("picked", &picked_err), ("both", &both_err)] {
+        assert!(
+            err.contains("wait:load settled gen 0 (satisfied"),
+            "the {name} run's `wait:load settled gen 0` never fired — its \
+             `home` and `pick` were timed, not gated:\n{err}"
+        );
+        assert!(
+            err.contains("wait:thumb landed idx 2 (satisfied"),
+            "the {name} run's thumb waits never fired — the shot was timed, \
+             not gated, and the star search can run over a placeholder in \
+             one shot and a photograph in the other:\n{err}"
+        );
+    }
     // Anti-vacuity: the second frame really is a selected, picked cell.
     let status = both_err
         .lines()
@@ -2854,10 +3008,20 @@ fn provisional_order_flip_rearms_after_an_in_app_swap() {
     );
     let out = out_dir().join("swap-rearm.jpg");
     // `right` claims session A's cursor on index 1 — both leak flavours
-    // (index and claim) now point AWAY from B's expected outcome. The
-    // trailing `grid` holds the shutter until B's two files have loaded
-    // and re-sorted (zoom keys never claim the cursor).
-    let script = format!("1000:right;2000:open:{};8500:grid", dir_b.display());
+    // (index and claim) now point AWAY from B's expected outcome.
+    // `wait:load settled gen 1` is what holds the shutter until B's two
+    // files have loaded and RE-SORTED; the trailing `grid` (a zoom key
+    // never claims the cursor) is the harmless backstop the shutter used
+    // to ride alone. B is `gen 1` — one successful open — so the token
+    // names B's settle and cannot be satisfied by A's. The schedule is
+    // unchanged: a wait polls from its OWN timestamp, so 8400 is still
+    // 8400 and the mark (3381 ms on the Windows debug runner, 2017 ms on
+    // the Linux release one) is already there when it does; only a
+    // slower session B moves the `grid` behind it.
+    let script = format!(
+        "1000:right;2000:open:{};8400:wait:load settled gen 1;8500:grid",
+        dir_b.display()
+    );
     let stderr = shoot_env_stderr(
         &[dir_a.to_str().unwrap()],
         &[("FASTCULL_TRACE", "1"), ("FASTCULL_DRIVE", &script)],
@@ -2874,6 +3038,11 @@ fn provisional_order_flip_rearms_after_an_in_app_swap() {
         "session A's `right` never fired — the cursor reset under test \
          was never armed:\n{stderr}"
     );
+    assert!(
+        stderr.contains("wait:load settled gen 1 (satisfied"),
+        "the `wait:load settled gen 1` step never fired — the hold before \
+         the shot was timed, not gated:\n{stderr}"
+    );
     let status = stderr
         .lines()
         .rev()
@@ -2883,6 +3052,11 @@ fn provisional_order_flip_rearms_after_an_in_app_swap() {
     // "2 thumbs loaded" — B's load finished, so B's re-sort really happened;
     // "a_late.ARW (2/2)" — the cursor opened on B's name-first image and
     // kept it through the flip (capture time sorts it last).
+    // Behind the settle wait the first half is definitional rather than
+    // lucky: `metadata_complete()` IS `thumbs_done >= labels.len()`
+    // (state.rs), and `thumbs_done` is what the status counts — so a
+    // settled generation cannot report fewer. It stays as the anti-vacuity
+    // reading of the wait, not as an independent race.
     assert!(
         status.contains("2 thumbs loaded"),
         "session B never finished loading, so its re-sort never happened: {status}"
@@ -3162,12 +3336,25 @@ fn modal_over_a_focused_field_owns_the_keyboard_and_writes_nothing() {
             ("FASTCULL_TRACE", "1"),
             (
                 "FASTCULL_DRIVE",
-                "2500:key:k;3000:click.115,19;3400:click.180,93;3800:dump.about;\
+                "2400:wait:load settled gen 0;2500:key:k;3000:click.115,19;3400:click.180,93;\
+                 3800:dump.about;\
                  4000:key:b;4100:key:a;4200:key:d;4400:key:escape;4800:dump.esc;\
                  5000:key:+;5300:dump.end",
             ),
         ],
         &out,
+    );
+    // The panel opens BEHIND the load settle (2026-09-03): a rows rebuild
+    // the load adds after the panel key is indistinguishable from the
+    // blur, menu and swap rebuilds this family counts. Of these six sites
+    // only `keyword_enter_commit_still_writes_and_returns_focus` runs on
+    // Windows, and it measured the margin there at 1.1 s (settle 1397 ms
+    // against a 2500 ms key); the five behind `menu_clicks_are_
+    // calibrated()` never measured it at all.
+    assert!(
+        stderr.contains("wait:load settled gen 0 (satisfied"),
+        "the `wait:load settled gen 0` step never fired — the panel opened \
+         on the clock:\n{stderr}"
     );
     let about = qedump(&stderr, "about");
     assert!(
@@ -3299,7 +3486,7 @@ fn session_swap_mid_field_edit_discards_and_keeps_the_keyboard() {
     // command line). The keystroke probe fires before it, immediately
     // after the swap, which is where the ownerless window was.
     let drive = format!(
-        "{PIN_WINDOW};2500:key:i;2600:wait:iptc field 0 laid out at 1150;\
+        "{PIN_WINDOW};2400:wait:load settled gen 0;2500:key:i;2600:wait:iptc field 0 laid out at 1150;\
          3000:click:iptc field 0;3200:dump.focused;\
          3400:key:w;3500:key:i;3600:key:p;4000:open:{};\
          4050:key:+;4400:dump.after;\
@@ -3318,6 +3505,16 @@ fn session_swap_mid_field_edit_discards_and_keeps_the_keyboard() {
         stderr.contains("wait:iptc field 0 laid out at 1150 (satisfied"),
         "the `wait:` step never fired — the click below was timed, not \
          gated:\n{stderr}"
+    );
+    // …and the panel OPEN, the one ungated link in this script until
+    // 2026-09-03, is behind A's settle: a rows rebuild the load adds after
+    // `key:i` looks exactly like the swap's own rebuild that this test is
+    // about (settle 1396 ms against the `i` at 2500 on the Windows debug
+    // runner — 1.1 s of luck).
+    assert!(
+        stderr.contains("wait:load settled gen 0 (satisfied"),
+        "the `wait:load settled gen 0` step never fired — the panel opened \
+         on the clock:\n{stderr}"
     );
     // The click resolved against the rectangle the app reported for that
     // row, and landed inside it — before the outcome assertions, so a
@@ -3449,8 +3646,19 @@ fn session_swap_mid_keyword_edit_never_writes_into_the_new_session() {
         &dir_b.join("two.ARW"),
     );
     let out = out_dir().join("focus-d3kw.jpg");
+    // The panel opens BEHIND the settle (2026-09-03): a panel built before
+    // the metadata lands is rebuilt again when it does, and a load-driven
+    // rows rebuild is indistinguishable from the swap's own — the hazard
+    // `a_cursor_move_rebuild_keeps_the_keyboard_in_the_field` added this
+    // token for. The margin was 1.1 s on the Windows debug runner (settle
+    // 1402 ms against the `k` at 2500), i.e. green by luck rather than by
+    // construction. `5200:dump.swapped` is deliberately NOT gated on
+    // `load settled gen 1`: nothing it asserts needs B's settle (the status
+    // names `two.ARW` from the provisional view, `focusowner` is the swap's
+    // reclaim), and ui-grid.md records the #63 lesson that moving a
+    // keyboard dump behind a wait widens its exposure.
     let drive = format!(
-        "2500:key:k;3000:key:w;3100:key:i;3200:key:p;4000:open:{};\
+        "2400:wait:load settled gen 0;2500:key:k;3000:key:w;3100:key:i;3200:key:p;4000:open:{};\
          5200:dump.swapped;5400:key:+;5800:dump.end",
         dir_b.display()
     );
@@ -3458,6 +3666,11 @@ fn session_swap_mid_keyword_edit_never_writes_into_the_new_session() {
         &[dir_a.to_str().unwrap()],
         &[("FASTCULL_TRACE", "1"), ("FASTCULL_DRIVE", &drive)],
         &out,
+    );
+    assert!(
+        stderr.contains("wait:load settled gen 0 (satisfied"),
+        "the `wait:load settled gen 0` step never fired — the panel opened \
+         on the clock:\n{stderr}"
     );
     let swapped = qedump(&stderr, "swapped");
     assert!(
@@ -3742,11 +3955,24 @@ fn keyword_enter_commit_still_writes_and_returns_focus() {
             ("FASTCULL_TRACE", "1"),
             (
                 "FASTCULL_DRIVE",
-                "2500:key:k;3000:key:o;3100:key:k;3300:key:return;\
+                "2400:wait:load settled gen 0;2500:key:k;3000:key:o;3100:key:k;\
+                 3300:key:return;\
                  3700:dump.committed;3900:key:+;4200:dump.end",
             ),
         ],
         &out,
+    );
+    // The panel opens BEHIND the load settle (2026-09-03): a rows rebuild
+    // the load adds after the panel key is indistinguishable from the
+    // blur, menu and swap rebuilds this family counts. Of these six sites
+    // only `keyword_enter_commit_still_writes_and_returns_focus` runs on
+    // Windows, and it measured the margin there at 1.1 s (settle 1397 ms
+    // against a 2500 ms key); the five behind `menu_clicks_are_
+    // calibrated()` never measured it at all.
+    assert!(
+        stderr.contains("wait:load settled gen 0 (satisfied"),
+        "the `wait:load settled gen 0` step never fired — the panel opened \
+         on the clock:\n{stderr}"
     );
     let committed = qedump(&stderr, "committed");
     assert!(
@@ -4073,7 +4299,8 @@ fn a_menu_item_over_a_focused_field_row_keeps_the_keyboard() {
             (
                 "FASTCULL_DRIVE",
                 &format!(
-                    "{PIN_WINDOW};2500:key:i;2600:wait:iptc field 0 laid out at 1150;\
+                    "{PIN_WINDOW};2400:wait:load settled gen 0;\
+                     2500:key:i;2600:wait:iptc field 0 laid out at 1150;\
                      3000:click:iptc field 0;3200:key:a;3300:key:b;\
                      3600:click.72,19;4000:click.128,157;\
                      4300:wait:menu -> row 0;4400:dump.menu;\
@@ -4098,6 +4325,18 @@ fn a_menu_item_over_a_focused_field_row_keeps_the_keyboard() {
         stderr.contains("wait:menu -> row 0 (satisfied"),
         "the menu item's own claim never came, so the keys after it ran on \
          the clock:\n{stderr}"
+    );
+    // The panel opens BEHIND the load settle (2026-09-03): a rows rebuild
+    // the load adds after the panel key is indistinguishable from the
+    // blur, menu and swap rebuilds this family counts. Of these six sites
+    // only `keyword_enter_commit_still_writes_and_returns_focus` runs on
+    // Windows, and it measured the margin there at 1.1 s (settle 1397 ms
+    // against a 2500 ms key); the five behind `menu_clicks_are_
+    // calibrated()` never measured it at all.
+    assert!(
+        stderr.contains("wait:load settled gen 0 (satisfied"),
+        "the `wait:load settled gen 0` step never fired — the panel opened \
+         on the clock:\n{stderr}"
     );
     assert_click_resolved(&stderr, "iptc field 0");
     // The menu really acted (anti-vacuity): the filter bar toggled, so
@@ -4168,7 +4407,8 @@ fn a_dismissed_menu_over_a_focused_field_row_keeps_the_keyboard() {
             (
                 "FASTCULL_DRIVE",
                 &format!(
-                    "{PIN_WINDOW};2500:key:i;2600:wait:iptc field 0 laid out at 1150;\
+                    "{PIN_WINDOW};2400:wait:load settled gen 0;\
+                     2500:key:i;2600:wait:iptc field 0 laid out at 1150;\
                      3000:click:iptc field 0;3200:key:q;\
                      3600:click.72,19;4000:key:escape;4400:dump.dismissed;\
                      4600:key:return;4900:key:y;5300:dump.after"
@@ -4180,6 +4420,18 @@ fn a_dismissed_menu_over_a_focused_field_row_keeps_the_keyboard() {
     assert!(
         stderr.contains("wait:iptc field 0 laid out at 1150 (satisfied"),
         "the `wait:` never fired — the field click was timed, not gated:\n{stderr}"
+    );
+    // The panel opens BEHIND the load settle (2026-09-03): a rows rebuild
+    // the load adds after the panel key is indistinguishable from the
+    // blur, menu and swap rebuilds this family counts. Of these six sites
+    // only `keyword_enter_commit_still_writes_and_returns_focus` runs on
+    // Windows, and it measured the margin there at 1.1 s (settle 1397 ms
+    // against a 2500 ms key); the five behind `menu_clicks_are_
+    // calibrated()` never measured it at all.
+    assert!(
+        stderr.contains("wait:load settled gen 0 (satisfied"),
+        "the `wait:load settled gen 0` step never fired — the panel opened \
+         on the clock:\n{stderr}"
     );
     assert_click_resolved(&stderr, "iptc field 0");
     // The menu really opened and the field's blur really rebuilt the rows
@@ -4239,12 +4491,25 @@ fn filter_bar_toggle_mid_edit_commits_and_keeps_the_field_coherent() {
             ("FASTCULL_TRACE", "1"),
             (
                 "FASTCULL_DRIVE",
-                "2500:key:k;3000:key:w;3300:click.72,19;3700:click.128,157;\
+                "2400:wait:load settled gen 0;2500:key:k;3000:key:w;3300:click.72,19;\
+                 3700:click.128,157;\
                  4100:dump.toggled;4300:key:return;4700:dump.after;\
                  4900:key:+;5200:dump.end",
             ),
         ],
         &out,
+    );
+    // The panel opens BEHIND the load settle (2026-09-03): a rows rebuild
+    // the load adds after the panel key is indistinguishable from the
+    // blur, menu and swap rebuilds this family counts. Of these six sites
+    // only `keyword_enter_commit_still_writes_and_returns_focus` runs on
+    // Windows, and it measured the margin there at 1.1 s (settle 1397 ms
+    // against a 2500 ms key); the five behind `menu_clicks_are_
+    // calibrated()` never measured it at all.
+    assert!(
+        stderr.contains("wait:load settled gen 0 (satisfied"),
+        "the `wait:load settled gen 0` step never fired — the panel opened \
+         on the clock:\n{stderr}"
     );
     let toggled = qedump(&stderr, "toggled");
     // The half-typed keyword committed on the menu-open exit (G7), so
@@ -4297,12 +4562,25 @@ fn copy_picks_from_the_menu_over_a_focused_field_owns_the_keyboard() {
             ("FASTCULL_TRACE", "1"),
             (
                 "FASTCULL_DRIVE",
-                "2500:key:k;3000:click.22,19;3400:click.80,93;3800:dump.opened;\
+                "2400:wait:load settled gen 0;2500:key:k;3000:click.22,19;3400:click.80,93;\
+                 3800:dump.opened;\
                  4000:key:x;4300:key:escape;4700:dump.closed;4900:key:+;\
                  5200:dump.end",
             ),
         ],
         &out,
+    );
+    // The panel opens BEHIND the load settle (2026-09-03): a rows rebuild
+    // the load adds after the panel key is indistinguishable from the
+    // blur, menu and swap rebuilds this family counts. Of these six sites
+    // only `keyword_enter_commit_still_writes_and_returns_focus` runs on
+    // Windows, and it measured the margin there at 1.1 s (settle 1397 ms
+    // against a 2500 ms key); the five behind `menu_clicks_are_
+    // calibrated()` never measured it at all.
+    assert!(
+        stderr.contains("wait:load settled gen 0 (satisfied"),
+        "the `wait:load settled gen 0` step never fired — the panel opened \
+         on the clock:\n{stderr}"
     );
     // The dialog opened via the real menu and its scope owns the keys.
     let opened = qedump(&stderr, "opened");
@@ -4383,15 +4661,6 @@ fn dump_text<'a>(dump: &'a str, name: &str) -> &'a str {
         })
         .unwrap_or(rest.len());
     &rest[..end]
-}
-
-/// The millisecond stamp a `FASTCULL_TRACE` line carries, as in
-/// `fastcull-trace: [51] loupe thumb idx 0 ...` — the app's own clock, so
-/// a test can tell a startup event from one inside a drive script's
-/// window. `None` for any line without a well-formed stamp; callers decide
-/// whether that is disqualifying (an unstamped line is never "early").
-fn trace_ms(line: &str) -> Option<u64> {
-    line.split_once('[')?.1.split_once(']')?.0.parse().ok()
 }
 
 /// Ten files cycling the three A1 classes: identical per-class EXIF
@@ -4714,8 +4983,10 @@ fn paced_taps_over_an_interleaved_session_land_warm() {
     let dir = out_dir().join("i46-f2");
     interleaved_session(&dir);
     let out = out_dir().join("i46-f2.jpg");
-    // The first tap, shared with the warm-landing assertion below so the
-    // script and the window it is judged over cannot drift apart.
+    // The first tap. The warm-landing assertion below splits the log at
+    // this step's own echo rather than at this number, so the script and
+    // the window it is judged over cannot drift apart however late the
+    // step fires.
     const FIRST_TAP_MS: u64 = 8000;
     let drive = format!(
         "{FIRST_TAP_MS}:right;8600:right;9200:right;9800:right;10400:right;11000:dump.done"
@@ -4753,11 +5024,24 @@ fn paced_taps_over_an_interleaved_session_land_warm() {
     // with all five taps at 8000-10400 ms rendering the full 8640x5760.
     // Anything at or after the first tap still fails, which is the
     // regression this pins.
+    //
+    // The split is the tap's OWN echo, not its scripted timestamp (CI
+    // audit item 6, 2026-09-03): the harness prints `drive: right` before
+    // it dispatches the key, so everything after that byte offset is the
+    // tap window and everything before it the cold start, whenever the
+    // step actually fired. Comparing trace clocks against FIRST_TAP_MS
+    // instead makes the window a guess about the runner — the Windows
+    // debug runner fired this first tap at 9480 ms, 1480 ms late, and on
+    // a release runner that lost the same 1.5 s a startup thumb at
+    // 8100 ms would have been read as a tap's. The failgate test splits
+    // its log the same way (`match_indices("drive: end").nth(1)`).
     if !cfg!(debug_assertions) {
-        let late_thumb = stderr
+        let first_tap = stderr
+            .find("drive: right")
+            .unwrap_or_else(|| panic!("the first tap never ran:\n{stderr}"));
+        let late_thumb = stderr[first_tap..]
             .lines()
-            .filter(|l| l.contains("loupe thumb idx"))
-            .find(|l| trace_ms(l).is_none_or(|ms| ms >= FIRST_TAP_MS));
+            .find(|l| l.contains("loupe thumb idx"));
         assert!(
             late_thumb.is_none(),
             "a paced tap fell to the THUMB rung — the ring is not warming \
@@ -5603,10 +5887,17 @@ fn camera_template_stamps_the_exif_model() {
     {
         place_fixture(&raws_dir().join(name), &src.join(format!("cam_{i}.ARW")));
     }
+    // `dump.done` reads the copy's report card, so it waits for the copy's
+    // own mark rather than for 12.4 s of clock: `copy finished run 1` is
+    // numbered at `start_copy`, and the only copy this script starts is the
+    // Enter at 3600 (measured 4686 ms on the Windows debug runner, 3805 ms
+    // on the Linux release one — the wait is satisfied instantly at 15900
+    // in both). The 16000 stays as a backstop; a runner slower than 12.4 s
+    // for two 50 MP frames now shifts the tail instead of dumping mid-copy.
     let script = format!(
         "1600:key:y;1900:key:y;2200:copydest:{dest};2600:key:ctrl+e;\
          3000:copytemplate:{{camera}}.{{ext}};3400:dump.planned;3600:key:return;\
-         16000:dump.done;16400:key:escape;16800:dump.end",
+         15900:wait:copy finished run 1;16000:dump.done;16400:key:escape;16800:dump.end",
         dest = dest.display()
     );
     let out = out_dir().join("camera-template.jpg");
@@ -5614,6 +5905,11 @@ fn camera_template_stamps_the_exif_model() {
         &[src.to_str().unwrap()],
         &[("FASTCULL_TRACE", "1"), ("FASTCULL_DRIVE", script.as_str())],
         &out,
+    );
+    assert!(
+        stderr.contains("wait:copy finished run 1 (satisfied"),
+        "the `wait:copy finished run 1` step never fired — `dump.done` was \
+         timed, not gated:\n{stderr}"
     );
     let mut on_disk: Vec<String> = std::fs::read_dir(&dest)
         .map(|d| {
@@ -5782,14 +6078,19 @@ fn export_frames_as_video_writes_a_real_motion_jpeg() {
     };
     let before = listing(&src);
 
-    // 8.5 s for the export itself: it measures ~1.6 s on the development
-    // laptop in a DEBUG build (the release screenshot job is faster
-    // still), so this is a five-fold margin for a loaded CI runner.
+    // `dump.done` waits for the export's own report-card mark. The first
+    // Ctrl+Shift+E at 1900 is REFUSED (no destination yet), and the run
+    // number is taken at `start_export`, so `run 1` is the export the
+    // Enter at 3500 starts and nothing else. The 8.5 s the schedule still
+    // leaves after that Enter (the export measures ~1.6 s on the
+    // development laptop in a DEBUG build, 245 ms on the Windows CI
+    // runner) is a backstop the wait rides through when it is already
+    // satisfied; a slower runner shifts the tail instead of failing.
     let script = format!(
         "1600:dump.idle;1900:key:ctrl+shift+e;2200:dump.refused;\
          2500:select-all;2700:clipdest:{dest};2900:key:ctrl+shift+e;\
          3100:key:n;3200:key:y;3300:key:ctrl+o;3400:dump.plan;\
-         3500:key:return;12000:dump.done;\
+         3500:key:return;11900:wait:clip export finished run 1;12000:dump.done;\
          12400:key:escape;12700:dump.end",
         dest = dest.display()
     );
@@ -5798,6 +6099,11 @@ fn export_frames_as_video_writes_a_real_motion_jpeg() {
         &[src.to_str().unwrap()],
         &[("FASTCULL_TRACE", "1"), ("FASTCULL_DRIVE", script.as_str())],
         &out,
+    );
+    assert!(
+        stderr.contains("wait:clip export finished run 1 (satisfied"),
+        "the `wait:clip export finished run 1` step never fired — \
+         `dump.done` was timed, not gated:\n{stderr}"
     );
     let landed: Vec<String> = listing(&dest).into_iter().map(|(n, _)| n).collect();
     let movie_path = dest.join("c-b.mov");
@@ -7368,11 +7674,13 @@ fn a_wheel_over_the_copy_dialog_never_scrolls_the_grid_behind_it() {
 /// The settled-sort gate (ui-grid.md) still matters here even though no
 /// positional key is driven: the load-settled edge WRITES `vp_y` itself
 /// (`presenter.rs`, via `grid::scroll_after_resort`), so a re-sort landing
-/// between two dumps would move the very number this test reads. It is
-/// safe by timing, not by luck — these fixtures are kilobytes, and the
-/// "load settled" trace fires at ~160 ms against a first wheel at
-/// 1,900 ms, a ~12x margin. If that trace ever appears after the first
-/// dump, this test's numbers are the re-sort's, not the scrim's.
+/// between two dumps would move the very number this test reads. The
+/// script therefore WAITS for the settle before the first wheel
+/// (2026-09-03) instead of resting on a margin — 120 kilobyte fixtures
+/// settle at ~160 ms against a 1,900 ms wheel today, but a margin is a
+/// guess about a runner and this one is 120 file reads wide. The
+/// assertion below reads the same ordering off the log, so a wait that is
+/// ever tidied away still fails loudly rather than silently.
 #[test]
 fn a_wheel_over_the_export_dialog_never_scrolls_the_grid_behind_it() {
     if !has_display() {
@@ -7387,7 +7695,7 @@ fn a_wheel_over_the_export_dialog_never_scrolls_the_grid_behind_it() {
     }
     let out = out_dir().join("i49-clip-wheel.jpg");
     let script = format!(
-        "{PIN_WINDOW};1600:select-all;1900:{w};2400:dump.prewheel;\
+        "{PIN_WINDOW};1600:select-all;1800:wait:load settled gen 0;1900:{w};2400:dump.prewheel;\
          2700:key:ctrl+shift+e;3000:dump.open;\
          3300:{w};4000:dump.wheeled;\
          4300:key:escape;4600:dump.closed;\
@@ -7400,18 +7708,29 @@ fn a_wheel_over_the_export_dialog_never_scrolls_the_grid_behind_it() {
         &out,
     );
     std::fs::remove_dir_all(&src).ok();
-    // The re-sort's own `vp_y` write is behind us before the first wheel.
-    let settled = stderr
-        .lines()
-        .find(|l| l.contains("load settled gen "))
-        .and_then(trace_ms)
-        .unwrap_or_else(|| {
-            panic!("the view never settled, so the sort could still move it:\n{stderr}")
-        });
+    // The re-sort's own `vp_y` write is behind us before the first wheel,
+    // now by construction: the script waits for the settle. This reads the
+    // same fact off the log as an ORDERING — the settle line before the
+    // first wheel's echo — so it still binds if the wait is ever taken
+    // out, and a slow settle delays the wheel instead of failing the run.
+    // The old form compared the settle's trace clock against the scripted
+    // 1900 and would have gone red on exactly the runner the wait exists
+    // for.
     assert!(
-        settled < 1_900,
-        "the sort settled at {settled} ms, at or after the first wheel — \
-         `vpy` below would be the re-sort's number, not the scrim's:\n{stderr}"
+        stderr.contains("wait:load settled gen 0 (satisfied"),
+        "the `wait:load settled gen 0` step never fired — the first wheel \
+         was timed, not gated:\n{stderr}"
+    );
+    let settled_at = stderr.find("load settled gen 0").unwrap_or_else(|| {
+        panic!("the view never settled, so the sort could still move it:\n{stderr}")
+    });
+    let first_wheel = stderr
+        .find("drive: wheel.")
+        .unwrap_or_else(|| panic!("the first wheel never ran:\n{stderr}"));
+    assert!(
+        settled_at < first_wheel,
+        "the sort settled after the first wheel — `vpy` below would be the \
+         re-sort's number, not the scrim's:\n{stderr}"
     );
     assert_wheel_over_the_dialog_is_swallowed(&stderr, "clip");
 }
