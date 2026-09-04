@@ -32,10 +32,18 @@ struct Step {
 /// killed by that watchdog reports a bare timeout, so the app must still
 /// be alive to say which substring it was waiting for. The bound is on
 /// the SUM: 30 s buys that diagnostic only for a wait whose step comes due
-/// before ~60 s, which every script in the suite does by a wide margin
-/// (the latest is issue #50's, at 16.5 s). A script that schedules a wait
-/// later than that gets the watchdog's generic timeout instead — the same
-/// "keep scripts short" caveat the drives-pending wait already carries.
+/// before ~60 s. The cap runs from the STEP, not from install, which is
+/// what lets a wait target an event slower than the cap itself — and what
+/// makes a wait's PLACEMENT part of its budget. The latest wait step in
+/// the suite is the clip-badge test's `wait:clip export finished run 2` at
+/// 33.2 s, whose cap ends at 63.2 s, 27 s under the watchdog; the issue
+/// #46 M3 drag test's `wait:loupe idx 0 factor` sits at 20 s because the
+/// sharp render it waits for lands at 26-40 s on the Windows debug runner
+/// (measured 2026-09-02; 30.3 s in that test's own run), so its cap
+/// reaches 50 s where a step at 0 s would have ended those runs at 30 s. A
+/// script that schedules a wait later than ~60 s gets the watchdog's
+/// generic timeout instead — the same "keep scripts short" caveat the
+/// drives-pending wait already carries.
 ///
 /// The other budget a long wait spends is the shutter's: its 60 s
 /// readiness cap runs from `shutter::arm`, and a pending drive step defers

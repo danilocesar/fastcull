@@ -2667,8 +2667,24 @@ the user confirms, all cheap to change):**
 Documented because they ship in release builds (validator finding):
 
 - `FASTCULL_TRACE=1`: eprintln any UI-thread phase (`handle_nav`, `refresh`
-  stages, texture adoption) exceeding 20 ms, plus loupe-ready marks — the
-  evidence channel for hang reports. The thumb path is traced at BOTH of
+  stages, texture adoption) exceeding 20 ms, plus the loupe's own rungs — the
+  evidence channel for hang reports. The rungs are three sentences a `wait:`
+  can tell apart: `loupe ready idx N long L` (the DECODE arrived — L its long
+  edge, at or below `MID_RUNG_MAX_LONG` (2048) a mid rung, above it the
+  full-res), `loupe soft idx N factor …` / `loupe thumb idx N factor …` (a
+  TRANSIT rung is what is on screen) and `loupe idx N factor F extent WxH …`
+  (the SHARP render: the full-res texture is the one on screen and the soft
+  flag is cleared). `wait:loupe idx N factor` is therefore the
+  full-res-on-screen gate: every other `loupe …` line carries its own word
+  between `loupe` and `idx` (`ready`, `soft`, `thumb`, `hold`, `overlay
+  dropped`), so not one of them contains that substring — where the bare
+  `idx N factor` that `one_to_one_click_claims_the_keyboard` uses on purpose
+  matches any rung (its own comment says why: the claim under test is the
+  overlay's,
+  which every rung has). Keep the trailing ` factor` so `idx 1` cannot match
+  `idx 10`; the sharp line re-fires on every pan of the same frame, so it
+  answers "has this frame gone sharp yet", never "again".
+  The thumb path is traced at BOTH of
   its stages, because they are seconds apart and only the first touches
   the file: `thumb bytes idx N` (the pipeline read the embedded JPEG, at
   scan time) and `thumb landed idx N` (the kitchen decoded it into a
@@ -2729,6 +2745,38 @@ Documented because they ship in release builds (validator finding):
   by a session swap emits no mark at all — cancelled is not finished, and
   the dialog's report says which — so a wait for that run's number ends
   the script, correctly: nothing it waits for will happen.
+  What the SETTLE means is the metadata predicate itself, not a moment in
+  the render: `metadata_complete()` is `self.thumbs_done >= self.labels.len()`
+  (state.rs), and `thumbs_done` is incremented at the very site that traces
+  `thumb bytes idx N`, so `load settled gen N` says by DEFINITION that every
+  image's thumb BYTES arrived — a dump taken behind `wait:load settled gen N`
+  reads `N thumbs loaded` by construction, not by a same-tick coincidence a
+  pipeline change could break in silence. Three limits an author has to know
+  (2026-09-03). It is the bytes, not the pixels: the thumb TEXTURES are
+  adopted afterwards, `thumb landed idx N` is that mark, and the Windows
+  debug runner's clip-badge trace puts its three landings 36, 75 and 110 ms
+  behind the settle — so a shot whose claim is RENDERED content gates on the
+  landings, never on the settle alone. It is unobservable in a `--synthetic`
+  session: that settle fires inside the first refresh, BEFORE
+  `harness::install`, so a wait for it is never satisfied, burns the full 30 s
+  cap and ends the run — only folder sessions may wait on it. And at ONE
+  column there is no settle mark at all: the re-anchor it reports is the
+  multi-column one (the strip re-anchors through its own block, issue #16),
+  so a `--start-11` or `--start-loupe` script has nothing to wait for and
+  stays on the clock.
+  `sidecar writer closed gen N: K pending flushed` (2026-09-03) is traced by
+  a session SWAP once the old session's writer has drained: N is the CLOSED
+  session's generation (read before the bump) and K how many writes were
+  still inside their debounce window and were flushed by the close
+  (`SidecarWriter::close`, xmp-sidecars.md). It is the observable behind
+  "flushed on session close", and it exists so a driven swap can assert a
+  structural fact — `K == 1` for a mark still inside its debounce — instead
+  of measuring the pick-to-swap gap between two harness echoes against the
+  700 ms debounce with a stopwatch (the issue #58 shape). A `wait:` could not
+  serve there in any case: the claim is that the debounce had NOT fired, and
+  a wait only ever answers "has this happened yet". The startup path closes
+  no writer and process exit goes through the drop, so neither traces it: the
+  mark means "a swap closed it".
   **Focus, as it moves (issues #63/#64)**: `keysfocus` at a dump is one
   sample of a value that changes several times inside a single input
   dispatch, which is how a stranded keyboard shipped twice — a run could
@@ -3096,7 +3144,21 @@ Documented because they ship in release builds (validator finding):
   readiness cap runs from `shutter::arm` and is NOT paused while a drive
   step is pending — a wait that takes 25 s leaves ~35 s for the cursor's
   texture to arrive, which in a debug build over a 50 MP frame is a real
-  margin. An
+  margin. The 30 s runs from the STEP, not from install, which is what lets
+  a wait target an event slower than the cap itself and makes a wait's
+  PLACEMENT part of its budget: the latest wait step in the suite is the
+  clip-badge test's `wait:clip export finished run 2` at 33.2 s, whose cap
+  ends at 63.2 s — 27 s under the 90 s watchdog — and the issue #46 M3 drag
+  test's `wait:loupe idx 0 factor` sits at 20 s because the sharp render it
+  waits for lands at 26-40 s on the Windows debug runner (measured
+  2026-09-02 across that job's uploaded traces; 30.3 s in that test's own
+  run), so its cap reaches 50 s where a step at 0 s would have ended those
+  runs at 30 s and the fixed 45 s lead it replaced reached only 45. The
+  corollary for authors: the steps after a wait keep their gaps from the
+  wait's OWN timestamp, so gating a late-scheduled block means moving the
+  block UP to the wait, not leaving it where the clock had it — a wait at
+  20 s with a tail still written at 45 s lands that tail 25 s AFTER the mark
+  it was supposed to follow. An
   empty substring would match the next mark whatever it is, so
   `wait:` with nothing after it is dropped like any other malformed step.
   `dump.<label>` traces the focus/surface state for test assertions:
