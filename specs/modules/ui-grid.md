@@ -1633,7 +1633,11 @@ restore — see Focus continuity in the Filter & sort bar section.
     device, not a model of the runner. Since 2026-09-04 the job writes
     its own CPU count, memory, image and `rustc -vV` into the run summary
     (ci.yml, `Record the runner's environment`), so the next reader does
-    not have to believe this paragraph either.
+    not have to believe this paragraph either. The five CODE comments
+    that carried the same wrong number were corrected in place the same
+    day (`focus.rs`, `main.slint`, `screenshot.rs`, core's `loupe.rs` and
+    `zoom_walk.rs`) — a grep for it now finds the retraction and not four
+    fresh assertions of it.
     **What answers both orderings is a per-row `Timer`** (1 ms, `running:
     want-refocus`, the claim re-checked on the tick). A timer tick is the
     one hook that runs after the change trackers are installed however
@@ -2268,22 +2272,53 @@ the user confirms, all cheap to change):**
       the harness writes each child's stderr to `<shot>.trace.log`, so
       an app panic now reaches the uploaded evidence with its backtrace.
       **Four workflow facts a test author needs** (ci.yml, CI audit
-      2026-09-04). *Concurrency*: runs are grouped per workflow and ref,
-      and `cancel-in-progress` is true for `pull_request` only — a second
-      push to a PR branch kills the first job mid-suite, so a run that
-      vanishes without a verdict is a cancel and not a hang, while a push
-      to main always finishes. *Timeout*: the job is capped at 75 minutes
-      against a 60.9-minute record and a 65.7-minute cold-cache run, so a
-      test that adds more than ~9 minutes of wall clock to the Windows
-      job is spending headroom that is measured, not spare. *The headless
-      seat is a constant*: the Linux screenshot step runs under
-      `xvfb-run -a --server-args="-screen 0 1920x1200x24"`, which
-      contains the 1440x900 default window and both driven resizes
-      (1440x700, 1200x800) with room over. Before 2026-09-04 it took
-      xvfb-run's own default, `-screen 0 1280x1024x24` — 160 px NARROWER
-      than the window the suite drives — so a test that drives a larger
-      geometry must now raise the screen in the same commit rather than
-      discover the ceiling by a red. *Evidence*: the
+      2026-09-04, corrected the same day by the audit's own gate).
+      *Concurrency*: a pull request's runs share one group per ref with
+      `cancel-in-progress: true`, so a second push to a PR branch kills
+      the first job mid-suite and a run that vanishes without a verdict
+      is a cancel, not a hang. EVERY OTHER EVENT GETS ITS OWN GROUP,
+      keyed on `github.run_id`. The first cut of this text said main runs
+      shared a group with `cancel-in-progress: false` and therefore
+      "always finish", and that is not what GitHub does: a run whose
+      group is occupied is queued as PENDING, and queueing it CANCELS
+      whatever was already pending there. Shared, main pushes would have
+      serialised behind ~45–66-minute Windows jobs, and a third push
+      inside that window would have cancelled the middle one — a main
+      commit with no verdict. Main is pushed that fast here (runs
+      33693900007/33694019447 are 92 s apart; 33151667132/33151754695 are
+      77 s apart), so the group is per-run and cannot collide. A re-run
+      keeps its `run_id` and rejoins an empty group. *Timeout*: the job
+      is capped at 90 minutes. THE CAP MUST CLEAR A COLD WINDOWS JOB, NOT
+      A WARM ONE, and it is `save-if: main` that makes that the binding
+      case: pull requests restore and never save, so after every rustc
+      release each PR push rebuilds from scratch until a main push
+      repopulates the cache — and the toolchain is `@stable`, unpinned.
+      Measured Windows jobs: 40.1 and 45.3 minutes warm, 60.9 the earlier
+      record, 65.7 COLD (run 33839957294, the first run after rustc
+      1.98.1) and 59.5 cold on main the same day (33888473738). 75 left
+      the cold run 9.3 minutes; 90 leaves it 24.3. A test that adds more
+      than ~20 minutes of wall clock to the Windows job is spending
+      headroom that is measured, not spare. *The headless seat is a
+      constant*: the Linux screenshot step runs under `xvfb-run -a
+      --server-args="-screen 0 1920x1200x24"`. What the pin buys is a
+      STATED CONSTANT in place of a distro default — this spec reasons
+      about the seat, and the seat must not move because a runner image
+      bumped one. It does NOT fix an observed defect, and the first cut
+      of this text implied it did: xvfb-run's default `-screen 0
+      1280x1024x24` is indeed narrower than the widest geometry the suite
+      drives, but it was never seen to break anything and the evidence
+      says it would not — the shot is Slint's own `take_snapshot`
+      (shutter.rs), which renders the WINDOW's surface at the window's
+      size rather than grabbing the X screen; the suite's one
+      resolution-shaped assertion (`grid_shot`'s `w == 1440`) is a
+      scale-factor check that a screen size cannot move; and the suite
+      has been driving 1600x800 green on the 1280-wide server all along.
+      The suite drives NINE distinct geometries, not the two the first
+      cut listed — 640x300, 900x800, 1000x700, 1024x768, 1200x800,
+      1440x700, 1440x900, 1500x800, 1600x800 — plus the 1440x900 the app
+      opens at; widest 1600, tallest 900, all inside 1920x1200 with room
+      over. A test that drives past that raises the screen in the same
+      commit. *Evidence*: the
       two suite passes now write to separate temp dirs, so the
       `screenshot-evidence-<os>` artifact opens as `debug/` and
       `release/` — the debug pass is the `cargo test --workspace` step

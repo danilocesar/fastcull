@@ -4719,8 +4719,12 @@ fn interleaved_session(dir: &Path) {
 /// RELEASE ONLY (validator, gate round 2): in debug the run rides the
 /// app's own 60 s screenshot-readiness cap — the cursor's 50 MP debug
 /// decode plus ten thumb jobs plus the cook hold landed at 58.5 s on a
-/// loaded 8-core laptop, so under contention (or a 2-vCPU CI runner)
-/// the app exits 1 at the cap before the shutter can fire. The debug
+/// loaded 8-core laptop, so under contention (or on a CI runner, which
+/// the audit of 2026-09-04 measured at 4 vCPU where this line said 2)
+/// the app exits 1 at the cap before the shutter can fire. The number
+/// that carries the decision is 58.5 against 60 — a 1.5 s margin
+/// measured on a machine with TWICE the runner's cores; correcting 2 to
+/// 4 halves the shortfall without giving the margin back. The debug
 /// profile keeps its no-drop coverage through paced_taps and
 /// transit_at_zoom_stays_soft; the phase pins here bind in release,
 /// the profile the reproduction and the red-run were proven in (the
