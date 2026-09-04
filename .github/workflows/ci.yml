@@ -152,12 +152,18 @@ jobs:
       # of the development machine in every gate round (issue #27 decision,
       # specs/01-architecture.md).
       # `--test-threads=1` here for the same reason as the steps above
-      # (QE 2026-09-03): `perf_budgets.rs` takes a process-wide mutex in
-      # its measuring tests too, so the pool queues them and their clocks
-      # start when they are QUEUED. No warning has been observed from this
-      # step, but the exposure is the same one the flag removes elsewhere,
-      # and a budget measured behind a lock-wait is the one number here
-      # nobody should have to distrust.
+      # (QE 2026-09-03; the REASON corrected 2026-09-04): every test in
+      # perf_budgets.rs takes a process-wide mutex, so the pool queues
+      # them, and a test's 60 s warning timer starts when libtest QUEUES
+      # it rather than when the mutex lets it run -- the same queued-clock
+      # exposure the flag removes in the steps above. It is NOT about the
+      # measurements: each budget test takes the guard as its FIRST
+      # statement and starts its own Instant inside the guarded region,
+      # so a lock-wait never entered a budget number (the note that stood
+      # here said one could, and that was wrong). No warning has been
+      # observed from this step, and serialising tests that already
+      # serialise themselves costs it nothing, so uniformity across the
+      # four invocations is the whole case for the flag here.
       - name: Performance budgets (release, advisory)
         continue-on-error: true
         run: cargo test --release -p fastcull-core --test perf_budgets -- --test-threads=1

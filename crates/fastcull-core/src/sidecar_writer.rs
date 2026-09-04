@@ -349,6 +349,22 @@ mod tests {
     /// flushed`). It counts WRITES, so re-marks that coalesced into one
     /// pending entry count once and a value already on disk counts zero —
     /// the two ends the app's swap-flush assertion distinguishes.
+    ///
+    /// ACCEPTED TIMING RISK (validator F4, 2026-09-04). The first two
+    /// blocks need their marks to be still PENDING when `close()` runs,
+    /// i.e. `mark(...)` and `close()` inside one `DEBOUNCE` (700 ms).
+    /// Past it the writer's own timeout drain writes first and the close
+    /// truthfully reports 0. `DEBOUNCE` is a private const with no
+    /// injection point, and none is being added for a test, so the risk
+    /// is taken with open eyes: a machine that spends 700 ms between two
+    /// adjacent statements turns this red. The sibling
+    /// `debounce_writes_without_flush_within_window` could be written in
+    /// the robust direction — it waits for something to HAPPEN, and a
+    /// poll loop with a 10 s deadline is slow-machine-proof — while this
+    /// one needs something to have NOT happened yet, which no amount of
+    /// waiting can make true. Both counts below therefore name both
+    /// readings in their message, so a red here is not misread as a
+    /// product defect.
     #[test]
     fn close_reports_the_writes_its_shutdown_drain_performed() {
         let dir = tmp();
@@ -360,7 +376,10 @@ mod tests {
         assert_eq!(
             writer.close(),
             1,
-            "the pending mark was not reported by the close"
+            "the pending mark was not reported by the close — either the \
+             drain's count is wrong, or this machine spent longer than the \
+             writer's 700 ms debounce between the mark and the close and \
+             the timeout drain wrote it first (see the note on this test)"
         );
         assert_eq!(
             read_sidecar(&sidecar_path(&raw)).unwrap().pick,
@@ -377,7 +396,11 @@ mod tests {
         assert_eq!(
             writer.close(),
             3,
-            "the count is not the number of writes the drain performed"
+            "the count is not the number of writes the drain performed — \
+             either the coalescing or the count is wrong, or this machine \
+             spent longer than the writer's 700 ms debounce between the \
+             marks and the close and the timeout drain wrote them first \
+             (see the note on this test)"
         );
         assert_eq!(
             read_sidecar(&sidecar_path(&raws[0])).unwrap().pick,

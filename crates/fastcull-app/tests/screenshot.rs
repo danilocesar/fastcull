@@ -1032,11 +1032,25 @@ fn iptc_panel_docks_without_gutter() {
     // token safe here (see the helper). Measured under six spinners in a
     // debug build, the waits held these two shots for 1042 and 1096 ms —
     // without them the floor would have fired with two of the three cells
-    // still placeholders. The toggle keeps its 600 ms and stays FIRST:
-    // putting the waits in front of it would let the shot follow the panel
-    // by a single 250 ms poll, where today it has ≥900 ms to reflow. Both
-    // runs are traced, so the waits have a witness — these two shots used
-    // to write an empty trace log.
+    // still placeholders.
+    //
+    // WHAT THE WAITS DO NOT SAY (corrected 2026-09-04, validator F6). The
+    // mark carries no retarget generation, so in the open run — toggle at
+    // 600 ms, waits at 1000-1002 ms — an adoption from BEFORE the toggle
+    // satisfies them, and on a fast seat that is exactly what happens: a
+    // release run here landed all three at 42-46 ms (two runs) and every
+    // wait reported `satisfied after 0 ms`. So the gate says "three real
+    // textures exist", never "these textures were re-cooked at the
+    // panel-open cell size" (173x116 closed, 136x90 open in that run) —
+    // no token in the harness can say the latter today. It is still the
+    // gate worth having: it is what stopped both runs photographing
+    // placeholders, and what the variance below reads is photo content
+    // versus flat background, not sharpness. The re-cook is covered by
+    // the CLOCK, as it always was — the toggle keeps its 600 ms and stays
+    // FIRST, so the shutter's 1.5 s floor leaves ≥900 ms of reflow (903 ms
+    // in that run), where waits placed in front of the toggle would leave
+    // a single 250 ms poll. Both runs are traced, so the waits have a
+    // witness — these two shots used to write an empty trace log.
     let thumbs = thumb_waits_from(1000);
     let closed_err = shoot_env_stderr(
         &[raws.to_str().unwrap()],
@@ -4819,17 +4833,29 @@ fn transit_to_a_cold_frame_keeps_the_overlay_at_the_carried_center() {
 /// full-res arm: the rungs below it say `loupe soft idx 0 factor` and
 /// `loupe thumb idx 0 factor`, which do not contain the substring, and
 /// the trailing ` factor` closes the `idx 0` prefix against `idx 10`.
-/// The wait step sits at 20 s because the harness's 30 s cap runs from
-/// the STEP (harness.rs `WAIT_CAP`) and a debug-profile full-res
-/// adoption lands at 26-40 s on the Windows CI runner (30.3 s in this
-/// test's own run, measured 2026-09-02): the cap therefore reaches 50 s
-/// where the old fixed 45 s lead reached 45, and a release run stops
-/// paying the other 25 s. The whole tail moved by one constant, so every
-/// gap below is still the physics the phases need. The end of the script
-/// is now `sharp + 2.2 s` rather than a fixed 47.4 s, which is what the
-/// shutter's 60 s readiness cap gets back: it still waits for idx 1's
-/// texture exactly as it does today, from an earlier start. The `predrag`
-/// guard stays as the proof the wait meant what it says:
+/// The wait step is PROFILE-SPLIT (2026-09-04, validator F5), the shape
+/// `panel_toggle_at_one_to_one_reanchors_the_crop` already uses. DEBUG
+/// keeps it at 20 s: the harness's 30 s cap runs from the STEP
+/// (harness.rs `WAIT_CAP`) and a debug-profile full-res adoption lands at
+/// 26-40 s on the Windows CI runner (30.3 s in this test's own run,
+/// measured 2026-09-02), so the cap has to reach 50 s where the fixed
+/// 45 s lead it replaced reached only 45. RELEASE puts the same step at
+/// 1.5 s, because there the sharp mark lands in under half a second
+/// (381, 454 and 457 ms across three release runs on this seat,
+/// 2026-09-04, each wait then `satisfied after 0 ms`): its cap still
+/// reaches 31.5 s, ~31 s of headroom over a decode that takes 0.45 s, and
+/// the release run stops spending 18.5 s of dead clock: the script's last
+/// step moves from 22.2 s to 3.7 s and the test measured 4.0 s of libtest
+/// time in all three runs. What
+/// each profile's wait covers is therefore different — debug waits for a
+/// decode that may genuinely take half a minute, release waits for one
+/// that is already done — and the schedule behind it is the same in both,
+/// because the steps after a wait keep their gaps from the WAIT's
+/// timestamp and everything below is gaps. The end of the script is
+/// `sharp + 2.2 s` in both profiles, which is what the shutter's 60 s
+/// readiness cap gets back: it still waits for idx 1's texture exactly as
+/// before, from an earlier start. The `predrag` guard stays as the proof
+/// the wait meant what it says:
 ///  1. slow drag — pans 1:1 (the guard half, green on both sides);
 ///  2. flick — five fast moves and release: offsets must be IDENTICAL
 ///     at +100 ms and +400 ms after release (pre-fix: the Flickable's
@@ -4859,27 +4885,39 @@ fn loupe_drag_pans_one_to_one_and_a_fling_never_survives_navigation() {
         place_fixture(&raws_dir().join(src), &dir.join(dst));
     }
     let out = out_dir().join("i46-m3.jpg");
+    // Every timestamp after the wait is rebased on the moment it fires,
+    // so the numbers below are gaps, not offsets. Phase 1: slow drag
+    // right+down by (100, 40). Phase 2: the flick (5 events, 16 ms
+    // apart — the velocity ring buffer needs real timing). Phase 3:
+    // arrow mid-"decay".
+    //
+    // The two forms are ONE schedule with two bases: the wait's step
+    // (20 s debug, 1.5 s release — see the doc comment for why each) and
+    // then the identical gaps +100/+150/+250/+350/+450/+550, +700/+716/
+    // +732/+748/+764/+780, +880/+1180, +1300/+1400/+2200. Every one of
+    // those is physics some assertion below reads — the 16 ms flick
+    // cadence feeds the velocity ring buffer, the +100/+400 ms pair after
+    // release is the fling test, the +900 ms after the arrow is the
+    // carried-centre test. Edit the two consts together.
+    #[cfg(debug_assertions)]
+    const DRIVE: &str = "20000:wait:loupe idx 0 factor;\
+         20100:dump.predrag;20150:press.700,450;20250:move.750,470;20350:move.800,490;\
+         20450:release.800,490;20550:dump.dragged;\
+         20700:press.700,450;20716:move.800,520;20732:move.900,590;20748:move.1000,660;\
+         20764:move.1100,730;20780:release.1100,730;\
+         20880:dump.afterfling1;21180:dump.afterfling2;\
+         21300:right;21400:dump.afternav;22200:dump.late";
+    #[cfg(not(debug_assertions))]
+    const DRIVE: &str = "1500:wait:loupe idx 0 factor;\
+         1600:dump.predrag;1650:press.700,450;1750:move.750,470;1850:move.800,490;\
+         1950:release.800,490;2050:dump.dragged;\
+         2200:press.700,450;2216:move.800,520;2232:move.900,590;2248:move.1000,660;\
+         2264:move.1100,730;2280:release.1100,730;\
+         2380:dump.afterfling1;2680:dump.afterfling2;\
+         2800:right;2900:dump.afternav;3700:dump.late";
     let stderr = shoot_env_stderr(
         &["--start-11", dir.to_str().unwrap()],
-        &[
-            ("FASTCULL_TRACE", "1"),
-            (
-                "FASTCULL_DRIVE",
-                // Every timestamp after the wait is rebased on the
-                // moment it fires, so the numbers below are gaps, not
-                // offsets. Phase 1: slow drag right+down by (100, 40).
-                // Phase 2: the flick (5 events, 16 ms apart — the
-                // velocity ring buffer needs real timing). Phase 3:
-                // arrow mid-"decay".
-                "20000:wait:loupe idx 0 factor;\
-                 20100:dump.predrag;20150:press.700,450;20250:move.750,470;20350:move.800,490;\
-                 20450:release.800,490;20550:dump.dragged;\
-                 20700:press.700,450;20716:move.800,520;20732:move.900,590;20748:move.1000,660;\
-                 20764:move.1100,730;20780:release.1100,730;\
-                 20880:dump.afterfling1;21180:dump.afterfling2;\
-                 21300:right;21400:dump.afternav;22200:dump.late",
-            ),
-        ],
+        &[("FASTCULL_TRACE", "1"), ("FASTCULL_DRIVE", DRIVE)],
         &out,
     );
     let predrag = qedump(&stderr, "predrag");

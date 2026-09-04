@@ -34,15 +34,32 @@ struct Step {
 /// the SUM: 30 s buys that diagnostic only for a wait whose step comes due
 /// before ~60 s. The cap runs from the STEP, not from install, which is
 /// what lets a wait target an event slower than the cap itself — and what
-/// makes a wait's PLACEMENT part of its budget. The latest wait step in
-/// the suite is the clip-badge test's `wait:clip export finished run 2` at
-/// 33.2 s, whose cap ends at 63.2 s, 27 s under the watchdog; the issue
-/// #46 M3 drag test's `wait:loupe idx 0 factor` sits at 20 s because the
-/// sharp render it waits for lands at 26-40 s on the Windows debug runner
-/// (measured 2026-09-02; 30.3 s in that test's own run), so its cap
-/// reaches 50 s where a step at 0 s would have ended those runs at 30 s. A
-/// script that schedules a wait later than ~60 s gets the watchdog's
-/// generic timeout instead — the same "keep scripts short" caveat the
+/// makes a wait's PLACEMENT part of its budget. SCRIPT time is not that
+/// budget, though (corrected 2026-09-04, validator F3): `schedule_from`
+/// rebases every step behind a satisfied wait on the moment it fired, so
+/// in a script with several waits the last one can INSTALL much later
+/// than the timestamp it is authored at, and the worst case is the sum of
+/// what each wait ahead of it burns. The latest AUTHORED wait step in the
+/// suite is the clip-badge test's `wait:clip export finished run 2` at
+/// 33.2 s — in the script that also has the most waits (four: 4.9 s,
+/// 16.9 s, 25.0 s, 33.2 s, tail ending at 48.0 s), so what bounds it is
+/// not 33.2 + 30 but the screenshot harness's 90 s watchdog against that
+/// 48.0 s tail: 42 s of TOTAL wait time across the four, which still
+/// leaves room for one of them to spend its entire 30 s cap. Measured
+/// (release, this seat, 2026-09-04): all four are satisfied after 0 ms
+/// and the test takes 48.3 s. Past that 42 s the watchdog kills the child
+/// and the run reports a bare timeout — WITHOUT the `wait never
+/// satisfied: <substring>` line the 30 s cap exists to buy, which is
+/// exactly the outcome the cap is set below the watchdog to avoid. The
+/// issue #46 M3 drag test's `wait:loupe idx 0 factor` is the cap-PLACED
+/// one: 20 s in DEBUG, because the sharp render it waits for lands at
+/// 26-40 s on the Windows debug runner (measured 2026-09-02; 30.3 s in
+/// that test's own run, 18.1 s on this seat), so its cap reaches 50 s
+/// where a step at 0 s would have ended those runs at 30 s; 1.5 s in
+/// RELEASE, where the same mark lands at 0.38-0.46 s. A wait whose step
+/// comes due after ~60 s of the child's life — authored there or pushed
+/// there by the waits in front of it — gets the watchdog's generic
+/// timeout instead: the same "keep scripts short" caveat the
 /// drives-pending wait already carries.
 ///
 /// The other budget a long wait spends is the shutter's: its 60 s
