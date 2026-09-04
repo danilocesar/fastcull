@@ -2324,6 +2324,174 @@ fn shortcuts_popup_contains_the_keyboard() {
     );
 }
 
+/// The shortcuts card after the 2026-09-04 rebuild: a 780 px two-column
+/// key sheet whose HEIGHT IS ITS CONTENT'S, opened and closed from the
+/// keyboard, and fitting whole at the smallest window the design claims.
+///
+/// Nothing in the suite asserted this popup's size or position before —
+/// the only record of it was a doc comment two thousand lines down — so a
+/// redesign that scrolled, clipped its footer or hung off the window would
+/// have shipped green. Four things are pinned here, and each is a way the
+/// card can be wrong:
+///
+/// 1. **`?` and F1 open it, and close it.** It used to be reachable only
+///    from Help > Keyboard Shortcuts, i.e. only with the mouse, in a
+///    keyboard-first app.
+/// 2. **780 px wide, exactly.** That number is geometric (18 + 2 x (104
+///    key + 14 gutter + 240 action) + 28 + 18) and so is the same on every
+///    seat: it is the fixed key cell — the whole alignment contract — plus
+///    the room the action column was measured to need.
+/// 3. **The height is between the content and the ceiling, and IDENTICAL
+///    at 1000x700.** Not an exact constant: the height is the sum of ~27
+///    text line boxes, and the suite already knows two Linux seats disagree
+///    about a row's y by 3 px (the CI section of ui-grid.md). The band is
+///    what the claim actually is — a card that collapsed, that grew past
+///    its ceiling, or that got CLAMPED at the smaller window (which is what
+///    "it never scrolls at a supported size" forbids) fails it.
+/// 4. **The footer is inside the card, at both sizes.** The body is the
+///    child that yields when the window is short (issue #62's rule), so
+///    this is the assertion that says the yielding lands where it should.
+///
+/// The last strand is the one the new binding owes: with the keyboard in
+/// the keyword field, `?` is a question mark, not a popup.
+#[test]
+fn shortcuts_card_is_a_two_column_sheet_that_fits_its_window() {
+    if !has_display() {
+        eprintln!("screenshot smoke skipped: no display server");
+        return;
+    }
+    let _s = serial();
+    let out = out_dir().join("shortcuts-card.jpg");
+    let script = format!(
+        "{PIN_WINDOW};900:key:?;1300:dump.opened;1600:key:?;1900:dump.closed;\
+         2200:key:f1;2600:dump.f1;\
+         3000:resize:1000x700;3200:wait:shortcuts card laid out at 110,;\
+         3600:dump.small;4000:key:f1;4300:dump.gone;\
+         4600:resize:1440x900;5000:key:k;\
+         5100:wait:iptc field 0 laid out at 1150;\
+         5500:key:?;5900:dump.typing"
+    );
+    let stderr = shoot_env_stderr(
+        &["--synthetic", "200"],
+        &[("FASTCULL_TRACE", "1"), ("FASTCULL_DRIVE", script.as_str())],
+        &out,
+    );
+    // The panel gate doubles as the resize gate: `iptc field 0` is laid out
+    // at x=1150 only in a 1440 px window, so a `k` that arrived before the
+    // window came back would never satisfy it — a failure, not a silent
+    // re-timing (issue #13's rule).
+    for gate in [
+        "wait:shortcuts card laid out at 110, (satisfied",
+        "wait:iptc field 0 laid out at 1150 (satisfied",
+    ] {
+        assert!(
+            stderr.contains(gate),
+            "the `{gate}…` gate never fired — the steps after it were timed:\n{stderr}"
+        );
+    }
+
+    // --- 1: the keyboard opens it, and closes it
+    assert_eq!(
+        dump_field(qedump(&stderr, "opened"), "shortcuts"),
+        "true",
+        "`?` did not open the shortcuts popup:\n{stderr}"
+    );
+    assert_eq!(
+        dump_field(qedump(&stderr, "closed"), "shortcuts"),
+        "false",
+        "`?` did not close the shortcuts popup it had opened:\n{stderr}"
+    );
+    assert_eq!(
+        dump_field(qedump(&stderr, "f1"), "shortcuts"),
+        "true",
+        "F1 did not open the shortcuts popup:\n{stderr}"
+    );
+    assert_eq!(
+        dump_field(qedump(&stderr, "gone"), "shortcuts"),
+        "false",
+        "F1 did not close the shortcuts popup:\n{stderr}"
+    );
+
+    // --- 2, 3, 4: the card's shape, at both sizes
+    let (big_x, big_y, big_w, big_h) = laid_out_at(&stderr, "shortcuts card", "opened");
+    assert_eq!(
+        big_w, 780.0,
+        "the shortcuts card is {big_w} px wide, not the 780 the two 104 px \
+         key columns and their action columns add up to:\n{stderr}"
+    );
+    assert!(
+        (480.0..=794.0).contains(&big_h),
+        "the shortcuts card is {big_h} px tall at 1440x900; the content is \
+         ~531 and the ceiling (834 modal layer − 40) is 794:\n{stderr}"
+    );
+    assert!(
+        big_x >= 0.0 && big_x + big_w <= 1440.0 && big_y + big_h <= 900.0,
+        "the shortcuts card ({big_x},{big_y} {big_w}x{big_h}) hangs off a \
+         1440x900 window:\n{stderr}"
+    );
+    assert_footer_inside_the_shortcuts_card(&stderr, "opened", 900.0);
+
+    let (small_x, _, small_w, small_h) = laid_out_at(&stderr, "shortcuts card", "small");
+    assert_eq!(
+        small_w, 780.0,
+        "the card narrowed at 1000x700, where min(780, 1000 − 48) is still \
+         780:\n{stderr}"
+    );
+    assert!(
+        small_x >= 0.0,
+        "the card hangs off the left of a 1000 px window:\n{stderr}"
+    );
+    assert_eq!(
+        small_h, big_h,
+        "the card was CLAMPED at 1000x700 ({small_h} against {big_h} at \
+         1440x900) — at the smallest supported window it must still fit \
+         whole, or the list scrolls where today's every row is visible:\n{stderr}"
+    );
+    assert_footer_inside_the_shortcuts_card(&stderr, "small", 700.0);
+
+    // --- the new binding cannot fire from a text field
+    let typing = qedump(&stderr, "typing");
+    assert_ne!(
+        dump_field(typing, "focusowner"),
+        "0",
+        "the keyword field does not hold the keyboard, so the `?` below \
+         proves nothing about text fields:\n{stderr}"
+    );
+    assert_eq!(
+        dump_field(typing, "shortcuts"),
+        "false",
+        "`?` typed into the keyword field opened the shortcuts popup — the \
+         opener lives in the main key scope precisely so it cannot:\n{stderr}"
+    );
+}
+
+/// The shortcuts card's footer (the zoom-ladder line) is inside the card,
+/// and the card is inside the window. Issue #62's contract, on the third
+/// card that grows with its content — the body is the child with
+/// `vertical-stretch: 1; min-height: 0px`, so a window too short for the
+/// list must clip the LIST, never push the footer through the card's floor.
+fn assert_footer_inside_the_shortcuts_card(stderr: &str, label: &str, window_h: f32) {
+    let (_, card_y, _, card_h) = laid_out_at(stderr, "shortcuts card", label);
+    let (_, foot_y, _, foot_h) = laid_out_at(stderr, "shortcuts footer", label);
+    assert!(
+        foot_y >= card_y,
+        "dump.{label}: the shortcuts footer starts above its card:\n{stderr}"
+    );
+    assert!(
+        foot_y + foot_h <= card_y + card_h + 0.5,
+        "dump.{label}: the shortcuts footer ends at {} but the card ends at \
+         {} — the zoom ladder is outside the card:\n{stderr}",
+        foot_y + foot_h,
+        card_y + card_h
+    );
+    assert!(
+        card_y + card_h <= window_h,
+        "dump.{label}: the shortcuts card ends at {} in a {window_h}px \
+         window:\n{stderr}",
+        card_y + card_h
+    );
+}
+
 /// Mean (B − R) over a fractional sub-rectangle. The selection wash is a BLUE
 /// tint, and blue-minus-red isolates it from plain brightness changes: a
 /// merely brighter cell lifts every channel equally and moves this number
@@ -7559,8 +7727,15 @@ const PIN_WINDOW: &str = "200:resize:1440x900";
 /// `900 - 40 - 26` = 834 px tall (the status bar is 26 px), so a centred
 /// card of height H spans y `40 + (834 - H) / 2` .. that plus H:
 /// Copy Picks (480) y 217..697, the export dialog (260) y 327..587,
-/// the shortcuts popup (560) y 177..737, About (348) y 283..631.
-/// Cards are 560 px wide (480 for the two popups), centred in 1440.
+/// the shortcuts popup (531) y 192..723, About (348) y 283..631.
+/// Cards are 560 px wide, 480 for About, and 780 for the shortcuts popup,
+/// centred in 1440.
+///
+/// The shortcuts figures were `(560) y 177..737` until the card was
+/// rebuilt around a fixed key column (2026-09-04): its height is its
+/// CONTENT's now, so 531 is measured — `shortcuts_card_is_a_two_column_
+/// sheet_that_fits_its_window` pins it — and not a constant a reader can
+/// find in the .slint file.
 ///
 /// The first two numbers are FLOORS since issue #62, not constants: those
 /// cards grow with their content up to the window. These scripts use
@@ -7792,11 +7967,14 @@ fn a_wheel_over_the_export_dialog_never_scrolls_the_grid_behind_it() {
 /// the suite silently starts marking photographs behind a scrim.
 ///
 /// One run covers both call sites and both card shapes: the shortcuts card
-/// (560 px, clicks pass through to the scrim) and About (348 px,
+/// (780x531, clicks pass through to the scrim) and About (480x348,
 /// `card-eats-clicks`, whose extra `TouchArea` has no `scroll-event` arm of
 /// its own — the wheel has to fall through it to the scrim below, which is
 /// the same "over a child" question the copy dialog's rename field asks).
-/// `wheel.700,400` is inside both cards at the pinned window size.
+/// `wheel.700,400` is inside both cards at the pinned window size — and
+/// over the shortcuts card it now lands on the non-interactive `Flickable`
+/// that wraps that card's body, which consumes the wheel itself. Still not
+/// the grid, which is all this test claims.
 #[test]
 fn a_wheel_over_the_help_popups_never_scrolls_the_grid_behind_them() {
     if !has_display() {
