@@ -2205,10 +2205,14 @@ the user confirms, all cheap to change):**
       screenshot suite nothing (one app child at a time already: 74
       libtest slots summing 497 s against 459 s of child lifetime in the
       same step's uploaded traces; measured again locally, 892.5 →
-      892.8 s) and the rest of the workspace ~24 s — loupe.rs +14 s (its
-      one unguarded test, `decode_oriented_actually_rotates`, no longer
-      overlaps the guarded eight), pipeline.rs +7 s, core's lib tests
-      +3 s, a debug workspace run 1031 → 1057 s. It hides no cross-test
+      892.8 s, and 872.0 → 870.6 s in a second round) and the rest of the
+      workspace between 12 s and 24 s, a debug workspace run 1031 →
+      1057 s. Only the total is quotable: the two rounds disagree on
+      which binary pays — core's `loupe.rs`, whose one unguarded test
+      `decode_oriented_actually_rotates` stops overlapping the guarded
+      eight, measured +14 s once and +0.8 s the next time — so the
+      per-binary attribution is noise at this size and is not a number to
+      defend. It hides no cross-test
       race: the pool only ever overlapped core's own test binaries,
       whose scratch paths are unique per process and thread, and the two
       contention-sensitive ones keep their concurrency inside a single
@@ -2895,11 +2899,17 @@ Documented because they ship in release builds (validator finding):
   the script, correctly: nothing it waits for will happen.
   What the SETTLE means is the metadata predicate itself, not a moment in
   the render: `metadata_complete()` is `self.thumbs_done >= self.labels.len()`
-  (state.rs), and `thumbs_done` is incremented at the very site that traces
-  `thumb bytes idx N`, so `load settled gen N` says by DEFINITION that every
-  image's thumb BYTES arrived — a dump taken behind `wait:load settled gen N`
-  reads `N thumbs loaded` by construction, not by a same-tick coincidence a
-  pipeline change could break in silence. Three limits an author has to know
+  (state.rs), so `load settled gen N` says by DEFINITION that every image's
+  thumb work FINISHED — a dump taken behind `wait:load settled gen N` reads
+  `N thumbs loaded` by construction, not by a same-tick coincidence a
+  pipeline change could break in silence. Finished is not the same as
+  arrived, and the counter says which (QE 2026-09-03): `thumbs_done` is
+  incremented at TWO sites in the pump — the `ThumbReady` arm, which also
+  traces `thumb bytes idx N`, and the `Failed` arm, which traces nothing.
+  A folder of malformed RAWs therefore settles with fewer `thumb bytes`
+  lines than images, and the dump still reads `N thumbs loaded` because the
+  presenter clamps the count to the image count. So the settle is the right
+  gate for "the load is over" and the wrong one for "every thumb exists". Three limits an author has to know
   (2026-09-03). It is the bytes, not the pixels: the thumb TEXTURES are
   adopted afterwards, `thumb landed idx N` is that mark, and the Windows
   debug runner's clip-badge trace puts its three landings 36, 75 and 110 ms

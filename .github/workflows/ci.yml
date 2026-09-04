@@ -105,12 +105,13 @@ jobs:
       # the pool only ever overlapped core's own test binaries, whose
       # scratch paths are unique per process and thread, and the two
       # contention-sensitive ones keep their concurrency INSIDE one test
-      # -- there is no cross-test race for the flag to mask. Cost,
-      # measured on an 8-core laptop: the binaries that really
-      # parallelise lose ~24 s (loupe.rs +14 s -- its one unguarded test
-      # stops overlapping the guarded eight -- pipeline.rs +7 s, core's
-      # lib tests +3 s) while the screenshot binary does not move (892.5
-      # -> 892.8 s), so a debug workspace run goes 1031 s -> 1057 s. The
+      # -- there is no cross-test race for the flag to mask. Cost, twice
+      # measured on an 8-core laptop: the screenshot binary does not move
+      # (892.5 -> 892.8 s, and 872.0 -> 870.6 s in the second round), and
+      # the rest of the workspace loses between 12 s and 24 s. The two
+      # rounds disagree on WHICH binary pays -- loupe.rs +14 s in one and
+      # +0.8 s in the other -- so only the total is quotable, and even it
+      # is noise-dominated at this size. The
       # warnings were also the log's only heartbeat during this step;
       # what replaces it is the harness's 90 s child watchdog, the app's
       # 30 s `wait:` cap and the shutter's 60 s readiness cap, each of
@@ -150,9 +151,16 @@ jobs:
       # cannot gate wall-clock budgets; enforcement happens on an idle run
       # of the development machine in every gate round (issue #27 decision,
       # specs/01-architecture.md).
+      # `--test-threads=1` here for the same reason as the steps above
+      # (QE 2026-09-03): `perf_budgets.rs` takes a process-wide mutex in
+      # its measuring tests too, so the pool queues them and their clocks
+      # start when they are QUEUED. No warning has been observed from this
+      # step, but the exposure is the same one the flag removes elsewhere,
+      # and a budget measured behind a lock-wait is the one number here
+      # nobody should have to distrust.
       - name: Performance budgets (release, advisory)
         continue-on-error: true
-        run: cargo test --release -p fastcull-core --test perf_budgets
+        run: cargo test --release -p fastcull-core --test perf_budgets -- --test-threads=1
 
       # ---------------------------------------------------------------
       # Windows test build. These steps sit last in the job, so the .exe
