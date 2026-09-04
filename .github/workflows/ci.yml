@@ -5,6 +5,48 @@ on:
     branches: [main]
   pull_request:
 
+# A pull request's run is disposable; every other run is evidence.
+#
+# Pull requests share ONE group per ref with `cancel-in-progress: true`.
+# Two pushes to a PR branch used to race two 45-minute Windows jobs to a
+# finish nobody reads -- 11 of the last 150 runs were cancelled by hand --
+# so the second push now stops the first.
+#
+# Every other event gets a group of its OWN, keyed on `github.run_id`.
+# The obvious spelling -- one group per ref for everything, with
+# `cancel-in-progress: false` on main -- was what this file said first,
+# and it was WRONG (gate, 2026-09-04). `cancel-in-progress: false` does
+# NOT mean "both runs proceed". GitHub's actual rule is: a run whose
+# concurrency group is already occupied is queued as PENDING, and
+# queueing it CANCELS whatever was already pending in that group. Under a
+# shared main group, then, main pushes would have SERIALISED -- the
+# second waiting out the first's ~45-66 minute Windows job -- and a THIRD
+# push inside that window would have cancelled the middle one outright,
+# leaving a main commit with no verdict. `false` protects the RUNNING
+# run; it is the pending one that dies, and on this repo the pending one
+# is a real commit. Main is pushed exactly that fast here: runs
+# 33693900007 and 33694019447 are 92 s apart (2026-09-02T23:11:09Z /
+# 23:12:41Z) and 33151667132 / 33151754695 are 77 s apart
+# (2026-08-28T07:29:51Z / 07:31:08Z).
+#
+# A per-run group cannot collide, so a main run is never queued behind
+# its successor and never cancelled by it. `github.run_id` is stable
+# across re-run attempts -- only `run_attempt` increments -- so a re-run
+# rejoins the group of the finished run it repeats, which is empty, and
+# starts immediately. The ternary is GitHub's `&& ... ||` idiom and is
+# safe here because the left result (`github.ref`) is always a non-empty
+# string, hence always truthy.
+concurrency:
+  group: ${{ github.workflow }}-${{ github.event_name == 'pull_request' && github.ref || github.run_id }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+
+# This workflow reads the repository and nothing else: it opens no issue,
+# writes no comment, pushes no tag. Uploading an artifact is not a
+# `contents` write, so read is the whole need -- and stating it means a
+# token that escapes into a build script cannot push with it.
+permissions:
+  contents: read
+
 env:
   CARGO_TERM_COLOR: always
   # A red on a remote runner is read from its log alone. Without this a
@@ -21,13 +63,57 @@ env:
 
 jobs:
   test:
+    # THE CAP MUST CLEAR A COLD WINDOWS JOB, NOT A WARM ONE. That is the
+    # whole sizing rule, and it is `save-if` (below) that makes it bite:
+    # pull requests restore and never save, so after every rustc release
+    # -- and the toolchain here is `@stable`, unpinned -- each PR push
+    # rebuilds from scratch until a push to main repopulates the cache.
+    #
+    # Measured, all Windows: 45.3 min warm (run 33694019447), 40.1 min
+    # warm (33229151348), 60.9 min the previous record, and 65.7 min COLD
+    # on 2026-09-04 (run 33839957294, PR `ci-timing`, the first run after
+    # rustc moved to 1.98.1). A push to main the same day (33888473738)
+    # missed too -- a main run cannot read a PR's cache scope -- and took
+    # 59.5 min. Against the 75 the gate found here, 65.7 leaves 9.3
+    # minutes: 12 % of headroom on the WARM number and none worth the
+    # name on the cold one, on a shared virtualised runner. 90 gives the
+    # worst measured run 27 % and still replaces GitHub's 6-hour default,
+    # under which one hung app child would bill five idle hours of
+    # Windows minutes before anyone noticed. Slow is not failed; hung is.
+    timeout-minutes: 90
     strategy:
       fail-fast: false
       matrix:
         os: [ubuntu-latest, windows-latest]
     runs-on: ${{ matrix.os }}
     steps:
-      - uses: actions/checkout@v4
+      # Action versions, to stop the "Node.js 20 is deprecated ... forced
+      # to run on Node.js 24" line on every run. ALL THREE ARE NOW
+      # node24, which is the whole point and was not true when this file
+      # first claimed it: checkout@v5 and cache@v5 declare `using:
+      # node24`, but upload-artifact@v5's action.yml still declares
+      # `using: 'node20'`, so the bump to v5 left the warning in place
+      # and the commit message claimed a fix it had not made (gate,
+      # 2026-09-04). upload-artifact@v6 is the tag that carries node24,
+      # so both upload sites are at v6.
+      #
+      # Checked against each action's own action.yml at the tag actually
+      # used (`gh api repos/<action>/contents/action.yml?ref=<tag>`): no
+      # input this workflow passes was removed or renamed. cache@v5 still
+      # takes `path`/`key`/`restore-keys`; upload-artifact@v6 still takes
+      # `name`/`path`/`if-no-files-found`/`retention-days`, its input set
+      # being byte-identical to v5's (`name`, `path`,
+      # `if-no-files-found`, `retention-days`, `compression-level`,
+      # `overwrite`, `include-hidden-files`) with only `using:` changed;
+      # checkout is used bare. Not v7, which is also node24 but adds an
+      # `archive` input and rewrites what `name` means when `archive` is
+      # false -- release.yml already runs v7 and can, because it needs
+      # that behaviour; this workflow does not. v5's one breaking change
+      # that touches us is checkout 5.1.0's `allow-unsafe-pr-checkout`,
+      # which gates checking out a fork's code from `pull_request_target`
+      # or `workflow_run`; this workflow triggers on `pull_request`,
+      # which is unaffected, so the input is left at its default.
+      - uses: actions/checkout@v5
 
       # The screenshot tests write their shots, traces AND fixture copies
       # under the system temp dir (`std::env::temp_dir()`), and the upload
@@ -39,6 +125,15 @@ jobs:
       # runner's small D: work drive next to two target dirs (validator
       # 2026-09-02). So Windows gets a folder on C:, Linux the runner temp.
       # The free-space readout is what makes an ENOSPC red legible.
+      #
+      # `debug/` and `release/` are the two SUITE passes. Windows runs the
+      # screenshot tests twice — `has_display()` is `cfg!(windows)`, so the
+      # `cargo test --workspace` step runs them in debug and the release
+      # step runs them again — and the harness names its output directory
+      # `fastcull-shots-<pid>` under `std::env::temp_dir()`, so both passes
+      # used to land side by side in one folder with nothing but their
+      # content to tell them apart. Each pass now gets its own temp dir
+      # (set per step below), which is the only thing the harness reads.
       - name: Point the temp dir at an uploadable, roomy place
         shell: bash
         run: |
@@ -47,7 +142,7 @@ jobs:
           else
             evidence="$RUNNER_TEMP/fastcull-tmp"
           fi
-          mkdir -p "$evidence"
+          mkdir -p "$evidence" "$evidence/debug" "$evidence/release"
           {
             echo "TMPDIR=$evidence"
             echo "TEMP=$evidence"
@@ -65,13 +160,64 @@ jobs:
         if: runner.os == 'Linux'
         run: sudo apt-get update && sudo apt-get install -y libfontconfig1-dev libxkbcommon-dev libxkbcommon-x11-0 xvfb
 
+      # `save-if` main-only. Measured 2026-09-04 (`gh api
+      # .../actions/cache/usage` and `.../actions/caches`): 8 entries,
+      # 11.50 GB active against a 10 GB quota -- i.e. already OVER, with
+      # GitHub evicting least-recently-used to get back under. (The 4.15
+      # GB this comment used to claim was a partial sum; the gate caught
+      # it.) The real case for `save-if` is stronger than a total,
+      # though: 3.67 GB of that 11.50 -- 32 %, two rust-cache entries at
+      # `refs/pull/72/merge` -- is PR-SCOPED, written by PR #72
+      # (`ci-timing`), which merged at 2026-09-04T15:15:49Z and whose
+      # branch no longer exists, and readable by nothing that runs now. A
+      # PR cache is dead the moment the PR lands, and every one of them
+      # pushes a live main entry towards eviction. `save-if` is what
+      # stops them being written. Pull requests restore what main built
+      # and save nothing; main is the only writer, one entry per OS.
+      # `cache-on-failure`: the action's post step is `post-if: success()
+      # || env.CACHE_ON_FAILURE == 'true'`, so without this a red run on
+      # main throws away everything it had already compiled and the next
+      # run starts cold -- which is exactly the 20 extra minutes the
+      # 2026-09-04 cold Windows cache cost.
       - uses: Swatinem/rust-cache@v2
+        with:
+          save-if: ${{ github.ref == 'refs/heads/main' }}
+          cache-on-failure: true
 
+      # Content-addressed on the fetch script, because that script IS the
+      # contents: it carries the file list, the URLs and the expected byte
+      # sizes that pin the upstream revisions. The old key was the literal
+      # `testdata-raws-v1`, which never changed -- every run logged "Cache
+      # hit occurred on the primary key testdata-raws-v1, not saving cache"
+      # -- so adding or resizing a RAW in fetch.sh would have restored the
+      # stale entry forever, and the fetch step would have silently
+      # re-downloaded the missing file on every single run. The prefix
+      # restore-key keeps the old copy useful across such an edit: the
+      # files already there at the right size are skipped, and only the
+      # changed one is fetched.
+      #
+      # Two consequences of the v1 -> v2 bump, both one-off and both
+      # worth stating rather than discovering (gate, 2026-09-04). First,
+      # the `testdata-raws-v2-` restore prefix does NOT match
+      # `testdata-raws-v1`, so the first run restores nothing and
+      # re-downloads the RAWs once -- 240 MB, on BOTH seats, since the
+      # key carries no OS and each of the two `Fetch sample RAWs` steps
+      # runs the script -- before saving a v2 entry the next run reuses.
+      # Second, the `testdata-raws-v1` entries still in the cache are now
+      # ORPHANED: 240.3 MB each, 0.48 GB together, created 2026-08-22,
+      # and there are two of them for the one key because `actions/cache`
+      # keys an entry by path AND compression, which is what separates
+      # the Linux copy from the Windows one. Nothing will restore them
+      # again and nothing overwrites them, so they hold quota until
+      # GitHub's least-recently-used eviction takes them. Both costs are
+      # the price of the key being content-addressed at last, paid once.
       - name: Cache sample RAWs
-        uses: actions/cache@v4
+        uses: actions/cache@v5
         with:
           path: testdata/raws
-          key: testdata-raws-v1
+          key: testdata-raws-v2-${{ hashFiles('testdata/fetch.sh') }}
+          restore-keys: |
+            testdata-raws-v2-
 
       - name: Fetch sample RAWs
         if: runner.os != 'Windows'
@@ -81,11 +227,34 @@ jobs:
         shell: bash
         run: testdata/fetch.sh
 
+      # `cargo fmt` cannot carry `--locked` and does not need to: the
+      # subcommand rejects the flag outright ("error: unexpected argument
+      # '--locked' found"), and measured against a deliberately stale
+      # lockfile it exits 0 having left Cargo.lock byte-identical
+      # (sha256 unchanged). It neither guards nor drifts, so the guard
+      # belongs on the step after it.
       - name: Format check
         run: cargo fmt --all -- --check
 
+      # `--locked` STARTS HERE, and that is the point. It went on the
+      # four `cargo test` invocations first and guarded nothing (gate,
+      # 2026-09-04), because clippy ran earlier WITHOUT it and cargo's
+      # default is to repair a stale lockfile silently. Proved locally by
+      # deleting a single `[[package]]` entry from Cargo.lock: unguarded,
+      # `cargo clippy --workspace --all-targets -- -D warnings` printed
+      # "Locking 1 package to latest compatible version / Adding cfg-if
+      # v1.0.4", rewrote the file back to its original sha256 and exited
+      # 0 -- after which every `--locked` step downstream was satisfied
+      # by a lockfile clippy had just fixed for it. With the flag, the
+      # same stale lock stops the job at the first cargo step that can
+      # resolve anything: "error: cannot update the lock file ... because
+      # --locked was passed to prevent this", exit 101, Cargo.lock left
+      # untouched. The lockfile decides what is built AND feeds
+      # rust-cache's key, so a resolver that quietly picks a different
+      # version changes both the thing under test and the cache it
+      # restores from. Fail instead of drifting.
       - name: Clippy
-        run: cargo clippy --workspace --all-targets -- -D warnings
+        run: cargo clippy --workspace --all-targets --locked -- -D warnings
 
       # `--test-threads=1`: every test in
       # fastcull-app/tests/screenshot.rs takes ONE process-wide mutex as
@@ -116,15 +285,65 @@ jobs:
       # what replaces it is the harness's 90 s child watchdog, the app's
       # 30 s `wait:` cap and the shutter's 60 s readiness cap, each of
       # which names its own failure.
+      #
+      # `--locked` is on this and every other cargo invocation in the
+      # job, but the one that actually stops a drift is the CLIPPY step
+      # above -- see the reasoning there. By the time control reaches a
+      # test step, an unguarded earlier step would already have rewritten
+      # the lockfile and made this flag a no-op. Uniform here so that
+      # reordering the steps cannot reopen the hole. (`cargo build` in
+      # the Windows artifact step already had it.)
       - name: Tests
-        run: cargo test --workspace -- --test-threads=1
+        env:
+          # The debug pass of the screenshot suite (Windows only; on Linux
+          # this step has no display and the tests skip).
+          TMPDIR: ${{ env.FASTCULL_EVIDENCE }}/debug
+          TEMP: ${{ env.FASTCULL_EVIDENCE }}/debug
+          TMP: ${{ env.FASTCULL_EVIDENCE }}/debug
+        run: cargo test --workspace --locked -- --test-threads=1
 
+      # `-screen 0 1920x1200x24` pins the headless seat. What the pin
+      # buys is a STATED CONSTANT in place of a distro default -- that,
+      # and nothing more. This comment used to imply a hazard as well,
+      # and the gate struck it (2026-09-04): it said xvfb-run's default
+      # `-screen 0 1280x1024x24` is "160 px NARROWER than the window
+      # these tests drive", inviting the reader to conclude the old seat
+      # was clipping something. It is narrower. It was never observed to
+      # break anything, and the evidence says it would not have:
+      #
+      #   * the shot is not an X screen grab. It is Slint's own
+      #     `take_snapshot` (shutter.rs), which renders the WINDOW's
+      #     surface at the window's size, whatever the root window
+      #     measures;
+      #   * the one resolution-shaped assertion in the suite,
+      #     `grid_shot`'s `w == 1440`, is a SCALE-FACTOR check -- it
+      #     catches a HiDPI seat, which a screen size cannot move;
+      #   * and the suite has been driving 1600x800 -- 320 px wider than
+      #     1280 -- green on the 1280-wide server all along.
+      #
+      # So the case for pinning is the constant itself: ui-grid.md
+      # reasons about this seat, and a seat the specs reason about must
+      # not change under them because a runner image bumped a default.
+      # 1920x1200 contains every geometry the suite drives with room
+      # over -- NINE distinct ones, not the two this comment used to
+      # list (`grep -o 'resize:[0-9]*x[0-9]*'
+      # crates/fastcull-app/tests/screenshot.rs | sort -u`): 640x300,
+      # 900x800, 1000x700, 1024x768, 1200x800, 1440x700, 1440x900,
+      # 1500x800, 1600x800, plus the 1440x900 the app opens at
+      # (`preferred-width`/`preferred-height`, main.slint). Widest 1600,
+      # tallest 900. Depth 24 is true colour, so the uploaded JPEGs are
+      # not read through a quantised palette.
       - name: Screenshot smoke tests (Linux, headless X)
         if: runner.os == 'Linux'
-        run: xvfb-run -a cargo test --release -p fastcull-app --test screenshot -- --test-threads=1
+        env:
+          TMPDIR: ${{ env.FASTCULL_EVIDENCE }}/release
+        run: xvfb-run -a --server-args="-screen 0 1920x1200x24" cargo test --release --locked -p fastcull-app --test screenshot -- --test-threads=1
       - name: Screenshot smoke tests (Windows)
         if: runner.os == 'Windows'
-        run: cargo test --release -p fastcull-app --test screenshot -- --test-threads=1
+        env:
+          TEMP: ${{ env.FASTCULL_EVIDENCE }}/release
+          TMP: ${{ env.FASTCULL_EVIDENCE }}/release
+        run: cargo test --release --locked -p fastcull-app --test screenshot -- --test-threads=1
 
       # The shots and the per-run `<name>.trace.log` beside them. Uploaded
       # on EVERY run, not only on failure: a Windows red is read by
@@ -136,16 +355,36 @@ jobs:
       # Windows where it symlinks on unix — a 63 MB frame per copy, some
       # gigabyte of artifact for evidence that is a few MB of JPEG and
       # text. Shots are written at the top level, fixtures never are.
+      #
+      # Named per PASS, so the artifact opens as `debug/` and `release/`
+      # and a reader never has to identify a Windows shot by its content.
+      # The two directories are spelled out rather than globbed for a
+      # reason: upload-artifact takes the artifact's root from the LEAST
+      # COMMON ANCESTOR of the patterns' non-magic prefixes, not of the
+      # files it found, so naming both keeps the root at the evidence dir
+      # and the labels intact even when a pass produced nothing -- which
+      # is every Linux run, where the debug step has no display.
+      #
+      # 30 days, against 14 for the binaries: 7 was shorter than the loop
+      # it serves. A Windows red is diagnosed by comparing its traces
+      # against the same test's Linux green, and an intermittent is often
+      # only recognised as one when it recurs a fortnight later -- at
+      # which point the first run's evidence had already expired.
+      # `if-no-files-found: warn`, not `ignore`: an evidence path that
+      # stops matching is a silent loss of the only thing a remote red
+      # leaves behind, and it should say so in the log.
       - name: Upload screenshot evidence
         if: always()
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v6
         with:
           name: screenshot-evidence-${{ matrix.os }}
           path: |
-            ${{ env.FASTCULL_EVIDENCE }}/fastcull-shots-*/*.jpg
-            ${{ env.FASTCULL_EVIDENCE }}/fastcull-shots-*/*.trace.log
-          if-no-files-found: ignore
-          retention-days: 7
+            ${{ env.FASTCULL_EVIDENCE }}/debug/fastcull-shots-*/*.jpg
+            ${{ env.FASTCULL_EVIDENCE }}/debug/fastcull-shots-*/*.trace.log
+            ${{ env.FASTCULL_EVIDENCE }}/release/fastcull-shots-*/*.jpg
+            ${{ env.FASTCULL_EVIDENCE }}/release/fastcull-shots-*/*.trace.log
+          if-no-files-found: warn
+          retention-days: 30
 
       # Advisory only (user decision 2026-07-25): shared virtualized runners
       # cannot gate wall-clock budgets; enforcement happens on an idle run
@@ -166,7 +405,7 @@ jobs:
       # four invocations is the whole case for the flag here.
       - name: Performance budgets (release, advisory)
         continue-on-error: true
-        run: cargo test --release -p fastcull-core --test perf_budgets -- --test-threads=1
+        run: cargo test --release --locked -p fastcull-core --test perf_budgets -- --test-threads=1
 
       # ---------------------------------------------------------------
       # Windows test build. These steps sit last in the job, so the .exe
@@ -287,9 +526,99 @@ jobs:
 
       - name: Upload Windows test binaries
         if: runner.os == 'Windows'
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v6
         with:
           name: fastcull-windows-x64
           path: artifact/
           retention-days: 14
           if-no-files-found: error
+
+      # `if: always()`, and last, so the disk reading is taken at the END
+      # of the job — after two target dirs, the fetched RAWs and some 80
+      # fixture copies exist. The workflow used to print `df -h` once at
+      # the start, which is the one moment it cannot answer an ENOSPC.
+      # This step is what turns "why only on CI" into something a reader
+      # can settle on sight: the specs reason about the runner's core
+      # count and its memory, and until now neither was recorded anywhere
+      # a grep could reach — the "2-core CI runner" belief in
+      # ui-grid.md survived a year of runs because nothing contradicted
+      # it in the log.
+      #
+      # Every reading is defensive: the two runners share no tooling.
+      # Git Bash on windows-2025 has no `/proc/meminfo`, ubuntu-24.04 has
+      # no PowerShell, and `wmic` is gone from current Windows images, so
+      # each fact falls back through what the seat does have and finally
+      # to "unknown".
+      #
+      # THE STEP REPORTS; IT NEVER FAILS THE JOB -- which this step
+      # claimed before it was true (gate, 2026-09-04, reproduced by both
+      # reviewers). `shell: bash` on Actions is `bash --noprofile --norc
+      # -e -o pipefail {0}`: the `-e` and the `-o pipefail` are the
+      # runner's, not ours, and `set -u` does not switch them off. The
+      # memory reading assigns from a PIPELINE whose first element is
+      # `powershell`, so a powershell that exits non-zero made the
+      # pipeline fail, made the assignment fail, and ended the step --
+      # after the tests, the artifacts and everything else had gone
+      # green. Measured with a `powershell` stub that exits 1: exit 1
+      # from the step and a ZERO-BYTE summary, because the block that
+      # writes the table never ran. A red at the end of a green Windows
+      # job, from the one step whose entire job is to report.
+      #
+      # Belt and braces. `continue-on-error: true` means a failure here
+      # cannot fail the job whatever happens inside. And every fact is
+      # gathered by an assignment that is explicitly recovered (`|| var=""`),
+      # so a missing or failing tool yields "unknown" and the table is
+      # still written -- the flag is the net, the recovery is the fix.
+      - name: Record the runner's environment
+        if: always()
+        continue-on-error: true
+        shell: bash
+        run: |
+          set -u
+
+          cpus="$(nproc 2>/dev/null)" || cpus=""
+          [ -n "$cpus" ] || cpus="${NUMBER_OF_PROCESSORS:-}"
+          [ -n "$cpus" ] || cpus="unknown"
+
+          mem=""
+          if [ -r /proc/meminfo ]; then
+            mem="$(awk '/^MemTotal:/ {printf "%.1f GiB", $2/1048576}' /proc/meminfo 2>/dev/null)" || mem=""
+          elif command -v powershell >/dev/null 2>&1; then
+            mem="$(powershell -NoProfile -Command \
+              '"{0:N1} GiB" -f ((Get-CimInstance Win32_ComputerSystem).TotalPhysicalMemory / 1GB)' \
+              2>/dev/null | tr -d '\r')" || mem=""
+          fi
+          [ -n "$mem" ] || mem="unknown"
+
+          disk="$(df -h 2>/dev/null)" || disk=""
+          [ -n "$disk" ] || disk="df unavailable on this runner"
+
+          rustcv="$(rustc -vV 2>/dev/null)" || rustcv=""
+          [ -n "$rustcv" ] || rustcv="rustc unavailable on this runner"
+
+          summary="${GITHUB_STEP_SUMMARY:-/dev/null}"
+          {
+            echo "## Runner environment — ${{ matrix.os }}"
+            echo
+            echo "| fact | value |"
+            echo "| --- | --- |"
+            echo "| image | ${ImageOS:-unknown} ${ImageVersion:-} |"
+            echo "| os / arch | ${RUNNER_OS:-unknown} / ${RUNNER_ARCH:-unknown} |"
+            echo "| cpus | $cpus |"
+            echo "| memory | $mem |"
+            echo "| evidence root | ${FASTCULL_EVIDENCE:-unset} |"
+            echo
+            echo '<details><summary>free disk at the end of the job</summary>'
+            echo
+            echo '```'
+            echo "$disk"
+            echo '```'
+            echo '</details>'
+            echo
+            echo '<details><summary>rustc -vV</summary>'
+            echo
+            echo '```'
+            echo "$rustcv"
+            echo '```'
+            echo '</details>'
+          } >> "$summary" || true

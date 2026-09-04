@@ -13,8 +13,14 @@ use std::path::PathBuf;
 use std::time::{Duration, Instant};
 
 /// Engine tests decode 50 MP JPEGs; run them serially — four parallel
-/// engines on a 2-vCPU debug-mode CI runner starved each other past the
-/// event timeouts (Windows flake).
+/// engines on a debug-mode CI runner starved each other past the event
+/// timeouts (Windows flake). What was measured is that flake: the
+/// timeouts, on that seat, with the engines running in parallel. The
+/// "2-vCPU" this line used to give as the cause was never measured and
+/// is wrong — both CI seats are 4 vCPU with ~16 GB (CI audit
+/// 2026-09-04) — and four debug-mode 50 MP decoders oversubscribe four
+/// cores nearly as thoroughly as two, so the observed starvation, not
+/// an arithmetic ratio, is what this mutex answers.
 static SERIAL: std::sync::Mutex<()> = std::sync::Mutex::new(());
 
 use fastcull_core::loupe::{LoupeEngine, LoupeEvent, DEFAULT_BUDGET_BYTES, UPSCALE_THRESHOLD};

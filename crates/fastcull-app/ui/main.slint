@@ -1672,8 +1672,13 @@ export component MainWindow inherits Window {
                             // recreated first and `changed want-refocus`
                             // above fires on a live row — that path is
                             // unchanged and still the one that claims.
-                            // EARLY arm (the 2-core headless runner): the
-                            // zero-length timer wins, so this row is BORN
+                            // EARLY arm (the headless CI runner — 4
+                            // vCPU, not the 2 this line claimed until
+                            // the CI audit of 2026-09-04 measured it;
+                            // what was actually observed is the
+                            // ORDERING in that run's own timestamps, and
+                            // no core count was ever read off anything):
+                            // the zero-length timer wins, so this row is BORN
                             // with `want-refocus` already true — and then
                             // `changed want-refocus` NEVER fires, because
                             // Slint installs a row's change trackers
