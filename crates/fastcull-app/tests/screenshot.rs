@@ -2693,8 +2693,11 @@ fn open_folder_mid_flight_swaps_sessions_without_stale_kitchen_work() {
 /// the-new-session-starts ordering half of the barrier has no cheap
 /// black-box observable and stays covered by the core writer units. A
 /// schedule that SLIPS past the debounce (Slint timers fire late under a
-/// stalled loop) would be the same vacuity by another route; the
-/// trace-clock guard below fails loud on it instead (validator F2).
+/// stalled loop) would be the same vacuity by another route; the writer's
+/// own close count (`sidecar writer closed gen 0: 1 pending flushed`,
+/// traced by the swap) fails loud on it instead — validator F2, asserted
+/// on the app's account since 2026-09-03, where it used to be a measured
+/// gap between two drive echoes.
 ///
 /// The first `open:` targets a nonexistent path: the error branch of the
 /// real Open Folder action must leave the running session intact (status
@@ -2726,7 +2729,7 @@ fn session_swap_flushes_pending_marks_to_sidecars() {
     std::fs::create_dir_all(&dir_b).unwrap();
     let out = out_dir().join("swap-flush.jpg");
     let script = format!(
-        "800:open:{};1200:pick;1500:open:{}",
+        "800:open:{};1100:wait:load settled gen 0;1200:pick;1500:open:{}",
         dir_b.join("does-not-exist").display(),
         dir_b.display()
     );
@@ -2746,29 +2749,37 @@ fn session_swap_flushes_pending_marks_to_sidecars() {
             .any(|l| l.starts_with("fastcull: ") && l.contains("not a directory")),
         "the failed open never reported its error:\n{stderr}"
     );
+    // The pick is made on the SETTLED view, so the 300 ms that has to stay
+    // inside the debounce carries no load work: on the Windows debug
+    // runner the old 1200 ms pick fired 246 ms BEFORE the settle, which
+    // put the re-sort and its full refresh between the mark and the swap —
+    // the one variable-cost thing in that window, and a busy loop is
+    // exactly what makes a Slint timer fire late.
+    assert!(
+        stderr.contains("wait:load settled gen 0 (satisfied"),
+        "the `wait:load settled gen 0` step never fired — the pick was \
+         timed, not gated:\n{stderr}"
+    );
     // The swap must have landed INSIDE the debounce window, or the writer's
     // own timer wrote the sidecar before the swap and the flush assertion
-    // below is testing nothing (validator F2: Slint timers fire late under
-    // a stalled loop — Windows CI has measured ~60% slower runs). Loud
-    // retune signal, same policy as the mid-flight guard in the swap test.
-    // LAST match for the open: the 800 ms bogus-path open also traces
-    // `drive: open:` — the swap under test is the second one.
-    let drive_ms = |needle: &str| -> u64 {
-        stderr
-            .lines()
-            .rev()
-            .find(|l| l.contains(needle))
-            .and_then(|l| l.split('[').nth(1))
-            .and_then(|r| r.split(']').next())
-            .and_then(|n| n.trim().parse().ok())
-            .unwrap_or_else(|| panic!("no trace clock for {needle:?}:\n{stderr}"))
-    };
-    let gap = drive_ms("drive: open:").saturating_sub(drive_ms("drive: pick"));
+    // below is testing nothing (validator F2). Asserted on the WRITER's own
+    // account, not on two drive-echo timestamps: the swap closes session
+    // A's writer by hand and traces how many writes that close had to
+    // flush. One pick, 300 ms into a 700 ms debounce, is exactly one; a
+    // schedule that slipped past the debounce (Slint timers fire late under
+    // a stalled loop — Windows CI has measured ~60% slower runs) reports
+    // zero, the same loud retune signal with nothing left for timer drift
+    // to falsify. `gen 0` is session A: the 800 ms bogus-path open failed
+    // and closed nothing.
+    let closed = stderr
+        .lines()
+        .find(|l| l.contains("sidecar writer closed gen 0:"))
+        .unwrap_or_else(|| panic!("the swap never closed session A's writer:\n{stderr}"));
     assert!(
-        gap < 700,
-        "the swap fired {gap} ms after the pick — outside the 700 ms \
-         debounce, so the flush assertion below would be vacuous; retune \
-         the schedule:\n{stderr}"
+        closed.contains(": 1 pending flushed"),
+        "the writer had nothing pending when the swap closed it — the \
+         pick's 700 ms debounce had already fired, so the flush assertion \
+         below would be vacuous; retune the schedule ({closed}):\n{stderr}"
     );
     // THE flush assertion: a1's mark, still inside the 700 ms debounce at
     // swap time, is on disk — written by the swap, since its writer no
@@ -4533,9 +4544,23 @@ fn transit_to_a_cold_frame_keeps_the_overlay_at_the_carried_center() {
 /// into a navigation, and the pan centre is folded only by the real drag
 /// itself (the #16/#22 positive-signal doctrine).
 ///
-/// One app run, three phases at a resolved 1:1 (the 45 s lead time is
-/// what a debug-profile full-res decode needs; the `predrag` guard fails
-/// loudly rather than letting a slow run pass vacuously):
+/// One app run, three phases at a resolved 1:1, GATED on the sharp
+/// render's own mark instead of on a lead time long enough for the
+/// slowest profile. `wait:loupe idx 0 factor` is satisfied only by the
+/// full-res arm: the rungs below it say `loupe soft idx 0 factor` and
+/// `loupe thumb idx 0 factor`, which do not contain the substring, and
+/// the trailing ` factor` closes the `idx 0` prefix against `idx 10`.
+/// The wait step sits at 20 s because the harness's 30 s cap runs from
+/// the STEP (harness.rs `WAIT_CAP`) and a debug-profile full-res
+/// adoption lands at 26-40 s on the Windows CI runner (30.3 s in this
+/// test's own run, measured 2026-09-02): the cap therefore reaches 50 s
+/// where the old fixed 45 s lead reached 45, and a release run stops
+/// paying the other 25 s. The whole tail moved by one constant, so every
+/// gap below is still the physics the phases need. The end of the script
+/// is now `sharp + 2.2 s` rather than a fixed 47.4 s, which is what the
+/// shutter's 60 s readiness cap gets back: it still waits for idx 1's
+/// texture exactly as it does today, from an earlier start. The `predrag`
+/// guard stays as the proof the wait meant what it says:
 ///  1. slow drag — pans 1:1 (the guard half, green on both sides);
 ///  2. flick — five fast moves and release: offsets must be IDENTICAL
 ///     at +100 ms and +400 ms after release (pre-fix: the Flickable's
@@ -4571,15 +4596,19 @@ fn loupe_drag_pans_one_to_one_and_a_fling_never_survives_navigation() {
             ("FASTCULL_TRACE", "1"),
             (
                 "FASTCULL_DRIVE",
-                // Phase 1: slow drag right+down by (100, 40). Phase 2:
-                // the flick (5 events, 16 ms apart — the velocity ring
-                // buffer needs real timing). Phase 3: arrow mid-"decay".
-                "45000:dump.predrag;45050:press.700,450;45150:move.750,470;45250:move.800,490;\
-                 45350:release.800,490;45450:dump.dragged;\
-                 45600:press.700,450;45616:move.800,520;45632:move.900,590;45648:move.1000,660;\
-                 45664:move.1100,730;45680:release.1100,730;\
-                 45780:dump.afterfling1;46080:dump.afterfling2;\
-                 46200:right;46300:dump.afternav;47100:dump.late",
+                // Every timestamp after the wait is rebased on the
+                // moment it fires, so the numbers below are gaps, not
+                // offsets. Phase 1: slow drag right+down by (100, 40).
+                // Phase 2: the flick (5 events, 16 ms apart — the
+                // velocity ring buffer needs real timing). Phase 3:
+                // arrow mid-"decay".
+                "20000:wait:loupe idx 0 factor;\
+                 20100:dump.predrag;20150:press.700,450;20250:move.750,470;20350:move.800,490;\
+                 20450:release.800,490;20550:dump.dragged;\
+                 20700:press.700,450;20716:move.800,520;20732:move.900,590;20748:move.1000,660;\
+                 20764:move.1100,730;20780:release.1100,730;\
+                 20880:dump.afterfling1;21180:dump.afterfling2;\
+                 21300:right;21400:dump.afternav;22200:dump.late",
             ),
         ],
         &out,
@@ -4590,6 +4619,14 @@ fn loupe_drag_pans_one_to_one_and_a_fling_never_survives_navigation() {
     let fling2 = qedump(&stderr, "afterfling2");
     let afternav = qedump(&stderr, "afternav");
     let late = qedump(&stderr, "late");
+    // The gate really fired: a dropped or misspelled token is a script
+    // quietly back on the clock, and the phases below would then run
+    // 100 ms after launch instead of 100 ms after the sharp render.
+    assert!(
+        stderr.contains("wait:loupe idx 0 factor (satisfied"),
+        "the `wait:loupe idx 0 factor` step never fired — the pointer \
+         work was timed, not gated:\n{stderr}"
+    );
     // Guard: the 1:1 must be RESOLVED before the pointer work, or the
     // extents are fit-sized and nothing can pan — a vacuous pass.
     assert_eq!(
@@ -4600,8 +4637,8 @@ fn loupe_drag_pans_one_to_one_and_a_fling_never_survives_navigation() {
     assert_eq!(
         dump_field(predrag, "soft"),
         "false",
-        "full-res not resolved 45 s in — the drag would have no pan range \
-         and every assertion below would be vacuous:\n{predrag}"
+        "full-res not resolved when the wait let the drag through — no pan \
+         range, so every assertion below would be vacuous:\n{predrag}"
     );
     let vx = |l: &str| dump_field(l, "vx").parse::<f32>().unwrap();
     let vy = |l: &str| dump_field(l, "vy").parse::<f32>().unwrap();
@@ -5070,9 +5107,10 @@ fn a_decode_failed_cursor_drops_to_fit_instead_of_masking_the_badge() {
 /// test that moves REAL A1 files (~126 MB), so it also proves the copy
 /// engine on real bytes; the clash question's own flows are driven on
 /// small fixtures below. The deletion runs on a helper thread that polls
-/// the destination — the drive script is wall-clock timed, so the second
-/// phase starts well after the first copy can finish. Fixtures are
-/// symlinks (the copy follows them); the copies are removed at the end.
+/// the destination for the landed pairs; the second phase waits for the
+/// app's own `copy finished run 1` mark and then leaves the helper an
+/// authored gap for its four unlinks. Fixtures are symlinks (the copy
+/// follows them); the copies are removed at the end.
 #[test]
 fn copy_picks_rerun_recopies_hand_deleted_files() {
     if !has_display() {
@@ -5088,24 +5126,37 @@ fn copy_picks_rerun_recopies_hand_deleted_files() {
     place_fixture(&raw, &src.join("b.ARW"));
     let raw_len = std::fs::metadata(&raw).unwrap().len();
 
-    // Phase 1 lands at ~3.2 s; the helper deletes as soon as both pairs
-    // are complete; phase 2 starts at 12 s with a wide margin for a debug
-    // build hashing 126 MB twice.
+    // Phase 2 is gated on phase 1's report card (`wait:copy finished run
+    // 1`, the app's own mark) rather than on a guess about 126 MB hashed
+    // twice on a debug build. The wait sits right AFTER its trigger, not
+    // just before the consumer, on purpose: the 8.7 s the script leaves
+    // between the mark and the second phase's Escape — 9.1 s before the
+    // Ctrl+E that recomputes the plan — prices the helper thread's four
+    // local unlinks, bounded work, and has to survive a slow copy
+    // too. CI run 98735565222 (Windows, 2026-08-28) is this suite's one
+    // PROVEN red of that shape: the copy overran the old 12 s clock and
+    // the helper's 11 s deadline together. The re-run's dump waits the
+    // same way.
     let script = format!(
         "1600:key:y;1900:key:y;2200:copydest:{dest};2600:key:ctrl+e;3000:dump.first;\
-         3200:key:return;12000:key:escape;12400:key:ctrl+e;12800:dump.second;\
-         13000:key:return;19000:dump.third;19300:key:escape;19600:dump.end",
+         3200:key:return;3300:wait:copy finished run 1;\
+         12000:key:escape;12400:key:ctrl+e;12800:dump.second;\
+         13000:key:return;18900:wait:copy finished run 2;19000:dump.third;\
+         19300:key:escape;19600:dump.end",
         dest = dest.display()
     );
     let landed = ["a.ARW", "a.ARW.xmp", "b.ARW", "b.ARW.xmp"];
     let deleter = {
         let dest = dest.clone();
         std::thread::spawn(move || -> Result<(), String> {
-            let deadline = Instant::now() + Duration::from_secs(11);
+            // Liveness escape only: the script's own `wait:copy finished
+            // run 1` ends a run whose copy stalls long before this, so the
+            // deadline is not part of the ordering argument any more.
+            let deadline = Instant::now() + Duration::from_secs(60);
             while !landed.iter().all(|n| dest.join(n).exists()) {
                 if Instant::now() > deadline {
                     return Err(format!(
-                        "the first copy did not land within 11 s: {:?}",
+                        "the first copy never landed (60 s escape): {:?}",
                         std::fs::read_dir(&dest).map(|d| d
                             .filter_map(|e| e.ok())
                             .map(|e| e.file_name())
@@ -5148,6 +5199,17 @@ fn copy_picks_rerun_recopies_hand_deleted_files() {
     std::fs::remove_dir_all(&dest).ok();
 
     assert_eq!(deleted, Ok(()), "hand deletion did not happen:\n{stderr}");
+    // Both gates really fired: a dropped or misspelled `wait:` token puts
+    // the phase back on the clock this conversion removed.
+    for token in [
+        "wait:copy finished run 1 (satisfied",
+        "wait:copy finished run 2 (satisfied",
+    ] {
+        assert!(
+            stderr.contains(token),
+            "`{token}` never fired — that phase was timed, not gated:\n{stderr}"
+        );
+    }
     let field = dump_text;
     let first = qedump(&stderr, "first");
     assert!(
@@ -6042,16 +6104,31 @@ fn an_exported_frame_wears_a_badge_until_its_video_is_gone() {
     let before = listing(&src);
 
     // The deletion has to land AFTER the hint that names `c-b.mov`
-    // (script 34.5 s) and BEFORE the dialog re-opens (46.5 s), and it is
-    // DETERMINISTIC by construction rather than timed hopefully: it fires
-    // 10 s after the victim appears, and the victim's appearance is
-    // bracketed by the script itself. The second export starts at 26.8 s,
-    // so the file cannot appear before then → fire ≥ 36.8 s, past the
-    // 34.5 s hint. And `dump.done2` at 33.3 s asserts the export finished,
-    // so the file cannot appear after 33.3 s → fire ≤ 43.3 s, before the
-    // 46.0 s dump. Anchoring on the FILE rather than on this thread's
-    // clock is what makes both ends hold whatever the process's startup
-    // cost was — the wall clock here starts before the app boots.
+    // (`dump.hint2`) and BEFORE the dialog re-opens (`dump.stale`), and it
+    // is DETERMINISTIC by construction rather than timed hopefully: it
+    // fires 10 s after the victim appears, and the victim's appearance is
+    // bracketed by the script itself — CAUSALLY, since the script gates on
+    // the app's own marks and every timestamp after a `wait:` is rebased
+    // on it, so the gaps below hold whatever a slow runner adds. The
+    // second export's `key:return` is 7.7 s before `dump.hint2` (more if
+    // the export is slow — see the bound below), so the file cannot appear
+    // before then → fire 2.3 s past the hint. And
+    // `dump.done2` runs only once `wait:clip export finished run 2` has
+    // seen the export finish, so the file exists before it fires → fire
+    // ≤ 10.9 s after done2 (the three unlink retries included), before the
+    // `dump.stale` 12.7 s after it. Anchoring on the FILE rather than on
+    // this thread's clock is what makes both ends hold whatever the
+    // process's startup cost was — the wall clock here starts before the
+    // app boots.
+    //
+    // The EARLY end carries a bound: it holds while the second export
+    // takes under 8.7 s (its wait step sits 6.4 s after the Enter and the
+    // hint 1.3 s behind that, against the 10 s sleep). A slower export
+    // pushes the whole tail past the deletion, and the run then fails at
+    // `dump.hint2` with the victim already gone — not at `dump.done2`.
+    // Read a red there as "the second export took longer than 8.7 s", not
+    // as a badge that never appeared. Measured export duration: 253 ms on
+    // the Windows debug runner, the slower of the two artifact sets.
     //
     // The poll's own deadline is a failure guard, not part of that
     // argument: it only turns "the export never happened" into a message
@@ -6090,18 +6167,22 @@ fn an_exported_frame_wears_a_badge_until_its_video_is_gone() {
     // — which silently turns `right`/`shift-right` into a different
     // selection (validator finding, 2026-08-29: it selected b+c, whose
     // video is the SAME name the second export wants, and the run died in
-    // a clash question). `dump.sorted` asserts the settle where it would
-    // break, and the nav sits seconds behind it.
+    // a clash question). `home` now WAITS for the settle itself
+    // (`wait:load settled gen 0`), and `dump.sorted` keeps asserting it as
+    // the proof — the mark IS the thumb-bytes count (state.rs
+    // `metadata_complete`), so "3 thumbs loaded" behind it is definitional.
     let script = format!(
         "1900:clipdest:{dest};2000:copydest:{copied};\
-         5000:home;5200:dump.sorted;\
+         4900:wait:load settled gen 0;5000:home;5200:dump.sorted;\
          8000:right;8200:key:y;8400:key:ctrl+e;8600:dump.copyplan;8800:key:return;\
-         17000:dump.copied;17300:key:escape;\
+         16900:wait:copy finished run 1;17000:dump.copied;17300:key:escape;\
          17600:home;17800:right;18000:shift-right;\
          18200:key:ctrl+shift+e;18400:dump.plan1;18600:key:return;\
-         25100:dump.done1;25400:key:escape;25700:dump.badges1;\
+         25000:wait:clip export finished run 1;25100:dump.done1;25400:key:escape;\
+         25700:dump.badges1;\
          26000:select-all;26200:key:ctrl+shift+e;26500:dump.plan2;26800:key:return;\
-         33300:dump.done2;33600:key:escape;33900:dump.badges2;\
+         33200:wait:clip export finished run 2;33300:dump.done2;33600:key:escape;\
+         33900:dump.badges2;\
          34200:key:ctrl+shift+e;34500:dump.hint2;34800:key:escape;\
          46000:dump.stale;46500:key:ctrl+shift+e;46800:dump.gone;\
          47100:key:escape;47400:key:escape;47700:home;48000:dump.end",
@@ -6132,6 +6213,21 @@ fn an_exported_frame_wears_a_badge_until_its_video_is_gone() {
         Ok(()),
         "the hand deletion did not happen:\n{stderr}"
     );
+
+    // The four gates really fired: a dropped or misspelled `wait:` token
+    // is a script quietly back on the clock, and every dump below then
+    // reads a state the app is no longer promised to be in.
+    for token in [
+        "wait:load settled gen 0 (satisfied",
+        "wait:copy finished run 1 (satisfied",
+        "wait:clip export finished run 1 (satisfied",
+        "wait:clip export finished run 2 (satisfied",
+    ] {
+        assert!(
+            stderr.contains(token),
+            "`{token}` never fired — that step was timed, not gated:\n{stderr}"
+        );
+    }
 
     // --- the sort settled before anything counted positions ---------------
     let sorted = qedump(&stderr, "sorted");

@@ -1928,9 +1928,13 @@ the user confirms, all cheap to change):**
       only — a debug build decodes a mid slower than the cadence, so
       the test skips that one assertion there (the perf_budgets
       precedent) while its no-drop and `one2one` assertions still
-      bind; the M1 test and the failed-cursor gate test run in RELEASE
-      only outright — in debug both ride the app's own 60 s
-      screenshot-readiness cap (the cursor's 50 MP debug decode landed
+      bind; the M3 drag test runs in BOTH profiles and gates its pointer
+      work on the sharp render's own mark (`wait:loupe idx 0 factor`,
+      scheduled at 20 s — the harness section's `wait:` paragraph says why
+      that placement is the cap arithmetic), where until 2026-09-03 it led
+      with a fixed 45 s sized for the debug decode; the M1 test and the
+      failed-cursor gate test run in RELEASE only outright — in debug
+      both ride the app's own 60 s screenshot-readiness cap (the cursor's 50 MP debug decode landed
       at 58.5 s on a loaded 8-core laptop; a 2-vCPU CI runner under
       the cook hold has no margin at all — validator, gate round 2),
       while the debug profile keeps its no-drop coverage through
@@ -2356,9 +2360,18 @@ the user confirms, all cheap to change):**
       dump before the first positional key and assert BOTH that every
       thumb has loaded (metadata precedes each thumb on the same ordered
       channel, so all-thumbs implies all-keys) and that the status line
-      names the image the script expects at that position; then leave
-      seconds of slack before the navigation itself. Renaming fixtures
-      does not help — a partially keyed view sorts the keyed ones first.
+      names the image the script expects at that position; then GATE the
+      first positional key on the settle itself — `wait:load settled gen
+      N`, with the dump kept as the proof of what it meant (2026-09-03).
+      Seconds of slack were the pre-#61 form of this and the badge test
+      carried them until the CI audit; slack is still a clock, and a
+      loaded runner outruns it (that test's settle landed at 1.5 s on the
+      Windows debug runner against a 5 s `home`, while the six-copy
+      fixtures elsewhere in the suite settle at 4.7-5.7 s there). The
+      gate is available only above one column — the one-column strip re-anchors through its
+      own block and emits no settle — so a `--start-11`/`--start-loupe`
+      script keeps the slack and says so. Renaming fixtures does not
+      help — a partially keyed view sorts the keyed ones first.
 - [x] **Focus continuity (issues #41/#42)**: driven through REAL key and
       pointer dispatch (`key:`/`click.` — the nav tokens bypass focus and
       cannot see this class), every bug-strand test red-run-verified
@@ -2632,6 +2645,49 @@ the user confirms, all cheap to change):**
       DISCARD dumps only. Putting the keyboard assertion behind it was a
       mistake: it moved that dump seconds later and widened the
       deactivation exposure, which is how it was caught.
+      **The remaining clock-gated steps (2026-09-03, CI audit item 6):** a
+      script step that waits for a variable-cost operation now waits for
+      that operation's own mark. The shape rule is fixed: keep the
+      absolute step as a harmless backstop, insert the wait in FRONT of
+      the consumer, and assert the `(satisfied` echo, so a satisfied-
+      instantly wait leaves the schedule untouched and a dropped token
+      cannot put a script back on the clock in silence. The audit's two
+      named sites went first. The issue #46 M3 drag test gates its
+      pointer work on `wait:loupe idx 0 factor` and is the one site
+      RE-TIMED rather than backstopped: the wait sits at 20 s and the
+      whole tail moved up by 24.9 s with every authored gap intact,
+      because a wait at 20 s with the tail left at 45 s would have landed
+      `dump.predrag` 25 s after the mark. Its 45 s lead is gone — 25 s
+      back on a release runner (the sharp render lands at 352 ms there),
+      and on the Windows debug runner the run ends at ~32.5 s instead of
+      47.4 s, leaving ~27 s of the shutter's 60 s readiness cap where it
+      had 12.9 s. The swap-flush test's `gap < 700` stopwatch could not
+      become a wait at all — it asserts that the debounce had NOT fired,
+      and a wait only answers "has this happened yet" — so it reads the
+      writer's own close count instead (`sidecar writer closed gen 0: 1
+      pending flushed`), with a settle wait moving the load work out of
+      the 300 ms the debounce premise depends on (that pick fired 246 ms
+      BEFORE the settle on the Windows debug runner, putting a re-sort and
+      a full refresh inside the window). Two more scripts followed the
+      same rule. The #56 badge test gates its positional nav, its copy and
+      both exports (`load settled gen 0`, `copy finished run 1`, `clip
+      export finished run 1/2`), which is what makes the ENDS of its
+      helper thread's deletion window causal rather than hoped for; the
+      early end holds while the second export takes under 8.7 s, and a
+      slower one now fails at `dump.hint2` with the victim already gone
+      rather than at `dump.done2`. The hand-deletion re-run puts
+      `wait:copy finished run 1` right AFTER its trigger instead of before
+      its consumer, so the 8.7 s the script leaves for the helper's four
+      unlinks survives a slow copy too — CI run 98735565222 (Windows,
+      2026-08-28) is that failure, this suite's one proven red of the
+      shape — and the helper's own 11 s deadline becomes a 60 s liveness
+      escape, since the script's wait now ends a stalled copy long before
+      it. Kept on the clock on purpose in these four, each test saying so:
+      the M3 fling pair's +100/+400 ms samples and its 16 ms flick cadence
+      (the timing IS the property — "stops dead" is a statement about
+      elapsed time, and no event occurs; the block moved bodily with its
+      gaps), and the badge deleter's 10 s offset, an authored position
+      inside a window whose ends these waits make causal.
 - [x] **No modal scrolls the grid behind it (issue #49)**: a wheel over
       any of the four scrims leaves the grid's `vpy` where it was, and all
       four are now driven. The two hand-rolled scrims (Copy Picks, Export
@@ -2769,11 +2825,11 @@ Documented because they ship in release builds (validator finding):
   session's generation (read before the bump) and K how many writes were
   still inside their debounce window and were flushed by the close
   (`SidecarWriter::close`, xmp-sidecars.md). It is the observable behind
-  "flushed on session close", and it exists so a driven swap can assert a
-  structural fact — `K == 1` for a mark still inside its debounce — instead
-  of measuring the pick-to-swap gap between two harness echoes against the
-  700 ms debounce with a stopwatch (the issue #58 shape). A `wait:` could not
-  serve there in any case: the claim is that the debounce had NOT fired, and
+  "flushed on session close": since 2026-09-03 the swap-flush test asserts
+  the structural fact — `K == 1` for a mark still inside its debounce —
+  where it used to measure the pick-to-swap gap between two harness echoes
+  against the 700 ms debounce with a stopwatch (the issue #58 shape). A
+  `wait:` could not serve there in any case: the claim is that the debounce had NOT fired, and
   a wait only ever answers "has this happened yet". The startup path closes
   no writer and process exit goes through the drop, so neither traces it: the
   mark means "a swap closed it".
