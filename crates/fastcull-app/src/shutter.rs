@@ -44,6 +44,22 @@ pub(crate) fn arm(
             slint::TimerMode::Repeated,
             std::time::Duration::from_millis(250),
             move || {
+                // Exactly one capture per run (issue #77). Slint re-arms a
+                // repeated timer BEFORE running its callback and runs due
+                // timers FIRST in every event-loop iteration, while the
+                // `quit_event_loop()` below is a user event that winit's
+                // Wayland loop delivers one iteration LATER than its X11
+                // and Windows loops do — so a capture that outlasts the
+                // 250 ms period (461-478 ms here, measured 2026-09-05)
+                // would photograph a second time before the quit lands,
+                // on every Wayland seat and never on CI. This early return
+                // is the whole fix: nothing after the first capture can
+                // shoot again, whatever the platform delivers next. Do not
+                // replace it with a timer stop — the guard is what the
+                // count assertion in tests/screenshot.rs pins.
+                if shot_written.get() {
+                    return;
+                }
                 let Some(win) = win.upgrade() else { return };
                 let elapsed = started.elapsed();
                 // The DRIVE script must have fully executed: a fast

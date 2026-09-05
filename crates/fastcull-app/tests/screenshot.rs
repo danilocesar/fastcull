@@ -107,6 +107,29 @@ fn shoot_env_stderr_watching(
                 "app exited with {status}; trace: {}; stderr:\n{stderr}",
                 trace.display()
             );
+            // Exactly one capture per run (issue #77): a second
+            // `status at shutter` means the poll ran again after the
+            // capture, and the run photographed a state half a second
+            // later than the one CI photographs — on a Wayland seat that
+            // was EVERY stock-debug run until 2026-09-05, and never CI.
+            // When this fails this way it is that defect; do not quiet it,
+            // do not gate it on a platform, and do not "fix" it by reading
+            // the last line somewhere else. This is the one function every
+            // app spawn goes through, so every driven test enforces it.
+            // A run without FASTCULL_TRACE prints no mark at all, so the
+            // expected count is 1 when traced and 0 otherwise.
+            let traced = envs.iter().any(|(k, _)| *k == "FASTCULL_TRACE")
+                || std::env::var_os("FASTCULL_TRACE").is_some();
+            let want = usize::from(traced);
+            let shots = stderr.matches("status at shutter: ").count();
+            let geoms = stderr.matches("geometry at shutter: ").count();
+            assert!(
+                shots == want && geoms == want,
+                "the shutter fired {shots} time(s) with {geoms} geometry mark(s), \
+                 expected {want}; a --screenshot run photographs exactly once \
+                 (issue #77); trace: {}",
+                trace.display()
+            );
             return stderr;
         }
         if Instant::now() >= deadline {

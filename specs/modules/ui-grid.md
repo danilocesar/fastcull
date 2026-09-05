@@ -2711,7 +2711,7 @@ the user confirms, all cheap to change):**
       reads rendered pixels needs `wait:thumb landed idx N` on top of it
       (the two selection-wash tests and the panel-dock test do exactly
       that — see the item-6 ledger below).
-- [ ] **The screenshot shutter fires exactly once per run (issue #77,
+- [x] **The screenshot shutter fires exactly once per run (issue #77,
       2026-09-05)**: on every seat and in every profile a `--screenshot`
       run emits exactly one `status at shutter` and one `geometry at
       shutter` mark and writes its JPEG once, because the poll returns at
