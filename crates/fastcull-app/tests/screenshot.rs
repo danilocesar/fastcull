@@ -637,12 +637,46 @@ fn loupe_survives_a_vertical_resize_with_one_whole_frame() {
                 // toggle changes grid width and triggers its own relayout
                 // correction. The About modal changes no grid geometry, so
                 // it holds the shutter and nothing else.
+                // The LEADING wait is the other half of the same anti-vacuity
+                // argument (issue #73). At one column a settle arrives in
+                // `claim_cursor_at_loupe` as `view_mutated`, so a settle
+                // landing AFTER the `3000:resize` fires a second re-anchor
+                // that REPAIRS the state under test — the mutant passes.
+                // Worst measured margin between the settle and that resize
+                // on the Windows debug runner: 146 ms. Gating in front of
+                // `home` (not of the resize) also removes the residual
+                // dependence on name-order == capture-order for which image
+                // `right` lands on. `schedule_from` rebases the tail on the
+                // moment the wait fires and keeps every authored gap, so the
+                // 1200 ms lead to the resize survives verbatim.
                 "FASTCULL_DRIVE",
-                "1500:home;1800:right;3000:resize:1440x700;\
-                 3050:wait:window geometry 1440x700;3600:about;4000:about",
+                "1400:wait:load settled gen 0;1500:home;1800:right;\
+                 3000:resize:1440x700;3050:wait:window geometry 1440x700;\
+                 3600:about;4000:about",
             ),
         ],
         &out,
+    );
+    assert!(
+        stderr.contains("wait:load settled gen 0 (satisfied"),
+        "the `wait:load settled gen 0` step never fired — the resize under \
+         test was timed against the load, not gated on it:\n{stderr}"
+    );
+    // The same fact as an ORDERING, so the gate survives a later re-time:
+    // the settle's line must sit before the first step it gates. A settle
+    // after this point can still re-anchor, which is the vacuity the wait
+    // exists to prevent.
+    let settled_at = stderr.find("load settled gen 0").unwrap_or_else(|| {
+        panic!("the view never settled, so its re-anchor could still repair the state:\n{stderr}")
+    });
+    let first_key = stderr
+        .find("drive: home")
+        .unwrap_or_else(|| panic!("the `home` step never ran:\n{stderr}"));
+    assert!(
+        settled_at < first_key,
+        "the load settled after the first key — its own re-anchor can then \
+         land after the resize and repair the very offset the assertions \
+         below read:\n{stderr}"
     );
     // THE ANTI-VACUITY GUARD (issue #65). Everything below also holds at
     // the default 1440x900, so without this a run whose resize the
@@ -952,10 +986,48 @@ fn engine_events_after_loading_never_move_an_untouched_cursor() {
         &[dir.to_str().unwrap(), "--start-11"],
         &[
             ("FASTCULL_TRACE", "1"),
-            // Settle, then keep the engine busy well past the flip.
-            ("FASTCULL_DRIVE", "3000:zoom-out;4000:one2one;5000:zoom-out"),
+            // Settle, then keep the engine busy well past the flip — and
+            // the settle is now a FACT, not a clock (issue #73). The 3000 ms
+            // pin was 0.95-1.27 s ahead of the settle on the Windows debug
+            // runner and lost that race on this seat in 2 of 6 idle runs and
+            // 5 of 5 under load. Losing it is SILENT: every engine event
+            // then fires BEFORE the flip, the head-follow property this test
+            // exists for is never exercised, and both assertions below still
+            // pass at the shutter. The wait costs nothing when it is not
+            // needed (satisfied after 0 ms on all eleven CI artifacts
+            // measured, and the 1000 ms gaps behind it — the "keep the
+            // engine busy" cadence — are preserved by `schedule_from`).
+            // It needs the one-column mark: at 2900 ms the app is at ONE
+            // column in both profiles, the first zoom-out not yet fired.
+            (
+                "FASTCULL_DRIVE",
+                "2900:wait:load settled gen 0;3000:zoom-out;4000:one2one;5000:zoom-out",
+            ),
         ],
         &out,
+    );
+    assert!(
+        stderr.contains("wait:load settled gen 0 (satisfied"),
+        "the `wait:load settled gen 0` step never fired — the engine steps \
+         were timed, not gated:\n{stderr}"
+    );
+    // And the same fact as an ORDERING, so the gate survives a later
+    // re-time: the settle's own line must sit before the first engine step's
+    // echo. Without it the `(satisfied` assertion above proves only that a
+    // wait ran, and a script edit could put the zoom-out back in front of
+    // the flip with nothing going red (the idiom is the export-dialog wheel
+    // test's `settled_at < first_wheel`).
+    let settled_at = stderr.find("load settled gen 0").unwrap_or_else(|| {
+        panic!("the view never settled, so no engine event fired after the flip:\n{stderr}")
+    });
+    let first_engine_step = stderr
+        .find("drive: zoom-out")
+        .unwrap_or_else(|| panic!("the first zoom-out never ran:\n{stderr}"));
+    assert!(
+        settled_at < first_engine_step,
+        "the load settled AFTER the first engine step — every event this \
+         test drives fired before the flip, so the head-follow rule was \
+         never re-applied and the assertions below prove nothing:\n{stderr}"
     );
     let status = stderr
         .lines()
@@ -1286,16 +1358,23 @@ fn panel_toggle_at_one_to_one_keeps_the_photo() {
         &["--start-11", dir.to_str().unwrap()],
         &[
             ("FASTCULL_TRACE", "1"),
-            // Let the metadata stream SETTLE before driving, then pin
-            // with `home` (Windows CI 2026-07-27: six same-timestamp
-            // fixtures re-sort as EXIF lands — keyed files sort before
-            // keyless — and a right at 250 ms rode a transient order,
-            // landing the cursor one frame off; the #20 badge traces
-            // exposed the churn). That churn is what issue #25 fixed —
-            // the view now holds filename order until the load finishes —
-            // but the settle-then-pin schedule stays: it makes the step
-            // deterministic regardless, and `home` touches the cursor on
-            // the settled view.
+            // TIMED, not gated, and deliberately so (issue #73). This
+            // schedule used to call itself "settle-then-pin"; it never was.
+            // On the Windows debug runner the load settles at 4.7-6.3 s
+            // while `home` fires at 1.5-3.1 s, so every step here runs on a
+            // still-loading view — and that is harmless, because this
+            // fixture CANNOT re-sort: six copies of one file carry one
+            // capture key, and `filter.rs`'s comparator breaks a
+            // capture-time tie on the filename, so a1..a6 sort identically
+            // before and after the settle. A `wait:load settled gen 0` here
+            // would buy no ordering and cost the measured +3.2 to +4.9 s of
+            // tail (controlled A/B: +3.8 s of script bought +3.9 s of
+            // shutter) out of the shutter's 60 s readiness cap — the same
+            // budget whose exhaustion is the sibling resize test's only
+            // recorded failure mechanism. The historical churn this comment
+            // used to blame (Windows CI 2026-07-27: keyed files sorting
+            // before keyless mid-load) was fixed at the source by issue #25;
+            // the view now holds filename order until the load finishes.
             (
                 "FASTCULL_DRIVE",
                 "1500:home;1650:right;1800:right;1950:right;2100:right;2400:iptc;2700:iptc",
@@ -1358,8 +1437,17 @@ fn window_resize_keeps_the_photo() {
         &["--start-11", dir.to_str().unwrap()],
         &[
             ("FASTCULL_TRACE", "1"),
-            // Settle-then-pin, same rationale as the panel-toggle test
-            // (the load-transient sort race; see that test's comment).
+            // TIMED, not gated, same reasoning as the panel-toggle test and
+            // for the same fixture: six copies of one file cannot re-sort
+            // (see that test's comment), so a `wait:load settled gen 0`
+            // would buy no ordering — and it would cost it here out of the
+            // one budget this test is known to lose. Measured on the
+            // Windows debug runner the gate is +3.7 to +4.8 s of tail
+            // against 18.6-23.6 s of remaining readiness headroom; the
+            // shutter's 60 s cap is this test's ONLY recorded failure
+            // mechanism (four refusals, and twice it took three tests down
+            // with it). The cap's own defect — a texture budget set by
+            // script length — is a separate issue.
             // The two resizes sit 4 s apart: a stalled CI event loop
             // fires overdue timers BUNCHED, and back-to-back resizes
             // between two refreshes are a net geometry no-op — the
@@ -1388,10 +1476,29 @@ fn window_resize_keeps_the_photo() {
         "window resize misread as scrolling — the cursor was claimed:\n{stderr}"
     );
     // The guard must actually have run (validator: without this the test
-    // goes vacuously green if the resize stops dislodging the cursor).
+    // goes vacuously green if the resize stops dislodging the cursor), and
+    // it is POSITIONAL (issue #73): `relayout re-anchor` is not the resize's
+    // private word. At one column the load settle reaches
+    // `claim_cursor_at_loupe` as a view mutation and can emit the identical
+    // string with no resize anywhere in the script — QE watched it do so
+    // (`relayout re-anchor: cursor kept at pos 0, scroll 794 -> 0`, at the
+    // settle's own millisecond). An order-blind `contains` would take that
+    // for the resize. What keeps it honest today is the fixture — six
+    // copies of one file cannot re-sort, so the settle leaves the cursor's
+    // cell wholly visible and the re-anchor arm never fires — and a fixture
+    // is not a property. Read the ordering instead, the way the
+    // export-dialog wheel test reads its settle.
+    let resized_at = stderr
+        .find("drive: resize:1000x700")
+        .unwrap_or_else(|| panic!("the resize under test never ran:\n{stderr}"));
+    let reanchored_at = stderr.find("relayout re-anchor").unwrap_or_else(|| {
+        panic!("the relayout path never fired — the resize wasn't exercised:\n{stderr}")
+    });
     assert!(
-        stderr.contains("relayout re-anchor"),
-        "the relayout path never fired — the resize wasn't exercised:\n{stderr}"
+        resized_at < reanchored_at,
+        "the only `relayout re-anchor` in this run happened BEFORE the \
+         resize under test — something else moved the strip and the guard \
+         would have taken it for the resize:\n{stderr}"
     );
     let last_idx = stderr
         .lines()
@@ -3534,12 +3641,44 @@ fn panel_close_from_the_menu_at_one_to_one_keeps_the_keyboard() {
         &[
             ("FASTCULL_TRACE", "1"),
             (
+                // Gated, not timed (issue #73), for the reason the eight
+                // other focus-family scripts already record: the IPTC rows
+                // are REBUILT when the metadata lands, and a rebuild
+                // arriving after the K is indistinguishable from the blur
+                // this test measures. Free — the one-file fixture settles at
+                // 33 ms on the Linux release runner (the only runner that
+                // runs this test: `menu_clicks_are_calibrated()` is
+                // `!cfg!(windows)`), so the wait is satisfied after 0 ms and
+                // the menu-click choreography behind it keeps every authored
+                // gap. The margin against `harness::install` is small on
+                // that runner and is recorded in ui-grid.md beside the
+                // conversion; if the settle ever beat install the wait could
+                // never be satisfied, and the failure would be loud
+                // (`wait never satisfied`, exit 1), not silent.
                 "FASTCULL_DRIVE",
-                "3500:key:k;4000:dump.k;4400:click.72,19;4800:click.128,125;\
+                "3400:wait:load settled gen 0;3500:key:k;4000:dump.k;\
+                 4400:click.72,19;4800:click.128,125;\
                  5200:dump.closed;5400:key:g;5800:dump.end",
             ),
         ],
         &out,
+    );
+    assert!(
+        stderr.contains("wait:load settled gen 0 (satisfied"),
+        "the `wait:load settled gen 0` step never fired — the K was timed \
+         against the rows rebuild, not gated on it:\n{stderr}"
+    );
+    // The same fact as an ORDERING, so the gate survives a later re-time.
+    let settled_at = stderr.find("load settled gen 0").unwrap_or_else(|| {
+        panic!("the view never settled, so a rows rebuild could still follow the K:\n{stderr}")
+    });
+    let first_key = stderr
+        .find("drive: key:k")
+        .unwrap_or_else(|| panic!("the `key:k` step never ran:\n{stderr}"));
+    assert!(
+        settled_at < first_key,
+        "the load settled after the K — a rows rebuild landing on top of it \
+         reads exactly like the blur this test measures:\n{stderr}"
     );
     // The K really landed in the field (anti-vacuity: panel open and the
     // keyboard NOT on the main scope — the dangerous state is armed).
