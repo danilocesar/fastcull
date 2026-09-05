@@ -21,9 +21,12 @@ Measured 2026-09-05: two shots in 26 of 26 local traces on the 8-core
 laptop; one shot in 0 of 249 CI traces (four runs, Windows debug, Windows
 release, Linux release). A late settle photographed too early on CI can be
 photographed correctly by the second local shot, so a local green does not
-prove what a CI green proves. Every test-side reader takes the FIRST
-`status at shutter` line (`find_map` in screenshot.rs), which is why nothing
-has failed; nothing asserts the count.
+prove what a CI green proves. Every test-side reader takes the LAST
+`status at shutter` line (`.lines().rev().find_map` in screenshot.rs;
+corrected 2026-09-05 by the senior developer — this brief and issue #77
+first said FIRST), so a local green could be a green of the SECOND capture,
+taken half a second after the state CI photographs; nothing asserts the
+count.
 
 **#76.** Ten Windows CI jobs (runs 58–71, 2026-07-27 and 2026-08-01) failed
 with `full-res texture never adopted for the 1:1 frame within 60 s`. The
@@ -190,3 +193,20 @@ Skipped: test and CI plumbing, nothing user-visible (workflow step 2).
   user's order); persona gate skipped (plumbing); #73's readiness-budget
   design stays rejected; the earlier stopped run left no commits (its
   branch `debug-fast` was deleted) and its PR draft is not evidence.
+- 2026-09-05, senior developer (duty 1, agreed by the Manager): the spec
+  change in `ui-grid.md`, `raw-pipeline.md` and `01-architecture.md`
+  (list: `.qe-scratch/pipeline-001/SPEC-CHANGE.md`); OQ1 settled — the two
+  release-only gates that rested on the debug decode are lifted, the F2
+  warm-landing pin and the M1 thumb-rung pin stay release-only for reasons
+  that survive; no ADR (a reversible profile line is not architecture);
+  no `docs/` page; `milestones.md` untouched (it does not quote #33).
+- 2026-09-05, Manager, on the senior developer's Q1: the Windows job's
+  90-minute cap is left alone for the PR's first cold run; the developer
+  raises it to 120 in the same PR only if that run finishes over about
+  80 minutes or is cancelled (CI bookkeeping, M3).
+- 2026-09-05, Manager, on Q2: the brief's context paragraph corrected
+  (FIRST → LAST); issue #77's text is corrected in its closing comment.
+- 2026-09-05, Manager, on Q3: every run on the PR is cold (rust-cache
+  saves on main only), so the "cached job durations" placeholder in
+  `01-architecture.md` is filled by the Manager in a later spec commit,
+  once a cached main run exists — not a PR of its own.

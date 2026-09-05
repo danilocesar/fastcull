@@ -121,8 +121,11 @@ build the 2-busy case measured red (~411 ms), and green again (~313 ms)
 after cooldown. A red under load is a measurement, not a verdict —
 re-run idle before treating it as a failing change. The CI step is advisory-only (`continue-on-error`, user decision
 2026-07-25): shared virtualized runners cannot meaningfully gate
-wall-clock budgets. Skipped in debug builds where decode timing is
-meaningless. Numbers for humans: criterion benches in
+wall-clock budgets. Skipped in debug builds, where a wall clock is not
+the shipped number: since 2026-09-05 dependencies compile optimised in the
+dev profile too, but the workspace crates' own code — the rotate kernel,
+the pipeline, the kitchen fills — stays at opt-level 0 (see "Build
+profiles" below; corrected 2026-09-05, senior-developer plan). Numbers for humans: criterion benches in
 `crates/fastcull-core/benches/hot_path.rs` (`cargo bench -p fastcull-core`).
 
 Thresholds were set ~2× looser than the decode-bound baselines to absorb
@@ -194,6 +197,80 @@ clock-free in
 which runs in every debug workspace test run including CI's, except that its
 no-read half is `cfg(unix)`-gated and so compiles out on the Windows job,
 where that claim stays review-only.
+
+## Build profiles (user decision 2026-09-05, issue #76)
+
+The workspace `Cargo.toml` sets `[profile.dev.package."*"] opt-level = 2`:
+every crate that is NOT a workspace member compiles optimised in the dev
+profile — and therefore in `cargo test`, whose `test` profile inherits
+`dev` — while `fastcull-core`, `fastcull-cli` and `fastcull-app` keep the
+default dev `opt-level` 0 and stay debuggable. Nothing else in the profile
+moves: `debug-assertions` and `overflow-checks` stay on for every crate
+(the `cfg!(debug_assertions)` gates in the tests still fire: the #73
+discussion ran the two then release-only tests on a binary built with the
+line and both still printed their debug skip), and the release profile is
+untouched. The user's words: "dependencies are not required to be compile
+at debug mode. most of the time that's useless."
+
+Why: the app's hot pixel work is in dependencies — `zune-jpeg` decodes the
+embedded JPEGs (ADR 0001), `fast_image_resize` scales them, Slint's
+software renderer and `jpeg-encoder` produce a `--screenshot` frame — and
+at opt-level 0 a debug build decoded the A1's 8640×5760 full-res JPEG in
+26-40 s on the Windows CI runner and 31 s on the development seat
+(rotated; 13 s landscape), against the screenshot shutter's 60 s readiness
+cap: ten Windows CI jobs failed that way on 2026-07-27 and 2026-08-01
+(issues #33 and #76; `modules/ui-grid.md`, "Debug facilities"). Same
+source, one profile line apart, measured on the development seat on
+2026-09-05 (senior developer, #73 discussion): `decode_oriented` on
+`A1_full_lossless_compressed.ARW` 31,020 ms → 1,720 ms rotated (13,000 →
+819 ms landscape; release 373 ms); `window_resize_keeps_the_photo` under
+the load recipe that reproduces the CI refusals — the test pinned to two
+cores with `taskset -c 0,1` against six busy-loop spinners pinned to the
+same two cores — 0 of 4 green → 4 of 4 green, readiness 4.1-10.1 s;
+unloaded, all six full-res rungs of that script decoded in under 4 s where
+the stock profile managed three in 17.4-17.7 s. In a `--start-11` run over
+the three sample RAWs (the center-anchor script, idle seat, plan-time
+measurement 2026-09-05) the first full-res rung landed 14.2 s after
+launch without the line and 1.24-1.37 s with it (three runs), the third
+rung at 14.8 s against 2.43-2.50 s, and the sharp 1:1 render at 16.5 s
+against 2.7 s — the #76 commit re-measures the same script and records
+its own before/after beside these. Numbers are the seat's and the day's.
+
+What it costs, and what was accepted: a cold debug build compiles every
+dependency optimised once — the screenshot test binary, cold, on the
+development seat on 2026-09-05: 2 m 17 s stock against 10 m 43 s with the
+line (4.7×; idle apart from a few short test runs) — and CI's `rust-cache`
+pays it once per toolchain change (its `save-if: main` rule means a pull
+request after a rustc release pays it on every push until main
+repopulates the cache; the PR that landed the line records its cold and
+its cached job durations, to be filled). Incremental builds of workspace
+code are unaffected. A measurement trap, recorded because it bit the
+plan-time A/B (2026-09-05): two profile variants built into ONE target
+directory get distinct test binaries but share the uplifted
+`debug/fastcull-app` that `CARGO_BIN_EXE_fastcull-app` points at, so the
+last build wins and a "stock" test binary spawns the optimised app — an
+A/B across the profile line needs two target directories, or a rebuild
+before every measurement. Not architecture: no interface, dependency,
+thread or data flow changes, and the line is reversible by deletion — so
+no ADR; ADR 0002's "one toolchain" consequence stands. Do not extend it:
+no per-crate opt-level tweaks and no un-optimising a dependency for
+debuggability without asking the user (senior-developer standing
+directive, 2026-09-05).
+
+What it changed in the test suite (`modules/ui-grid.md` for each): the
+debug-profile margin under the 60 s readiness cap; the two release-only
+gates that rested on the debug decode
+(`transit_to_a_cold_frame_keeps_the_overlay_at_the_carried_center`,
+`a_decode_failed_cursor_drops_to_fit_instead_of_masking_the_badge`) are
+lifted, while the timing pins that bind in release by the perf-budgets
+precedent keep their gates; the Windows debug pass, which runs the whole
+screenshot suite in this profile, stops waiting on the decode (estimated
+~275 s across its `--start-11` scripts; the PR records the measured job
+durations). The two-shot shutter of issue #77 was fixed FIRST, in its own
+commit, because its cleanest reproduction is a stock-profile capture that
+overruns the poll's 250 ms period: with the line the capture is shorter,
+and the reproduction keeps only the scripts whose window is large enough
+to overrun it (`modules/ui-grid.md`, "Debug facilities").
 
 ## Shutdown policy (recorded 2026-07-25)
 
