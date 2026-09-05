@@ -192,28 +192,57 @@ fn anchor_the_scroll(win: &MainWindow, st: &mut AppState, pass: &mut Pass) {
     // bottom (growing at End must not strand the viewport mid-list),
     // and keep the cursor visible if it was. The N=1 strip has its own
     // re-anchor in the loupe block below (issue #16).
-    // The load-settled re-sort (issue #25) at MULTI-COLUMN zoom: content,
-    // not geometry, so the relayout branch below cannot see it. Put the
-    // cursor's cell back on screen and let the scroll follow it.
-    // ...but only for a cursor the user was actually looking at. Wheel and
+    // The load-settled re-sort (issue #25): the MARK is the session's fact
+    // and is emitted at every zoom (issue #73). `metadata_complete()` is
+    // `thumbs_done >= labels.len()` — it knows nothing about the layout — so
+    // `wait:load settled gen N` has to mean the same thing in the loupe as in
+    // the grid, or a `--start-11`/`--start-loupe` script has nothing to gate
+    // its first load-dependent step on and burns the 30 s wait cap finding
+    // out. What is CONTRACTUAL is the prefix `load settled gen {gen}: cursor
+    // pos {pos}, `; the tail after it differs per zoom and must not contain
+    // any other registered wait substring (in particular not `re-anchor`).
+    // The scroll CORRECTION stays multi-column, for the two reasons it always
+    // had. It is content, not geometry, so the relayout branch below cannot
+    // see it: put the cursor's cell back on screen and let the scroll follow
+    // it — but only for a cursor the user was actually looking at. Wheel and
     // scrollbar browsing do NOT claim the cursor, and the cursor contract
     // says an off-screen cursor stays off-screen until the next arrow key —
     // so yanking the viewport back would be the very "it moved with no
     // input" defect this change exists to remove, and would regress a
     // browsing user against the old behaviour (validator FAIL, 2026-07-31).
-    // Same guard the relayout branch below already applies.
-    if pass.load_settled && layout.columns > 1 {
+    // Same guard the relayout branch below already applies. And at N=1 the
+    // strip re-anchors through `claim_cursor_at_loupe` below — a second
+    // writer of `vp_y` in this same pass, whose arm depends on the very
+    // `scroll_y` this block would have changed — while
+    // `st.grid.last_cursor_visible`, the flag `scroll_after_resort` reads, is
+    // recorded at this function's footer AHEAD of that block and is therefore
+    // one pass stale at one column. Reporting a correction there would be
+    // false twice over: none is applied, and the input would be a lie.
+    if pass.load_settled {
         let cur_pos = st.cursor_pos().unwrap_or(0);
         // The guard itself lives in core (rule 5) and is unit-tested there:
         // grid::scroll_after_resort. It shipped into review MISSING from the
         // app-level version, so it does not belong in the app.
-        let corrected = grid::scroll_after_resort(
-            layout,
-            cur_pos,
-            scroll_y,
-            viewport_h,
-            st.grid.last_cursor_visible,
-        );
+        let corrected = (layout.columns > 1).then(|| {
+            grid::scroll_after_resort(
+                layout,
+                cur_pos,
+                scroll_y,
+                viewport_h,
+                st.grid.last_cursor_visible,
+            )
+        });
+        let tail = match corrected {
+            Some(corrected) => format!(
+                "scroll {scroll_y:.0} -> {corrected:.0}  (cursor was {})",
+                if st.grid.last_cursor_visible {
+                    "visible"
+                } else {
+                    "off-screen; offset kept"
+                }
+            ),
+            None => format!("scroll {scroll_y:.0} kept (one column; the loupe block owns it)"),
+        };
         // Unconditional marker: a test must be able to see that the flip
         // HAPPENED, not only that it moved something (validator: the old
         // trace fired solely inside the >=0.5px branch, so a run where the
@@ -225,18 +254,19 @@ fn anchor_the_scroll(win: &MainWindow, st: &mut AppState, pass: &mut Pass) {
         // matches the old session's line (the #13 limitation, recorded in
         // ui-grid.md). `session-gen` counts folder opens, so
         // `wait:load settled gen 2` names one of them.
+        // ONE emit site, and it stays AHEAD of the two window writes below:
+        // `vp_y` is bound to `on_viewport_changed`, which calls `refresh`, so
+        // a nested pass's marks must not be able to land in front of this
+        // line — one test reads it by byte offset against another mark.
         trace_mark(&format!(
-            "load settled gen {}: cursor pos {cur_pos}, scroll {scroll_y:.0} -> {corrected:.0}  (cursor was {})",
-            win.get_session_gen(),
-            if st.grid.last_cursor_visible {
-                "visible"
-            } else {
-                "off-screen; offset kept"
-            }
+            "load settled gen {}: cursor pos {cur_pos}, {tail}",
+            win.get_session_gen()
         ));
-        win.set_virtual_height(layout.total_height);
-        win.set_vp_y(-corrected);
-        scroll_y = corrected;
+        if let Some(corrected) = corrected {
+            win.set_virtual_height(layout.total_height);
+            win.set_vp_y(-corrected);
+            scroll_y = corrected;
+        }
     }
     if pass.relayout && layout.columns > 1 && view_len > 0 && viewport_h > 0.0 {
         if let Some((old_width, old_viewport_h)) = pass.prev_geom {
@@ -282,7 +312,9 @@ fn anchor_the_scroll(win: &MainWindow, st: &mut AppState, pass: &mut Pass) {
     // NOTE: this is after both multi-column writes to `vp_y`, but BEFORE the
     // loupe block's own write and follow-scroll claim — so on the N=1 path
     // the recorded value is one pass stale. Harmless only because the
-    // consumer is gated on `columns > 1`; revisit if that gate is relaxed.
+    // CONSUMER — `grid::scroll_after_resort`, not the settle MARK, which
+    // since issue #73 is emitted at every zoom — is gated on `columns > 1`;
+    // revisit if that gate is relaxed.
     if pass.can_anchor {
         st.grid.last_cursor_visible = st
             .cursor_pos()

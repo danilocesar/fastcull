@@ -2678,9 +2678,10 @@ the user confirms, all cheap to change):**
       loaded runner outruns it (that test's settle landed at 1.5 s on the
       Windows debug runner against a 5 s `home`, while the six-copy
       fixtures elsewhere in the suite settle at 4.7-5.7 s there). The
-      gate is available only above one column — the one-column strip re-anchors through its
-      own block and emits no settle — so a `--start-11`/`--start-loupe`
-      script keeps the slack and says so. Renaming fixtures does not
+      gate is available at EVERY zoom since issue #73 — the one-column
+      strip still re-anchors through its own block, but the MARK is the
+      session's fact and is emitted there too, so a `--start-11`/
+      `--start-loupe` script gates like any other. Renaming fixtures does not
       help — a partially keyed view sorts the keyed ones first. And the
       settle gates the KEY, not the picture: a script whose assertion
       reads rendered pixels needs `wait:thumb landed idx N` on top of it
@@ -3071,45 +3072,175 @@ the user confirms, all cheap to change):**
       shutter's 1.5 s floor, i.e. the clock; the waits keep the shots off
       placeholders, which is what they were added for, and claim nothing
       about the re-cook.
-      **Deferred, with the measurements that decided it:** a one-column
-      `load settled` mark in the presenter, and the six settle-then-pin
-      scripts that would need it — `selection_wash_never_reaches_the_
-      loupe`, `window_resize_keeps_the_photo`,
-      `panel_toggle_at_one_to_one_keeps_the_photo`, `loupe_survives_a_
-      vertical_resize_with_one_whole_frame`, `engine_events_after_
-      loading_never_move_an_untouched_cursor` and `panel_close_from_the_
-      menu_at_one_to_one_keeps_the_keyboard`. Order-neutrality is half a
-      reason and it covers half the list (corrected 2026-09-04,
-      validator F1 — the first wording claimed it for all six): the two
-      resize/toggle scripts place six copies of
-      `A1_full_compressed.ARW` and the focus script places one file, so
-      those three fixtures carry ONE capture key and cannot re-sort —
-      there the gate would protect nothing. The other three have
-      DISTINCT capture times and can re-sort: the wash and the vertical
-      resize open a/b/c or the three fetched references, and
-      `engine_events…` is ABOUT the flip. What defers those is cost
-      against measured margin. Cost, on the Windows debug runner: the
-      six-copy settle lands at 4.7-5.7 s (`thumb bytes idx 5` at
-      4717 ms in `panel-cursor.trace.log`, `thumb bytes idx 4` at
-      5732 ms in `resize-cursor.trace.log`), 3.2-4.2 s behind the
-      1500 ms pin a gate would sit in front of, so each script's tail
-      moves that much further into the shutter's 60 s readiness cap —
-      and `window_resize_keeps_the_photo` is the KNOWN INTERMITTENT
-      whose recorded mechanism is exactly that cap. Margin, for the
-      three that can re-sort: the three references sort the same way by
-      NAME as by capture time (15:29:13 compressed, 15:29:40 lossless-
-      compressed, 15:29:55 uncompressed), so in the two that open them
-      under those names the re-sort moves nothing today — a coincidence,
-      recorded here and in `selection_wash_tints_the_grid_and_status_
-      counts`, not a guarantee; and `engine_events…`, the one script
-      that inverts the order on purpose, settles at 1884 ms
-      (`thumb bytes idx 1`) against its first drive step at 3004 ms in
-      `cursor-order.trace.log` — 1.1 s — and asserts the flip it depends
-      on (`2 thumbs loaded` and `(2/2)`), so a run that lost that race
-      fails loudly instead of measuring the wrong cell. Deferred, not
-      done: those scripts keep their clocks and their existing comments,
-      and the day one of those coincidences breaks is the day the
-      one-column mark is worth building.
+      **Done, and per script (issue #73, 2026-09-05)** — this entry
+      replaces the deferral that stood here, and one sentence of that
+      deferral was wrong; it is corrected below. The presenter now emits
+      the settle MARK at every zoom (`anchor_the_scroll`): the edge is the
+      session's, not the layout's, so only the SCROLL CORRECTION stays
+      multi-column, for the two reasons it always had (at N=1 the strip
+      re-anchors through `claim_cursor_at_loupe`, a second writer of `vp_y`
+      in the same pass, and `last_cursor_visible` is one pass stale there).
+      One emit site; the multi-column sentence is byte-identical to the one
+      the CI artifacts already carry, double space included; the
+      `geometry at shutter` line of all seven one-column scripts is
+      unchanged before and after, every line of it. Before the change,
+      `--start-11` plus `wait:load settled gen 0` burned the full 30 s cap
+      and exited 1; after it, the same run is `satisfied after 701 ms`.
+      THREE scripts were converted, and the motive is per script and is
+      NOT the ordering the issue led with. Ordering cannot bite any of the
+      six: `filter.rs` breaks a capture-time tie on the filename and
+      `exif.rs`'s `sort_key` has no filename term, so the six-copy
+      fixtures, the single-file fixture, the three fetched references and
+      `place_three_distinct` (15:29:13 / 15:29:40 / 15:29:55) all sort
+      identically by name and by capture time — the re-sort is a
+      mathematical no-op on five of them, and the sixth inverts on purpose
+      but has no positional key. What is live is VACUITY: a run that
+      passes having measured nothing.
+      `engine_events_after_loading_never_move_an_untouched_cursor` gates
+      `2900:wait:load settled gen 0` in front of its first engine step. Its
+      property is "engine events AFTER the settle never move an untouched
+      cursor"; a settle landing after `5000:zoom-out` leaves that property
+      unexercised while BOTH its anti-vacuity assertions (`2 thumbs
+      loaded`, `a_late.ARW (2/2)`) still pass at the shutter. Reproduced
+      by the QE gate of 2026-09-05 on an 8-core seat under load (the test
+      pinned to two cores against six spinners and a hashing churner): on
+      main the settle landed AFTER the first drive step in 10 of 10 runs —
+      settle 10115-15701 ms against `drive: zoom-out` at ~3000 ms — and
+      the test was GREEN all ten, 0 of the 10 emitting any settle mark at
+      all. Idle on main the same settle is 1164-1295 ms, so the race is
+      LOAD-dependent, which is why a quiet runner never showed it. On this
+      branch the gate held 10 of 10, dwelling 2.8-5.3 s of the 30 s cap.
+      That corrects the sentence this ledger used to carry — it said
+      the test "asserts the flip it depends on … so a run that lost that
+      race fails loudly instead of measuring the wrong cell". It fails
+      loudly for the WRONG-CELL case and not for the vacuity case, which
+      is exactly why it is converted. Cost: nil — the settle is at
+      1788-2061 ms on the Windows debug runner against a 2900 ms step, so
+      the wait is `satisfied after 0 ms` on every artifact measured and on
+      this seat, and `schedule_from` preserves the 1000 ms "keep the
+      engine busy" gaps behind it.
+      `loupe_survives_a_vertical_resize_with_one_whole_frame` gates
+      `1400:wait:load settled gen 0` in front of `1500:home`. Same motive:
+      at one column a settle reaches `claim_cursor_at_loupe` as a view
+      mutation, so a settle landing after the `3000:resize` fires a second
+      `relayout re-anchor` that REPAIRS the state under test — the hazard
+      this test's own comment already records for its About pair ("a
+      panel-toggle pair was tried and made this test vacuous — the mutant
+      passed"). Worst measured margin between the settle and that resize:
+      146 ms (settle 2854 ms, PR#71 Windows debug artifact). The QE gate
+      of 2026-09-05 reproduced the hazard itself under the same load: on
+      main the settle landed after `1500:home` AND after the `3000:resize`
+      under test in 10 of 10 runs, GREEN every time; the worst IDLE margin
+      ahead of `home` was 61 ms (settle 1439 ms against the 1500 ms step).
+      On this branch the gate held 10 of 10, dwelling 5.8-9.8 s, with the
+      authored 1500 ms `home`-to-`resize` gap preserved to ±2 ms in all
+      ten. Cost: +0.5 to +1.5 s of tail on the Windows debug runner
+      against 54 s of headroom, 0 on both release runners.
+      `panel_close_from_the_menu_at_one_to_one_keeps_the_keyboard` gates
+      `3400:wait:load settled gen 0` in front of `3500:key:k`, for the
+      motive its eight focus-family siblings already record: the IPTC rows
+      are REBUILT when the metadata lands, and a rebuild after the K is
+      indistinguishable from the blur the test measures. Free, and free on
+      the only runner that runs it — `menu_clicks_are_calibrated()` is
+      `!cfg!(windows)` and no Windows artifact contains a `focus-d1-11`
+      trace. One number is worth recording beside it, because this is the
+      smallest fixture in the suite and the synthetic-session hazard above
+      is the shape of the failure it would take. On the Linux release
+      runner its single file settles 29 ms after the `window geometry`
+      mark of the refresh that immediately precedes `harness::install`
+      (geometry [4], `thumb bytes idx 0` [33], both Linux artifacts on
+      disk); 984 ms of margin in debug on this seat, and in a release run
+      here the two round to the same millisecond with the wait still
+      `satisfied after 0 ms`. That last case is the one worth
+      understanding, because it shows the margin is an observable of a
+      STRUCTURAL fact rather than a race won: a folder session starts at
+      `thumbs_done: 0` and is incremented only in the pump, which runs on
+      the event loop — i.e. after `install` — so a folder settle cannot
+      precede registration however fast the disk is. Only a `--synthetic`
+      session, whose state is constructed with `thumbs_done: n`, can — and
+      only on a platform where the first laid-out refresh runs ahead of
+      install, which is the platform-dependence recorded above. And if it
+      ever did lose, the failure would be LOUD — `wait never satisfied`,
+      exit 1 — not silent.
+      Each of the three carries the `(satisfied` echo assertion AND a
+      permanent byte-offset ORDERING assertion (`stderr.find("load settled
+      gen 0") < stderr.find("drive: …")`, the idiom the export-dialog
+      wheel test already uses), because the echo alone proves a wait ran,
+      not that it ran in front of the key — a later re-time could take the
+      gate out with nothing going red. Verified by mutation: with the
+      gated step hand-shifted ahead of the settle each ordering assertion
+      goes red; with the wait step deleted each `(satisfied` assertion
+      goes red; with the token misspelled the run burns the 30 s cap and
+      exits 1.
+      THREE stay on the clock, deliberately.
+      `panel_toggle_at_one_to_one_keeps_the_photo` and
+      `window_resize_keeps_the_photo` place six copies of
+      `A1_full_compressed.ARW`: one capture key, so a gate protects
+      nothing, and it would be paid out of the one budget those tests are
+      known to lose. Measured cost on the Windows debug runner: +3.2 to
+      +4.9 s of tail, and the tail translates 1:1 — a controlled A/B on
+      the real `resize-cursor` script against the same script shifted
+      +3.80 s moved the shutter +3.895 s (n=3, ratio 1.03).
+      `window_resize_keeps_the_photo` has SIX recorded failing jobs, all
+      Windows, all 2026-07-27, and they split into TWO mechanisms: FOUR
+      are the shutter's 60 s readiness cap (runs 58, 62, 65, 70 — twice it
+      took three tests down in one job) and TWO are `the relayout path
+      never fired — the resize wasn't exercised` (runs 60 and 71, bunched
+      resizes; run 60's trace reads `[1577] drive: resize:1000x700`
+      against `[1580] drive: resize:1440x900`). The cap is the DOMINANT
+      mechanism and the budget the tail is not spent out of; the second is
+      the very guard this change hardens, and the 4 s the schedule keeps
+      between its two resizes is what a bunching stall has to swallow
+      first. What was wrong there was the SCHEDULE'S NAME, not the
+      schedule: both comments claimed a settle they never waited for
+      ("Let the metadata stream SETTLE before driving"), while `home`
+      fires at 1.5-3.1 s against a 4.7-6.3 s settle. The comments now say
+      what is true — timed, order-neutral, and what the gate would cost.
+      `window_resize_keeps_the_photo`'s anti-vacuity guard is also
+      hardened in the same change: `relayout re-anchor` is not the
+      resize's private word, and QE watched a one-column SETTLE emit the
+      identical string with no resize in the script, so the order-blind
+      `contains` would have taken it for the resize. It is now positional
+      and reads the SUFFIX after the resize echo —
+      `stderr[find("drive: resize:1000x700")..].contains("relayout
+      re-anchor")` — not "the FIRST re-anchor came after the resize",
+      which a first-occurrence `find` pair would have asserted and which
+      is not the property: a re-anchor BEFORE the resize is somebody
+      else's, and what the guard has to see is one AFTER it. Verified by
+      mutation on 2026-09-05, direct-drive traces beside each test run.
+      Unmutated, the re-anchors are `[2501]` (the resize under test) and
+      `[6505]` (the 6500 restore). With an injected
+      `2200:resize:1200x700`, the injected resize takes the re-anchor at
+      `[2201]`, the resize under test at `[2501]` emits none, and the
+      restore emits one at `[6508]`: the suffix form is GREEN, the `find`
+      pair was RED and said "the only `relayout re-anchor` … happened
+      BEFORE the resize under test", which that trace contradicts. Dropping
+      the four `right` steps so the resize no longer dislodges the cursor
+      yields a trace with NO re-anchor at all — the vacuity the guard
+      exists for — and is RED under the suffix form, on its own message.
+      The suffix deliberately runs to the end of the trace, restore
+      included: the restore asks for the DEFAULT geometry, so it can only
+      re-anchor if the resize under test actually landed and moved the
+      layout, and the recorded bunched-resize failure (runs 60, 71) leaves
+      neither resize a re-anchor to emit.
+      The wash pair (`selection_wash_never_reaches_the_loupe`) keeps its
+      clock for a different reason, and it is this file's own rule: the
+      settle gates the KEY, not the picture. That test asserts on RENDERED
+      pixels — `region_variance > 100` and a blue-bias difference compared
+      ACROSS TWO PROCESSES — so it needs the landings, not the settle
+      alone; both shots are pinned today by the shutter's fixed 1.5 s
+      floor, which is a stable cross-process synchroniser, and a
+      settle-alone gate would swap it for a variable one inside the rung
+      ladder. The same experiment was tried on its GRID twin and rejected
+      (recorded in item 6 above and in that test's comment), and this test
+      has already gone red once on a rung difference (variance 99.2). If
+      it is ever gated it gates on the texture its samples read.
+      The shutter's own defect — a readiness budget set by script length,
+      11.8 s for the suite's longest script against 59.7 s for a 0.3 s one
+      over the same 50 MP frame — is real, is NOT what #73 was about, and
+      would not have saved any of the four recorded refusals (in every one
+      the stall had bunched the script to an end at 1.3-4.0 s). It has its
+      own issue.
 - [x] **No modal scrolls the grid behind it (issue #49)**: a wheel over
       any of the four scrims leaves the grid's `vpy` where it was, and all
       four are now driven. The two hand-rolled scrims (Copy Picks, Export
@@ -3247,14 +3378,52 @@ Documented because they ship in release builds (validator finding):
   adopted afterwards, `thumb landed idx N` is that mark, and the Windows
   debug runner's clip-badge trace puts its three landings 36, 75 and 110 ms
   behind the settle — so a shot whose claim is RENDERED content gates on the
-  landings, never on the settle alone. It is unobservable in a `--synthetic`
-  session: that settle fires inside the first refresh, BEFORE
-  `harness::install`, so a wait for it is never satisfied, burns the full 30 s
-  cap and ends the run — only folder sessions may wait on it. And at ONE
-  column there is no settle mark at all: the re-anchor it reports is the
-  multi-column one (the strip re-anchors through its own block, issue #16),
-  so a `--start-11` or `--start-loupe` script has nothing to wait for and
-  stays on the clock.
+  landings, never on the settle alone. Whether it is observable AT ALL in a
+  `--synthetic` session is PLATFORM-DEPENDENT and a script must not rely on it
+  either way: a synthetic state is constructed with `thumbs_done: n`, so it
+  settles inside the first laid-out refresh, and that refresh can fall on
+  either side of `harness::install`. Measured on Linux (QE 2026-09-05),
+  `--synthetic 4 --start-11` emits the settle at `[28]` and a wait on it IS
+  satisfied, install having run first; the Windows artifacts show the first
+  laid-out refresh possibly preceding install, and there the wait is never
+  satisfied, burns the full 30 s cap and ends the run. Only FOLDER sessions
+  may wait on the settle portably, and they may for a structural reason —
+  their `thumbs_done` starts at 0 and is incremented only in the pump, which
+  runs on the event loop, i.e. after install. And the mark
+  is ZOOM-INDEPENDENT but its sentence is not (issue #73): the edge it
+  reports — `metadata_complete()` false→true — has no layout term, so since
+  #73 it fires at ONE column too, on the same edge, in the same phase of the
+  same refresh pass, and a `--start-11`/`--start-loupe` script gates on it
+  like any other. That newly reachable gate has two EDGES a `--start-11`
+  author has to know, and both fail loudly rather than silently (QE
+  2026-09-05): a folder whose scan outlives WAIT_CAP never settles inside the
+  wait — 1000 files gave `wait never satisfied … (after 30 s)` and exit 1 —
+  and an EMPTY folder never settles at ANY zoom, because the settle needs
+  `can_anchor` and `can_anchor` needs `view_len > 0`, so that run burns the
+  same 30 s cap and exits 1 too.
+  What is CONTRACTUAL is the PREFIX `load settled gen {gen}: cursor pos
+  {pos}, ` — that is the whole substring a `wait:` registers, `observe()`
+  being a plain `label.contains(needle)`. The tail
+  after it differs by zoom and is free to: above one column it reports the
+  scroll correction (`scroll X -> Y  (cursor was …)`), at one column it
+  reports `scroll X kept (one column; the loupe block owns it)`, because
+  there NO correction is applied — the strip re-anchors through
+  `claim_cursor_at_loupe` instead — and the `last_cursor_visible` a
+  correction would be computed from is one pass stale there, so reporting
+  one would be false twice over. Two rules bind whoever next touches the
+  tail: it must not contain any other registered wait substring (it
+  deliberately avoids `re-anchor`, which is a substring of both `grid
+  relayout re-anchor:` and `relayout re-anchor: cursor kept at pos`), and
+  the mark carries the same no-terminator hazard as `thumb landed idx 1` /
+  `idx 10` — `wait:load settled gen 1` is a substring of `load settled gen
+  10:`, so an author who ever needs gen ≥ 10 writes the trailing colon into
+  the wait (`wait:load settled gen 1:`), which the parser permits because
+  only the FIRST colon separates MS from ACTION. Since `open_folder_at`
+  resets the zoom, gen ≥ 1 always settles multi-column; only gen 0 of a
+  loupe launch can settle at one column. Counted over the 579 CI traces on
+  disk (Windows debug, Windows release, Linux release), no generation is
+  ever emitted twice in one run: 362 (run, generation) pairs, every one of
+  them exactly once.
   `sidecar writer closed gen N: K pending flushed` (2026-09-03) is traced by
   a session SWAP once the old session's writer has drained: N is the CLOSED
   session's generation (read before the bump) and K how many writes were
