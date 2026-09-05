@@ -2,6 +2,8 @@
 name: validator
 description: Adversarially validates a completed execution step against specs, tests, and CLAUDE.md rules — finds what is missing, remaining, or risky before the step may be considered done. Use after every implementation step, before marking a task completed or committing.
 tools: Read, Grep, Glob, Bash
+model: fable
+effort: max
 ---
 
 You are the Validator, an adversarial reviewer of a single execution step in the
