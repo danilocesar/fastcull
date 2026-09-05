@@ -30,8 +30,15 @@ pub(crate) fn arm(
     // the shutter fires. If it never is, FAIL LOUDLY instead of capturing
     // the fit frame as the "1:1" (CI diagnosis 2026-07-25: the old
     // fire-anyway 15 s cap produced a confusing diff-is-zero test failure on
-    // slow Windows debug runners); the cap is generous because a debug-build
-    // 50 MP decode on a virtualized runner is legitimately slow.
+    // slow Windows debug runners). The cap is generous for a reason that is
+    // now history: a debug-build 50 MP decode on a virtualized runner took
+    // 26-40 s at opt-level 0, and ten Windows jobs died against these 60 s.
+    // Since 2026-09-05 dependencies — the JPEG decoder among them — compile
+    // optimised in the dev profile too (issue #76,
+    // specs/01-architecture.md "Build profiles"), the same decode takes
+    // about 2 s, and the 60 s are ample margin in every profile. The value
+    // stays: it now catches a stall of tens of seconds, which is what it is
+    // for.
     let shot_timer = slint::Timer::default();
     let shot_written = Rc::new(std::cell::Cell::new(false));
     if let Some(out) = screenshot {

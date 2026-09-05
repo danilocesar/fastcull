@@ -2189,15 +2189,35 @@ the user confirms, all cheap to change):**
       order, which a congested debug kitchen — workspace code, still at
       opt-level 0 — can legitimately collapse into a single drain (its
       own comment says so). Debug runs of both tests on the development
-      seat before the lift landed: N of N idle and N of N under the #76
-      load recipe (numbers to be filled by the #76 commit, which is where
-      the skips go), and the PR's Windows debug pass is their first CI
-      run in that profile. The debug profile ALSO keeps its no-drop
+      seat before the lift landed (developer 2026-09-05): the
+      failed-cursor gate 10 of 10 idle and 3 of 3 under the #76 load
+      recipe; the M1 test 10 of 10 idle and 0 of 3 under the recipe AS
+      WRITTEN — its recovery pin was a fixed clock (`dump.landed` at
+      26.5 s, 6.45 s after the End) racing the debug kitchen, workspace
+      code still at opt-level 0: under the recipe the cursor's rescue
+      rungs queue behind off-cursor 149 MB full-res fills of 3.5-5.5 s
+      each (the kitchen pops Full > Wrap > Thumb with no notion of the
+      cursor), the 250 ms hold cap fires at the next refresh — the
+      spec'd bounded drop, 14 of 14 loaded runs — and the first rung of
+      the new image lands 5.0-13.9 s after the End; the overlay
+      re-raised every time, in 8 of 11 runs after the dump had
+      photographed the honest fit (senior-developer diagnosis
+      2026-09-05; the same script in release under the same load: 3 of
+      3). The clock became the sharp rung's own mark (`wait:loupe idx 8
+      factor` at 20.2 s, the dump kept at 26.5 s as the backstop and
+      fired 6.3 s behind the mark — the CI-audit shape rule, `(satisfied`
+      echo asserted), which is stricter, not looser: the sharp must land
+      within the wait's 30 s cap and the overlay must be up 6.3 s later;
+      with the wait, 10 of 10 idle and 3 of 3 under the recipe in debug,
+      3 of 3 in release. The PR's Windows debug pass is both tests'
+      first CI run in that profile. The debug profile ALSO keeps its no-drop
       coverage through
       `paced_taps` and `transit_at_zoom_stays_soft`; the M1 test
       allows the spec'd reason-carrying drops (failure/hold-cap) while
       asserting the excuse-less `(no rung in hand)` drop away, plus
-      recovery via the late "landed" dump. The failed-cursor gate is
+      recovery via the "landed" dump, gated since
+      2026-09-05 on the sharp rung's own mark rather than a clock (the
+      #76 paragraph above). The failed-cursor gate is
       pinned by
       `a_decode_failed_cursor_drops_to_fit_instead_of_masking_the_badge`
       (mid-session corruption — a helper thread zeroes the file on disk
@@ -2249,11 +2269,16 @@ the user confirms, all cheap to change):**
       inert, the reserved no-op's end-to-end half. Still without a
       deterministic release-profile exercise (recorded, QE gate): the
       `(hold cap)` drop-and-re-raise fires routinely in debug runs (as
-      of 2026-08-11, stock dev profile; whether it still fires routinely
-      now that the decoder compiles optimised in debug — the texture
-      fills that congest the kitchen are workspace code and stay at
-      opt-level 0 — is unmeasured, 2026-09-05) and
-      the M1 test asserts the recovery whenever it fires, but forcing
+      of 2026-08-11, stock dev profile; with the decoder optimised in
+      debug it no longer fires idle — 0 of 15 idle debug runs of the M1
+      test on the development seat, the thumb rung landing 155 ms after
+      the End — and fires 14 of 14 under the #76 load recipe (six
+      spinners and the app on two cores), where the cursor's rescue
+      rungs queue behind off-cursor full-res fills; the recipe is
+      therefore a deterministic debug-profile exercise of the
+      drop-and-re-raise, senior-developer diagnosis 2026-09-05) and
+      the M1 test asserts the recovery whenever it fires — its landing
+      dump is mark-gated since 2026-09-05 — but forcing
       it deterministically in release needs a decode-wedge knob —
       deferred alongside the wedge affordances already recorded in
       this spec. Narrowed 2026-08-11 (A3): the cap timing, the failure
@@ -2730,19 +2755,29 @@ the user confirms, all cheap to change):**
       their shape: the cap refusal and the write failure exit 1 with their
       messages, and `finish` still exits 2 when the loop ends before a
       shot; the readiness predicate is untouched.
-- [ ] **The 60 s readiness cap is margin again in a debug build (issue
+- [x] **The 60 s readiness cap is margin again in a debug build (issue
       #76, user decision 2026-09-05)**: dependencies compile optimised in
       the dev profile (`01-architecture.md`, "Build profiles"), so the
       full-res decode of the 8640×5760 frame lands in at most 2 s in a
-      debug build on the development seat (26-40 s on the Windows debug
-      runner and 31 s here before), and `window_resize_keeps_the_photo` —
+      debug build on the development seat — measured by the #76 commit,
+      the first full-res rung of the center-anchor script at 1.15-1.36 s
+      against 15.3-17.2 s without the line, its sharp 1:1 render at
+      2.8-3.1 s against 17.9-19.6 s (three runs each, developer
+      2026-09-05) — where the same decode took 26-40 s on the Windows
+      debug runner and 31 s here before, and
+      `window_resize_keeps_the_photo` —
       the cap's recorded intermittent — is green 4 of 4 under the load
-      recipe that reproduces the CI refusals (0 of 4 before). Pinned by
+      recipe that reproduces the CI refusals (0 of 4 before; 0 of 2 when
+      the #76 commit re-ran it on the stock profile, both runs refusing
+      with `full-res never adopted for the 1:1 frame`), its readiness
+      phase 7.1-18.9 s against the 60 s cap. Pinned by
       measurement, not by a test: the before/after landing times and the
       loaded runs are recorded in the #76 commit and in
       `01-architecture.md`; the cap, the 1.5 s floor, the 30 s `wait:`
-      cap and the 90 s watchdog keep their values, and no test schedule
-      moved with it.
+      cap and the 90 s watchdog keep their values, and the only test
+      schedule that moved with it is the M1 transit test's landing dump,
+      which became mark-gated instead of clock-timed (the lift paragraph
+      above).
 - [x] **Focus continuity (issues #41/#42)**: driven through REAL key and
       pointer dispatch (`key:`/`click.` — the nav tokens bypass focus and
       cannot see this class), every bug-strand test red-run-verified
@@ -3988,7 +4023,16 @@ Documented because they ship in release builds (validator finding):
   schedule — harmless, kept as is, and re-timed only on the PR's Windows
   debug artifacts, the first evidence of the new landing time on that
   runner (a schedule is re-timed on a measurement, never on an estimate;
-  senior-developer plan 2026-09-05). The gaps after the wait are identical in both forms — a wait's
+  senior-developer plan 2026-09-05). The issue #46 M1 transit test's
+  `wait:loupe idx 8 factor` (2026-09-05) is placed the same way, at 20.2 s
+  in BOTH profiles: its End lands on a stone-cold frame at 20.05 s and the
+  sharp it waits for landed 1.8-2.8 s later on the development seat idle
+  and 9.3-14.4 s later under the #76 load recipe in debug (1.6-2.1 s in
+  release under the same load), so its cap reaches 50.2 s against the
+  shutter's 60 s; the `dump.landed` behind it keeps its authored 26.5 s as
+  the backstop and fires 6.3 s after the mark. That gate replaced a bare
+  clock, which in a debug build under load photographed a legitimately
+  dropped overlay before its re-raise (the ledger item above). The gaps after the wait are identical in both forms — a wait's
   tail is written in gaps, not offsets — and the 18.5 s the split takes
   off that one test is visible in the whole step: the release screenshot
   suite, serial, measured 451.5 s against the 468.8 s of the run before

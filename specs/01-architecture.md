@@ -233,13 +233,22 @@ the three sample RAWs (the center-anchor script, idle seat, plan-time
 measurement 2026-09-05) the first full-res rung landed 14.2 s after
 launch without the line and 1.24-1.37 s with it (three runs), the third
 rung at 14.8 s against 2.43-2.50 s, and the sharp 1:1 render at 16.5 s
-against 2.7 s — the #76 commit re-measures the same script and records
-its own before/after beside these. Numbers are the seat's and the day's.
+against 2.7 s. The #76 commit re-measured the same script on the same
+seat (developer 2026-09-05, three runs per side, the "before" built from
+its own target directory): the first full-res rung landed at
+15.30/17.20/15.77 s without the line and 1.15/1.24/1.36 s with it, the
+cursor's own rung at 16.06/17.79/16.40 s against 1.39/1.44/1.46 s, and
+the sharp 1:1 render at 17.88/19.62/18.39 s against 2.81/2.88/3.07 s —
+the whole test 19.0-20.8 s against 3.6-3.8 s. Its loaded pair, same
+recipe: 0 of 2 green before (both refusing with `full-res never adopted
+for the 1:1 frame`) and 4 of 4 after, readiness 7.1-18.9 s. Numbers are
+the seat's and the day's.
 
 What it costs, and what was accepted: a cold debug build compiles every
 dependency optimised once — the screenshot test binary, cold, on the
 development seat on 2026-09-05: 2 m 17 s stock against 10 m 43 s with the
-line (4.7×; idle apart from a few short test runs) — and CI's `rust-cache`
+line (4.7×; idle apart from a few short test runs), re-measured by the
+#76 commit at 2 m 19 s against 9 m 10 s (4.0×) — and CI's `rust-cache`
 pays it once per toolchain change (its `save-if: main` rule means a pull
 request after a rustc release pays it on every push until main
 repopulates the cache; the PR that landed the line records its cold and
@@ -263,7 +272,11 @@ gates that rested on the debug decode
 (`transit_to_a_cold_frame_keeps_the_overlay_at_the_carried_center`,
 `a_decode_failed_cursor_drops_to_fit_instead_of_masking_the_badge`) are
 lifted, while the timing pins that bind in release by the perf-budgets
-precedent keep their gates; the Windows debug pass, which runs the whole
+precedent keep their gates; the M1 test's landing dump moved from a
+fixed clock to the sharp rung's own mark in the same commit, because the
+lift exposed it as a wall-clock pin racing the debug KITCHEN — workspace
+code, still at opt-level 0 — under the #76 load recipe
+(`modules/ui-grid.md` for the mechanism and the counts); the Windows debug pass, which runs the whole
 screenshot suite in this profile, stops waiting on the decode (estimated
 ~275 s across its `--start-11` scripts; the PR records the measured job
 durations). The two-shot shutter of issue #77 was fixed FIRST, in its own
