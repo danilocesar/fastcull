@@ -3101,10 +3101,16 @@ the user confirms, all cheap to change):**
       property is "engine events AFTER the settle never move an untouched
       cursor"; a settle landing after `5000:zoom-out` leaves that property
       unexercised while BOTH its anti-vacuity assertions (`2 thumbs
-      loaded`, `a_late.ARW (2/2)`) still pass at the shutter. Measured on
-      an 8-core seat: the settle landed after the first drive step in 2 of
-      6 idle runs and 5 of 5 under load, and the test was green every
-      time. That corrects the sentence this ledger used to carry — it said
+      loaded`, `a_late.ARW (2/2)`) still pass at the shutter. Reproduced
+      by the QE gate of 2026-09-05 on an 8-core seat under load (the test
+      pinned to two cores against six spinners and a hashing churner): on
+      main the settle landed AFTER the first drive step in 10 of 10 runs —
+      settle 10115-15701 ms against `drive: zoom-out` at ~3000 ms — and
+      the test was GREEN all ten, 0 of the 10 emitting any settle mark at
+      all. Idle on main the same settle is 1164-1295 ms, so the race is
+      LOAD-dependent, which is why a quiet runner never showed it. On this
+      branch the gate held 10 of 10, dwelling 2.8-5.3 s of the 30 s cap.
+      That corrects the sentence this ledger used to carry — it said
       the test "asserts the flip it depends on … so a run that lost that
       race fails loudly instead of measuring the wrong cell". It fails
       loudly for the WRONG-CELL case and not for the vacuity case, which
@@ -3121,9 +3127,15 @@ the user confirms, all cheap to change):**
       this test's own comment already records for its About pair ("a
       panel-toggle pair was tried and made this test vacuous — the mutant
       passed"). Worst measured margin between the settle and that resize:
-      146 ms (settle 2854 ms, PR#71 Windows debug artifact). Cost: +0.5 to
-      +1.5 s of tail on the Windows debug runner against 54 s of headroom,
-      0 on both release runners.
+      146 ms (settle 2854 ms, PR#71 Windows debug artifact). The QE gate
+      of 2026-09-05 reproduced the hazard itself under the same load: on
+      main the settle landed after `1500:home` AND after the `3000:resize`
+      under test in 10 of 10 runs, GREEN every time; the worst IDLE margin
+      ahead of `home` was 61 ms (settle 1439 ms against the 1500 ms step).
+      On this branch the gate held 10 of 10, dwelling 5.8-9.8 s, with the
+      authored 1500 ms `home`-to-`resize` gap preserved to ±2 ms in all
+      ten. Cost: +0.5 to +1.5 s of tail on the Windows debug runner
+      against 54 s of headroom, 0 on both release runners.
       `panel_close_from_the_menu_at_one_to_one_keeps_the_keyboard` gates
       `3400:wait:load settled gen 0` in front of `3500:key:k`, for the
       motive its eight focus-family siblings already record: the IPTC rows
@@ -3145,10 +3157,11 @@ the user confirms, all cheap to change):**
       `thumbs_done: 0` and is incremented only in the pump, which runs on
       the event loop — i.e. after `install` — so a folder settle cannot
       precede registration however fast the disk is. Only a `--synthetic`
-      session, whose state is constructed with `thumbs_done: n`, can, and
-      that is the limitation already recorded above. And if it ever did
-      lose, the failure would be LOUD — `wait never satisfied`, exit 1 —
-      not silent.
+      session, whose state is constructed with `thumbs_done: n`, can — and
+      only on a platform where the first laid-out refresh runs ahead of
+      install, which is the platform-dependence recorded above. And if it
+      ever did lose, the failure would be LOUD — `wait never satisfied`,
+      exit 1 — not silent.
       Each of the three carries the `(satisfied` echo assertion AND a
       permanent byte-offset ORDERING assertion (`stderr.find("load settled
       gen 0") < stderr.find("drive: …")`, the idiom the export-dialog
@@ -3167,11 +3180,19 @@ the user confirms, all cheap to change):**
       known to lose. Measured cost on the Windows debug runner: +3.2 to
       +4.9 s of tail, and the tail translates 1:1 — a controlled A/B on
       the real `resize-cursor` script against the same script shifted
-      +3.80 s moved the shutter +3.895 s (n=3, ratio 1.03). The shutter's
-      60 s readiness cap is `window_resize_keeps_the_photo`'s ONLY
-      recorded failure mechanism (four refusals; twice it took three tests
-      down in one job). What was wrong there was the SCHEDULE'S NAME, not
-      the schedule: both comments claimed a settle they never waited for
+      +3.80 s moved the shutter +3.895 s (n=3, ratio 1.03).
+      `window_resize_keeps_the_photo` has SIX recorded failing jobs, all
+      Windows, all 2026-07-27, and they split into TWO mechanisms: FOUR
+      are the shutter's 60 s readiness cap (runs 58, 62, 65, 70 — twice it
+      took three tests down in one job) and TWO are `the relayout path
+      never fired — the resize wasn't exercised` (runs 60 and 71, bunched
+      resizes; run 60's trace reads `[1577] drive: resize:1000x700`
+      against `[1580] drive: resize:1440x900`). The cap is the DOMINANT
+      mechanism and the budget the tail is not spent out of; the second is
+      the very guard this change hardens, and the 4 s the schedule keeps
+      between its two resizes is what a bunching stall has to swallow
+      first. What was wrong there was the SCHEDULE'S NAME, not the
+      schedule: both comments claimed a settle they never waited for
       ("Let the metadata stream SETTLE before driving"), while `home`
       fires at 1.5-3.1 s against a 4.7-6.3 s settle. The comments now say
       what is true — timed, order-neutral, and what the gate would cost.
@@ -3180,9 +3201,28 @@ the user confirms, all cheap to change):**
       resize's private word, and QE watched a one-column SETTLE emit the
       identical string with no resize in the script, so the order-blind
       `contains` would have taken it for the resize. It is now positional
-      — `find("drive: resize:1000x700") < find("relayout re-anchor")` —
-      red on a mutant that re-anchors before the resize under test, where
-      the `contains` form is green.
+      and reads the SUFFIX after the resize echo —
+      `stderr[find("drive: resize:1000x700")..].contains("relayout
+      re-anchor")` — not "the FIRST re-anchor came after the resize",
+      which a first-occurrence `find` pair would have asserted and which
+      is not the property: a re-anchor BEFORE the resize is somebody
+      else's, and what the guard has to see is one AFTER it. Verified by
+      mutation on 2026-09-05, direct-drive traces beside each test run.
+      Unmutated, the re-anchors are `[2501]` (the resize under test) and
+      `[6505]` (the 6500 restore). With an injected
+      `2200:resize:1200x700`, the injected resize takes the re-anchor at
+      `[2201]`, the resize under test at `[2501]` emits none, and the
+      restore emits one at `[6508]`: the suffix form is GREEN, the `find`
+      pair was RED and said "the only `relayout re-anchor` … happened
+      BEFORE the resize under test", which that trace contradicts. Dropping
+      the four `right` steps so the resize no longer dislodges the cursor
+      yields a trace with NO re-anchor at all — the vacuity the guard
+      exists for — and is RED under the suffix form, on its own message.
+      The suffix deliberately runs to the end of the trace, restore
+      included: the restore asks for the DEFAULT geometry, so it can only
+      re-anchor if the resize under test actually landed and moved the
+      layout, and the recorded bunched-resize failure (runs 60, 71) leaves
+      neither resize a re-anchor to emit.
       The wash pair (`selection_wash_never_reaches_the_loupe`) keeps its
       clock for a different reason, and it is this file's own rule: the
       settle gates the KEY, not the picture. That test asserts on RENDERED
@@ -3338,17 +3378,32 @@ Documented because they ship in release builds (validator finding):
   adopted afterwards, `thumb landed idx N` is that mark, and the Windows
   debug runner's clip-badge trace puts its three landings 36, 75 and 110 ms
   behind the settle — so a shot whose claim is RENDERED content gates on the
-  landings, never on the settle alone. It is unobservable in a `--synthetic`
-  session: that settle fires inside the first refresh, BEFORE
-  `harness::install`, so a wait for it is never satisfied, burns the full 30 s
-  cap and ends the run — only folder sessions may wait on it. And the mark
+  landings, never on the settle alone. Whether it is observable AT ALL in a
+  `--synthetic` session is PLATFORM-DEPENDENT and a script must not rely on it
+  either way: a synthetic state is constructed with `thumbs_done: n`, so it
+  settles inside the first laid-out refresh, and that refresh can fall on
+  either side of `harness::install`. Measured on Linux (QE 2026-09-05),
+  `--synthetic 4 --start-11` emits the settle at `[28]` and a wait on it IS
+  satisfied, install having run first; the Windows artifacts show the first
+  laid-out refresh possibly preceding install, and there the wait is never
+  satisfied, burns the full 30 s cap and ends the run. Only FOLDER sessions
+  may wait on the settle portably, and they may for a structural reason —
+  their `thumbs_done` starts at 0 and is incremented only in the pump, which
+  runs on the event loop, i.e. after install. And the mark
   is ZOOM-INDEPENDENT but its sentence is not (issue #73): the edge it
   reports — `metadata_complete()` false→true — has no layout term, so since
   #73 it fires at ONE column too, on the same edge, in the same phase of the
   same refresh pass, and a `--start-11`/`--start-loupe` script gates on it
-  like any other. What is CONTRACTUAL is the PREFIX `load settled gen
-  {gen}: cursor pos {pos}, ` — that is the whole substring a `wait:`
-  registers, `observe()` being a plain `label.contains(needle)`. The tail
+  like any other. That newly reachable gate has two EDGES a `--start-11`
+  author has to know, and both fail loudly rather than silently (QE
+  2026-09-05): a folder whose scan outlives WAIT_CAP never settles inside the
+  wait — 1000 files gave `wait never satisfied … (after 30 s)` and exit 1 —
+  and an EMPTY folder never settles at ANY zoom, because the settle needs
+  `can_anchor` and `can_anchor` needs `view_len > 0`, so that run burns the
+  same 30 s cap and exits 1 too.
+  What is CONTRACTUAL is the PREFIX `load settled gen {gen}: cursor pos
+  {pos}, ` — that is the whole substring a `wait:` registers, `observe()`
+  being a plain `label.contains(needle)`. The tail
   after it differs by zoom and is free to: above one column it reports the
   scroll correction (`scroll X -> Y  (cursor was …)`), at one column it
   reports `scroll X kept (one column; the loupe block owns it)`, because

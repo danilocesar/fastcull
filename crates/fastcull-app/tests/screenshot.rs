@@ -1443,11 +1443,17 @@ fn window_resize_keeps_the_photo() {
             // would buy no ordering — and it would cost it here out of the
             // one budget this test is known to lose. Measured on the
             // Windows debug runner the gate is +3.7 to +4.8 s of tail
-            // against 18.6-23.6 s of remaining readiness headroom; the
-            // shutter's 60 s cap is this test's ONLY recorded failure
-            // mechanism (four refusals, and twice it took three tests down
-            // with it). The cap's own defect — a texture budget set by
-            // script length — is a separate issue.
+            // against 18.6-23.6 s of remaining readiness headroom. This
+            // test has SIX recorded failing jobs, all Windows, all
+            // 2026-07-27, in TWO mechanisms: four are the shutter's 60 s
+            // cap (runs 58, 62, 65, 70 — twice it took three tests down
+            // with it), two are `the relayout path never fired` guard
+            // below going red on bunched resizes (runs 60, 71). The cap is
+            // the dominant one and the reason this tail is not spent; the
+            // second is the guard hardened below, and the paragraph after
+            // this one is why the two resizes sit 4 s apart. The cap's own
+            // defect — a texture budget set by script length — is a
+            // separate issue.
             // The two resizes sit 4 s apart: a stalled CI event loop
             // fires overdue timers BUNCHED, and back-to-back resizes
             // between two refreshes are a net geometry no-op — the
@@ -1487,18 +1493,24 @@ fn window_resize_keeps_the_photo() {
     // copies of one file cannot re-sort, so the settle leaves the cursor's
     // cell wholly visible and the re-anchor arm never fires — and a fixture
     // is not a property. Read the ordering instead, the way the
-    // export-dialog wheel test reads its settle.
+    // export-dialog wheel test reads its settle — and read it as the
+    // SUFFIX after the resize echo, not as "the first re-anchor came
+    // after it": a run that re-anchors both before AND after the resize
+    // did exercise the path, and only a run with NO re-anchor after the
+    // resize failed to. The suffix runs to the end of the trace, the 6500
+    // restore included: that step asks for the DEFAULT geometry, so it
+    // can only re-anchor if the resize under test landed and moved the
+    // layout — and the bunched-resize failure this guard is here to catch
+    // leaves neither resize a re-anchor to emit.
     let resized_at = stderr
         .find("drive: resize:1000x700")
         .unwrap_or_else(|| panic!("the resize under test never ran:\n{stderr}"));
-    let reanchored_at = stderr.find("relayout re-anchor").unwrap_or_else(|| {
-        panic!("the relayout path never fired — the resize wasn't exercised:\n{stderr}")
-    });
     assert!(
-        resized_at < reanchored_at,
-        "the only `relayout re-anchor` in this run happened BEFORE the \
-         resize under test — something else moved the strip and the guard \
-         would have taken it for the resize:\n{stderr}"
+        stderr[resized_at..].contains("relayout re-anchor"),
+        "no `relayout re-anchor` AFTER the resize under test — the \
+         relayout path never fired, so the resize wasn't exercised (a \
+         re-anchor earlier in the run belongs to something else and the \
+         guard must not take it for the resize):\n{stderr}"
     );
     let last_idx = stderr
         .lines()
