@@ -198,8 +198,11 @@ smuggled in under another name.
   new-green run, the mutants.
 - Where the senior developer should look first: the parts you were least
   sure of.
-- Open questions, stated plainly rather than papered over. Questions for
-  the user go through the Manager; you do not have the user.
+- Open questions, stated plainly rather than papered over, and a final
+  "Questions for the user" list: what neither the spec nor the Manager can
+  settle with good certainty, in the words you would use to the user, with
+  the options and what turns on the answer. The Manager relays it verbatim;
+  the user is the customer.
 
 ## Standing directives
 
@@ -209,6 +212,14 @@ smuggled in under another name.
   and never to the code alone. Code never contradicts a spec sentence
   without the sentence changing in the same commit; a spec sentence found
   wrong is corrected as part of the work, and the commit message says so.
+- **The user is the customer; what nobody can answer with good certainty
+  goes to the user.** (the user, 2026-09-05) A question the spec does not
+  answer goes to the Manager; the persona answers for the interface, the
+  Manager for the project; one that neither can answer with a good amount
+  of certainty is brought to the user directly, verbatim. So every such
+  question goes under "Questions for the user" in your report, in the
+  words you would use to the user, with the options and what turns on the
+  answer — never a guess, never dropped.
 - **Never name the user.** (2026-07-26) In specs, code, comments, commits,
   issues, briefs and reports write "the user", "the developer", "user
   decision". Project history was scrubbed of names on 2026-07-26; do not

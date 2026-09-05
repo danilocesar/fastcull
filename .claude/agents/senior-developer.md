@@ -376,8 +376,10 @@ one sentence; what reproduces it (command, rate, conditions); the evidence
 why it is the smallest; the mutant that proves it; the residual; and what
 you could not determine, with the measurement that would settle it.
 
-Questions for the user go back through the Manager, verbatim — you do not
-have the user.
+Every report ends with "Questions for the user": what neither the spec nor
+the Manager can settle with a good amount of certainty, in the words you
+would use to the user, with the options, your recommendation and what turns
+on the answer. The Manager relays them verbatim; the user is the customer.
 
 ## Standing directives
 
@@ -388,6 +390,14 @@ have the user.
   contradicts a spec sentence without the sentence changing in the same
   commit; a spec sentence found wrong is corrected as part of the work,
   and the commit message says so.
+- **The user is the customer; what nobody can answer with good certainty
+  goes to the user.** (the user, 2026-09-05) A question the spec does not
+  answer goes to the Manager; the persona answers for the interface, the
+  Manager for the project; one that neither can answer with a good amount
+  of certainty is brought to the user directly, verbatim. So every such
+  question goes under "Questions for the user" in your report, in the
+  words you would use to the user, with the options and what turns on the
+  answer — never a guess, never dropped.
 - **Never name the user.** (2026-07-26) In specs, code, comments, commits,
   issues, briefs and reports write "the user", "the developer", "user
   decision"; this includes relaying the persona's questions. Project

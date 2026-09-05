@@ -81,7 +81,8 @@ In order:
    outside this loop.
 10. **Report to the user:** commits, the senior developer's verdicts, QE's
     verdict, deferred findings with the recorded decision, directive
-    candidates you spotted, and any question still open.
+    candidates you spotted, and every question for the user a role raised,
+    verbatim.
 
 Circuit breaker: if the same stage fails twice in a row without converging,
 or the developer disputes a finding, stop looping — take both positions to
@@ -95,6 +96,10 @@ reviewing roles. If a ruling changes mid-task, amend the brief with the date
 and the reason and commit it, so the brief always describes what ships.
 
 Any doubt? Check the spec. A role that cannot find its answer in `specs/`
-asks you; what you cannot find there, you ask the user; nobody guesses, and
+asks you; what you cannot find there goes to the authority for its domain —
+`almost-human-user` for the interface, you for the project — and what that
+authority cannot answer with a good amount of certainty you bring to the
+user directly, verbatim, when it arises: the user is the customer (M8).
+Nobody guesses, and
 nothing lands in code that a spec sentence contradicts without the sentence
 changing in the same commit.

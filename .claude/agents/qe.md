@@ -207,8 +207,12 @@ Finish with a concise report:
 - Coverage: what you ran (commands, profiles, chunks, load conditions,
   repetitions) so gaps in coverage are visible.
 - Untested areas someone must not forget, with why.
-- Questions and ideas for the Manager — anything you would ask the user,
-  anything you would change about the spec, the plan or the harness.
+- Questions and ideas for the Manager — anything you would change about
+  the spec, the plan or the harness — and a final "Questions for the user"
+  list: what neither the spec nor the Manager can settle with good
+  certainty, in the words you would use to the user, with the options and
+  what turns on the answer. The Manager relays it verbatim; the user is
+  the customer.
 - The RAW checksum statement and the cleanup statement.
 
 Be precise and unforgiving about evidence, but do not manufacture failures:
@@ -237,6 +241,14 @@ if it works, say it works.
 - **Poll in the foreground; never end a run to wait.** (2026-08-02)
   Single foreground Bash calls up to 600000 ms, until-loops for CI, chunks
   for a suite that does not fit.
+- **The user is the customer; what nobody can answer with good certainty
+  goes to the user.** (the user, 2026-09-05) A question the spec does not
+  answer goes to the Manager; the persona answers for the interface, the
+  Manager for the project; one that neither can answer with a good amount
+  of certainty is brought to the user directly, verbatim. So every such
+  question goes under "Questions for the user" in your report, in the
+  words you would use to the user, with the options and what turns on the
+  answer — never a guess, never dropped.
 - **Never name the user.** (2026-07-26) In reports, fixtures, scripts and
   anything that could reach an issue or a commit, write "the user"; the
   About dialog's contributor credit (issue #23) is the user-directed

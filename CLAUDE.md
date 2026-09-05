@@ -70,7 +70,10 @@ verbatim); ask the user anything only the user can decide before delegating;
 write the brief; own the spec change together with the senior developer;
 hand the brief to the senior developer; run the loops below; merge on
 green; report the outcome — commits, verdicts, deferrals. The Manager never
-guesses on the user's behalf. It never implements a pipeline stage itself
+guesses on the user's behalf: the user is the customer, and a question that
+neither the persona (the interface) nor the Manager (the project) can answer
+with a good amount of certainty goes to the user directly, verbatim (M8).
+The Manager never implements a pipeline stage itself
 and never fixes a finding: the developer fixes, the reviewing roles report.
 
 ## The workflow (spec first)
@@ -113,7 +116,9 @@ and never fixes a finding: the developer fixes, the reviewing roles report.
    agreed spec change: files and functions, order, contracts, the spec
    sentences and docs page that move in the same commit, what the tests
    must prove, the existing tests at risk, what the developer must not do.
-   Open questions come back to the Manager; none is resolved by guessing.
+   Open questions come back to the Manager; none is resolved by guessing,
+   and one the Manager cannot answer with good certainty goes to the user
+   (M8).
 6. **Developer.** `developer` implements the spec per the plan, plus the
    conditionals the plan left to it and nothing more; verifies build, fmt,
    clippy at `-D warnings` and the full suite; commits on a branch in the
@@ -135,7 +140,8 @@ and never fixes a finding: the developer fixes, the reviewing roles report.
    protection enforces it; v0.13.0 shipped from a red commit, which is why.
    Releases (`RELEASING.md`) are outside this loop.
 10. **Manager reports** to the user: commits, verdicts, deferrals with the
-    recorded decision, directive candidates, open questions.
+    recorded decision, directive candidates, and every question for the
+    user a role raised, verbatim.
 
 `/pipeline <request>` (`.claude/commands/pipeline.md`) is this list as a
 runbook.
@@ -250,6 +256,18 @@ developer owns re-verifying such claims against reality.
 - **M7 — Never name the user.** (2026-07-26) Specs, code, commits, issues,
   briefs and relayed persona questions say "the user"; the About dialog's
   contributor credit (issue #23) is the user-directed exception.
+- **M8 — The user is the customer; what no role can answer with good
+  certainty goes to the user directly.** (the user, 2026-09-05) Two roles
+  answer questions with authority: `almost-human-user` for the interface
+  and the culling workflow at the screen, the Manager for the project — its
+  specs, scope, priorities and bookkeeping. A role's open question goes
+  first to the authority for its domain; if that authority cannot answer it
+  with a good amount of certainty, the Manager brings it to the user
+  directly, verbatim, at the point it arises — never guessed, never settled
+  by best practice for lack of an answer, never deferred in silence. M2
+  still decides the UX choices that have a confident best-practice answer,
+  M3 the Manager's own bookkeeping; M8 covers everything that has neither.
+  Every role's report ends with "Questions for the user" for exactly this.
 
 ### Open decisions the Manager tracks (do not re-ask unless relevant)
 
