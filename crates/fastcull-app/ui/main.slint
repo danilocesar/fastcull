@@ -106,6 +106,113 @@ component AnswerRow inherits Rectangle {
     }
 }
 
+// ONE ROW OF THE KEYBOARD-SHORTCUTS CARD: a fixed-width key cell beside a
+// stretching action cell. The whole redesign is this component — the card
+// used to be a single Text with "\n" separators and three literal spaces
+// between each key and its description, so the action text started
+// wherever the key happened to end: 23 rows, 23 different left edges, and
+// nothing to run the eye down.
+//
+// THE 104 px IS A CONSTANT, NEVER A MEASUREMENT. That is the alignment
+// contract: the action column starts at the same x on every row, in any
+// font, on any platform, whether or not a section above it holds a wide
+// label. A cell sized to its content (or to the widest content in a
+// repeater) would put the guarantee at the mercy of the platform's default
+// sans, which is exactly what this replaces. Right-alignment gives a
+// SECOND hard edge, so the key list and the action list are each
+// independently scannable. Widest label at 13 px semibold measures ~83 px
+// across Noto Sans / Liberation Sans / Open Sans ("Y / P / Space",
+// "Shift+arrows", "Double-click"), i.e. 20% headroom.
+//
+// Both cells wrap. A key that outgrows its cell breaks INSIDE it (at the
+// space or the slash) and the row grows taller; the action column does not
+// move, and neither cell ever elides — losing a character of a shortcut is
+// worse than a taller row (the same argument the About version string
+// carries two elements up). The fixed-width child of a layout is
+// `AnswerRow`'s idiom above, generalised.
+//
+// NO TOUCHAREA HERE, EVER. Clicks on this card must fall THROUGH to the
+// scrim's TouchArea — that is what makes "Esc or click anywhere to close"
+// true (`card-eats-clicks` stays false for this popup). A hover highlight
+// on the rows would need a TouchArea and would silently break it.
+component KeyRow inherits HorizontalLayout {
+    in property <string> k;
+    in property <string> a;
+    // The reserved star-rating row: keys that do nothing yet. Colour says
+    // "not yet" faster than any word would — but a row nobody can read is
+    // not a softer statement, it is a missing one. #8a8a96 measures
+    // 4.74:1 on this card's #202028, over AA's 4.5; the #707078 it
+    // replaces measured 3.29:1, which is the same failure and the same
+    // number that took the card's closing hint off that same colour.
+    // It still reads as plainly inactive beside a live row: the
+    // key beside it is 13.27:1 and the action 9.72:1, so the dim row
+    // keeps HALF the contrast of its neighbours while staying legible.
+    in property <bool> dim: false;
+    spacing: 14px;
+    Text {
+        text: root.k;
+        width: 104px;
+        horizontal-alignment: right;
+        color: root.dim ? #8a8a96 : #e8e8f0;
+        font-size: 13px;
+        font-weight: 600;
+        wrap: word-wrap;
+    }
+    Text {
+        text: root.a;
+        color: root.dim ? #8a8a96 : #c8c8d0;
+        font-size: 13px;
+        horizontal-stretch: 1;
+        wrap: word-wrap;
+    }
+}
+
+// A labelled group of `KeyRow`s: an 11 px tracked heading with a hairline
+// running from it to the column's right edge, then the rows at 5 px.
+//
+// Headings are LANDMARKS, so they are one word ("MOVE", "MARK", "SELECT")
+// rather than a phrase — the eye lands on the word for what it wants and
+// reads three or four rows, instead of reading 23 lines in implementation
+// order. The rule gives the grouping a visual body that a dimmer-than-body
+// label cannot carry on gap ratio alone.
+component KeySection inherits VerticalLayout {
+    in property <string> heading;
+    spacing: 5px;
+    HorizontalLayout {
+        spacing: 8px;
+        Text {
+            text: root.heading;
+            color: #8a8a96;
+            font-size: 11px;
+            letter-spacing: 0.6px;
+            vertical-alignment: center;
+        }
+        // The hairline is drawn by a child so the layout can stretch the
+        // parent to the row's full height and the line still sits on its
+        // middle — a 1px-high layout child would be centred by the layout
+        // itself, which is a rule this file should not have to rely on.
+        //
+        // #6a6a76, measured at 3.03:1 on the card's #202028 — WCAG's
+        // non-text minimum, and the reason this is not the #33333d it was
+        // built with: that measured 1.29:1, which is a line nobody can
+        // see. A rule drawn in ink below the threshold of vision is not a
+        // subtle rule, it is a rule that is not there, and the choice was
+        // draw it or drop it. It stays deliberately UNDER the 4.74:1 of
+        // the heading beside it: the word is the landmark, the rule is
+        // what gives the group a body.
+        Rectangle {
+            horizontal-stretch: 1;
+            Rectangle {
+                y: (parent.height - self.height) / 2;
+                width: 100%;
+                height: 1px;
+                background: #6a6a76;
+            }
+        }
+    }
+    @children
+}
+
 // Modal scaffolding shared by the Help > Shortcuts and About popups:
 // full-area scrim, click-outside-to-close, wheel swallowed (validator M2
 // — TouchAreas pass unhandled scrolls through to the Flickable below),
@@ -134,7 +241,24 @@ component ModalScrim inherits Rectangle {
     // blocked on this file; the default is what both current sites use,
     // so no pixel moves.
     in property <length> card-width: 480px;
+    // OPT-IN content-driven height, default false. Set it and the card is
+    // exactly as tall as what is in it (still clamped to the window);
+    // leave it and `card-height` keeps the meaning — and the trap — it has
+    // always had, so About sits on the identical arm BY CONSTRUCTION
+    // rather than by the accident that its content is shorter than its
+    // 348 px. Deliberately NOT a redefinition of `card-height` as a floor:
+    // an unset `card-height` is 0px, `min(0px, …)` is 0px, and a clamp
+    // built on that would yield the content height — quietly repairing the
+    // very mistake the nine-line comment above exists to make unmissable.
+    in property <bool> card-fits-content: false;
     callback dismissed();
+    // The card's laid-out rectangle, for the harness — the same
+    // `<what> laid out at X,Y size WxH` mark the two hand-rolled dialog
+    // cards emit (issue #62). A card whose height follows its content has
+    // no arithmetic a reader can check in this file, and a JPEG cannot be
+    // asked how tall a rounded rectangle is; unbound (About), it costs
+    // nothing and emits nothing.
+    callback card-laid-out(length, length, length, length);
     y: 0; // missing-binding trap (issue #12): unset y centered the scrim 13px low
     background: #000000aa;
     TouchArea {
@@ -144,19 +268,55 @@ component ModalScrim inherits Rectangle {
     Rectangle {
         x: (parent.width - self.width) / 2;
         y: (parent.height - self.height) / 2;
-        width: root.card-width;
+        // Clamped to the window, which it never was: `width: card-width`
+        // hung a card off BOTH edges of any window narrower than it. Latent
+        // for the two 480 px popups (it needs a sub-480 window) and real for
+        // the 780 px shortcuts card; both get the fix from here.
+        width: min(root.card-width, parent.width - 40px);
         // The `> 0px` arm is the unbound-property trap above, not a layout
         // choice: an unset card-height means "fill", never "vanish".
-        height: root.card-height > 0px
-            ? min(root.card-height, parent.height - 40px)
-            : parent.height - 40px;
+        height: root.card-fits-content
+            ? min(card-layout.preferred-height, parent.height - 40px)
+            : (root.card-height > 0px
+                ? min(root.card-height, parent.height - 40px)
+                : parent.height - 40px);
         border-radius: 8px;
         background: #202028;
         border-width: 1px;
         border-color: #3a3a44;
+        // NOTHING PAINTS OUTSIDE THE CARD. A Slint layout does not clip
+        // its children: given less room than its children's minimum, a
+        // HorizontalLayout hands each of them the minimum anyway and the
+        // row simply overflows its parent — so a Text with neither `wrap`
+        // nor `overflow: elide` in a too-narrow card draws its tail on the
+        // SCRIM, outside the rounded rect. Measured before this line, at
+        // 400x320: the shortcuts title row's hint painted glyphs at
+        // x 379..396 with the card's right border at 375. That is the
+        // defect issue #26 treated as a real regression on the About card
+        // (its version string), and it belongs here rather than at either
+        // call site: it is a property of a CARD, and the call sites are
+        // where it was forgotten. The children still elide or wrap where
+        // that reads better — this is the floor under them, not a
+        // substitute for them.
+        clip: true;
+        init => {
+            root.card-laid-out(self.absolute-position.x, self.absolute-position.y,
+                self.width, self.height);
+        }
+        changed absolute-position => {
+            root.card-laid-out(self.absolute-position.x, self.absolute-position.y,
+                self.width, self.height);
+        }
+        changed height => {
+            root.card-laid-out(self.absolute-position.x, self.absolute-position.y,
+                self.width, self.height);
+        }
         if root.card-eats-clicks: TouchArea { } // clicks on the card never close it
-        VerticalLayout {
+        card-layout := VerticalLayout {
             padding: root.card-padding;
+            // HARD-CODED, and a call site cannot override it: a card that
+            // wants a rhythm of its own has to make its top-level children
+            // few enough that this spacing produces only the gaps it meant.
             spacing: 8px;
             @children
         }
@@ -647,6 +807,17 @@ export component MainWindow inherits Window {
     // Fired by the Help menu items: the Rust side answers with the
     // deferred re-focus that survives the menu's focus restore (#41 D2).
     callback modal-opened();
+    // The one body both openers fire — the Help menu item and the `?`/F1
+    // keys. `modal-opened`, never a bare `focus-keys()`: the menu restores
+    // focus AFTER activation and would override a synchronous steal made
+    // here (issue #41 D2 — the un-dismissable modal, with blind typing
+    // into the field hidden behind the scrim). The key path does not need
+    // the steal and is harmless under it; inheriting the body is what
+    // keeps the two routes from drifting apart.
+    public function open-shortcuts() {
+        root.shortcuts-visible = true;
+        root.modal-opened();
+    }
     // Fired FIRST by every menu item, whatever it does (issue #63, QE
     // finding 2026-08-30). Activating any item blurs a focused panel
     // field, which COMMITS it (G7) — and a commit rebuilds the field
@@ -724,7 +895,7 @@ export component MainWindow inherits Window {
                 // focus AFTER activation, overriding any steal made here
                 // (issue #41 D2 — the un-dismissable modal + blind typing
                 // into the field hidden behind the scrim).
-                activated => { root.menu-activated(); root.shortcuts-visible = true; root.modal-opened(); }
+                activated => { root.menu-activated(); root.open-shortcuts(); }
             }
             MenuItem {
                 title: "About FastCull";
@@ -763,7 +934,15 @@ export component MainWindow inherits Window {
                     return accept;
                 }
                 if (root.shortcuts-visible) {
-                    if (event.text == Key.Escape) { root.shortcuts-visible = false; }
+                    if (event.text == Key.Escape) { root.shortcuts-visible = false; return accept; }
+                    // The key that opened it closes it (persona: a
+                    // keyboard-first app whose keyboard help could only be
+                    // opened with the mouse). Everything else still dies
+                    // here, unchanged.
+                    if (event.text == "?" || event.text == Key.F1) {
+                        root.shortcuts-visible = false;
+                        return accept;
+                    }
                     return accept;
                 }
                 if (event.modifiers.control) {
@@ -799,6 +978,11 @@ export component MainWindow inherits Window {
                     // so both spellings are the same key here.
                     if (event.text == "]" || event.text == "}") { root.nav("shift-burst-next"); return accept; }
                     if (event.text == "[" || event.text == "{") { root.nav("shift-burst-prev"); return accept; }
+                    // `?` is Shift+`/` on most layouts and arrives as the
+                    // shifted character "?"; a layout that reports the
+                    // UNSHIFTED "/" plus the modifier gets the same key
+                    // here, so the opener is never a dead key.
+                    if (event.text == "/" || event.text == "?") { root.open-shortcuts(); return accept; }
                 }
                 if (event.text == "i" || event.text == "I") { root.iptc-toggle(); return accept; }
                 if (event.text == "k" || event.text == "K") {
@@ -830,6 +1014,14 @@ export component MainWindow inherits Window {
                 if (event.text == "u" || event.text == "U") { root.nav("clear"); return accept; }
                 if (event.text == "z" || event.text == "Z") { root.nav("one2one"); return accept; }
                 if (event.text == "g" || event.text == "G") { root.nav("grid"); return accept; }
+                // `?` / F1: open the keyboard help FROM THE KEYBOARD. It
+                // lived on a Help menu item and nothing else, which in a
+                // keyboard-first app meant taking a hand off the keys to
+                // ask what the keys are. In this scope, so it cannot fire
+                // while an IPTC field, the keyword field or a dialog's
+                // rename field holds the keyboard — those live in sibling
+                // scopes and their keystrokes never reach here.
+                if (event.text == "?" || event.text == Key.F1) { root.open-shortcuts(); return accept; }
                 // Esc: back to the grid AND the selection cleared, from
                 // anywhere (user decision 2026-08-28, issue #55).
                 if (event.text == Key.Escape) { root.nav("esc"); return accept; }
@@ -1926,6 +2118,13 @@ export component MainWindow inherits Window {
                                 root.shortcuts-visible = false;
                             }
                         }
+                        // `?`/F1 closes the shortcuts card here too — the
+                        // same key, the same meaning, whichever scope the
+                        // keyboard happens to be in. About is untouched by
+                        // it: Esc stays its only key.
+                        if ((event.text == "?" || event.text == Key.F1) && !root.about-visible) {
+                            root.shortcuts-visible = false;
+                        }
                         return accept;
                     }
                     // THE BODY SCROLLS FROM THE KEYBOARD TOO (issue #62).
@@ -2379,6 +2578,13 @@ export component MainWindow inherits Window {
                                 root.shortcuts-visible = false;
                             }
                         }
+                        // `?`/F1 closes the shortcuts card here too — the
+                        // same key, the same meaning, whichever scope the
+                        // keyboard happens to be in. About is untouched by
+                        // it: Esc stays its only key.
+                        if ((event.text == "?" || event.text == Key.F1) && !root.about-visible) {
+                            root.shortcuts-visible = false;
+                        }
                         return accept;
                     }
                     // The body scrolls from the keyboard too, and only
@@ -2745,30 +2951,297 @@ export component MainWindow inherits Window {
         // dialogs on purpose (validator M1, issue #23): later elements
         // render on top, and the scrims must cover EVERY layer — the
         // old order left the panel clickable above an "open" modal.
-        // Keyboard-shortcuts popup (Help menu; Esc closes). The keyboard map
-        // in ui-grid.md is the source of truth for this list.
+        // KEYBOARD-SHORTCUTS POPUP (Help > Keyboard Shortcuts, `?`, F1;
+        // Esc or a click anywhere closes it). The keyboard map in
+        // ui-grid.md is the source of truth for what is listed here; this
+        // card GROUPS and PARAPHRASES it, and lists every binding in it.
+        //
+        // Three top-level children, and it has to be three: `ModalScrim`'s
+        // `spacing: 8px` is hard-coded, so every extra child is another gap
+        // nobody chose. Title row, body, footer — the leftover height then
+        // lands ONCE, at the bottom of the body, instead of being sprayed
+        // between the title, the list and the footer the way the old fixed
+        // 560 px card sprayed 78 px of it at 1440x900.
+        //
+        // Nothing in this card takes the pointer or the keyboard. No
+        // TouchArea (so a click falls through to the scrim and
+        // "click anywhere to close" is true), no FocusScope, no LineEdit,
+        // no Button (so `focus-owner` stays 0 and the containment guard in
+        // the root key scope still swallows every stray key).
         if root.shortcuts-visible: ModalScrim {
             width: 100%;
             height: parent.height - statusbar.height;
-            card-height: 560px;
+            // 780 px = 18 padding + 2 x (104 key + 14 gutter + 240 action)
+            // + 28 column gutter + 18 padding, clamped so the card is never
+            // wider than the window it is centred in.
+            card-width: min(780px, root.width - 48px);
+            // Content-driven: 27 rows in seven sections is what the card
+            // is, and any constant here would be either 78 px of empty card
+            // or a scroll (the two failures the old 560 px had at the two
+            // window sizes it was looked at).
+            card-fits-content: true;
             card-padding: 18px;
             dismissed => { root.shortcuts-visible = false; }
-            Text {
-                text: "Keyboard shortcuts";
-                color: #ffffff;
-                font-size: 16px;
+            card-laid-out(x, y, w, h) => { root.dbg-card-laid-out("shortcuts card", x, y, w, h); }
+
+            // 1 — TITLE ROW. The hint rides here, flush right, instead of
+            // costing a fourth child (and a fourth gap) as its own footer
+            // line. #8a8a96, not the old #707078, which measures 3.28:1 on
+            // this ground — under AA, on the only sentence that says how to
+            // leave.
+            //
+            // It carries the OPENER as well as the exit, and that is where
+            // `?`/F1 is "listed": the binding that brings you here is the
+            // one row a grouped list has no natural home for, and the
+            // moment to teach it is while the reader is looking at what it
+            // opens. "anywhere" is the true statement — this card leaves
+            // `card-eats-clicks` false.
+            HorizontalLayout {
+                // The title is a TITLE, not the first line of the MOVE
+                // group. Without this it ended 12 px above the "MOVE"
+                // heading while a row's ink ends 21 px above the NEXT
+                // heading, so the closest thing to the title was the group
+                // under it and the card read as one list with a caption.
+                // 18 px puts the gap at 30 — half again the section gap,
+                // measured on the render, and the cheapest of the three
+                // ways to say "this line is not part of that list" (the
+                // other two being a rule under the title, which would make
+                // eight rules on a card that has seven, and a bigger type
+                // size, which would push the two columns further down).
+                padding-bottom: 18px;
+                // So the two never touch when the row is squeezed: at
+                // 400x320 the title takes its preferred width and the
+                // hint elides into what is left, and with no spacing the
+                // ellipsis butted straight against the "s" of
+                // "shortcuts".
+                spacing: 12px;
+                Text {
+                    text: "Keyboard shortcuts";
+                    color: #ffffff;
+                    font-size: 16px;
+                    // Neither of these two ever wraps — a wrapped title row
+                    // would push the list down — so both elide, which is
+                    // what keeps the row inside the card at a window too
+                    // narrow to hold it. `overflow: elide` also drops a
+                    // Text's layout MINIMUM to the width of one ellipsis
+                    // (i-slint-core 1.17.1 items/text.rs:656), which is
+                    // what actually lets the row shrink; the card's
+                    // `clip: true` is the floor under both.
+                    overflow: elide;
+                }
+                Text {
+                    text: "? or F1 to open · Esc or click anywhere to close";
+                    color: #8a8a96;
+                    font-size: 11px;
+                    horizontal-stretch: 1;
+                    horizontal-alignment: right;
+                    vertical-alignment: center;
+                    overflow: elide;
+                }
             }
-            Text {
-                text: "Arrows / PgUp / PgDn / Home / End   navigate\nY, P or Space   pick (take)\nN or X   reject\nU   clear mark\n+ / -   zoom in / out (grid → loupe fit → ×1.5 steps → 1:1, center held)\nWheel in loupe   zoom, anchored under the pointer (grid: scroll)\nZ   fit → 1:1; zoomed → back to fit (from grid: jump to 1:1)\nClick in loupe   above fit: center on the clicked point\nDouble-click   grid: open in loupe; loupe: 1:1 on the clicked point\nG   back to the grid\nEsc   back to the grid, selection cleared\nK   keyword field (opens the IPTC panel)\nI   IPTC panel\nShift+arrows   extend selection\nCtrl+A   select all (filtered set)\n[ / ]   previous / next burst\nShift+[ / ]   extend the selection by a whole burst\nCtrl+Shift+B   select this burst\nCtrl+O   open folder\nCtrl+E   Copy Picks…\nCtrl+Shift+E   Export Frames as Video…\nCtrl+Q   quit\n1–5, 0   reserved (star ratings, v2)";
-                color: #c8c8d0;
-                font-size: 13px;
+
+            // 2 — THE BODY, in two columns.
+            //
+            // `Flickable { interactive: false }` is a SAFETY VALVE, not a
+            // feature: at every supported size the card fits whole and this
+            // never engages. Below roughly a 600 px window height the
+            // deficit lands here (the title and the footer stay put, issue
+            // #62's guarantee) and the list clips-and-scrolls on the wheel
+            // instead of painting outside the rounded rect.
+            //
+            // A non-interactive Flickable returns ForwardAndIgnore for
+            // every non-wheel pointer event and still handles Wheel
+            // (i-slint-core 1.17.1 items/flickable.rs:155, :168), which is
+            // exactly the pair of behaviours this card needs.
+            //
+            // NOT a ScrollView, and the reason this comment used to give
+            // was WRONG — measured 2026-09-04 against i-slint-compiler
+            // 1.17.1 widgets/fluent/scrollview.slint. The fluent
+            // ScrollView's own Flickable is `interactive: false` too
+            // (:174-176), and its ScrollBar is `visible` only while
+            // `maximum > 0` (:54), so wherever this card FITS a ScrollView
+            // is exactly as transparent to the pointer as this Flickable:
+            // swap one in and a click at the card's centre still closes it.
+            // The difference is narrower and it lands where the safety
+            // valve is working — once the card is clamped the bar appears
+            // and its TouchArea eats every click on the 14 px strip down
+            // the body's right edge, so "click anywhere to close" stops
+            // being true over a band of the card while the hint keeps
+            // promising it. Driven both ways at 1010x520 on that strip;
+            // that is the second click in
+            // `shortcuts_card_is_a_two_column_sheet_that_fits_its_window`,
+            // and it is what would go red here.
+            Flickable {
+                interactive: false;
+                vertical-stretch: 1;
+                min-height: 0px;
+                preferred-height: sc-body.preferred-height;
+                viewport-width: self.width;
+                viewport-height: sc-body.preferred-height;
+                sc-body := HorizontalLayout {
+                    spacing: 0px;
+
+                    // LEFT COLUMN — the cull loop.
+                    //
+                    // Both columns take HALF of what is left after the
+                    // gutter, explicitly. Two stretch factors would split
+                    // the SURPLUS over two different preferred widths and
+                    // land the divider a few pixels off centre — invisible
+                    // today, and a thing the next content edit would move.
+                    VerticalLayout {
+                        width: (parent.width - 28px) / 2;
+                        spacing: 16px;
+                        alignment: start;
+                        KeySection {
+                            heading: "MOVE";
+                            KeyRow { k: "← / →"; a: "previous / next frame"; }
+                            KeyRow { k: "↑ / ↓"; a: "one row up / down"; }
+                            KeyRow { k: "PgUp / PgDn"; a: "one screen back / forward"; }
+                            KeyRow { k: "Home / End"; a: "first / last frame"; }
+                            KeyRow { k: "[ / ]"; a: "previous / next burst"; }
+                            KeyRow { k: "G"; a: "back to the grid, selection kept"; }
+                            // The card's one sub-line. "selection kept" on
+                            // its own would be FALSE in the grid, where G
+                            // is the deselect gesture (ui-grid.md); a
+                            // second G row would read as a duplicate.
+                            HorizontalLayout {
+                                spacing: 14px;
+                                Rectangle { width: 104px; }
+                                Text {
+                                    text: "at a grid zoom it clears the selection instead";
+                                    color: #8a8a96;
+                                    font-size: 11px;
+                                    horizontal-stretch: 1;
+                                    wrap: word-wrap;
+                                }
+                            }
+                            KeyRow { k: "Esc"; a: "back to the grid, selection cleared"; }
+                        }
+                        KeySection {
+                            heading: "MARK";
+                            // Auto-advance is this app's most surprising
+                            // behaviour; docs/culling.md has always said it
+                            // and this card never did.
+                            KeyRow { k: "Y / P / Space"; a: "pick — and advance"; }
+                            KeyRow { k: "N / X"; a: "reject — and advance"; }
+                            KeyRow { k: "U"; a: "clear the mark, stay put"; }
+                            // Kept, not dropped: it is the answer to
+                            // "I pressed 3 and nothing happened", and
+                            // ratings are marks.
+                            KeyRow { k: "1–5, 0"; a: "reserved for star ratings (v2)"; dim: true; }
+                        }
+                        KeySection {
+                            heading: "SELECT";
+                            KeyRow { k: "Shift+arrows"; a: "extend the selection"; }
+                            KeyRow { k: "Shift+[ / ]"; a: "extend it by whole bursts"; }
+                            KeyRow { k: "Ctrl+Shift+B"; a: "add the burst under the cursor"; }
+                            KeyRow { k: "Ctrl+A"; a: "select all (the filtered set)"; }
+                        }
+                    }
+
+                    // The column gutter, with the hairline that stops the
+                    // eye reading straight across from a left-hand action
+                    // into a right-hand key — right-flush keys make that
+                    // read easy, so the separator is not decoration.
+                    Rectangle {
+                        width: 28px;
+                        // Same reckoning as the heading rules: #2c2c30
+                        // measured 1.16:1 and was invisible. This line
+                        // runs the body's whole height, which is exactly
+                        // why it must be seen — it is the only thing
+                        // saying the right-hand keys are not the left-hand
+                        // rows' second column.
+                        Rectangle {
+                            x: (parent.width - self.width) / 2;
+                            width: 1px;
+                            height: 100%;
+                            background: #6a6a76;
+                        }
+                    }
+
+                    // RIGHT COLUMN — looking closer, the mouse, and the menu.
+                    VerticalLayout {
+                        width: (parent.width - 28px) / 2;
+                        spacing: 16px;
+                        alignment: start;
+                        KeySection {
+                            heading: "ZOOM";
+                            KeyRow { k: "+ / -"; a: "zoom in / out, one stop"; }
+                            KeyRow { k: "Z"; a: "fit ⇄ 1:1 (grid: straight to 1:1)"; }
+                        }
+                        // MOUSE is its own section because a card titled
+                        // "Keyboard shortcuts" that files Wheel and
+                        // Double-click among the keys is lying — and
+                        // because the heading is what shrinks
+                        // "Wheel in loupe" to "Wheel", which is most of
+                        // what makes a fixed key column possible.
+                        KeySection {
+                            heading: "MOUSE";
+                            KeyRow { k: "Wheel"; a: "grid: scroll · loupe: zoom at pointer"; }
+                            KeyRow { k: "Drag"; a: "grid: scroll · loupe: pan above fit"; }
+                            KeyRow { k: "Click"; a: "loupe above fit: centre there"; }
+                            KeyRow { k: "Double-click"; a: "grid: open in loupe · loupe: 1:1 there"; }
+                        }
+                        KeySection {
+                            heading: "PANELS";
+                            KeyRow { k: "I"; a: "IPTC panel"; }
+                            KeyRow { k: "K"; a: "keyword field (opens the panel)"; }
+                        }
+                        // Named after the menu, character for character,
+                        // ellipses included, so a mouse user learns where
+                        // the four chords live for free.
+                        KeySection {
+                            heading: "FILE MENU";
+                            KeyRow { k: "Ctrl+O"; a: "Open Folder…"; }
+                            KeyRow { k: "Ctrl+E"; a: "Copy Picks…"; }
+                            KeyRow { k: "Ctrl+Shift+E"; a: "Export Frames as Video…"; }
+                            KeyRow { k: "Ctrl+Q"; a: "Quit"; }
+                        }
+                        // The rule ui-grid.md goes out of its way to state,
+                        // and the one a user with a 40-frame burst selected
+                        // will otherwise get backwards.
+                        Text {
+                            text: "Marks act on the cursor frame only — never on the selection.";
+                            color: #8a8a96;
+                            font-size: 11px;
+                            wrap: word-wrap;
+                        }
+                    }
+                }
             }
+
+            // 3 — FOOTER. The zoom ladder, parked: it is a diagram, not a
+            // binding, and as a row it was the widest string on the card
+            // (~400 px of a 444 px content box) and so set the card's width.
+            // Kept rather than deleted — that ladder is why `+` behaves
+            // differently in the grid than in the loupe.
+            //
+            // Traced like the two dialogs' button rows (issue #62): the
+            // body is the child that yields when the window is too short,
+            // so "the footer is still inside the card" is a relation
+            // between two laid-out rectangles rather than something a
+            // reader can check in this file — and a line drawn below the
+            // card is still drawn, so no render proves it either.
             Text {
-                // License line moved to About (issue #23 — its
-                // intended home per the M5 deferral note).
-                text: "Esc or click to close.";
-                color: #707078;
+                text: "Zoom ladder: grid columns → loupe fit → ×1.5 steps → 1:1, centre held";
+                color: #8a8a96;
                 font-size: 11px;
+                // A diagram reads better cut with an ellipsis than cut
+                // mid-glyph by the card's clip, and it must never wrap:
+                // a two-line footer would take the room from the list.
+                overflow: elide;
+                init => {
+                    root.dbg-card-laid-out("shortcuts footer", self.absolute-position.x,
+                        self.absolute-position.y, self.width, self.height);
+                }
+                changed absolute-position => {
+                    root.dbg-card-laid-out("shortcuts footer", self.absolute-position.x,
+                        self.absolute-position.y, self.width, self.height);
+                }
+                changed height => {
+                    root.dbg-card-laid-out("shortcuts footer", self.absolute-position.x,
+                        self.absolute-position.y, self.width, self.height);
+                }
             }
         }
 

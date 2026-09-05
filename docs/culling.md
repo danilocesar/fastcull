@@ -22,32 +22,54 @@ which is faster than any undo dialog.
 
 ## Keyboard map
 
+In the order the in-app card lists them.
+
 | Key | Action |
 |---|---|
-| Arrows / PgUp / PgDn / Home / End | navigate (grid and loupe) |
+| `←` / `→` | previous / next frame |
+| `↑` / `↓` | one row up / down |
+| PgUp / PgDn | one screen back / forward |
+| Home / End | first / last frame |
+| `[` / `]` | previous / next burst (see below) |
+| `G` | back to the grid at your previous grid zoom, selection kept — *at a grid zoom it clears the selection instead* |
+| `Esc` | back to the grid, **and the selection is cleared** — from anywhere but a text field |
 | `Y`, `P` or `Space` | pick (auto-advances) |
 | `N` or `X` | reject (auto-advances) |
 | `U` | clear mark (stays put) |
-| `+` / `-` | zoom: grid columns → loupe fit → ×1.5 steps → 1:1 |
+| Shift+arrows | extend the selection |
+| Shift+`[` / Shift+`]` | extend it by whole bursts (see below) |
+| `Ctrl+Shift+B` | add the burst under the cursor to the selection (see below) |
+| `Ctrl+A` | select all (of the filtered view) |
+| `+` / `-` | zoom in / out, one stop: grid columns → loupe fit → ×1.5 steps → 1:1 |
 | `Z` | fit → 1:1; from 1:1 *or any zoom* → back to fit (from the grid: straight to 1:1) |
-| `G` | back to the grid at your previous grid zoom |
-| `Esc` | back to the grid, **and the selection is cleared** — from anywhere but a text field |
-| `[` / `]` | previous / next burst (see below) |
-| Shift+`[` / Shift+`]` | extend the selection by a whole burst (see below) |
-| `Ctrl+Shift+B` | select this burst — the whole one under the cursor (see below) |
 | `I` | IPTC panel |
 | `K` | jump to the keyword field (opens the panel if needed) |
-| Shift+arrows | extend a selection |
-| `Ctrl+A` | select all (of the filtered view) |
+| `Ctrl+O` | Open Folder… |
 | `Ctrl+E` | Copy Picks… |
 | `Ctrl+Shift+E` | Export Frames as Video… |
-| `Ctrl+O` | Open Folder… |
 | `Ctrl+Q` | quit |
+| `?` or `F1` | the shortcuts card — press either again to close it |
 | `1`–`5`, `0` | reserved for star ratings (a future version) |
 
-The same map lives in **Help > Keyboard Shortcuts** inside the app. On
-Windows those menus are the system menu bar Windows draws for the window,
-not a bar inside it — the same menus either way.
+The same map lives in **Help > Keyboard Shortcuts** inside the app — or
+press **`?`** (or `F1`), which is quicker and does not need the mouse. The
+card groups these under MOVE, MARK and SELECT down the left and ZOOM,
+MOUSE, PANELS and FILE MENU down the right, with every key in one aligned
+column so you can run your eye down them; `Esc`, `?`, `F1` or a click
+anywhere closes it. On Windows those menus are the system menu bar Windows
+draws for the window, not a bar inside it — the same menus either way.
+
+> **Changed after 0.13.1**: the card used to be one 23-line block in
+> which the key and its description ran together at the same size, weight
+> and colour, in no useful order, inside a box that was the same height
+> whatever was in it. It is now a two-column sheet with seven headed
+> groups and the keys in their own aligned column, only as tall as what is
+> on it — and it says several things it never said: that `Y` and `N`
+> advance while `U` stays put, that `G` keeps your selection from the
+> loupe and clears it at a grid zoom, and that marks only ever touch the
+> frame under the cursor. Dragging is listed at last. And `?` or `F1`
+> opens it: before, the keyboard help of a keyboard-first app could only
+> be opened with the mouse.
 
 **Help > About** shows the version, license, and project link. When
 filing a bug, include the version string from there. Development builds
@@ -55,9 +77,11 @@ read `X.Y.Z-devel-<date>-<commit>` — the date is when that commit was
 made, not when the build was compiled, so the same code always reports
 the same version. Together they say exactly which code you were running
 and how old it is. A tagged release just reads `X.Y.Z`.
-While About or the shortcuts popup is open, keys are swallowed (a
-stray `N` will never reject the photo underneath); `Esc` or a click
-outside closes them. `Esc` always closes the thing on top: if a popup
+While About or the shortcuts card is open, keys are swallowed (a
+stray `N` will never reject the photo underneath); `Esc` closes either
+one, a click outside closes either one, and a click *on* the shortcuts
+card closes it too — About is the one that stays put under a click,
+because there is a URL on it you may be trying to read. `Esc` always closes the thing on top: if a popup
 is open over the Copy Picks dialog, the first `Esc` closes the popup
 and the dialog — destination, plan and all — survives underneath.
 The keyboard itself never dies: closing the IPTC panel, opening one of
@@ -101,10 +125,13 @@ be a cull command.
 
 - **Grid**: wheel scrolls, click selects (and moves the cursor),
   double-click opens the image in the loupe, drag scrolls.
-- **While a dialog or popup is open**: the wheel does nothing. About,
-  Keyboard Shortcuts, Copy Picks and Export Frames as Video all block
-  it, so an absent-minded scroll cannot move the grid behind them —
-  close the dialog and you are still where you left off.
+- **While a dialog or popup is open**: the wheel never reaches the grid.
+  About, Copy Picks and Export Frames as Video swallow it outright.
+  Keyboard Shortcuts is the one that does something with it: if your
+  window is too short to show the whole card, the wheel scrolls the list
+  inside it — and only that. Either way an absent-minded scroll cannot
+  move the grid behind them; close the dialog and you are still where
+  you left off.
 - **Loupe, at fit**: wheel-up zooms in one step, anchored under the
   pointer — aim the wheel at an eye and it stays put. Wheel-down does
   nothing (use `G`/`Esc` to leave). A single click does nothing;

@@ -1209,6 +1209,7 @@ brightening during wheel scrolling (needs an activity decay timer).
 | `Ctrl+Q` | Quit (persona accelerator gap, provisional) |
 | `Ctrl+E` (menu: Copy picks…) | open copy dialog (`Ctrl+C` stays clipboard-idle: user decision after persona review — never repurpose it) |
 | `Ctrl+Shift+E` (menu: Export Frames as Video…) | open the video export dialog (M9, video-export.md). A CHORD, not a bare letter, so it cannot fire from a fat finger mid `]`/`N` (persona 2026-08-27); it is matched BEFORE `Ctrl+E` because with Shift held the event still arrives as the letter plus modifiers. Disabled — with its reason in the status line, never silently — when there is neither a selection nor a burst under the cursor |
+| `?` / `F1` | open the keyboard-shortcuts card — and, while it is up, close it again (2026-09-04; the persona's finding was that the keyboard help of a keyboard-first app could be opened only with the mouse). `?` reaches the app as the shifted character on most layouts, so it is matched both with and without a reported Shift modifier, and `/`-with-Shift is matched too for layouts that report the unshifted key. The opener lives in the MAIN key scope beside the other bare letters, which is what keeps it from firing while an IPTC field, the keyword field or a dialog's own field holds the keyboard; the close arm is mirrored in the copy and export scopes (issue #42's topmost-first rule). About keeps `Esc` as its only key. **Both keys are therefore inert while a field or a dialog holds the keyboard, and for `F1` that is a decision, not a consequence** (2026-09-04): for `?` it is forced — the key is a typed character, and a help card that opened instead of typing a question mark into a keyword would be a defect — while `F1` is not a character and could have been given a scope of its own. It was not, because the help it opens is the GRID's help: none of its 27 rows applies while a text field has the keyboard, and a modal that appeared over a half-typed keyword would have to decide what happens to the edit. Esc leaves the field first; F1 works there |
 | `1`–`5`, `0` | reserved (star ratings, v2) — must not conflict |
 
 There is no undo stack in v1 (user decision): a mis-marked frame during
@@ -1268,13 +1269,212 @@ The menus:
   nothing), Settings… (placeholder entry, disabled until a settings dialog
   exists — post-v1 candidate), Quit.
 - **View**: Zoom In/Out (`+`/`-`), IPTC Panel (`I`, from M5), Filter Bar.
-- **Help**: Keyboard Shortcuts (small popup listing the keyboard map — the
-  map in this spec is the source of truth), About.
+- **Help**: Keyboard Shortcuts (the card below — the map in this spec is
+  the source of truth for what it lists), About.
+
+### The keyboard-shortcuts card (rebuilt 2026-09-04)
+
+The owner's verdict on the previous one was "awful and cramped", and the
+diagnosis was in the source rather than in the leading: the whole body was
+ONE `Text` with `\n` separators and three literal spaces between each key
+and its description, so the action text began wherever the key happened to
+end — 23 rows, 23 different left edges — the key had no more visual weight
+than the prose, there were no groups, and the card was a hard-coded 560 px
+that wasted 78 px at 1440x900 and covered 88 % of the modal layer at
+1100x700. It also lacked `drag`, which is in the map above, so the
+acceptance line below was false. What replaced it:
+
+- **A fixed key column, and that is the whole contract.** Every row is a
+  `KeyRow`: a **104 px** right-aligned key cell (13 px, weight 600,
+  `#e8e8f0`), a 14 px gutter, then a stretching action cell (13 px,
+  `#c8c8d0`). The 104 px IS A CONSTANT, never a content measurement — that
+  is what makes the action column start at the same x on all 27 rows, in
+  any font, on any platform, and right-alignment gives a SECOND hard edge
+  so the key list and the action list are each independently scannable.
+  Widest label measures ~83 px at 13 px semibold across Noto Sans /
+  Liberation Sans / Open Sans (`Y / P / Space`, `Shift+arrows`,
+  `Double-click`): 20 % headroom. Both cells `wrap` and neither elides — a
+  wider platform font costs a taller row, never a lost character of a
+  shortcut. A `dim` variant (both cells) carries the reserved star-rating
+  row: colour says "not yet" faster than a word. It is **`#8a8a96`,
+  4.74:1** on this card's `#202028` — not the `#707078` it shipped with on
+  2026-09-04, which measures **3.29:1**. A row dimmed below AA is not a
+  softer statement, it is a missing one, and that is the same number on
+  the same ground that took the closing hint off the same colour (the
+  "Exactly three children" bullet below): the two decisions are one. It still reads as
+  plainly inactive next to a live row, whose key measures 13.27:1 and
+  whose action measures 9.72:1 — the dim row keeps about half their
+  contrast. All four ratios are computed from the sRGB values; the ink as
+  RENDERED measures a little brighter (5.25:1 for the dim key, off the
+  1440x900 shot), which is antialiasing, and both readings clear 4.5.
+- **Seven sections in two columns**: MOVE, MARK, SELECT down the left;
+  ZOOM, MOUSE, PANELS, FILE MENU down the right. Headings are ONE WORD
+  (a landmark is short), 11 px `#8a8a96` with 0.6 px tracking, each with a
+  1 px **`#6a6a76`** rule running to its column's edge; a 1 px `#6a6a76`
+  hairline separates the two columns over the body's full height. Those
+  two were `#33333d` and `#2c2c30` when the card shipped, which measure
+  **1.29:1** and **1.16:1** on this ground — ink under the threshold of
+  vision, which is not a subtle rule but an absent one, so the choice was
+  to draw them or drop them. `#6a6a76` measures **3.03:1** (WCAG's
+  non-text minimum) computed, 3.02:1 as rendered, and stays deliberately
+  BELOW the heading's 4.74:1 beside it: the word is the landmark, the rule
+  is what gives the group a body. MOUSE is a section of its own because a
+  card headed "Keyboard shortcuts" that files `wheel` and `double-click`
+  among the keys is lying — and because the heading is what shrinks
+  "Wheel in loupe" to "Wheel", which is most of what makes a fixed key
+  column fit at all. FILE MENU echoes the File menu
+  character for character, ellipses included, so a mouse user learns where
+  the four chords live.
+- **The card GROUPS AND PARAPHRASES the map, and lists every binding in
+  it.** One map row becomes four (`Arrows / PgUp / PgDn / Home / End` was
+  a 222 px key string that made any fixed column impossible, and named
+  five keys while explaining none); two map rows share one card row (the
+  two double-clicks); `drag` is a row at last. `?`/`F1` is named in the
+  title-row hint rather than given a row of its own: it is the key that
+  brought the reader here, and it belongs to no section.
+- **780 px wide, content-driven tall.** `card-width: min(780px, window −
+  48px)`; the height is `ModalScrim`'s opt-in `card-fits-content`, clamped
+  to `window − 40px`. Measured **780x549** on the development seat, at
+  1440x900 (x 330..1110, y 182..731) and unchanged at 1000x700 (x 110..890,
+  y 82..631) — it fits whole at the smallest supported window and never
+  scrolls there. **Every length in this section is a LOGICAL pixel**, the
+  unit Slint lays out in: a 200 % seat at 1920x1080 is 960x540 logical, so
+  it is a smaller window than 1000x700 and the card clamps there. "The
+  smallest supported window" is therefore a claim about logical size, and
+  a high-DPI seat is small in exactly the way a small monitor is.
+- **549 is a MEASUREMENT and no test may pin it.** It is the sum of ~27
+  text line boxes, so it belongs to whichever face the seat draws with,
+  and the numbers are far apart: 549 in this machine's Noto Sans, **491**
+  in Liberation Sans, 512 in Nimbus Sans / Carlito / Cantarell, 525 in
+  Montserrat, 627 in Noto Sans Mono. The ubuntu CI runner draws in DejaVu
+  Sans and the Windows runner in Segoe UI; neither is this seat's font,
+  and the suite already knows two Linux seats disagree about a panel row's
+  y by 3 px. The card's test therefore pins **only what is geometric**:
+  the 780 width, that the card lies inside the modal layer, that it FITS
+  WHOLE at 1000x700, that its footer is inside it, and — only after the
+  fits-whole check, so that it can no longer double as clamp detection in
+  disguise — that the height is the SAME at both window sizes, which
+  follows from the content and the width being the same. Fitting whole is
+  measured as slack rather than as a ceiling: a clamped card is exactly
+  `layer − 40` tall and so leaves exactly 20 px above the status bar,
+  while an unclamped one leaves more, and the status bar's top is the
+  modal layer's floor on both platforms where the layer's TOP is not (the
+  menu bar is in-window on Linux and the OS window frame's on Windows,
+  which moves the ceiling by 40 px between the runners). The card reports
+  its own rectangle through `ModalScrim`'s `card-laid-out` callback, as
+  the two dialog cards do, because a content-driven card has no arithmetic
+  a reader can check in the file.
+- **Exactly three children of `ModalScrim`'s layout** — title row, body,
+  footer — because that component's `spacing: 8px` is HARD-CODED and no
+  call site can override it: a fourth child is a gap nobody chose, and the
+  old card's four non-stretching children are why its leftover height was
+  sprayed into a 27 px gap under the title and a 45 px gap above the
+  footer. The closing hint moved onto the title row (flush right, 11 px
+  `#8a8a96` — `#707078` measured 3.29:1 on this ground, under AA, on the
+  only sentence saying how to leave), and the zoom ladder moved to the
+  footer: it is a diagram, not a binding, and as a row it was the widest
+  string on the card and therefore set the card's width. The title row
+  carries **18 px of padding under it**: without it the title's ink ended
+  12 px above the "MOVE" heading while a row's ink ends 21 px above the
+  NEXT heading, so the nearest thing to the title was the group under it
+  and the card read as one list with a caption. 18 px puts that gap at 30
+  — half again the section gap, measured on the render — which is the
+  cheapest of the three ways to say "this line is not part of that list"
+  (the others being a rule under the title, making eight rules on a card
+  that has seven, and a larger type size, which pushes both columns
+  further down).
+- **Nothing paints outside the card, at any window size.** The card
+  `clip`s, in `ModalScrim`, for every card it draws. A Slint layout does
+  not clip its children: handed less room than their minimum widths, a
+  `HorizontalLayout` gives each of them that minimum anyway and simply
+  overflows its parent, so a `Text` with neither `wrap` nor
+  `overflow: elide` draws its tail on the SCRIM, outside the rounded rect.
+  Measured before the fix, at 400x320: the title row's hint painted glyphs
+  at x 379..396 with the card's right border at 375 — 61 pixels of ink on
+  the scrim, and the same defect issue #26 treated as a real regression on
+  the About card's version string. Both Texts of the title row also
+  `overflow: elide` now (which drops a Text's layout minimum to the width
+  of one ellipsis, i-slint-core 1.17.1 `items/text.rs:656`, and is what
+  actually lets the row shrink), as does the footer; the clip is the floor
+  under them, not a substitute for them. Re-measured at 400x320 after: no
+  pixel outside the card differs from the scrim over the grid by more than
+  JPEG noise.
+- **What that changed about About, precisely.** The claim that this
+  rebuild left About byte-for-byte identical holds only for windows at
+  least **520 px wide** — below that the new `min(card-width, window −
+  40px)` clamp narrows a card that used to hang off both edges — and, from
+  the clip above, only for windows tall and wide enough that nothing in
+  About overflows. Below those sizes About changes, and for the better:
+  its content is cut at the card's edge instead of being drawn on the
+  scrim. That supersedes the accepted defect recorded under issue #26
+  below.
+- **Nothing in the card takes the pointer or the keyboard.** No TouchArea
+  (so a click falls through to the scrim's, and "click anywhere to close"
+  is TRUE — this card leaves `card-eats-clicks` false, unlike About), no
+  FocusScope, LineEdit or Button, so `focus-owner` stays 0 and the
+  containment guard in the root key scope keeps swallowing every stray key
+  (issue #23). A hover highlight on the rows would need a TouchArea and
+  would break click-to-close silently; do not add one, and do not add a
+  search field either — it would need focus, which is what issue #23 bought
+  containment against.
+- **The body is a `Flickable { interactive: false }`, deliberately not a
+  `ScrollView`.** A non-interactive Flickable returns ForwardAndIgnore for
+  every non-wheel pointer event and still handles Wheel
+  (i-slint-core 1.17.1 `items/flickable.rs:155`, `:168`), so a click on the
+  body reaches the scrim while a wheel over the card never reaches the
+  grid. **The reason first recorded for preferring it to a `ScrollView`
+  was wrong about the mechanism and is corrected here** (measured
+  2026-09-04, against i-slint-compiler 1.17.1
+  `widgets/fluent/scrollview.slint`): the fluent ScrollView's own Flickable
+  is `interactive: false` too (`:174-176`), and its ScrollBar is `visible`
+  only while `maximum > 0` (`:54`). So wherever the card FITS, a ScrollView
+  is as transparent to the pointer as this Flickable — swapping one in
+  leaves a click at the card's centre closing the card exactly as before.
+  The difference is real but narrower, and it appears precisely where the
+  safety valve is doing its job: once the card is clamped the bar becomes
+  visible and its TouchArea eats every click on the 14 px strip down the
+  body's right edge. Driven both ways at 1010x520 on that strip — the
+  Flickable closes the card, the ScrollView leaves it open — which is
+  "click anywhere" quietly ceasing to be true over a band of the card
+  while the hint still promises it, and it is the case the click assertion
+  in `shortcuts_card_is_a_two_column_sheet_that_fits_its_window` exists to
+  kill. It is a SAFETY VALVE, not a feature: below roughly a 640 px window
+  height the card is clamped, the deficit lands in the body (it is the only
+  child with `vertical-stretch: 1; min-height: 0px`), and the list clips
+  and scrolls on the wheel while the title and the footer stay inside the
+  rounded rect — issue #62's guarantee, verified at 640x300 (card 592x194,
+  footer at y 221..236 inside a card ending at 254). This is also the one
+  thing the wheel does over a modal, which `docs/culling.md` says.
 
 Acceptance: opening a folder via the menu behaves identically to the CLI
-argument (same session path); the shortcuts popup lists every binding in this
-spec and closes with Esc. Persona (almost-human-user) reviews this section at
-M5 implementation start per the gate.
+argument (same session path); the shortcuts card lists every binding in
+this spec — `the_shortcuts_card_lists_every_binding_in_the_spec` parses
+the Keyboard map table above and the card's own rows and fails if either
+grows a row the other does not have, which is what makes this line
+checkable instead of aspirational (and a spec row may be paired with NO
+card row only if it is one of the bindings the card teaches in prose
+instead, which that test keeps its own short list of — an unexplained
+empty pairing is how the next `drag` would be missed) — and it closes
+with `Esc`, with `?`, with `F1` and with a click anywhere, including on
+the card, which is driven at two points: the card's centre where it fits,
+and the body's right edge where it is clamped. Persona
+(almost-human-user) reviews this section at M5 implementation start per the
+gate.
+
+Recorded against this card and NOT fixed, so that silence is not taken for
+acceptance (gate, 2026-09-04):
+
+- **The export dialog's `?`/F1 close arm has never been driven.** The copy
+  dialog's arm was driven end to end; the export one could not be reached
+  on synthetic data, which has nothing to export. The two arms are
+  character-identical, which is an argument and not a measurement, and it
+  is recorded as one.
+- **A full-suite run during the gate saw
+  `session_swap_mid_keyword_edit_never_writes_into_the_new_session` fail
+  once and then pass 3/3 in isolation.** This card touches neither keyword
+  commit nor session swap; it is the pre-existing load-sensitive flake of
+  the issue #54 family, and it is named here so the next reader does not
+  spend the afternoon on it.
 
 **Folderless launch (user requirement 2026-07-25, issue #5 — IMPLEMENTED
 2026-07-26)**: `fastcull-app` with NO arguments must open the normal
@@ -1362,10 +1562,12 @@ would stop reading as separators.
   hyphen); the width margin is what does.
   The card grew to 348 px with tighter padding to hold the extra line. QE
   verified the version renders complete at every size down to 480x320,
-  including with `core.abbrev=20`. Accepted below ~360 px window height:
-  the redundant "Esc or click outside to close" hint spills outside the
-  card. That is narrower than the About card's own content and far below
-  any usable culling window; the version string itself never clips.
+  including with `core.abbrev=20`. The accepted defect recorded here — that
+  below ~360 px of window height the redundant "Esc or click outside to
+  close" hint spilled outside the card — is CLOSED as of 2026-09-04: the
+  shared card clips (the shortcuts-card section above), so overflowing
+  content is now cut at the card's edge instead of drawn on the scrim.
+  The version string itself never clips at any usable size.
 
 **Modal keyboard containment (issue #23, user decision "swallow
 everything in that screen")**: while About OR the shortcuts popup is

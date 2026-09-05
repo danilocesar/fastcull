@@ -512,6 +512,10 @@ fn dispatch(win: &MainWindow, state: &Rc<RefCell<AppState>>, key: &str, layout: 
             "pgup" => char::from(Key::PageUp).to_string().into(),
             "home" => char::from(Key::Home).to_string().into(),
             "end" => char::from(Key::End).to_string().into(),
+            // Added with the shortcuts card's `?`/F1 opener: F1 is the
+            // only one of the two that is not literal text, so without a
+            // name here a script could drive half the binding.
+            "f1" => char::from(Key::F1).to_string().into(),
             s => s.into(),
         };
         let ctrl_text: slint::SharedString = char::from(Key::Control).to_string().into();

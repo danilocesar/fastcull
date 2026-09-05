@@ -2324,6 +2324,300 @@ fn shortcuts_popup_contains_the_keyboard() {
     );
 }
 
+/// The shortcuts card after the 2026-09-04 rebuild: a 780 px two-column
+/// key sheet whose HEIGHT IS ITS CONTENT'S, opened and closed from the
+/// keyboard and by a click on the card itself, and fitting whole at the
+/// smallest window the design claims.
+///
+/// Nothing in the suite asserted this popup's size or position before —
+/// the only record of it was a doc comment two thousand lines down — so a
+/// redesign that scrolled, clipped its footer or hung off the window would
+/// have shipped green.
+///
+/// **NOT ONE PIXEL OF FONT METRICS IS PINNED HERE, and that is the whole
+/// design of this test.** It first shipped with a height band
+/// (`480..=794`) and a big-window/small-window height EQUALITY, and both
+/// were this development seat's Noto Sans wearing the costume of a
+/// property: forcing fonts that exist on the CI runners broke them
+/// immediately — Liberation Sans lays the card out 473 px tall and fails
+/// the band's floor, Noto Sans Mono 609 px and fails the equality, because
+/// the equality silently carried a 594 px ceiling (the 1000x700 modal
+/// layer, 634, minus the 40 px clamp) with no way to say so. The Windows
+/// runner draws in Segoe UI and the ubuntu runner in DejaVu Sans; neither
+/// is what this seat renders. So what is pinned is what the DESIGN
+/// guarantees, and each of these holds in any font:
+///
+/// 1. **`?` and F1 open it, and close it.** It used to be reachable only
+///    from Help > Keyboard Shortcuts, i.e. only with the mouse, in a
+///    keyboard-first app.
+/// 2. **A click ON THE CARD closes it** — at the centre at 1440x900, and
+///    on the body's right edge at 1010x520, where the card is clamped.
+///    The hint says "click anywhere", and the card is where a hand aiming
+///    at "anywhere" lands. It works only because nothing in the card takes
+///    the pointer, which is why the body is a non-interactive `Flickable`
+///    and not a `ScrollView`. The second click is the discriminating one
+///    and the first is not: a fluent ScrollView wraps a Flickable that is
+///    ALSO non-interactive and hides its ScrollBar until something
+///    overflows, so it eats a click only on the 14 px strip its bar
+///    occupies, only while the card is clamped. Mutation-checked at both
+///    points — see the comment on the assertions.
+/// 3. **780 px wide, exactly.** That number is geometric (18 + 2 x (104
+///    key + 14 gutter + 240 action) + 28 + 18) and so is the same on every
+///    seat: it is the fixed key cell — the whole alignment contract — plus
+///    the room the action column was measured to need.
+/// 4. **It lies inside the modal layer, and it FITS WHOLE at the smallest
+///    supported window.** Not a height in pixels — a relation to the layer
+///    it is centred in. The card is clamped 40 px inside that layer, so a
+///    clamped card leaves exactly 20 px between its floor and the layer's;
+///    more than 20 means it fits, and "it never scrolls at a supported
+///    size" is exactly that. The layer's FLOOR is the status bar's top on
+///    every platform, which is why the check is written against it: its
+///    top is not, the menu bar being in-window on Linux and the OS
+///    window frame's on Windows.
+/// 5. **The same height at both window sizes** — asserted after 4, so it
+///    can only mean what it says: the content and the width are identical
+///    at 1440x900 and at 1000x700, so the height must be too, whatever
+///    face draws it. Before 4 it was doing clamp detection in disguise.
+/// 6. **The footer is inside the card, at both sizes.** The body is the
+///    child that yields when the window is short (issue #62's rule), so
+///    this is the assertion that says the yielding lands where it should —
+///    and it is also what catches a card that collapsed to nothing, which
+///    is the failure the band's floor was aimed at.
+///
+/// The last strand is the one the new binding owes: with the keyboard in
+/// the keyword field, `?` is a question mark, not a popup.
+#[test]
+fn shortcuts_card_is_a_two_column_sheet_that_fits_its_window() {
+    if !has_display() {
+        eprintln!("screenshot smoke skipped: no display server");
+        return;
+    }
+    let _s = serial();
+    let out = out_dir().join("shortcuts-card.jpg");
+    let script = format!(
+        "{PIN_WINDOW};900:key:?;1300:dump.opened;1600:key:?;1900:dump.closed;\
+         2200:key:f1;2600:dump.f1;\
+         3000:click:shortcuts card;3400:dump.clicked;\
+         3800:key:f1;\
+         4200:resize:1000x700;4400:wait:shortcuts card laid out at 110,;\
+         4800:dump.small;5200:key:f1;5500:dump.gone;\
+         5800:resize:1010x520;6100:key:f1;\
+         6300:wait:shortcuts card laid out at 115,;\
+         6700:click.870,250;7100:dump.clickedclamped;7400:key:escape;\
+         7700:resize:1440x900;8100:key:k;\
+         8200:wait:iptc field 0 laid out at 1150;\
+         8600:key:?;9000:dump.typing"
+    );
+    let stderr = shoot_env_stderr(
+        &["--synthetic", "200"],
+        &[("FASTCULL_TRACE", "1"), ("FASTCULL_DRIVE", script.as_str())],
+        &out,
+    );
+    // The panel gate doubles as the resize gate: `iptc field 0` is laid out
+    // at x=1150 only in a 1440 px window, so a `k` that arrived before the
+    // window came back would never satisfy it — a failure, not a silent
+    // re-timing (issue #13's rule).
+    for gate in [
+        "wait:shortcuts card laid out at 110, (satisfied",
+        "wait:shortcuts card laid out at 115, (satisfied",
+        "wait:iptc field 0 laid out at 1150 (satisfied",
+    ] {
+        assert!(
+            stderr.contains(gate),
+            "the `{gate}…` gate never fired — the steps after it were timed:\n{stderr}"
+        );
+    }
+
+    // --- 1: the keyboard opens it, and closes it
+    assert_eq!(
+        dump_field(qedump(&stderr, "opened"), "shortcuts"),
+        "true",
+        "`?` did not open the shortcuts popup:\n{stderr}"
+    );
+    assert_eq!(
+        dump_field(qedump(&stderr, "closed"), "shortcuts"),
+        "false",
+        "`?` did not close the shortcuts popup it had opened:\n{stderr}"
+    );
+    assert_eq!(
+        dump_field(qedump(&stderr, "f1"), "shortcuts"),
+        "true",
+        "F1 did not open the shortcuts popup:\n{stderr}"
+    );
+    assert_eq!(
+        dump_field(qedump(&stderr, "gone"), "shortcuts"),
+        "false",
+        "F1 did not close the shortcuts popup:\n{stderr}"
+    );
+
+    // --- 2: a click ON THE CARD closes it, twice, and the second one is
+    // the one that bites
+    //
+    // `click:<element>` resolves to the CENTRE of the rectangle the card
+    // last reported, which is squarely on the body. The spec says this
+    // card closes "with a click anywhere, INCLUDING on the card", and
+    // until this line the suite only ever clicked the scrim.
+    assert_eq!(
+        dump_field(qedump(&stderr, "clicked"), "shortcuts"),
+        "false",
+        "a click at the centre of the card did not close it — the hint on \
+         it promises \"click anywhere\", and something in the card is now \
+         eating the pointer before the scrim's TouchArea sees it (a hover \
+         highlight, any TouchArea at all):\n{stderr}"
+    );
+    // The second click is at 1010x520, where the card is CLAMPED and the
+    // list really does scroll, on the 14 px strip down the body's right
+    // edge — `x 870` is the middle of 863..877, the card's content ending
+    // at 1010/2 + 390 − 18 = 877. That strip is where a `ScrollView` puts
+    // its ScrollBar, and the ScrollBar owns a TouchArea.
+    //
+    // MEASURED, because the reason recorded for choosing a Flickable over
+    // a ScrollView was wrong about the mechanism and this is what is
+    // actually true (i-slint-compiler 1.17.1
+    // `widgets/fluent/scrollview.slint`): the fluent ScrollView's own
+    // Flickable is `interactive: false` (:174-176), exactly like ours, and
+    // its ScrollBar is `visible` only while `maximum > 0` (:54). So where
+    // the card FITS, a ScrollView is as transparent to the pointer as a
+    // Flickable is — swapping one in leaves the centre click above green —
+    // and the difference appears only once the card is clamped, precisely
+    // where the safety valve is doing its job. Driven both ways at this
+    // size and this point: Flickable closes the card, ScrollView leaves it
+    // open.
+    assert_eq!(
+        dump_field(qedump(&stderr, "clickedclamped"), "shortcuts"),
+        "false",
+        "at 1010x520 the card is clamped and its list scrolls; a click on \
+         the strip where a scrollbar would live did NOT close it, so \
+         \"click anywhere\" has quietly stopped being true over a band of \
+         the card while the hint still promises it:\n{stderr}"
+    );
+
+    // --- 3, 4, 6: the card's shape, at both sizes
+    let (_, _, _, big_h) = laid_out_at(&stderr, "shortcuts card", "opened");
+    assert_shortcuts_card_shape(&stderr, "opened", 1440.0, 900.0);
+    assert_shortcuts_card_shape(&stderr, "small", 1000.0, 700.0);
+
+    // --- 5: and it is the CONTENT's height, not the window's
+    //
+    // Only meaningful because neither size clamped (asserted just above):
+    // the two windows show the same 27 rows at the same 780 px, so the
+    // preferred height they add up to is the same number in any font. A
+    // difference here means some length in the card is reading the window
+    // — which is the one thing a content-driven card must not do.
+    let (_, _, _, small_h) = laid_out_at(&stderr, "shortcuts card", "small");
+    assert_eq!(
+        small_h, big_h,
+        "the card is {small_h} px tall at 1000x700 but {big_h} at 1440x900, \
+         and neither is clamped — so its height depends on the window it \
+         is centred in, not on the list in it:\n{stderr}"
+    );
+
+    // --- the new binding cannot fire from a text field
+    let typing = qedump(&stderr, "typing");
+    assert_ne!(
+        dump_field(typing, "focusowner"),
+        "0",
+        "the keyword field does not hold the keyboard, so the `?` below \
+         proves nothing about text fields:\n{stderr}"
+    );
+    assert_eq!(
+        dump_field(typing, "shortcuts"),
+        "false",
+        "`?` typed into the keyword field opened the shortcuts popup — the \
+         opener lives in the main key scope precisely so it cannot:\n{stderr}"
+    );
+}
+
+/// The shortcuts card's shape at one window size, in the terms the design
+/// guarantees and no others: 780 px wide, inside the modal layer, and
+/// FITTING WHOLE there — plus its footer inside it.
+///
+/// The one number that is deliberately absent is a height. The height is
+/// the sum of ~27 text line boxes and belongs to whatever face the seat
+/// draws with (549 px in this machine's Noto Sans, 491 in Liberation
+/// Sans, 512 in Nimbus Sans / Carlito / Cantarell, 525 in Montserrat,
+/// 627 in Noto Sans Mono); pinning it, or a band around it, pins a font. What the card actually promises is a
+/// relation to the layer it is centred in, and that is what is checked.
+///
+/// **How "it fits whole" is measured without knowing the ceiling.** The
+/// card's height is `min(content, layer − 40px)`, so a CLAMPED card is
+/// exactly `layer − 40` tall and sits exactly 20 px above the layer's
+/// floor; an unclamped one leaves more. The layer's floor is the status
+/// bar's top — `window − 26` — on every platform. Its TOP is not: the
+/// menu bar is drawn in-window on Linux (40 px) and belongs to the OS
+/// window frame on Windows (ui-grid.md's CI section), which moves the
+/// layer's top, its height and therefore the ceiling by 40 px between the
+/// two runners. Measuring the slack under the card instead of the height
+/// against a ceiling makes the check the same sentence on both.
+fn assert_shortcuts_card_shape(stderr: &str, label: &str, window_w: f32, window_h: f32) {
+    let (x, y, w, h) = laid_out_at(stderr, "shortcuts card", label);
+
+    // 780 px is arithmetic, not a measurement: 18 padding + 2 x (104 key +
+    // 14 gutter + 240 action) + 28 column gutter + 18 padding. It is the
+    // same on every seat, so it is the one length that may be an equality.
+    assert_eq!(
+        w, 780.0,
+        "dump.{label}: the shortcuts card is {w} px wide at \
+         {window_w}x{window_h}, not the 780 the two 104 px key columns and \
+         their action columns add up to:\n{stderr}"
+    );
+
+    let layer_floor = window_h - 26.0;
+    assert!(
+        x >= 0.0 && x + w <= window_w && y >= 0.0 && y + h <= layer_floor,
+        "dump.{label}: the shortcuts card ({x},{y} {w}x{h}) is not inside \
+         the modal layer of a {window_w}x{window_h} window (which ends at \
+         y={layer_floor}, the top of the status bar):\n{stderr}"
+    );
+
+    let slack = layer_floor - (y + h);
+    assert!(
+        slack > 20.0,
+        "dump.{label}: THE CARD OUTGREW ITS SMALLEST WINDOW. It is {h} px \
+         tall at {window_w}x{window_h} and leaves {slack} px between its \
+         floor and the status bar — the clamp's own 20 px, which is what a \
+         card pinned at `layer − 40` leaves, so the list inside it now \
+         scrolls at a size the design says it must not. The ceiling here is \
+         {} px where the menu bar is drawn in-window (window − 26 status − \
+         40 menu − 40 clamp), 40 more where it is the OS's. Either the card \
+         grew a section or this seat's face is far taller than the ones it \
+         was measured on:\n{stderr}",
+        window_h - 106.0
+    );
+
+    assert_footer_inside_the_shortcuts_card(stderr, label, window_h);
+}
+
+/// The shortcuts card's footer (the zoom-ladder line) is inside the card,
+/// and the card is inside the window. Issue #62's contract, on the third
+/// card that grows with its content — the body is the child with
+/// `vertical-stretch: 1; min-height: 0px`, so a window too short for the
+/// list must clip the LIST, never push the footer through the card's floor.
+///
+/// This is also what stands in for the height band's floor: a card that
+/// collapsed puts its footer outside itself, and fails here by name.
+fn assert_footer_inside_the_shortcuts_card(stderr: &str, label: &str, window_h: f32) {
+    let (_, card_y, _, card_h) = laid_out_at(stderr, "shortcuts card", label);
+    let (_, foot_y, _, foot_h) = laid_out_at(stderr, "shortcuts footer", label);
+    assert!(
+        foot_y >= card_y,
+        "dump.{label}: the shortcuts footer starts above its card:\n{stderr}"
+    );
+    assert!(
+        foot_y + foot_h <= card_y + card_h + 0.5,
+        "dump.{label}: the shortcuts footer ends at {} but the card ends at \
+         {} — the zoom ladder is outside the card:\n{stderr}",
+        foot_y + foot_h,
+        card_y + card_h
+    );
+    assert!(
+        card_y + card_h <= window_h,
+        "dump.{label}: the shortcuts card ends at {} in a {window_h}px \
+         window:\n{stderr}",
+        card_y + card_h
+    );
+}
+
 /// Mean (B − R) over a fractional sub-rectangle. The selection wash is a BLUE
 /// tint, and blue-minus-red isolates it from plain brightness changes: a
 /// merely brighter cell lifts every channel equally and moves this number
@@ -7559,8 +7853,18 @@ const PIN_WINDOW: &str = "200:resize:1440x900";
 /// `900 - 40 - 26` = 834 px tall (the status bar is 26 px), so a centred
 /// card of height H spans y `40 + (834 - H) / 2` .. that plus H:
 /// Copy Picks (480) y 217..697, the export dialog (260) y 327..587,
-/// the shortcuts popup (560) y 177..737, About (348) y 283..631.
-/// Cards are 560 px wide (480 for the two popups), centred in 1440.
+/// the shortcuts popup (549) y 182..731, About (348) y 283..631.
+/// Cards are 560 px wide, 480 for About, and 780 for the shortcuts popup,
+/// centred in 1440.
+///
+/// The shortcuts figures were `(560) y 177..737` until the card was
+/// rebuilt around a fixed key column (2026-09-04): its height is its
+/// CONTENT's now, so 549 is a MEASUREMENT ON THIS SEAT and not a constant
+/// a reader can find in the .slint file — Liberation Sans lays the same
+/// card out at 491 px. `shortcuts_card_is_a_two_column_sheet_that_fits_
+/// its_window` therefore pins no height at all; what keeps the number
+/// above honest is that a pointer 100 px off the card's centre is still
+/// on the card in every face measured.
 ///
 /// The first two numbers are FLOORS since issue #62, not constants: those
 /// cards grow with their content up to the window. These scripts use
@@ -7792,11 +8096,14 @@ fn a_wheel_over_the_export_dialog_never_scrolls_the_grid_behind_it() {
 /// the suite silently starts marking photographs behind a scrim.
 ///
 /// One run covers both call sites and both card shapes: the shortcuts card
-/// (560 px, clicks pass through to the scrim) and About (348 px,
+/// (780x549 on this seat, clicks pass through to the scrim) and About (480x348,
 /// `card-eats-clicks`, whose extra `TouchArea` has no `scroll-event` arm of
 /// its own — the wheel has to fall through it to the scrim below, which is
 /// the same "over a child" question the copy dialog's rename field asks).
-/// `wheel.700,400` is inside both cards at the pinned window size.
+/// `wheel.700,400` is inside both cards at the pinned window size — and
+/// over the shortcuts card it now lands on the non-interactive `Flickable`
+/// that wraps that card's body, which consumes the wheel itself. Still not
+/// the grid, which is all this test claims.
 #[test]
 fn a_wheel_over_the_help_popups_never_scrolls_the_grid_behind_them() {
     if !has_display() {
