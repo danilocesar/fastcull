@@ -30,7 +30,13 @@ use std::path::{Path, PathBuf};
 /// An EMPTY list means the binding is on the card but not as a key row —
 /// today that is only `?`/F1, which is named in the title-row hint (the
 /// key that opens the card has no natural section, and the reader holding
-/// it does not need a row to find it). Those are asserted separately.
+/// it does not need a row to find it). It is asserted separately, and
+/// `HINTED_INSTEAD_OF_ROWED` below is the whole permitted list: an empty
+/// cell list asserts NOTHING about the card, so left open to anyone it
+/// would let the next binding be written `("Ctrl+P", &[])` and satisfy
+/// this test in both directions while never appearing on the card — which
+/// is the `drag` failure this file exists to prevent, wearing this file's
+/// own uniform.
 const CARD_ROWS_FOR: &[(&str, &[&str])] = &[
     (
         "Arrows / PgUp / PgDn / Home / End",
@@ -68,6 +74,14 @@ const CARD_ROWS_FOR: &[(&str, &[&str])] = &[
     ("`?` / `F1`", &[]),
     ("`1`–`5`, `0`", &["1–5, 0"]),
 ];
+
+/// The only spec rows allowed an empty cell list in `CARD_ROWS_FOR`, and
+/// the string each is named by on the card instead of in a `KeyRow`.
+/// Adding to this list is a decision about the CARD — that a binding is
+/// better taught where the reader already is than filed under a heading —
+/// so it is made here, once, and not by leaving a `&[]` in a table of 27
+/// rows where nobody would see it.
+const HINTED_INSTEAD_OF_ROWED: &[(&str, &str)] = &[("`?` / `F1`", "? or F1 to open")];
 
 fn repo_root() -> PathBuf {
     // crates/fastcull-app -> crates -> repo root
@@ -203,12 +217,38 @@ fn the_shortcuts_card_lists_every_binding_in_the_spec() {
         );
     }
 
-    // --- the one binding the card names outside a key row ------------
+    // --- the escape hatch is exactly as wide as it is documented -----
+    //
+    // Without this, `&[]` is a way to add a binding to the spec, satisfy
+    // both directions of the parity above, and ship a card that does not
+    // list it — the exact hole `drag` fell through, reopened inside the
+    // test that closed it.
+    for (key, wanted) in CARD_ROWS_FOR {
+        assert!(
+            !wanted.is_empty() || HINTED_INSTEAD_OF_ROWED.iter().any(|(k, _)| k == key),
+            "CARD_ROWS_FOR gives the spec row `{key}` an EMPTY cell list, \
+             which asserts nothing at all about the card. Only a binding \
+             the card teaches in prose instead of in a row may have one, \
+             and every such binding is named in HINTED_INSTEAD_OF_ROWED \
+             with the words that carry it. Give `{key}` a `KeyRow`, or add \
+             it there and say where it is written."
+        );
+    }
+
+    // --- and those bindings really are named on the card -------------
     let block = popup_block(&ui);
-    assert!(
-        block.contains("? or F1 to open"),
-        "the card's title-row hint no longer names `?`/F1, which is the \
-         only place that binding is listed (CARD_ROWS_FOR gives it no key \
-         row on purpose)."
-    );
+    for (key, hint) in HINTED_INSTEAD_OF_ROWED {
+        assert!(
+            CARD_ROWS_FOR.iter().any(|(k, w)| k == key && w.is_empty()),
+            "HINTED_INSTEAD_OF_ROWED claims `{key}` is taught in prose, but \
+             CARD_ROWS_FOR does not pair it with an empty cell list — the \
+             two tables disagree about which binding this is."
+        );
+        assert!(
+            block.contains(hint),
+            "the card no longer says \"{hint}\", which is the only place \
+             `{key}` is listed (CARD_ROWS_FOR gives it no key row on \
+             purpose)."
+        );
+    }
 }

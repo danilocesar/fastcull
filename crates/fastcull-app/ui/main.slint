@@ -139,21 +139,28 @@ component KeyRow inherits HorizontalLayout {
     in property <string> k;
     in property <string> a;
     // The reserved star-rating row: keys that do nothing yet. Colour says
-    // "not yet" faster than any word would.
+    // "not yet" faster than any word would — but a row nobody can read is
+    // not a softer statement, it is a missing one. #8a8a96 measures
+    // 4.74:1 on this card's #202028, over AA's 4.5; the #707078 it
+    // replaces measured 3.29:1, which is the same failure and the same
+    // number that took the card's closing hint off that same colour.
+    // It still reads as plainly inactive beside a live row: the
+    // key beside it is 13.27:1 and the action 9.72:1, so the dim row
+    // keeps HALF the contrast of its neighbours while staying legible.
     in property <bool> dim: false;
     spacing: 14px;
     Text {
         text: root.k;
         width: 104px;
         horizontal-alignment: right;
-        color: root.dim ? #707078 : #e8e8f0;
+        color: root.dim ? #8a8a96 : #e8e8f0;
         font-size: 13px;
         font-weight: 600;
         wrap: word-wrap;
     }
     Text {
         text: root.a;
-        color: root.dim ? #707078 : #c8c8d0;
+        color: root.dim ? #8a8a96 : #c8c8d0;
         font-size: 13px;
         horizontal-stretch: 1;
         wrap: word-wrap;
@@ -184,13 +191,22 @@ component KeySection inherits VerticalLayout {
         // parent to the row's full height and the line still sits on its
         // middle — a 1px-high layout child would be centred by the layout
         // itself, which is a rule this file should not have to rely on.
+        //
+        // #6a6a76, measured at 3.03:1 on the card's #202028 — WCAG's
+        // non-text minimum, and the reason this is not the #33333d it was
+        // built with: that measured 1.29:1, which is a line nobody can
+        // see. A rule drawn in ink below the threshold of vision is not a
+        // subtle rule, it is a rule that is not there, and the choice was
+        // draw it or drop it. It stays deliberately UNDER the 4.74:1 of
+        // the heading beside it: the word is the landmark, the rule is
+        // what gives the group a body.
         Rectangle {
             horizontal-stretch: 1;
             Rectangle {
                 y: (parent.height - self.height) / 2;
                 width: 100%;
                 height: 1px;
-                background: #33333d;
+                background: #6a6a76;
             }
         }
     }
@@ -268,6 +284,21 @@ component ModalScrim inherits Rectangle {
         background: #202028;
         border-width: 1px;
         border-color: #3a3a44;
+        // NOTHING PAINTS OUTSIDE THE CARD. A Slint layout does not clip
+        // its children: given less room than its children's minimum, a
+        // HorizontalLayout hands each of them the minimum anyway and the
+        // row simply overflows its parent — so a Text with neither `wrap`
+        // nor `overflow: elide` in a too-narrow card draws its tail on the
+        // SCRIM, outside the rounded rect. Measured before this line, at
+        // 400x320: the shortcuts title row's hint painted glyphs at
+        // x 379..396 with the card's right border at 375. That is the
+        // defect issue #26 treated as a real regression on the About card
+        // (its version string), and it belongs here rather than at either
+        // call site: it is a property of a CARD, and the call sites are
+        // where it was forgotten. The children still elide or wrap where
+        // that reads better — this is the floor under them, not a
+        // substitute for them.
+        clip: true;
         init => {
             root.card-laid-out(self.absolute-position.x, self.absolute-position.y,
                 self.width, self.height);
@@ -2966,10 +2997,37 @@ export component MainWindow inherits Window {
             // opens. "anywhere" is the true statement — this card leaves
             // `card-eats-clicks` false.
             HorizontalLayout {
+                // The title is a TITLE, not the first line of the MOVE
+                // group. Without this it ended 12 px above the "MOVE"
+                // heading while a row's ink ends 21 px above the NEXT
+                // heading, so the closest thing to the title was the group
+                // under it and the card read as one list with a caption.
+                // 18 px puts the gap at 30 — half again the section gap,
+                // measured on the render, and the cheapest of the three
+                // ways to say "this line is not part of that list" (the
+                // other two being a rule under the title, which would make
+                // eight rules on a card that has seven, and a bigger type
+                // size, which would push the two columns further down).
+                padding-bottom: 18px;
+                // So the two never touch when the row is squeezed: at
+                // 400x320 the title takes its preferred width and the
+                // hint elides into what is left, and with no spacing the
+                // ellipsis butted straight against the "s" of
+                // "shortcuts".
+                spacing: 12px;
                 Text {
                     text: "Keyboard shortcuts";
                     color: #ffffff;
                     font-size: 16px;
+                    // Neither of these two ever wraps — a wrapped title row
+                    // would push the list down — so both elide, which is
+                    // what keeps the row inside the card at a window too
+                    // narrow to hold it. `overflow: elide` also drops a
+                    // Text's layout MINIMUM to the width of one ellipsis
+                    // (i-slint-core 1.17.1 items/text.rs:656), which is
+                    // what actually lets the row shrink; the card's
+                    // `clip: true` is the floor under both.
+                    overflow: elide;
                 }
                 Text {
                     text: "? or F1 to open · Esc or click anywhere to close";
@@ -2978,6 +3036,7 @@ export component MainWindow inherits Window {
                     horizontal-stretch: 1;
                     horizontal-alignment: right;
                     vertical-alignment: center;
+                    overflow: elide;
                 }
             }
 
@@ -2990,15 +3049,28 @@ export component MainWindow inherits Window {
             // #62's guarantee) and the list clips-and-scrolls on the wheel
             // instead of painting outside the rounded rect.
             //
-            // NOT a ScrollView, and that is load-bearing: a ScrollView's
-            // Flickable is interactive and its scrollbar has its own
-            // TouchArea, so a click on the body would be consumed and never
-            // reach the scrim — click-anywhere-to-close would die silently
-            // over most of the card while the hint above still promised it.
             // A non-interactive Flickable returns ForwardAndIgnore for
             // every non-wheel pointer event and still handles Wheel
             // (i-slint-core 1.17.1 items/flickable.rs:155, :168), which is
             // exactly the pair of behaviours this card needs.
+            //
+            // NOT a ScrollView, and the reason this comment used to give
+            // was WRONG — measured 2026-09-04 against i-slint-compiler
+            // 1.17.1 widgets/fluent/scrollview.slint. The fluent
+            // ScrollView's own Flickable is `interactive: false` too
+            // (:174-176), and its ScrollBar is `visible` only while
+            // `maximum > 0` (:54), so wherever this card FITS a ScrollView
+            // is exactly as transparent to the pointer as this Flickable:
+            // swap one in and a click at the card's centre still closes it.
+            // The difference is narrower and it lands where the safety
+            // valve is working — once the card is clamped the bar appears
+            // and its TouchArea eats every click on the 14 px strip down
+            // the body's right edge, so "click anywhere to close" stops
+            // being true over a band of the card while the hint keeps
+            // promising it. Driven both ways at 1010x520 on that strip;
+            // that is the second click in
+            // `shortcuts_card_is_a_two_column_sheet_that_fits_its_window`,
+            // and it is what would go red here.
             Flickable {
                 interactive: false;
                 vertical-stretch: 1;
@@ -3073,11 +3145,17 @@ export component MainWindow inherits Window {
                     // read easy, so the separator is not decoration.
                     Rectangle {
                         width: 28px;
+                        // Same reckoning as the heading rules: #2c2c30
+                        // measured 1.16:1 and was invisible. This line
+                        // runs the body's whole height, which is exactly
+                        // why it must be seen — it is the only thing
+                        // saying the right-hand keys are not the left-hand
+                        // rows' second column.
                         Rectangle {
                             x: (parent.width - self.width) / 2;
                             width: 1px;
                             height: 100%;
-                            background: #2c2c30;
+                            background: #6a6a76;
                         }
                     }
 
@@ -3148,6 +3226,10 @@ export component MainWindow inherits Window {
                 text: "Zoom ladder: grid columns → loupe fit → ×1.5 steps → 1:1, centre held";
                 color: #8a8a96;
                 font-size: 11px;
+                // A diagram reads better cut with an ellipsis than cut
+                // mid-glyph by the card's clip, and it must never wrap:
+                // a two-line footer would take the room from the list.
+                overflow: elide;
                 init => {
                     root.dbg-card-laid-out("shortcuts footer", self.absolute-position.x,
                         self.absolute-position.y, self.width, self.height);

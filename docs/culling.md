@@ -125,10 +125,13 @@ be a cull command.
 
 - **Grid**: wheel scrolls, click selects (and moves the cursor),
   double-click opens the image in the loupe, drag scrolls.
-- **While a dialog or popup is open**: the wheel does nothing. About,
-  Keyboard Shortcuts, Copy Picks and Export Frames as Video all block
-  it, so an absent-minded scroll cannot move the grid behind them —
-  close the dialog and you are still where you left off.
+- **While a dialog or popup is open**: the wheel never reaches the grid.
+  About, Copy Picks and Export Frames as Video swallow it outright.
+  Keyboard Shortcuts is the one that does something with it: if your
+  window is too short to show the whole card, the wheel scrolls the list
+  inside it — and only that. Either way an absent-minded scroll cannot
+  move the grid behind them; close the dialog and you are still where
+  you left off.
 - **Loupe, at fit**: wheel-up zooms in one step, anchored under the
   pointer — aim the wheel at an eye and it stays put. Wheel-down does
   nothing (use `G`/`Esc` to leave). A single click does nothing;
