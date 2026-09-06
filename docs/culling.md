@@ -28,8 +28,8 @@ In the order the in-app card lists them, reading down its left column and then i
 |---|---|
 | `←` / `→` | previous / next frame — ends any selection |
 | `↑` / `↓` | one row up / down — ends any selection |
-| PgUp / PgDn | one screen back / forward — ends any selection |
-| Home / End | first / last frame — ends any selection |
+| PgUp / PgDn | one screen back / forward — ends any selection, but with Shift held it extends instead |
+| Home / End | first / last frame — ends any selection, but with Shift held it extends instead |
 | `[` / `]` | previous / next burst (see below) — ends any selection |
 | `G` | back to the grid at your previous grid zoom, selection kept — *at a grid zoom it clears the selection instead* |
 | `Esc` | back to the grid, **and the selection is cleared** — from anywhere but a text field |
