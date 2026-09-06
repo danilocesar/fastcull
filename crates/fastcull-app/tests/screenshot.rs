@@ -2680,7 +2680,7 @@ fn shortcuts_card_is_a_two_column_sheet_that_fits_its_window() {
     // --- 5: and it is the CONTENT's height, not the window's
     //
     // Only meaningful because neither size clamped (asserted just above):
-    // the two windows show the same 27 rows at the same 780 px, so the
+    // the two windows show the same 29 rows at the same 780 px, so the
     // preferred height they add up to is the same number in any font. A
     // difference here means some length in the card is reading the window
     // — which is the one thing a content-driven card must not do.
@@ -2713,10 +2713,11 @@ fn shortcuts_card_is_a_two_column_sheet_that_fits_its_window() {
 /// FITTING WHOLE there — plus its footer inside it.
 ///
 /// The one number that is deliberately absent is a height. The height is
-/// the sum of ~27 text line boxes and belongs to whatever face the seat
-/// draws with (549 px in this machine's Noto Sans, 491 in Liberation
-/// Sans, 512 in Nimbus Sans / Carlito / Cantarell, 525 in Montserrat,
-/// 627 in Noto Sans Mono); pinning it, or a band around it, pins a font. What the card actually promises is a
+/// the sum of ~29 text line boxes and belongs to whatever face the seat
+/// draws with (568 px in this machine's Noto Sans; the per-face spread
+/// measured on the 27-row card of 2026-09-04 was 491 in Liberation Sans,
+/// 512 in Nimbus Sans / Carlito / Cantarell, 525 in Montserrat, 627 in
+/// Noto Sans Mono); pinning it, or a band around it, pins a font. What the card actually promises is a
 /// relation to the layer it is centred in, and that is what is checked.
 ///
 /// **How "it fits whole" is measured without knowing the ceiling.** The
@@ -7655,6 +7656,1082 @@ fn esc_clears_a_burst_selection_from_inside_the_loupe() {
         dump_field(out_dump, "zoom"),
         dump_field(loupe, "zoom"),
         "Esc still leaves the loupe: {out_dump}"
+    );
+}
+
+/// The file-manager companions of the collapse rule (brief 002, user
+/// decision 2026-09-06, AC3 and AC4): Ctrl+arrows, Ctrl+PgUp/PgDn/Home/End
+/// and Ctrl+`[`/`]` move the cursor exactly where the plain key would and
+/// leave the selection alone, and Ctrl+Space adds or removes the frame
+/// under the cursor without moving it.
+///
+/// Driven with REAL chords (`key:ctrl+…` synthesises a held Control the way
+/// a keyboard does), because that is the whole claim: these keys were dead
+/// before this change — the main scope's Ctrl block rejected everything but
+/// O/Q/A/E/Shift+E/Shift+B — so a `nav` token would prove the handler and
+/// not the binding.
+///
+/// The route through the burst pattern (`SYNTHETIC_BURST_RUNS`, single 0,
+/// A = 1..=5, single 6, B = 7..=9, C = 10..=17, … G = 34..=39) is the
+/// user's own "two non-adjacent bursts" sequence: Ctrl+Shift+B on A,
+/// Ctrl+`]` three times, Ctrl+Shift+B on C.
+#[test]
+fn ctrl_navigation_keeps_the_selection_and_ctrl_space_toggles() {
+    if !has_display() {
+        eprintln!("screenshot smoke skipped: no display server");
+        return;
+    }
+    let _s = serial();
+    let out = out_dir().join("ctrl-nav.jpg");
+    let stderr = shoot_env_stderr(
+        &["--synthetic", "40", "--bursts"],
+        &[
+            ("FASTCULL_TRACE", "1"),
+            (
+                "FASTCULL_DRIVE",
+                "600:key:];800:key:ctrl+shift+b;1000:dump.a;\
+                 1200:key:ctrl+];1400:dump.h1;1600:key:ctrl+];1700:key:ctrl+];1900:dump.h3;\
+                 2100:key:ctrl+shift+b;2300:dump.two;\
+                 2500:key:ctrl+right;2700:dump.cr;2900:key:ctrl+pgdn;3100:dump.cpd;\
+                 3300:key:ctrl+home;3500:dump.ch;3700:key:ctrl+end;3900:dump.ce;\
+                 4100:key:ctrl+[;4300:dump.cb;\
+                 4500:key:ctrl+space;4700:dump.t1;4900:key:ctrl+left;5000:key:ctrl+space;5200:dump.t2;\
+                 5400:key:ctrl+space;5600:dump.t3;5800:key:ctrl+up;6000:dump.cu;\
+                 6200:key:];6400:dump.plain;\
+                 6600:key:escape;6800:key:home;7000:key:ctrl+space;7200:key:ctrl+right;7300:key:ctrl+right;\
+                 7500:key:ctrl+space;7700:key:ctrl+right;7900:key:ctrl+space;8100:dump.three;\
+                 8300:key:ctrl+space;8500:dump.two2;\
+                 8700:key:escape;8900:filter:picked;9100:dump.empty;\
+                 9300:key:ctrl+space;9500:filter:all;9700:dump.ghost;\
+                 9900:key:escape;10100:key:home;10300:key:];\
+                 10500:key:ctrl+shift+b;10700:key:ctrl+];\
+                 10900:key:shift+right;11100:dump.hopfresh",
+            ),
+        ],
+        &out,
+    );
+    // (cursor image id, selection count) at a dump.
+    let at = |label: &str| -> (usize, usize) {
+        let d = qedump(&stderr, label);
+        (
+            dump_field(d, "cursor").parse().unwrap(),
+            dump_field(d, "selected").parse().unwrap(),
+        )
+    };
+    assert_eq!(at("a"), (1, 5), "Ctrl+Shift+B on A's opener takes A whole");
+    // --- Ctrl+`]` walks with the selection in hand (AC3) -------------------
+    assert_eq!(at("h1"), (6, 5), "Ctrl+`]` lands on the single, keeps A");
+    assert_eq!(at("h3"), (10, 5), "three hops: B's opener, then C's");
+    assert_eq!(
+        at("two"),
+        (10, 13),
+        "the second Ctrl+Shift+B adds C to A — two non-adjacent bursts (AC3)"
+    );
+    // --- and so does every other Ctrl-move --------------------------------
+    assert_eq!(at("cr"), (11, 13), "Ctrl+Right moves, keeps");
+    let (cpd_cursor, cpd_sel) = at("cpd");
+    assert!(
+        cpd_cursor > 11,
+        "Ctrl+PgDn did not move the cursor (it was at 11, it is at {cpd_cursor})"
+    );
+    assert_eq!(cpd_sel, 13, "Ctrl+PgDn keeps the selection");
+    assert_eq!(at("ch"), (0, 13), "Ctrl+Home");
+    assert_eq!(at("ce"), (39, 13), "Ctrl+End");
+    assert_eq!(
+        at("cb"),
+        (34, 13),
+        "Ctrl+`[` from mid-G re-anchors on G's opener, like `[`"
+    );
+    // --- Ctrl+Space toggles the frame under the cursor (AC4) --------------
+    assert_eq!(at("t1"), (34, 14), "Ctrl+Space adds 34, cursor unmoved");
+    assert_eq!(at("t2"), (33, 15), "Ctrl+Left then Ctrl+Space adds 33");
+    assert_eq!(at("t3"), (33, 14), "Ctrl+Space again removes it");
+    let (cu_cursor, cu_sel) = at("cu");
+    // The row width follows the window and the zoom, so what is pinned is
+    // that the cursor MOVED, never where to.
+    assert_ne!(cu_cursor, 33, "Ctrl+Up did not move the cursor");
+    assert_eq!(cu_sel, 14, "Ctrl+Up keeps the selection");
+    // --- Ctrl+Space builds a discontiguous selection from nothing (AC4) ---
+    assert_eq!(
+        at("three"),
+        (3, 3),
+        "Ctrl+Space on three frames, walked between with Ctrl+Right"
+    );
+    assert_eq!(at("two2"), (3, 2), "and one press takes one away");
+    // The contrast this test exists to draw: the same `]`, without Ctrl,
+    // ends the selection (rule 1). It read 14 before the rule landed.
+    let (_, plain_sel) = at("plain");
+    assert_eq!(
+        plain_sel, 0,
+        "a plain `]` kept the selection that Ctrl+`]` is for"
+    );
+    // The status bar counts what the dump counts, and goes silent when
+    // there is nothing to count.
+    assert!(
+        dump_text(qedump(&stderr, "two"), "status").contains("· 13 selected"),
+        "{}",
+        qedump(&stderr, "two")
+    );
+    assert!(
+        !dump_text(qedump(&stderr, "plain"), "status").contains("selected"),
+        "an empty selection is silent: {}",
+        qedump(&stderr, "plain")
+    );
+    // --- and a cursor the filter has hidden toggles nothing ---------------
+    // `select-toggle`'s guard (`nav.rs`, `cursor_pos().is_some()`), which
+    // is only reachable while the view is empty and was review-verified
+    // until the harness learned `filter:` (senior-developer review F2).
+    // Nothing is marked in this session, so the Picked filter empties the
+    // view; the cursor id survives as a stale one, and a Ctrl+Space there
+    // must not select it. Widening the filter again is what makes the
+    // difference visible — a ghost selected member is invisible in
+    // `selected=` while the view that would count it is empty.
+    let empty = qedump(&stderr, "empty");
+    assert!(
+        dump_text(empty, "status").contains("(0/0)"),
+        "the Picked filter did not empty the view of an unmarked session, \
+         so the guard below is not being exercised: {empty}"
+    );
+    assert_eq!(
+        dump_field(qedump(&stderr, "ghost"), "selected"),
+        "0",
+        "Ctrl+Space selected a frame the filter had hidden — what you see \
+         is what you stamp (this reads 1 without the guard):\n{stderr}"
+    );
+    // --- Ctrl+`[` / Ctrl+`]` RESET THE ANCHOR, like Ctrl+arrows ----------
+    // The other half of the spec's Ctrl+`[`/`]` row (ui-grid.md: "and the
+    // anchor reset of Ctrl+arrows"), which had no test until the
+    // senior developer's re-review found a mutant surviving it (N-2,
+    // 2026-09-06): making the burst hop KEEP the anchor left T1-T4 green.
+    //
+    // `]` to A's opener, Ctrl+Shift+B takes A (anchor armed at 1),
+    // Ctrl+`]` hops to the single at 6 — and must drop that anchor, so
+    // the Shift+Right after it is a FRESH span: {6, 7}, two frames. With
+    // the anchor kept it would continue from 1 and read 1..=7, seven.
+    assert_eq!(
+        at("hopfresh"),
+        (7, 2),
+        "the Shift+Right after a Ctrl+`]` continued the burst's anchor \
+         instead of starting fresh — Ctrl-navigation resets it (this \
+         reads (7, 7) when the hop keeps the anchor):\n{stderr}"
+    );
+}
+
+/// Rule 1 of the selection rule (brief 002, the user's decision of
+/// 2026-09-06): EVERY unmodified cursor move empties the selection — an
+/// arrow, `]`, PgDn, End, and the advance a `Y` performs — while `U`,
+/// which does not move, leaves it alone.
+///
+/// Every strand here was RED before the rule landed (the counts it read
+/// then are named beside each assertion): a plain move used to fold the
+/// live span into the selection and keep it, which is what carried a
+/// finished export's frames into the next one.
+#[test]
+fn a_plain_move_collapses_the_selection_in_the_grid() {
+    if !has_display() {
+        eprintln!("screenshot smoke skipped: no display server");
+        return;
+    }
+    let _s = serial();
+    let out = out_dir().join("collapse-grid.jpg");
+    let stderr = shoot_env_stderr(
+        &["--synthetic", "40", "--bursts"],
+        &[
+            ("FASTCULL_TRACE", "1"),
+            (
+                "FASTCULL_DRIVE",
+                "600:key:right;700:key:right;800:key:right;1000:key:ctrl+shift+b;1200:dump.sel;\
+                 1400:key:right;1600:dump.arrow;1800:key:ctrl+shift+b;2000:dump.sel2;\
+                 2200:key:];2400:dump.bracket;2600:key:shift+];2800:dump.span;\
+                 3000:key:pgdn;3200:dump.pgdn;3400:key:end;3600:key:ctrl+shift+b;3800:dump.sel3;\
+                 4000:key:right;4200:dump.edge;\
+                 4400:key:home;4600:key:right;4700:key:right;4800:key:right;\
+                 5000:key:ctrl+shift+b;5200:dump.sel4;\
+                 5400:key:y;5600:dump.y;5800:key:left;6000:dump.marked;\
+                 6200:key:right;6300:key:right;6500:dump.next;\
+                 6700:key:ctrl+shift+b;6900:dump.sel5;7100:key:u;7300:dump.u;\
+                 7500:key:home;7700:key:y;7800:key:y;7900:key:y;8100:dump.picks;\
+                 8300:filter:picked;8500:dump.filtered;8700:key:home;\
+                 8900:select-all;9100:dump.all;9300:key:u;9500:dump.removed;\
+                 9700:filter:all;9900:select-all;10100:dump.all40;\
+                 10300:filter:rejected;10500:dump.emptyview;10700:key:right;\
+                 10900:filter:all;11100:dump.after",
+            ),
+        ],
+        &out,
+    );
+    let at = |label: &str| -> (usize, usize) {
+        let d = qedump(&stderr, label);
+        (
+            dump_field(d, "cursor").parse().unwrap(),
+            dump_field(d, "selected").parse().unwrap(),
+        )
+    };
+    let status = |label: &str| dump_text(qedump(&stderr, label), "status").to_string();
+
+    // --- an arrow ---------------------------------------------------------
+    assert_eq!(at("sel"), (3, 5), "Ctrl+Shift+B on frame 3 takes A whole");
+    assert_eq!(
+        at("arrow"),
+        (4, 0),
+        "a plain Right left the selection standing (it read 5 before the rule)"
+    );
+    // --- `[` / `]` --------------------------------------------------------
+    assert_eq!(at("sel2"), (4, 5));
+    assert_eq!(
+        at("bracket"),
+        (6, 0),
+        "a plain `]` left the selection standing (it read 5 before the rule)"
+    );
+    // And the Shift+`]` that follows an emptied selection is a fresh span:
+    // from the single at 6 it takes 6 plus B, and nothing else.
+    assert_eq!(at("span"), (7, 4), "a fresh burst span: the single plus B");
+    // --- PgDn -------------------------------------------------------------
+    let (pgdn_cursor, pgdn_sel) = at("pgdn");
+    assert!(
+        pgdn_cursor > 7,
+        "PgDn did not move the cursor (it was at 7, it is at {pgdn_cursor})"
+    );
+    assert_eq!(pgdn_sel, 0, "PgDn left the selection standing");
+    // --- a key that moves NOTHING still collapses --------------------------
+    // End lands on the last frame, Ctrl+Shift+B takes G, and the Right
+    // after it has nowhere to go: the selection goes anyway, because the
+    // intent is the same (ui-grid.md, rule 1, "whether or not the move
+    // changed the cursor").
+    assert_eq!(at("sel3"), (39, 6), "End, then Ctrl+Shift+B on G");
+    assert_eq!(
+        at("edge"),
+        (39, 0),
+        "a Right at the last frame moved nothing and kept the selection"
+    );
+    // --- the Y advance is a cursor move (AC5) ------------------------------
+    assert_eq!(at("sel4"), (3, 5), "A selected again, cursor on frame 3");
+    assert_eq!(
+        at("y"),
+        (4, 0),
+        "the pick advance left the selection standing (it read 5 before)"
+    );
+    assert!(
+        status("y").contains("· unmarked"),
+        "the advance landed on 4, which is unmarked: {}",
+        status("y")
+    );
+    let (marked_cursor, _) = at("marked");
+    assert_eq!(marked_cursor, 3);
+    assert!(
+        status("marked").contains("★ picked"),
+        "the mark did not land on frame 3: {}",
+        status("marked")
+    );
+    // The mark landed on the CURSOR frame only, never on the five that
+    // were selected when the key was pressed: 5 was one of them.
+    let (next_cursor, _) = at("next");
+    assert_eq!(next_cursor, 5);
+    assert!(
+        status("next").contains("· unmarked"),
+        "the Y marked a frame that was merely SELECTED — marks are not \
+         batch operations (ui-grid.md): {}",
+        status("next")
+    );
+    // --- `U` moves nothing, so it takes nothing ---------------------------
+    assert_eq!(at("sel5"), (5, 5), "A selected once more, cursor on 5");
+    assert_eq!(
+        at("u"),
+        (5, 5),
+        "`U` collapsed the selection — it does not advance, so it must not \
+         (ui-grid.md rule 1, Manager 2026-09-06)"
+    );
+    // --- ...unless its mark takes the frame OUT of the view ---------------
+    // The other half of rule 1's `U` clause, and the reason the harness
+    // learned `filter:` (senior-developer review F1): under a Picked
+    // filter, clearing a mark removes the frame from the view, the
+    // live-removal rule moves the cursor on, and THAT is a cursor move
+    // like any other. Unreachable without a filter — which is why the
+    // clause had no driven proof until this strand.
+    //
+    // Note the order: `home` comes BEFORE `select-all`, because `home` is
+    // itself a plain move and would otherwise empty the selection this
+    // strand needs the `U` to take.
+    assert_eq!(
+        at("picks"),
+        (3, 0),
+        "three picks from the head, cursor on 3"
+    );
+    let filtered = qedump(&stderr, "filtered");
+    assert!(
+        dump_text(filtered, "status").contains("showing 4 of 40"),
+        "the Picked filter did not narrow the view to the four picked \
+         frames (three from this strand, plus the one the `Y` above left on \
+         frame 3), so the `U` below takes nothing out of anything: \
+         {filtered}"
+    );
+    assert_eq!(at("all"), (0, 4), "select-all over the picked view");
+    let (removed_cursor, removed_sel) = at("removed");
+    assert_eq!(
+        removed_sel, 0,
+        "the `U` took its frame out of the Picked view and the cursor moved \
+         on, which is a cursor move — the selection must go with it \
+         (ui-grid.md rule 1). Without the cursor-moved half of that rule \
+         this reads 3."
+    );
+    assert_ne!(
+        removed_cursor, 0,
+        "the cleared frame is still under the cursor, so nothing moved and \
+         this strand proves nothing:\n{stderr}"
+    );
+    // --- and a plain move collapses even where there is nowhere to move --
+    // Rule 1 says the clear happens "whether or not the move changed the
+    // cursor", and an EMPTY filtered view is the hardest case of that: no
+    // frame to move to, so the move does nothing visible, and the
+    // selection used to survive it and come back the moment the filter
+    // widened again (QE 2026-09-06, M-2 — reachable with the mouse alone:
+    // click a chip that matches nothing, press an arrow, click All).
+    //
+    // The Rejected view is the empty one here: this session has picks by
+    // now, so Picked would not be empty (QE's strand used an unmarked
+    // session; this test is no longer one).
+    assert_eq!(
+        dump_field(qedump(&stderr, "all40"), "selected"),
+        "40",
+        "select-all did not take the whole view back:\n{stderr}"
+    );
+    let empty_view = qedump(&stderr, "emptyview");
+    assert!(
+        dump_text(empty_view, "status").contains("(0/0)")
+            && dump_text(empty_view, "status").contains("showing 0 of 40"),
+        "the Rejected filter did not empty the view, so the arrow below \
+         had somewhere to go: {empty_view}"
+    );
+    assert_eq!(
+        dump_field(qedump(&stderr, "after"), "selected"),
+        "0",
+        "a plain arrow in an empty view left the selection standing, and \
+         widening the filter brought all 40 back (it read 40 before the \
+         fix):\n{stderr}"
+    );
+}
+
+/// Rule 1 in the LOUPE, where no wash shows a selection and the status
+/// count is its only sign — and rule 2 there too (Ctrl+Right keeps it).
+/// The `zoom` field is read at every dump: the run never left the loupe,
+/// so none of this is the grid's behaviour in disguise.
+#[test]
+fn a_plain_move_collapses_the_selection_in_the_loupe() {
+    if !has_display() {
+        eprintln!("screenshot smoke skipped: no display server");
+        return;
+    }
+    let _s = serial();
+    let out = out_dir().join("collapse-loupe.jpg");
+    let stderr = shoot_env_stderr(
+        &["--synthetic", "40", "--bursts", "--start-loupe"],
+        &[
+            ("FASTCULL_TRACE", "1"),
+            (
+                "FASTCULL_DRIVE",
+                "600:key:];800:key:shift+];1000:dump.sel;1200:key:right;1400:dump.arrow;\
+                 1600:key:ctrl+shift+b;1800:dump.sel2;2000:key:];2200:dump.bracket;\
+                 2400:key:ctrl+shift+b;2600:dump.sel3;2800:key:ctrl+right;3000:dump.keep;\
+                 3200:key:y;3400:dump.y;3600:key:left;3800:dump.marked",
+            ),
+        ],
+        &out,
+    );
+    let at = |label: &str| -> (usize, usize) {
+        let d = qedump(&stderr, label);
+        (
+            dump_field(d, "cursor").parse().unwrap(),
+            dump_field(d, "selected").parse().unwrap(),
+        )
+    };
+    let status = |label: &str| dump_text(qedump(&stderr, label), "status").to_string();
+    let labels = [
+        "sel", "arrow", "sel2", "bracket", "sel3", "keep", "y", "marked",
+    ];
+
+    assert_eq!(
+        at("sel"),
+        (6, 6),
+        "Shift+`]` in the loupe: A plus the single"
+    );
+    assert_eq!(
+        at("arrow"),
+        (7, 0),
+        "a plain Right in the loupe left the selection standing (it read 6)"
+    );
+    assert_eq!(at("sel2"), (7, 3), "Ctrl+Shift+B on B");
+    assert_eq!(
+        at("bracket"),
+        (10, 0),
+        "a plain `]` in the loupe left the selection standing (it read 3)"
+    );
+    assert_eq!(at("sel3"), (10, 8), "Ctrl+Shift+B on C");
+    assert_eq!(
+        at("keep"),
+        (11, 8),
+        "Ctrl+Right must keep the selection in the loupe too"
+    );
+    assert_eq!(at("y"), (12, 0), "the pick advance kept the selection");
+    assert!(status("y").contains("· unmarked"), "{}", status("y"));
+    let (marked_cursor, _) = at("marked");
+    assert_eq!(marked_cursor, 11);
+    assert!(
+        status("marked").contains("★ picked"),
+        "the mark did not land on 11: {}",
+        status("marked")
+    );
+    // The whole run happened at one zoom: nothing above is a grid gesture.
+    let zoom = dump_field(qedump(&stderr, "sel"), "zoom").to_string();
+    for label in labels {
+        assert_eq!(
+            dump_field(qedump(&stderr, label), "zoom"),
+            zoom,
+            "dump.{label} is at another zoom — the run left the loupe:\n{stderr}"
+        );
+    }
+}
+
+/// Rule 3 (brief 002, the user's answer 3): a Shift-span whose anchor arms
+/// on THIS press is the whole selection — the frames a Ctrl+Space added
+/// included — while a span that continues a live anchor still shrinks and
+/// flips.
+#[test]
+fn a_fresh_span_after_ctrl_navigation_replaces_the_selection() {
+    if !has_display() {
+        eprintln!("screenshot smoke skipped: no display server");
+        return;
+    }
+    let _s = serial();
+    let out = out_dir().join("fresh-span.jpg");
+    let stderr = shoot_env_stderr(
+        &["--synthetic", "40", "--bursts"],
+        &[
+            ("FASTCULL_TRACE", "1"),
+            (
+                "FASTCULL_DRIVE",
+                "600:key:home;800:key:shift+right;900:key:shift+right;1000:key:shift+right;\
+                 1200:dump.four;\
+                 1400:key:ctrl+right;1500:key:ctrl+right;1700:dump.walked;\
+                 1900:key:shift+right;2100:dump.fresh;\
+                 2300:key:ctrl+right;2500:key:ctrl+space;2700:dump.added;\
+                 2900:key:ctrl+right;3000:key:ctrl+right;3200:key:shift+right;3400:dump.fresh2;\
+                 3600:key:shift+left;3800:dump.shrink;4000:key:shift+left;4200:dump.flip;\
+                 4400:key:ctrl+left;4500:key:ctrl+left;4600:key:ctrl+left;4700:key:ctrl+left;\
+                 4900:key:shift+[;5100:dump.burstfresh",
+            ),
+        ],
+        &out,
+    );
+    let at = |label: &str| -> (usize, usize) {
+        let d = qedump(&stderr, label);
+        (
+            dump_field(d, "cursor").parse().unwrap(),
+            dump_field(d, "selected").parse().unwrap(),
+        )
+    };
+    assert_eq!(at("four"), (3, 4), "Shift+Right x3 from the head");
+    assert_eq!(at("walked"), (5, 4), "Ctrl+Right x2 keeps the four");
+    assert_eq!(
+        at("fresh"),
+        (6, 2),
+        "the fresh span is 5..6 and nothing else — before the rule it read \
+         6, the old four unioned with the new two"
+    );
+    assert_eq!(at("added"), (7, 3), "Ctrl+Space adds 7 to the span");
+    assert_eq!(
+        at("fresh2"),
+        (10, 2),
+        "the next fresh span replaces the Ctrl-added frame too (answer 3) \
+         — before the rule it read 4"
+    );
+    // A span that CONTINUES its anchor still replaces only itself.
+    assert_eq!(at("shrink"), (9, 1), "Shift+Left shrinks the live span");
+    assert_eq!(at("flip"), (8, 2), "and flips past its anchor");
+    assert_eq!(
+        at("burstfresh"),
+        (1, 5),
+        "a fresh Shift+`[` from mid-A takes A alone — before the rule it \
+         read 7, A plus the abandoned {{8, 9}}"
+    );
+}
+
+/// AC1 and AC6, end to end: the user's own report of 2026-09-06, as a
+/// test. Four frames exported, Esc on the report, two arrows, a new
+/// Shift-span — and the second video holds the NEW two frames only.
+///
+/// Before the rule this run produced `a-g.mov` with six frames and the
+/// dialog said "4 of 6 frames are already in a-d.mov" (the earlier-export
+/// hint of issue #56, which is what told the user something was wrong
+/// after the fact).
+///
+/// Eight tiny synthetic RAWs rather than real camera files: two exports
+/// have to fit inside one driven run, and `write_synthetic_raw` gives each
+/// frame a distinct length so a wrong frame set is visible in the file's
+/// size as well as in its sample count.
+#[test]
+fn the_second_video_holds_only_the_new_span() {
+    if !has_display() {
+        eprintln!("screenshot smoke skipped: no display server");
+        return;
+    }
+    let _s = serial();
+    let src = out_dir().join("collapse-clip-src");
+    let dest = out_dir().join("collapse-clip-dest");
+    for d in [&src, &dest] {
+        std::fs::remove_dir_all(d).ok();
+        std::fs::create_dir_all(d).unwrap();
+    }
+    for (i, name) in ["a", "b", "c", "d", "e", "f", "g", "h"].iter().enumerate() {
+        write_synthetic_raw(&src.join(format!("{name}.ARW")), 400, 300, 1, 4096 + i * 64);
+    }
+    // ADR 0003 guard: this run marks nothing, so the whole source listing
+    // — names and lengths — must come back identical.
+    let listing = |d: &Path| -> Vec<(String, u64)> {
+        let mut v: Vec<(String, u64)> = std::fs::read_dir(d)
+            .map(|it| {
+                it.filter_map(|e| e.ok())
+                    .map(|e| {
+                        (
+                            e.file_name().to_string_lossy().into_owned(),
+                            e.metadata().map(|m| m.len()).unwrap_or(0),
+                        )
+                    })
+                    .collect()
+            })
+            .unwrap_or_default();
+        v.sort();
+        v
+    };
+    let before = listing(&src);
+
+    let script = format!(
+        "1500:clipdest:{dest};1700:wait:load settled gen 0;1800:home;\
+         2000:key:shift+right;2100:key:shift+right;2200:key:shift+right;2400:dump.four;\
+         2600:key:ctrl+shift+e;2900:dump.plan1;3100:key:return;\
+         3200:wait:clip export finished run 1;4400:dump.done1;\
+         4700:key:escape;5000:dump.closed1;5200:key:right;5300:key:right;5500:dump.moved;\
+         5700:key:shift+right;5900:dump.span;6100:key:ctrl+shift+e;6400:dump.plan2;\
+         6600:key:return;6700:wait:clip export finished run 2;7900:dump.done2;\
+         8200:key:escape;8500:dump.closed2;8700:key:escape;9000:dump.cleared",
+        dest = dest.display()
+    );
+    let out = out_dir().join("collapse-clip.jpg");
+    let stderr = shoot_env_stderr(
+        &[src.to_str().unwrap()],
+        &[("FASTCULL_TRACE", "1"), ("FASTCULL_DRIVE", script.as_str())],
+        &out,
+    );
+    let after = listing(&src);
+    let mut landed: Vec<String> = std::fs::read_dir(&dest)
+        .map(|it| {
+            it.filter_map(|e| e.ok())
+                .map(|e| e.file_name().to_string_lossy().into_owned())
+                .collect()
+        })
+        .unwrap_or_default();
+    landed.sort();
+    let first = dest
+        .join("a-d.mov")
+        .is_file()
+        .then(|| read_movie_at(&dest.join("a-d.mov")));
+    let second = dest
+        .join("f-g.mov")
+        .is_file()
+        .then(|| read_movie_at(&dest.join("f-g.mov")));
+    for d in [&src, &dest] {
+        std::fs::remove_dir_all(d).ok();
+    }
+
+    assert_eq!(before, after, "the export wrote to a source RAW (ADR 0003)");
+    for run in [1, 2] {
+        assert!(
+            stderr.contains(&format!("wait:clip export finished run {run} (satisfied")),
+            "the `wait:` for export {run} never fired — the dumps were \
+             timed, not gated:\n{stderr}"
+        );
+    }
+    let sel = |label: &str| dump_field(qedump(&stderr, label), "selected").to_string();
+    let status = |label: &str| dump_text(qedump(&stderr, label), "status").to_string();
+
+    // --- the first export, four frames ------------------------------------
+    assert_eq!(sel("four"), "4");
+    assert!(
+        status("four").starts_with("d.ARW (4/8)"),
+        "the span is a..d: {}",
+        status("four")
+    );
+    let plan1 = qedump(&stderr, "plan1");
+    assert_eq!(dump_field(plan1, "clipstate"), "0", "{plan1}");
+    assert!(
+        dump_text(plan1, "clipsummary").starts_with("4 frames")
+            && dump_text(plan1, "clipsummary").contains("a-d.mov"),
+        "{plan1}"
+    );
+    assert!(
+        dump_text(qedump(&stderr, "done1"), "clipreport").contains("a-d.mov"),
+        "{}",
+        qedump(&stderr, "done1")
+    );
+    // AC6, first half: Esc closes the dialog and the selection is INTACT.
+    let closed1 = qedump(&stderr, "closed1");
+    assert_eq!(dump_field(closed1, "clip"), "false", "{closed1}");
+    assert_eq!(
+        dump_field(closed1, "selected"),
+        "4",
+        "a dialog's Esc took the selection with it — it must only close \
+         the dialog (video-export.md, brief 002): {closed1}"
+    );
+
+    // --- two arrows, and the old selection is gone (AC1) -------------------
+    assert_eq!(
+        sel("moved"),
+        "0",
+        "the two arrows left the first export's four frames selected — the \
+         user's report (it read 4 before the rule)"
+    );
+    assert!(
+        status("moved").starts_with("f.ARW (6/8)"),
+        "{}",
+        status("moved")
+    );
+    assert_eq!(
+        sel("span"),
+        "2",
+        "the new span carried the old four along (it read 6 before the rule)"
+    );
+    let plan2 = qedump(&stderr, "plan2");
+    assert_eq!(dump_field(plan2, "clipstate"), "0", "{plan2}");
+    assert!(
+        dump_text(plan2, "clipsummary").starts_with("2 frames")
+            && dump_text(plan2, "clipsummary").contains("f-g.mov"),
+        "the second plan is not the new span alone (it read \"6 frames … \
+         a-g.mov\" before the rule): {plan2}"
+    );
+    assert_eq!(
+        dump_text(plan2, "cliphint"),
+        "",
+        "the second export overlaps the first (the hint read \"4 of 6 \
+         frames are already in a-d.mov\" before the rule): {plan2}"
+    );
+    assert!(
+        dump_text(qedump(&stderr, "done2"), "clipreport").contains("f-g.mov"),
+        "{}",
+        qedump(&stderr, "done2")
+    );
+    let closed2 = qedump(&stderr, "closed2");
+    assert_eq!(dump_field(closed2, "clip"), "false", "{closed2}");
+    assert_eq!(dump_field(closed2, "selected"), "2", "{closed2}");
+    // AC6, second half: the Esc after it, on the grid, clears.
+    assert_eq!(
+        sel("cleared"),
+        "0",
+        "the second Esc did not clear the selection"
+    );
+    // Neither export ever met the clash question: two different names.
+    for label in [
+        "four", "plan1", "done1", "closed1", "moved", "span", "plan2", "done2", "closed2",
+        "cleared",
+    ] {
+        assert_ne!(
+            dump_field(qedump(&stderr, label), "clipstate"),
+            "3",
+            "dump.{label}: the export asked to replace a file, so the two \
+             runs collided on one name:\n{stderr}"
+        );
+    }
+
+    // --- and the files on disk say the same thing --------------------------
+    assert_eq!(
+        landed,
+        vec!["a-d.mov".to_string(), "f-g.mov".to_string()],
+        "the destination holds the wrong files"
+    );
+    assert_eq!(
+        first.expect("a-d.mov").samples.len(),
+        4,
+        "the first video is not four frames"
+    );
+    assert_eq!(
+        second.expect("f-g.mov").samples.len(),
+        2,
+        "the second video holds more than the two frames that were selected"
+    );
+}
+
+/// AC2: caption a burst, hop to the next with `]`, caption again — and the
+/// second commit lands on the second burst only. The revert slot counts
+/// the batch it wrote, which is what makes "5, then 3, never 8" readable.
+///
+/// This is the IPTC half of the user's report: before the rule the `]`
+/// kept the first burst selected and the second commit stamped both.
+#[test]
+fn caption_then_hop_then_caption_lands_on_the_second_burst_only() {
+    if !has_display() {
+        eprintln!("screenshot smoke skipped: no display server");
+        return;
+    }
+    let _s = serial();
+    let out = out_dir().join("caption-hop.jpg");
+    let script = format!(
+        "{PIN_WINDOW};1200:key:];1400:key:ctrl+shift+b;1600:dump.sel;\
+         1800:key:i;1900:wait:iptc field 0 laid out at 1150;\
+         2300:click:iptc field 0;2500:key:t;2700:key:return;3000:dump.first;\
+         3200:key:];3400:dump.hop;3600:key:];3800:key:ctrl+shift+b;4000:dump.sel2;\
+         4200:click:iptc field 0;4400:key:u;4600:key:return;4900:dump.second"
+    );
+    let stderr = shoot_env_stderr(
+        &["--synthetic", "40", "--bursts"],
+        &[("FASTCULL_TRACE", "1"), ("FASTCULL_DRIVE", script.as_str())],
+        &out,
+    );
+    assert!(
+        stderr.contains("wait:iptc field 0 laid out at 1150 (satisfied"),
+        "the `wait:` never fired — the clicks were timed, not gated:\n{stderr}"
+    );
+    assert_click_resolved(&stderr, "iptc field 0");
+    let at = |label: &str| -> (usize, usize) {
+        let d = qedump(&stderr, label);
+        (
+            dump_field(d, "cursor").parse().unwrap(),
+            dump_field(d, "selected").parse().unwrap(),
+        )
+    };
+    assert_eq!(at("sel"), (1, 5), "Ctrl+Shift+B on A");
+    let first = qedump(&stderr, "first");
+    assert!(
+        dump_text(first, "revert").contains("on 5 image(s)"),
+        "the first commit did not stamp the five-frame burst — the field \
+         click missed, or nothing committed: {first}"
+    );
+    assert_eq!(
+        dump_field(first, "focusowner"),
+        "0",
+        "Enter did not return the keyboard to the grid, so the `]` below \
+         would be typed into the field: {first}"
+    );
+    assert_eq!(dump_field(first, "selected"), "5");
+    // The hop. This is the rule: the caption is on the sidecars, the
+    // selection has no job left, and the `]` ends it.
+    assert_eq!(
+        at("hop"),
+        (6, 0),
+        "the `]` after a commit left the burst selected (it read 5 before \
+         the rule)"
+    );
+    assert_eq!(
+        dump_field(qedump(&stderr, "hop"), "focusowner"),
+        "0",
+        "the `]` never reached the grid:\n{stderr}"
+    );
+    assert_eq!(at("sel2"), (7, 3), "the second burst, alone (it read 8)");
+    let second = qedump(&stderr, "second");
+    assert!(
+        dump_text(second, "revert").contains("on 3 image(s)")
+            && !dump_text(second, "revert").contains("8 image(s)"),
+        "the second commit did not land on the second burst alone — it \
+         read \"on 8 image(s)\" before the rule: {second}"
+    );
+}
+
+/// AC7 (brief 002 R5, persona A1): "· N selected" is painted in the
+/// selection's blue, in the grid and in the loupe, and an empty selection
+/// says nothing at all.
+///
+/// Measured, never assumed: the fragment reports its own rectangle
+/// (`status selected laid out at X,Y size WxH`) and so does the grey half
+/// before it, and this reads the PIXELS inside each in the same shot. That
+/// is what makes it a colour assertion rather than a font one — no
+/// coordinate is written here, and a face that moves the fragment 40 px
+/// along the bar moves the rectangle with it.
+///
+/// Blue bias is mean (B − R) over the rectangle, the same measure the wash
+/// tests use. Both rectangles are mostly the bar's own #202024, whose own
+/// bias is +4, with glyphs on top, so the numbers are small in absolute
+/// terms and only the DIFFERENCE means anything. Measured on this seat at
+/// 1440x900 over JPEG q92, identical in both runs: fragment 18.0, grey
+/// head 4.1 — a difference of 13.9. The two mutants this must catch,
+/// measured the same way: the fragment painted in the grey #a8a8b0 gives
+/// 4.1 (difference 0.0) and the fragment painted in the 25 % wash blend
+/// instead of the hue at full opacity gives 7.4 (difference 3.3).
+///
+/// The threshold is 8.0: 2.4x the strongest mutant and 0.58x the real
+/// signal. Font sensitivity, since CI draws in DejaVu Sans and Segoe UI
+/// and this seat in Noto Sans: the bias is coverage x 178 (the accent's
+/// own B − R) plus background, so 18.0 means the glyphs ink about 8 % of
+/// the rectangle, and 8.0 would need that to fall under 2.2 % — a face
+/// three and a half times lighter than this one. Do not raise it to pass
+/// on a seat; a red here is a paint that changed.
+#[test]
+fn the_selection_count_is_drawn_in_the_accent() {
+    if !has_display() {
+        eprintln!("screenshot smoke skipped: no display server");
+        return;
+    }
+    let _s = serial();
+    const T: f64 = 8.0;
+    for (name, args) in [
+        ("grid", vec!["--synthetic", "40", "--bursts"]),
+        (
+            "loupe",
+            vec!["--synthetic", "40", "--bursts", "--start-loupe"],
+        ),
+    ] {
+        let out = out_dir().join(format!("status-accent-{name}.jpg"));
+        let stderr = shoot_env_stderr(
+            &args,
+            &[
+                ("FASTCULL_TRACE", "1"),
+                (
+                    "FASTCULL_DRIVE",
+                    &format!(
+                        "{PIN_WINDOW};1300:wait:window geometry 1440x900;\
+                         1500:key:];1700:key:shift+];1900:dump.sel"
+                    ),
+                ),
+            ],
+            &out,
+        );
+        assert!(
+            stderr.contains("wait:window geometry 1440x900 (satisfied"),
+            "{name}: the window never reached 1440x900, so the fractions \
+             below address the wrong pixels:\n{stderr}"
+        );
+        let sel = qedump(&stderr, "sel");
+        // Anti-vacuity: there IS a count to paint.
+        assert_eq!(
+            dump_field(sel, "selected"),
+            "6",
+            "{name}: nothing is selected, so the fragment is empty and the \
+             pixels below are the bar's: {sel}"
+        );
+        assert!(
+            dump_text(sel, "status").contains("· 6 selected"),
+            "{name}: {sel}"
+        );
+        if name == "loupe" {
+            assert_eq!(
+                dump_field(sel, "one2one"),
+                "false",
+                "{name}: the loupe run is not at fit: {sel}"
+            );
+        }
+        // The two rectangles, as the app reported them at the shutter.
+        let (sx, sy, sw, sh) = laid_out_rect(&stderr, "status selected", "status at shutter: ");
+        let (hx, hy, hw, hh) = laid_out_rect(&stderr, "status head", "status at shutter: ");
+        assert!(
+            sw > 0.0 && sh > 0.0,
+            "{name}: the count fragment has no rectangle ({sw}x{sh}) — it \
+             was never laid out:\n{stderr}"
+        );
+        assert!(hw > 0.0 && hh > 0.0, "{name}: no head rectangle:\n{stderr}");
+        // Logical px over the pinned window is the frame fraction at any
+        // scale factor, which is what keeps this readable on a HiDPI seat.
+        let bias = |(x, y, w, h): (f32, f32, f32, f32)| {
+            region_blue_bias(
+                &out,
+                x as f64 / 1440.0,
+                y as f64 / 900.0,
+                (x + w) as f64 / 1440.0,
+                (y + h) as f64 / 900.0,
+            )
+        };
+        let sel_bias = bias((sx, sy, sw, sh));
+        let head_bias = bias((hx, hy, hw, hh));
+        eprintln!("{name}: fragment blue bias {sel_bias:.1}, head {head_bias:.1}");
+        assert!(
+            head_bias < 6.0,
+            "{name}: the grey half of the status line reads {head_bias:.1} \
+             of blue bias — the control is not grey, so the comparison \
+             below means nothing"
+        );
+        assert!(
+            sel_bias - head_bias > T,
+            "{name}: the selection count is not drawn in the accent — blue \
+             bias {head_bias:.1} (grey head) vs {sel_bias:.1} (the \
+             fragment), a difference of {:.1} against the {T} this \
+             requires:\n{stderr}",
+            sel_bias - head_bias
+        );
+    }
+}
+
+/// Shift+PgUp, Shift+PgDn, Shift+Home and Shift+End EXTEND the selection,
+/// exactly as Shift+arrows do (Manager ruling 2026-09-06 on QE's M-1: the
+/// file-manager convention this whole unit is built on).
+///
+/// They were unbound when the collapse rule landed, and an unbound Shift
+/// chord fell through to its PLAIN form — so for one commit these four
+/// keys moved the cursor and threw the selection away, which is worse than
+/// the nothing they did before. A Shift-modified key is never silently the
+/// plain key.
+///
+/// The spans are asserted as arithmetic, never as a page size: a synthetic
+/// session's ids are its view positions, so "the span runs from the anchor
+/// to wherever the key landed" is `selected == |cursor − anchor| + 1` for
+/// any window, any row width and any page height.
+#[test]
+fn shift_page_keys_extend_the_selection() {
+    if !has_display() {
+        eprintln!("screenshot smoke skipped: no display server");
+        return;
+    }
+    let _s = serial();
+    let out = out_dir().join("shift-page.jpg");
+    let stderr = shoot_env_stderr(
+        &["--synthetic", "40", "--bursts"],
+        &[
+            ("FASTCULL_TRACE", "1"),
+            (
+                "FASTCULL_DRIVE",
+                &format!(
+                    "{PIN_WINDOW};1300:wait:window geometry 1440x900;\
+                     1500:key:home;1700:key:right;1800:key:right;1900:key:right;2100:dump.start;\
+                     2300:key:shift+end;2500:dump.send;2700:key:shift+home;2900:dump.shome;\
+                     3100:key:escape;3300:key:home;3500:key:down;3700:dump.mid;\
+                     3900:key:shift+pgdn;4100:dump.spgdn;4300:key:shift+pgup;4500:dump.spgup;\
+                     4700:key:escape;4900:key:home;5100:key:ctrl+a;5300:dump.all;\
+                     5500:key:shift+space;5700:dump.sspace"
+                ),
+            ),
+        ],
+        &out,
+    );
+    assert!(
+        stderr.contains("wait:window geometry 1440x900 (satisfied"),
+        "the window never reached 1440x900:\n{stderr}"
+    );
+    let at = |label: &str| -> (usize, usize) {
+        let d = qedump(&stderr, label);
+        (
+            dump_field(d, "cursor").parse().unwrap(),
+            dump_field(d, "selected").parse().unwrap(),
+        )
+    };
+    // --- Shift+End / Shift+Home, where the landing is not in doubt -------
+    assert_eq!(at("start"), (3, 0), "three plain rights from the head");
+    assert_eq!(
+        at("send"),
+        (39, 37),
+        "Shift+End must EXTEND from the anchor at 3 to the last frame — \
+         before the fix it read (39, 0), the plain End's collapse"
+    );
+    assert_eq!(
+        at("shome"),
+        (0, 4),
+        "Shift+Home continues the live anchor at 3, so the span flips to \
+         0..=3 — before the fix it read (0, 0)"
+    );
+    // --- the page keys, whose landing depends on the window --------------
+    assert_eq!(at("mid"), (8, 0), "one row down from the head at 8 columns");
+    let (down, down_sel) = at("spgdn");
+    assert!(
+        down > 8,
+        "Shift+PgDn did not move the cursor (8 -> {down}), so the span \
+         below proves nothing:\n{stderr}"
+    );
+    assert_eq!(
+        down_sel,
+        down - 8 + 1,
+        "Shift+PgDn must span from the anchor at 8 to where the page \
+         landed ({down}) — before the fix it read 0"
+    );
+    let (up, up_sel) = at("spgup");
+    assert!(
+        up < down,
+        "Shift+PgUp did not move the cursor back ({down} -> {up}):\n{stderr}"
+    );
+    assert_eq!(
+        up_sel,
+        8_usize.abs_diff(up) + 1,
+        "Shift+PgUp must re-span from the SAME anchor at 8 (a continued \
+         span, not a fresh one) to {up} — before the fix it read 0"
+    );
+    // --- and Shift+Space is inert, not a pick ----------------------------
+    // The same fall-through, with a harmless-looking meaning: nothing in
+    // the spec gives Shift+Space a job, so it must do nothing rather than
+    // quietly mark a frame and advance (which also collapsed the
+    // selection, 40 -> 0).
+    assert_eq!(at("all"), (0, 40), "Ctrl+A over the whole view");
+    assert_eq!(
+        at("sspace"),
+        (0, 40),
+        "Shift+Space moved the cursor or ate the selection — it is inert \
+         (before the fix it picked frame 0 and advanced, reading (1, 0))"
+    );
+    assert!(
+        dump_text(qedump(&stderr, "sspace"), "status").contains("★0"),
+        "Shift+Space marked a frame: {}",
+        qedump(&stderr, "sspace")
+    );
+}
+
+/// Ctrl-navigation CLAIMS THE CURSOR (`ui-grid.md`'s key table: "claims
+/// the cursor"), so the view rules stop moving it afterwards.
+///
+/// `filter::cursor_after_recompute` snaps an UNTOUCHED cursor to the new
+/// view's head whenever the user asks for a different view (issue #4: a
+/// folder never opens with the cursor stranded mid-grid) or while the
+/// metadata is still streaming; a cursor the user has moved keeps its
+/// image instead. A Ctrl-move is a deliberate act on the cursor, so it
+/// must switch that off — and nothing in the suite noticed when the eleven
+/// Ctrl/toggle tokens were deleted from the claim (QE 2026-09-06, M-5).
+///
+/// The discriminator here is a FILTER CHANGE, not the load-settled
+/// re-sort the sibling test uses: `user_changed_query || !metadata_complete`
+/// is one condition, and only the first half can be driven without a race.
+/// Measured on this seat, three real RAWs settle in under 600 ms — earlier
+/// than any key a script can send — so the re-sort form of this test was
+/// vacuous (its own ordering guard said so, which is why it is not the
+/// form that shipped).
+///
+/// `Ctrl+Space` sits in the same `matches!` and is not pinned separately:
+/// it never moves the cursor, so its claim cannot be observed on its own —
+/// any gesture that would make it visible has already claimed the cursor
+/// itself.
+#[test]
+fn ctrl_navigation_claims_the_cursor() {
+    if !has_display() {
+        eprintln!("screenshot smoke skipped: no display server");
+        return;
+    }
+    let _s = serial();
+    let out = out_dir().join("ctrl-claim.jpg");
+    let stderr = shoot_env_stderr(
+        &["--synthetic", "40", "--bursts"],
+        &[
+            ("FASTCULL_TRACE", "1"),
+            (
+                "FASTCULL_DRIVE",
+                "600:key:ctrl+right;700:key:ctrl+right;800:key:ctrl+right;1000:dump.walked;\
+                 1200:filter:unmarked;1400:dump.filtered",
+            ),
+        ],
+        &out,
+    );
+    let walked = qedump(&stderr, "walked");
+    assert_eq!(
+        dump_field(walked, "cursor"),
+        "3",
+        "three Ctrl+Rights did not reach frame 3, so nothing below is \
+         about a cursor the user moved: {walked}"
+    );
+    let filtered = qedump(&stderr, "filtered");
+    // Anti-vacuity: the filter really changed, so the cursor rule really
+    // re-ran with `user_changed_query` set. Every synthetic frame is
+    // unmarked, so the Unmarked view holds all forty — the membership is
+    // the same, the QUESTION asked of the cursor is not.
+    assert!(
+        dump_text(filtered, "status").contains("showing 40 of 40"),
+        "the Unmarked filter never engaged, so no cursor rule was \
+         re-applied: {filtered}"
+    );
+    assert_eq!(
+        dump_field(filtered, "cursor"),
+        "3",
+        "the filter change snapped the cursor back to the head of the \
+         view, off the frame the user had walked to with Ctrl+Right — a \
+         Ctrl-move claims the cursor (ui-grid.md). Without that claim this \
+         reads 0:\n{stderr}"
     );
 }
 

@@ -435,6 +435,29 @@ fn dispatch(win: &MainWindow, state: &Rc<RefCell<AppState>>, key: &str, layout: 
         open_folder_at(win, state, std::path::Path::new(path));
         return;
     }
+    if let Some(name) = key.strip_prefix("filter:") {
+        // filter:all|picked|rejected|unmarked — switch the filter chip
+        // without the pointer. Added for brief 002's mark-arm rule
+        // (senior-developer review F1): the second half of "a `U` whose
+        // mark removed the frame from the view collapses the selection"
+        // is only reachable while a filter is active, and until now no
+        // driven run could turn one on — the chips are not
+        // self-reporting elements, so `click:` cannot name one and a
+        // literal coordinate is what issue #70 forbids.
+        //
+        // Through the window's own `set-filter` callback, which is the
+        // string the chip itself passes (`main.slint`, the Chip
+        // `clicked` handlers), so this drives the REAL chip path
+        // including its name-to-enum mapping and the cursor rules that
+        // follow it. Only the four real names act: an unknown one is
+        // ignored rather than silently meaning "all", so a typo shows up
+        // as a test that does not see the view it asked for.
+        let name = name.trim();
+        if matches!(name, "all" | "picked" | "rejected" | "unmarked") {
+            win.invoke_set_filter(name.into());
+        }
+        return;
+    }
     if let Some(text) = key.strip_prefix("copytemplate:") {
         // copytemplate:TEXT — type a rename template without
         // the pointer gymnastics of focusing the LineEdit and
@@ -516,6 +539,13 @@ fn dispatch(win: &MainWindow, state: &Rc<RefCell<AppState>>, key: &str, layout: 
             // only one of the two that is not literal text, so without a
             // name here a script could drive half the binding.
             "f1" => char::from(Key::F1).to_string().into(),
+            // Space, by name, for Ctrl+Space (brief 002): the step parser
+            // trims every action (see the FASTCULL_DRIVE loop above), so a
+            // literal trailing blank cannot spell this key and
+            // `key:ctrl+space` is the only way to send the chord. A bare
+            // `key:space` is the pick key, the same one `key: ` could
+            // never express.
+            "space" => " ".into(),
             s => s.into(),
         };
         let ctrl_text: slint::SharedString = char::from(Key::Control).to_string().into();

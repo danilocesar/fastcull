@@ -395,7 +395,16 @@ export component MainWindow inherits Window {
 
     in property <[CellData]> cells: [];
     in property <length> virtual-height: 0px;
+    // The whole status line, as one string. NOTHING RENDERS THIS: it is
+    // the trace/QEDUMP contract (`status at shutter:` and the `status=`
+    // dump field), and the three fragments below are what the bar draws.
+    // They concatenate to exactly this (presenter.rs).
     in property <string> status: "";
+    in property <string> status-head: "";
+    // " · N selected", separator included, or empty. Its own Text so it
+    // can carry the selection accent (ui-grid.md, brief 002 R5).
+    in property <string> status-sel: "";
+    in property <string> status-tail: "";
     in property <bool> one2one: false;
     // Selection wash (user request 2026-07-28): hue and strength of the tint
     // over selected grid cells. Deliberately PROPERTIES, not literals — the
@@ -966,6 +975,35 @@ export component MainWindow inherits Window {
                         root.nav("select-burst");
                         return accept;
                     }
+                    // Ctrl-navigation and Ctrl+Space (brief 002, user
+                    // decision 2026-09-06, "file manager style"): since a
+                    // PLAIN move now empties the selection, these are the
+                    // companions that let the keyboard move without letting
+                    // go and build a discontiguous selection. Only WITHOUT
+                    // Shift — Ctrl+Shift+arrows stay unbound (reject), so a
+                    // future "add a range to the selection" chord finds them
+                    // free.
+                    //
+                    // The `event.text` comparisons are the same route the
+                    // Ctrl+O/Q/A/E arms above already take: the winit
+                    // backend maps a NAMED key (Space, the arrows,
+                    // PgUp/PgDn/Home/End) to its Slint character whatever
+                    // modifiers are held, and a character key to its own
+                    // string, so Ctrl+Space arrives here as " " and Ctrl+`]`
+                    // as "]" with `modifiers.control` set.
+                    if (!event.modifiers.shift) {
+                        if (event.text == Key.LeftArrow) { root.nav("ctrl-left"); return accept; }
+                        if (event.text == Key.RightArrow) { root.nav("ctrl-right"); return accept; }
+                        if (event.text == Key.UpArrow) { root.nav("ctrl-up"); return accept; }
+                        if (event.text == Key.DownArrow) { root.nav("ctrl-down"); return accept; }
+                        if (event.text == Key.PageUp) { root.nav("ctrl-pgup"); return accept; }
+                        if (event.text == Key.PageDown) { root.nav("ctrl-pgdn"); return accept; }
+                        if (event.text == Key.Home) { root.nav("ctrl-home"); return accept; }
+                        if (event.text == Key.End) { root.nav("ctrl-end"); return accept; }
+                        if (event.text == "[") { root.nav("ctrl-burst-prev"); return accept; }
+                        if (event.text == "]") { root.nav("ctrl-burst-next"); return accept; }
+                        if (event.text == " ") { root.nav("select-toggle"); return accept; }
+                    }
                     return reject;
                 }
                 if (event.modifiers.shift) {
@@ -978,6 +1016,30 @@ export component MainWindow inherits Window {
                     // so both spellings are the same key here.
                     if (event.text == "]" || event.text == "}") { root.nav("shift-burst-next"); return accept; }
                     if (event.text == "[" || event.text == "{") { root.nav("shift-burst-prev"); return accept; }
+                    // Shift + the page keys EXTEND, exactly as Shift+arrows
+                    // do (Manager ruling 2026-09-06 on QE's M-1; the
+                    // file-manager convention this unit's collapse rule
+                    // comes from). They were unbound when that rule landed,
+                    // and an unbound Shift chord falls THROUGH to the plain
+                    // arms below — so for one commit these four moved the
+                    // cursor and threw the selection away. A Shift-modified
+                    // NAVIGATION or MARK key is never silently its plain
+                    // form — the letters, Esc and F1 ignore Shift by design
+                    // and always have (their arms match both cases, and
+                    // Shift+Esc clears exactly as Esc does; measured
+                    // 2026-09-06, senior-developer re-review N-3).
+                    if (event.text == Key.PageUp) { root.nav("shift-pgup"); return accept; }
+                    if (event.text == Key.PageDown) { root.nav("shift-pgdn"); return accept; }
+                    if (event.text == Key.Home) { root.nav("shift-home"); return accept; }
+                    if (event.text == Key.End) { root.nav("shift-end"); return accept; }
+                    // Shift+Space, by the same rule: the spec gives it no
+                    // job, so it does NOTHING rather than falling through
+                    // to the plain Space, which picks the frame and
+                    // advances (and, since 2026-09-06, collapses the
+                    // selection on the way). Accepted, not rejected — an
+                    // unbound chord is swallowed here, the same contract
+                    // Ctrl+Shift+arrows have in the Ctrl block above.
+                    if (event.text == " ") { return accept; }
                     // `?` is Shift+`/` on most layouts and arrives as the
                     // shifted character "?"; a layout that reports the
                     // UNSHIFTED "/" plus the modifier gets the same key
@@ -3081,7 +3143,8 @@ export component MainWindow inherits Window {
                 sc-body := HorizontalLayout {
                     spacing: 0px;
 
-                    // LEFT COLUMN — the cull loop.
+                    // LEFT COLUMN — the frame under the cursor: reach it,
+                    // mark it, or get to it with the mouse.
                     //
                     // Both columns take HALF of what is left after the
                     // gutter, explicitly. Two stretch factors would split
@@ -3094,7 +3157,13 @@ export component MainWindow inherits Window {
                         alignment: start;
                         KeySection {
                             heading: "MOVE";
-                            KeyRow { k: "← / →"; a: "previous / next frame"; }
+                            // The headline rule of brief 002, in the one
+                            // place the card had room for it: characters,
+                            // not rows (QE 2026-09-06, M-7). 38 characters
+                            // is exactly what the 240 px action cell holds
+                            // at 13 px on a Noto Sans seat — do not
+                            // lengthen it.
+                            KeyRow { k: "← / →"; a: "previous / next frame (ends selection)"; }
                             KeyRow { k: "↑ / ↓"; a: "one row up / down"; }
                             KeyRow { k: "PgUp / PgDn"; a: "one screen back / forward"; }
                             KeyRow { k: "Home / End"; a: "first / last frame"; }
@@ -3130,12 +3199,18 @@ export component MainWindow inherits Window {
                             // ratings are marks.
                             KeyRow { k: "1–5, 0"; a: "reserved for star ratings (v2)"; dim: true; }
                         }
+                        // MOUSE is its own section because a card titled
+                        // "Keyboard shortcuts" that files Wheel and
+                        // Double-click among the keys is lying — and
+                        // because the heading is what shrinks
+                        // "Wheel in loupe" to "Wheel", which is most of
+                        // what makes a fixed key column possible.
                         KeySection {
-                            heading: "SELECT";
-                            KeyRow { k: "Shift+arrows"; a: "extend the selection"; }
-                            KeyRow { k: "Shift+[ / ]"; a: "extend it by whole bursts"; }
-                            KeyRow { k: "Ctrl+Shift+B"; a: "add the burst under the cursor"; }
-                            KeyRow { k: "Ctrl+A"; a: "select all (the filtered set)"; }
+                            heading: "MOUSE";
+                            KeyRow { k: "Wheel"; a: "grid: scroll · loupe: zoom at pointer"; }
+                            KeyRow { k: "Drag"; a: "grid: scroll · loupe: pan above fit"; }
+                            KeyRow { k: "Click"; a: "loupe above fit: centre there"; }
+                            KeyRow { k: "Double-click"; a: "grid: open in loupe · loupe: 1:1 there"; }
                         }
                     }
 
@@ -3159,7 +3234,8 @@ export component MainWindow inherits Window {
                         }
                     }
 
-                    // RIGHT COLUMN — looking closer, the mouse, and the menu.
+                    // RIGHT COLUMN — the view, and working on several at
+                    // once: select, caption, export.
                     VerticalLayout {
                         width: (parent.width - 28px) / 2;
                         spacing: 16px;
@@ -3169,18 +3245,38 @@ export component MainWindow inherits Window {
                             KeyRow { k: "+ / -"; a: "zoom in / out, one stop"; }
                             KeyRow { k: "Z"; a: "fit ⇄ 1:1 (grid: straight to 1:1)"; }
                         }
-                        // MOUSE is its own section because a card titled
-                        // "Keyboard shortcuts" that files Wheel and
-                        // Double-click among the keys is lying — and
-                        // because the heading is what shrinks
-                        // "Wheel in loupe" to "Wheel", which is most of
-                        // what makes a fixed key column possible.
+                        // SELECT sits here rather than under MARK, where
+                        // the cull loop would put it, because the card is
+                        // a fixed-height sheet at 1000x700 — the columns
+                        // are 19 px apart and the left one may not grow.
+                        // Moving SELECT back costs 27 px on the left and
+                        // clamps the card on a Noto Sans seat (ui-grid.md,
+                        // "Seven sections").
                         KeySection {
-                            heading: "MOUSE";
-                            KeyRow { k: "Wheel"; a: "grid: scroll · loupe: zoom at pointer"; }
-                            KeyRow { k: "Drag"; a: "grid: scroll · loupe: pan above fit"; }
-                            KeyRow { k: "Click"; a: "loupe above fit: centre there"; }
-                            KeyRow { k: "Double-click"; a: "grid: open in loupe · loupe: 1:1 there"; }
+                            heading: "SELECT";
+                            // "page keys too" carries the map's
+                            // Shift+PgUp/PgDn/Home/End without a row of its
+                            // own — the card has ~26 px of height headroom
+                            // and a row costs 23 (ui-grid.md, "Seven
+                            // sections").
+                            KeyRow { k: "Shift+arrows"; a: "extend the selection (page keys too)"; }
+                            KeyRow { k: "Shift+[ / ]"; a: "extend it by whole bursts"; }
+                            KeyRow { k: "Ctrl+Shift+B"; a: "add the burst under the cursor"; }
+                            KeyRow { k: "Ctrl+A"; a: "select all (the filtered set)"; }
+                            // The collapse rule's companions (brief 002,
+                            // user decision 2026-09-06): a plain move now
+                            // ends a selection, so the card has to say how
+                            // to move without ending it. Both action texts
+                            // are 28 and 30 characters because the 240 px
+                            // action cell holds 38 at 13 px on this seat
+                            // and a wrapped line costs the card 18 px —
+                            // "any MOVE key" names PgUp/PgDn/Home/End and
+                            // `[ / ]` by pointing at a section the reader
+                            // can see, which is also what pairs the map's
+                            // Ctrl+`[`/`]` row to this cell in the parity
+                            // test. Do not reword them longer.
+                            KeyRow { k: "Ctrl+arrows"; a: "any MOVE key, selection kept"; }
+                            KeyRow { k: "Ctrl+Space"; a: "add or remove the cursor frame"; }
                         }
                         KeySection {
                             heading: "PANELS";
@@ -3201,7 +3297,7 @@ export component MainWindow inherits Window {
                         // and the one a user with a 40-frame burst selected
                         // will otherwise get backwards.
                         Text {
-                            text: "Marks act on the cursor frame only — never on the selection.";
+                            text: "Marks act on the cursor frame only; the advance ends a selection.";
                             color: #8a8a96;
                             font-size: 11px;
                             wrap: word-wrap;
@@ -3327,13 +3423,59 @@ export component MainWindow inherits Window {
             width: 100%;
             height: 26px;
             background: #202024;
-            Text {
-                text: root.status;
-                color: #a8a8b0;
-                font-size: 12px;
+            // Three Texts, one sentence: the count fragment in the middle
+            // is painted in the selection's blue at FULL opacity (the
+            // cursor outline's #4da3ff, not the 25 % wash), because in the
+            // loupe it is the only sign a selection is live. Same
+            // font-size, same vertical alignment and the same grey on
+            // either side, so the line reads as one sentence and the words
+            // sit exactly where they always did.
+            HorizontalLayout {
                 x: 10px;
-                vertical-alignment: center;
                 height: 100%;
+                spacing: 0;
+                alignment: start;
+                status-head-text := Text {
+                    text: root.status-head;
+                    color: #a8a8b0;
+                    font-size: 12px;
+                    vertical-alignment: center;
+                    // Where the grey half was laid out, for the driven
+                    // test that compares its pixels with the fragment's
+                    // (issue #70's rule: a test reads a rectangle the app
+                    // reported, never a coordinate measured on one seat).
+                    // A `changed` handler, never `init`: the first
+                    // non-empty value IS a change, and an init-time report
+                    // would name an empty rectangle.
+                    changed absolute-position => {
+                        root.dbg-card-laid-out("status head", self.absolute-position.x,
+                            self.absolute-position.y, self.width, self.height);
+                    }
+                    changed width => {
+                        root.dbg-card-laid-out("status head", self.absolute-position.x,
+                            self.absolute-position.y, self.width, self.height);
+                    }
+                }
+                status-sel-text := Text {
+                    text: root.status-sel;
+                    color: root.selection-wash;
+                    font-size: 12px;
+                    vertical-alignment: center;
+                    changed absolute-position => {
+                        root.dbg-card-laid-out("status selected", self.absolute-position.x,
+                            self.absolute-position.y, self.width, self.height);
+                    }
+                    changed width => {
+                        root.dbg-card-laid-out("status selected", self.absolute-position.x,
+                            self.absolute-position.y, self.width, self.height);
+                    }
+                }
+                Text {
+                    text: root.status-tail;
+                    color: #a8a8b0;
+                    font-size: 12px;
+                    vertical-alignment: center;
+                }
             }
         }
     }

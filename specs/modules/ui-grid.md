@@ -523,7 +523,7 @@ scrolling are out of scope; they reuse this machine when they land.
 | Wheel up | scroll the view up; cursor unmoved (browsing) | **zoom in** one ladder stop → `Zoomed { 1.5 }`, anchored under the pointer | one ladder stop up, anchored under the pointer; caps exactly at 1:1 |
 | Wheel down | scroll the view down; cursor unmoved | **nothing** (clamped — user decision 2026-07-26: the wheel never falls out of the loupe; `-`/`G`/`Esc` are the exits) | one ladder stop down, anchored under the pointer; a step landing on `1.0` → `Fit` |
 | Ctrl+Wheel | grid zoom in/out — still the M2 deferral | **reserved**: the modifier is ignored, the plain-wheel row applies | **reserved**: the modifier is ignored, the plain-wheel row applies |
-| Click | move the cursor to that cell + collapse the multi-selection (issue #7); Ctrl/Shift variants per the cursor contract | **nothing** — the whole image is on screen, and the keyboard ladder stays center-anchored (user decision 2026-07-26, Q5) | re-center the view on the clicked point; factor unchanged |
+| Click | move the cursor to that cell + collapse the multi-selection (issue #7 — and since 2026-09-06 the same collapse every plain keyboard move performs, brief 002); Ctrl/Shift variants per the cursor contract | **nothing** — the whole image is on screen, and the keyboard ladder stays center-anchored (user decision 2026-07-26, Q5) | re-center the view on the clicked point; factor unchanged |
 | Double-click | **open that image in the loupe at fit** (user decision 2026-07-26 — the first click has already moved the cursor there, so this is purely "enter the loupe"); the previous grid zoom is remembered for `G`/`Esc` | → **1:1 with the clicked point centered** | → **1:1 with the clicked point centered** (already at 1:1: re-center only) |
 | Drag | scroll the view (Flickable kinetic drag, today's behavior — **kept**); rubber-band multi-select is the reserved future gesture | **nothing** — nothing is off-screen, so there is no pan axis | **pan the image**, 1:1 with pointer motion, clamped so the image never detaches from the viewport edges; **release stops the image dead — no fling, no inertia** (issue #46, see below) |
 
@@ -856,10 +856,15 @@ brightening during wheel scrolling (needs an activity decay timer).
 - **Grid click moves the cursor (user requirement 2026-07-25, issue #7 —
   IMPLEMENTED with the panel step)**: a plain click on a cell moves the
   cursor to that image (and claims it, per the untouched-cursor rule) and
-  COLLAPSES any multi-selection (the deselect gesture; Esc clears the
-  selection from anywhere — user decision 2026-08-28 — and G does at a
-  grid zoom). Ctrl+click toggles membership;
-  Shift+click spans cursor..clicked in view order. Clicks live in per-cell
+  COLLAPSES any multi-selection — one of the deselect gestures, and since
+  2026-09-06 no longer the only implicit one: every PLAIN keyboard move
+  collapses the selection the same way (user decision 2026-09-06, brief
+  002 — the file-manager rule, stated in full under "Selection" in the
+  Visual language section); Esc clears the selection from anywhere (user
+  decision 2026-08-28) and G does at a grid zoom. Ctrl+click toggles
+  membership; Shift+click spans cursor..clicked in view order, and after
+  a plain click that span starts FRESH and is the whole selection (brief
+  002 R2). Clicks live in per-cell
   touch areas INSIDE the Flickable, so drag remains scrolling (the
   press+release-without-movement disambiguation comes from the Flickable's
   drag grab); clicks never scroll the view as a side effect. Clicking the
@@ -1134,8 +1139,9 @@ brightening during wheel scrolling (needs an activity decay timer).
 - Selection (wash added 2026-07-28 on user request, persona-reviewed
   MUST-HAVE): a translucent **accent-blue wash over the whole cell**, plus
   the existing accent outline; multi-select via Ctrl/Shift-click,
-  Shift+arrows, and the burst chords Shift+`[`/`]` and Ctrl+Shift+B
-  (burst-grouping.md, issue #55). Rationale — the selection is what the **IPTC panel** stamps
+  Shift+arrows, Ctrl+Space, and the burst chords Shift+`[`/`]` and
+  Ctrl+Shift+B (burst-grouping.md, issue #55; Ctrl+Space and the
+  Ctrl-navigation keys since 2026-09-06, brief 002). Rationale — the selection is what the **IPTC panel** stamps
   (`Selection::batch()`; field commit/clear, keyword add/remove, template
   apply), so it can write metadata across hundreds of images at once, and
   the 2px outline alone was unreadable at 8–12 columns, leaving that reach
@@ -1146,9 +1152,73 @@ brightening during wheel scrolling (needs an activity decay timer).
   commit, decision G4); do not let the wash's presence suggest otherwise.
   A filled area is
   the only selection indicator whose legibility does not shrink with the
-  cell. The wash also makes selection and cursor ORTHOGONAL channels —
+  cell. The wash also draws selection and cursor as two SEPARATE channels —
   filled = selected, bright border = cursor, both compose on one cell —
   replacing the old "two blue borders differing only in width" language.
+  Two channels for DRAWING, not for MOVING (corrected 2026-09-06, brief
+  002): until that date this sentence read "ORTHOGONAL channels" and the
+  code made it so — a plain arrow moved the cursor and left the selection
+  lit, so that a captioned run could be walked with `Y`/`N` afterwards and
+  two non-adjacent bursts could be chorded with plain `]` hops — and a
+  Shift-span started after such a walk was UNIONED with the old selection
+  (`selection.rs`, commit 7ed0949: a rule no surveyed product has and no
+  spec sentence ever stated). The user's report of 2026-09-06 was that
+  product: a video exported, Esc on its report, two arrows, a new
+  Shift-span, and the second video held both sets (measured 4 → 4 → 6
+  selected, `.qe-scratch/unit-002-selection/code/MECHANISM.md` §4).
+  **The selection rule since 2026-09-06 (user decision, brief 002: "file
+  manager style"):**
+  1. **Plain navigation collapses the selection.** Every unmodified cursor
+     move — Left, Right, Up, Down, PgUp, PgDn, Home, End, `[`, `]` — and
+     the `Y`/`N` mark auto-advance leave the selection EMPTY: the cursor
+     is the batch, the count is silent, no wash. Grid and loupe alike, at
+     every zoom. The clear happens whether or not the move changed the
+     cursor (a Right at the last frame still clears — the intent is the
+     same) and whether or not the advance after `Y`/`N` found a next
+     frame; `U` stays put and leaves the selection alone, unless the mark
+     removed the frame from the view and the live-removal rule moved the
+     cursor on (a cursor move like any other). Not navigation, and never
+     touching the selection: the zoom keys, the wheel and the scrollbar
+     (browsing, including the loupe's follow-scroll claim), a modal's Esc,
+     the IPTC panel, the export, and every cursor move the ENGINE makes
+     (the load-settled re-sort, a filter or a landing sidecar moving the
+     cursor to a survivor) — those are not the user's navigation. Esc, a
+     plain click and G at a grid zoom clear as before; G from the loupe
+     keeps.
+  2. **Ctrl-navigation keeps it.** Ctrl+Left/Right/Up/Down,
+     Ctrl+PgUp/PgDn/Home/End and Ctrl+`[`/`]` move the cursor exactly as
+     the plain key would, reset the Shift anchor, and leave the selection
+     alone — the file-manager companion (Explorer, GTK, Qt, Thunderbird:
+     "move the focus without affecting the selection").
+  3. **A fresh Shift-span REPLACES the whole selection**, Ctrl-added frames
+     included (user decision 2026-09-06, answer 3): Shift+arrows and
+     Shift+`[`/`]` whose anchor arms on this press — after a plain click,
+     after Ctrl-navigation, on an empty selection — ARE the selection. A
+     span that continues a live anchor (Shift held on, or the anchor
+     armed by Ctrl+click, Ctrl+Space or Ctrl+Shift+B) replaces only the
+     live span, so shrink and flip work as before. Ctrl+click, Ctrl+Space
+     and Ctrl+Shift+B add; Ctrl+A is exactly the view.
+  4. **Ctrl+Space toggles the cursor frame's membership** — additive like
+     Ctrl+click, cursor unmoved, anchor armed on the cursor: the
+     keyboard's way to build a discontiguous selection.
+  What the rule buys: "export, `]`, export" and "caption, `]`,
+  Ctrl+Shift+B, caption" act on the new burst only, a fresh span can never
+  carry an old one along, and no stale selection can beat the burst under
+  the cursor at the next Ctrl+Shift+E. What it costs, recorded because the
+  persona rated the rule IN-MY-WAY (2026-09-06, `PERSONA.md` §3 C): a stray
+  arrow after a 40-frame chord loses the selection silently and there is
+  no undo (one Ctrl+Shift+B rebuilds a burst; a hand-built span costs its
+  keys again); Ctrl+arrow is a chord the research calls "essentially
+  undiscoverable", so the shortcuts card and docs/culling.md name it
+  beside the plain arrows; the walk-and-mark of a captioned run ends at
+  the first `Y` (the caption is already on the sidecars — a second batch
+  on the same run is a re-select away); the two-burst union is Ctrl+`]`.
+  The persona's alternative — drop the selection only when a key lands
+  OUTSIDE it — was put to the user with this trade-off; the user chose
+  the file-manager rule ("when I move the arrow or press ] to a new burst
+  after an export, I expected the older frames to be not selected"), and
+  rejected a finished export consuming its selection ("I don't think auto
+  deselecting is intuitive", answer 5).
   Acceptance criteria:
   - The wash renders on **every** selected cell **including the cursor
     cell**. (The pre-wash rule was `selected && !is-cursor`, which hid the
@@ -1178,14 +1248,33 @@ brightening during wheel scrolling (needs an activity decay timer).
   WHICH images the IPTC batch covers; the count says HOW MANY, including
   selected images scrolled off-screen, which no on-cell indicator can
   convey. Images selected but filtered OUT of the view are excluded from
-  both, matching "what you see is what you stamp".
+  both, matching "what you see is what you stamp". **Drawn in the
+  selection accent** (2026-09-06, brief 002 R5; persona A1 USEFUL): the
+  fragment is painted in `selection-wash`'s hue at full opacity — the
+  cursor outline's blue, `#4da3ff`, 6.2:1 computed on the bar's `#202024`
+  beside the grey `#a8a8b0` at 6.9:1 — because in the loupe, where no
+  wash shows, this fragment is the ONLY sign that a selection is live
+  (`code/persona-loupe-stale.jpg`: grey status text is prose, blue is a
+  state light). It is its own `Text` between the two grey halves of the
+  line, in the same place in the sentence as before; the `status`
+  property stays the whole line, so the trace's `status at shutter:` and
+  the QEDUMP `status=` field read exactly what they always did; and the
+  fragment reports its rectangle as `status selected laid out at X,Y size
+  WxH` (the grey head as `status head laid out …`) so a driven test can
+  read its pixels by name rather than by a coordinate. Pinned by
+  `the_selection_count_is_drawn_in_the_accent` (brief 002), which compares
+  the blue bias inside the two reported rectangles in one shot: measured
+  18.0 for the fragment against 4.1 for the grey head (the bar's own
+  background is +4), with the two mutants at 4.1 (the fragment painted
+  grey) and 7.4 (painted in the 25 % wash blend instead of the hue), so
+  the test's threshold of 8.0 sits between them.
 - Failed file: warning badge + tooltip with reason.
 
 ## Keyboard map (keyboard-first is a feature)
 
 | Key | Action |
 |---|---|
-| Arrows / PgUp / PgDn / Home / End | navigate (grid and loupe) |
+| Arrows / PgUp / PgDn / Home / End | navigate (grid and loupe). A plain move COLLAPSES the selection — the cursor is then the batch, the count silent (user decision 2026-09-06, brief 002: the file-manager rule, in full under "Selection" in Visual language); with Ctrl held the same key moves without touching it |
 | `Y`, `P` or `Space` | pick (take) |
 | `N` or `X` | reject |
 | `U` | clear mark |
@@ -1196,20 +1285,23 @@ brightening during wheel scrolling (needs an activity decay timer).
 | double-click (grid) | open that image in the loupe at fit |
 | double-click (loupe) | 1:1 with the clicked point centered |
 | drag | grid: scroll; loupe above fit: pan the image |
-| `G` | back to the grid at the previous grid zoom (from loupe/1:1); at a grid zoom it is also the deselect gesture (clears the selection); from the loupe it KEEPS the selection — the "go and look at what I selected" exit |
-| `Esc` | back to the grid at the previous grid zoom AND the selection cleared — from anywhere, the loupe included (user decision 2026-08-28, issue #55: the burst chords build a 40-frame selection in the loupe with one press, where no wash shows it, and a stale one would silently take the next IPTC commit; the cancel key must work where the selection was made). Modal popups still take Esc first (they close; the grid never sees it), and with keyboard focus in an IPTC field Esc stays the recorded no-op (Slint LineEdit has no Esc hook — see the panel section; QE 2026-08-28). Like every nav key it ends in the cursor reveal, so an Esc taken by the grid also scrolls the cursor back into view — that is the reveal rule, not a lost scroll position: only keys that never reach the grid (a modal's Esc) leave a browsing viewport alone |
+| `G` | back to the grid at the previous grid zoom (from loupe/1:1); at a grid zoom it is also the deselect gesture (clears the selection); from the loupe it KEEPS the selection — the "go and look at what I selected" exit; the first plain move after it drops the selection like any other (brief 002, 2026-09-06) |
+| `Esc` | back to the grid at the previous grid zoom AND the selection cleared — from anywhere, the loupe included (user decision 2026-08-28, issue #55: the burst chords build a 40-frame selection in the loupe with one press, where no wash shows it, and a stale one would silently take the next IPTC commit; the cancel key must work where the selection was made). Modal popups still take Esc first (they close; the grid never sees it), and with keyboard focus in an IPTC field Esc stays the recorded no-op (Slint LineEdit has no Esc hook — see the panel section; QE 2026-08-28). Like every nav key it ends in the cursor reveal, so an Esc taken by the grid also scrolls the cursor back into view — that is the reveal rule, not a lost scroll position: only keys that never reach the grid (a modal's Esc) leave a browsing viewport alone. Since 2026-09-06 (brief 002) any plain move ends a selection too; Esc remains the clear that leaves the cursor where it is, and the only one that reaches a selection made before a dialog opened — the dialog takes the first Esc, the grid the second |
 | `I` | toggle IPTC panel |
 | `K` | focus the keyword field, opening the IPTC panel if needed (persona G3; implemented with the panel step — K is never a dead key) |
-| Shift+arrows | extend selection (span anchor..cursor over view positions; a new span replaces the previous one — shrink/flip works) |
-| `Ctrl+A` | select all (filtered set) |
-| `[` / `]` | burst boundary jump (M7): `]` = next frame whose group differs (in a contiguous capture-sorted view that is the next group's first frame; with non-contiguous members it follows view order); `[` = re-anchor on the current group's first visible frame, crossing to the previous group only from there (CD-player convention); claims the cursor; carries loupe zoom/pan persistence; see burst-grouping.md |
-| Shift+`[` / Shift+`]` (also `{` / `}`, the shifted characters a US keyboard sends) | extend the selection by WHOLE bursts (issue #55): the cursor lands where `[`/`]` would, and every whole burst between the anchor's burst and the cursor's is selected; the opposite key drops a burst; a following Shift+arrow is frame-precise from the burst's edge; see burst-grouping.md |
-| `Ctrl+Shift+B` | select this burst (issue #55, user proposal): the burst under the cursor joins the selection, cursor unmoved, additive, idempotent; see burst-grouping.md |
+| Shift+arrows / PgUp / PgDn / Home / End | extend selection (span anchor..cursor over view positions; a new span replaces the previous one — shrink/flip works). A span whose anchor arms on THIS press — after a plain click, after Ctrl-navigation, on an empty selection — replaces the WHOLE selection, Ctrl-added frames included (user decision 2026-09-06, brief 002 answer 3; until then a fresh span was unioned with the folded old one, `selection.rs` 7ed0949 — a rule no surveyed product has, which this row never stated and which produced the two-sets video of the user's report); a span continuing a live anchor (Shift held on, or the anchor armed by Ctrl+click, Ctrl+Space or Ctrl+Shift+B) replaces only the live span. The PAGE keys extend by the same rule, a span from the anchor to wherever the plain key lands (QE 2026-09-06, D1; Manager ruling: the file-manager convention the collapse rule comes from). They were UNBOUND when that rule landed and an unbound Shift chord falls through to its plain form, so for one commit Shift+Home/End/PgUp/PgDn moved the cursor and destroyed the selection — a Shift-modified NAVIGATION or MARK key is never silently its plain form (the letters, `Esc` and `F1` ignore Shift by design and always have: Shift+Esc clears like Esc, Shift+F1 opens the card, and every letter arm matches both cases — measured 2026-09-06, senior-developer re-review N-3). Shift+Space is inert for the same reason: the map gives it no job, so it is swallowed rather than picking the frame and advancing. Shift+Ctrl+arrows stay reserved |
+| `Ctrl+A` | select all (filtered set); arms no anchor, so a Shift+arrow after it starts fresh from the cursor and replaces it — Explorer's and GTK's behaviour, kept (brief 002 OQ2, 2026-09-06) |
+| `[` / `]` | burst boundary jump (M7): `]` = next frame whose group differs (in a contiguous capture-sorted view that is the next group's first frame; with non-contiguous members it follows view order); `[` = re-anchor on the current group's first visible frame, crossing to the previous group only from there (CD-player convention); claims the cursor; carries loupe zoom/pan persistence; a plain `[`/`]` collapses the selection like the arrows, and Ctrl+`[`/`]` jumps the same way with the selection kept (2026-09-06, brief 002); see burst-grouping.md |
+| Shift+`[` / Shift+`]` (also `{` / `}`, the shifted characters a US keyboard sends) | extend the selection by WHOLE bursts (issue #55): the cursor lands where `[`/`]` would, and every whole burst between the anchor's burst and the cursor's is selected; the opposite key drops a burst; a following Shift+arrow is frame-precise from the burst's edge; from a FRESH anchor the burst span is the whole selection, the same rule as Shift+arrows (brief 002, 2026-09-06); see burst-grouping.md |
+| `Ctrl+Shift+B` | select this burst (issue #55, user proposal): the burst under the cursor joins the selection, cursor unmoved, additive, idempotent, arms the anchor; a plain `]` between two presses now empties the selection, so two non-adjacent bursts are Ctrl+Shift+B, Ctrl+`]`×n, Ctrl+Shift+B (2026-09-06, brief 002); see burst-grouping.md |
+| Ctrl+arrows / PgUp / PgDn / Home / End | move the cursor exactly as the plain key would and leave the selection alone — the file-manager companion of the collapse rule (user decision 2026-09-06, brief 002 R3; Explorer, GTK, Qt, Thunderbird). Resets the Shift anchor, so a Shift+arrow that follows starts fresh from the cursor — deliberately not Explorer's sticky anchor: one rule for where a span starts. Ctrl+Shift+arrows stay unbound (reserved). Grid and loupe alike; claims the cursor |
+| Ctrl+`[` / Ctrl+`]` | burst jump with the selection kept — `]`'s landing, `[`'s re-anchor convention, and the anchor reset of Ctrl+arrows; the seven hops in "Ctrl+Shift+B on 40, Ctrl+`]`×7, Ctrl+Shift+B on 47" (brief 002 R3; burst-grouping.md) |
+| Ctrl+Space | toggle the cursor frame's membership — additive like Ctrl+click, anchor armed on the cursor, cursor unmoved; the keyboard's way to build a discontiguous selection (brief 002 R4; Explorer, GTK, WAI-ARIA). Inert while a field or a dialog holds the keyboard, like every grid key. A desktop whose input-method switcher owns Ctrl+Space (older IBus setups) never delivers it; Ctrl+click is the same toggle there |
 | `Ctrl+O` | Open Folder… (persona accelerator gap, provisional) |
 | `Ctrl+Q` | Quit (persona accelerator gap, provisional) |
 | `Ctrl+E` (menu: Copy picks…) | open copy dialog (`Ctrl+C` stays clipboard-idle: user decision after persona review — never repurpose it) |
 | `Ctrl+Shift+E` (menu: Export Frames as Video…) | open the video export dialog (M9, video-export.md). A CHORD, not a bare letter, so it cannot fire from a fat finger mid `]`/`N` (persona 2026-08-27); it is matched BEFORE `Ctrl+E` because with Shift held the event still arrives as the letter plus modifiers. Disabled — with its reason in the status line, never silently — when there is neither a selection nor a burst under the cursor |
-| `?` / `F1` | open the keyboard-shortcuts card — and, while it is up, close it again (2026-09-04; the persona's finding was that the keyboard help of a keyboard-first app could be opened only with the mouse). `?` reaches the app as the shifted character on most layouts, so it is matched both with and without a reported Shift modifier, and `/`-with-Shift is matched too for layouts that report the unshifted key. The opener lives in the MAIN key scope beside the other bare letters, which is what keeps it from firing while an IPTC field, the keyword field or a dialog's own field holds the keyboard; the close arm is mirrored in the copy and export scopes (issue #42's topmost-first rule). About keeps `Esc` as its only key. **Both keys are therefore inert while a field or a dialog holds the keyboard, and for `F1` that is a decision, not a consequence** (2026-09-04): for `?` it is forced — the key is a typed character, and a help card that opened instead of typing a question mark into a keyword would be a defect — while `F1` is not a character and could have been given a scope of its own. It was not, because the help it opens is the GRID's help: none of its 27 rows applies while a text field has the keyboard, and a modal that appeared over a half-typed keyword would have to decide what happens to the edit. Esc leaves the field first; F1 works there |
+| `?` / `F1` | open the keyboard-shortcuts card — and, while it is up, close it again (2026-09-04; the persona's finding was that the keyboard help of a keyboard-first app could be opened only with the mouse). `?` reaches the app as the shifted character on most layouts, so it is matched both with and without a reported Shift modifier, and `/`-with-Shift is matched too for layouts that report the unshifted key. The opener lives in the MAIN key scope beside the other bare letters, which is what keeps it from firing while an IPTC field, the keyword field or a dialog's own field holds the keyboard; the close arm is mirrored in the copy and export scopes (issue #42's topmost-first rule). About keeps `Esc` as its only key. **Both keys are therefore inert while a field or a dialog holds the keyboard, and for `F1` that is a decision, not a consequence** (2026-09-04): for `?` it is forced — the key is a typed character, and a help card that opened instead of typing a question mark into a keyword would be a defect — while `F1` is not a character and could have been given a scope of its own. It was not, because the help it opens is the GRID's help: none of its 29 rows applies while a text field has the keyboard, and a modal that appeared over a half-typed keyword would have to decide what happens to the edit. Esc leaves the field first; F1 works there |
 | `1`–`5`, `0` | reserved (star ratings, v2) — must not conflict |
 
 There is no undo stack in v1 (user decision): a mis-marked frame during
@@ -1218,7 +1310,11 @@ auto-advance is fixed with arrow-back + re-mark, which costs one keystroke.
 Picking (`Y`) or rejecting (`N`) auto-advances the cursor to the next image
 at EVERY zoom level — grid and loupe alike (user decision 2026-07-25: "once
 I select Y or N, the UI should automatically move to the next image").
-Clearing (`U`) does not advance. This becomes a configuration option
+Clearing (`U`) does not advance. The advance is a cursor move and collapses
+the selection like an arrow (brief 002 R1, Manager 2026-09-06, best
+practice: Lightroom's auto-advance collapses to the next photo, and an
+exemption would make `Y` and Right disagree about the selection); `U`,
+which does not move, leaves it alone. This becomes a configuration option
 (default: on) when the settings dialog lands (File menu placeholder,
 post-v1); until then it is always on.
 
@@ -1288,7 +1384,7 @@ acceptance line below was false. What replaced it:
   `KeyRow`: a **104 px** right-aligned key cell (13 px, weight 600,
   `#e8e8f0`), a 14 px gutter, then a stretching action cell (13 px,
   `#c8c8d0`). The 104 px IS A CONSTANT, never a content measurement — that
-  is what makes the action column start at the same x on all 27 rows, in
+  is what makes the action column start at the same x on all 29 rows, in
   any font, on any platform, and right-alignment gives a SECOND hard edge
   so the key list and the action list are each independently scannable.
   Widest label measures ~83 px at 13 px semibold across Noto Sans /
@@ -1307,8 +1403,10 @@ acceptance line below was false. What replaced it:
   contrast. All four ratios are computed from the sRGB values; the ink as
   RENDERED measures a little brighter (5.25:1 for the dim key, off the
   1440x900 shot), which is antialiasing, and both readings clear 4.5.
-- **Seven sections in two columns**: MOVE, MARK, SELECT down the left;
-  ZOOM, MOUSE, PANELS, FILE MENU down the right. Headings are ONE WORD
+- **Seven sections in two columns**: MOVE, MARK, MOUSE down the left;
+  ZOOM, SELECT, PANELS, FILE MENU down the right (SELECT and MOUSE swapped
+  sides on 2026-09-06, brief 002 — the measurement is in this bullet's
+  last paragraph). Headings are ONE WORD
   (a landmark is short), 11 px `#8a8a96` with 0.6 px tracking, each with a
   1 px **`#6a6a76`** rule running to its column's edge; a 1 px `#6a6a76`
   hairline separates the two columns over the body's full height. Those
@@ -1324,7 +1422,48 @@ acceptance line below was false. What replaced it:
   "Wheel in loupe" to "Wheel", which is most of what makes a fixed key
   column fit at all. FILE MENU echoes the File menu
   character for character, ellipses included, so a mouse user learns where
-  the four chords live.
+  the four chords live. SELECT lists the collapse rule's companions as TWO
+  rows (brief 002, 2026-09-06): `Ctrl+arrows`, whose action text says "any
+  MOVE key" — which is what pairs the map's Ctrl+`[`/`]` row to this cell
+  in the parity test, `[`/`]` being a MOVE row on this same card — and
+  `Ctrl+Space`. **SELECT and MOUSE swapped columns in the same commit, and
+  the estimate that stood here until then was wrong** (corrected
+  2026-09-06, developer measurement with the senior developer's ruling;
+  the numbers below are measured off the `shortcuts card laid out at`
+  marks at both windows, this seat, Noto Sans): the clamp at 1000x700 is `layer − 40px` = **594**, not the 604
+  this bullet claimed, and the card was **549**, so the room was **44 px**,
+  not 55; and a one-line `KeyRow` costs **23 px** — an 18 px line box plus
+  the section's 5 px spacing — not the ~20 assumed. The card had room for
+  ONE row and needed two: with both rows on the left it measured **595**
+  and clamped to 594, leaving the 20 px of slack that means "clamped". The
+  left column also led the right by 27 px, so every pixel added there cost
+  the card a pixel while the right column's last 27 were free; swapping
+  SELECT (six rows after this brief) with MOUSE (four) moves 46 px across,
+  leaves the columns 19 px apart instead of 73, and puts the card at
+  **568**, 26 px under the clamp. Both columns are exactly
+  `(744 − 28) / 2 = 358 px`, so a section changing side cannot rewrap a
+  line. **An action text must fit ONE line of the 240 px action cell**: 38
+  characters fit at 13 px on this seat ("grid: open in loupe · loupe: 1:1
+  there"), 40 do not — "add or remove the frame under the cursor" wrapped
+  and cost 18 px — so the two new rows are written at 28 and 30. Two more
+  action texts spend that budget deliberately (QE 2026-09-06, M-7 and D1):
+  the MOVE section's `← / →` row reads "previous / next frame (ends
+  selection)" (38), which is where this brief's headline rule reaches the
+  card at last — in characters, since there was no room for it in rows —
+  and SELECT's `Shift+arrows` row reads "extend the selection (page keys
+  too)" (36), which is how the map's Shift+PgUp/PgDn/Home/End row is
+  listed without a row of its own. Measured after both: still 780x568 at
+  1440x900 and at 1000x700, so neither wrapped. The card
+  is now a fixed-height sheet with ~25 px of room at 1000x700: the next
+  binding either replaces a row or moves a section, and the fits-whole
+  test is what will say so. Until QE M-7 (2026-09-06) the card did not carry
+  this brief's headline rule — that a plain move ends the selection —
+  because no arrangement had the 15-20 px a row for it would cost; **it
+  now does**, in the `← / →` action text, at no cost in rows. The
+  constraint was rows, not characters, and that is the lesson to take from
+  it: the card teaches the companion beside it ("any MOVE key, selection
+  kept"), and docs/culling.md and the selection rule above carry the rule
+  in full.
 - **The card GROUPS AND PARAPHRASES the map, and lists every binding in
   it.** One map row becomes four (`Arrows / PgUp / PgDn / Home / End` was
   a 222 px key string that made any fixed column impossible, and named
@@ -1334,19 +1473,29 @@ acceptance line below was false. What replaced it:
   brought the reader here, and it belongs to no section.
 - **780 px wide, content-driven tall.** `card-width: min(780px, window −
   48px)`; the height is `ModalScrim`'s opt-in `card-fits-content`, clamped
-  to `window − 40px`. Measured **780x549** on the development seat, at
-  1440x900 (x 330..1110, y 182..731) and unchanged at 1000x700 (x 110..890,
-  y 82..631) — it fits whole at the smallest supported window and never
-  scrolls there. **Every length in this section is a LOGICAL pixel**, the
+  to `window − 40px`. Measured **780x568** on the development seat (Noto
+  Sans), at 1440x900 (x 330..1110, y 173..741) and unchanged at 1000x700
+  (x 110..890, y 73..641), where it leaves 33 px above the status bar — it
+  fits whole at the smallest supported window and never scrolls there. The
+  **780x549** this bullet gave until 2026-09-06 was the 27-row card of
+  2026-09-04, before brief 002 added the two SELECT rows and swapped
+  SELECT with MOUSE; both numbers are read from the `shortcuts card laid
+  out at` marks of
+  `shortcuts_card_is_a_two_column_sheet_that_fits_its_window`, which is
+  where the next editor re-measures them. **Every length in this section is a LOGICAL pixel**, the
   unit Slint lays out in: a 200 % seat at 1920x1080 is 960x540 logical, so
   it is a smaller window than 1000x700 and the card clamps there. "The
   smallest supported window" is therefore a claim about logical size, and
   a high-DPI seat is small in exactly the way a small monitor is.
-- **549 is a MEASUREMENT and no test may pin it.** It is the sum of ~27
+- **568 is a MEASUREMENT and no test may pin it.** It is the sum of ~29
   text line boxes, so it belongs to whichever face the seat draws with,
-  and the numbers are far apart: 549 in this machine's Noto Sans, **491**
-  in Liberation Sans, 512 in Nimbus Sans / Carlito / Cantarell, 525 in
-  Montserrat, 627 in Noto Sans Mono. The ubuntu CI runner draws in DejaVu
+  and the numbers are far apart. Measured on the 27-row card of 2026-09-04
+  (two rows fewer than today's, so stale in absolute terms — the SPREAD
+  between faces is what this list is for): 549 in this machine's Noto
+  Sans, **491** in Liberation Sans, 512 in Nimbus Sans / Carlito /
+  Cantarell, 525 in Montserrat, 627 in Noto Sans Mono — that last one
+  already over the 594 clamp before this brief, so the fits-whole promise
+  has always been about the proportional faces. The ubuntu CI runner draws in DejaVu
   Sans and the Windows runner in Segoe UI; neither is this seat's font,
   and the suite already knows two Linux seats disagree about a panel row's
   y by 3 px. The card's test therefore pins **only what is geometric**:
@@ -3415,6 +3564,88 @@ the user confirms, all cheap to change):**
       any zoom, which would make the control vacuous; it asserts the
       load-settled edge landed before the first wheel, because that edge
       writes `vp_y` itself.
+- [x] **Brief 002, AC1 — the user's scenario** (user decision 2026-09-06):
+      4 selected → export → Esc → Right, Right → Shift+Right → exactly 2
+      selected, the plan names only those two, no earlier-video hint, and
+      the second file holds two frames. Pinned by
+      `the_second_video_holds_only_the_new_span` (RED on the pre-fix tree
+      2026-09-06: 6 selected, `clipsummary` "6 frames … → a-g.mov" and
+      `cliphint` "4 of 6 frames are already in a-d.mov" — the user's
+      report, `code/MECHANISM.md` §4). The `]`-to-a-burst half is pinned by parts
+      — `a_plain_move_collapses_the_selection_in_the_grid` (a plain `]`
+      empties it) with `core: the_scope_is_the_selection_or_the_burst_under_the_cursor`
+      — because no fixture in the repository forms a burst from real files
+      (video-export.md's recorded deviation).
+- [x] **Brief 002, AC2 — caption, hop, caption**: Ctrl+Shift+B, an IPTC
+      commit, `]`, Ctrl+Shift+B, a second commit → the second commit lands
+      on the second burst only. Pinned by
+      `caption_then_hop_then_caption_lands_on_the_second_burst_only` (the
+      revert label counts the batch — 5, then 3, never 8; RED pre-fix with
+      the hop reading 5 selected).
+- [x] **Brief 002, AC3 — two bursts by Ctrl-hops**: Ctrl+Shift+B,
+      Ctrl+`]`×n, Ctrl+Shift+B → both bursts; a plain `]` anywhere in the
+      sequence → empty. Pinned by
+      `ctrl_navigation_keeps_the_selection_and_ctrl_space_toggles` (its
+      `plain` dump read 14 selected on the pre-fix tree); the core rule by
+      `selection.rs` `a_fresh_burst_span_replaces_ctrl_added_frames`.
+- [x] **Brief 002, AC4 — Ctrl+Space**: on three separate frames → 3
+      selected; again on one → 2; the Ctrl+Right between them keeps the
+      count. Same test as AC3, with `selection.rs`
+      `ctrl_space_toggles_additively_across_ctrl_navigation` for the rule.
+- [x] **Brief 002, AC5 — the mark advance collapses**: `Y` on a frame
+      inside a live selection → the selection is empty afterwards and the
+      mark is on that frame only; `U` leaves the selection alone. Pinned
+      by `a_plain_move_collapses_the_selection_in_the_grid` and
+      `a_plain_move_collapses_the_selection_in_the_loupe` (the loupe
+      strand also proves the zoom never changed).
+- [x] **Brief 002, AC6 — a dialog's Esc**: Esc in the export dialog closes
+      it and the selection is intact; a second Esc, on the grid, clears
+      it — unchanged, now in docs/culling.md. Pinned by
+      `the_second_video_holds_only_the_new_span` (`closed1`: dialog gone,
+      4 selected; `cleared`: 0).
+- [x] **Brief 002, AC7 — the count's colour**: "· N selected" renders in
+      the accent in the grid and in the loupe, absent when empty. Pinned
+      by `the_selection_count_is_drawn_in_the_accent` (the fragment's
+      rectangle is read by name and its blue bias compared with the grey
+      head's in the same shot: 18.0 against 4.1; both mutants red — the
+      accent set to `#a8a8b0` gives 0.0 of difference and the 25 % wash
+      blend 3.3, against a threshold of 8.0).
+- [ ] **Brief 002, AC8 — suite, card, checksums**: the full suite green on
+      both runners; `the_shortcuts_card_lists_every_binding_in_the_spec`
+      carries the three new pairings; RAW checksums unchanged. R2's core
+      rule: `selection.rs`
+      `a_fresh_span_replaces_the_whole_selection_a_continued_one_replaces_its_span`
+      (rewritten from `toggle_and_anchor_reset`, which asserted the union;
+      RED against the pre-fix `extend_to`).
+- [x] **Brief 002, the Shift page keys** (QE 2026-09-06, M-1; Manager
+      ruling A): Shift+PgUp, Shift+PgDn, Shift+Home and Shift+End extend
+      by the same rule as Shift+arrows — a span from the anchor to where
+      the plain key lands, fresh or continued — and Shift+Space is inert.
+      Pinned by `shift_page_keys_extend_the_selection` (the page spans
+      asserted as arithmetic, never a page size; RED before the binding
+      with Shift+End reading (39, 0), the plain End's collapse).
+- [x] **Brief 002, an empty filtered view still collapses** (QE
+      2026-09-06, M-2): rule 1's "whether or not the move changed the
+      cursor" holds where there is nowhere to move at all, so a selection
+      cannot survive an arrow pressed under a filter that matches nothing
+      and come back when the filter widens. Pinned by the empty-view
+      strand of `a_plain_move_collapses_the_selection_in_the_grid` (RED
+      before the fix, reading 40).
+- [x] **Brief 002, the Ctrl chords claim the cursor** (QE 2026-09-06,
+      M-5): a Ctrl-move sets `cursor_touched`, so the view rules stop
+      moving the cursor afterwards. Pinned by
+      `ctrl_navigation_claims_the_cursor` through a FILTER CHANGE — the
+      `user_changed_query` half of `filter::cursor_after_recompute`'s
+      `follow_head`. **The load-settled half of that same condition, and
+      `Ctrl+Space`'s membership in the claim, are review-verified only**:
+      three real RAWs settle before any key a script can send (measured
+      2026-09-06 — the re-sort form of the test was vacuous and its own
+      ordering guard said so), and Ctrl+Space never moves the cursor, so
+      its claim cannot be observed on its own. The anchor reset that comes
+      with a Ctrl+`[`/`]` hop is pinned by the `hopfresh` strand of
+      `ctrl_navigation_keeps_the_selection_and_ctrl_space_toggles`
+      (senior-developer re-review N-2; the mutant that keeps the anchor
+      reads (7, 7) against (7, 2)).
 - [ ] Manual acceptance (per release): 5,000-file A1 folder (a bad evening, per
       persona review) scrolls at 60 fps after thumbs load; pick→auto-advance→pick
       loop in loupe has no perceived latency.
@@ -3488,7 +3719,33 @@ Documented because they ship in release builds (validator finding):
   no cursor, so nothing else in a dump moves when PgDn does. `key:` also
   understands `pgdn`, `pgup`, `home` and `end` now; before issue #62 the
   grid's own PgUp/PgDn/Home/End were reachable only through the `nav`
-  tokens, which bypass the key path.
+  tokens, which bypass the key path. `f1` joined them with the shortcuts
+  card's opener (2026-09-04; this sentence lacked it until 2026-09-06),
+  and `space` with Ctrl+Space (brief 002): the step parser trims each
+  action, so a literal trailing blank cannot spell the key, and
+  `key:ctrl+space` is the only way to send the chord. The Ctrl chords
+  have `nav` tokens as well (`ctrl-left`/`right`/`up`/`down`,
+  `ctrl-pgup`/`pgdn`/`home`/`end`, `ctrl-burst-prev`/`next`,
+  `select-toggle`) for a script that needs to bypass focus, and the
+  status bar's selection fragment reports its rectangle as `status
+  selected laid out at X,Y size WxH` (the grey head as `status head laid
+  out …`), which is how a test reads its colour.
+  `filter:all|picked|rejected|unmarked` switches the filter chip
+  (2026-09-06, senior-developer review F1): it invokes the window's own
+  `set-filter` callback with the string the chip passes, so a script gets
+  the chip's whole path — the name-to-enum mapping, the view recompute
+  and the cursor rules that follow it. It exists because the rules that
+  only apply while a filter is ON had no driven proof: a mark that takes
+  its frame OUT of the view (the `U` half of the collapse rule) and a
+  cursor the filter has hidden (the guard on `select-toggle`) are
+  unreachable without one, and the chips are not self-reporting
+  elements, so `click:` cannot name one. Only those four names act; an
+  unknown one does nothing rather than silently meaning `all`. Like
+  `open:` it is harness plumbing, not a grid key, so **it stays live while
+  a modal is up** (QE 2026-09-06, D3, measured: the view switched under an
+  open shortcuts card, which no chip can do — they sit behind the scrim).
+  A test about modal containment must therefore click a chip, never send
+  this token.
   Two more marks let a driven run gate on the app instead of the clock
   (issue #62): `clip export finished run N` and `copy finished run N` fire
   when the respective report card goes up, and `load settled gen N`
@@ -3885,7 +4142,7 @@ Documented because they ship in release builds (validator finding):
   the nav tokens bypass (they call `handle_nav` directly, so they are
   blind to the whole stranded-keyboard class: only a dispatched event can
   land on no element). Named keys: `escape`, `return`, `tab`,
-  `left`/`right`/`up`/`down`; anything else is sent as literal text
+  `left`/`right`/`up`/`down`, later `pgdn`/`pgup`/`home`/`end`, `f1` and `space` (recorded where they were added, above); anything else is sent as literal text
   (`key:k` types k). `ctrl+` synthesizes a held Control around the press.
   `click.X,Y` dispatches a real pointer move+press+release at
   window-logical coordinates, hit-tested by Slint — this makes the

@@ -34,7 +34,10 @@ folder, full disk) the status bar says so — silence means saved.
 anywhere (opening the panel if needed).
 
 - Fields apply to the **current image**, or to the whole **selection**
-  if you have one (`Ctrl+A`, Shift+arrows, Ctrl/Shift+click).
+  if you have one (`Ctrl+A`, Shift+arrows, Ctrl+Space, Ctrl/Shift+click).
+  A selection lasts until you move: a plain arrow ends it, Ctrl+arrows
+  keep it — see
+  [the selection](culling.md#working-on-several-photos-at-once-the-selection).
 - On a mixed selection a field shows *mixed*; typing overwrites all.
 - **Keywords are additive**: applying adds to what each image has.
   Removing a keyword chip removes it from every selected image.
