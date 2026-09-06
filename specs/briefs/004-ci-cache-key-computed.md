@@ -145,3 +145,25 @@ Skipped: CI plumbing, nothing user-visible.
   ci."
 - 2026-09-06, Manager: option (a), parsed-TOML form, as recorded in the
   context; unit 003's closing items ride in this unit.
+- 2026-09-06, senior developer (duty 1): OQ1 settled from the runner
+  images' software lists at the versions the job logs name — ubuntu-24.04
+  `20260831.293` ships Python 3.12.3 as `python3`, windows-2025-vs2026
+  `20260824.214` ships 3.12.10 as `python`; `tomllib` on both, no
+  `setup-python`; the step prints the interpreter's version. OQ2 settled
+  from `config.ts` at 6323deb: the `key` input enters directly after the
+  prefix and sits in the restore key and the primary key, so a profile
+  change misses both (wanted). The component for the manifest as it
+  stands is `profile-a66a9ea8`; the mutants: opt-level 2→3 → `1395f519`,
+  version bump / comment / reorder / CRLF → unchanged, no `[profile]` →
+  `44136fa3`, parse error → exit 1. Deviation from R1, accepted: a second
+  step asserts the hash reached the cache key, because a renamed step id
+  or output would silently turn the component into a constant.
+  Corrections to this brief's context: cache usage after the v0 deletions
+  is 3.96 GiB over four entries (5.61 GiB was read before the Windows v0
+  entry went); the v1 entries are 1.89 / 1.63 GiB; the cold Windows job
+  is a range, 57 m 43 s to 1 h 09 m 58 s.
+- 2026-09-06, Manager rulings: Q1 keep the guard step; Q2 delete the
+  orphaned `v1-rust-test-…` pair after the merge run saves under the
+  computed key, not before; Q3 QE reads the Windows job for AC1, the
+  Manager as fallback; Q4 AC4's tick lands in the developer's commit; Q5
+  this entry.

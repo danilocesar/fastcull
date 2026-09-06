@@ -2574,9 +2574,17 @@ the user confirms, all cheap to change):**
       Measured Windows jobs: 40.1 and 45.3 minutes warm, 60.9 the earlier
       record, 65.7 COLD (run 33839957294, the first run after rustc
       1.98.1) and 59.5 cold on main the same day (33888473738). 75 left
-      the cold run 9.3 minutes; 90 leaves it 24.3. A test that adds more
-      than ~20 minutes of wall clock to the Windows job is spending
-      headroom that is measured, not spare. *The headless seat is a
+      the cold run 9.3 minutes; 90 left it 24.3 — and then #76 made a
+      cold job colder (dependencies compile optimised in debug,
+      2026-09-05) and a run under a NEW cache key rebuilds the release
+      half of the entry too (corrected 2026-09-06, QE D2): 61.7
+      (33996087777, PR #80's first run), 70.0 = 1 h 09 m 58 s
+      (34014978820, PR #82, the worst measured) and 57.7 (34018510289,
+      main, including its 2 m 15 s cache save) — two samples of one
+      shape 12 minutes apart, so the cold figure is a range; 90 leaves
+      the worst 20.0 minutes, 22 %. A test that adds wall clock to the
+      Windows job is spending headroom that is measured, not spare, and
+      the worst cold job has 20 minutes of it. *The headless seat is a
       constant*: the Linux screenshot step runs under `xvfb-run -a
       --server-args="-screen 0 1920x1200x24"`. What the pin buys is a
       STATED CONSTANT in place of a distro default — this spec reasons
