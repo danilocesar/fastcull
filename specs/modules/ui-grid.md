@@ -2290,8 +2290,10 @@ the user confirms, all cheap to change):**
       122 ms — soft at 20593, sharp at 23886, the wait satisfied after
       3682 ms, `one2one=true` at 30186; the release runners 767 ms and
       343 ms), so the RE-RAISE pin is exercised by the local load recipe
-      only — 19 of 19 drops re-raised across the developer's, the senior
-      developer's and QE's loaded runs — and a CI run would pass with the
+      only — 19 of 19 healthy loaded debug runs of the M1 script across
+      the three roles' evidence sets re-raised after the bounded drop
+      (the re-raise-deleted mutant's runs excluded, which is the pin
+      working; QE 2026-09-05, D7) — and a CI run would pass with the
       re-raise deleted. The drop-and-re-raise itself DID occur once in
       that Windows debug pass, in the soft-transit script where no
       assertion reads it (hold 953 ms, `(hold cap)` at 1393, soft at
@@ -3793,10 +3795,15 @@ Documented because they ship in release builds (validator finding):
   helper asserts that count on every successful traced run, so a local
   trace and a CI trace mean the same thing. Until 2026-09-05 they did
   not: the development seat photographed TWICE in every run (10 of 10
-  stock-debug runs of the loupe-resize script, the second shot 468-507 ms
-  after the first across 33 runs (474-488 and 468-485 plan-time, 490-507
-  in the #77 commit's old-red set, 480-504 in QE's; all 2026-09-05 —
-  corrected 2026-09-05, QE D1 and senior-developer review); 26 of 26
+  stock-debug runs of the loupe-resize script, the second shot following
+  by about half a second (468-526 ms across 44 unguarded runs of that
+  script on this seat, 2026-09-05: 474-488 and 468-485 plan-time,
+  490-507 and 509-526 in the two old-red sets of the #77 guard — the
+  #77 commit's and the fix commit's — and 480-504 and 504-515 in QE's
+  two; the gap is the capture duration and moves with window size,
+  profile and thermal state — always past the 250 ms period, which is
+  the fact that matters; corrected 2026-09-05, QE D6, after D1's
+  narrower 468-507 was itself overtaken by two later sets); 26 of 26
   and 25 of 29 in the two counts that found it during the #73
   discussion) while CI photographed once (0 of 660
   artifact traces on disk — eight passes of five CI runs, Windows debug
