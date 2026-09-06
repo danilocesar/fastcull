@@ -104,13 +104,30 @@ decoding RAW sensor data on the hot path.
      an intermediate frame ~2 s; the settled frame then missed the
      60 s shutter cap). Remaining residual (accepted): the lane checks
      only BETWEEN rungs, so a focus change during a single rung's
-     decode waits out that one rung (~30 s worst case in debug, ~140 ms
-     release) — decode itself stays uninterruptible. (History: a
+     decode waits out that one rung (~140 ms release; in a debug build
+     about 1-2 s since 2026-09-05, when dependencies — the JPEG decoder
+     among them — started compiling optimised in the dev profile, and
+     ~30 s worst case before that: issue #76, `01-architecture.md`
+     "Build profiles"; corrected 2026-09-05, senior-developer plan)
+     — decode itself stays uninterruptible. (History: a
      debounce-less reservation failed validation for the
      transient-capture; an index-change-only clock failed QE for the
      rest-then-escalate capture; a boundary-check-less lane failed on
      the release-commit CI run for the double-settle) —
      full-res decodes must never queue behind a background thumbnail sweep.
+     Both starvations in this history, and the stale-revival one below,
+     were caught by the screenshot shutter's 60 s cap in the Windows
+     job's DEBUG pass — a release decode of well under a second could not
+     have reached the cap — where a stock-profile full-res decode of
+     26-40 s left the cap little margin; with the decoder optimised in
+     debug (2026-09-05, issue #76)
+     the cap no longer resolves a doubled decode in either profile — it
+     catches a stall of tens of seconds. That sensitivity is spent
+     deliberately (user decision 2026-09-05): the ladder's contracts are
+     pinned where they are pinned at all by their own tests — the
+     `transit::render_rung` table rows, the engine's unit tests, the
+     driven no-drop tests in `ui-grid.md` — never by the cap's timing
+     (recorded 2026-09-05, senior-developer plan).
      turbojpeg DCT scaling is a recorded FUTURE optimization only (saves
      ~35–45% on the cook; the ladder already hides that latency).
      Issue #21 (2026-07-27): while the top rung cooks, the loupe renders

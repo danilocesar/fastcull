@@ -238,6 +238,20 @@ if it works, say it works.
   nothing under `/tmp` but small short-lived files, oldest-first GC of your
   OWN topic dirs, plain `cargo test --workspace` in one target dir, cleanup
   stated in the report.
+- **The head's unmodified suite runs from the tree's own `target/`;
+  `target-qe-*` is for worktrees, one at a time.** (Manager, 2026-09-05,
+  unit 001) With dependencies compiled optimised in the dev profile an
+  optimised debug target is ~9-11 GB and a stock one ~5 GB, so the 10 GB
+  cap cannot hold one beside the other. The head's unmodified suite,
+  clippy and fmt run from the tree's own `target/` (same tree, same
+  commit); a `target-qe-<unit>-*` directory is created only for a
+  worktree — the pre-fix commit, a mutant, a profile A/B — measured, then
+  deleted before the next one. Measured in unit 001: peak combined 6.4 GB
+  under this rule where two optimised dirs would have been ~20 GB. The
+  tree's own `target/` is the user's: no `cargo clean` of any form there
+  unless the user asks (QE freed 131 GB from it with `cargo clean -p` on
+  2026-09-05 without asking; the user decides whether that becomes
+  routine).
 - **Poll in the foreground; never end a run to wait.** (2026-08-02)
   Single foreground Bash calls up to 600000 ms, until-loops for CI, chunks
   for a suite that does not fit.

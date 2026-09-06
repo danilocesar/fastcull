@@ -15,6 +15,29 @@ repository = "https://github.com/danilocesar/fastcull"
 [workspace.dependencies]
 fastcull-core = { path = "crates/fastcull-core" }
 
+# Dependencies compile optimised even in debug (user decision 2026-09-05,
+# issue #76; closes #33): "dependencies are not required to be compile at
+# debug mode. most of the time that's useless." The app's hot pixel work
+# lives in dependencies — zune-jpeg decodes the embedded JPEGs, the Slint
+# software renderer and jpeg-encoder make a --screenshot frame — and at
+# opt-level 0 a debug build took 26-40 s (Windows CI) / 31 s (the 8-core
+# laptop) to decode the A1's 8640x5760 JPEG against the screenshot
+# shutter's 60 s cap: ten Windows CI jobs failed that way in 2026-07/08.
+# Measured with this line, same seat: decode_oriented 31,020 -> 1,720 ms
+# (senior developer, 2026-09-05); window_resize_keeps_the_photo under the
+# CI-shaped load recipe 0/2 -> 4/4 green; first full-res landing of the
+# center-anchor run 15.3-17.2 s -> 1.15-1.36 s, its sharp 1:1 render
+# 17.9-19.6 s -> 2.8-3.1 s (three runs per side).
+# Workspace crates keep the default dev opt-level 0 and stay debuggable;
+# debug-assertions and overflow-checks stay on everywhere; the release
+# profile is untouched. Cost: a cold debug build compiles every
+# dependency optimised once (screenshot test binary 2m19s -> 9m10s on
+# the laptop), accepted. Do not add per-crate tweaks or build-override
+# here without asking the user (specs/01-architecture.md, "Build
+# profiles").
+[profile.dev.package."*"]
+opt-level = 2
+
 [profile.release]
 opt-level = 3
 lto = "thin"

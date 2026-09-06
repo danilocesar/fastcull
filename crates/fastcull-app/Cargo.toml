@@ -43,6 +43,21 @@ fastcull-core.workspace = true
 #      An `init` flip therefore cannot manufacture an edge for a row born
 #      into an already-armed refocus request — a per-row `Timer` tick is
 #      what claims in that case.
+# THIRD CANARY (issue #77, same 1.17.1 + winit 0.30.13). The screenshot
+# shutter's "fires once" guard (shutter.rs) exists because of three
+# measured behaviours, none of them documented upstream:
+#   1. A `TimerMode::Repeated` timer is re-armed at `now + period` BEFORE
+#      its callback runs (i-slint-core timers.rs `maybe_activate_timers`),
+#      so a callback longer than the period returns already overdue.
+#   2. Due timers run inside winit's `new_events`, the FIRST thing in
+#      every loop iteration (i-slint-backend-winit event_loop.rs), while
+#      `slint::quit_event_loop()` is a winit user event handled later.
+#   3. winit's Wayland loop delivers a user event posted during
+#      `new_events` one iteration LATER than its X11 and Windows loops do
+#      — so the overdue poll ran again before the quit landed, on Wayland
+#      only. If any of these changes, the guard becomes dead code rather
+#      than wrong, but the count assertion in tests/screenshot.rs is what
+#      would notice a new way to photograph twice.
 # Re-read the owner-invariant section of specs/modules/ui-grid.md before
 # raising this bound.
 slint = { version = "1", default-features = false, features = [

@@ -2153,9 +2153,15 @@ the user confirms, all cheap to change):**
       and its fold-at-drag-time assertion is ALSO red on pre-fix code,
       which deferred the fold to the next input. Recorded limitations: the F2 warm-landing pin (zero
       thumb-rung rescues at a 600 ms cadence) binds in RELEASE builds
-      only — a debug build decodes a mid slower than the cadence, so
-      the test skips that one assertion there (the perf_budgets
-      precedent) while its no-drop and `one2one` assertions still
+      only — it is a timing pin, a decode raced against a clock, and
+      timing pins bind in the release profile like the perf budgets (the
+      perf_budgets precedent). The reason first written here, "a debug
+      build decodes a mid slower than the cadence", stopped being true on
+      2026-09-05, when dependencies — the mid decoder among them — started
+      compiling optimised in the dev profile (issue #76,
+      `01-architecture.md` "Build profiles"); the gate stays for the
+      precedent alone (corrected 2026-09-05, senior-developer plan) —
+      while its no-drop and `one2one` assertions still
       bind, and the window that pin is judged over is the log after the
       first tap's own `drive: right` echo rather than a trace-clock
       comparison against the scripted offset (2026-09-03 — the Windows
@@ -2165,19 +2171,59 @@ the user confirms, all cheap to change):**
       scheduled at 20 s — the harness section's `wait:` paragraph says why
       that placement is the cap arithmetic), where until 2026-09-03 it led
       with a fixed 45 s sized for the debug decode; the M1 test and the
-      failed-cursor gate test run in RELEASE only outright — in debug
-      both ride the app's own 60 s screenshot-readiness cap (the cursor's 50 MP debug decode landed
-      at 58.5 s on a loaded 8-core laptop; a 4-vCPU CI runner under
-      the cook hold has half those cores and no margin worth the risk —
-      validator, gate round 2, the vCPU count corrected from 2 to the
-      measured 4 by the CI audit of 2026-09-04, which changes the size of
-      the gap and not the decision: what the deferral rests on is 58.5 s
-      against a 60 s cap on a machine with MORE cores than CI has),
-      while the debug profile keeps its no-drop coverage through
-      `paced_taps` and `transit_at_zoom_stays_soft`; the M1 test
+      failed-cursor gate test run in BOTH profiles since 2026-09-05
+      (corrected 2026-09-05, senior-developer plan, issue #76). Until
+      then both ran in RELEASE only, because in debug both rode the app's
+      own 60 s screenshot-readiness cap: the cursor's 50 MP debug decode
+      landed at 58.5 s on a loaded 8-core laptop, and a 4-vCPU CI runner
+      under the cook hold had half those cores and no margin worth the
+      risk (validator, gate round 2; the vCPU count corrected from 2 to
+      the measured 4 by the CI audit of 2026-09-04). That 58.5 s was the
+      JPEG decoder — a dependency — compiled at opt-level 0; with
+      dependencies optimised in the dev profile the same decode lands in
+      about 2 s (`01-architecture.md`, "Build profiles"), the deferral has
+      nothing left to rest on, and a gate whose reason is gone is a
+      "cfg gate that removes a platform" the test-integrity rule would
+      refuse today — so both skips are lifted. What stays release-only is the ONE pin
+      whose reason was never the decoder: the M1 test's thumb-rung render
+      order, which a congested debug kitchen — workspace code, still at
+      opt-level 0 — can legitimately collapse into a single drain (its
+      own comment says so). Debug runs of both tests on the development
+      seat before the lift landed (developer 2026-09-05): the
+      failed-cursor gate 10 of 10 idle and 3 of 3 under the #76 load
+      recipe; the M1 test 10 of 10 idle and 0 of 3 under the recipe AS
+      WRITTEN — its recovery pin was a fixed clock (`dump.landed` at
+      26.5 s, 6.45 s after the End) racing the debug kitchen, workspace
+      code still at opt-level 0: under the recipe the cursor's rescue
+      rungs queue behind off-cursor 149 MB full-res fills of 3.5-5.5 s
+      each (the kitchen pops Full > Wrap > Thumb with no notion of the
+      cursor), the 250 ms hold cap fires at the next refresh — the
+      spec'd bounded drop, 14 of 14 loaded runs — and the first rung of
+      the new image lands 5.0-13.9 s after the End; the overlay
+      re-raised every time, in 8 of 11 runs after the dump had
+      photographed the honest fit (senior-developer diagnosis
+      2026-09-05; the same script in release under the same load: 3 of
+      3). The clock became the sharp rung's own mark (`wait:loupe idx 8
+      factor` at 20.2 s, the dump keeping its authored 26.5 s as its FLOOR —
+      it fires 6.3 s after the wait is satisfied, never earlier and never
+      on its own, measured at 28.32-28.37 s idle and 39.4-40.6 s under
+      the recipe, while a wait that never satisfies aborts the run at
+      50.2 s with no dump at all (QE 2026-09-05, D3) — the CI-audit shape rule, `(satisfied`
+      echo asserted), which is stricter, not looser: the sharp must land
+      within the wait's 30 s cap and the overlay must be up 6.3 s later;
+      with the wait, 10 of 10 idle and 3 of 3 under the recipe in debug,
+      3 of 3 in release. The PR's Windows debug pass is both tests'
+      first CI run in that profile. `paced_taps` keeps the debug profile's
+      no-drop coverage (it asserts no `loupe overlay dropped` at all);
+      `transit_at_zoom_stays_soft` pins the soft render and the sharp
+      landing, not the absence of a bounded drop — its own Windows debug
+      run of PR #80 carried a `(hold cap)` drop and passed (corrected
+      2026-09-05, senior-developer review F5); the M1 test
       allows the spec'd reason-carrying drops (failure/hold-cap) while
       asserting the excuse-less `(no rung in hand)` drop away, plus
-      recovery via the late "landed" dump. The failed-cursor gate is
+      recovery via the "landed" dump, gated since
+      2026-09-05 on the sharp rung's own mark rather than a clock (the
+      #76 paragraph above). The failed-cursor gate is
       pinned by
       `a_decode_failed_cursor_drops_to_fit_instead_of_masking_the_badge`
       (mid-session corruption — a helper thread zeroes the file on disk
@@ -2228,8 +2274,38 @@ the user confirms, all cheap to change):**
       rather than zeroing), and a full notch DOWN at fit is asserted
       inert, the reserved no-op's end-to-end half. Still without a
       deterministic release-profile exercise (recorded, QE gate): the
-      `(hold cap)` drop-and-re-raise fires routinely in debug runs and
-      the M1 test asserts the recovery whenever it fires, but forcing
+      `(hold cap)` drop-and-re-raise fires routinely in debug runs (as
+      of 2026-08-11, stock dev profile; with the decoder optimised in
+      debug it no longer fires idle — 0 of 15 idle debug runs of the M1
+      test on the development seat, the thumb rung landing 155 ms after
+      the End — and fires 14 of 14 under the #76 load recipe (six
+      spinners and the app on two cores), where the cursor's rescue
+      rungs queue behind off-cursor full-res fills; the recipe is
+      therefore a deterministic debug-profile exercise of the
+      drop-and-re-raise, senior-developer diagnosis 2026-09-05) and
+      the M1 test asserts the recovery whenever it fires — its landing
+      dump is mark-gated since 2026-09-05. On CI it never fired in that
+      test: on every runner of PR #80 the rescue thumb beat the 250 ms
+      cap (Windows debug `i46-m1`: hold at 20087 ms, thumb at 20209 —
+      122 ms — soft at 20593, sharp at 23886, the wait satisfied after
+      3682 ms, `one2one=true` at 30186; the release runners 767 ms and
+      343 ms), so the RE-RAISE pin is exercised by the local load recipe
+      only — 20 of 20 healthy loaded debug runs of the M1 script
+      re-raised after the bounded drop: every trace on disk carrying the
+      `(hold cap)` drop of idx 8 is 25 once byte-identical copies are
+      removed, the five runs of the re-raise-deleted mutant are the five
+      with no re-raise, which is the pin working, and the remaining 20
+      (developer 7, senior developer 8, QE 3, review 2) all re-raised
+      (QE 2026-09-05, D7; count corrected 2026-09-05, senior-developer
+      review F6) — and a CI run would pass with the re-raise deleted.
+      The drop-and-re-raise itself DID occur once in that Windows debug
+      pass, in the soft-transit script where no
+      assertion reads it (hold 953 ms, `(hold cap)` at 1393, soft at
+      1445, sharp at 4939). What the M1 test does prove on CI is not
+      nothing: the hold engaged, the rescue thumb landed inside the cap,
+      no excuse-less drop appeared, the sharp landed inside the wait's
+      30 s cap and the overlay was still up 6.3 s later (QE 2026-09-05,
+      D2, with the senior developer's two precisions). Forcing
       it deterministically in release needs a decode-wedge knob —
       deferred alongside the wedge affordances already recorded in
       this spec. Narrowed 2026-08-11 (A3): the cap timing, the failure
@@ -2687,6 +2763,52 @@ the user confirms, all cheap to change):**
       reads rendered pixels needs `wait:thumb landed idx N` on top of it
       (the two selection-wash tests and the panel-dock test do exactly
       that — see the item-6 ledger below).
+- [x] **The screenshot shutter fires exactly once per run (issue #77,
+      2026-09-05)**: on every seat and in every profile a `--screenshot`
+      run emits exactly one `status at shutter` and one `geometry at
+      shutter` mark and writes its JPEG once, because the poll returns at
+      once when `shot_written` is set (the mechanism, the source lines and
+      the measurements are in the harness section under "Debug
+      facilities"). Pinned by the spawn helper in `tests/screenshot.rs`
+      (`shoot_env_stderr_watching`), which counts emitted `status at
+      shutter` mark lines (prefix- and label-anchored, so a file name
+      that quotes the mark cannot inflate it — QE probe 2026-09-05) in
+      every successful traced run and fails on any count but one — so
+      every driven test enforces it, on the Windows debug pass too — and
+      by its mutant: with the guard deleted, the Wayland development seat
+      photographs twice — 10 of 10 loupe-resize runs in the stock dev
+      profile (26 of 26 across the #73 discussion's mixed set), 2 of 2
+      runs of a default-window script with dependencies optimised — and
+      the count goes red (the mutant is never red on CI:
+      its seats deliver the quit before the overdue poll). The two failure exits keep
+      their shape: the cap refusal and the write failure exit 1 with their
+      messages, and `finish` still exits 2 when the loop ends before a
+      shot; the readiness predicate is untouched.
+- [x] **The 60 s readiness cap is margin again in a debug build (issue
+      #76, user decision 2026-09-05)**: dependencies compile optimised in
+      the dev profile (`01-architecture.md`, "Build profiles"), so the
+      full-res decode of the 8640×5760 frame lands in at most 2 s in a
+      debug build on the development seat — measured by the #76 commit,
+      the first full-res rung of the center-anchor script at 1.15-1.36 s
+      against 15.3-17.2 s without the line, its sharp 1:1 render at
+      2.8-3.1 s against 17.9-19.6 s (three runs each, developer
+      2026-09-05; QE's independent sample on the same seat, same script:
+      14.73-15.96 s → 1.14-1.25 s and 17.10-18.38 s → 2.03-2.66 s — QE
+      2026-09-05, D5) — where the same decode took 26-40 s on the Windows
+      debug runner and 31 s here before, and
+      `window_resize_keeps_the_photo` —
+      the cap's recorded intermittent — is green 4 of 4 under the load
+      recipe that reproduces the CI refusals (0 of 4 before; 0 of 2 when
+      the #76 commit re-ran it on the stock profile, both runs refusing
+      with `full-res never adopted for the 1:1 frame`), its readiness
+      phase 7.1-18.9 s against the 60 s cap. Pinned by
+      measurement, not by a test: the before/after landing times and the
+      loaded runs are recorded in the #76 commit and in
+      `01-architecture.md`; the cap, the 1.5 s floor, the 30 s `wait:`
+      cap and the 90 s watchdog keep their values, and the only test
+      schedule that moved with it is the M1 transit test's landing dump,
+      which became mark-gated instead of clock-timed (the lift paragraph
+      above).
 - [x] **Focus continuity (issues #41/#42)**: driven through REAL key and
       pointer dispatch (`key:`/`click.` — the nav tokens bypass focus and
       cannot see this class), every bug-strand test red-run-verified
@@ -2976,7 +3098,12 @@ the user confirms, all cheap to change):**
       back on a release runner (the sharp render lands at 352 ms there),
       and on the Windows debug runner the run ends at ~32.5 s instead of
       47.4 s, leaving ~27 s of the shutter's 60 s readiness cap where it
-      had 12.9 s. The swap-flush test's `gap < 700` stopwatch could not
+      had 12.9 s (stock dev profile, historical since 2026-09-05: with
+      dependencies optimised the sharp render lands seconds, not tens of
+      seconds, after launch there — the PR's Windows debug artifacts carry
+      the new figure, and the 20 s placement stays until it is re-timed on
+      that evidence; see the `wait:` paragraph of the harness section).
+      The swap-flush test's `gap < 700` stopwatch could not
       become a wait at all — it asserts that the debounce had NOT fired,
       and a wait only answers "has this happened yet" — so it reads the
       writer's own close count instead (`sidecar writer closed gen 0: 1
@@ -3184,7 +3311,12 @@ the user confirms, all cheap to change):**
       `window_resize_keeps_the_photo` has SIX recorded failing jobs, all
       Windows, all 2026-07-27, and they split into TWO mechanisms: FOUR
       are the shutter's 60 s readiness cap (runs 58, 62, 65, 70 — twice it
-      took three tests down in one job) and TWO are `the relayout path
+      took three tests down in one job; the mechanism was the JPEG decoder,
+      a dependency, compiled at opt-level 0 in the debug pass — issue #76,
+      removed 2026-09-05 by compiling dependencies optimised in the dev
+      profile, `01-architecture.md` "Build profiles": reproduced and closed
+      on the development seat under the load recipe, 0 of 4 green stock →
+      4 of 4 green with the profile line) and TWO are `the relayout path
       never fired — the resize wasn't exercised` (runs 60 and 71, bunched
       resizes; run 60's trace reads `[1577] drive: resize:1000x700`
       against `[1580] drive: resize:1440x900`). The cap is the DOMINANT
@@ -3240,7 +3372,15 @@ the user confirms, all cheap to change):**
       over the same 50 MP frame — is real, is NOT what #73 was about, and
       would not have saved any of the four recorded refusals (in every one
       the stall had bunched the script to an end at 1.3-4.0 s). It has its
-      own issue.
+      own issue, #76, settled on 2026-09-05 (user decision) not by moving
+      the budget but by removing the cost: the cap keeps its 60 s from
+      `shutter::arm`, and the frame it waited on — a 50 MP JPEG decoded by
+      a dependency compiled at opt-level 0, 26-40 s on the Windows debug
+      runner and 31 s on the development seat — decodes in about 2 s in a
+      debug build now that dependencies compile optimised in the dev
+      profile (`01-architecture.md`, "Build profiles"). The budget still
+      varies with script length; against a 2 s decode that variation is
+      noise, and a #73-style redesign of the budget stays rejected.
 - [x] **No modal scrolls the grid behind it (issue #49)**: a wheel over
       any of the four scrims leaves the grid's `vpy` where it was, and all
       four are now driven. The two hand-rolled scrims (Copy Picks, Export
@@ -3475,7 +3615,9 @@ Documented because they ship in release builds (validator finding):
   script that wants to gate on a toggle must wait on a panel mark
   instead. It is the acknowledgement `resize:` never had: `geometry at
   shutter` is the only other geometry witness and it fires once, at the
-  end. **Both terms are LOGICAL pixels** — `Window::size()` is physical,
+  end — exactly once on every seat since issue #77 (2026-09-05; the
+  harness section says what fired it twice before, and the test harness
+  now counts). **Both terms are LOGICAL pixels** — `Window::size()` is physical,
   so a HiDPI runner at scale 2 would report `2400x1600` and never match
   the `1200x800` a script asked for; the window size is divided by the
   scale factor and the grid terms are logical already.
@@ -3651,6 +3793,84 @@ Documented because they ship in release builds (validator finding):
   actions run and captures a half-driven state — the same script must
   mean the same shot in every profile (found 2026-07-27 when
   settle-then-pin drive schedules moved past the 1.5 s floor).
+  **The shutter fires exactly once per run, on every seat and in every
+  profile (issue #77, 2026-09-05).** One `status at shutter` mark, one
+  `geometry at shutter` mark, one JPEG — and the test harness's spawn
+  helper asserts that count on every successful traced run, so a local
+  trace and a CI trace mean the same thing. Until 2026-09-05 they did
+  not: the development seat photographed TWICE in every run (10 of 10
+  stock-debug runs of the loupe-resize script, the second shot following
+  by about half a second (468-526 ms across 44 unguarded runs of that
+  script on this seat, 2026-09-05: 474-488 and 468-485 plan-time,
+  490-507 and 509-526 in the two old-red sets of the #77 guard — the
+  #77 commit's and the fix commit's — and 480-504 and 504-515 in QE's
+  two; the gap is the capture duration and moves with window size,
+  profile and thermal state — always past the 250 ms period, which is
+  the fact that matters; corrected 2026-09-05, QE D6, after D1's
+  narrower 468-507 was itself overtaken by two later sets); 26 of 26
+  and 25 of 29 in the two counts that found it during the #73
+  discussion) while CI photographed once (0 of 660
+  artifact traces on disk — eight passes of five CI runs, Windows debug
+  and release and Linux release). The mechanism, from the sources this build pins
+  (senior-developer plan 2026-09-05): the poll is a `TimerMode::Repeated`
+  250 ms timer, and Slint re-arms a repeated timer at `now + period`
+  BEFORE running its callback (i-slint-core 1.17.1 `timers.rs:283-284,
+  389-393`); Slint runs due timers as the FIRST thing in every winit loop
+  iteration, inside `new_events` (i-slint-backend-winit 1.17.1
+  `event_loop.rs:599-612`), while `slint::quit_event_loop()` is a winit
+  USER EVENT (`lib.rs:838-844`) handled later in an iteration
+  (`event_loop.rs:546-557`). A capture callback longer than the period
+  therefore returns with its own timer already overdue, and whether the
+  quit or the overdue poll runs next is the platform's: winit's Wayland
+  loop reads a user event posted during `new_events` only at its NEXT
+  dispatch, so the overdue poll fires first and photographs again (winit
+  0.30.13 `platform_impl/linux/wayland/event_loop/mod.rs`,
+  `single_iteration`: `NewEvents` at 345, `pending_user_events` drained
+  at 355, filled by the dispatch that precedes the iteration); its X11
+  loop pulls user events off a channel in the SAME iteration
+  (`platform_impl/linux/x11/mod.rs:512, 549`) and its Windows pump drains
+  messages posted during `new_events` before the iteration ends
+  (`platform_impl/windows/event_loop.rs:368-420`), so on both the quit
+  lands first. Measured on the development seat, stock dev profile: the
+  callback took 461-478 ms — the software renderer's `take_snapshot`
+  ~110 ms, the JPEG encode and write ~360 ms, both dependencies at
+  opt-level 0 — 210-230 ms past the period, and the second shot followed
+  6 ms after the first callback returned (3 of 3 probed runs); the SAME
+  binary on X11 (XWayland, `WAYLAND_DISPLAY` unset) fired once in 5 of 5
+  runs with a callback of 1.8-1.9 s, which is the falsification: it is
+  the delivery order, not the duration alone. Both conditions are
+  needed — a Wayland seat AND a capture over 250 ms — which is why the
+  Linux release runner (X11) and the Windows runners never doubled. The
+  capture's cost is mostly WORKSPACE code: with dependencies optimised
+  (issue #76) the same seat measured 236-239 ms for the loupe-resize
+  script's 1440x700 window (1 of 10 runs still doubled, at 266 ms) and
+  332-366 ms for the default 1440x900 window of the center-anchor
+  script (2 of 2 doubled without the guard) — the software renderer
+  dropped to 11-20 ms but the RGBA→RGB conversion in
+  `write_snapshot_jpeg` runs at opt-level 0 — so the two-shot is not a
+  stock-profile curiosity and the guard is load-bearing on every Wayland
+  seat in debug. The fix is the smallest that is provable: the
+  poll returns at once when `shot_written` is already set, so nothing
+  after the first capture can photograph, whatever the platform delivers
+  next; the readiness predicate, the 1.5 s floor, the 60 s cap and the
+  two failure exits (cap refusal and write failure, exit 1; `finish`,
+  exit 2) are untouched. Two things a reader of traces must know: every
+  test-side reader of `status at shutter` takes the LAST line
+  (`.lines().rev().find_map`), not the first — so before the fix a local
+  green could be a green of the SECOND capture, taken half a second after
+  the state CI photographs (QE, 2026-09-05: 12 of 25 double-shot runs
+  described materially different states, one where the intended capture
+  read `0/2 loaded` and the accidental one the exact `2 thumbs loaded`
+  string an anti-vacuity assertion needed); and the count guard's
+  old-red and its mutant are shown on a WAYLAND seat — the stock dev
+  profile doubles every script there (10 of 10), the optimised one every
+  default-window script (the center-anchor script: 2 of 2 without the
+  guard, 0 of 3 with it) — and never on CI, whose seats deliver the quit
+  before the overdue poll. With the guard: 10 of 10 single shots in the
+  stock profile with a 486-505 ms capture, 3 of 3 in the optimised one
+  with 345-366 ms (senior-developer plan 2026-09-05). The dependency
+  behaviours are recorded in the version canary of
+  `crates/fastcull-app/Cargo.toml`.
   `key:<k>` / `key:ctrl+<k>` (issue #41 sweep, promoted from QE
   instrumentation) dispatches a REAL key press+release through
   `slint::Window::dispatch_event` — through the true focus system, which
@@ -3803,8 +4023,14 @@ Documented because they ship in release builds (validator finding):
   harness watchdog's generic timeout wins), and the shutter's own 60 s
   readiness cap runs from `shutter::arm` and is NOT paused while a drive
   step is pending — a wait that takes 25 s leaves ~35 s for the cursor's
-  texture to arrive, which in a debug build over a 50 MP frame is a real
-  margin. The 30 s runs from the STEP, not from install, which is what lets
+  texture to arrive. That used to be a real margin in a debug build over
+  a 50 MP frame — the full-res decode took 26-40 s on the Windows debug
+  runner and 31 s on the development seat while the decoder compiled at
+  opt-level 0 — and since 2026-09-05 it is ample in every profile: with
+  dependencies optimised in the dev profile the same decode lands in
+  about 2 s in debug (issue #76; the numbers and the decision are in
+  `01-architecture.md`, "Build profiles"; corrected 2026-09-05,
+  senior-developer plan). The 30 s runs from the STEP, not from install, which is what lets
   a wait target an event slower than the cap itself and makes a wait's
   PLACEMENT part of its budget — but SCRIPT time is not that budget
   (corrected 2026-09-04, validator F3): the steps behind a satisfied wait
@@ -3829,7 +4055,26 @@ Documented because they ship in release builds (validator finding):
   reaches 50 s where a step at 0 s would have ended those runs at 30 s and
   the fixed 45 s lead it replaced reached only 45; 1.5 s in RELEASE, where
   the same mark lands at 0.38-0.46 s (three runs) and its cap still reaches
-  31.5 s. The gaps after the wait are identical in both forms — a wait's
+  31.5 s. Those debug landing times are the stock dev profile's and are
+  historical since 2026-09-05 (issue #76): with dependencies optimised
+  the sharp render lands in seconds in debug too, so the 20 s placement is
+  satisfied when it comes due and costs a debug run about 18 s of idle
+  schedule — harmless, kept as is, and re-timed only on the PR's Windows
+  debug artifacts, the first evidence of the new landing time on that
+  runner (a schedule is re-timed on a measurement, never on an estimate;
+  senior-developer plan 2026-09-05). The issue #46 M1 transit test's
+  `wait:loupe idx 8 factor` (2026-09-05) is placed the same way, at 20.2 s
+  in BOTH profiles: its End lands on a stone-cold frame at 20.05 s and the
+  sharp it waits for landed 1.8-2.8 s later on the development seat idle
+  and 9.3-14.4 s later under the #76 load recipe in debug (1.6-2.1 s in
+  release under the same load), so its cap reaches 50.2 s against the
+  shutter's 60 s; the `dump.landed` behind it keeps its authored 26.5 s as
+  its floor — it fires 6.3 s after the wait is satisfied, never earlier
+  and never on its own (measured 28.32-28.37 s idle, 39.4-40.6 s under
+  the #76 load recipe; a never-satisfied wait aborts the run at 50.2 s
+  with no dump at all — QE 2026-09-05, D3). That gate replaced a bare
+  clock, which in a debug build under load photographed a legitimately
+  dropped overlay before its re-raise (the ledger item above). The gaps after the wait are identical in both forms — a wait's
   tail is written in gaps, not offsets — and the 18.5 s the split takes
   off that one test is visible in the whole step: the release screenshot
   suite, serial, measured 451.5 s against the 468.8 s of the run before

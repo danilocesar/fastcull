@@ -107,6 +107,37 @@ fn shoot_env_stderr_watching(
                 "app exited with {status}; trace: {}; stderr:\n{stderr}",
                 trace.display()
             );
+            // Exactly one capture per run (issue #77): a second
+            // `status at shutter` means the poll ran again after the
+            // capture, and the run photographed a state half a second
+            // later than the one CI photographs — on a Wayland seat that
+            // was EVERY stock-debug run until 2026-09-05, and never CI.
+            // When this fails this way it is that defect; do not quiet it,
+            // do not gate it on a platform, and do not "fix" it by reading
+            // the last line somewhere else. This is the one function every
+            // app spawn goes through, so every driven test enforces it.
+            // A run without FASTCULL_TRACE prints no mark at all, so the
+            // expected count is 1 when traced and 0 otherwise.
+            //
+            // Counted as EMITTED MARK LINES, not substring occurrences
+            // (senior-developer test-integrity review 2026-09-05, on a QE
+            // probe): a session whose file is named `status at shutter:
+            // a.ARW` puts the mark's own text into the status string and
+            // into a QEDUMP field, and the substring form counted 3 where
+            // one mark was emitted — a banner that says "do not doubt this
+            // failure" must not be able to fire on a file name.
+            let traced = envs.iter().any(|(k, _)| *k == "FASTCULL_TRACE")
+                || std::env::var_os("FASTCULL_TRACE").is_some();
+            let want = usize::from(traced);
+            let shots = mark_lines(&stderr, "status at shutter: ");
+            let geoms = mark_lines(&stderr, "geometry at shutter: ");
+            assert!(
+                shots == want && geoms == want,
+                "the shutter fired {shots} time(s) with {geoms} geometry mark(s), \
+                 expected {want}; a --screenshot run photographs exactly once \
+                 (issue #77); trace: {}",
+                trace.display()
+            );
             return stderr;
         }
         if Instant::now() >= deadline {
@@ -124,6 +155,21 @@ fn shoot_env_stderr_watching(
         }
         std::thread::sleep(Duration::from_millis(200));
     }
+}
+
+/// Emitted mark lines, not substring occurrences: a mark is one line
+/// `fastcull-trace: [<ms>] <label>` (trace.rs `emit`, the one emit site),
+/// so anchoring on where the label starts makes a file name that quotes
+/// the mark — through the status string or a QEDUMP field — count for
+/// nothing (QE probe 2026-09-05: `status at shutter: a.ARW` counted 3 by
+/// substring, 1 by line).
+fn mark_lines(stderr: &str, mark: &str) -> usize {
+    stderr
+        .lines()
+        .filter_map(|l| l.strip_prefix("fastcull-trace: ["))
+        .filter_map(|r| r.split_once("] "))
+        .filter(|(_, label)| label.starts_with(mark))
+        .count()
 }
 
 /// Write a run's stderr next to its shot as `<name>.trace.log`, and
@@ -957,11 +1003,14 @@ fn one_to_one_entry_is_center_anchored() {
 /// flip alone (validator FAIL, 2026-07-31).
 ///
 /// Asserted on the STATUS BAR, not on the 1:1 overlay trace. The overlay
-/// line is emitted only by the sharp full-res branch, so in the debug
-/// profile — which is how CI runs `cargo test --workspace`, on Windows too
-/// — the 50 MP decode never lands inside the drive window and the line
-/// simply does not exist. The status bar needs no decode, and it carries
-/// BOTH facts this test needs in one string.
+/// line is emitted only by the sharp full-res branch, so it depends on a
+/// 50 MP decode landing inside the drive window — which in the debug
+/// profile CI runs `cargo test --workspace` in, on Windows too, it simply
+/// did not do before 2026-09-05 (a stock-profile decode took tens of
+/// seconds; issue #76 made dependencies compile optimised in debug, so the
+/// line may exist there now). The status bar needs no decode at all, which
+/// is why this test reads it: it carries BOTH facts in one string, in
+/// every profile and at any decode speed.
 #[test]
 fn engine_events_after_loading_never_move_an_untouched_cursor() {
     if !has_display() {
@@ -1836,8 +1885,10 @@ fn grid_resize_at_top_stays_at_top() {
 /// view must stay at the carried factor rendered SOFT from the mid
 /// rung (flagged), never drop to fit — and the landing frame must end
 /// sharp. The transit naturally outruns the full-res ladder in both
-/// profiles (release ~140ms cooks vs 60ms key spacing; debug ~12s
-/// cooks with the virgin-pin rule rendering soft on mid adoption).
+/// profiles (release ~140ms cooks vs 60ms key spacing; in debug ~12s
+/// cooks before 2026-09-05 and ~1-2 s since dependencies compile
+/// optimised there (issue #76) — either way far past the key spacing,
+/// with the virgin-pin rule rendering soft on mid adoption).
 #[test]
 fn transit_at_zoom_stays_soft_never_drops_to_fit() {
     if !has_display() {
@@ -1857,9 +1908,10 @@ fn transit_at_zoom_stays_soft_never_drops_to_fit() {
     // No starvation knob: FASTCULL_MAX_READERS governs the thumbnail
     // pipeline, NOT the loupe ladder (gate finding — it was a no-op
     // here). The race is real in both profiles: release full-res cooks
-    // ~140ms against 60ms key spacing; debug cooks ~12s, and the
-    // virgin-pin rule renders soft the moment the landing mid adopts,
-    // long before the shutter's sharp gate opens.
+    // ~140ms against 60ms key spacing; debug cooked ~12 s before
+    // 2026-09-05 and ~1-2 s since (issue #76) — either way past the key
+    // spacing — and the virgin-pin rule renders soft the moment the
+    // landing mid adopts, long before the shutter's sharp gate opens.
     let stderr = shoot_env_stderr(
         &["--start-11", dir.to_str().unwrap()],
         &[
@@ -2069,7 +2121,12 @@ fn loupe_badge_star_renders_at_one_to_one() {
 /// Sharp-path anchor values (`loupe idx ... off X,Y`) only exist while
 /// full-res is up: in release the sharp view is up before the toggles
 /// and the full contract is asserted; in debug the toggles happen in
-/// the soft regime, so only the post-toggle stability half applies —
+/// the soft regime, so only the post-toggle stability half applies
+/// (measured 2026-09-05, senior-developer review F2, now that
+/// dependencies compile optimised in debug: PR #80's Windows debug
+/// artifact has the sharp `loupe idx 0 factor` at 2776 ms against
+/// toggles at 2003 and 2604 ms — it holds there by 172 ms — and by
+/// 0.2-0.6 s on the development seat) —
 /// the release assertions are the regression teeth (fails on pre-#16
 /// code: no docked line ever appeared after open, and close popped a
 /// stale docked frame).
@@ -2095,10 +2152,14 @@ fn panel_toggle_at_one_to_one_reanchors_the_crop() {
     // the soft and thumb rungs carry their own word between `loupe` and
     // `idx` and cannot satisfy it). It lands at 374 ms on the Linux
     // release runner, so the wait is free there. DEBUG keeps the clock on
-    // purpose: the same mark lands at 28.3 s on the Windows debug runner
+    // purpose: the same mark landed at 28.3 s on the Windows debug runner
     // and the harness's 30 s wait cap runs from the STEP, so a wait at
-    // 1600 would end those runs at ~31.6 s — while the debug half asserts
-    // only post-close stability and is content in the soft regime. Edit
+    // 1600 would have ended those runs at ~31.6 s — while the debug half
+    // asserts only post-close stability and is content in the soft
+    // regime. That 28.3 s is HISTORICAL (stock dev profile, before
+    // 2026-09-05): dependencies compile optimised in debug now (issue
+    // #76), so the mark lands far earlier, and the split is re-timed on
+    // the PR's Windows debug artifacts rather than guessed at here. Edit
     // the two consts together: they must stay one schedule.
     #[cfg(not(debug_assertions))]
     const DRIVE: &str = "1500:home;1600:wait:loupe idx 0 factor;2000:iptc;2600:iptc";
@@ -4263,10 +4324,12 @@ fn esc_over_stacked_modals_closes_the_topmost_first() {
 /// to the fit surface, whose click ALSO claims the keyboard, so the test
 /// would go green having exercised the wrong element. Under load that is
 /// what the run captured (issue #61: `one2one=false` at the clicked dump).
-/// Not the sharp rung: a debug-build 50 MP decode on a loaded machine
-/// legitimately takes tens of seconds (the recorded reason the M1 tests
-/// are release-only), and the claim under test is the overlay's, not the
-/// top rung's.
+/// Not the sharp rung: the claim under test is the overlay's, not the top
+/// rung's, and a full-res decode on a loaded machine can be seconds behind
+/// the first rung either way. (The stronger form of that reason — a
+/// debug-build 50 MP decode taking tens of seconds, which is what made the
+/// M1 tests release-only — is history since 2026-09-05: issue #76,
+/// 01-architecture.md "Build profiles".)
 ///
 /// The click lands at 800,500 — inside the image rect of even the smallest
 /// rung the overlay can show (the 320 px thumb, centred) and deliberately
@@ -5152,8 +5215,10 @@ fn interleaved_session(dir: &Path) {
 /// (~150–300 ms behind the cook hold in release; later in debug, where
 /// the kitchen queue is congested by 149 MB debug-profile fills and the
 /// hold cap may legitimately fire first — the spec'd bounded drop,
-/// which must RE-RAISE the moment the thumb lands; the far "landed"
-/// dump covers both timelines).
+/// which must RE-RAISE the moment any rung of the new image lands; the
+/// "landed" dump is gated on the sharp rung's own mark and fires 6.3 s
+/// behind it, so it covers both timelines by construction, not by a
+/// clock).
 ///
 /// RED on pre-fix code (+ the drive-harness commit): `one2one=false` at
 /// the mid-gap dump (the overlay dropped and the strip showed the whole
@@ -5161,27 +5226,52 @@ fn interleaved_session(dir: &Path) {
 /// the excuse-less drop, which post-fix is structurally impossible —
 /// and neither a "loupe hold" nor a "loupe thumb" render anywhere.
 ///
-/// RELEASE ONLY (validator, gate round 2): in debug the run rides the
-/// app's own 60 s screenshot-readiness cap — the cursor's 50 MP debug
+/// BOTH PROFILES since 2026-09-05 (issue #76). Until then this test ran
+/// in RELEASE ONLY (validator, gate round 2): in a debug build the run
+/// rode the app's own 60 s screenshot-readiness cap — the cursor's 50 MP
 /// decode plus ten thumb jobs plus the cook hold landed at 58.5 s on a
 /// loaded 8-core laptop, so under contention (or on a CI runner, which
-/// the audit of 2026-09-04 measured at 4 vCPU where this line said 2)
-/// the app exits 1 at the cap before the shutter can fire. The number
-/// that carries the decision is 58.5 against 60 — a 1.5 s margin
-/// measured on a machine with TWICE the runner's cores; correcting 2 to
-/// 4 halves the shortfall without giving the margin back. The debug
-/// profile keeps its no-drop coverage through paced_taps and
-/// transit_at_zoom_stays_soft; the phase pins here bind in release,
-/// the profile the reproduction and the red-run were proven in (the
-/// perf_budgets precedent).
+/// the audit of 2026-09-04 measured at 4 vCPU where that line said 2)
+/// the app exited 1 at the cap before the shutter could fire. That
+/// 58.5 s was the JPEG decoder — a dependency — compiled at opt-level 0;
+/// dependencies compile optimised in the dev profile now
+/// (01-architecture.md, "Build profiles"), the same decode lands in
+/// about 2 s, and the deferral has nothing left to rest on.
+///
+/// What the lift exposed (senior-developer diagnosis 2026-09-05): the
+/// recovery pin was a CLOCK — `dump.landed` at 26.5 s, 6.45 s after the
+/// End — racing the debug KITCHEN, which is workspace code at opt-level
+/// 0. Under the #76 load recipe (six spinners and the app on two cores)
+/// the new cursor's rescue rungs queue behind off-cursor 149 MB full-res
+/// fills of 3.5-5.5 s each — the kitchen pops Full > Wrap > Thumb with
+/// no notion of the cursor — so the hold cap fires at the next refresh
+/// (the spec'd bounded drop, 14 of 14 loaded runs) and the first rung of
+/// the new image lands 5.0-13.9 s after the End; the overlay re-raised
+/// EVERY time, but in 8 of 11 runs after the clock had already
+/// photographed the honest fit (0 of 4 green as written; the same script
+/// in release under the same load: 3 of 3). The dump is gated on the
+/// sharp rung's own mark now (`wait:loupe idx 8 factor` at 20.2 s, the
+/// dump 6.3 s behind it — the CI-audit shape rule, echo asserted below),
+/// which is stricter, not looser: the sharp must land within the wait's
+/// 30 s cap and the overlay must be up 6.3 s later. The dump's authored
+/// 26.5 s is its FLOOR, not a fallback: it fires 6.3 s after the wait is
+/// satisfied, never earlier and never on its own (28.32-28.37 s idle,
+/// 39.4-40.6 s under the recipe; a wait that never satisfies aborts the
+/// run at 50.2 s with no dump at all — QE 2026-09-05, D3). Measured with the
+/// wait on the development seat: debug 10 of 10 idle (the sharp 1.8-2.8 s
+/// after the wait's step, no drop) and 3 of 3 under the recipe (9.3-14.4 s,
+/// the hold cap firing in each); release 3 of 3 under the recipe
+/// (1.6-2.1 s, no drop). The
+/// thumb-rung pin below stays release-only for the same kitchen's sake.
+/// `paced_taps` keeps the debug no-drop coverage — it asserts no `loupe
+/// overlay dropped` at all; `transit_at_zoom_stays_soft` pins the soft
+/// render and the sharp landing, not the absence of a bounded drop
+/// (corrected 2026-09-05, senior-developer review F5: its own Windows
+/// debug run of PR #80 carried a `(hold cap)` drop and passed).
 #[test]
 fn transit_to_a_cold_frame_keeps_the_overlay_at_the_carried_center() {
     if !has_display() {
         eprintln!("screenshot smoke skipped: no display server");
-        return;
-    }
-    if cfg!(debug_assertions) {
-        eprintln!("skipped: debug build rides the 60 s readiness cap (run with --release)");
         return;
     }
     let _s = serial();
@@ -5195,7 +5285,7 @@ fn transit_to_a_cold_frame_keeps_the_overlay_at_the_carried_center() {
             ("FASTCULL_KITCHEN_COOK_MS", "150"),
             (
                 "FASTCULL_DRIVE",
-                "20000:dump.pre;20050:end;20130:dump.midgap;26500:dump.landed",
+                "20000:dump.pre;20050:end;20130:dump.midgap;20200:wait:loupe idx 8 factor;26500:dump.landed",
             ),
         ],
         &out,
@@ -5264,6 +5354,17 @@ fn transit_to_a_cold_frame_keeps_the_overlay_at_the_carried_center() {
             vx(midgap)
         );
     }
+    // The landing is GATED on the sharp rung's own mark (2026-09-05): the
+    // steps behind a satisfied wait keep their gaps, so `dump.landed`
+    // fires 6.3 s after the End target's sharp render whatever the
+    // profile and the load. A dropped token or a renamed mark would put
+    // the dump back on the clock in silence — the CI-audit shape rule
+    // says assert the echo, so that fails loudly here instead.
+    assert!(
+        stderr.contains("wait:loupe idx 8 factor (satisfied"),
+        "the `wait:loupe idx 8 factor` step never fired — the landing was \
+         timed, not gated:\n{stderr}"
+    );
     assert_eq!(
         dump_field(landed, "one2one"),
         "true",
@@ -5285,10 +5386,15 @@ fn transit_to_a_cold_frame_keeps_the_overlay_at_the_carried_center() {
 /// The wait step is PROFILE-SPLIT (2026-09-04, validator F5), the shape
 /// `panel_toggle_at_one_to_one_reanchors_the_crop` already uses. DEBUG
 /// keeps it at 20 s: the harness's 30 s cap runs from the STEP
-/// (harness.rs `WAIT_CAP`) and a debug-profile full-res adoption lands at
-/// 26-40 s on the Windows CI runner (30.3 s in this test's own run,
+/// (harness.rs `WAIT_CAP`) and a debug-profile full-res adoption landed
+/// at 26-40 s on the Windows CI runner (30.3 s in this test's own run,
 /// measured 2026-09-02), so the cap has to reach 50 s where the fixed
-/// 45 s lead it replaced reached only 45. RELEASE puts the same step at
+/// 45 s lead it replaced reached only 45. Those landing times are
+/// HISTORICAL (stock dev profile, before 2026-09-05): dependencies
+/// compile optimised in debug since issue #76, the adoption lands in
+/// seconds, and the 20 s placement is simply satisfied when due — about
+/// 18 s of idle schedule — until it is re-timed on the PR's Windows
+/// debug artifacts. RELEASE puts the same step at
 /// 1.5 s, because there the sharp mark lands in under half a second
 /// (381, 454 and 457 ms across three release runs on this seat,
 /// 2026-09-04, each wait then `satisfied after 0 ms`): its cap still
@@ -5296,9 +5402,10 @@ fn transit_to_a_cold_frame_keeps_the_overlay_at_the_carried_center() {
 /// the release run stops spending 18.5 s of dead clock: the script's last
 /// step moves from 22.2 s to 3.7 s and the test measured 4.0 s of libtest
 /// time in all three runs. What
-/// each profile's wait covers is therefore different — debug waits for a
-/// decode that may genuinely take half a minute, release waits for one
-/// that is already done — and the schedule behind it is the same in both,
+/// each profile's wait covered was therefore different — debug waited for
+/// a decode that could genuinely take half a minute, release for one
+/// already done; since #76 both wait for a decode of seconds and only the
+/// placement still differs — and the schedule behind it is the same in both,
 /// because the steps after a wait keep their gaps from the WAIT's
 /// timestamp and everything below is gaps. The end of the script is
 /// `sharp + 2.2 s` in both profiles, which is what the shutter's 60 s
@@ -5495,9 +5602,14 @@ fn paced_taps_over_an_interleaved_session_land_warm() {
     // F2 specifically, not F1 masking it: a warm landing renders from the
     // mid or better — the thumb rung is the cold-path rescue and must not
     // be needed at a 600 ms cadence with a view-order ring. RELEASE
-    // profile only (the perf_budgets precedent): a debug build decodes a
-    // mid slower than the tap cadence, so the thumb rescue legitimately
-    // fires there — the no-drop and one2one assertions above still bind.
+    // profile only, on the perf_budgets precedent ALONE: this is a timing
+    // pin — a decode raced against a clock — and timing pins bind in the
+    // release profile. The reason first written here, "a debug build
+    // decodes a mid slower than the tap cadence", stopped being true on
+    // 2026-09-05, when dependencies started compiling optimised in the
+    // dev profile (issue #76, 01-architecture.md "Build profiles"); the
+    // gate stays for the precedent, and the no-drop and one2one
+    // assertions above still bind in both profiles.
     //
     // Scoped to the TAP WINDOW, which is what the message claims. The
     // cold start is not a paced tap: at t=0 nothing is decoded yet, so
@@ -5682,15 +5794,16 @@ fn overlay_wheel_still_zooms_one_stop_per_notch() {
 /// deliberately delayed 600 ms so the failure wins the race, the OLD
 /// body fails with the issue's own "never rendered at all" message
 /// while this one passes.
-/// RELEASE ONLY: debug rides the 60 s readiness cap (see the M1 test).
+/// BOTH PROFILES since 2026-09-05 (issue #76): the debug skip that used
+/// to stand here rested on the 60 s readiness cap and a full-res decode
+/// of tens of seconds, and the dev profile's optimised dependencies took
+/// that cost away (see the M1 test above and 01-architecture.md, "Build
+/// profiles"). Measured in debug before the lift: 10 of 10 idle runs
+/// green and 3 of 3 under the #76 load recipe.
 #[test]
 fn a_decode_failed_cursor_drops_to_fit_instead_of_masking_the_badge() {
     if !has_display() {
         eprintln!("screenshot smoke skipped: no display server");
-        return;
-    }
-    if cfg!(debug_assertions) {
-        eprintln!("skipped: debug build rides the 60 s readiness cap (run with --release)");
         return;
     }
     let _s = serial();

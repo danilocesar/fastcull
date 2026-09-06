@@ -243,9 +243,10 @@ smuggled in under another name.
   full-res decode took 26-40 s in debug against the shutter's 60 s cap
   with the JPEG decoder at opt-level 0, and 0.3-0.55 s in release. Do not
   add per-crate debug opt-level tweaks and do not un-optimise dependencies
-  for debuggability; a cold debug build being slower once was accepted. If
-  the line is not in `Cargo.toml` yet, the decision stands and the change
-  is owed; its absence is not a reversal.
+  for debuggability; a cold debug build being slower once was accepted.
+  The line landed on 2026-09-05 (PR #80, unit 001). The tree's own
+  `target/` is the user's: no `cargo clean` of any form there unless the
+  user asks.
 - **One implementer per tree.** (2026-09-01, when two sessions edited one
   checkout and the user had to stop everything) You hold the work branch
   alone while you hold it; experiments that need another revision go in a

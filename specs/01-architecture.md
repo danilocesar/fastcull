@@ -121,8 +121,11 @@ build the 2-busy case measured red (~411 ms), and green again (~313 ms)
 after cooldown. A red under load is a measurement, not a verdict —
 re-run idle before treating it as a failing change. The CI step is advisory-only (`continue-on-error`, user decision
 2026-07-25): shared virtualized runners cannot meaningfully gate
-wall-clock budgets. Skipped in debug builds where decode timing is
-meaningless. Numbers for humans: criterion benches in
+wall-clock budgets. Skipped in debug builds, where a wall clock is not
+the shipped number: since 2026-09-05 dependencies compile optimised in the
+dev profile too, but the workspace crates' own code — the rotate kernel,
+the pipeline, the kitchen fills — stays at opt-level 0 (see "Build
+profiles" below; corrected 2026-09-05, senior-developer plan). Numbers for humans: criterion benches in
 `crates/fastcull-core/benches/hot_path.rs` (`cargo bench -p fastcull-core`).
 
 Thresholds were set ~2× looser than the decode-bound baselines to absorb
@@ -194,6 +197,106 @@ clock-free in
 which runs in every debug workspace test run including CI's, except that its
 no-read half is `cfg(unix)`-gated and so compiles out on the Windows job,
 where that claim stays review-only.
+
+## Build profiles (user decision 2026-09-05, issue #76)
+
+The workspace `Cargo.toml` sets `[profile.dev.package."*"] opt-level = 2`:
+every crate that is NOT a workspace member compiles optimised in the dev
+profile — and therefore in `cargo test`, whose `test` profile inherits
+`dev` — while `fastcull-core`, `fastcull-cli` and `fastcull-app` keep the
+default dev `opt-level` 0 and stay debuggable. Nothing else in the profile
+moves: `debug-assertions` and `overflow-checks` stay on for every crate
+(the `cfg!(debug_assertions)` gates in the tests still fire: the #73
+discussion ran the two then release-only tests on a binary built with the
+line and both still printed their debug skip), and the release profile is
+untouched. The user's words: "dependencies are not required to be compile
+at debug mode. most of the time that's useless."
+
+Why: the app's hot pixel work is in dependencies — `zune-jpeg` decodes the
+embedded JPEGs (ADR 0001), `fast_image_resize` scales them, Slint's
+software renderer and `jpeg-encoder` produce a `--screenshot` frame — and
+at opt-level 0 a debug build decoded the A1's 8640×5760 full-res JPEG in
+26-40 s on the Windows CI runner and 31 s on the development seat
+(rotated; 13 s landscape), against the screenshot shutter's 60 s readiness
+cap: ten Windows CI jobs failed that way on 2026-07-27 and 2026-08-01
+(issues #33 and #76; `modules/ui-grid.md`, "Debug facilities"). Same
+source, one profile line apart, measured on the development seat on
+2026-09-05 (senior developer, #73 discussion): `decode_oriented` on
+`A1_full_lossless_compressed.ARW` 31,020 ms → 1,720 ms rotated (13,000 →
+819 ms landscape; release 373 ms); `window_resize_keeps_the_photo` under
+the load recipe that reproduces the CI refusals — the test pinned to two
+cores with `taskset -c 0,1` against six busy-loop spinners pinned to the
+same two cores — 0 of 4 green → 4 of 4 green, readiness 4.1-10.1 s;
+unloaded, all six full-res rungs of that script decoded in under 4 s where
+the stock profile managed three in 17.4-17.7 s. In a `--start-11` run over
+the three sample RAWs (the center-anchor script, idle seat, plan-time
+measurement 2026-09-05) the first full-res rung landed 14.2 s after
+launch without the line and 1.24-1.37 s with it (three runs), the third
+rung at 14.8 s against 2.43-2.50 s, and the sharp 1:1 render at 16.5 s
+against 2.7 s. The #76 commit re-measured the same script on the same
+seat (developer 2026-09-05, three runs per side, the "before" built from
+its own target directory): the first full-res rung landed at
+15.30/17.20/15.77 s without the line and 1.15/1.24/1.36 s with it, the
+cursor's own rung at 16.06/17.79/16.40 s against 1.39/1.44/1.46 s, and
+the sharp 1:1 render at 17.88/19.62/18.39 s against 2.81/2.88/3.07 s —
+the whole test 19.0-20.8 s against 3.6-3.8 s. Its loaded pair, same
+recipe: 0 of 2 green before (both refusing with `full-res never adopted
+for the 1:1 frame`) and 4 of 4 after, readiness 7.1-18.9 s. QE re-ran the
+same script on the same seat as an independent sample (QE 2026-09-05,
+D5): first full-res rung 14.73-15.96 s → 1.14-1.25 s, sharp 1:1 render
+17.10-18.38 s → 2.03-2.66 s. Numbers are the seat's and the day's.
+
+What it costs, and what was accepted: a cold debug build compiles every
+dependency optimised once — the screenshot test binary, cold, on the
+development seat on 2026-09-05: 2 m 17 s stock against 10 m 43 s with the
+line (4.7×; idle apart from a few short test runs), re-measured by the
+#76 commit at 2 m 19 s against 9 m 10 s (4.0×) — and CI's `rust-cache`
+pays it once per toolchain change (its `save-if: main` rule means a pull
+request after a rustc release pays it on every push until main
+repopulates the cache). PR #80 landed the line and its first run
+(33996087777, both jobs green, 2026-09-05) is that cold pass:
+**ubuntu-latest 30 m 35 s** — clippy 6 m 24 s, `Tests` 11 m 53 s, the
+headless-X release screenshot pass 10 m 27 s, perf budgets 58 s — and
+**windows-latest 61 m 43 s** — clippy 12 m 44 s, `Tests` (the debug pass)
+25 m 36 s, the Windows release screenshot pass 12 m 42 s, perf budgets
+2 m 23 s, the release test-binary build 6 m 35 s. For scale, the last
+cached `main` run before the line (33986518746) took 17 m 33 s on ubuntu
+and 33 m 48 s on windows — cold against cached, so the pair bounds the
+cost rather than isolating it. The Windows job finished 28 minutes under
+its 90-minute `timeout-minutes`, so `ci.yml` was not touched (Manager's
+ruling on Q1, option a). The first CACHED `main` run's durations: to be
+filled by the Manager once one exists (2026-09-05). Incremental builds
+of workspace code are unaffected. A measurement trap, recorded because it bit the
+plan-time A/B (2026-09-05): two profile variants built into ONE target
+directory get distinct test binaries but share the uplifted
+`debug/fastcull-app` that `CARGO_BIN_EXE_fastcull-app` points at, so the
+last build wins and a "stock" test binary spawns the optimised app — an
+A/B across the profile line needs two target directories, or a rebuild
+before every measurement. Not architecture: no interface, dependency,
+thread or data flow changes, and the line is reversible by deletion — so
+no ADR; ADR 0002's "one toolchain" consequence stands. Do not extend it:
+no per-crate opt-level tweaks and no un-optimising a dependency for
+debuggability without asking the user (senior-developer standing
+directive, 2026-09-05).
+
+What it changed in the test suite (`modules/ui-grid.md` for each): the
+debug-profile margin under the 60 s readiness cap; the two release-only
+gates that rested on the debug decode
+(`transit_to_a_cold_frame_keeps_the_overlay_at_the_carried_center`,
+`a_decode_failed_cursor_drops_to_fit_instead_of_masking_the_badge`) are
+lifted, while the timing pins that bind in release by the perf-budgets
+precedent keep their gates; the M1 test's landing dump moved from a
+fixed clock to the sharp rung's own mark in the same commit, because the
+lift exposed it as a wall-clock pin racing the debug KITCHEN — workspace
+code, still at opt-level 0 — under the #76 load recipe
+(`modules/ui-grid.md` for the mechanism and the counts); the Windows debug pass, which runs the whole
+screenshot suite in this profile, stops waiting on the decode (estimated
+~275 s across its `--start-11` scripts; the PR records the measured job
+durations). The two-shot shutter of issue #77 was fixed FIRST, in its own
+commit, because its cleanest reproduction is a stock-profile capture that
+overruns the poll's 250 ms period: with the line the capture is shorter,
+and the reproduction keeps only the scripts whose window is large enough
+to overrun it (`modules/ui-grid.md`, "Debug facilities").
 
 ## Shutdown policy (recorded 2026-07-25)
 
