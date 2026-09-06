@@ -25,7 +25,13 @@ In order:
    `claude` PIDs to their cwds first; stop or get the user to stop any
    peer before touching the tree). `git status` clean, on `main` or the
    unit's own branch; `testdata/raws/` fetched;
-   `export PATH=$HOME/.cargo/bin:$PATH`.
+   `export PATH=$HOME/.cargo/bin:$PATH`. Cleanup (M9): `cargo clean -p
+   fastcull-app -p fastcull-core -p fastcull-cli` in the tree's own
+   `target/` (never a full `cargo clean`), remove any `target-qe-*`
+   directory or worktree a previous unit left, apply the scratch cap's
+   oldest-first GC, and state what was freed in the report. Mid-unit only
+   when space is needed, and then between stages, never under a running
+   role.
 1. **Receive and develop the idea.** Read the module spec(s) the request
    touches, `01-architecture.md` and the ADRs. Classify the work: a
    feature or user-visible change, a bug fix, or test/CI plumbing. Ask the
@@ -83,11 +89,6 @@ In order:
     verdict, deferred findings with the recorded decision, directive
     candidates you spotted, and every question for the user a role raised,
     verbatim.
-11. **Clean up (M9).** After the merge: `cargo clean -p fastcull-app -p
-    fastcull-core -p fastcull-cli` in the tree's own `target/` (never a
-    full `cargo clean`), remove any `target-qe-*` directory or worktree the
-    unit left, apply the scratch cap's oldest-first GC, and state what was
-    freed in the report.
 
 Circuit breaker: if the same stage fails twice in a row without converging,
 or the developer disputes a finding, stop looping — take both positions to

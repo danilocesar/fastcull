@@ -82,7 +82,12 @@ and never fixes a finding: the developer fixes, the reviewing roles report.
    the `claude` PIDs to their cwds before the first tool that touches the
    tree; stop, or get the user to stop, any peer in the same repo —
    sessions in other repos are unrelated and left alone). Tree clean, on
-   `main` or the unit's own branch; `testdata/raws/` fetched.
+   `main` or the unit's own branch; `testdata/raws/` fetched. Cleanup
+   (M9): before the unit starts, `cargo clean -p fastcull-app -p
+   fastcull-core -p fastcull-cli` in the tree's own `target/`, any
+   `target-qe-*` directory or worktree a previous unit left removed, the
+   scratch cap's oldest-first GC applied; what was freed goes in the
+   report.
 1. **Manager** receives the work, reads the specs it touches, classifies it
    (feature or user-visible change / bug fix / test or CI plumbing), and
    asks the user what only the user can decide.
@@ -142,13 +147,6 @@ and never fixes a finding: the developer fixes, the reviewing roles report.
 10. **Manager reports** to the user: commits, verdicts, deferrals with the
     recorded decision, directive candidates, and every question for the
     user a role raised, verbatim.
-11. **Clean up (M9).** After the merge the Manager runs
-    `cargo clean -p fastcull-app -p fastcull-core -p fastcull-cli` in the
-    tree's own `target/` (the workspace crates' accumulated build variants
-    go; every dependency stays compiled, so the next build costs well under
-    a minute), removes any `target-qe-*` directory or worktree the unit
-    left, applies the scratch cap's oldest-first GC, and states what was
-    freed in the report.
 
 `/pipeline <request>` (`.claude/commands/pipeline.md`) is this list as a
 runbook.
@@ -275,19 +273,21 @@ developer owns re-verifying such claims against reality.
   still decides the UX choices that have a confident best-practice answer,
   M3 the Manager's own bookkeeping; M8 covers everything that has neither.
   Every role's report ends with "Questions for the user" for exactly this.
-- **M9 — Cleanup runs at the end of every unit of work.** (the user,
-  2026-09-06: "i want clean up to run at the end of every major request.
-  feature or bug, run it.") After the merge of every unit — feature or bug
-  fix — the Manager runs `cargo clean -p fastcull-app -p fastcull-core -p
-  fastcull-cli`, which drops the workspace crates' accumulated build
-  variants from the tree's own `target/` and keeps every dependency
-  compiled (unit 001: 131 GB freed the first time, 5.9 GB at the unit's
-  end, rebuild 39 s); removes any `target-qe-*` directory and worktree the
-  unit left; and applies the scratch cap's oldest-first GC. It runs at the
-  END of a unit and never in the middle — a mid-unit clean invalidates the
-  measurements of every role still running — and never as a full `cargo
-  clean`, which costs a ~9-10 minute cold rebuild since #76. The report
-  states what was freed.
+- **M9 — Cleanup runs before a major new task, or when space is
+  needed.** (the user, 2026-09-06: "it should happen before the execution
+  of a major new task, or when space is needed") Before every unit of work
+  starts — feature or bug fix — the Manager runs `cargo clean -p
+  fastcull-app -p fastcull-core -p fastcull-cli`, which drops the
+  workspace crates' accumulated build variants from the tree's own
+  `target/` and keeps every dependency compiled (unit 001: 131 GB freed
+  the first time, 5.9 GB at its end, rebuild 39 s); removes any
+  `target-qe-*` directory or worktree a previous unit left; and applies
+  the scratch cap's oldest-first GC. Mid-unit it runs only when space is
+  needed — a scratch directory at the cap, a disk under pressure — and
+  then between stages, never under a running role, because a clean
+  invalidates the measurements of every role still running. Never a full
+  `cargo clean`, which costs a ~9-10 minute cold rebuild since #76. The
+  report states what was freed.
 
 ### Open decisions the Manager tracks (do not re-ask unless relevant)
 

@@ -248,11 +248,12 @@ if it works, say it works.
   worktree — the pre-fix commit, a mutant, a profile A/B — measured, then
   deleted before the next one. Measured in unit 001: peak combined 6.4 GB
   under this rule where two optimised dirs would have been ~20 GB. The
-  tree's own `target/` is cleaned by the Manager at the END of every unit
-  (`cargo clean -p` of the three workspace crates, CLAUDE.md M9, the
-  user's rule of 2026-09-06) and never by a role mid-unit: a clean during a
-  unit invalidates the measurements of every role still running, and a
-  full `cargo clean` is never run (a cold rebuild is ~9-10 min since #76).
+  tree's own `target/` is cleaned by the Manager before every unit starts,
+  or between stages when space is needed (`cargo clean -p` of the three
+  workspace crates, CLAUDE.md M9, the user's rule of 2026-09-06), never by
+  a role and never under a running role: a clean during a measurement
+  invalidates it, and a full `cargo clean` is never run (a cold rebuild is
+  ~9-10 min since #76). Out of space mid-run: stop and report, do not clean.
 - **Poll in the foreground; never end a run to wait.** (2026-08-02)
   Single foreground Bash calls up to 600000 ms, until-loops for CI, chunks
   for a suite that does not fit.
