@@ -45,8 +45,13 @@ and 33 m 48 s for the last cached run before the profile line (run
 
 - What CI runs, the profile line, the `save-if: main` rule and the RAW
   cache stay as they are.
-- No attempt to raise the Actions cache quota (fixed at 10 GB on
-  github.com; the CI audit recorded it).
+- No attempt to raise the Actions cache quota in this unit. (This line
+  said "fixed at 10 GB on github.com" — wrong, corrected 2026-09-06, QE
+  D3: GitHub's caching page says 10 GB is the DEFAULT per repository,
+  that repository administrators can raise it from the Actions settings,
+  and that usage beyond 10 GB is billed; the CI audit found no such
+  control on this repository's settings page on 2026-09-03, so whether
+  this account exposes it is unverified.)
 
 ## Requirements
 

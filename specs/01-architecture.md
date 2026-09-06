@@ -251,11 +251,13 @@ dependency optimised once — the screenshot test binary, cold, on the
 development seat on 2026-09-05: 2 m 17 s stock against 10 m 43 s with the
 line (4.7×; idle apart from a few short test runs), re-measured by the
 #76 commit at 2 m 19 s against 9 m 10 s (4.0×) — and CI pays it once per
-change of the `rust-cache` KEY, which since brief 003 carries a
-hand-bumped profile version (next paragraph, with the retraction of what
-this sentence said before 2026-09-06; the `save-if: main` rule still
-means a pull request after a rustc release or a profile bump pays it on
-every push until main saves under the new key). PR #80 landed the line
+change of the `rust-cache` KEY, which since brief 004 carries a component
+computed from the root manifest's `[profile]` tables (brief 003 had made
+it a hand-bumped version number earlier the same day; next paragraph,
+with the retraction of what this sentence said before 2026-09-06; the
+`save-if: main` rule still means a pull request after a rustc release or
+a profile change pays it on every push until main saves under the new
+key). PR #80 landed the line
 and its first run
 (33996087777, both jobs green, 2026-09-05) is that cold pass:
 **ubuntu-latest 30 m 35 s** — clippy 6 m 24 s, `Tests` 11 m 53 s, the
@@ -270,8 +272,15 @@ its 90-minute `timeout-minutes`, so `ci.yml` was not touched (Manager's
 ruling on Q1, option a). The first CACHED `main` run's durations: to be
 filled by the Manager once one exists (2026-09-05; re-dated 2026-09-06,
 brief 003 — none could exist under the old key, see the next paragraph;
-the first candidate is the run AFTER the first main run that saves a
-`v1-rust-…` entry). Incremental builds
+re-dated again 2026-09-06, brief 004 — the `v1-rust-test-…` pair that
+main run 34018510289 saved was never restored, because brief 004 put the
+profile component into the key before any run asked for it (`gh run
+list`: no run between 34018510289 and brief 004's pull request), so the
+first candidate is the run AFTER the main run that merges brief 004 and
+saves under `v1-rust-profile-a66a9ea8-…`; a pull request restores main's
+entry too, so the first cached run may be a PR run, and a MAIN run's
+figure, which includes the post step, is the like-for-like one).
+Incremental builds
 of workspace code are unaffected. A measurement trap, recorded because it bit the
 plan-time A/B (2026-09-05): two profile variants built into ONE target
 directory get distinct test binaries but share the uplifted
@@ -286,6 +295,7 @@ debuggability without asking the user (senior-developer standing
 directive, 2026-09-05).
 
 **The CI cache key and the profile** (brief 003; senior-developer plan
+2026-09-06; the computed rule below: brief 004, senior-developer plan
 2026-09-06). Until 2026-09-06 the paragraph above said that CI's
 `rust-cache` "pays it once per toolchain change (its `save-if: main` rule
 means a pull request after a rustc release pays it on every push until
@@ -294,8 +304,11 @@ main repopulates the cache)", and for a profile change that was WRONG
 key it hits. What `Swatinem/rust-cache@v2` keys on, read from its source
 at the commit the `v2` tag resolves to (v2.9.2, 6323deb — the same commit
 the job log's "Download action repository" line names; `src/config.ts`):
-`prefix-key` (default `v0-rust`), the job id, `os.type()` and `os.arch()`
-(lines 73-95); then eight hex digits of a SHA-1 over `rustc -vV` of every
+`prefix-key` (default `v0-rust`), then the `key` input when one is set —
+appended directly after the prefix (79-82), so it is in the restore key
+and the primary key alike; brief 004 sets it — then the job id,
+`os.type()` and `os.arch()` (lines 73-95); then eight hex digits of a
+SHA-1 over `rustc -vV` of every
 installed toolchain and every environment variable whose name starts
 with `CARGO`, `CC`, `CFLAGS`, `CXX`, `CMAKE` or `RUST` (104-131 — this
 much is the restore key); then eight digits of a SHA-1 over the
@@ -323,56 +336,235 @@ from); the release half of the entry stayed valid because the release
 profile did not change (the release screenshot step compiled 2 crates on
 both runs); the next main run (34013585441, 1d66e09) did exactly the
 same — `full match: true`, 237 and 454 `Compiling` lines, `Cache
-up-to-date.`, ubuntu 26 m 05 s — two of two main runs under the
+up-to-date.`, ubuntu 26 m 05 s; its Windows job likewise, `full match:
+true`, 228 and 337, `Cache up-to-date.` at log line 2239, 58 m 32 s
+(QE 2026-09-06, D4) — two of two main runs, both jobs, under the
 unchanged key. Every run since #76 paid the same cold dev build —
 26 m 17 s / 58 m 29 s (the first main run), 30 m 05 s / 59 m 08 s (PR
 #81, 34011097952),
 30 m 53 s / 60 m 09 s (PR #80's second run, 34004719857), ubuntu /
 windows — while `gh cache list` held only the two 2026-09-04 entries
 (1,903,351,905 B Linux, 1,769,851,005 B Windows) and two 240 MB RAW
-entries: 4,153,874,110 B of the 10 GB limit. The fix (brief 003, R1) is
-`prefix-key: v1-rust` in `ci.yml` — a version number bumped BY HAND
-whenever a `[profile]` table in the root `Cargo.toml` changes, and for
-nothing else: rustc releases, `RUSTFLAGS`, the lockfile, the member
-manifests, `.cargo/config.toml` and `rust-toolchain` move the key by
-themselves. Rejected: a `key:` input of `hashFiles('Cargo.toml')`, which
-would also move the key on every release's `[workspace.package] version`
-bump and on every comment edit — a cold pair of jobs each time,
-silently; and moving the profile into `.cargo/config.toml`, which the
-action does hash and cargo does honour (both reproduced 2026-09-06), but
-which relocates the user decision recorded above and moves the key on
-comment edits too. A bump costs once: the first main run under the new
-prefix is cold and saves; pull requests before that main run are cold
-too; the old prefix's entries sit orphaned until GitHub evicts them
-("not been accessed in over 7 days", or oldest access first once the
-10 GB limit is exceeded — GitHub's documented policy). On a pull request
-the proof that the key moved is the restore step alone: `Cache Key:`
-shows the new prefix and the line after `... Restoring cache ...` is
-`No cache found.`; the post step prints nothing on a pull request
-(`save-if` false returns before any log line — `save.ts` 18-22), by
-design.
+entries: 4,153,874,110 B of the 10 GB limit. The first fix (brief 003,
+R1, PR #82, 2026-09-06) was `prefix-key: v1-rust` in `ci.yml` — a
+version number bumped BY HAND whenever a `[profile]` table in the root
+`Cargo.toml` changed, and for nothing else: rustc releases, `RUSTFLAGS`,
+the lockfile, the member manifests, `.cargo/config.toml` and
+`rust-toolchain` move the key by themselves. It moved the key (AC1 of
+brief 003, below) and it was retired the same day (brief 004; the user,
+2026-09-06: "make a decision based on best practices regarding ci"; the
+Manager's decision on that basis): a cache key is derived from the
+inputs that shape the build and never maintained by hand, because the
+hand rule's failure is silent — a forgotten bump keeps every run green
+and 10-25 minutes slower per job, which is how #76 cost five cold runs
+across two days before anyone counted `Compiling` lines.
+
+**The computed rule** (brief 004, R1-R2; senior-developer plan
+2026-09-06). A `shell: bash` step named `Hash the root manifest's
+[profile] tables`, `id: profile`, runs on both runners before the
+rust-cache step. It parses the root `Cargo.toml` with Python's `tomllib`
+(3.11+; `python3` on Linux, `python` on Windows — the runner images ship
+3.12: ubuntu-24.04 `20260831.293` has 3.12.3, windows-2025-vs2026
+`20260824.214` has 3.12.10, read from the images' software lists at the
+versions the job logs name, and the step prints the version it found so
+a drift is visible; no `setup-python`), takes the document's `profile`
+table — `{}` when there is none — serialises it as canonical JSON (keys
+sorted at every level, no whitespace: `json.dumps(profile,
+sort_keys=True, separators=(",", ":"))`) and exposes the first eight hex
+digits of its SHA-256 as the step output `hash`, after checking in the
+step that it IS eight hex digits. The rust-cache step receives it as
+`key: profile-${{ steps.profile.outputs.hash }}`, which the action
+appends directly after the prefix (`config.ts` 79-82), before the job
+id, so it is part of the `.. Prefix:` line, the restore key (133) and
+the primary key (263) alike: a profile change misses both keys, which
+is the wanted outcome (a restore-key partial match would hand cargo a
+target the action pre-cleans on a mismatch, `restore.ts` 50-56, and
+cargo rebuilds under the new flags anyway; only the registry half would
+be reused, worth at most the crate downloads). `[profile]` is the one
+root-manifest table that shapes the artifacts the entry keeps — the
+dependencies' — since the save step removes the workspace members' own
+artifacts before saving (`save.ts` 41-50 with
+`getPackagesOutsideWorkspaceRoot`, `cleanup.ts` 62-79), so
+`[workspace.package]` and `[workspace.lints]` shape nothing cached, and
+a `[patch]` table changes `Cargo.lock`, which the action hashes. For the
+manifest as it stands the component is `profile-a66a9ea8` — the
+canonical JSON is
+`{"dev":{"package":{"*":{"opt-level":2}}},"dist":{"inherits":"release","lto":"thin"},"release":{"lto":"thin","opt-level":3}}`
+(development seat, Python 3.14.6, 2026-09-06; the PR run confirms it on
+both runners, AC1) — and the whole key
+`v1-rust-profile-a66a9ea8-test-Linux-x64-<env8>-<lock8>`. What moves it
+and what does not, each a mutant on a copy of the manifest run through
+the step's own command (senior-developer plan 2026-09-06, under
+`.qe-scratch/pipeline-004/mutants/`; re-run by QE for AC2): `opt-level =
+2` → `3` in `[profile.dev.package."*"]`, the #76 shape, moves it to
+`1395f519`; a `[workspace.package] version` bump, a comment edit, a
+reordering of the profile tables and of the keys inside one, and a CRLF
+copy of the same file do not (all `a66a9ea8` — the last because the hash
+is over the parsed document, not the bytes, which is also why both
+runners compute the same component); a member manifest is not read by
+the step at all (a dependency added to `fastcull-core`'s manifest left
+it at `a66a9ea8` while the action's own lock hash moved from `aacf1ed2`
+to `15007111`, `config.ts` 170-172, QE's `lockhash.py` from unit 003);
+deleting every `[profile]` table hashes `{}` → `44136fa3`, a move, not
+a failure; a manifest that does not parse fails the step, and the job,
+with an `::error::` line and no output — never a default. The step is
+reviewed under the test-integrity rule because its silent failure would
+be #76 in a new form, and every way it could degrade to "the key never
+moves" is loud or impossible: a missing interpreter or `tomllib`, a
+parse error, an unset `$GITHUB_OUTPUT` or a hash that is not eight hex
+digits each stop the job (`set -euo pipefail`, the in-step check; a
+failing interpreter propagates through the `tr -d '\r'` that strips the
+`\r\n` CPython writes to a pipe on Windows — `Python/pylifecycle.c`,
+`create_stdio`, v3.12.10 lines 2454-2458); and a guard step `Assert the
+profile hash reached the cache key`, between the hash step and the
+rust-cache step, re-reads the same `steps.profile.outputs.hash`
+expression through its `env` and fails the job unless it reads
+`profile-<8 hex>` — so a renamed step id, a renamed output or a skipped
+hash step cannot leave the key at a constant `profile-`. The residual:
+an edit to the rust-cache `key:` line alone, which nothing in the run
+detects; the `Cache Key:` reading (AC1) is the check for it, and the
+value the guard prints is the line to compare it with. `prefix-key:
+v1-rust` stays as the escape hatch: it is bumped only for a change to
+the action or to the key's format — a rust-cache release that hashes
+differently, a change to the step's command — and NOT for a profile
+change, which the computed component covers (AC4). Rejected, then and
+now: a `key:` input of `hashFiles('Cargo.toml')`, which would also move
+the key on every release's `[workspace.package] version` bump and on
+every comment edit — a cold pair of jobs each time, silently (the
+mutants above are exactly the edits it would have charged for); an
+`awk` range over the manifest text (QE's first draft of the computed
+rule, 2026-09-06: it captured the fourteen-line comment block between
+`[profile.release]` and `[profile.dist]`, so a comment edit would have
+moved the key — the reason the component is computed from a parsed
+document, brief 004); a guard test in the Rust crates that goes red
+when the profile changes without a bump (it turns one hand edit into
+two); and moving the profile into `.cargo/config.toml`, which the
+action does hash and cargo does honour (both reproduced 2026-09-06),
+but which relocates the user decision recorded above and moves the key
+on comment edits too. A key move costs once, and MORE than the post-#76
+cold runs it was first compared with (corrected 2026-09-06, QE D1): a
+run under a new key rebuilds BOTH halves of the entry, the release half
+included, where a v0 run since #76 had restored a still-valid release
+half — PR #82's run 34014978820 took 33 m 28 s / 1 h 09 m 58 s
+(ubuntu / windows) with the release steps compiling 469+86 and
+387+84+299 crates against 2+1 and 2+1+3 on the v0 runs, the debug steps
+unchanged at 238/454 and 229/337; the first main run under the new
+prefix (34018510289, d4da1ac) took 34 m 40 s / 57 m 43 s including its
+saves (28 s / 2 m 15 s) — two Windows samples of one shape 12 minutes
+apart, so the cold Windows figure is a range, not a number. The first
+main run under a new key is cold and saves; pull requests before that
+main run are cold too; the old key's entries sit orphaned until GitHub
+evicts them ("not been accessed in over 7 days", or oldest access first
+once the 10 GB limit is exceeded — GitHub's documented policy) or the
+Manager deletes them (the v0 pair, 2026-09-06). On a pull request the
+proof that the key moved is the restore step alone: `Cache Key:` shows
+the component and the line after `... Restoring cache ...` is `No cache
+found.`; the post step prints nothing on a pull request (`save-if`
+false returns before any log line — `save.ts` 18-22), by design.
 
 Acceptance (brief 003; a criterion is ticked by the commit that carries
 its evidence):
-- [ ] **The rust-cache key moves with the dev profile (AC1).** Both CI
+- [x] **The rust-cache key moves with the dev profile (AC1).** Both CI
   checks green on the PR, and both jobs' restore step logs `Cache Key:`
   with a `v1-rust-…` key followed by `No cache found.` — a `v0-` there
-  means the input did not take. Pinned by the PR run's job logs, quoted
-  in the developer's report; ticked, with the run id, by the Manager's
-  post-merge spec commit.
+  means the input did not take. Pinned by the PR run's job logs. Ticked
+  (brief 004's spec commit, 2026-09-06): run 34014978820 — ubuntu job
+  101437075173 green in 33 m 28 s, log lines 601-602 `Cache Key:` /
+  `v1-rust-test-Linux-x64-91e3cbda-aacf1ed2`, 619-620 `... Restoring
+  cache ...` / `No cache found.`; windows job 101437075249 green in
+  1 h 09 m 58 s, lines 428-429
+  `v1-rust-test-Windows_NT-x64-8918a2f9-aacf1ed2`, 446-447 `No cache
+  found.`; no `Unexpected input`, no `Cache hit for: v1-`; and the two
+  v0 entries' `lastAccessedAt` stayed at 05:17Z from run 34013585441 —
+  the key moved, seen from outside the log too (QE 2026-09-06).
 - [x] **The spec no longer claims main repopulates the cache under an
   unchanged key (AC2).** Pinned by the retraction above: a grep for
   "repopulates the cache" in this file finds only the correction.
-- [ ] **The first main run under the new prefix saves, and the run after
-  it is cached (AC3).** Post-merge, not gating the PR: both jobs' post
-  step logs `... Saving cache ...` and `Sent N of N (100.0%)`; `gh cache
-  list` shows two `v1-rust-…` entries with their sizes, and `gh api
-  .../actions/cache/usage` the total against the limit; the following
-  run restores both (`Cache hit for: v1-rust-…`, `full match: true`)
-  and its durations — well under 30 min on ubuntu and 59 min on
-  windows — fill the placeholder above. If the two entries plus the RAW
-  caches exceed the limit and evict each other, that goes to the user
-  with options, not solved here (brief 003, R4).
+- [x] **The first main run under the new prefix saves (AC3, the save
+  half).** Ticked (brief 004's spec commit, 2026-09-06): run 34018510289
+  (d4da1ac, both jobs green, ubuntu 34 m 40 s / windows 57 m 43 s) —
+  both restore steps `No cache found.` under `v1-rust-test-…`; both post
+  steps `... Saving cache ...` then `Sent 2028320243 of 2028320243
+  (100.0%)` (ubuntu, 28 s) and `Sent 1746095594 of 1746095594 (100.0%)`
+  (windows, 2 m 15 s); `gh cache list` shows
+  `v1-rust-test-Linux-x64-91e3cbda-aacf1ed2` at 2,028,320,243 B
+  (1.89 GiB) and `v1-rust-test-Windows_NT-x64-8918a2f9-aacf1ed2` at
+  1,746,095,594 B (1.63 GiB), both on `refs/heads/main`; the two v0
+  entries were deleted (Manager, Q2); `.../actions/cache/usage` reads
+  4,255,087,037 B (3.96 GiB) over 4 entries against the 10 GB limit —
+  the 5.61 GiB in brief 004's context was read while the Windows v0
+  entry still existed (4,255,087,037 + 1,769,851,005 = 6,024,938,042 B),
+  and its "1.88 / 1.62 GiB" are the same two sizes truncated rather than
+  rounded (senior-developer 2026-09-06). No thrash: the four entries
+  are under half the limit.
+- [ ] **… and the run after it is cached (AC3, the restore half).**
+  CORRECTED 2026-09-06 (brief 004): this half can no longer be ticked as
+  written — no run restored the `v1-rust-test-…` pair before brief 004
+  added the profile component to the key, so those two entries are
+  orphans in their turn (deleted by the Manager once the computed key's
+  pair exists, as the v0 pair was), and the first cached run is the one
+  after brief 004's merge. Carried by brief 004's AC3 below, which ticks
+  this line with it. The thrash rule stands: if the live pair plus the
+  RAW caches exceed the limit and evict each other, that goes to the
+  user with options, not solved here (brief 003, R4).
+
+Acceptance (brief 004; a criterion is ticked by the commit that carries
+its evidence):
+- [ ] **Both runners compute the component and the key carries it
+  (AC1).** Both CI checks green on the PR; both jobs' `Hash the root
+  manifest's [profile] tables` step logs `Python 3.12.x` and `profile
+  hash: <8 hex>` — the same eight digits on both, `a66a9ea8` for the
+  manifest as merged from d4da1ac — the guard step logs `rust-cache key
+  component: profile-<same>`, the rust-cache step's `with:` echo shows
+  `key: profile-<same>`, its `Cache Key:` is
+  `v1-rust-profile-<same>-test-<OS>-<env8>-<lock8>` and the line after
+  `... Restoring cache ...` is `No cache found.` (cold by design: no
+  entry exists under a key with the component until a main run saves
+  one). The failable readings: `profile-` with nothing after it in the
+  key (the plumbing failed and the guard did not fire), a `Cache hit
+  for: v1-rust-test-…` (the component did not take — the shape every
+  run of main's `ci.yml` shows now that the `v1-rust-test-…` pair
+  exists; that is this unit's old red), or a `Warning: Unexpected
+  input(s)` line. Pinned by the PR run's job logs, read by QE; ticked,
+  with the run id and the lines, by the Manager's closing spec commit.
+- [ ] **The mutants behave as stated (AC2).** The step's own command,
+  run on this seat by QE against copies of the manifest: `opt-level`
+  2 → 3 moves the hash (`a66a9ea8` → `1395f519`); a version bump, a
+  comment edit, a reordered table and a CRLF copy do not; a member
+  manifest change does not touch it (the action's lock hash moves
+  instead); no `[profile]` → `44136fa3`; a parse error → exit 1 with
+  `::error::` and no output; the guard rejects `profile-`, a
+  seven-digit and an upper-case value and accepts `profile-a66a9ea8`.
+  Recorded in the QE report and the developer's commit message; ticked
+  by the Manager's closing spec commit.
+- [ ] **The main run saves under the computed key and the run after it
+  restores it (AC3).** Post-merge, not gating the PR: the merge run's
+  post steps log `... Saving cache ...` and `Sent N of N (100.0%)` under
+  `v1-rust-profile-a66a9ea8-…`; `gh cache list` shows the pair with
+  sizes and the usage total against the limit; the orphaned
+  `v1-rust-test-…` pair is deleted once the new pair exists; the
+  following run restores both (`Cache hit for: v1-rust-profile-…`,
+  `full match: true`) and its durations fill the placeholder above.
+  Ticks brief 003's restore half with it.
+- [x] **No sentence still says the prefix is bumped for a profile change
+  (AC4).** `grep -n -i "bump" .github/workflows/ci.yml
+  specs/01-architecture.md` finds only history (what brief 003 did and
+  why it was retired), the action-or-format rule for `prefix-key`, the
+  rejected alternatives and the mutants ("a version bump"), and hits
+  about other things (the `v5` action bump, the RAW cache's `v1 -> v2`
+  bump, a runner image that "bumped a default"). Ticked by the
+  developer's `ci.yml` commit, whose grep is the evidence. Ticked
+  (developer 2026-09-06): nine hits in `ci.yml` — 190 the retraction
+  ("NOBODY BUMPS ANYTHING BY HAND"), 217 and 220 history (what brief
+  003's comment said, and why a forgotten bump is silent), 255 the
+  action-or-format rule ("and NOT for a profile change"), 236 and 260
+  the mutants and the rejected `hashFiles`, 102, 333 and 460 the `v5`
+  action bump, the RAW cache's `v1 -> v2` bump and a runner image that
+  bumped a default; and in this file 256, 350 and 358 history and its
+  retraction, 400 and 532 the mutants, 427 the escape-hatch rule, 432
+  and 440 the rejected alternatives, the remaining hits being this
+  criterion's own text. Not one of them is a rule to bump the prefix
+  for a profile change.
 
 What it changed in the test suite (`modules/ui-grid.md` for each): the
 debug-profile margin under the 60 s readiness cap; the two release-only

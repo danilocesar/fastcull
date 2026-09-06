@@ -74,10 +74,17 @@ jobs:
     # on 2026-09-04 (run 33839957294, PR `ci-timing`, the first run after
     # rustc moved to 1.98.1). A push to main the same day (33888473738)
     # missed too -- a main run cannot read a PR's cache scope -- and took
-    # 59.5 min. Against the 75 the gate found here, 65.7 leaves 9.3
-    # minutes: 12 % of headroom on the WARM number and none worth the
-    # name on the cold one, on a shared virtualised runner. 90 gives the
-    # worst measured run 27 % and still replaces GitHub's 6-hour default,
+    # 59.5 min. Since #76 (dependencies compile optimised in debug,
+    # 2026-09-05) a cold job is colder, and a run under a NEW cache key
+    # rebuilds the release half too (QE 2026-09-06, D2): 61.7 min
+    # (33996087777, PR #80), 70.0 min = 1 h 09 m 58 s (34014978820,
+    # PR #82, the worst measured) and 57.7 min (34018510289, main,
+    # including a 2 m 15 s cache save) -- two samples of one shape 12
+    # minutes apart, so the cold figure is a range, not a number.
+    # Against the 75 the gate found here, 65.7 left 9.3 minutes: 12 % of
+    # headroom on the WARM number and none worth the name on the cold
+    # one, on a shared virtualised runner. 90 gives the worst measured
+    # run 20 minutes, 22 %, and still replaces GitHub's 6-hour default,
     # under which one hung app child would bill five idle hours of
     # Windows minutes before anyone noticed. Slow is not failed; hung is.
     timeout-minutes: 90
@@ -180,56 +187,134 @@ jobs:
       # run starts cold -- which is exactly the 20 extra minutes the
       # 2026-09-04 cold Windows cache cost.
       #
-      # `prefix-key` IS THE PROFILE'S VERSION NUMBER, BUMPED BY HAND. The
-      # key the action computes never reads the workspace `Cargo.toml`.
+      # THE KEY MOVES WITH THE PROFILE, AND NOBODY BUMPS ANYTHING BY HAND.
+      # The key the action computes never reads the workspace `Cargo.toml`.
       # From its source at the commit the `v2` tag resolves to (v2.9.2,
-      # 6323deb, `src/config.ts`): prefix + job id + OS + arch (lines
-      # 73-95); then 8 hex digits of a SHA-1 over `rustc -vV` and every
-      # env var whose name starts CARGO/CC/CFLAGS/CXX/CMAKE/RUST
-      # (104-131); then 8 more over `.cargo/config.toml`,
-      # `rust-toolchain{,.toml}`, the manifests of the workspace MEMBERS
-      # that `cargo metadata --no-deps` lists, and the Cargo.lock entries
-      # that carry a `source` or `checksum` (156-261) -- e.g.
-      # `v1-rust-test-Linux-x64-91e3cbda-aacf1ed2`. A `[profile]` table
-      # counts only in the workspace root (cargo: "profiles for the non
-      # root package will be ignored"), and this root `Cargo.toml` is a
-      # virtual manifest -- no `[package]`, not a member, never read. The
-      # log's `Lockfiles considered` is Cargo.lock plus the three
-      # `crates/*/Cargo.toml`, nothing else.
+      # 6323deb, `src/config.ts`): prefix, then the `key` input, then job
+      # id + OS + arch (lines 73-95); then 8 hex digits of a SHA-1 over
+      # `rustc -vV` and every env var whose name starts
+      # CARGO/CC/CFLAGS/CXX/CMAKE/RUST (104-131); then 8 more over
+      # `.cargo/config.toml`, `rust-toolchain{,.toml}`, the manifests of
+      # the workspace MEMBERS that `cargo metadata --no-deps` lists, and
+      # the Cargo.lock entries that carry a `source` or `checksum`
+      # (156-261). A `[profile]` table counts only in the workspace root
+      # (cargo: "profiles for the non root package will be ignored"), and
+      # this root `Cargo.toml` is a virtual manifest -- no `[package]`,
+      # not a member, never read. The log's `Lockfiles considered` is
+      # Cargo.lock plus the three `crates/*/Cargo.toml`, nothing else.
       #
       # So #76's `[profile.dev.package."*"]` line did not move the key.
       # The main run that landed it (34007321960; 34013585441 after it
-      # did the same) restored the stock-profile entry under the
-      # unchanged `v0-rust-...` key, rebuilt the dev-profile dependencies
-      # (238 `Compiling` lines in the clippy step and 454 in `Tests`,
-      # against 1 and 3 on the last cached run, 33986518746), and its
-      # post step said `Cache up-to-date.` and saved nothing: a
+      # did the same, both jobs) restored the stock-profile entry under
+      # the unchanged `v0-rust-...` key, rebuilt the dev-profile
+      # dependencies (238 `Compiling` lines in the clippy step and 454 in
+      # `Tests`, against 1 and 3 on the last cached run, 33986518746),
+      # and its post step said `Cache up-to-date.` and saved nothing: a
       # full-match restore leaves `save.ts` no state to save from (lines
-      # 25-28). Every run after it paid the same cold build -- 26-31 min
-      # ubuntu, 58-62 min windows, against 17 m 33 s / 33 m 48 s cached
-      # -- until the bump to `v1-rust` (brief 003, 2026-09-06;
-      # `specs/01-architecture.md`, "Build profiles", has the
-      # measurements).
+      # 25-28). Every run after it paid the same cold dev build -- 26-31
+      # min ubuntu, 58-62 min windows, against 17 m 33 s / 33 m 48 s
+      # cached -- until `prefix-key: v1-rust` (brief 003, PR #82,
+      # 2026-09-06), a version number this comment then said to bump by
+      # hand on any root `[profile]` change. That rule lasted one
+      # morning: its failure is silent by construction -- a forgotten
+      # bump keeps every run green and 10-25 minutes slower per job --
+      # so brief 004 replaced it, the same day, with the step below.
       #
-      # BUMP THE PREFIX WHENEVER A `[profile]` TABLE IN THE ROOT
-      # `Cargo.toml` CHANGES, and for nothing else: rustc releases,
-      # RUSTFLAGS, the lockfile, the member manifests,
-      # `.cargo/config.toml` and `rust-toolchain` already move the key by
-      # themselves. Not a `key:` of `hashFiles('Cargo.toml')` -- that
-      # also moves it on every release's version bump and every comment
-      # edit, a cold pair of jobs each time, silently. A bump costs once:
-      # the first main run under the new prefix is cold and saves, pull
-      # requests before it are cold too, and the old prefix's entries sit
-      # orphaned until GitHub evicts them (unused for 7 days, or oldest
-      # access first over the 10 GB limit). On a pull request the proof
-      # that the key moved is the RESTORE step -- `Cache Key:` shows the
-      # new prefix and the line after `... Restoring cache ...` is `No
-      # cache found.` -- and the post step is silent (`save-if` false
-      # returns before it logs anything), so its silence is not a failed
-      # save.
+      # THE STEP BELOW HASHES THE `[profile]` TABLES OF THE ROOT
+      # `Cargo.toml`, AND THE HASH IS PART OF THE KEY. It parses the
+      # manifest with Python's `tomllib` (3.11+; both runner images ship
+      # 3.12 -- ubuntu-24.04 has 3.12.3 as `python3`, windows-2025 has
+      # 3.12.10 as `python`, from the images' software lists -- and the
+      # step prints the version it found), takes the `profile` table,
+      # `{}` when there is none, writes it as canonical JSON (keys sorted
+      # at every level, no whitespace) and keeps 8 hex digits of its
+      # SHA-256. For the manifest as it stands that is `a66a9ea8`, from
+      # `{"dev":{"package":{"*":{"opt-level":2}}},"dist":{"inherits":
+      # "release","lto":"thin"},"release":{"lto":"thin","opt-level":3}}`
+      # (measured 2026-09-06; `specs/01-architecture.md`, "Build
+      # profiles", has the mutants). `opt-level = 2` -> `3` moves it to
+      # `1395f519`; a version bump, a comment edit, a reordered table and
+      # a CRLF checkout of the same file leave it alone, and a member
+      # manifest is not read by it at all (the action's own hash covers
+      # those). A manifest that does not parse FAILS THE JOB with an
+      # `::error::` line -- never a default: a step that fell back to a
+      # constant would be #76 again, silently. The `tr -d '\r'` is for
+      # Windows, where Python writes `\r\n` to a pipe (CPython
+      # `Python/pylifecycle.c`, `create_stdio`: "sys.stdout and
+      # sys.stderr: translate \n to \r\n") and the 8-hex check below
+      # would otherwise reject a correct hash. The rust-cache step takes
+      # the hash as its `key` input, which the action puts directly after
+      # the prefix (`config.ts` 79-82), so it is in the restore key and
+      # the primary key alike and a profile change misses both -- e.g.
+      # `v1-rust-profile-a66a9ea8-test-Linux-x64-91e3cbda-aacf1ed2`. The
+      # guard step between the two re-reads the same expression the
+      # rust-cache step reads: a renamed step id, a renamed output or a
+      # skipped hash step would otherwise evaluate to '' and leave the
+      # key at a constant `profile-` -- green, and never moving again.
+      #
+      # `prefix-key: v1-rust` is now the escape hatch only: bump it for a
+      # change to the ACTION or to the KEY'S FORMAT (a rust-cache release
+      # that hashes differently, a change to the step's command), and NOT
+      # for a profile change, which the hash covers. Not `hashFiles(
+      # 'Cargo.toml')` as the key -- that moves it on every release's
+      # version bump and every comment edit, a cold pair of jobs each
+      # time, silently -- and not an `awk` slice of the file either: the
+      # first draft of this rule sliced the text and captured the
+      # comment block between two profile tables. A key move costs once,
+      # and more than the post-#76 runs above: a run under a NEW key
+      # rebuilds both halves of the entry, the release half included --
+      # PR #82's run 34014978820 took 33 m 28 s ubuntu / 1 h 09 m 58 s
+      # windows, the first main save under v1 (34018510289) 34 m 40 s /
+      # 57 m 43 s including the save (28 s / 2 m 15 s). The first main
+      # run under a new key is cold and saves, pull requests before it
+      # are cold too, and the old key's entries sit orphaned until GitHub
+      # evicts them (unused for 7 days, or oldest access first over the
+      # 10 GB limit) or they are deleted by hand. On a pull request the
+      # proof that the key moved is the RESTORE step -- `Cache Key:`
+      # shows the component and the line after `... Restoring cache ...`
+      # is `No cache found.` -- and the post step is silent (`save-if`
+      # false returns before it logs anything), so its silence is not a
+      # failed save.
+      - name: Hash the root manifest's [profile] tables
+        id: profile
+        shell: bash
+        run: |
+          set -euo pipefail
+          if [ "${RUNNER_OS:-}" = "Windows" ]; then py=python; else py=python3; fi
+          "$py" --version
+          hash="$("$py" - <<'EOF' | tr -d '\r'
+          import hashlib, json, sys, tomllib
+          try:
+              with open("Cargo.toml", "rb") as f:
+                  doc = tomllib.load(f)
+          except (OSError, tomllib.TOMLDecodeError) as e:
+              print(f"::error::Cargo.toml did not parse; no profile hash: {e}", file=sys.stderr)
+              sys.exit(1)
+          profile = doc.get("profile", {})
+          if not isinstance(profile, dict):
+              print(f"::error::Cargo.toml: profile is not a table: {profile!r}", file=sys.stderr)
+              sys.exit(1)
+          canon = json.dumps(profile, sort_keys=True, separators=(",", ":"))
+          print(hashlib.sha256(canon.encode("utf-8")).hexdigest()[:8])
+          EOF
+          )"
+          [[ "$hash" =~ ^[0-9a-f]{8}$ ]] || { echo "::error::profile hash is '$hash', not 8 hex digits"; exit 1; }
+          echo "profile hash: $hash"
+          echo "hash=$hash" >> "$GITHUB_OUTPUT"
+
+      - name: Assert the profile hash reached the cache key
+        shell: bash
+        env:
+          PROFILE_KEY: profile-${{ steps.profile.outputs.hash }}
+        run: |
+          set -euo pipefail
+          [[ "$PROFILE_KEY" =~ ^profile-[0-9a-f]{8}$ ]] || { echo "::error::cache key component is '$PROFILE_KEY', not profile-<8 hex>: the hash step's output did not reach the key"; exit 1; }
+          echo "rust-cache key component: $PROFILE_KEY"
+
       - uses: Swatinem/rust-cache@v2
         with:
           prefix-key: v1-rust
+          key: profile-${{ steps.profile.outputs.hash }}
           save-if: ${{ github.ref == 'refs/heads/main' }}
           cache-on-failure: true
 
