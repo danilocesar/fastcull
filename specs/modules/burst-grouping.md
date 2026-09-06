@@ -225,10 +225,11 @@ maker note degrades to it, never to an error).
       id and selection count are observable in the QEDUMP line (app:
       `burst_keys_select_whole_bursts_and_esc_clears`,
       `esc_clears_a_burst_selection_from_inside_the_loupe`).
-- [ ] Ctrl+`[`/`]` keep the selection across a burst hop and a plain hop
+- [x] Ctrl+`[`/`]` keep the selection across a burst hop and a plain hop
       drops it (brief 002, user decision 2026-09-06): Ctrl+Shift+B on one
       burst, Ctrl+`]`×n, Ctrl+Shift+B on another → both bursts; a plain
       `]` anywhere in the sequence → empty; a fresh Shift+`]` after
       Ctrl-navigation replaces the Ctrl-added frames (app:
-      `ctrl_navigation_keeps_the_selection_and_ctrl_space_toggles`, core:
-      `a_fresh_burst_span_replaces_ctrl_added_frames` — to be written).
+      `ctrl_navigation_keeps_the_selection_and_ctrl_space_toggles` and
+      `a_plain_move_collapses_the_selection_in_the_grid`, core:
+      `a_fresh_burst_span_replaces_ctrl_added_frames`).

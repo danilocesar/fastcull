@@ -7753,16 +7753,566 @@ fn ctrl_navigation_keeps_the_selection_and_ctrl_space_toggles() {
         "Ctrl+Space on three frames, walked between with Ctrl+Right"
     );
     assert_eq!(at("two2"), (3, 2), "and one press takes one away");
-    // `dump.plain` — the plain `]` at 6200 — is deliberately not read here
-    // yet: it is the contrast this test exists to draw (Ctrl keeps, plain
-    // does not), and the assertion lands with rule 1 in the commit that
-    // makes a plain move collapse. Until then it reads 14, which is the
-    // behaviour the user reported.
-    // The status bar counts what the dump counts.
+    // The contrast this test exists to draw: the same `]`, without Ctrl,
+    // ends the selection (rule 1). It read 14 before the rule landed.
+    let (_, plain_sel) = at("plain");
+    assert_eq!(
+        plain_sel, 0,
+        "a plain `]` kept the selection that Ctrl+`]` is for"
+    );
+    // The status bar counts what the dump counts, and goes silent when
+    // there is nothing to count.
     assert!(
         dump_text(qedump(&stderr, "two"), "status").contains("· 13 selected"),
         "{}",
         qedump(&stderr, "two")
+    );
+    assert!(
+        !dump_text(qedump(&stderr, "plain"), "status").contains("selected"),
+        "an empty selection is silent: {}",
+        qedump(&stderr, "plain")
+    );
+}
+
+/// Rule 1 of the selection rule (brief 002, the user's decision of
+/// 2026-09-06): EVERY unmodified cursor move empties the selection — an
+/// arrow, `]`, PgDn, End, and the advance a `Y` performs — while `U`,
+/// which does not move, leaves it alone.
+///
+/// Every strand here was RED before the rule landed (the counts it read
+/// then are named beside each assertion): a plain move used to fold the
+/// live span into the selection and keep it, which is what carried a
+/// finished export's frames into the next one.
+#[test]
+fn a_plain_move_collapses_the_selection_in_the_grid() {
+    if !has_display() {
+        eprintln!("screenshot smoke skipped: no display server");
+        return;
+    }
+    let _s = serial();
+    let out = out_dir().join("collapse-grid.jpg");
+    let stderr = shoot_env_stderr(
+        &["--synthetic", "40", "--bursts"],
+        &[
+            ("FASTCULL_TRACE", "1"),
+            (
+                "FASTCULL_DRIVE",
+                "600:key:right;700:key:right;800:key:right;1000:key:ctrl+shift+b;1200:dump.sel;\
+                 1400:key:right;1600:dump.arrow;1800:key:ctrl+shift+b;2000:dump.sel2;\
+                 2200:key:];2400:dump.bracket;2600:key:shift+];2800:dump.span;\
+                 3000:key:pgdn;3200:dump.pgdn;3400:key:end;3600:key:ctrl+shift+b;3800:dump.sel3;\
+                 4000:key:right;4200:dump.edge;\
+                 4400:key:home;4600:key:right;4700:key:right;4800:key:right;\
+                 5000:key:ctrl+shift+b;5200:dump.sel4;\
+                 5400:key:y;5600:dump.y;5800:key:left;6000:dump.marked;\
+                 6200:key:right;6300:key:right;6500:dump.next;\
+                 6700:key:ctrl+shift+b;6900:dump.sel5;7100:key:u;7300:dump.u",
+            ),
+        ],
+        &out,
+    );
+    let at = |label: &str| -> (usize, usize) {
+        let d = qedump(&stderr, label);
+        (
+            dump_field(d, "cursor").parse().unwrap(),
+            dump_field(d, "selected").parse().unwrap(),
+        )
+    };
+    let status = |label: &str| dump_text(qedump(&stderr, label), "status").to_string();
+
+    // --- an arrow ---------------------------------------------------------
+    assert_eq!(at("sel"), (3, 5), "Ctrl+Shift+B on frame 3 takes A whole");
+    assert_eq!(
+        at("arrow"),
+        (4, 0),
+        "a plain Right left the selection standing (it read 5 before the rule)"
+    );
+    // --- `[` / `]` --------------------------------------------------------
+    assert_eq!(at("sel2"), (4, 5));
+    assert_eq!(
+        at("bracket"),
+        (6, 0),
+        "a plain `]` left the selection standing (it read 5 before the rule)"
+    );
+    // And the Shift+`]` that follows an emptied selection is a fresh span:
+    // from the single at 6 it takes 6 plus B, and nothing else.
+    assert_eq!(at("span"), (7, 4), "a fresh burst span: the single plus B");
+    // --- PgDn -------------------------------------------------------------
+    let (pgdn_cursor, pgdn_sel) = at("pgdn");
+    assert!(
+        pgdn_cursor > 7,
+        "PgDn did not move the cursor (it was at 7, it is at {pgdn_cursor})"
+    );
+    assert_eq!(pgdn_sel, 0, "PgDn left the selection standing");
+    // --- a key that moves NOTHING still collapses --------------------------
+    // End lands on the last frame, Ctrl+Shift+B takes G, and the Right
+    // after it has nowhere to go: the selection goes anyway, because the
+    // intent is the same (ui-grid.md, rule 1, "whether or not the move
+    // changed the cursor").
+    assert_eq!(at("sel3"), (39, 6), "End, then Ctrl+Shift+B on G");
+    assert_eq!(
+        at("edge"),
+        (39, 0),
+        "a Right at the last frame moved nothing and kept the selection"
+    );
+    // --- the Y advance is a cursor move (AC5) ------------------------------
+    assert_eq!(at("sel4"), (3, 5), "A selected again, cursor on frame 3");
+    assert_eq!(
+        at("y"),
+        (4, 0),
+        "the pick advance left the selection standing (it read 5 before)"
+    );
+    assert!(
+        status("y").contains("· unmarked"),
+        "the advance landed on 4, which is unmarked: {}",
+        status("y")
+    );
+    let (marked_cursor, _) = at("marked");
+    assert_eq!(marked_cursor, 3);
+    assert!(
+        status("marked").contains("★ picked"),
+        "the mark did not land on frame 3: {}",
+        status("marked")
+    );
+    // The mark landed on the CURSOR frame only, never on the five that
+    // were selected when the key was pressed: 5 was one of them.
+    let (next_cursor, _) = at("next");
+    assert_eq!(next_cursor, 5);
+    assert!(
+        status("next").contains("· unmarked"),
+        "the Y marked a frame that was merely SELECTED — marks are not \
+         batch operations (ui-grid.md): {}",
+        status("next")
+    );
+    // --- `U` moves nothing, so it takes nothing ---------------------------
+    assert_eq!(at("sel5"), (5, 5), "A selected once more, cursor on 5");
+    assert_eq!(
+        at("u"),
+        (5, 5),
+        "`U` collapsed the selection — it does not advance, so it must not \
+         (ui-grid.md rule 1, Manager 2026-09-06)"
+    );
+}
+
+/// Rule 1 in the LOUPE, where no wash shows a selection and the status
+/// count is its only sign — and rule 2 there too (Ctrl+Right keeps it).
+/// The `zoom` field is read at every dump: the run never left the loupe,
+/// so none of this is the grid's behaviour in disguise.
+#[test]
+fn a_plain_move_collapses_the_selection_in_the_loupe() {
+    if !has_display() {
+        eprintln!("screenshot smoke skipped: no display server");
+        return;
+    }
+    let _s = serial();
+    let out = out_dir().join("collapse-loupe.jpg");
+    let stderr = shoot_env_stderr(
+        &["--synthetic", "40", "--bursts", "--start-loupe"],
+        &[
+            ("FASTCULL_TRACE", "1"),
+            (
+                "FASTCULL_DRIVE",
+                "600:key:];800:key:shift+];1000:dump.sel;1200:key:right;1400:dump.arrow;\
+                 1600:key:ctrl+shift+b;1800:dump.sel2;2000:key:];2200:dump.bracket;\
+                 2400:key:ctrl+shift+b;2600:dump.sel3;2800:key:ctrl+right;3000:dump.keep;\
+                 3200:key:y;3400:dump.y;3600:key:left;3800:dump.marked",
+            ),
+        ],
+        &out,
+    );
+    let at = |label: &str| -> (usize, usize) {
+        let d = qedump(&stderr, label);
+        (
+            dump_field(d, "cursor").parse().unwrap(),
+            dump_field(d, "selected").parse().unwrap(),
+        )
+    };
+    let status = |label: &str| dump_text(qedump(&stderr, label), "status").to_string();
+    let labels = [
+        "sel", "arrow", "sel2", "bracket", "sel3", "keep", "y", "marked",
+    ];
+
+    assert_eq!(
+        at("sel"),
+        (6, 6),
+        "Shift+`]` in the loupe: A plus the single"
+    );
+    assert_eq!(
+        at("arrow"),
+        (7, 0),
+        "a plain Right in the loupe left the selection standing (it read 6)"
+    );
+    assert_eq!(at("sel2"), (7, 3), "Ctrl+Shift+B on B");
+    assert_eq!(
+        at("bracket"),
+        (10, 0),
+        "a plain `]` in the loupe left the selection standing (it read 3)"
+    );
+    assert_eq!(at("sel3"), (10, 8), "Ctrl+Shift+B on C");
+    assert_eq!(
+        at("keep"),
+        (11, 8),
+        "Ctrl+Right must keep the selection in the loupe too"
+    );
+    assert_eq!(at("y"), (12, 0), "the pick advance kept the selection");
+    assert!(status("y").contains("· unmarked"), "{}", status("y"));
+    let (marked_cursor, _) = at("marked");
+    assert_eq!(marked_cursor, 11);
+    assert!(
+        status("marked").contains("★ picked"),
+        "the mark did not land on 11: {}",
+        status("marked")
+    );
+    // The whole run happened at one zoom: nothing above is a grid gesture.
+    let zoom = dump_field(qedump(&stderr, "sel"), "zoom").to_string();
+    for label in labels {
+        assert_eq!(
+            dump_field(qedump(&stderr, label), "zoom"),
+            zoom,
+            "dump.{label} is at another zoom — the run left the loupe:\n{stderr}"
+        );
+    }
+}
+
+/// Rule 3 (brief 002, the user's answer 3): a Shift-span whose anchor arms
+/// on THIS press is the whole selection — the frames a Ctrl+Space added
+/// included — while a span that continues a live anchor still shrinks and
+/// flips.
+#[test]
+fn a_fresh_span_after_ctrl_navigation_replaces_the_selection() {
+    if !has_display() {
+        eprintln!("screenshot smoke skipped: no display server");
+        return;
+    }
+    let _s = serial();
+    let out = out_dir().join("fresh-span.jpg");
+    let stderr = shoot_env_stderr(
+        &["--synthetic", "40", "--bursts"],
+        &[
+            ("FASTCULL_TRACE", "1"),
+            (
+                "FASTCULL_DRIVE",
+                "600:key:home;800:key:shift+right;900:key:shift+right;1000:key:shift+right;\
+                 1200:dump.four;\
+                 1400:key:ctrl+right;1500:key:ctrl+right;1700:dump.walked;\
+                 1900:key:shift+right;2100:dump.fresh;\
+                 2300:key:ctrl+right;2500:key:ctrl+space;2700:dump.added;\
+                 2900:key:ctrl+right;3000:key:ctrl+right;3200:key:shift+right;3400:dump.fresh2;\
+                 3600:key:shift+left;3800:dump.shrink;4000:key:shift+left;4200:dump.flip;\
+                 4400:key:ctrl+left;4500:key:ctrl+left;4600:key:ctrl+left;4700:key:ctrl+left;\
+                 4900:key:shift+[;5100:dump.burstfresh",
+            ),
+        ],
+        &out,
+    );
+    let at = |label: &str| -> (usize, usize) {
+        let d = qedump(&stderr, label);
+        (
+            dump_field(d, "cursor").parse().unwrap(),
+            dump_field(d, "selected").parse().unwrap(),
+        )
+    };
+    assert_eq!(at("four"), (3, 4), "Shift+Right x3 from the head");
+    assert_eq!(at("walked"), (5, 4), "Ctrl+Right x2 keeps the four");
+    assert_eq!(
+        at("fresh"),
+        (6, 2),
+        "the fresh span is 5..6 and nothing else — before the rule it read \
+         6, the old four unioned with the new two"
+    );
+    assert_eq!(at("added"), (7, 3), "Ctrl+Space adds 7 to the span");
+    assert_eq!(
+        at("fresh2"),
+        (10, 2),
+        "the next fresh span replaces the Ctrl-added frame too (answer 3) \
+         — before the rule it read 4"
+    );
+    // A span that CONTINUES its anchor still replaces only itself.
+    assert_eq!(at("shrink"), (9, 1), "Shift+Left shrinks the live span");
+    assert_eq!(at("flip"), (8, 2), "and flips past its anchor");
+    assert_eq!(
+        at("burstfresh"),
+        (1, 5),
+        "a fresh Shift+`[` from mid-A takes A alone — before the rule it \
+         read 7, A plus the abandoned {{8, 9}}"
+    );
+}
+
+/// AC1 and AC6, end to end: the user's own report of 2026-09-06, as a
+/// test. Four frames exported, Esc on the report, two arrows, a new
+/// Shift-span — and the second video holds the NEW two frames only.
+///
+/// Before the rule this run produced `a-g.mov` with six frames and the
+/// dialog said "4 of 6 frames are already in a-d.mov" (the earlier-export
+/// hint of issue #56, which is what told the user something was wrong
+/// after the fact).
+///
+/// Eight tiny synthetic RAWs rather than real camera files: two exports
+/// have to fit inside one driven run, and `write_synthetic_raw` gives each
+/// frame a distinct length so a wrong frame set is visible in the file's
+/// size as well as in its sample count.
+#[test]
+fn the_second_video_holds_only_the_new_span() {
+    if !has_display() {
+        eprintln!("screenshot smoke skipped: no display server");
+        return;
+    }
+    let _s = serial();
+    let src = out_dir().join("collapse-clip-src");
+    let dest = out_dir().join("collapse-clip-dest");
+    for d in [&src, &dest] {
+        std::fs::remove_dir_all(d).ok();
+        std::fs::create_dir_all(d).unwrap();
+    }
+    for (i, name) in ["a", "b", "c", "d", "e", "f", "g", "h"].iter().enumerate() {
+        write_synthetic_raw(&src.join(format!("{name}.ARW")), 400, 300, 1, 4096 + i * 64);
+    }
+    // ADR 0003 guard: this run marks nothing, so the whole source listing
+    // — names and lengths — must come back identical.
+    let listing = |d: &Path| -> Vec<(String, u64)> {
+        let mut v: Vec<(String, u64)> = std::fs::read_dir(d)
+            .map(|it| {
+                it.filter_map(|e| e.ok())
+                    .map(|e| {
+                        (
+                            e.file_name().to_string_lossy().into_owned(),
+                            e.metadata().map(|m| m.len()).unwrap_or(0),
+                        )
+                    })
+                    .collect()
+            })
+            .unwrap_or_default();
+        v.sort();
+        v
+    };
+    let before = listing(&src);
+
+    let script = format!(
+        "1500:clipdest:{dest};1700:wait:load settled gen 0;1800:home;\
+         2000:key:shift+right;2100:key:shift+right;2200:key:shift+right;2400:dump.four;\
+         2600:key:ctrl+shift+e;2900:dump.plan1;3100:key:return;\
+         3200:wait:clip export finished run 1;4400:dump.done1;\
+         4700:key:escape;5000:dump.closed1;5200:key:right;5300:key:right;5500:dump.moved;\
+         5700:key:shift+right;5900:dump.span;6100:key:ctrl+shift+e;6400:dump.plan2;\
+         6600:key:return;6700:wait:clip export finished run 2;7900:dump.done2;\
+         8200:key:escape;8500:dump.closed2;8700:key:escape;9000:dump.cleared",
+        dest = dest.display()
+    );
+    let out = out_dir().join("collapse-clip.jpg");
+    let stderr = shoot_env_stderr(
+        &[src.to_str().unwrap()],
+        &[("FASTCULL_TRACE", "1"), ("FASTCULL_DRIVE", script.as_str())],
+        &out,
+    );
+    let after = listing(&src);
+    let mut landed: Vec<String> = std::fs::read_dir(&dest)
+        .map(|it| {
+            it.filter_map(|e| e.ok())
+                .map(|e| e.file_name().to_string_lossy().into_owned())
+                .collect()
+        })
+        .unwrap_or_default();
+    landed.sort();
+    let first = dest
+        .join("a-d.mov")
+        .is_file()
+        .then(|| read_movie_at(&dest.join("a-d.mov")));
+    let second = dest
+        .join("f-g.mov")
+        .is_file()
+        .then(|| read_movie_at(&dest.join("f-g.mov")));
+    for d in [&src, &dest] {
+        std::fs::remove_dir_all(d).ok();
+    }
+
+    assert_eq!(before, after, "the export wrote to a source RAW (ADR 0003)");
+    for run in [1, 2] {
+        assert!(
+            stderr.contains(&format!("wait:clip export finished run {run} (satisfied")),
+            "the `wait:` for export {run} never fired — the dumps were \
+             timed, not gated:\n{stderr}"
+        );
+    }
+    let sel = |label: &str| dump_field(qedump(&stderr, label), "selected").to_string();
+    let status = |label: &str| dump_text(qedump(&stderr, label), "status").to_string();
+
+    // --- the first export, four frames ------------------------------------
+    assert_eq!(sel("four"), "4");
+    assert!(
+        status("four").starts_with("d.ARW (4/8)"),
+        "the span is a..d: {}",
+        status("four")
+    );
+    let plan1 = qedump(&stderr, "plan1");
+    assert_eq!(dump_field(plan1, "clipstate"), "0", "{plan1}");
+    assert!(
+        dump_text(plan1, "clipsummary").starts_with("4 frames")
+            && dump_text(plan1, "clipsummary").contains("a-d.mov"),
+        "{plan1}"
+    );
+    assert!(
+        dump_text(qedump(&stderr, "done1"), "clipreport").contains("a-d.mov"),
+        "{}",
+        qedump(&stderr, "done1")
+    );
+    // AC6, first half: Esc closes the dialog and the selection is INTACT.
+    let closed1 = qedump(&stderr, "closed1");
+    assert_eq!(dump_field(closed1, "clip"), "false", "{closed1}");
+    assert_eq!(
+        dump_field(closed1, "selected"),
+        "4",
+        "a dialog's Esc took the selection with it — it must only close \
+         the dialog (video-export.md, brief 002): {closed1}"
+    );
+
+    // --- two arrows, and the old selection is gone (AC1) -------------------
+    assert_eq!(
+        sel("moved"),
+        "0",
+        "the two arrows left the first export's four frames selected — the \
+         user's report (it read 4 before the rule)"
+    );
+    assert!(
+        status("moved").starts_with("f.ARW (6/8)"),
+        "{}",
+        status("moved")
+    );
+    assert_eq!(
+        sel("span"),
+        "2",
+        "the new span carried the old four along (it read 6 before the rule)"
+    );
+    let plan2 = qedump(&stderr, "plan2");
+    assert_eq!(dump_field(plan2, "clipstate"), "0", "{plan2}");
+    assert!(
+        dump_text(plan2, "clipsummary").starts_with("2 frames")
+            && dump_text(plan2, "clipsummary").contains("f-g.mov"),
+        "the second plan is not the new span alone (it read \"6 frames … \
+         a-g.mov\" before the rule): {plan2}"
+    );
+    assert_eq!(
+        dump_text(plan2, "cliphint"),
+        "",
+        "the second export overlaps the first (the hint read \"4 of 6 \
+         frames are already in a-d.mov\" before the rule): {plan2}"
+    );
+    assert!(
+        dump_text(qedump(&stderr, "done2"), "clipreport").contains("f-g.mov"),
+        "{}",
+        qedump(&stderr, "done2")
+    );
+    let closed2 = qedump(&stderr, "closed2");
+    assert_eq!(dump_field(closed2, "clip"), "false", "{closed2}");
+    assert_eq!(dump_field(closed2, "selected"), "2", "{closed2}");
+    // AC6, second half: the Esc after it, on the grid, clears.
+    assert_eq!(
+        sel("cleared"),
+        "0",
+        "the second Esc did not clear the selection"
+    );
+    // Neither export ever met the clash question: two different names.
+    for label in [
+        "four", "plan1", "done1", "closed1", "moved", "span", "plan2", "done2", "closed2",
+        "cleared",
+    ] {
+        assert_ne!(
+            dump_field(qedump(&stderr, label), "clipstate"),
+            "3",
+            "dump.{label}: the export asked to replace a file, so the two \
+             runs collided on one name:\n{stderr}"
+        );
+    }
+
+    // --- and the files on disk say the same thing --------------------------
+    assert_eq!(
+        landed,
+        vec!["a-d.mov".to_string(), "f-g.mov".to_string()],
+        "the destination holds the wrong files"
+    );
+    assert_eq!(
+        first.expect("a-d.mov").samples.len(),
+        4,
+        "the first video is not four frames"
+    );
+    assert_eq!(
+        second.expect("f-g.mov").samples.len(),
+        2,
+        "the second video holds more than the two frames that were selected"
+    );
+}
+
+/// AC2: caption a burst, hop to the next with `]`, caption again — and the
+/// second commit lands on the second burst only. The revert slot counts
+/// the batch it wrote, which is what makes "5, then 3, never 8" readable.
+///
+/// This is the IPTC half of the user's report: before the rule the `]`
+/// kept the first burst selected and the second commit stamped both.
+#[test]
+fn caption_then_hop_then_caption_lands_on_the_second_burst_only() {
+    if !has_display() {
+        eprintln!("screenshot smoke skipped: no display server");
+        return;
+    }
+    let _s = serial();
+    let out = out_dir().join("caption-hop.jpg");
+    let script = format!(
+        "{PIN_WINDOW};1200:key:];1400:key:ctrl+shift+b;1600:dump.sel;\
+         1800:key:i;1900:wait:iptc field 0 laid out at 1150;\
+         2300:click:iptc field 0;2500:key:t;2700:key:return;3000:dump.first;\
+         3200:key:];3400:dump.hop;3600:key:];3800:key:ctrl+shift+b;4000:dump.sel2;\
+         4200:click:iptc field 0;4400:key:u;4600:key:return;4900:dump.second"
+    );
+    let stderr = shoot_env_stderr(
+        &["--synthetic", "40", "--bursts"],
+        &[("FASTCULL_TRACE", "1"), ("FASTCULL_DRIVE", script.as_str())],
+        &out,
+    );
+    assert!(
+        stderr.contains("wait:iptc field 0 laid out at 1150 (satisfied"),
+        "the `wait:` never fired — the clicks were timed, not gated:\n{stderr}"
+    );
+    assert_click_resolved(&stderr, "iptc field 0");
+    let at = |label: &str| -> (usize, usize) {
+        let d = qedump(&stderr, label);
+        (
+            dump_field(d, "cursor").parse().unwrap(),
+            dump_field(d, "selected").parse().unwrap(),
+        )
+    };
+    assert_eq!(at("sel"), (1, 5), "Ctrl+Shift+B on A");
+    let first = qedump(&stderr, "first");
+    assert!(
+        dump_text(first, "revert").contains("on 5 image(s)"),
+        "the first commit did not stamp the five-frame burst — the field \
+         click missed, or nothing committed: {first}"
+    );
+    assert_eq!(
+        dump_field(first, "focusowner"),
+        "0",
+        "Enter did not return the keyboard to the grid, so the `]` below \
+         would be typed into the field: {first}"
+    );
+    assert_eq!(dump_field(first, "selected"), "5");
+    // The hop. This is the rule: the caption is on the sidecars, the
+    // selection has no job left, and the `]` ends it.
+    assert_eq!(
+        at("hop"),
+        (6, 0),
+        "the `]` after a commit left the burst selected (it read 5 before \
+         the rule)"
+    );
+    assert_eq!(
+        dump_field(qedump(&stderr, "hop"), "focusowner"),
+        "0",
+        "the `]` never reached the grid:\n{stderr}"
+    );
+    assert_eq!(at("sel2"), (7, 3), "the second burst, alone (it read 8)");
+    let second = qedump(&stderr, "second");
+    assert!(
+        dump_text(second, "revert").contains("on 3 image(s)")
+            && !dump_text(second, "revert").contains("8 image(s)"),
+        "the second commit did not land on the second burst alone — it \
+         read \"on 8 image(s)\" before the rule: {second}"
     );
 }
 

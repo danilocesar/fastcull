@@ -3540,38 +3540,41 @@ the user confirms, all cheap to change):**
       any zoom, which would make the control vacuous; it asserts the
       load-settled edge landed before the first wheel, because that edge
       writes `vp_y` itself.
-- [ ] **Brief 002, AC1 — the user's scenario** (user decision 2026-09-06):
+- [x] **Brief 002, AC1 — the user's scenario** (user decision 2026-09-06):
       4 selected → export → Esc → Right, Right → Shift+Right → exactly 2
       selected, the plan names only those two, no earlier-video hint, and
       the second file holds two frames. Pinned by
-      `the_second_video_holds_only_the_new_span` (to be written; RED on
-      the pre-fix tree: 6 selected and "4 of 6 frames are already in …",
-      `code/MECHANISM.md` §4). The `]`-to-a-burst half is pinned by parts
+      `the_second_video_holds_only_the_new_span` (RED on the pre-fix tree
+      2026-09-06: 6 selected, `clipsummary` "6 frames … → a-g.mov" and
+      `cliphint` "4 of 6 frames are already in a-d.mov" — the user's
+      report, `code/MECHANISM.md` §4). The `]`-to-a-burst half is pinned by parts
       — `a_plain_move_collapses_the_selection_in_the_grid` (a plain `]`
       empties it) with `core: the_scope_is_the_selection_or_the_burst_under_the_cursor`
       — because no fixture in the repository forms a burst from real files
       (video-export.md's recorded deviation).
-- [ ] **Brief 002, AC2 — caption, hop, caption**: Ctrl+Shift+B, an IPTC
+- [x] **Brief 002, AC2 — caption, hop, caption**: Ctrl+Shift+B, an IPTC
       commit, `]`, Ctrl+Shift+B, a second commit → the second commit lands
       on the second burst only. Pinned by
-      `caption_then_hop_then_caption_lands_on_the_second_burst_only` (to
-      be written; the revert label counts the batch — 5, then 3, never 8).
-- [ ] **Brief 002, AC3 — two bursts by Ctrl-hops**: Ctrl+Shift+B,
+      `caption_then_hop_then_caption_lands_on_the_second_burst_only` (the
+      revert label counts the batch — 5, then 3, never 8; RED pre-fix with
+      the hop reading 5 selected).
+- [x] **Brief 002, AC3 — two bursts by Ctrl-hops**: Ctrl+Shift+B,
       Ctrl+`]`×n, Ctrl+Shift+B → both bursts; a plain `]` anywhere in the
       sequence → empty. Pinned by
-      `ctrl_navigation_keeps_the_selection_and_ctrl_space_toggles` (to be
-      written); the core rule by `selection.rs`
-      `a_fresh_burst_span_replaces_ctrl_added_frames`.
-- [ ] **Brief 002, AC4 — Ctrl+Space**: on three separate frames → 3
+      `ctrl_navigation_keeps_the_selection_and_ctrl_space_toggles` (its
+      `plain` dump read 14 selected on the pre-fix tree); the core rule by
+      `selection.rs` `a_fresh_burst_span_replaces_ctrl_added_frames`.
+- [x] **Brief 002, AC4 — Ctrl+Space**: on three separate frames → 3
       selected; again on one → 2; the Ctrl+Right between them keeps the
-      count. Same test as AC3.
-- [ ] **Brief 002, AC5 — the mark advance collapses**: `Y` on a frame
+      count. Same test as AC3, with `selection.rs`
+      `ctrl_space_toggles_additively_across_ctrl_navigation` for the rule.
+- [x] **Brief 002, AC5 — the mark advance collapses**: `Y` on a frame
       inside a live selection → the selection is empty afterwards and the
       mark is on that frame only; `U` leaves the selection alone. Pinned
       by `a_plain_move_collapses_the_selection_in_the_grid` and
-      `a_plain_move_collapses_the_selection_in_the_loupe` (to be written;
-      the loupe strand also proves the zoom never changed).
-- [ ] **Brief 002, AC6 — a dialog's Esc**: Esc in the export dialog closes
+      `a_plain_move_collapses_the_selection_in_the_loupe` (the loupe
+      strand also proves the zoom never changed).
+- [x] **Brief 002, AC6 — a dialog's Esc**: Esc in the export dialog closes
       it and the selection is intact; a second Esc, on the grid, clears
       it — unchanged, now in docs/culling.md. Pinned by
       `the_second_video_holds_only_the_new_span` (`closed1`: dialog gone,

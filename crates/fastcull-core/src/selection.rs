@@ -1,12 +1,24 @@
 //! Multi-selection over the filtered view (`ui-grid.md`: Shift+arrows
-//! extend, Ctrl+A selects the filtered set, Ctrl/Shift-click join in the
-//! panel step). Selected images are IDs (session-stable); ranges are
-//! resolved against VIEW positions at extension time, so a filter change
-//! never re-interprets an old range.
+//! extend, Ctrl+A selects the filtered set, Ctrl+Space and Ctrl/Shift-click
+//! join). Selected images are IDs (session-stable); ranges are resolved
+//! against VIEW positions at extension time, so a filter change never
+//! re-interprets an old range.
 //!
 //! The cursor is always implicitly part of the batch the IPTC panel acts
 //! on: an empty selection means "the cursor image" (Photo Mechanic
 //! convention — no dead panel on a bare cursor).
+//!
+//! HOW LONG A SELECTION LASTS (the rule of 2026-09-06, user decision
+//! "file manager style", brief 002 — `ui-grid.md`, "Selection" under
+//! Visual language, has it in full): a PLAIN cursor move ends it
+//! ([`Selection::collapse`]), a CTRL move keeps it and drops the anchor
+//! ([`Selection::reset_anchor`]), and a Shift-span whose anchor arms on
+//! that press IS the selection — the frames a Ctrl+click or Ctrl+Space
+//! added included. Until that date a plain move kept the selection and
+//! the next span was UNIONED with it, which is how a video export came to
+//! hold the previous export's frames as well as the new ones (the user's
+//! report of 2026-09-06). Which keys are which is the app's business
+//! (`nav.rs`); this module owns what each does to the selection.
 
 use std::collections::HashSet;
 
@@ -17,11 +29,12 @@ pub struct Selection {
     /// The CURRENT Shift-span (anchor..cursor): each extension REPLACES it
     /// (validator finding: a grow-only span made shrinking impossible —
     /// Shift+Right x3 then Shift+Left left the abandoned tail selected).
-    /// Folded into `base` when the anchor resets (plain navigation).
+    /// Folded into `base` when the anchor resets (Ctrl-navigation).
     span: HashSet<usize>,
-    /// Range anchor (image id): where Shift-extension started. Plain
-    /// navigation moves the cursor and RESETS the anchor; Shift+arrows
-    /// keep it and re-span anchor..cursor.
+    /// Range anchor (image id): where Shift-extension started. NONE means
+    /// the next Shift gesture arms fresh — and a fresh span replaces the
+    /// whole selection. Ctrl-navigation resets it; Shift+arrows keep it
+    /// and re-span anchor..cursor.
     anchor: Option<usize>,
 }
 
@@ -44,6 +57,23 @@ impl Selection {
         self.anchor = None;
     }
 
+    /// Rule 1 of the selection rule (user decision 2026-09-06, brief 002,
+    /// "file manager style"): every UNMODIFIED cursor move — an arrow,
+    /// PgUp/PgDn/Home/End, `[`/`]` — and the `Y`/`N` mark advance end the
+    /// selection. Nothing is left selected, so the cursor alone is the
+    /// batch ([`Selection::batch`]), [`Selection::count_in_view`] is 0 and
+    /// the status bar goes silent. It fires whether or not the cursor
+    /// actually moved: a Right at the last frame is the same intent.
+    ///
+    /// The body is [`Selection::clear`] — this exists as a NAMED operation
+    /// because the call sites are a key map, and a key map that reads
+    /// `selection.clear()` says what the code does while this one says
+    /// which rule it is obeying. `clear` stays what Esc, a plain click and
+    /// G at a grid zoom call.
+    pub fn collapse(&mut self) {
+        self.clear();
+    }
+
     /// Ctrl+A: exactly the current filtered view.
     pub fn select_all(&mut self, view: &[usize]) {
         self.base = view.iter().copied().collect();
@@ -54,9 +84,19 @@ impl Selection {
     /// Shift+arrow / Shift+click: span anchor..cursor over view positions.
     /// The anchor arms on the first extension (from the pre-move cursor)
     /// and persists across further extensions. Each extension REPLACES the
-    /// current span (so it can shrink and flip) and unions with prior
-    /// toggles/spans (PM behavior).
+    /// current span, so a span can shrink and flip.
+    ///
+    /// Rule 3 (user decision 2026-09-06, brief 002, answer 3): a span whose
+    /// anchor arms on THIS call — after a plain click, after
+    /// Ctrl-navigation, on an empty selection — IS the whole selection, so
+    /// the base goes with it, Ctrl-added frames included. A span that
+    /// CONTINUES a live anchor replaces only the span, so everything the
+    /// user built around it survives. Until 2026-09-06 a fresh span was
+    /// unioned with the base instead ("PM behavior", a claim the research
+    /// of brief 002 found no product has), which is what carried an
+    /// exported set into the next export.
     pub fn extend_to(&mut self, view: &[usize], from: usize, to: usize) {
+        let fresh = self.anchor.is_none();
         let anchor = *self.anchor.get_or_insert(from);
         let (Some(a), Some(b)) = (
             view.iter().position(|id| *id == anchor),
@@ -64,6 +104,12 @@ impl Selection {
         ) else {
             return; // anchor or target filtered out: nothing to span
         };
+        // AFTER the lookup, never before: a gesture that spans nothing
+        // must change nothing (`a_span_that_resolves_to_nothing_leaves_a_
+        // fresh_selection_untouched` pins the order).
+        if fresh {
+            self.base.clear();
+        }
         let (lo, hi) = if a <= b { (a, b) } else { (b, a) };
         self.span = view[lo..=hi].iter().copied().collect();
     }
@@ -85,6 +131,10 @@ impl Selection {
     /// extension is, not two). Each press REPLACES the live span, so the
     /// opposite key drops a burst and flips past the anchor burst the way
     /// Shift+arrows flip.
+    ///
+    /// Rule 3 applies here exactly as it does to [`Selection::extend_to`]:
+    /// a burst span whose anchor arms on this press is the whole selection
+    /// (brief 002, 2026-09-06).
     pub fn extend_bursts(
         &mut self,
         view: &[usize],
@@ -92,6 +142,7 @@ impl Selection {
         to: usize,
         group_of: impl Fn(usize) -> Option<usize>,
     ) {
+        let fresh = self.anchor.is_none();
         let anchor = *self.anchor.get_or_insert(from);
         let (Some(a), Some(b)) = (
             view.iter().position(|id| *id == anchor),
@@ -99,6 +150,10 @@ impl Selection {
         ) else {
             return; // anchor or target filtered out: nothing to span
         };
+        // After the lookup, for the reason `extend_to` gives.
+        if fresh {
+            self.base.clear();
+        }
         let (lo, hi) = if a <= b { (a, b) } else { (b, a) };
         let lo = group_edge(view, lo, &group_of, false);
         let hi = group_edge(view, hi, &group_of, true);
@@ -137,17 +192,24 @@ impl Selection {
         self.anchor = Some(cursor);
     }
 
-    /// Plain (non-extending) cursor movement resets the range anchor; the
-    /// selected set itself is untouched (arrows never deselect — the live
-    /// span is committed into the base, Esc/click semantics come with the
-    /// panel step).
+    /// Rule 2 (brief 002, 2026-09-06): the cursor moved WITHOUT a selection
+    /// gesture — Ctrl+arrows, Ctrl+PgUp/PgDn/Home/End, Ctrl+`[`/`]` — so
+    /// the live span is committed into the base and the anchor drops. The
+    /// selected set itself is untouched; the next Shift-span, arming
+    /// fresh, therefore REPLACES it (see [`Selection::extend_to`]).
+    ///
+    /// This used to be what a PLAIN arrow called, which is why the comment
+    /// here promised that an arrow could never drop a selection. Since
+    /// 2026-09-06 a plain move calls [`Selection::collapse`] instead.
     pub fn reset_anchor(&mut self) {
         self.base.extend(self.span.drain());
         self.anchor = None;
     }
 
-    /// Ctrl+click toggle (commits any live span first — the toggle acts on
-    /// the selection as the user sees it).
+    /// Ctrl+click and Ctrl+Space (brief 002 R4): add or remove one image,
+    /// committing any live span first — the toggle acts on the selection
+    /// as the user sees it. The anchor arms here, so a Shift-span that
+    /// follows CONTINUES from this image instead of replacing everything.
     pub fn toggle(&mut self, id: usize) {
         self.base.extend(self.span.drain());
         if !self.base.insert(id) {
@@ -272,8 +334,19 @@ mod tests {
         assert_eq!(sel.batch(&[7, 9], 4), vec![7, 9]);
     }
 
+    /// The rule of 2026-09-06 (brief 002, user decision "file manager
+    /// style", answer 3), in one test, because it is two halves of one
+    /// sentence: a span whose anchor arms on THIS gesture IS the whole
+    /// selection, and a span that continues a live anchor replaces only
+    /// itself.
+    ///
+    /// This is the rewrite of `toggle_and_anchor_reset`, which asserted
+    /// the opposite of the last line — `[1, 2, 3, 4]`, "unions with
+    /// prior" — and was the only place the union rule of commit 7ed0949
+    /// was ever written down. That rule is what put a previous export's
+    /// four frames into the next video (the user's report of 2026-09-06).
     #[test]
-    fn toggle_and_anchor_reset() {
+    fn a_fresh_span_replaces_the_whole_selection_a_continued_one_replaces_its_span() {
         let view = vec![1, 2, 3, 4];
         let mut sel = Selection::default();
         sel.toggle(2);
@@ -282,12 +355,96 @@ mod tests {
         assert_eq!(sel.batch(&view, 1), vec![4]);
         // The anchor is the LAST interaction point (2, even though it was
         // toggled off — file-manager convention): the next span runs from
-        // there, re-including it.
+        // there, re-including it. The anchor is LIVE, so this span
+        // continues it and the Ctrl-toggled 4 survives beside it.
         sel.extend_to(&view, 4, 3);
-        assert_eq!(sel.batch(&view, 3), vec![2, 3, 4]);
+        assert_eq!(sel.batch(&view, 3), vec![2, 3, 4], "a continued span");
+        // Ctrl-navigation (or a click) drops the anchor. The next span
+        // therefore arms FRESH — and a fresh span is the whole selection,
+        // Ctrl-added frames included.
         sel.reset_anchor();
         sel.extend_to(&view, 1, 2);
-        assert_eq!(sel.batch(&view, 2), vec![1, 2, 3, 4], "unions with prior");
+        assert_eq!(
+            sel.batch(&view, 2),
+            vec![1, 2],
+            "a fresh span REPLACES what was selected before it"
+        );
+    }
+
+    /// The same rule for the burst spans (Shift+`[` / Shift+`]`): a fresh
+    /// one replaces, Ctrl+Shift+B's frames included. The CONTINUED case —
+    /// `select_group` arms the anchor, so the Shift+`]` after it extends
+    /// from that burst — is pinned at the end of
+    /// `select_group_is_additive_idempotent_and_view_scoped` and must stay
+    /// as it is.
+    #[test]
+    fn a_fresh_burst_span_replaces_ctrl_added_frames() {
+        let view = ids(0..=12);
+        let mut sel = Selection::default();
+        sel.select_group(&view, 8, groups); // Ctrl+Shift+B on B
+        assert_eq!(sel.batch(&view, 8), vec![7, 8, 9]);
+        sel.reset_anchor(); // Ctrl+`]` to C
+        sel.extend_bursts(&view, 10, 12, groups);
+        assert_eq!(
+            sel.batch(&view, 12),
+            ids(10..=12),
+            "a fresh burst span is the whole selection, B gone"
+        );
+    }
+
+    /// Rule 1 (brief 002): a plain cursor move empties the selection — the
+    /// cursor is then the batch and the status count is silent — and the
+    /// span that follows starts fresh, so it cannot resurrect what the
+    /// move dropped.
+    #[test]
+    fn plain_navigation_collapses_and_the_next_span_starts_fresh() {
+        let view = ids(0..=9);
+        let mut sel = Selection::default();
+        sel.toggle(2);
+        sel.extend_to(&view, 2, 4);
+        assert_eq!(sel.count_in_view(&view), 3);
+        sel.collapse(); // a plain Right / `]` / PgDn / Y-advance
+        assert!(sel.is_empty(), "the selection is gone, not folded");
+        assert_eq!(sel.count_in_view(&view), 0, "the count goes silent");
+        assert_eq!(sel.batch(&view, 3), vec![3], "the cursor is the batch");
+        sel.extend_to(&view, 6, 7);
+        assert_eq!(
+            sel.batch(&view, 7),
+            vec![6, 7],
+            "and the next span is fresh"
+        );
+    }
+
+    /// The ORDER inside `extend_to`: the base is cleared only once the
+    /// span is really going to be set. A Shift+arrow whose anchor or
+    /// target is filtered out spans nothing, and "spans nothing" must mean
+    /// "changes nothing" — clearing first would make a no-op gesture eat
+    /// the selection.
+    #[test]
+    fn a_span_that_resolves_to_nothing_leaves_a_fresh_selection_untouched() {
+        let view = vec![1usize, 2, 3];
+        let mut sel = Selection::default();
+        sel.toggle(5); // selected, and not in this view
+        sel.reset_anchor();
+        sel.extend_to(&view, 1, 9); // 9 is filtered out: no span
+        assert!(sel.is_selected(5), "the no-op span dropped the selection");
+        assert_eq!(sel.count_in_view(&[1, 2, 3, 5]), 1);
+    }
+
+    /// Ctrl+Space is `toggle`, and `toggle` stays ADDITIVE across the
+    /// Ctrl-navigation between two presses: that is the whole point of the
+    /// pair — the keyboard's way to build a discontiguous selection
+    /// (brief 002 R4, AC4).
+    #[test]
+    fn ctrl_space_toggles_additively_across_ctrl_navigation() {
+        let view = ids(0..=9);
+        let mut sel = Selection::default();
+        sel.toggle(2);
+        sel.reset_anchor(); // Ctrl+Right
+        sel.toggle(4);
+        assert_eq!(sel.batch(&view, 4), vec![2, 4], "additive");
+        sel.toggle(4);
+        assert_eq!(sel.batch(&view, 2), vec![2], "and it takes away again");
     }
 
     #[test]

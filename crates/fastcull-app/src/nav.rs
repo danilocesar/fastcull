@@ -255,6 +255,20 @@ fn handle_nav_inner(win: &MainWindow, state: &Rc<RefCell<AppState>>, key: &str) 
                         st.exit_loupe();
                     }
                 }
+                // Rule 1 again (brief 002, Manager 2026-09-06): the
+                // advance a `Y`/`N` performs is a cursor move, so it ends
+                // the selection — whether or not there was a next frame to
+                // advance to, exactly as a Right at the last frame does.
+                // `U` does not advance and leaves the selection alone,
+                // UNLESS its mark took the frame out of the filtered view
+                // and the live-removal rule moved the cursor on: that is a
+                // cursor move like any other, and "collapse = a cursor
+                // move" stays one rule. A mark that lands on nothing never
+                // reaches here — the guard above fails and nothing is
+                // touched.
+                if key != "clear" || st.grid.cursor != cursor {
+                    st.grid.selection.collapse();
+                }
             }
         }
         // One seamless zoom axis (spec): columns -> loupe fit -> x1.5
@@ -361,13 +375,17 @@ fn handle_nav_inner(win: &MainWindow, state: &Rc<RefCell<AppState>>, key: &str) 
                     st.grid
                         .selection
                         .extend_bursts(&view, from, st.grid.cursor, group_by_id);
-                } else {
+                } else if key.starts_with("ctrl-") {
                     // Ctrl+[ / Ctrl+]: the plain key's landing with the
                     // selection kept, the anchor reset (ui-grid.md's
-                    // selection rule 2, brief 002). A plain [ / ] takes
-                    // the same branch here and gets rule 1's collapse in
-                    // the commit that lands it.
+                    // selection rule 2, brief 002).
                     st.grid.selection.reset_anchor();
+                } else {
+                    // A plain [ / ] is an unmodified cursor move, so it
+                    // ends the selection like an arrow (rule 1). This is
+                    // what makes "export this burst, `]`, export the next"
+                    // take the burst under the cursor the second time.
+                    st.grid.selection.collapse();
                 }
             }
         }
@@ -448,12 +466,12 @@ fn handle_nav_inner(win: &MainWindow, state: &Rc<RefCell<AppState>>, key: &str) 
                     }
                     // Ctrl+arrow: the selection is untouched; the anchor
                     // drops, so a Shift+arrow after it starts fresh from
-                    // the cursor (ui-grid.md's selection rule 2). A plain
-                    // arrow takes the same call in THIS commit and gets
-                    // rule 1's collapse in the commit that lands it.
-                    SelEffect::Keep | SelEffect::Collapse => {
-                        st.grid.selection.reset_anchor();
-                    }
+                    // the cursor (ui-grid.md's selection rule 2).
+                    SelEffect::Keep => st.grid.selection.reset_anchor(),
+                    // A plain arrow / PgUp / PgDn / Home / End ends the
+                    // selection (rule 1, user decision 2026-09-06): the
+                    // cursor is then the batch.
+                    SelEffect::Collapse => st.grid.selection.collapse(),
                 }
             }
         }

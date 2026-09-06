@@ -799,14 +799,14 @@ sample RAWs), `app:` = the driven `tests/screenshot.rs` test.
       the same burst index (the disabled-with-a-reason assertion). A
       driven burst strand needs a burst fixture, which is its own piece
       of work (a synthetic RAW with a Sony maker note).
-- [ ] The second export after a plain move holds only the new frames
+- [x] The second export after a plain move holds only the new frames
       (brief 002, user decision 2026-09-06): 4 selected → export → Esc →
       Right, Right → Shift+Right → the plan says 2 frames and names no
       earlier video, the file holds 2 samples, no clash question; Esc on
       the finished report leaves the selection intact and a second Esc
-      clears it. → `app: the_second_video_holds_only_the_new_span` (to be
-      written; RED on the pre-fix tree with "6 frames" and "4 of 6 frames
-      are already in …"). The `]`-to-the-next-burst form is pinned by
+      clears it. → `app: the_second_video_holds_only_the_new_span` (RED on
+      the pre-fix tree 2026-09-06 with `clipsummary` "6 frames · … →
+      a-g.mov" and `cliphint` "4 of 6 frames are already in a-d.mov"). The `]`-to-the-next-burst form is pinned by
       parts, as the deviation above records: no repository fixture forms a
       burst from real files.
 - [x] Exported badge and hint (#56): a landed export badges exactly the
