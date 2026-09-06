@@ -83,6 +83,11 @@ In order:
     verdict, deferred findings with the recorded decision, directive
     candidates you spotted, and every question for the user a role raised,
     verbatim.
+11. **Clean up (M9).** After the merge: `cargo clean -p fastcull-app -p
+    fastcull-core -p fastcull-cli` in the tree's own `target/` (never a
+    full `cargo clean`), remove any `target-qe-*` directory or worktree the
+    unit left, apply the scratch cap's oldest-first GC, and state what was
+    freed in the report.
 
 Circuit breaker: if the same stage fails twice in a row without converging,
 or the developer disputes a finding, stop looping — take both positions to

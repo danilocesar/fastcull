@@ -436,10 +436,11 @@ on the answer. The Manager relays them verbatim; the user is the customer.
   worktree — the pre-fix commit, a mutant, a profile A/B — measured, then
   deleted before the next one. Measured in unit 001: peak combined 6.4 GB
   under this rule where two optimised dirs would have been ~20 GB. The
-  tree's own `target/` is the user's: no `cargo clean` of any form there
-  unless the user asks (QE freed 131 GB from it with `cargo clean -p` on
-  2026-09-05 without asking; the user decides whether that becomes
-  routine).
+  tree's own `target/` is cleaned by the Manager at the END of every unit
+  (`cargo clean -p` of the three workspace crates, CLAUDE.md M9, the
+  user's rule of 2026-09-06) and never by a role mid-unit: a clean during a
+  unit invalidates the measurements of every role still running, and a
+  full `cargo clean` is never run (a cold rebuild is ~9-10 min since #76).
 - **The machine and the build environment.** The development seat since
   2026-07-28 is an Intel i7-8665U laptop (4 cores / 8 threads, 31 GB,
   Fedora, Intel i915 graphics); the previous 32-core desktop's numbers do
