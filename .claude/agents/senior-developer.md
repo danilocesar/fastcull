@@ -423,9 +423,23 @@ on the answer. The Manager relays them verbatim; the user is the customer.
   per-crate debug opt-level tweaks or un-optimising dependencies for
   debuggability without asking; a cold debug build is slower once and that
   was accepted. Any "debug is slow" diagnosis first asks whether the slow
-  code is a dependency (fast) or workspace code (opt-level 0). If the line
-  is not in `Cargo.toml` yet, the decision stands and the change is owed;
-  its absence is not a reversal.
+  code is a dependency (fast) or workspace code (opt-level 0). The line
+  landed on 2026-09-05 (PR #80, unit 001; `01-architecture.md` "Build
+  profiles" records the measurements and the cost).
+- **The head's unmodified suite runs from the tree's own `target/`;
+  `target-qe-*` is for worktrees, one at a time.** (Manager, 2026-09-05,
+  unit 001; the same rule as QE's) With dependencies compiled optimised in the dev profile an
+  optimised debug target is ~9-11 GB and a stock one ~5 GB, so the 10 GB
+  cap cannot hold one beside the other. The head's unmodified suite,
+  clippy and fmt run from the tree's own `target/` (same tree, same
+  commit); a `target-qe-<unit>-*` directory is created only for a
+  worktree — the pre-fix commit, a mutant, a profile A/B — measured, then
+  deleted before the next one. Measured in unit 001: peak combined 6.4 GB
+  under this rule where two optimised dirs would have been ~20 GB. The
+  tree's own `target/` is the user's: no `cargo clean` of any form there
+  unless the user asks (QE freed 131 GB from it with `cargo clean -p` on
+  2026-09-05 without asking; the user decides whether that becomes
+  routine).
 - **The machine and the build environment.** The development seat since
   2026-07-28 is an Intel i7-8665U laptop (4 cores / 8 threads, 31 GB,
   Fedora, Intel i915 graphics); the previous 32-core desktop's numbers do
