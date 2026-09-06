@@ -269,17 +269,20 @@ cached `main` run before the line (33986518746) took 17 m 33 s on ubuntu
 and 33 m 48 s on windows — cold against cached, so the pair bounds the
 cost rather than isolating it. The Windows job finished 28 minutes under
 its 90-minute `timeout-minutes`, so `ci.yml` was not touched (Manager's
-ruling on Q1, option a). The first CACHED `main` run's durations: to be
-filled by the Manager once one exists (2026-09-05; re-dated 2026-09-06,
-brief 003 — none could exist under the old key, see the next paragraph;
-re-dated again 2026-09-06, brief 004 — the `v1-rust-test-…` pair that
-main run 34018510289 saved was never restored, because brief 004 put the
-profile component into the key before any run asked for it (`gh run
-list`: no run between 34018510289 and brief 004's pull request), so the
-first candidate is the run AFTER the main run that merges brief 004 and
-saves under `v1-rust-profile-a66a9ea8-…`; a pull request restores main's
-entry too, so the first cached run may be a PR run, and a MAIN run's
-figure, which includes the post step, is the like-for-like one).
+ruling on Q1, option a). The first CACHED run since the
+profile line (filled 2026-09-06, Manager, closing brief 003 and 004):
+PR #84's run 34056017285, restoring the computed-key pair the main run of
+brief 004 saved — `Cache hit for: v1-rust-profile-a66a9ea8-…`, `full
+match: true` on both jobs — took **ubuntu-latest 14 m 59 s** (`Tests`
+1 m 22 s, the headless-X release screenshot pass 11 m 22 s, clippy 14 s) and **windows-latest 35 m 40 s** (`Tests` 11 m 56 s, the Windows release screenshot pass 13 m 34 s, clippy 44 s),
+against 17 m 33 s / 33 m 48 s cached before the line and 27-35 / 58-72
+min cold after it. (The placeholder's history: dated 2026-09-05; re-dated
+2026-09-06 by brief 003 because none could exist under the old key, and
+again by brief 004 because the `v1-rust-test-…` pair main run
+34018510289 saved was never restored — brief 004 put the profile
+component into the key before any run asked for it; a MAIN run's figure,
+which includes the post step, is the like-for-like one and is recorded
+when the next main run lands.)
 Incremental builds
 of workspace code are unaffected. A measurement trap, recorded because it bit the
 plan-time A/B (2026-09-05): two profile variants built into ONE target
@@ -423,7 +426,15 @@ expression through its `env` and fails the job unless it reads
 hash step cannot leave the key at a constant `profile-`. The residual:
 an edit to the rust-cache `key:` line alone, which nothing in the run
 detects; the `Cache Key:` reading (AC1) is the check for it, and the
-value the guard prints is the line to compare it with. `prefix-key:
+value the guard prints is the line to compare it with. Offline it is one
+command: a pyyaml assertion that the rust-cache step's `with.key` is
+`profile-${{ steps.profile.outputs.hash }}` and that neither new step
+carries an `if:` or `continue-on-error:` — the structural check QE ran
+for brief 004 (QE 2026-09-06, D1); an in-run grep of the workflow's own
+text would have to escape `${{`, which the runner substitutes before the
+shell sees it. The residual also covers the `key:` line REPLACED by a
+well-formed constant, where `Cache Key:` still looks right and only the
+comparison with the guard's printed line catches it. `prefix-key:
 v1-rust` stays as the escape hatch: it is bumped only for a change to
 the action or to the key's format — a rust-cache release that hashes
 differently, a change to the step's command — and NOT for a profile
@@ -497,7 +508,9 @@ its evidence):
   and its "1.88 / 1.62 GiB" are the same two sizes truncated rather than
   rounded (senior-developer 2026-09-06). No thrash: the four entries
   are under half the limit.
-- [ ] **… and the run after it is cached (AC3, the restore half).**
+- [x] **… and the run after it is cached (AC3, the restore half).**
+  TICKED 2026-09-06 by brief 004's AC3 (PR #84's run 34056017285 restored
+  the computed-key pair; the durations are in the placeholder above).
   CORRECTED 2026-09-06 (brief 004): this half can no longer be ticked as
   written — no run restored the `v1-rust-test-…` pair before brief 004
   added the profile component to the key, so those two entries are
@@ -510,8 +523,15 @@ its evidence):
 
 Acceptance (brief 004; a criterion is ticked by the commit that carries
 its evidence):
-- [ ] **Both runners compute the component and the key carries it
-  (AC1).** Both CI checks green on the PR; both jobs' `Hash the root
+- [x] **Both runners compute the component and the key carries it
+  (AC1).** TICKED 2026-09-06 (Manager, closing commit): PR #83's run
+  34043232886 — ubuntu job 101513620755 `Python 3.12.3`, `profile hash:
+  a66a9ea8`, `rust-cache key component: profile-a66a9ea8`, `Cache Key:
+  v1-rust-profile-a66a9ea8-test-Linux-x64-91e3cbda-aacf1ed2`, `No cache
+  found.`; windows job 101513620796 `Python 3.12.10`, the same hash and
+  component, `Cache Key: v1-rust-profile-a66a9ea8-test-Windows_NT-x64-
+  8918a2f9-aacf1ed2`, `No cache found.`; no `Cache hit for: v1-rust-test-`,
+  no `Unexpected input`; both green (27 m 49 s, 1 h 06 m 15 s). Both CI checks green on the PR; both jobs' `Hash the root
   manifest's [profile] tables` step logs `Python 3.12.x` and `profile
   hash: <8 hex>` — the same eight digits on both, `a66a9ea8` for the
   manifest as merged from d4da1ac — the guard step logs `rust-cache key
@@ -527,7 +547,9 @@ its evidence):
   exists; that is this unit's old red), or a `Warning: Unexpected
   input(s)` line. Pinned by the PR run's job logs, read by QE; ticked,
   with the run id and the lines, by the Manager's closing spec commit.
-- [ ] **The mutants behave as stated (AC2).** The step's own command,
+- [x] **The mutants behave as stated (AC2).** TICKED 2026-09-06
+  (Manager, closing commit; QE's report of PR #83, 17 fixtures plus the
+  guard's 14 inputs and 4 loud paths). The step's own command,
   run on this seat by QE against copies of the manifest: `opt-level`
   2 → 3 moves the hash (`a66a9ea8` → `1395f519`); a version bump, a
   comment edit, a reordered table and a CRLF copy do not; a member
@@ -537,8 +559,16 @@ its evidence):
   seven-digit and an upper-case value and accepts `profile-a66a9ea8`.
   Recorded in the QE report and the developer's commit message; ticked
   by the Manager's closing spec commit.
-- [ ] **The main run saves under the computed key and the run after it
-  restores it (AC3).** Post-merge, not gating the PR: the merge run's
+- [x] **The main run saves under the computed key and the run after it
+  restores it (AC3).** TICKED 2026-09-06 (Manager, closing commit): main
+  run 34047309575 (e879cff) saved `v1-rust-profile-a66a9ea8-test-Linux-
+  x64-91e3cbda-aacf1ed2` (2,028,320,243 B) in its ubuntu post step (28 s)
+  and `…-Windows_NT-x64-8918a2f9-aacf1ed2` (1,746,553,629 B) in its
+  windows post step (4 m 18 s; the job 1 h 12 m 18 s, the longest Windows
+  job measured, 17.7 minutes under the cap); the orphaned
+  `v1-rust-test-…` pair was deleted the same day; usage 5.58 GiB of the
+  10 GB limit; PR #84's run 34056017285 restored the pair on both jobs
+  (`full match: true`) — the durations are in the placeholder above. Post-merge, not gating the PR: the merge run's
   post steps log `... Saving cache ...` and `Sent N of N (100.0%)` under
   `v1-rust-profile-a66a9ea8-…`; `gh cache list` shows the pair with
   sizes and the usage total against the limit; the orphaned

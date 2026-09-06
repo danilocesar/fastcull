@@ -2728,10 +2728,13 @@ the user confirms, all cheap to change):**
       2026-09-05) and a run under a NEW cache key rebuilds the release
       half of the entry too (corrected 2026-09-06, QE D2): 61.7
       (33996087777, PR #80's first run), 70.0 = 1 h 09 m 58 s
-      (34014978820, PR #82, the worst measured) and 57.7 (34018510289,
-      main, including its 2 m 15 s cache save) — two samples of one
-      shape 12 minutes apart, so the cold figure is a range; 90 leaves
-      the worst 20.0 minutes, 22 %. A test that adds wall clock to the
+      (34014978820, PR #82), 57.7 (34018510289, main, including its 2 m 15 s
+      cache save), 66.3 = 1 h 06 m 15 s (34043232886, PR #83) and 72.3 =
+      1 h 12 m 18 s (34047309575, main, including a 4 m 18 s save of a
+      1.63 GiB entry — the worst measured; corrected 2026-09-06, Manager's
+      closing commit for briefs 003/004) — samples of one shape 15
+      minutes apart, so the cold figure is a range; 90 leaves the worst
+      17.7 minutes, 20 %. A test that adds wall clock to the
       Windows job is spending headroom that is measured, not spare, and
       the worst cold job has 20 minutes of it. *The headless seat is a
       constant*: the Linux screenshot step runs under `xvfb-run -a
