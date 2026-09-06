@@ -118,11 +118,19 @@ fn shoot_env_stderr_watching(
             // app spawn goes through, so every driven test enforces it.
             // A run without FASTCULL_TRACE prints no mark at all, so the
             // expected count is 1 when traced and 0 otherwise.
+            //
+            // Counted as EMITTED MARK LINES, not substring occurrences
+            // (senior-developer test-integrity review 2026-09-05, on a QE
+            // probe): a session whose file is named `status at shutter:
+            // a.ARW` puts the mark's own text into the status string and
+            // into a QEDUMP field, and the substring form counted 3 where
+            // one mark was emitted — a banner that says "do not doubt this
+            // failure" must not be able to fire on a file name.
             let traced = envs.iter().any(|(k, _)| *k == "FASTCULL_TRACE")
                 || std::env::var_os("FASTCULL_TRACE").is_some();
             let want = usize::from(traced);
-            let shots = stderr.matches("status at shutter: ").count();
-            let geoms = stderr.matches("geometry at shutter: ").count();
+            let shots = mark_lines(&stderr, "status at shutter: ");
+            let geoms = mark_lines(&stderr, "geometry at shutter: ");
             assert!(
                 shots == want && geoms == want,
                 "the shutter fired {shots} time(s) with {geoms} geometry mark(s), \
@@ -147,6 +155,21 @@ fn shoot_env_stderr_watching(
         }
         std::thread::sleep(Duration::from_millis(200));
     }
+}
+
+/// Emitted mark lines, not substring occurrences: a mark is one line
+/// `fastcull-trace: [<ms>] <label>` (trace.rs `emit`, the one emit site),
+/// so anchoring on where the label starts makes a file name that quotes
+/// the mark — through the status string or a QEDUMP field — count for
+/// nothing (QE probe 2026-09-05: `status at shutter: a.ARW` counted 3 by
+/// substring, 1 by line).
+fn mark_lines(stderr: &str, mark: &str) -> usize {
+    stderr
+        .lines()
+        .filter_map(|l| l.strip_prefix("fastcull-trace: ["))
+        .filter_map(|r| r.split_once("] "))
+        .filter(|(_, label)| label.starts_with(mark))
+        .count()
 }
 
 /// Write a run's stderr next to its shot as `<name>.trace.log`, and
@@ -1885,9 +1908,10 @@ fn transit_at_zoom_stays_soft_never_drops_to_fit() {
     // No starvation knob: FASTCULL_MAX_READERS governs the thumbnail
     // pipeline, NOT the loupe ladder (gate finding — it was a no-op
     // here). The race is real in both profiles: release full-res cooks
-    // ~140ms against 60ms key spacing; debug cooks ~12s, and the
-    // virgin-pin rule renders soft the moment the landing mid adopts,
-    // long before the shutter's sharp gate opens.
+    // ~140ms against 60ms key spacing; debug cooked ~12 s before
+    // 2026-09-05 and ~1-2 s since (issue #76) — either way past the key
+    // spacing — and the virgin-pin rule renders soft the moment the
+    // landing mid adopts, long before the shutter's sharp gate opens.
     let stderr = shoot_env_stderr(
         &["--start-11", dir.to_str().unwrap()],
         &[
@@ -2097,7 +2121,12 @@ fn loupe_badge_star_renders_at_one_to_one() {
 /// Sharp-path anchor values (`loupe idx ... off X,Y`) only exist while
 /// full-res is up: in release the sharp view is up before the toggles
 /// and the full contract is asserted; in debug the toggles happen in
-/// the soft regime, so only the post-toggle stability half applies —
+/// the soft regime, so only the post-toggle stability half applies
+/// (measured 2026-09-05, senior-developer review F2, now that
+/// dependencies compile optimised in debug: PR #80's Windows debug
+/// artifact has the sharp `loupe idx 0 factor` at 2776 ms against
+/// toggles at 2003 and 2604 ms — it holds there by 172 ms — and by
+/// 0.2-0.6 s on the development seat) —
 /// the release assertions are the regression teeth (fails on pre-#16
 /// code: no docked line ever appeared after open, and close popped a
 /// stale docked frame).
@@ -5224,14 +5253,21 @@ fn interleaved_session(dir: &Path) {
 /// sharp rung's own mark now (`wait:loupe idx 8 factor` at 20.2 s, the
 /// dump 6.3 s behind it — the CI-audit shape rule, echo asserted below),
 /// which is stricter, not looser: the sharp must land within the wait's
-/// 30 s cap and the overlay must be up 6.3 s later. Measured with the
+/// 30 s cap and the overlay must be up 6.3 s later. The dump's authored
+/// 26.5 s is its FLOOR, not a fallback: it fires 6.3 s after the wait is
+/// satisfied, never earlier and never on its own (28.32-28.37 s idle,
+/// 39.4-40.6 s under the recipe; a wait that never satisfies aborts the
+/// run at 50.2 s with no dump at all — QE 2026-09-05, D3). Measured with the
 /// wait on the development seat: debug 10 of 10 idle (the sharp 1.8-2.8 s
 /// after the wait's step, no drop) and 3 of 3 under the recipe (9.3-14.4 s,
 /// the hold cap firing in each); release 3 of 3 under the recipe
 /// (1.6-2.1 s, no drop). The
-/// thumb-rung pin below stays release-only for the same kitchen's sake;
-/// paced_taps and transit_at_zoom_stays_soft keep the debug no-drop
-/// coverage.
+/// thumb-rung pin below stays release-only for the same kitchen's sake.
+/// `paced_taps` keeps the debug no-drop coverage — it asserts no `loupe
+/// overlay dropped` at all; `transit_at_zoom_stays_soft` pins the soft
+/// render and the sharp landing, not the absence of a bounded drop
+/// (corrected 2026-09-05, senior-developer review F5: its own Windows
+/// debug run of PR #80 carried a `(hold cap)` drop and passed).
 #[test]
 fn transit_to_a_cold_frame_keeps_the_overlay_at_the_carried_center() {
     if !has_display() {

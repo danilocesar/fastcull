@@ -2204,15 +2204,21 @@ the user confirms, all cheap to change):**
       photographed the honest fit (senior-developer diagnosis
       2026-09-05; the same script in release under the same load: 3 of
       3). The clock became the sharp rung's own mark (`wait:loupe idx 8
-      factor` at 20.2 s, the dump kept at 26.5 s as the backstop and
-      fired 6.3 s behind the mark — the CI-audit shape rule, `(satisfied`
+      factor` at 20.2 s, the dump keeping its authored 26.5 s as its FLOOR —
+      it fires 6.3 s after the wait is satisfied, never earlier and never
+      on its own, measured at 28.32-28.37 s idle and 39.4-40.6 s under
+      the recipe, while a wait that never satisfies aborts the run at
+      50.2 s with no dump at all (QE 2026-09-05, D3) — the CI-audit shape rule, `(satisfied`
       echo asserted), which is stricter, not looser: the sharp must land
       within the wait's 30 s cap and the overlay must be up 6.3 s later;
       with the wait, 10 of 10 idle and 3 of 3 under the recipe in debug,
       3 of 3 in release. The PR's Windows debug pass is both tests'
-      first CI run in that profile. The debug profile ALSO keeps its no-drop
-      coverage through
-      `paced_taps` and `transit_at_zoom_stays_soft`; the M1 test
+      first CI run in that profile. `paced_taps` keeps the debug profile's
+      no-drop coverage (it asserts no `loupe overlay dropped` at all);
+      `transit_at_zoom_stays_soft` pins the soft render and the sharp
+      landing, not the absence of a bounded drop — its own Windows debug
+      run of PR #80 carried a `(hold cap)` drop and passed (corrected
+      2026-09-05, senior-developer review F5); the M1 test
       allows the spec'd reason-carrying drops (failure/hold-cap) while
       asserting the excuse-less `(no rung in hand)` drop away, plus
       recovery via the "landed" dump, gated since
@@ -2278,7 +2284,22 @@ the user confirms, all cheap to change):**
       therefore a deterministic debug-profile exercise of the
       drop-and-re-raise, senior-developer diagnosis 2026-09-05) and
       the M1 test asserts the recovery whenever it fires — its landing
-      dump is mark-gated since 2026-09-05 — but forcing
+      dump is mark-gated since 2026-09-05. On CI it never fired in that
+      test: on every runner of PR #80 the rescue thumb beat the 250 ms
+      cap (Windows debug `i46-m1`: hold at 20087 ms, thumb at 20209 —
+      122 ms — soft at 20593, sharp at 23886, the wait satisfied after
+      3682 ms, `one2one=true` at 30186; the release runners 767 ms and
+      343 ms), so the RE-RAISE pin is exercised by the local load recipe
+      only — 19 of 19 drops re-raised across the developer's, the senior
+      developer's and QE's loaded runs — and a CI run would pass with the
+      re-raise deleted. The drop-and-re-raise itself DID occur once in
+      that Windows debug pass, in the soft-transit script where no
+      assertion reads it (hold 953 ms, `(hold cap)` at 1393, soft at
+      1445, sharp at 4939). What the M1 test does prove on CI is not
+      nothing: the hold engaged, the rescue thumb landed inside the cap,
+      no excuse-less drop appeared, the sharp landed inside the wait's
+      30 s cap and the overlay was still up 6.3 s later (QE 2026-09-05,
+      D2, with the senior developer's two precisions). Forcing
       it deterministically in release needs a decode-wedge knob —
       deferred alongside the wedge affordances already recorded in
       this spec. Narrowed 2026-08-11 (A3): the cap timing, the failure
@@ -2743,7 +2764,9 @@ the user confirms, all cheap to change):**
       once when `shot_written` is set (the mechanism, the source lines and
       the measurements are in the harness section under "Debug
       facilities"). Pinned by the spawn helper in `tests/screenshot.rs`
-      (`shoot_env_stderr_watching`), which counts `status at shutter` in
+      (`shoot_env_stderr_watching`), which counts emitted `status at
+      shutter` mark lines (prefix- and label-anchored, so a file name
+      that quotes the mark cannot inflate it — QE probe 2026-09-05) in
       every successful traced run and fails on any count but one — so
       every driven test enforces it, on the Windows debug pass too — and
       by its mutant: with the guard deleted, the Wayland development seat
@@ -2763,7 +2786,9 @@ the user confirms, all cheap to change):**
       the first full-res rung of the center-anchor script at 1.15-1.36 s
       against 15.3-17.2 s without the line, its sharp 1:1 render at
       2.8-3.1 s against 17.9-19.6 s (three runs each, developer
-      2026-09-05) — where the same decode took 26-40 s on the Windows
+      2026-09-05; QE's independent sample on the same seat, same script:
+      14.73-15.96 s → 1.14-1.25 s and 17.10-18.38 s → 2.03-2.66 s — QE
+      2026-09-05, D5) — where the same decode took 26-40 s on the Windows
       debug runner and 31 s here before, and
       `window_resize_keeps_the_photo` —
       the cap's recorded intermittent — is green 4 of 4 under the load
@@ -3768,9 +3793,12 @@ Documented because they ship in release builds (validator finding):
   helper asserts that count on every successful traced run, so a local
   trace and a CI trace mean the same thing. Until 2026-09-05 they did
   not: the development seat photographed TWICE in every run (10 of 10
-  stock-debug runs of the loupe-resize script, the second shot 470-490 ms
-  after the first; 26 of 26 and 25 of 29 in the two counts that found it
-  during the #73 discussion) while CI photographed once (0 of 660
+  stock-debug runs of the loupe-resize script, the second shot 468-507 ms
+  after the first across 33 runs (474-488 and 468-485 plan-time, 490-507
+  in the #77 commit's old-red set, 480-504 in QE's; all 2026-09-05 —
+  corrected 2026-09-05, QE D1 and senior-developer review); 26 of 26
+  and 25 of 29 in the two counts that found it during the #73
+  discussion) while CI photographed once (0 of 660
   artifact traces on disk — eight passes of five CI runs, Windows debug
   and release and Linux release). The mechanism, from the sources this build pins
   (senior-developer plan 2026-09-05): the poll is a `TimerMode::Repeated`
@@ -4030,7 +4058,10 @@ Documented because they ship in release builds (validator finding):
   and 9.3-14.4 s later under the #76 load recipe in debug (1.6-2.1 s in
   release under the same load), so its cap reaches 50.2 s against the
   shutter's 60 s; the `dump.landed` behind it keeps its authored 26.5 s as
-  the backstop and fires 6.3 s after the mark. That gate replaced a bare
+  its floor — it fires 6.3 s after the wait is satisfied, never earlier
+  and never on its own (measured 28.32-28.37 s idle, 39.4-40.6 s under
+  the #76 load recipe; a never-satisfied wait aborts the run at 50.2 s
+  with no dump at all — QE 2026-09-05, D3). That gate replaced a bare
   clock, which in a debug build under load photographed a legitimately
   dropped overlay before its re-raise (the ledger item above). The gaps after the wait are identical in both forms — a wait's
   tail is written in gaps, not offsets — and the 18.5 s the split takes

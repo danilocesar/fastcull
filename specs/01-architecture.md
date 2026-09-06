@@ -241,8 +241,10 @@ cursor's own rung at 16.06/17.79/16.40 s against 1.39/1.44/1.46 s, and
 the sharp 1:1 render at 17.88/19.62/18.39 s against 2.81/2.88/3.07 s —
 the whole test 19.0-20.8 s against 3.6-3.8 s. Its loaded pair, same
 recipe: 0 of 2 green before (both refusing with `full-res never adopted
-for the 1:1 frame`) and 4 of 4 after, readiness 7.1-18.9 s. Numbers are
-the seat's and the day's.
+for the 1:1 frame`) and 4 of 4 after, readiness 7.1-18.9 s. QE re-ran the
+same script on the same seat as an independent sample (QE 2026-09-05,
+D5): first full-res rung 14.73-15.96 s → 1.14-1.25 s, sharp 1:1 render
+17.10-18.38 s → 2.03-2.66 s. Numbers are the seat's and the day's.
 
 What it costs, and what was accepted: a cold debug build compiles every
 dependency optimised once — the screenshot test binary, cold, on the
@@ -251,9 +253,20 @@ line (4.7×; idle apart from a few short test runs), re-measured by the
 #76 commit at 2 m 19 s against 9 m 10 s (4.0×) — and CI's `rust-cache`
 pays it once per toolchain change (its `save-if: main` rule means a pull
 request after a rustc release pays it on every push until main
-repopulates the cache; the PR that landed the line records its cold and
-its cached job durations, to be filled). Incremental builds of workspace
-code are unaffected. A measurement trap, recorded because it bit the
+repopulates the cache). PR #80 landed the line and its first run
+(33996087777, both jobs green, 2026-09-05) is that cold pass:
+**ubuntu-latest 30 m 35 s** — clippy 6 m 24 s, `Tests` 11 m 53 s, the
+headless-X release screenshot pass 10 m 27 s, perf budgets 58 s — and
+**windows-latest 61 m 43 s** — clippy 12 m 44 s, `Tests` (the debug pass)
+25 m 36 s, the Windows release screenshot pass 12 m 42 s, perf budgets
+2 m 23 s, the release test-binary build 6 m 35 s. For scale, the last
+cached `main` run before the line (33986518746) took 17 m 33 s on ubuntu
+and 33 m 48 s on windows — cold against cached, so the pair bounds the
+cost rather than isolating it. The Windows job finished 28 minutes under
+its 90-minute `timeout-minutes`, so `ci.yml` was not touched (Manager's
+ruling on Q1, option a). The first CACHED `main` run's durations: to be
+filled by the Manager once one exists (2026-09-05). Incremental builds
+of workspace code are unaffected. A measurement trap, recorded because it bit the
 plan-time A/B (2026-09-05): two profile variants built into ONE target
 directory get distinct test binaries but share the uplifted
 `debug/fastcull-app` that `CARGO_BIN_EXE_fastcull-app` points at, so the
