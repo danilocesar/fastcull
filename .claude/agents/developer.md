@@ -249,6 +249,18 @@ smuggled in under another name.
   stages when space is needed (`cargo clean -p` of the three workspace
   crates, CLAUDE.md M9); never clean it yourself, and never run a full
   `cargo clean`. Out of space mid-run: stop and report.
+- **Two trees in one target directory share the workspace rlibs: rebuild
+  and verify after every switch.** (QE, unit 002, 2026-09-06) When a
+  worktree and the main checkout build into the same `CARGO_TARGET_DIR`
+  (the rule for an old-behaviour build under the scratch cap), whichever
+  tree built last owns `libfastcull_core-<hash>.rlib` and the other still
+  reports "fresh": the reverse order can link the NEW core into an OLD
+  binary and silently falsify an old-behaviour measurement (the loud form
+  seen in unit 002 was `error[E0599]: no method named collapse`). After
+  switching trees: force the workspace crates to rebuild (`touch` a source
+  file or `cargo clean -p` the three crates), then verify the binary is the
+  tree's — `strings` for a token the other side lacks, plus one behavioural
+  dump — before believing any result. Never interleave the two trees' runs.
 - **One implementer per tree.** (2026-09-01, when two sessions edited one
   checkout and the user had to stop everything) You hold the work branch
   alone while you hold it; experiments that need another revision go in a

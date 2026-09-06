@@ -442,6 +442,18 @@ on the answer. The Manager relays them verbatim; the user is the customer.
   a role and never under a running role: a clean during a measurement
   invalidates it, and a full `cargo clean` is never run (a cold rebuild is
   ~9-10 min since #76). Out of space mid-run: stop and report, do not clean.
+- **Two trees in one target directory share the workspace rlibs: rebuild
+  and verify after every switch.** (QE, unit 002, 2026-09-06) When a
+  worktree and the main checkout build into the same `CARGO_TARGET_DIR`
+  (the rule for an old-behaviour build under the scratch cap), whichever
+  tree built last owns `libfastcull_core-<hash>.rlib` and the other still
+  reports "fresh": the reverse order can link the NEW core into an OLD
+  binary and silently falsify an old-behaviour measurement (the loud form
+  seen in unit 002 was `error[E0599]: no method named collapse`). After
+  switching trees: force the workspace crates to rebuild (`touch` a source
+  file or `cargo clean -p` the three crates), then verify the binary is the
+  tree's — `strings` for a token the other side lacks, plus one behavioural
+  dump — before believing any result. Never interleave the two trees' runs.
 - **The machine and the build environment.** The development seat since
   2026-07-28 is an Intel i7-8665U laptop (4 cores / 8 threads, 31 GB,
   Fedora, Intel i915 graphics); the previous 32-core desktop's numbers do
