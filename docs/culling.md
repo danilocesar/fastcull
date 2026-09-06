@@ -22,7 +22,7 @@ which is faster than any undo dialog.
 
 ## Keyboard map
 
-In the order the in-app card lists them.
+In the order the in-app card lists them, reading down its left column and then its right. (The card's MOUSE section is not repeated here — the wheel, drags and double-clicks are described where they are used.)
 
 | Key | Action |
 |---|---|
@@ -36,14 +36,14 @@ In the order the in-app card lists them.
 | `Y`, `P` or `Space` | pick (auto-advances) |
 | `N` or `X` | reject (auto-advances) |
 | `U` | clear mark (stays put) |
+| `+` / `-` | zoom in / out, one stop: grid columns → loupe fit → ×1.5 steps → 1:1 |
+| `Z` | fit → 1:1; from 1:1 *or any zoom* → back to fit (from the grid: straight to 1:1) |
 | Shift+arrows | extend the selection |
 | Shift+`[` / Shift+`]` | extend it by whole bursts (see below) |
 | `Ctrl+Shift+B` | add the burst under the cursor to the selection (see below) |
 | `Ctrl+A` | select all (of the filtered view) |
 | Ctrl+arrows | move without ending the selection (Ctrl+PgUp/PgDn/Home/End and Ctrl+`[`/`]` too) |
 | Ctrl+Space | add or remove the photo under the cursor |
-| `+` / `-` | zoom in / out, one stop: grid columns → loupe fit → ×1.5 steps → 1:1 |
-| `Z` | fit → 1:1; from 1:1 *or any zoom* → back to fit (from the grid: straight to 1:1) |
 | `I` | IPTC panel |
 | `K` | jump to the keyword field (opens the panel if needed) |
 | `Ctrl+O` | Open Folder… |

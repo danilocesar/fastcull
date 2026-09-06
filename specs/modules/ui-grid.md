@@ -1428,9 +1428,9 @@ acceptance line below was false. What replaced it:
   in the parity test, `[`/`]` being a MOVE row on this same card — and
   `Ctrl+Space`. **SELECT and MOUSE swapped columns in the same commit, and
   the estimate that stood here until then was wrong** (corrected
-  2026-09-06, senior-developer review; the numbers below are measured off
-  the `shortcuts card laid out at` marks at both windows, this seat, Noto
-  Sans): the clamp at 1000x700 is `layer − 40px` = **594**, not the 604
+  2026-09-06, developer measurement with the senior developer's ruling;
+  the numbers below are measured off the `shortcuts card laid out at`
+  marks at both windows, this seat, Noto Sans): the clamp at 1000x700 is `layer − 40px` = **594**, not the 604
   this bullet claimed, and the card was **549**, so the room was **44 px**,
   not 55; and a one-line `KeyRow` costs **23 px** — an 18 px line box plus
   the section's 5 px spacing — not the ~20 assumed. The card had room for
@@ -3682,6 +3682,17 @@ Documented because they ship in release builds (validator finding):
   status bar's selection fragment reports its rectangle as `status
   selected laid out at X,Y size WxH` (the grey head as `status head laid
   out …`), which is how a test reads its colour.
+  `filter:all|picked|rejected|unmarked` switches the filter chip
+  (2026-09-06, senior-developer review F1): it invokes the window's own
+  `set-filter` callback with the string the chip passes, so a script gets
+  the chip's whole path — the name-to-enum mapping, the view recompute
+  and the cursor rules that follow it. It exists because the rules that
+  only apply while a filter is ON had no driven proof: a mark that takes
+  its frame OUT of the view (the `U` half of the collapse rule) and a
+  cursor the filter has hidden (the guard on `select-toggle`) are
+  unreachable without one, and the chips are not self-reporting
+  elements, so `click:` cannot name one. Only those four names act; an
+  unknown one does nothing rather than silently meaning `all`.
   Two more marks let a driven run gate on the app instead of the clock
   (issue #62): `clip export finished run N` and `copy finished run N` fire
   when the respective report card goes up, and `load settled gen N`

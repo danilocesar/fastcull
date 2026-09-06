@@ -7700,7 +7700,9 @@ fn ctrl_navigation_keeps_the_selection_and_ctrl_space_toggles() {
                  6200:key:];6400:dump.plain;\
                  6600:key:escape;6800:key:home;7000:key:ctrl+space;7200:key:ctrl+right;7300:key:ctrl+right;\
                  7500:key:ctrl+space;7700:key:ctrl+right;7900:key:ctrl+space;8100:dump.three;\
-                 8300:key:ctrl+space;8500:dump.two2",
+                 8300:key:ctrl+space;8500:dump.two2;\
+                 8700:key:escape;8900:filter:picked;9100:dump.empty;\
+                 9300:key:ctrl+space;9500:filter:all;9700:dump.ghost",
             ),
         ],
         &out,
@@ -7772,6 +7774,27 @@ fn ctrl_navigation_keeps_the_selection_and_ctrl_space_toggles() {
         "an empty selection is silent: {}",
         qedump(&stderr, "plain")
     );
+    // --- and a cursor the filter has hidden toggles nothing ---------------
+    // `select-toggle`'s guard (`nav.rs`, `cursor_pos().is_some()`), which
+    // is only reachable while the view is empty and was review-verified
+    // until the harness learned `filter:` (senior-developer review F2).
+    // Nothing is marked in this session, so the Picked filter empties the
+    // view; the cursor id survives as a stale one, and a Ctrl+Space there
+    // must not select it. Widening the filter again is what makes the
+    // difference visible — a ghost selected member is invisible in
+    // `selected=` while the view that would count it is empty.
+    let empty = qedump(&stderr, "empty");
+    assert!(
+        dump_text(empty, "status").contains("(0/0)"),
+        "the Picked filter did not empty the view of an unmarked session, \
+         so the guard below is not being exercised: {empty}"
+    );
+    assert_eq!(
+        dump_field(qedump(&stderr, "ghost"), "selected"),
+        "0",
+        "Ctrl+Space selected a frame the filter had hidden — what you see \
+         is what you stamp (this reads 1 without the guard):\n{stderr}"
+    );
 }
 
 /// Rule 1 of the selection rule (brief 002, the user's decision of
@@ -7806,7 +7829,10 @@ fn a_plain_move_collapses_the_selection_in_the_grid() {
                  5000:key:ctrl+shift+b;5200:dump.sel4;\
                  5400:key:y;5600:dump.y;5800:key:left;6000:dump.marked;\
                  6200:key:right;6300:key:right;6500:dump.next;\
-                 6700:key:ctrl+shift+b;6900:dump.sel5;7100:key:u;7300:dump.u",
+                 6700:key:ctrl+shift+b;6900:dump.sel5;7100:key:u;7300:dump.u;\
+                 7500:key:home;7700:key:y;7800:key:y;7900:key:y;8100:dump.picks;\
+                 8300:filter:picked;8500:dump.filtered;8700:key:home;\
+                 8900:select-all;9100:dump.all;9300:key:u;9500:dump.removed",
             ),
         ],
         &out,
@@ -7891,6 +7917,44 @@ fn a_plain_move_collapses_the_selection_in_the_grid() {
         (5, 5),
         "`U` collapsed the selection — it does not advance, so it must not \
          (ui-grid.md rule 1, Manager 2026-09-06)"
+    );
+    // --- ...unless its mark takes the frame OUT of the view ---------------
+    // The other half of rule 1's `U` clause, and the reason the harness
+    // learned `filter:` (senior-developer review F1): under a Picked
+    // filter, clearing a mark removes the frame from the view, the
+    // live-removal rule moves the cursor on, and THAT is a cursor move
+    // like any other. Unreachable without a filter — which is why the
+    // clause had no driven proof until this strand.
+    //
+    // Note the order: `home` comes BEFORE `select-all`, because `home` is
+    // itself a plain move and would otherwise empty the selection this
+    // strand needs the `U` to take.
+    assert_eq!(
+        at("picks"),
+        (3, 0),
+        "three picks from the head, cursor on 3"
+    );
+    let filtered = qedump(&stderr, "filtered");
+    assert!(
+        dump_text(filtered, "status").contains("showing 4 of 40"),
+        "the Picked filter did not narrow the view to the four picked \
+         frames (three from this strand, plus the one the `Y` above left on \
+         frame 3), so the `U` below takes nothing out of anything: \
+         {filtered}"
+    );
+    assert_eq!(at("all"), (0, 4), "select-all over the picked view");
+    let (removed_cursor, removed_sel) = at("removed");
+    assert_eq!(
+        removed_sel, 0,
+        "the `U` took its frame out of the Picked view and the cursor moved \
+         on, which is a cursor move — the selection must go with it \
+         (ui-grid.md rule 1). Without the cursor-moved half of that rule \
+         this reads 3."
+    );
+    assert_ne!(
+        removed_cursor, 0,
+        "the cleared frame is still under the cursor, so nothing moved and \
+         this strand proves nothing:\n{stderr}"
     );
 }
 

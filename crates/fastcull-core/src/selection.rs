@@ -431,6 +431,27 @@ mod tests {
         assert_eq!(sel.count_in_view(&[1, 2, 3, 5]), 1);
     }
 
+    /// The twin of the test above, for the BURST span — added after the
+    /// senior developer's review of 2026-09-06 found that moving
+    /// `extend_bursts`' `base.clear()` above its position lookup survived
+    /// the whole suite: the order was pinned for `extend_to` only. The
+    /// branch is not reachable from the key map today (both ends of a
+    /// burst span come from the view), which is exactly why it needs a
+    /// test — nothing else would notice it rotting.
+    #[test]
+    fn a_burst_span_that_resolves_to_nothing_leaves_a_fresh_selection_untouched() {
+        let view = vec![7usize, 8, 9];
+        let mut sel = Selection::default();
+        sel.toggle(3); // selected, and not in this view
+        sel.reset_anchor();
+        sel.extend_bursts(&view, 7, 99, groups); // 99 is filtered out
+        assert!(
+            sel.is_selected(3),
+            "the no-op burst span dropped the selection"
+        );
+        assert_eq!(sel.count_in_view(&[3, 7, 8, 9]), 1);
+    }
+
     /// Ctrl+Space is `toggle`, and `toggle` stays ADDITIVE across the
     /// Ctrl-navigation between two presses: that is the whole point of the
     /// pair — the keyboard's way to build a discontiguous selection
