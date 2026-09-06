@@ -1289,7 +1289,7 @@ brightening during wheel scrolling (needs an activity decay timer).
 | `Esc` | back to the grid at the previous grid zoom AND the selection cleared — from anywhere, the loupe included (user decision 2026-08-28, issue #55: the burst chords build a 40-frame selection in the loupe with one press, where no wash shows it, and a stale one would silently take the next IPTC commit; the cancel key must work where the selection was made). Modal popups still take Esc first (they close; the grid never sees it), and with keyboard focus in an IPTC field Esc stays the recorded no-op (Slint LineEdit has no Esc hook — see the panel section; QE 2026-08-28). Like every nav key it ends in the cursor reveal, so an Esc taken by the grid also scrolls the cursor back into view — that is the reveal rule, not a lost scroll position: only keys that never reach the grid (a modal's Esc) leave a browsing viewport alone. Since 2026-09-06 (brief 002) any plain move ends a selection too; Esc remains the clear that leaves the cursor where it is, and the only one that reaches a selection made before a dialog opened — the dialog takes the first Esc, the grid the second |
 | `I` | toggle IPTC panel |
 | `K` | focus the keyword field, opening the IPTC panel if needed (persona G3; implemented with the panel step — K is never a dead key) |
-| Shift+arrows / PgUp / PgDn / Home / End | extend selection (span anchor..cursor over view positions; a new span replaces the previous one — shrink/flip works). A span whose anchor arms on THIS press — after a plain click, after Ctrl-navigation, on an empty selection — replaces the WHOLE selection, Ctrl-added frames included (user decision 2026-09-06, brief 002 answer 3; until then a fresh span was unioned with the folded old one, `selection.rs` 7ed0949 — a rule no surveyed product has, which this row never stated and which produced the two-sets video of the user's report); a span continuing a live anchor (Shift held on, or the anchor armed by Ctrl+click, Ctrl+Space or Ctrl+Shift+B) replaces only the live span | The PAGE keys extend by the same rule, a span from the anchor to wherever the plain key lands (QE 2026-09-06, D1; Manager ruling: the file-manager convention the collapse rule comes from). They were UNBOUND when that rule landed and an unbound Shift chord falls through to its plain form, so for one commit Shift+Home/End/PgUp/PgDn moved the cursor and destroyed the selection — a Shift-modified key is never silently the plain key. Shift+Space is inert for the same reason: the map gives it no job, so it is swallowed rather than picking the frame and advancing. Shift+Ctrl+arrows stay reserved
+| Shift+arrows / PgUp / PgDn / Home / End | extend selection (span anchor..cursor over view positions; a new span replaces the previous one — shrink/flip works). A span whose anchor arms on THIS press — after a plain click, after Ctrl-navigation, on an empty selection — replaces the WHOLE selection, Ctrl-added frames included (user decision 2026-09-06, brief 002 answer 3; until then a fresh span was unioned with the folded old one, `selection.rs` 7ed0949 — a rule no surveyed product has, which this row never stated and which produced the two-sets video of the user's report); a span continuing a live anchor (Shift held on, or the anchor armed by Ctrl+click, Ctrl+Space or Ctrl+Shift+B) replaces only the live span. The PAGE keys extend by the same rule, a span from the anchor to wherever the plain key lands (QE 2026-09-06, D1; Manager ruling: the file-manager convention the collapse rule comes from). They were UNBOUND when that rule landed and an unbound Shift chord falls through to its plain form, so for one commit Shift+Home/End/PgUp/PgDn moved the cursor and destroyed the selection — a Shift-modified NAVIGATION or MARK key is never silently its plain form (the letters, `Esc` and `F1` ignore Shift by design and always have: Shift+Esc clears like Esc, Shift+F1 opens the card, and every letter arm matches both cases — measured 2026-09-06, senior-developer re-review N-3). Shift+Space is inert for the same reason: the map gives it no job, so it is swallowed rather than picking the frame and advancing. Shift+Ctrl+arrows stay reserved |
 | `Ctrl+A` | select all (filtered set); arms no anchor, so a Shift+arrow after it starts fresh from the cursor and replaces it — Explorer's and GTK's behaviour, kept (brief 002 OQ2, 2026-09-06) |
 | `[` / `]` | burst boundary jump (M7): `]` = next frame whose group differs (in a contiguous capture-sorted view that is the next group's first frame; with non-contiguous members it follows view order); `[` = re-anchor on the current group's first visible frame, crossing to the previous group only from there (CD-player convention); claims the cursor; carries loupe zoom/pan persistence; a plain `[`/`]` collapses the selection like the arrows, and Ctrl+`[`/`]` jumps the same way with the selection kept (2026-09-06, brief 002); see burst-grouping.md |
 | Shift+`[` / Shift+`]` (also `{` / `}`, the shifted characters a US keyboard sends) | extend the selection by WHOLE bursts (issue #55): the cursor lands where `[`/`]` would, and every whole burst between the anchor's burst and the cursor's is selected; the opposite key drops a burst; a following Shift+arrow is frame-precise from the burst's edge; from a FRESH anchor the burst span is the whole selection, the same rule as Shift+arrows (brief 002, 2026-09-06); see burst-grouping.md |
@@ -1456,11 +1456,14 @@ acceptance line below was false. What replaced it:
   1440x900 and at 1000x700, so neither wrapped. The card
   is now a fixed-height sheet with ~25 px of room at 1000x700: the next
   binding either replaces a row or moves a section, and the fits-whole
-  test is what will say so. What the card does NOT carry is this brief's
-  headline rule — that a plain move ends the selection — and that is a
-  room decision, not an oversight: no arrangement has the 15-20 px for it.
-  The card teaches the companion ("any MOVE key, selection kept"), and
-  docs/culling.md and the selection rule above carry the rule itself.
+  test is what will say so. Until QE M-7 (2026-09-06) the card did not carry
+  this brief's headline rule — that a plain move ends the selection —
+  because no arrangement had the 15-20 px a row for it would cost; **it
+  now does**, in the `← / →` action text, at no cost in rows. The
+  constraint was rows, not characters, and that is the lesson to take from
+  it: the card teaches the companion beside it ("any MOVE key, selection
+  kept"), and docs/culling.md and the selection rule above carry the rule
+  in full.
 - **The card GROUPS AND PARAPHRASES the map, and lists every binding in
   it.** One map row becomes four (`Arrows / PgUp / PgDn / Home / End` was
   a 222 px key string that made any fixed column impossible, and named
@@ -3606,6 +3609,35 @@ the user confirms, all cheap to change):**
       `a_fresh_span_replaces_the_whole_selection_a_continued_one_replaces_its_span`
       (rewritten from `toggle_and_anchor_reset`, which asserted the union;
       RED against the pre-fix `extend_to`).
+- [x] **Brief 002, the Shift page keys** (QE 2026-09-06, M-1; Manager
+      ruling A): Shift+PgUp, Shift+PgDn, Shift+Home and Shift+End extend
+      by the same rule as Shift+arrows — a span from the anchor to where
+      the plain key lands, fresh or continued — and Shift+Space is inert.
+      Pinned by `shift_page_keys_extend_the_selection` (the page spans
+      asserted as arithmetic, never a page size; RED before the binding
+      with Shift+End reading (39, 0), the plain End's collapse).
+- [x] **Brief 002, an empty filtered view still collapses** (QE
+      2026-09-06, M-2): rule 1's "whether or not the move changed the
+      cursor" holds where there is nowhere to move at all, so a selection
+      cannot survive an arrow pressed under a filter that matches nothing
+      and come back when the filter widens. Pinned by the empty-view
+      strand of `a_plain_move_collapses_the_selection_in_the_grid` (RED
+      before the fix, reading 40).
+- [x] **Brief 002, the Ctrl chords claim the cursor** (QE 2026-09-06,
+      M-5): a Ctrl-move sets `cursor_touched`, so the view rules stop
+      moving the cursor afterwards. Pinned by
+      `ctrl_navigation_claims_the_cursor` through a FILTER CHANGE — the
+      `user_changed_query` half of `filter::cursor_after_recompute`'s
+      `follow_head`. **The load-settled half of that same condition, and
+      `Ctrl+Space`'s membership in the claim, are review-verified only**:
+      three real RAWs settle before any key a script can send (measured
+      2026-09-06 — the re-sort form of the test was vacuous and its own
+      ordering guard said so), and Ctrl+Space never moves the cursor, so
+      its claim cannot be observed on its own. The anchor reset that comes
+      with a Ctrl+`[`/`]` hop is pinned by the `hopfresh` strand of
+      `ctrl_navigation_keeps_the_selection_and_ctrl_space_toggles`
+      (senior-developer re-review N-2; the mutant that keeps the anchor
+      reads (7, 7) against (7, 2)).
 - [ ] Manual acceptance (per release): 5,000-file A1 folder (a bad evening, per
       persona review) scrolls at 60 fps after thumbs load; pick→auto-advance→pick
       loop in loupe has no perceived latency.

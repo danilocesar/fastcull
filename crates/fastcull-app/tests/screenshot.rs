@@ -7702,7 +7702,10 @@ fn ctrl_navigation_keeps_the_selection_and_ctrl_space_toggles() {
                  7500:key:ctrl+space;7700:key:ctrl+right;7900:key:ctrl+space;8100:dump.three;\
                  8300:key:ctrl+space;8500:dump.two2;\
                  8700:key:escape;8900:filter:picked;9100:dump.empty;\
-                 9300:key:ctrl+space;9500:filter:all;9700:dump.ghost",
+                 9300:key:ctrl+space;9500:filter:all;9700:dump.ghost;\
+                 9900:key:escape;10100:key:home;10300:key:];\
+                 10500:key:ctrl+shift+b;10700:key:ctrl+];\
+                 10900:key:shift+right;11100:dump.hopfresh",
             ),
         ],
         &out,
@@ -7794,6 +7797,23 @@ fn ctrl_navigation_keeps_the_selection_and_ctrl_space_toggles() {
         "0",
         "Ctrl+Space selected a frame the filter had hidden — what you see \
          is what you stamp (this reads 1 without the guard):\n{stderr}"
+    );
+    // --- Ctrl+`[` / Ctrl+`]` RESET THE ANCHOR, like Ctrl+arrows ----------
+    // The other half of the spec's Ctrl+`[`/`]` row (ui-grid.md: "and the
+    // anchor reset of Ctrl+arrows"), which had no test until the
+    // senior developer's re-review found a mutant surviving it (N-2,
+    // 2026-09-06): making the burst hop KEEP the anchor left T1-T4 green.
+    //
+    // `]` to A's opener, Ctrl+Shift+B takes A (anchor armed at 1),
+    // Ctrl+`]` hops to the single at 6 — and must drop that anchor, so
+    // the Shift+Right after it is a FRESH span: {6, 7}, two frames. With
+    // the anchor kept it would continue from 1 and read 1..=7, seven.
+    assert_eq!(
+        at("hopfresh"),
+        (7, 2),
+        "the Shift+Right after a Ctrl+`]` continued the burst's anchor \
+         instead of starting fresh — Ctrl-navigation resets it (this \
+         reads (7, 7) when the hop keeps the anchor):\n{stderr}"
     );
 }
 

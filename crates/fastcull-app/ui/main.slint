@@ -1023,7 +1023,11 @@ export component MainWindow inherits Window {
                     // and an unbound Shift chord falls THROUGH to the plain
                     // arms below — so for one commit these four moved the
                     // cursor and threw the selection away. A Shift-modified
-                    // key is never silently the plain key.
+                    // NAVIGATION or MARK key is never silently its plain
+                    // form — the letters, Esc and F1 ignore Shift by design
+                    // and always have (their arms match both cases, and
+                    // Shift+Esc clears exactly as Esc does; measured
+                    // 2026-09-06, senior-developer re-review N-3).
                     if (event.text == Key.PageUp) { root.nav("shift-pgup"); return accept; }
                     if (event.text == Key.PageDown) { root.nav("shift-pgdn"); return accept; }
                     if (event.text == Key.Home) { root.nav("shift-home"); return accept; }
