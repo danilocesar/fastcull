@@ -351,6 +351,12 @@ fn handle_nav_inner(win: &MainWindow, state: &Rc<RefCell<AppState>>, key: &str) 
         // adjacent group; singles are their own territory; clamps.
         "burst-prev" | "burst-next" | "shift-burst-prev" | "shift-burst-next"
         | "ctrl-burst-prev" | "ctrl-burst-next" => {
+            // The plain `[`/`]` collapse, outside the emptiness guard for
+            // the reason the nav arm gives (QE 2026-09-06, M-2).
+            let plain_hop = !key.starts_with("shift-") && !key.starts_with("ctrl-");
+            if plain_hop {
+                st.grid.selection.collapse();
+            }
             if !st.grid.view.is_empty() {
                 // One `&mut AppState` so the closures below borrow only
                 // `bursts` while `grid` is being written (2021 closures
@@ -375,17 +381,14 @@ fn handle_nav_inner(win: &MainWindow, state: &Rc<RefCell<AppState>>, key: &str) 
                     st.grid
                         .selection
                         .extend_bursts(&view, from, st.grid.cursor, group_by_id);
-                } else if key.starts_with("ctrl-") {
+                } else if !plain_hop {
                     // Ctrl+[ / Ctrl+]: the plain key's landing with the
                     // selection kept, the anchor reset (ui-grid.md's
-                    // selection rule 2, brief 002).
+                    // selection rule 2, brief 002). A plain hop ended the
+                    // selection above — it is what makes "export this
+                    // burst, `]`, export the next" take the burst under
+                    // the cursor the second time.
                     st.grid.selection.reset_anchor();
-                } else {
-                    // A plain [ / ] is an unmodified cursor move, so it
-                    // ends the selection like an arrow (rule 1). This is
-                    // what makes "export this burst, `]`, export the next"
-                    // take the burst under the cursor the second time.
-                    st.grid.selection.collapse();
                 }
             }
         }
@@ -430,6 +433,13 @@ fn handle_nav_inner(win: &MainWindow, state: &Rc<RefCell<AppState>>, key: &str) 
                 "shift-right" => (Nav::Right, SelEffect::Extend),
                 "shift-up" => (Nav::Up, SelEffect::Extend),
                 "shift-down" => (Nav::Down, SelEffect::Extend),
+                // Shift + the page keys extend by the same rule as
+                // Shift+arrows (Manager 2026-09-06, QE M-1): a span from
+                // the anchor to wherever the plain key would have landed.
+                "shift-pgup" => (Nav::PageUp, SelEffect::Extend),
+                "shift-pgdn" => (Nav::PageDown, SelEffect::Extend),
+                "shift-home" => (Nav::Home, SelEffect::Extend),
+                "shift-end" => (Nav::End, SelEffect::Extend),
                 "ctrl-left" => (Nav::Left, SelEffect::Keep),
                 "ctrl-right" => (Nav::Right, SelEffect::Keep),
                 "ctrl-up" => (Nav::Up, SelEffect::Keep),
@@ -446,6 +456,18 @@ fn handle_nav_inner(win: &MainWindow, state: &Rc<RefCell<AppState>>, key: &str) 
             };
             if effect == SelEffect::Extend {
                 st.grid.cursor_touched = true; // shift-nav claims like plain nav
+            }
+            // Rule 1's clear happens "whether or not the move changed the
+            // cursor" (ui-grid.md), and an EMPTY filtered view is the
+            // hardest case of that: there is nowhere to go, so the move
+            // below does nothing — and the selection used to survive it
+            // and come back the moment the filter widened again (QE
+            // 2026-09-06, M-2: click a chip that matches nothing, press an
+            // arrow, click All, and forty frames are lit again). So the
+            // collapse sits OUTSIDE the emptiness guard; only the cursor
+            // move is inside it.
+            if effect == SelEffect::Collapse {
+                st.grid.selection.collapse();
             }
             // Navigation happens over VIEW positions; the cursor stays an
             // image id (M5 filter model).
@@ -468,10 +490,9 @@ fn handle_nav_inner(win: &MainWindow, state: &Rc<RefCell<AppState>>, key: &str) 
                     // drops, so a Shift+arrow after it starts fresh from
                     // the cursor (ui-grid.md's selection rule 2).
                     SelEffect::Keep => st.grid.selection.reset_anchor(),
-                    // A plain arrow / PgUp / PgDn / Home / End ends the
-                    // selection (rule 1, user decision 2026-09-06): the
-                    // cursor is then the batch.
-                    SelEffect::Collapse => st.grid.selection.collapse(),
+                    // The plain keys' collapse already happened above,
+                    // where an empty view cannot skip it.
+                    SelEffect::Collapse => {}
                 }
             }
         }

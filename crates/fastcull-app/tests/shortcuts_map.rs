@@ -56,7 +56,7 @@ const CARD_ROWS_FOR: &[(&str, &[&str])] = &[
     ("`Esc`", &["Esc"]),
     ("`I`", &["I"]),
     ("`K`", &["K"]),
-    ("Shift+arrows", &["Shift+arrows"]),
+    ("Shift+arrows / PgUp / PgDn / Home / End", &["Shift+arrows"]),
     ("`Ctrl+A`", &["Ctrl+A"]),
     ("`[` / `]`", &["[ / ]"]),
     (

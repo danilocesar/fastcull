@@ -1016,6 +1016,26 @@ export component MainWindow inherits Window {
                     // so both spellings are the same key here.
                     if (event.text == "]" || event.text == "}") { root.nav("shift-burst-next"); return accept; }
                     if (event.text == "[" || event.text == "{") { root.nav("shift-burst-prev"); return accept; }
+                    // Shift + the page keys EXTEND, exactly as Shift+arrows
+                    // do (Manager ruling 2026-09-06 on QE's M-1; the
+                    // file-manager convention this unit's collapse rule
+                    // comes from). They were unbound when that rule landed,
+                    // and an unbound Shift chord falls THROUGH to the plain
+                    // arms below — so for one commit these four moved the
+                    // cursor and threw the selection away. A Shift-modified
+                    // key is never silently the plain key.
+                    if (event.text == Key.PageUp) { root.nav("shift-pgup"); return accept; }
+                    if (event.text == Key.PageDown) { root.nav("shift-pgdn"); return accept; }
+                    if (event.text == Key.Home) { root.nav("shift-home"); return accept; }
+                    if (event.text == Key.End) { root.nav("shift-end"); return accept; }
+                    // Shift+Space, by the same rule: the spec gives it no
+                    // job, so it does NOTHING rather than falling through
+                    // to the plain Space, which picks the frame and
+                    // advances (and, since 2026-09-06, collapses the
+                    // selection on the way). Accepted, not rejected — an
+                    // unbound chord is swallowed here, the same contract
+                    // Ctrl+Shift+arrows have in the Ctrl block above.
+                    if (event.text == " ") { return accept; }
                     // `?` is Shift+`/` on most layouts and arrives as the
                     // shifted character "?"; a layout that reports the
                     // UNSHIFTED "/" plus the modifier gets the same key
@@ -3133,7 +3153,13 @@ export component MainWindow inherits Window {
                         alignment: start;
                         KeySection {
                             heading: "MOVE";
-                            KeyRow { k: "← / →"; a: "previous / next frame"; }
+                            // The headline rule of brief 002, in the one
+                            // place the card had room for it: characters,
+                            // not rows (QE 2026-09-06, M-7). 38 characters
+                            // is exactly what the 240 px action cell holds
+                            // at 13 px on a Noto Sans seat — do not
+                            // lengthen it.
+                            KeyRow { k: "← / →"; a: "previous / next frame (ends selection)"; }
                             KeyRow { k: "↑ / ↓"; a: "one row up / down"; }
                             KeyRow { k: "PgUp / PgDn"; a: "one screen back / forward"; }
                             KeyRow { k: "Home / End"; a: "first / last frame"; }
@@ -3224,7 +3250,12 @@ export component MainWindow inherits Window {
                         // "Seven sections").
                         KeySection {
                             heading: "SELECT";
-                            KeyRow { k: "Shift+arrows"; a: "extend the selection"; }
+                            // "page keys too" carries the map's
+                            // Shift+PgUp/PgDn/Home/End without a row of its
+                            // own — the card has ~26 px of height headroom
+                            // and a row costs 23 (ui-grid.md, "Seven
+                            // sections").
+                            KeyRow { k: "Shift+arrows"; a: "extend the selection (page keys too)"; }
                             KeyRow { k: "Shift+[ / ]"; a: "extend it by whole bursts"; }
                             KeyRow { k: "Ctrl+Shift+B"; a: "add the burst under the cursor"; }
                             KeyRow { k: "Ctrl+A"; a: "select all (the filtered set)"; }

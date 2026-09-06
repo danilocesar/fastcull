@@ -26,19 +26,20 @@ In the order the in-app card lists them, reading down its left column and then i
 
 | Key | Action |
 |---|---|
-| `←` / `→` | previous / next frame — a plain move ends any selection (see below) |
-| `↑` / `↓` | one row up / down |
-| PgUp / PgDn | one screen back / forward |
-| Home / End | first / last frame |
-| `[` / `]` | previous / next burst (see below) |
+| `←` / `→` | previous / next frame — ends any selection |
+| `↑` / `↓` | one row up / down — ends any selection |
+| PgUp / PgDn | one screen back / forward — ends any selection |
+| Home / End | first / last frame — ends any selection |
+| `[` / `]` | previous / next burst (see below) — ends any selection |
 | `G` | back to the grid at your previous grid zoom, selection kept — *at a grid zoom it clears the selection instead* |
 | `Esc` | back to the grid, **and the selection is cleared** — from anywhere but a text field |
 | `Y`, `P` or `Space` | pick (auto-advances) |
 | `N` or `X` | reject (auto-advances) |
 | `U` | clear mark (stays put) |
+| `1`–`5`, `0` | reserved for star ratings (v2) — they do nothing yet |
 | `+` / `-` | zoom in / out, one stop: grid columns → loupe fit → ×1.5 steps → 1:1 |
 | `Z` | fit → 1:1; from 1:1 *or any zoom* → back to fit (from the grid: straight to 1:1) |
-| Shift+arrows | extend the selection |
+| Shift+arrows | extend the selection — Shift+PgUp/PgDn and Shift+Home/End extend the same way |
 | Shift+`[` / Shift+`]` | extend it by whole bursts (see below) |
 | `Ctrl+Shift+B` | add the burst under the cursor to the selection (see below) |
 | `Ctrl+A` | select all (of the filtered view) |
@@ -51,7 +52,6 @@ In the order the in-app card lists them, reading down its left column and then i
 | `Ctrl+Shift+E` | Export Frames as Video… |
 | `Ctrl+Q` | quit |
 | `?` or `F1` | the shortcuts card — press either again to close it |
-| `1`–`5`, `0` | reserved for star ratings (a future version) |
 
 The same map lives in **Help > Keyboard Shortcuts** inside the app — or
 press **`?`** (or `F1`), which is quicker and does not need the mouse. The
@@ -316,8 +316,10 @@ as Video, About, the shortcuts card — the first `Esc` closes the dialog
 and the selection survives it; the next `Esc`, on the grid, clears it.
 `G` from the loupe keeps the selection (so you can go back to the grid
 and look at it — the first plain move there ends it); at a grid zoom `G`
-clears it like `Esc`. `U` never touches the selection: it clears a mark
-and stays put.
+clears it like `Esc`. `U` leaves the selection alone: it clears a mark
+and stays put — unless clearing that mark takes the photo out of the
+filter you are looking at, in which case the cursor moves on to the next
+survivor and that move ends the selection like any other.
 
 Captioning a run and then marking through it: caption first — the
 caption is on the sidecars the moment you commit — then walk with the

@@ -7832,7 +7832,10 @@ fn a_plain_move_collapses_the_selection_in_the_grid() {
                  6700:key:ctrl+shift+b;6900:dump.sel5;7100:key:u;7300:dump.u;\
                  7500:key:home;7700:key:y;7800:key:y;7900:key:y;8100:dump.picks;\
                  8300:filter:picked;8500:dump.filtered;8700:key:home;\
-                 8900:select-all;9100:dump.all;9300:key:u;9500:dump.removed",
+                 8900:select-all;9100:dump.all;9300:key:u;9500:dump.removed;\
+                 9700:filter:all;9900:select-all;10100:dump.all40;\
+                 10300:filter:rejected;10500:dump.emptyview;10700:key:right;\
+                 10900:filter:all;11100:dump.after",
             ),
         ],
         &out,
@@ -7955,6 +7958,36 @@ fn a_plain_move_collapses_the_selection_in_the_grid() {
         removed_cursor, 0,
         "the cleared frame is still under the cursor, so nothing moved and \
          this strand proves nothing:\n{stderr}"
+    );
+    // --- and a plain move collapses even where there is nowhere to move --
+    // Rule 1 says the clear happens "whether or not the move changed the
+    // cursor", and an EMPTY filtered view is the hardest case of that: no
+    // frame to move to, so the move does nothing visible, and the
+    // selection used to survive it and come back the moment the filter
+    // widened again (QE 2026-09-06, M-2 — reachable with the mouse alone:
+    // click a chip that matches nothing, press an arrow, click All).
+    //
+    // The Rejected view is the empty one here: this session has picks by
+    // now, so Picked would not be empty (QE's strand used an unmarked
+    // session; this test is no longer one).
+    assert_eq!(
+        dump_field(qedump(&stderr, "all40"), "selected"),
+        "40",
+        "select-all did not take the whole view back:\n{stderr}"
+    );
+    let empty_view = qedump(&stderr, "emptyview");
+    assert!(
+        dump_text(empty_view, "status").contains("(0/0)")
+            && dump_text(empty_view, "status").contains("showing 0 of 40"),
+        "the Rejected filter did not empty the view, so the arrow below \
+         had somewhere to go: {empty_view}"
+    );
+    assert_eq!(
+        dump_field(qedump(&stderr, "after"), "selected"),
+        "0",
+        "a plain arrow in an empty view left the selection standing, and \
+         widening the filter brought all 40 back (it read 40 before the \
+         fix):\n{stderr}"
     );
 }
 
@@ -8500,6 +8533,186 @@ fn the_selection_count_is_drawn_in_the_accent() {
             sel_bias - head_bias
         );
     }
+}
+
+/// Shift+PgUp, Shift+PgDn, Shift+Home and Shift+End EXTEND the selection,
+/// exactly as Shift+arrows do (Manager ruling 2026-09-06 on QE's M-1: the
+/// file-manager convention this whole unit is built on).
+///
+/// They were unbound when the collapse rule landed, and an unbound Shift
+/// chord fell through to its PLAIN form — so for one commit these four
+/// keys moved the cursor and threw the selection away, which is worse than
+/// the nothing they did before. A Shift-modified key is never silently the
+/// plain key.
+///
+/// The spans are asserted as arithmetic, never as a page size: a synthetic
+/// session's ids are its view positions, so "the span runs from the anchor
+/// to wherever the key landed" is `selected == |cursor − anchor| + 1` for
+/// any window, any row width and any page height.
+#[test]
+fn shift_page_keys_extend_the_selection() {
+    if !has_display() {
+        eprintln!("screenshot smoke skipped: no display server");
+        return;
+    }
+    let _s = serial();
+    let out = out_dir().join("shift-page.jpg");
+    let stderr = shoot_env_stderr(
+        &["--synthetic", "40", "--bursts"],
+        &[
+            ("FASTCULL_TRACE", "1"),
+            (
+                "FASTCULL_DRIVE",
+                &format!(
+                    "{PIN_WINDOW};1300:wait:window geometry 1440x900;\
+                     1500:key:home;1700:key:right;1800:key:right;1900:key:right;2100:dump.start;\
+                     2300:key:shift+end;2500:dump.send;2700:key:shift+home;2900:dump.shome;\
+                     3100:key:escape;3300:key:home;3500:key:down;3700:dump.mid;\
+                     3900:key:shift+pgdn;4100:dump.spgdn;4300:key:shift+pgup;4500:dump.spgup;\
+                     4700:key:escape;4900:key:home;5100:key:ctrl+a;5300:dump.all;\
+                     5500:key:shift+space;5700:dump.sspace"
+                ),
+            ),
+        ],
+        &out,
+    );
+    assert!(
+        stderr.contains("wait:window geometry 1440x900 (satisfied"),
+        "the window never reached 1440x900:\n{stderr}"
+    );
+    let at = |label: &str| -> (usize, usize) {
+        let d = qedump(&stderr, label);
+        (
+            dump_field(d, "cursor").parse().unwrap(),
+            dump_field(d, "selected").parse().unwrap(),
+        )
+    };
+    // --- Shift+End / Shift+Home, where the landing is not in doubt -------
+    assert_eq!(at("start"), (3, 0), "three plain rights from the head");
+    assert_eq!(
+        at("send"),
+        (39, 37),
+        "Shift+End must EXTEND from the anchor at 3 to the last frame — \
+         before the fix it read (39, 0), the plain End's collapse"
+    );
+    assert_eq!(
+        at("shome"),
+        (0, 4),
+        "Shift+Home continues the live anchor at 3, so the span flips to \
+         0..=3 — before the fix it read (0, 0)"
+    );
+    // --- the page keys, whose landing depends on the window --------------
+    assert_eq!(at("mid"), (8, 0), "one row down from the head at 8 columns");
+    let (down, down_sel) = at("spgdn");
+    assert!(
+        down > 8,
+        "Shift+PgDn did not move the cursor (8 -> {down}), so the span \
+         below proves nothing:\n{stderr}"
+    );
+    assert_eq!(
+        down_sel,
+        down - 8 + 1,
+        "Shift+PgDn must span from the anchor at 8 to where the page \
+         landed ({down}) — before the fix it read 0"
+    );
+    let (up, up_sel) = at("spgup");
+    assert!(
+        up < down,
+        "Shift+PgUp did not move the cursor back ({down} -> {up}):\n{stderr}"
+    );
+    assert_eq!(
+        up_sel,
+        8_usize.abs_diff(up) + 1,
+        "Shift+PgUp must re-span from the SAME anchor at 8 (a continued \
+         span, not a fresh one) to {up} — before the fix it read 0"
+    );
+    // --- and Shift+Space is inert, not a pick ----------------------------
+    // The same fall-through, with a harmless-looking meaning: nothing in
+    // the spec gives Shift+Space a job, so it must do nothing rather than
+    // quietly mark a frame and advance (which also collapsed the
+    // selection, 40 -> 0).
+    assert_eq!(at("all"), (0, 40), "Ctrl+A over the whole view");
+    assert_eq!(
+        at("sspace"),
+        (0, 40),
+        "Shift+Space moved the cursor or ate the selection — it is inert \
+         (before the fix it picked frame 0 and advanced, reading (1, 0))"
+    );
+    assert!(
+        dump_text(qedump(&stderr, "sspace"), "status").contains("★0"),
+        "Shift+Space marked a frame: {}",
+        qedump(&stderr, "sspace")
+    );
+}
+
+/// Ctrl-navigation CLAIMS THE CURSOR (`ui-grid.md`'s key table: "claims
+/// the cursor"), so the view rules stop moving it afterwards.
+///
+/// `filter::cursor_after_recompute` snaps an UNTOUCHED cursor to the new
+/// view's head whenever the user asks for a different view (issue #4: a
+/// folder never opens with the cursor stranded mid-grid) or while the
+/// metadata is still streaming; a cursor the user has moved keeps its
+/// image instead. A Ctrl-move is a deliberate act on the cursor, so it
+/// must switch that off — and nothing in the suite noticed when the eleven
+/// Ctrl/toggle tokens were deleted from the claim (QE 2026-09-06, M-5).
+///
+/// The discriminator here is a FILTER CHANGE, not the load-settled
+/// re-sort the sibling test uses: `user_changed_query || !metadata_complete`
+/// is one condition, and only the first half can be driven without a race.
+/// Measured on this seat, three real RAWs settle in under 600 ms — earlier
+/// than any key a script can send — so the re-sort form of this test was
+/// vacuous (its own ordering guard said so, which is why it is not the
+/// form that shipped).
+///
+/// `Ctrl+Space` sits in the same `matches!` and is not pinned separately:
+/// it never moves the cursor, so its claim cannot be observed on its own —
+/// any gesture that would make it visible has already claimed the cursor
+/// itself.
+#[test]
+fn ctrl_navigation_claims_the_cursor() {
+    if !has_display() {
+        eprintln!("screenshot smoke skipped: no display server");
+        return;
+    }
+    let _s = serial();
+    let out = out_dir().join("ctrl-claim.jpg");
+    let stderr = shoot_env_stderr(
+        &["--synthetic", "40", "--bursts"],
+        &[
+            ("FASTCULL_TRACE", "1"),
+            (
+                "FASTCULL_DRIVE",
+                "600:key:ctrl+right;700:key:ctrl+right;800:key:ctrl+right;1000:dump.walked;\
+                 1200:filter:unmarked;1400:dump.filtered",
+            ),
+        ],
+        &out,
+    );
+    let walked = qedump(&stderr, "walked");
+    assert_eq!(
+        dump_field(walked, "cursor"),
+        "3",
+        "three Ctrl+Rights did not reach frame 3, so nothing below is \
+         about a cursor the user moved: {walked}"
+    );
+    let filtered = qedump(&stderr, "filtered");
+    // Anti-vacuity: the filter really changed, so the cursor rule really
+    // re-ran with `user_changed_query` set. Every synthetic frame is
+    // unmarked, so the Unmarked view holds all forty — the membership is
+    // the same, the QUESTION asked of the cursor is not.
+    assert!(
+        dump_text(filtered, "status").contains("showing 40 of 40"),
+        "the Unmarked filter never engaged, so no cursor rule was \
+         re-applied: {filtered}"
+    );
+    assert_eq!(
+        dump_field(filtered, "cursor"),
+        "3",
+        "the filter change snapped the cursor back to the head of the \
+         view, off the frame the user had walked to with Ctrl+Right — a \
+         Ctrl-move claims the cursor (ui-grid.md). Without that claim this \
+         reads 0:\n{stderr}"
+    );
 }
 
 /// Both dialog cards keep their button row inside the card, at every size

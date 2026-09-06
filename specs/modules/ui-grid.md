@@ -1289,7 +1289,7 @@ brightening during wheel scrolling (needs an activity decay timer).
 | `Esc` | back to the grid at the previous grid zoom AND the selection cleared — from anywhere, the loupe included (user decision 2026-08-28, issue #55: the burst chords build a 40-frame selection in the loupe with one press, where no wash shows it, and a stale one would silently take the next IPTC commit; the cancel key must work where the selection was made). Modal popups still take Esc first (they close; the grid never sees it), and with keyboard focus in an IPTC field Esc stays the recorded no-op (Slint LineEdit has no Esc hook — see the panel section; QE 2026-08-28). Like every nav key it ends in the cursor reveal, so an Esc taken by the grid also scrolls the cursor back into view — that is the reveal rule, not a lost scroll position: only keys that never reach the grid (a modal's Esc) leave a browsing viewport alone. Since 2026-09-06 (brief 002) any plain move ends a selection too; Esc remains the clear that leaves the cursor where it is, and the only one that reaches a selection made before a dialog opened — the dialog takes the first Esc, the grid the second |
 | `I` | toggle IPTC panel |
 | `K` | focus the keyword field, opening the IPTC panel if needed (persona G3; implemented with the panel step — K is never a dead key) |
-| Shift+arrows | extend selection (span anchor..cursor over view positions; a new span replaces the previous one — shrink/flip works). A span whose anchor arms on THIS press — after a plain click, after Ctrl-navigation, on an empty selection — replaces the WHOLE selection, Ctrl-added frames included (user decision 2026-09-06, brief 002 answer 3; until then a fresh span was unioned with the folded old one, `selection.rs` 7ed0949 — a rule no surveyed product has, which this row never stated and which produced the two-sets video of the user's report); a span continuing a live anchor (Shift held on, or the anchor armed by Ctrl+click, Ctrl+Space or Ctrl+Shift+B) replaces only the live span |
+| Shift+arrows / PgUp / PgDn / Home / End | extend selection (span anchor..cursor over view positions; a new span replaces the previous one — shrink/flip works). A span whose anchor arms on THIS press — after a plain click, after Ctrl-navigation, on an empty selection — replaces the WHOLE selection, Ctrl-added frames included (user decision 2026-09-06, brief 002 answer 3; until then a fresh span was unioned with the folded old one, `selection.rs` 7ed0949 — a rule no surveyed product has, which this row never stated and which produced the two-sets video of the user's report); a span continuing a live anchor (Shift held on, or the anchor armed by Ctrl+click, Ctrl+Space or Ctrl+Shift+B) replaces only the live span | The PAGE keys extend by the same rule, a span from the anchor to wherever the plain key lands (QE 2026-09-06, D1; Manager ruling: the file-manager convention the collapse rule comes from). They were UNBOUND when that rule landed and an unbound Shift chord falls through to its plain form, so for one commit Shift+Home/End/PgUp/PgDn moved the cursor and destroyed the selection — a Shift-modified key is never silently the plain key. Shift+Space is inert for the same reason: the map gives it no job, so it is swallowed rather than picking the frame and advancing. Shift+Ctrl+arrows stay reserved
 | `Ctrl+A` | select all (filtered set); arms no anchor, so a Shift+arrow after it starts fresh from the cursor and replaces it — Explorer's and GTK's behaviour, kept (brief 002 OQ2, 2026-09-06) |
 | `[` / `]` | burst boundary jump (M7): `]` = next frame whose group differs (in a contiguous capture-sorted view that is the next group's first frame; with non-contiguous members it follows view order); `[` = re-anchor on the current group's first visible frame, crossing to the previous group only from there (CD-player convention); claims the cursor; carries loupe zoom/pan persistence; a plain `[`/`]` collapses the selection like the arrows, and Ctrl+`[`/`]` jumps the same way with the selection kept (2026-09-06, brief 002); see burst-grouping.md |
 | Shift+`[` / Shift+`]` (also `{` / `}`, the shifted characters a US keyboard sends) | extend the selection by WHOLE bursts (issue #55): the cursor lands where `[`/`]` would, and every whole burst between the anchor's burst and the cursor's is selected; the opposite key drops a burst; a following Shift+arrow is frame-precise from the burst's edge; from a FRESH anchor the burst span is the whole selection, the same rule as Shift+arrows (brief 002, 2026-09-06); see burst-grouping.md |
@@ -1445,7 +1445,15 @@ acceptance line below was false. What replaced it:
   line. **An action text must fit ONE line of the 240 px action cell**: 38
   characters fit at 13 px on this seat ("grid: open in loupe · loupe: 1:1
   there"), 40 do not — "add or remove the frame under the cursor" wrapped
-  and cost 18 px — so the two new rows are written at 28 and 30. The card
+  and cost 18 px — so the two new rows are written at 28 and 30. Two more
+  action texts spend that budget deliberately (QE 2026-09-06, M-7 and D1):
+  the MOVE section's `← / →` row reads "previous / next frame (ends
+  selection)" (38), which is where this brief's headline rule reaches the
+  card at last — in characters, since there was no room for it in rows —
+  and SELECT's `Shift+arrows` row reads "extend the selection (page keys
+  too)" (36), which is how the map's Shift+PgUp/PgDn/Home/End row is
+  listed without a row of its own. Measured after both: still 780x568 at
+  1440x900 and at 1000x700, so neither wrapped. The card
   is now a fixed-height sheet with ~25 px of room at 1000x700: the next
   binding either replaces a row or moves a section, and the fits-whole
   test is what will say so. What the card does NOT carry is this brief's
@@ -3692,7 +3700,12 @@ Documented because they ship in release builds (validator finding):
   cursor the filter has hidden (the guard on `select-toggle`) are
   unreachable without one, and the chips are not self-reporting
   elements, so `click:` cannot name one. Only those four names act; an
-  unknown one does nothing rather than silently meaning `all`.
+  unknown one does nothing rather than silently meaning `all`. Like
+  `open:` it is harness plumbing, not a grid key, so **it stays live while
+  a modal is up** (QE 2026-09-06, D3, measured: the view switched under an
+  open shortcuts card, which no chip can do — they sit behind the scrim).
+  A test about modal containment must therefore click a chip, never send
+  this token.
   Two more marks let a driven run gate on the app instead of the clock
   (issue #62): `clip export finished run N` and `copy finished run N` fire
   when the respective report card goes up, and `load settled gen N`
