@@ -546,14 +546,25 @@ its evidence):
   following run restores both (`Cache hit for: v1-rust-profile-…`,
   `full match: true`) and its durations fill the placeholder above.
   Ticks brief 003's restore half with it.
-- [ ] **No sentence still says the prefix is bumped for a profile change
+- [x] **No sentence still says the prefix is bumped for a profile change
   (AC4).** `grep -n -i "bump" .github/workflows/ci.yml
   specs/01-architecture.md` finds only history (what brief 003 did and
   why it was retired), the action-or-format rule for `prefix-key`, the
   rejected alternatives and the mutants ("a version bump"), and hits
   about other things (the `v5` action bump, the RAW cache's `v1 -> v2`
   bump, a runner image that "bumped a default"). Ticked by the
-  developer's `ci.yml` commit, whose grep is the evidence.
+  developer's `ci.yml` commit, whose grep is the evidence. Ticked
+  (developer 2026-09-06): nine hits in `ci.yml` — 190 the retraction
+  ("NOBODY BUMPS ANYTHING BY HAND"), 217 and 220 history (what brief
+  003's comment said, and why a forgotten bump is silent), 255 the
+  action-or-format rule ("and NOT for a profile change"), 236 and 260
+  the mutants and the rejected `hashFiles`, 102, 333 and 460 the `v5`
+  action bump, the RAW cache's `v1 -> v2` bump and a runner image that
+  bumped a default; and in this file 256, 350 and 358 history and its
+  retraction, 400 and 532 the mutants, 427 the escape-hatch rule, 432
+  and 440 the rejected alternatives, the remaining hits being this
+  criterion's own text. Not one of them is a rule to bump the prefix
+  for a profile change.
 
 What it changed in the test suite (`modules/ui-grid.md` for each): the
 debug-profile margin under the 60 s readiness cap; the two release-only
