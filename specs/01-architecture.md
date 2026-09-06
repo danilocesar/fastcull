@@ -250,10 +250,13 @@ What it costs, and what was accepted: a cold debug build compiles every
 dependency optimised once — the screenshot test binary, cold, on the
 development seat on 2026-09-05: 2 m 17 s stock against 10 m 43 s with the
 line (4.7×; idle apart from a few short test runs), re-measured by the
-#76 commit at 2 m 19 s against 9 m 10 s (4.0×) — and CI's `rust-cache`
-pays it once per toolchain change (its `save-if: main` rule means a pull
-request after a rustc release pays it on every push until main
-repopulates the cache). PR #80 landed the line and its first run
+#76 commit at 2 m 19 s against 9 m 10 s (4.0×) — and CI pays it once per
+change of the `rust-cache` KEY, which since brief 003 carries a
+hand-bumped profile version (next paragraph, with the retraction of what
+this sentence said before 2026-09-06; the `save-if: main` rule still
+means a pull request after a rustc release or a profile bump pays it on
+every push until main saves under the new key). PR #80 landed the line
+and its first run
 (33996087777, both jobs green, 2026-09-05) is that cold pass:
 **ubuntu-latest 30 m 35 s** — clippy 6 m 24 s, `Tests` 11 m 53 s, the
 headless-X release screenshot pass 10 m 27 s, perf budgets 58 s — and
@@ -265,7 +268,10 @@ and 33 m 48 s on windows — cold against cached, so the pair bounds the
 cost rather than isolating it. The Windows job finished 28 minutes under
 its 90-minute `timeout-minutes`, so `ci.yml` was not touched (Manager's
 ruling on Q1, option a). The first CACHED `main` run's durations: to be
-filled by the Manager once one exists (2026-09-05). Incremental builds
+filled by the Manager once one exists (2026-09-05; re-dated 2026-09-06,
+brief 003 — none could exist under the old key, see the next paragraph;
+the first candidate is the run AFTER the first main run that saves a
+`v1-rust-…` entry). Incremental builds
 of workspace code are unaffected. A measurement trap, recorded because it bit the
 plan-time A/B (2026-09-05): two profile variants built into ONE target
 directory get distinct test binaries but share the uplifted
@@ -278,6 +284,95 @@ no ADR; ADR 0002's "one toolchain" consequence stands. Do not extend it:
 no per-crate opt-level tweaks and no un-optimising a dependency for
 debuggability without asking the user (senior-developer standing
 directive, 2026-09-05).
+
+**The CI cache key and the profile** (brief 003; senior-developer plan
+2026-09-06). Until 2026-09-06 the paragraph above said that CI's
+`rust-cache` "pays it once per toolchain change (its `save-if: main` rule
+means a pull request after a rustc release pays it on every push until
+main repopulates the cache)", and for a profile change that was WRONG
+(corrected 2026-09-06, brief 003): main cannot repopulate a cache whose
+key it hits. What `Swatinem/rust-cache@v2` keys on, read from its source
+at the commit the `v2` tag resolves to (v2.9.2, 6323deb — the same commit
+the job log's "Download action repository" line names; `src/config.ts`):
+`prefix-key` (default `v0-rust`), the job id, `os.type()` and `os.arch()`
+(lines 73-95); then eight hex digits of a SHA-1 over `rustc -vV` of every
+installed toolchain and every environment variable whose name starts
+with `CARGO`, `CC`, `CFLAGS`, `CXX`, `CMAKE` or `RUST` (104-131 — this
+much is the restore key); then eight digits of a SHA-1 over the
+`.cargo/config.toml` and `rust-toolchain{,.toml}` files, the manifests of
+the workspace MEMBERS that `cargo metadata --no-deps` lists (parsed,
+`package.version` and path-dependency fields zeroed, the rest stringified
+whole) and the `Cargo.lock` entries that carry a `source` or `checksum`
+(156-261; `workspace.ts` 19-46): `v0-rust-test-Linux-x64-91e3cbda-aacf1ed2`
+and `v0-rust-test-Windows_NT-x64-8918a2f9-aacf1ed2` here. A `[profile]`
+table counts only in the workspace root ("profiles for the non root
+package will be ignored, specify profiles at the workspace root" —
+cargo's own warning, reproduced 2026-09-06), and this root `Cargo.toml`
+is a virtual manifest with no `[package]`: not a member, never read. Both
+jobs' `Lockfiles considered` list `Cargo.lock` and the three
+`crates/*/Cargo.toml`, nothing else. So the #76 line did not move the
+key. Measured (2026-09-06): the key on both jobs is unchanged since
+2026-09-04; the main run that landed the line (34007321960, f132a87)
+restored the stock-profile entry (`Cache hit for:
+v0-rust-test-Linux-x64-91e3cbda-aacf1ed2`, `full match: true`), rebuilt
+the dev-profile dependencies — 238 `Compiling` lines in the clippy step
+and 454 in `Tests`, against 1 and 3 on the last cached run
+(33986518746) — and its post step logged `Cache up-to-date.` and saved
+nothing (`save.ts` 25-28: a full-match restore leaves no state to save
+from); the release half of the entry stayed valid because the release
+profile did not change (the release screenshot step compiled 2 crates on
+both runs); the next main run (34013585441, 1d66e09) did exactly the
+same — `full match: true`, 237 and 454 `Compiling` lines, `Cache
+up-to-date.`, ubuntu 26 m 05 s — two of two main runs under the
+unchanged key. Every run since #76 paid the same cold dev build —
+26 m 17 s / 58 m 29 s (the first main run), 30 m 05 s / 59 m 08 s (PR
+#81, 34011097952),
+30 m 53 s / 60 m 09 s (PR #80's second run, 34004719857), ubuntu /
+windows — while `gh cache list` held only the two 2026-09-04 entries
+(1,903,351,905 B Linux, 1,769,851,005 B Windows) and two 240 MB RAW
+entries: 4,153,874,110 B of the 10 GB limit. The fix (brief 003, R1) is
+`prefix-key: v1-rust` in `ci.yml` — a version number bumped BY HAND
+whenever a `[profile]` table in the root `Cargo.toml` changes, and for
+nothing else: rustc releases, `RUSTFLAGS`, the lockfile, the member
+manifests, `.cargo/config.toml` and `rust-toolchain` move the key by
+themselves. Rejected: a `key:` input of `hashFiles('Cargo.toml')`, which
+would also move the key on every release's `[workspace.package] version`
+bump and on every comment edit — a cold pair of jobs each time,
+silently; and moving the profile into `.cargo/config.toml`, which the
+action does hash and cargo does honour (both reproduced 2026-09-06), but
+which relocates the user decision recorded above and moves the key on
+comment edits too. A bump costs once: the first main run under the new
+prefix is cold and saves; pull requests before that main run are cold
+too; the old prefix's entries sit orphaned until GitHub evicts them
+("not been accessed in over 7 days", or oldest access first once the
+10 GB limit is exceeded — GitHub's documented policy). On a pull request
+the proof that the key moved is the restore step alone: `Cache Key:`
+shows the new prefix and the line after `... Restoring cache ...` is
+`No cache found.`; the post step prints nothing on a pull request
+(`save-if` false returns before any log line — `save.ts` 18-22), by
+design.
+
+Acceptance (brief 003; a criterion is ticked by the commit that carries
+its evidence):
+- [ ] **The rust-cache key moves with the dev profile (AC1).** Both CI
+  checks green on the PR, and both jobs' restore step logs `Cache Key:`
+  with a `v1-rust-…` key followed by `No cache found.` — a `v0-` there
+  means the input did not take. Pinned by the PR run's job logs, quoted
+  in the developer's report; ticked, with the run id, by the Manager's
+  post-merge spec commit.
+- [x] **The spec no longer claims main repopulates the cache under an
+  unchanged key (AC2).** Pinned by the retraction above: a grep for
+  "repopulates the cache" in this file finds only the correction.
+- [ ] **The first main run under the new prefix saves, and the run after
+  it is cached (AC3).** Post-merge, not gating the PR: both jobs' post
+  step logs `... Saving cache ...` and `Sent N of N (100.0%)`; `gh cache
+  list` shows two `v1-rust-…` entries with their sizes, and `gh api
+  .../actions/cache/usage` the total against the limit; the following
+  run restores both (`Cache hit for: v1-rust-…`, `full match: true`)
+  and its durations — well under 30 min on ubuntu and 59 min on
+  windows — fill the placeholder above. If the two entries plus the RAW
+  caches exceed the limit and evict each other, that goes to the user
+  with options, not solved here (brief 003, R4).
 
 What it changed in the test suite (`modules/ui-grid.md` for each): the
 debug-profile margin under the 60 s readiness cap; the two release-only
