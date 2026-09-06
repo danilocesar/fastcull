@@ -395,7 +395,16 @@ export component MainWindow inherits Window {
 
     in property <[CellData]> cells: [];
     in property <length> virtual-height: 0px;
+    // The whole status line, as one string. NOTHING RENDERS THIS: it is
+    // the trace/QEDUMP contract (`status at shutter:` and the `status=`
+    // dump field), and the three fragments below are what the bar draws.
+    // They concatenate to exactly this (presenter.rs).
     in property <string> status: "";
+    in property <string> status-head: "";
+    // " · N selected", separator included, or empty. Its own Text so it
+    // can carry the selection accent (ui-grid.md, brief 002 R5).
+    in property <string> status-sel: "";
+    in property <string> status-tail: "";
     in property <bool> one2one: false;
     // Selection wash (user request 2026-07-28): hue and strength of the tint
     // over selected grid cells. Deliberately PROPERTIES, not literals — the
@@ -3379,13 +3388,59 @@ export component MainWindow inherits Window {
             width: 100%;
             height: 26px;
             background: #202024;
-            Text {
-                text: root.status;
-                color: #a8a8b0;
-                font-size: 12px;
+            // Three Texts, one sentence: the count fragment in the middle
+            // is painted in the selection's blue at FULL opacity (the
+            // cursor outline's #4da3ff, not the 25 % wash), because in the
+            // loupe it is the only sign a selection is live. Same
+            // font-size, same vertical alignment and the same grey on
+            // either side, so the line reads as one sentence and the words
+            // sit exactly where they always did.
+            HorizontalLayout {
                 x: 10px;
-                vertical-alignment: center;
                 height: 100%;
+                spacing: 0;
+                alignment: start;
+                status-head-text := Text {
+                    text: root.status-head;
+                    color: #a8a8b0;
+                    font-size: 12px;
+                    vertical-alignment: center;
+                    // Where the grey half was laid out, for the driven
+                    // test that compares its pixels with the fragment's
+                    // (issue #70's rule: a test reads a rectangle the app
+                    // reported, never a coordinate measured on one seat).
+                    // A `changed` handler, never `init`: the first
+                    // non-empty value IS a change, and an init-time report
+                    // would name an empty rectangle.
+                    changed absolute-position => {
+                        root.dbg-card-laid-out("status head", self.absolute-position.x,
+                            self.absolute-position.y, self.width, self.height);
+                    }
+                    changed width => {
+                        root.dbg-card-laid-out("status head", self.absolute-position.x,
+                            self.absolute-position.y, self.width, self.height);
+                    }
+                }
+                status-sel-text := Text {
+                    text: root.status-sel;
+                    color: root.selection-wash;
+                    font-size: 12px;
+                    vertical-alignment: center;
+                    changed absolute-position => {
+                        root.dbg-card-laid-out("status selected", self.absolute-position.x,
+                            self.absolute-position.y, self.width, self.height);
+                    }
+                    changed width => {
+                        root.dbg-card-laid-out("status selected", self.absolute-position.x,
+                            self.absolute-position.y, self.width, self.height);
+                    }
+                }
+                Text {
+                    text: root.status-tail;
+                    color: #a8a8b0;
+                    font-size: 12px;
+                    vertical-alignment: center;
+                }
             }
         }
     }

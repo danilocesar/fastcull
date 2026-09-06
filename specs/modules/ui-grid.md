@@ -1262,7 +1262,12 @@ brightening during wheel scrolling (needs an activity decay timer).
   fragment reports its rectangle as `status selected laid out at X,Y size
   WxH` (the grey head as `status head laid out …`) so a driven test can
   read its pixels by name rather than by a coordinate. Pinned by
-  `the_selection_count_is_drawn_in_the_accent` (to be written, brief 002).
+  `the_selection_count_is_drawn_in_the_accent` (brief 002), which compares
+  the blue bias inside the two reported rectangles in one shot: measured
+  18.0 for the fragment against 4.1 for the grey head (the bar's own
+  background is +4), with the two mutants at 4.1 (the fragment painted
+  grey) and 7.4 (painted in the 25 % wash blend instead of the hue), so
+  the test's threshold of 8.0 sits between them.
 - Failed file: warning badge + tooltip with reason.
 
 ## Keyboard map (keyboard-first is a feature)
@@ -3579,12 +3584,13 @@ the user confirms, all cheap to change):**
       it — unchanged, now in docs/culling.md. Pinned by
       `the_second_video_holds_only_the_new_span` (`closed1`: dialog gone,
       4 selected; `cleared`: 0).
-- [ ] **Brief 002, AC7 — the count's colour**: "· N selected" renders in
+- [x] **Brief 002, AC7 — the count's colour**: "· N selected" renders in
       the accent in the grid and in the loupe, absent when empty. Pinned
-      by `the_selection_count_is_drawn_in_the_accent` (to be written; the
-      fragment's rectangle is read by name and its blue bias compared with
-      the grey head's in the same shot; mutant: the accent set to
-      `#a8a8b0` goes red).
+      by `the_selection_count_is_drawn_in_the_accent` (the fragment's
+      rectangle is read by name and its blue bias compared with the grey
+      head's in the same shot: 18.0 against 4.1; both mutants red — the
+      accent set to `#a8a8b0` gives 0.0 of difference and the 25 % wash
+      blend 3.3, against a threshold of 8.0).
 - [ ] **Brief 002, AC8 — suite, card, checksums**: the full suite green on
       both runners; `the_shortcuts_card_lists_every_binding_in_the_spec`
       carries the three new pairings; RAW checksums unchanged. R2's core

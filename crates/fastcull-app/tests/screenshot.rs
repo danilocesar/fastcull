@@ -8316,6 +8316,128 @@ fn caption_then_hop_then_caption_lands_on_the_second_burst_only() {
     );
 }
 
+/// AC7 (brief 002 R5, persona A1): "· N selected" is painted in the
+/// selection's blue, in the grid and in the loupe, and an empty selection
+/// says nothing at all.
+///
+/// Measured, never assumed: the fragment reports its own rectangle
+/// (`status selected laid out at X,Y size WxH`) and so does the grey half
+/// before it, and this reads the PIXELS inside each in the same shot. That
+/// is what makes it a colour assertion rather than a font one — no
+/// coordinate is written here, and a face that moves the fragment 40 px
+/// along the bar moves the rectangle with it.
+///
+/// Blue bias is mean (B − R) over the rectangle, the same measure the wash
+/// tests use. Both rectangles are mostly the bar's own #202024, whose own
+/// bias is +4, with glyphs on top, so the numbers are small in absolute
+/// terms and only the DIFFERENCE means anything. Measured on this seat at
+/// 1440x900 over JPEG q92, identical in both runs: fragment 18.0, grey
+/// head 4.1 — a difference of 13.9. The two mutants this must catch,
+/// measured the same way: the fragment painted in the grey #a8a8b0 gives
+/// 4.1 (difference 0.0) and the fragment painted in the 25 % wash blend
+/// instead of the hue at full opacity gives 7.4 (difference 3.3).
+///
+/// The threshold is 8.0: 2.4x the strongest mutant and 0.58x the real
+/// signal. Font sensitivity, since CI draws in DejaVu Sans and Segoe UI
+/// and this seat in Noto Sans: the bias is coverage x 178 (the accent's
+/// own B − R) plus background, so 18.0 means the glyphs ink about 8 % of
+/// the rectangle, and 8.0 would need that to fall under 2.2 % — a face
+/// three and a half times lighter than this one. Do not raise it to pass
+/// on a seat; a red here is a paint that changed.
+#[test]
+fn the_selection_count_is_drawn_in_the_accent() {
+    if !has_display() {
+        eprintln!("screenshot smoke skipped: no display server");
+        return;
+    }
+    let _s = serial();
+    const T: f64 = 8.0;
+    for (name, args) in [
+        ("grid", vec!["--synthetic", "40", "--bursts"]),
+        (
+            "loupe",
+            vec!["--synthetic", "40", "--bursts", "--start-loupe"],
+        ),
+    ] {
+        let out = out_dir().join(format!("status-accent-{name}.jpg"));
+        let stderr = shoot_env_stderr(
+            &args,
+            &[
+                ("FASTCULL_TRACE", "1"),
+                (
+                    "FASTCULL_DRIVE",
+                    &format!(
+                        "{PIN_WINDOW};1300:wait:window geometry 1440x900;\
+                         1500:key:];1700:key:shift+];1900:dump.sel"
+                    ),
+                ),
+            ],
+            &out,
+        );
+        assert!(
+            stderr.contains("wait:window geometry 1440x900 (satisfied"),
+            "{name}: the window never reached 1440x900, so the fractions \
+             below address the wrong pixels:\n{stderr}"
+        );
+        let sel = qedump(&stderr, "sel");
+        // Anti-vacuity: there IS a count to paint.
+        assert_eq!(
+            dump_field(sel, "selected"),
+            "6",
+            "{name}: nothing is selected, so the fragment is empty and the \
+             pixels below are the bar's: {sel}"
+        );
+        assert!(
+            dump_text(sel, "status").contains("· 6 selected"),
+            "{name}: {sel}"
+        );
+        if name == "loupe" {
+            assert_eq!(
+                dump_field(sel, "one2one"),
+                "false",
+                "{name}: the loupe run is not at fit: {sel}"
+            );
+        }
+        // The two rectangles, as the app reported them at the shutter.
+        let (sx, sy, sw, sh) = laid_out_rect(&stderr, "status selected", "status at shutter: ");
+        let (hx, hy, hw, hh) = laid_out_rect(&stderr, "status head", "status at shutter: ");
+        assert!(
+            sw > 0.0 && sh > 0.0,
+            "{name}: the count fragment has no rectangle ({sw}x{sh}) — it \
+             was never laid out:\n{stderr}"
+        );
+        assert!(hw > 0.0 && hh > 0.0, "{name}: no head rectangle:\n{stderr}");
+        // Logical px over the pinned window is the frame fraction at any
+        // scale factor, which is what keeps this readable on a HiDPI seat.
+        let bias = |(x, y, w, h): (f32, f32, f32, f32)| {
+            region_blue_bias(
+                &out,
+                x as f64 / 1440.0,
+                y as f64 / 900.0,
+                (x + w) as f64 / 1440.0,
+                (y + h) as f64 / 900.0,
+            )
+        };
+        let sel_bias = bias((sx, sy, sw, sh));
+        let head_bias = bias((hx, hy, hw, hh));
+        eprintln!("{name}: fragment blue bias {sel_bias:.1}, head {head_bias:.1}");
+        assert!(
+            head_bias < 6.0,
+            "{name}: the grey half of the status line reads {head_bias:.1} \
+             of blue bias — the control is not grey, so the comparison \
+             below means nothing"
+        );
+        assert!(
+            sel_bias - head_bias > T,
+            "{name}: the selection count is not drawn in the accent — blue \
+             bias {head_bias:.1} (grey head) vs {sel_bias:.1} (the \
+             fragment), a difference of {:.1} against the {T} this \
+             requires:\n{stderr}",
+            sel_bias - head_bias
+        );
+    }
+}
+
 /// Both dialog cards keep their button row inside the card, at every size
 /// and whatever their text says (issue #62).
 ///

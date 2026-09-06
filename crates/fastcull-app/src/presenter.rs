@@ -1066,38 +1066,50 @@ fn write_status_and_chrome(
         }
         _ => String::new(),
     };
-    win.set_status(
-        format!(
-            "{} ({}/{}){}{}{}{} — {} — ★{} ✕{}{} — {} column{}{}",
-            if cursor_in_view {
-                st.session.labels.get(cursor).cloned().unwrap_or_default()
-            } else {
-                String::new()
-            },
-            cursor_pos.map_or(0, |p| p + 1),
-            // Honest count (issue #19): an empty view reads "(0/0)" — a
-            // fabricated "/1" made the whole counter untrustworthy ("a
-            // counter that can invent 1 can't be trusted to report
-            // 3,100" — persona).
-            view_len,
-            mark_words,
-            showing,
-            burst_note,
-            sel_note,
-            load_note,
-            counts.picked,
-            counts.rejected,
-            if st.session.sidecar_failures > 0 {
-                format!(" — ⚠{} sidecar write failures", st.session.sidecar_failures)
-            } else {
-                String::new()
-            },
-            layout.columns,
-            if layout.columns == 1 { "" } else { "s" },
-            clip_notice
-        )
-        .into(),
+    // The status line in THREE pieces, because the middle one is painted
+    // in the selection accent (ui-grid.md, "Selection count in the status
+    // bar", brief 002 R5): in the loupe, where no wash shows, this
+    // fragment is the only sign that a selection is live, and grey status
+    // text reads as prose. The words and their order are exactly what they
+    // were — only the paint changes.
+    let head = format!(
+        "{} ({}/{}){}{}{}",
+        if cursor_in_view {
+            st.session.labels.get(cursor).cloned().unwrap_or_default()
+        } else {
+            String::new()
+        },
+        cursor_pos.map_or(0, |p| p + 1),
+        // Honest count (issue #19): an empty view reads "(0/0)" — a
+        // fabricated "/1" made the whole counter untrustworthy ("a
+        // counter that can invent 1 can't be trusted to report
+        // 3,100" — persona).
+        view_len,
+        mark_words,
+        showing,
+        burst_note,
     );
+    let tail = format!(
+        " — {} — ★{} ✕{}{} — {} column{}{}",
+        load_note,
+        counts.picked,
+        counts.rejected,
+        if st.session.sidecar_failures > 0 {
+            format!(" — ⚠{} sidecar write failures", st.session.sidecar_failures)
+        } else {
+            String::new()
+        },
+        layout.columns,
+        if layout.columns == 1 { "" } else { "s" },
+        clip_notice
+    );
+    // `status` STAYS THE WHOLE LINE and nothing renders it: the trace's
+    // `status at shutter:` mark, the QEDUMP `status=` field and six tests
+    // read it, so splitting the paint must not split the string.
+    win.set_status(format!("{head}{sel_note}{tail}").into());
+    win.set_status_head(head.into());
+    win.set_status_sel(sel_note.into());
+    win.set_status_tail(tail.into());
 }
 
 fn refresh_inner(win: &MainWindow, state: &Rc<RefCell<AppState>>) {
