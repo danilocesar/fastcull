@@ -114,3 +114,18 @@ Skipped: CI plumbing, nothing user-visible.
   benefit for the developer's daily workflow; the fix is a key bump, the
   risk (quota thrash) is measured after the merge and taken to the user
   only if it materialises.
+- 2026-09-06, senior developer (duty 1): OQ1 settled from rust-cache's
+  source — the key hashes the workspace MEMBERS' manifests and the lockfile,
+  the toolchain and the environment; the root manifest is virtual and never
+  read, so no `[profile]` change moves the key; fix `prefix-key: v1-rust`,
+  bumped by hand on any root `[profile]` change. Corrections to this brief's
+  context: the key's third component is `os.type()-os.arch()`, not the
+  target; the Windows entry is 1.65 GiB; the ubuntu cold range is 26-31 min;
+  GitHub's page says the cache limit can be raised by repository
+  administrators (unverified here; the CI audit found no such control on
+  this repository's settings page on 2026-09-03).
+- 2026-09-06, Manager rulings: Q1 keep the checkbox ledger in
+  `01-architecture.md`; Q2 delete the orphaned `v0-rust-…` entries after the
+  first main run saves the `v1` pair (bookkeeping, M3); Q3 note only,
+  verify the cache-size control only if thrash materialises; Q4 the
+  developer reads the ubuntu job for AC1, the Manager reads the Windows one.
