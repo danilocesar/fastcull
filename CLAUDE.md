@@ -82,7 +82,12 @@ and never fixes a finding: the developer fixes, the reviewing roles report.
    the `claude` PIDs to their cwds before the first tool that touches the
    tree; stop, or get the user to stop, any peer in the same repo —
    sessions in other repos are unrelated and left alone). Tree clean, on
-   `main` or the unit's own branch; `testdata/raws/` fetched.
+   `main` or the unit's own branch; `testdata/raws/` fetched. Cleanup
+   (M9): before the unit starts, `cargo clean -p fastcull-app -p
+   fastcull-core -p fastcull-cli` in the tree's own `target/`, any
+   `target-qe-*` directory or worktree a previous unit left removed, the
+   scratch cap's oldest-first GC applied; what was freed goes in the
+   report.
 1. **Manager** receives the work, reads the specs it touches, classifies it
    (feature or user-visible change / bug fix / test or CI plumbing), and
    asks the user what only the user can decide.
@@ -268,6 +273,21 @@ developer owns re-verifying such claims against reality.
   still decides the UX choices that have a confident best-practice answer,
   M3 the Manager's own bookkeeping; M8 covers everything that has neither.
   Every role's report ends with "Questions for the user" for exactly this.
+- **M9 — Cleanup runs before a major new task, or when space is
+  needed.** (the user, 2026-09-06: "it should happen before the execution
+  of a major new task, or when space is needed") Before every unit of work
+  starts — feature or bug fix — the Manager runs `cargo clean -p
+  fastcull-app -p fastcull-core -p fastcull-cli`, which drops the
+  workspace crates' accumulated build variants from the tree's own
+  `target/` and keeps every dependency compiled (unit 001: 131 GB freed
+  the first time, 5.9 GB at its end, rebuild 39 s); removes any
+  `target-qe-*` directory or worktree a previous unit left; and applies
+  the scratch cap's oldest-first GC. Mid-unit it runs only when space is
+  needed — a scratch directory at the cap, a disk under pressure — and
+  then between stages, never under a running role, because a clean
+  invalidates the measurements of every role still running. Never a full
+  `cargo clean`, which costs a ~9-10 minute cold rebuild since #76. The
+  report states what was freed.
 
 ### Open decisions the Manager tracks (do not re-ask unless relevant)
 
