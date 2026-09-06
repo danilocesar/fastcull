@@ -217,3 +217,19 @@ with the user; the user chose C (answer 4) and rejected E-b (answer 5).
   standard companions; collapse means an empty selection (the cursor is the
   batch), matching the plain click; the status count in the accent colour
   and the docs correction ship in the same unit.
+- 2026-09-06, senior developer (duty 1): OQ1 — no existing binding of the
+  Ctrl chords or Ctrl+Space (the main scope's Ctrl block rejects everything
+  but O/Q/A/E/Shift+E/Shift+B; the dialog scopes' PgUp/PgDn/Home/End arms
+  are siblings; the winit backend delivers Ctrl+Space as a space with the
+  control modifier); OQ2 — Ctrl+A arms no anchor, a Shift+arrow after it
+  starts fresh (Explorer/GTK). `iptc-templates.md` needs no change. The
+  count is drawn in `selection-wash`'s hue at full opacity; the card gains
+  two SELECT rows (a measured limit: three would clamp at 1000x700 on Noto
+  Sans). Plan: three developer commits — chords and card, then the core rule
+  with old-red tests, then the count's colour.
+- 2026-09-06, Manager rulings: Q1 the card rows and the parity pairings
+  land in the developer's commit 1 (the spec commit carries specs and docs
+  only; the parity test is red for exactly that commit, which CI never runs
+  alone); Q2 `U` leaves the selection alone unless its mark removed the
+  frame and the cursor moved ("collapse = a cursor move", one rule); Q3 the
+  anchor resets after Ctrl-navigation.

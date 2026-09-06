@@ -93,7 +93,11 @@ maker note degrades to it, never to an error).
   case after `]` is unchanged since `]` always lands on a first frame.
   Claims the cursor (untouched-cursor rule), carries
   loupe zoom/pan persistence exactly like arrows, never marks (G1
-  untouched), clamps at the ends. MUST-HAVE — this is the feature: it
+  untouched), clamps at the ends. A plain `[`/`]` also COLLAPSES the
+  selection, like every unmodified move, and Ctrl+`[`/`]` jumps exactly
+  the same way with the selection kept (user decision 2026-09-06, brief
+  002 — the selection rule in ui-grid.md's Visual language section).
+  MUST-HAVE — this is the feature: it
   replaces ~18 dead arrow presses per burst, ~120 times an evening.
 - **Shift+`[` / Shift+`]`: extend the selection by whole bursts** (issue
   #55; persona 2026-08-28, USEFUL, shipped with Ctrl+Shift+B below). One
@@ -109,7 +113,10 @@ maker note degrades to it, never to an error).
   burst before it can drop anything — the one rule, applied). From mid-burst, Shift+`[`
   re-anchors on the opener like `[` does, which selects JUST this burst
   with the cursor on its opener. The anchor arms at the pre-press cursor
-  (or stays where a live Shift gesture put it) and is widened to its
+  (or stays where a live Shift gesture put it) — and when it arms FRESH
+  the burst span is the whole selection, Ctrl-added frames included, the
+  same rule as Shift+arrows (brief 002, user decision 2026-09-06) — and
+  is widened to its
   burst's far edge, so a Shift+arrow that follows is frame-precise from
   the burst's edge ("40 plus the first two frames of 41" — persona: one
   rule for what a Shift extension is, not two). The result is always a
@@ -135,8 +142,15 @@ maker note degrades to it, never to an error).
   does NOT move — the point of it: from frame 9/23, having just compared
   it to the opener, one chord selects the burst for a caption without
   losing the place (Shift+`[` would throw the cursor to the opener).
-  ADDITIVE (a union, like Ctrl+click — that is what makes non-adjacent
-  bursts cheap: Ctrl+Shift+B on 40, `]`×7, Ctrl+Shift+B on 47) and
+  ADDITIVE (a union, like Ctrl+click and Ctrl+Space — that is what makes
+  non-adjacent bursts cheap from the keyboard: Ctrl+Shift+B on 40,
+  Ctrl+`]`×7, Ctrl+Shift+B on 47. Ctrl+`]`, not `]` — corrected
+  2026-09-06, brief 002: a plain `]` collapses the selection like every
+  plain move, so the seven hops are the Ctrl variant, which lands where
+  `]` lands and leaves the selection alone. The plain hop is the frequent
+  meaning of the same sequence, "done with 40, now 47", and it is free;
+  the persona's IN-MY-WAY on paying a modifier for the rare meaning is
+  recorded with the user's decision in ui-grid.md's selection rule) and
   IDEMPOTENT (a second press changes nothing; a toggle on a 23-frame
   chord would empty the selection on a double-tap). Members hidden by the
   filter stay unselected — what you see is what you stamp, so a Picked
@@ -149,8 +163,10 @@ maker note degrades to it, never to an error).
   2026-08-28, the persona's one pre-condition for shipping the chords):
   the loupe shows no wash, so a one-press 40-frame selection made there
   and forgotten would silently take the next caption; the cancel key
-  works where the selection was made. Full rule in ui-grid.md's keyboard
-  table (G is unchanged).
+  works where the selection was made. Since 2026-09-06 (brief 002) any
+  plain move ends a selection too; Esc stays the clear that leaves the
+  cursor in place. Full rule in ui-grid.md's keyboard table (G is
+  unchanged).
 - **Status bar**: "burst 7/23" appended when the cursor is inside a
   group (loupe and grid alike). USEFUL.
 - **Edge strip** (optional polish): a thin 2-3px strip along the BOTTOM
@@ -209,3 +225,10 @@ maker note degrades to it, never to an error).
       id and selection count are observable in the QEDUMP line (app:
       `burst_keys_select_whole_bursts_and_esc_clears`,
       `esc_clears_a_burst_selection_from_inside_the_loupe`).
+- [ ] Ctrl+`[`/`]` keep the selection across a burst hop and a plain hop
+      drops it (brief 002, user decision 2026-09-06): Ctrl+Shift+B on one
+      burst, Ctrl+`]`×n, Ctrl+Shift+B on another → both bursts; a plain
+      `]` anywhere in the sequence → empty; a fresh Shift+`]` after
+      Ctrl-navigation replaces the Ctrl-added frames (app:
+      `ctrl_navigation_keeps_the_selection_and_ctrl_space_toggles`, core:
+      `a_fresh_burst_span_replaces_ctrl_added_frames` — to be written).

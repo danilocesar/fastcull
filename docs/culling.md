@@ -26,7 +26,7 @@ In the order the in-app card lists them.
 
 | Key | Action |
 |---|---|
-| `←` / `→` | previous / next frame |
+| `←` / `→` | previous / next frame — a plain move ends any selection (see below) |
 | `↑` / `↓` | one row up / down |
 | PgUp / PgDn | one screen back / forward |
 | Home / End | first / last frame |
@@ -40,6 +40,8 @@ In the order the in-app card lists them.
 | Shift+`[` / Shift+`]` | extend it by whole bursts (see below) |
 | `Ctrl+Shift+B` | add the burst under the cursor to the selection (see below) |
 | `Ctrl+A` | select all (of the filtered view) |
+| Ctrl+arrows | move without ending the selection (Ctrl+PgUp/PgDn/Home/End and Ctrl+`[`/`]` too) |
+| Ctrl+Space | add or remove the photo under the cursor |
 | `+` / `-` | zoom in / out, one stop: grid columns → loupe fit → ×1.5 steps → 1:1 |
 | `Z` | fit → 1:1; from 1:1 *or any zoom* → back to fit (from the grid: straight to 1:1) |
 | `I` | IPTC panel |
@@ -266,8 +268,8 @@ the left and right — that's the frame fitting, not something missing.
 
 ## Working on several photos at once: the selection
 
-Shift+arrows, Shift+click, Ctrl+click, `Ctrl+A` and the burst keys
-(Shift+`[`/`]`, `Ctrl+Shift+B` — see [Bursts](#bursts)) build a
+Shift+arrows, Shift+click, Ctrl+click, Ctrl+Space, `Ctrl+A` and the burst
+keys (Shift+`[`/`]`, `Ctrl+Shift+B` — see [Bursts](#bursts)) build a
 **selection** of several photos. The selection is what the **IPTC panel** writes to: commit a
 field, add or remove a keyword, or apply a template, and it lands on every
 selected photo at once. That's how you caption a whole run of frames in one
@@ -277,9 +279,11 @@ with nothing selected, the burst under the cursor is the selection.
 
 - Selected photos are **tinted blue** in the grid, so a selection reads
   at a glance across the whole page even at 12 columns.
-- The status bar shows **`· N selected`** whenever a selection exists —
-  including selected photos that have scrolled off-screen, which the
-  tint alone can't show you.
+- The status bar shows **`· N selected`**, in the selection's blue,
+  whenever a selection exists — including selected photos that have
+  scrolled off-screen, which the tint alone can't show you. In the loupe,
+  where nothing is tinted, that blue fragment is the one sign a selection
+  is live.
 - The **cursor keeps its bright outline** on top of the tint, so you can
   always see where the keyboard is pointing inside a selection.
 - The tint is **grid-only**. In the loupe your photo is never recolored:
@@ -295,14 +299,40 @@ place to advance to after marking fifty frames at once.
 
 A plain click **clears** the selection outright — the tint disappears and
 the `· N selected` counter goes with it, leaving you on the photo you
-clicked. **`Esc` clears it too, from anywhere** — inside the loupe as
-well, where nothing is tinted and it is easy to forget that a selection
-is still live; one `Esc` and the next caption lands only on the photo
-you're looking at. (The one place `Esc` does nothing is while you are
-typing in an IPTC field — click the grid or press `Tab` out first.) `G` from the loupe keeps the selection (so you can go
-back to the grid and look at it); at a grid zoom `G` clears it like `Esc`.
-Note that plain arrow navigation does *not* clear a selection: it stays
-live, and stays lit, until you clear it.
+clicked. **So does any plain move**: an arrow, PgUp/PgDn, Home/End,
+`[`/`]`, and the advance after `Y`/`N` all end the selection and leave you
+on one photo, the way a file manager does. To walk *without* dropping it,
+hold Ctrl — Ctrl+arrows (and Ctrl+PgUp/PgDn/Home/End, Ctrl+`[`/`]`) move
+the cursor with the selection kept — and Ctrl+Space adds or removes the
+photo under the cursor. A Shift+arrow span that starts after a plain move
+or a click is a **fresh** selection: it replaces the old one, photos you
+added with Ctrl included; Ctrl+click, Ctrl+Space and `Ctrl+Shift+B` add
+to what is there. **`Esc` clears it too, from anywhere** — inside the
+loupe as well, where nothing is tinted — and it is the clear that leaves
+the cursor where it is. Two places `Esc` does something else first: while
+you are typing in an IPTC field it does nothing (click the grid or press
+`Tab` out first), and while a dialog is open — Copy Picks, Export Frames
+as Video, About, the shortcuts card — the first `Esc` closes the dialog
+and the selection survives it; the next `Esc`, on the grid, clears it.
+`G` from the loupe keeps the selection (so you can go back to the grid
+and look at it — the first plain move there ends it); at a grid zoom `G`
+clears it like `Esc`. `U` never touches the selection: it clears a mark
+and stays put.
+
+Captioning a run and then marking through it: caption first — the
+caption is on the sidecars the moment you commit — then walk with the
+arrows and `Y`/`N`; the first move ends the selection, which no longer
+has a job. To put a second keyword on the same run, select it again (one
+`Ctrl+Shift+B` for a burst). A stray arrow after a forty-frame selection
+loses it the same way, and there is no undo for that: one chord rebuilds
+a burst, a hand-built span costs its keys again.
+
+> **Changed after 0.13.1**: until now a plain arrow *kept* the selection —
+> it stayed lit behind you until you pressed `Esc` — and a new Shift+arrow
+> span was **added** to it. Export a burst, close the report, arrow to the
+> next burst, Shift+arrow over it, export: the second video held both
+> bursts. Now any plain move ends the selection, Shift starts a fresh one,
+> and Ctrl+arrows are the way to move without letting go.
 
 ## Knowing where you are: marks in the loupe
 
@@ -369,11 +399,14 @@ it helps:
 - **`Ctrl+Shift+B`** selects the whole burst under the cursor **without
   moving the cursor** — the move for captioning a burst from whichever
   frame you happen to be judging. It *adds* to what is already selected
-  (so "burst 40 plus burst 47" is `Ctrl+Shift+B`, `]` a few times,
-  `Ctrl+Shift+B` again) and pressing it twice changes nothing. Only the
+  (so "burst 40 plus burst 47" is `Ctrl+Shift+B`, Ctrl+`]` a few times,
+  `Ctrl+Shift+B` again — a plain `]` would end the selection on the first
+  hop, which is what makes "caption 40, `]`, caption 41" land on 41
+  alone) and pressing it twice changes nothing. Only the
   frames the current filter shows are selected: filter to Picked first
   and the rejects stay out.
-- `Esc` clears the selection, in the loupe too — see
+- `Esc` clears the selection, in the loupe too — and so does any plain
+  move, `]` included; see
   [the selection](#working-on-several-photos-at-once-the-selection).
 
 Bursts never touch your files or marks — the grouping is a display and

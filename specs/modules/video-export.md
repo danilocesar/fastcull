@@ -56,6 +56,20 @@ re-encode, i.e. the first step into the editor.
   (burst-grouping.md `Grouping`). Neither → the menu item is disabled with
   its reason in the tooltip/status ("select frames or stand in a burst").
   One frame is not a video: the item is disabled for a single frame too.
+- **The per-burst rhythm needs no Esc** (user decision 2026-09-06, brief
+  002): a plain `]` — like every unmodified cursor move — collapses the
+  selection, so "export this burst, `]`, export the next" takes the burst
+  under the cursor the second time; the fallback above IS the rhythm.
+  Until that date the first burst's selection survived the hop and a
+  Shift-span made after it was unioned with it, which is the user's
+  report of 2026-09-06 — the second video held the old frames and the new
+  (`.qe-scratch/unit-002-selection/code/MECHANISM.md` §4, measured:
+  `f1-f4.mov`, then `f1-f7.mov`). Nothing here consumes a selection: a
+  finished export leaves it as it was, Cancel changes nothing, and Esc in
+  any dialog state closes the dialog and leaves the selection intact — the
+  next plain move, or a second Esc on the grid, ends it (the persona's
+  alternative, a finished report consuming the selection, was rejected by
+  the user: "I don't think auto deselecting is intuitive").
 - **Capture order**, always: the selection is the SET; the file is ordered
   by the capture-time sort key (filename as tiebreaker), regardless of the
   grid's current sort. A video that plays backwards because the grid was
@@ -260,7 +274,8 @@ when there is one; **Export** (Enter, when the plan is clean) and Cancel
 (Esc); progress "n / N" with Cancel while writing; the report with the
 verified line and an Open folder action. No other control. The clash
 question is the same dialog state as Copy Picks. Modal, keyboard-contained
-(issue #42 rules), never marks, never moves the cursor.
+(issue #42 rules), never marks, never moves the cursor, never touches the
+selection (stated 2026-09-06, brief 002 — true by omission before).
 
 **The card's height follows its content** (issue #62), between a floor —
 260 px, or 380 px while the clash question is up, so the ordinary dialog
@@ -784,6 +799,16 @@ sample RAWs), `app:` = the driven `tests/screenshot.rs` test.
       the same burst index (the disabled-with-a-reason assertion). A
       driven burst strand needs a burst fixture, which is its own piece
       of work (a synthetic RAW with a Sony maker note).
+- [ ] The second export after a plain move holds only the new frames
+      (brief 002, user decision 2026-09-06): 4 selected → export → Esc →
+      Right, Right → Shift+Right → the plan says 2 frames and names no
+      earlier video, the file holds 2 samples, no clash question; Esc on
+      the finished report leaves the selection intact and a second Esc
+      clears it. → `app: the_second_video_holds_only_the_new_span` (to be
+      written; RED on the pre-fix tree with "6 frames" and "4 of 6 frames
+      are already in …"). The `]`-to-the-next-burst form is pinned by
+      parts, as the deviation above records: no repository fixture forms a
+      burst from real files.
 - [x] Exported badge and hint (#56): a landed export badges exactly the
       frames that are IN the file and a skipped frame is never among them;
       a cancel or a failure badges nothing; an Overwrite with a different
