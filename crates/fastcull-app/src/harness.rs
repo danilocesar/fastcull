@@ -516,6 +516,13 @@ fn dispatch(win: &MainWindow, state: &Rc<RefCell<AppState>>, key: &str, layout: 
             // only one of the two that is not literal text, so without a
             // name here a script could drive half the binding.
             "f1" => char::from(Key::F1).to_string().into(),
+            // Space, by name, for Ctrl+Space (brief 002): the step parser
+            // trims every action (see the FASTCULL_DRIVE loop above), so a
+            // literal trailing blank cannot spell this key and
+            // `key:ctrl+space` is the only way to send the chord. A bare
+            // `key:space` is the pick key, the same one `key: ` could
+            // never express.
+            "space" => " ".into(),
             s => s.into(),
         };
         let ctrl_text: slint::SharedString = char::from(Key::Control).to_string().into();

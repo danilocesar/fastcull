@@ -55,8 +55,8 @@ In the order the in-app card lists them.
 
 The same map lives in **Help > Keyboard Shortcuts** inside the app — or
 press **`?`** (or `F1`), which is quicker and does not need the mouse. The
-card groups these under MOVE, MARK and SELECT down the left and ZOOM,
-MOUSE, PANELS and FILE MENU down the right, with every key in one aligned
+card groups these under MOVE, MARK and MOUSE down the left and ZOOM,
+SELECT, PANELS and FILE MENU down the right, with every key in one aligned
 column so you can run your eye down them; `Esc`, `?`, `F1` or a click
 anywhere closes it. On Windows those menus are the system menu bar Windows
 draws for the window, not a bar inside it — the same menus either way.

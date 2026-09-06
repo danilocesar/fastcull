@@ -158,6 +158,22 @@ fn apply_filter_change(
     reveal_cursor(win, state);
 }
 
+/// What a cursor key does to the selection on its way past — the second
+/// half of every arrow/page/home/end token (ui-grid.md, "Selection", the
+/// rule of 2026-09-06). Naming the three cases here is what keeps the
+/// bridge free of the rule itself: each variant is one call into
+/// `fastcull_core::Selection`, and the table in `handle_nav_inner` is then
+/// just the key map.
+#[derive(PartialEq, Eq, Clone, Copy)]
+enum SelEffect {
+    /// A plain move: the selection is emptied (the cursor is the batch).
+    Collapse,
+    /// A Ctrl-move: the selection survives, the Shift anchor drops.
+    Keep,
+    /// A Shift-move: the span runs anchor..cursor.
+    Extend,
+}
+
 pub(crate) fn handle_nav(win: &MainWindow, state: &Rc<RefCell<AppState>>, key: &str) {
     let t0 = trace_start();
     handle_nav_inner(win, state, key);
@@ -168,7 +184,9 @@ fn handle_nav_inner(win: &MainWindow, state: &Rc<RefCell<AppState>>, key: &str) 
     let (layout, viewport_h, scroll_y) = current_geometry(win, state);
     let mut st = state.borrow_mut();
     // Marks and navigation claim the cursor (issue #4); zoom keys do not
-    // move it and stay neutral.
+    // move it and stay neutral. The Ctrl chords and Ctrl+Space claim it
+    // for the same reason `select-burst` does: they are deliberate acts on
+    // the cursor, so the engine must stop moving it afterwards.
     if matches!(
         key,
         "pick"
@@ -187,6 +205,17 @@ fn handle_nav_inner(win: &MainWindow, state: &Rc<RefCell<AppState>>, key: &str) 
             | "shift-burst-prev"
             | "shift-burst-next"
             | "select-burst"
+            | "ctrl-left"
+            | "ctrl-right"
+            | "ctrl-up"
+            | "ctrl-down"
+            | "ctrl-pgup"
+            | "ctrl-pgdn"
+            | "ctrl-home"
+            | "ctrl-end"
+            | "ctrl-burst-prev"
+            | "ctrl-burst-next"
+            | "select-toggle"
     ) {
         st.grid.cursor_touched = true;
     }
@@ -306,7 +335,8 @@ fn handle_nav_inner(win: &MainWindow, state: &Rc<RefCell<AppState>>, key: &str) 
         // [ / ]: previous/next burst boundary over the FILTERED view
         // (burst-grouping.md UI contract): first visible frame of the
         // adjacent group; singles are their own territory; clamps.
-        "burst-prev" | "burst-next" | "shift-burst-prev" | "shift-burst-next" => {
+        "burst-prev" | "burst-next" | "shift-burst-prev" | "shift-burst-next"
+        | "ctrl-burst-prev" | "ctrl-burst-next" => {
             if !st.grid.view.is_empty() {
                 // One `&mut AppState` so the closures below borrow only
                 // `bursts` while `grid` is being written (2021 closures
@@ -332,8 +362,11 @@ fn handle_nav_inner(win: &MainWindow, state: &Rc<RefCell<AppState>>, key: &str) 
                         .selection
                         .extend_bursts(&view, from, st.grid.cursor, group_by_id);
                 } else {
-                    // Plain navigation resets the Shift-span anchor, same
-                    // as the arrow keys (selection contract, ui-grid.md).
+                    // Ctrl+[ / Ctrl+]: the plain key's landing with the
+                    // selection kept, the anchor reset (ui-grid.md's
+                    // selection rule 2, brief 002). A plain [ / ] takes
+                    // the same branch here and gets rule 1's collapse in
+                    // the commit that lands it.
                     st.grid.selection.reset_anchor();
                 }
             }
@@ -347,28 +380,53 @@ fn handle_nav_inner(win: &MainWindow, state: &Rc<RefCell<AppState>>, key: &str) 
                 .selection
                 .select_group(&st.grid.view, st.grid.cursor, group_by_id);
         }
+        "select-toggle" => {
+            // Ctrl+Space (brief 002 R4): `Selection::toggle` on the frame
+            // under the cursor — additive like Ctrl+click, the cursor does
+            // not move, the anchor arms there. A cursor the filter hid
+            // toggles nothing, the same guard the click handler and
+            // `select_group` apply: what you see is what you stamp.
+            if st.cursor_pos().is_some() {
+                let cursor = st.grid.cursor;
+                st.grid.selection.toggle(cursor);
+            }
+        }
         "select-all" => {
             st.grid.cursor_touched = true;
             let view = st.grid.view.clone();
             st.grid.selection.select_all(&view);
         }
         nav => {
-            let (nav, extends) = match nav {
-                "left" => (Nav::Left, false),
-                "right" => (Nav::Right, false),
-                "up" => (Nav::Up, false),
-                "down" => (Nav::Down, false),
-                "shift-left" => (Nav::Left, true),
-                "shift-right" => (Nav::Right, true),
-                "shift-up" => (Nav::Up, true),
-                "shift-down" => (Nav::Down, true),
-                "pgup" => (Nav::PageUp, false),
-                "pgdn" => (Nav::PageDown, false),
-                "home" => (Nav::Home, false),
-                "end" => (Nav::End, false),
+            // What the key does to the SELECTION, beside moving the cursor
+            // (ui-grid.md's selection rule, brief 002): a plain move
+            // collapses it, a Ctrl-move keeps it (anchor reset), a
+            // Shift-move spans. The key map is the bridge's job; every
+            // effect below is one call into `fastcull_core::Selection`,
+            // which owns the rule (hard rule 5).
+            let (nav, effect) = match nav {
+                "left" => (Nav::Left, SelEffect::Collapse),
+                "right" => (Nav::Right, SelEffect::Collapse),
+                "up" => (Nav::Up, SelEffect::Collapse),
+                "down" => (Nav::Down, SelEffect::Collapse),
+                "shift-left" => (Nav::Left, SelEffect::Extend),
+                "shift-right" => (Nav::Right, SelEffect::Extend),
+                "shift-up" => (Nav::Up, SelEffect::Extend),
+                "shift-down" => (Nav::Down, SelEffect::Extend),
+                "ctrl-left" => (Nav::Left, SelEffect::Keep),
+                "ctrl-right" => (Nav::Right, SelEffect::Keep),
+                "ctrl-up" => (Nav::Up, SelEffect::Keep),
+                "ctrl-down" => (Nav::Down, SelEffect::Keep),
+                "pgup" => (Nav::PageUp, SelEffect::Collapse),
+                "pgdn" => (Nav::PageDown, SelEffect::Collapse),
+                "home" => (Nav::Home, SelEffect::Collapse),
+                "end" => (Nav::End, SelEffect::Collapse),
+                "ctrl-pgup" => (Nav::PageUp, SelEffect::Keep),
+                "ctrl-pgdn" => (Nav::PageDown, SelEffect::Keep),
+                "ctrl-home" => (Nav::Home, SelEffect::Keep),
+                "ctrl-end" => (Nav::End, SelEffect::Keep),
                 _ => return,
             };
-            if extends {
+            if effect == SelEffect::Extend {
                 st.grid.cursor_touched = true; // shift-nav claims like plain nav
             }
             // Navigation happens over VIEW positions; the cursor stays an
@@ -381,13 +439,21 @@ fn handle_nav_inner(win: &MainWindow, state: &Rc<RefCell<AppState>>, key: &str) 
                     grid::navigate(pos, st.grid.view.len(), layout.columns, rows_per_page, nav);
                 let from = st.grid.cursor;
                 st.grid.cursor = st.grid.view[new_pos];
-                if extends {
-                    // Shift+arrow: span anchor..cursor (core model).
-                    let view = st.grid.view.clone();
-                    let to = st.grid.cursor;
-                    st.grid.selection.extend_to(&view, from, to);
-                } else {
-                    st.grid.selection.reset_anchor();
+                match effect {
+                    SelEffect::Extend => {
+                        // Shift+arrow: span anchor..cursor (core model).
+                        let view = st.grid.view.clone();
+                        let to = st.grid.cursor;
+                        st.grid.selection.extend_to(&view, from, to);
+                    }
+                    // Ctrl+arrow: the selection is untouched; the anchor
+                    // drops, so a Shift+arrow after it starts fresh from
+                    // the cursor (ui-grid.md's selection rule 2). A plain
+                    // arrow takes the same call in THIS commit and gets
+                    // rule 1's collapse in the commit that lands it.
+                    SelEffect::Keep | SelEffect::Collapse => {
+                        st.grid.selection.reset_anchor();
+                    }
                 }
             }
         }

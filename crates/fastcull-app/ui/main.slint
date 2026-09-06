@@ -966,6 +966,35 @@ export component MainWindow inherits Window {
                         root.nav("select-burst");
                         return accept;
                     }
+                    // Ctrl-navigation and Ctrl+Space (brief 002, user
+                    // decision 2026-09-06, "file manager style"): since a
+                    // PLAIN move now empties the selection, these are the
+                    // companions that let the keyboard move without letting
+                    // go and build a discontiguous selection. Only WITHOUT
+                    // Shift — Ctrl+Shift+arrows stay unbound (reject), so a
+                    // future "add a range to the selection" chord finds them
+                    // free.
+                    //
+                    // The `event.text` comparisons are the same route the
+                    // Ctrl+O/Q/A/E arms above already take: the winit
+                    // backend maps a NAMED key (Space, the arrows,
+                    // PgUp/PgDn/Home/End) to its Slint character whatever
+                    // modifiers are held, and a character key to its own
+                    // string, so Ctrl+Space arrives here as " " and Ctrl+`]`
+                    // as "]" with `modifiers.control` set.
+                    if (!event.modifiers.shift) {
+                        if (event.text == Key.LeftArrow) { root.nav("ctrl-left"); return accept; }
+                        if (event.text == Key.RightArrow) { root.nav("ctrl-right"); return accept; }
+                        if (event.text == Key.UpArrow) { root.nav("ctrl-up"); return accept; }
+                        if (event.text == Key.DownArrow) { root.nav("ctrl-down"); return accept; }
+                        if (event.text == Key.PageUp) { root.nav("ctrl-pgup"); return accept; }
+                        if (event.text == Key.PageDown) { root.nav("ctrl-pgdn"); return accept; }
+                        if (event.text == Key.Home) { root.nav("ctrl-home"); return accept; }
+                        if (event.text == Key.End) { root.nav("ctrl-end"); return accept; }
+                        if (event.text == "[") { root.nav("ctrl-burst-prev"); return accept; }
+                        if (event.text == "]") { root.nav("ctrl-burst-next"); return accept; }
+                        if (event.text == " ") { root.nav("select-toggle"); return accept; }
+                    }
                     return reject;
                 }
                 if (event.modifiers.shift) {
@@ -3081,7 +3110,8 @@ export component MainWindow inherits Window {
                 sc-body := HorizontalLayout {
                     spacing: 0px;
 
-                    // LEFT COLUMN — the cull loop.
+                    // LEFT COLUMN — the frame under the cursor: reach it,
+                    // mark it, or get to it with the mouse.
                     //
                     // Both columns take HALF of what is left after the
                     // gutter, explicitly. Two stretch factors would split
@@ -3130,12 +3160,18 @@ export component MainWindow inherits Window {
                             // ratings are marks.
                             KeyRow { k: "1–5, 0"; a: "reserved for star ratings (v2)"; dim: true; }
                         }
+                        // MOUSE is its own section because a card titled
+                        // "Keyboard shortcuts" that files Wheel and
+                        // Double-click among the keys is lying — and
+                        // because the heading is what shrinks
+                        // "Wheel in loupe" to "Wheel", which is most of
+                        // what makes a fixed key column possible.
                         KeySection {
-                            heading: "SELECT";
-                            KeyRow { k: "Shift+arrows"; a: "extend the selection"; }
-                            KeyRow { k: "Shift+[ / ]"; a: "extend it by whole bursts"; }
-                            KeyRow { k: "Ctrl+Shift+B"; a: "add the burst under the cursor"; }
-                            KeyRow { k: "Ctrl+A"; a: "select all (the filtered set)"; }
+                            heading: "MOUSE";
+                            KeyRow { k: "Wheel"; a: "grid: scroll · loupe: zoom at pointer"; }
+                            KeyRow { k: "Drag"; a: "grid: scroll · loupe: pan above fit"; }
+                            KeyRow { k: "Click"; a: "loupe above fit: centre there"; }
+                            KeyRow { k: "Double-click"; a: "grid: open in loupe · loupe: 1:1 there"; }
                         }
                     }
 
@@ -3159,7 +3195,8 @@ export component MainWindow inherits Window {
                         }
                     }
 
-                    // RIGHT COLUMN — looking closer, the mouse, and the menu.
+                    // RIGHT COLUMN — the view, and working on several at
+                    // once: select, caption, export.
                     VerticalLayout {
                         width: (parent.width - 28px) / 2;
                         spacing: 16px;
@@ -3169,18 +3206,33 @@ export component MainWindow inherits Window {
                             KeyRow { k: "+ / -"; a: "zoom in / out, one stop"; }
                             KeyRow { k: "Z"; a: "fit ⇄ 1:1 (grid: straight to 1:1)"; }
                         }
-                        // MOUSE is its own section because a card titled
-                        // "Keyboard shortcuts" that files Wheel and
-                        // Double-click among the keys is lying — and
-                        // because the heading is what shrinks
-                        // "Wheel in loupe" to "Wheel", which is most of
-                        // what makes a fixed key column possible.
+                        // SELECT sits here rather than under MARK, where
+                        // the cull loop would put it, because the card is
+                        // a fixed-height sheet at 1000x700 — the columns
+                        // are 19 px apart and the left one may not grow.
+                        // Moving SELECT back costs 27 px on the left and
+                        // clamps the card on a Noto Sans seat (ui-grid.md,
+                        // "Seven sections").
                         KeySection {
-                            heading: "MOUSE";
-                            KeyRow { k: "Wheel"; a: "grid: scroll · loupe: zoom at pointer"; }
-                            KeyRow { k: "Drag"; a: "grid: scroll · loupe: pan above fit"; }
-                            KeyRow { k: "Click"; a: "loupe above fit: centre there"; }
-                            KeyRow { k: "Double-click"; a: "grid: open in loupe · loupe: 1:1 there"; }
+                            heading: "SELECT";
+                            KeyRow { k: "Shift+arrows"; a: "extend the selection"; }
+                            KeyRow { k: "Shift+[ / ]"; a: "extend it by whole bursts"; }
+                            KeyRow { k: "Ctrl+Shift+B"; a: "add the burst under the cursor"; }
+                            KeyRow { k: "Ctrl+A"; a: "select all (the filtered set)"; }
+                            // The collapse rule's companions (brief 002,
+                            // user decision 2026-09-06): a plain move now
+                            // ends a selection, so the card has to say how
+                            // to move without ending it. Both action texts
+                            // are 28 and 30 characters because the 240 px
+                            // action cell holds 38 at 13 px on this seat
+                            // and a wrapped line costs the card 18 px —
+                            // "any MOVE key" names PgUp/PgDn/Home/End and
+                            // `[ / ]` by pointing at a section the reader
+                            // can see, which is also what pairs the map's
+                            // Ctrl+`[`/`]` row to this cell in the parity
+                            // test. Do not reword them longer.
+                            KeyRow { k: "Ctrl+arrows"; a: "any MOVE key, selection kept"; }
+                            KeyRow { k: "Ctrl+Space"; a: "add or remove the cursor frame"; }
                         }
                         KeySection {
                             heading: "PANELS";

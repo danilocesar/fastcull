@@ -1398,8 +1398,10 @@ acceptance line below was false. What replaced it:
   contrast. All four ratios are computed from the sRGB values; the ink as
   RENDERED measures a little brighter (5.25:1 for the dim key, off the
   1440x900 shot), which is antialiasing, and both readings clear 4.5.
-- **Seven sections in two columns**: MOVE, MARK, SELECT down the left;
-  ZOOM, MOUSE, PANELS, FILE MENU down the right. Headings are ONE WORD
+- **Seven sections in two columns**: MOVE, MARK, MOUSE down the left;
+  ZOOM, SELECT, PANELS, FILE MENU down the right (SELECT and MOUSE swapped
+  sides on 2026-09-06, brief 002 — the measurement is in this bullet's
+  last paragraph). Headings are ONE WORD
   (a landmark is short), 11 px `#8a8a96` with 0.6 px tracking, each with a
   1 px **`#6a6a76`** rule running to its column's edge; a 1 px `#6a6a76`
   hairline separates the two columns over the body's full height. Those
@@ -1416,15 +1418,36 @@ acceptance line below was false. What replaced it:
   column fit at all. FILE MENU echoes the File menu
   character for character, ellipses included, so a mouse user learns where
   the four chords live. SELECT lists the collapse rule's companions as TWO
-  rows, not three (brief 002, 2026-09-06): `Ctrl+arrows`, whose action
-  text names PgUp/PgDn/Home/End and `[`/`]` and to which the map's
-  Ctrl+`[`/`]` row is paired in the parity test, and `Ctrl+Space`. Three
-  rows would add ~60 px to the taller column, and at 1000x700 on this
-  seat's Noto Sans the card had 55 px of slack under the `window − 40px`
-  clamp (549 of 604) — a third row would have clamped it here and broken
-  "fits whole at the smallest supported window" on Noto seats while
-  passing on CI's DejaVu Sans, which is the font-dependent red this
-  section exists to forbid.
+  rows (brief 002, 2026-09-06): `Ctrl+arrows`, whose action text says "any
+  MOVE key" — which is what pairs the map's Ctrl+`[`/`]` row to this cell
+  in the parity test, `[`/`]` being a MOVE row on this same card — and
+  `Ctrl+Space`. **SELECT and MOUSE swapped columns in the same commit, and
+  the estimate that stood here until then was wrong** (corrected
+  2026-09-06, senior-developer review; the numbers below are measured off
+  the `shortcuts card laid out at` marks at both windows, this seat, Noto
+  Sans): the clamp at 1000x700 is `layer − 40px` = **594**, not the 604
+  this bullet claimed, and the card was **549**, so the room was **44 px**,
+  not 55; and a one-line `KeyRow` costs **23 px** — an 18 px line box plus
+  the section's 5 px spacing — not the ~20 assumed. The card had room for
+  ONE row and needed two: with both rows on the left it measured **595**
+  and clamped to 594, leaving the 20 px of slack that means "clamped". The
+  left column also led the right by 27 px, so every pixel added there cost
+  the card a pixel while the right column's last 27 were free; swapping
+  SELECT (six rows after this brief) with MOUSE (four) moves 46 px across,
+  leaves the columns 19 px apart instead of 73, and puts the card at
+  **568**, 26 px under the clamp. Both columns are exactly
+  `(744 − 28) / 2 = 358 px`, so a section changing side cannot rewrap a
+  line. **An action text must fit ONE line of the 240 px action cell**: 38
+  characters fit at 13 px on this seat ("grid: open in loupe · loupe: 1:1
+  there"), 40 do not — "add or remove the frame under the cursor" wrapped
+  and cost 18 px — so the two new rows are written at 28 and 30. The card
+  is now a fixed-height sheet with ~25 px of room at 1000x700: the next
+  binding either replaces a row or moves a section, and the fits-whole
+  test is what will say so. What the card does NOT carry is this brief's
+  headline rule — that a plain move ends the selection — and that is a
+  room decision, not an oversight: no arrangement has the 15-20 px for it.
+  The card teaches the companion ("any MOVE key, selection kept"), and
+  docs/culling.md and the selection rule above carry the rule itself.
 - **The card GROUPS AND PARAPHRASES the map, and lists every binding in
   it.** One map row becomes four (`Arrows / PgUp / PgDn / Home / End` was
   a 222 px key string that made any fixed column impossible, and named
@@ -1434,25 +1457,29 @@ acceptance line below was false. What replaced it:
   brought the reader here, and it belongs to no section.
 - **780 px wide, content-driven tall.** `card-width: min(780px, window −
   48px)`; the height is `ModalScrim`'s opt-in `card-fits-content`, clamped
-  to `window − 40px`. Measured **780x549** on the development seat, at
-  1440x900 (x 330..1110, y 182..731) and unchanged at 1000x700 (x 110..890,
-  y 82..631) — it fits whole at the smallest supported window and never
-  scrolls there. Those numbers predate the two SELECT rows of 2026-09-06
-  (brief 002); the commit that adds the rows re-measures both windows from
-  the `shortcuts card laid out at` marks of
-  `shortcuts_card_is_a_two_column_sheet_that_fits_its_window` and writes
-  them here — TO BE MEASURED (senior-developer plan 2026-09-06, commit 1;
-  expected ~589 tall in Noto Sans, and it must still leave slack at
-  1000x700). **Every length in this section is a LOGICAL pixel**, the
+  to `window − 40px`. Measured **780x568** on the development seat (Noto
+  Sans), at 1440x900 (x 330..1110, y 173..741) and unchanged at 1000x700
+  (x 110..890, y 73..641), where it leaves 33 px above the status bar — it
+  fits whole at the smallest supported window and never scrolls there. The
+  **780x549** this bullet gave until 2026-09-06 was the 27-row card of
+  2026-09-04, before brief 002 added the two SELECT rows and swapped
+  SELECT with MOUSE; both numbers are read from the `shortcuts card laid
+  out at` marks of
+  `shortcuts_card_is_a_two_column_sheet_that_fits_its_window`, which is
+  where the next editor re-measures them. **Every length in this section is a LOGICAL pixel**, the
   unit Slint lays out in: a 200 % seat at 1920x1080 is 960x540 logical, so
   it is a smaller window than 1000x700 and the card clamps there. "The
   smallest supported window" is therefore a claim about logical size, and
   a high-DPI seat is small in exactly the way a small monitor is.
-- **549 is a MEASUREMENT and no test may pin it.** It is the sum of ~29
+- **568 is a MEASUREMENT and no test may pin it.** It is the sum of ~29
   text line boxes, so it belongs to whichever face the seat draws with,
-  and the numbers are far apart: 549 in this machine's Noto Sans, **491**
-  in Liberation Sans, 512 in Nimbus Sans / Carlito / Cantarell, 525 in
-  Montserrat, 627 in Noto Sans Mono. The ubuntu CI runner draws in DejaVu
+  and the numbers are far apart. Measured on the 27-row card of 2026-09-04
+  (two rows fewer than today's, so stale in absolute terms — the SPREAD
+  between faces is what this list is for): 549 in this machine's Noto
+  Sans, **491** in Liberation Sans, 512 in Nimbus Sans / Carlito /
+  Cantarell, 525 in Montserrat, 627 in Noto Sans Mono — that last one
+  already over the 594 clamp before this brief, so the fits-whole promise
+  has always been about the proportional faces. The ubuntu CI runner draws in DejaVu
   Sans and the Windows runner in Segoe UI; neither is this seat's font,
   and the suite already knows two Linux seats disagree about a panel row's
   y by 3 px. The card's test therefore pins **only what is geometric**:

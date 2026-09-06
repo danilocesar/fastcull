@@ -2680,7 +2680,7 @@ fn shortcuts_card_is_a_two_column_sheet_that_fits_its_window() {
     // --- 5: and it is the CONTENT's height, not the window's
     //
     // Only meaningful because neither size clamped (asserted just above):
-    // the two windows show the same 27 rows at the same 780 px, so the
+    // the two windows show the same 29 rows at the same 780 px, so the
     // preferred height they add up to is the same number in any font. A
     // difference here means some length in the card is reading the window
     // — which is the one thing a content-driven card must not do.
@@ -2713,10 +2713,11 @@ fn shortcuts_card_is_a_two_column_sheet_that_fits_its_window() {
 /// FITTING WHOLE there — plus its footer inside it.
 ///
 /// The one number that is deliberately absent is a height. The height is
-/// the sum of ~27 text line boxes and belongs to whatever face the seat
-/// draws with (549 px in this machine's Noto Sans, 491 in Liberation
-/// Sans, 512 in Nimbus Sans / Carlito / Cantarell, 525 in Montserrat,
-/// 627 in Noto Sans Mono); pinning it, or a band around it, pins a font. What the card actually promises is a
+/// the sum of ~29 text line boxes and belongs to whatever face the seat
+/// draws with (568 px in this machine's Noto Sans; the per-face spread
+/// measured on the 27-row card of 2026-09-04 was 491 in Liberation Sans,
+/// 512 in Nimbus Sans / Carlito / Cantarell, 525 in Montserrat, 627 in
+/// Noto Sans Mono); pinning it, or a band around it, pins a font. What the card actually promises is a
 /// relation to the layer it is centred in, and that is what is checked.
 ///
 /// **How "it fits whole" is measured without knowing the ceiling.** The
@@ -7655,6 +7656,113 @@ fn esc_clears_a_burst_selection_from_inside_the_loupe() {
         dump_field(out_dump, "zoom"),
         dump_field(loupe, "zoom"),
         "Esc still leaves the loupe: {out_dump}"
+    );
+}
+
+/// The file-manager companions of the collapse rule (brief 002, user
+/// decision 2026-09-06, AC3 and AC4): Ctrl+arrows, Ctrl+PgUp/PgDn/Home/End
+/// and Ctrl+`[`/`]` move the cursor exactly where the plain key would and
+/// leave the selection alone, and Ctrl+Space adds or removes the frame
+/// under the cursor without moving it.
+///
+/// Driven with REAL chords (`key:ctrl+…` synthesises a held Control the way
+/// a keyboard does), because that is the whole claim: these keys were dead
+/// before this change — the main scope's Ctrl block rejected everything but
+/// O/Q/A/E/Shift+E/Shift+B — so a `nav` token would prove the handler and
+/// not the binding.
+///
+/// The route through the burst pattern (`SYNTHETIC_BURST_RUNS`, single 0,
+/// A = 1..=5, single 6, B = 7..=9, C = 10..=17, … G = 34..=39) is the
+/// user's own "two non-adjacent bursts" sequence: Ctrl+Shift+B on A,
+/// Ctrl+`]` three times, Ctrl+Shift+B on C.
+#[test]
+fn ctrl_navigation_keeps_the_selection_and_ctrl_space_toggles() {
+    if !has_display() {
+        eprintln!("screenshot smoke skipped: no display server");
+        return;
+    }
+    let _s = serial();
+    let out = out_dir().join("ctrl-nav.jpg");
+    let stderr = shoot_env_stderr(
+        &["--synthetic", "40", "--bursts"],
+        &[
+            ("FASTCULL_TRACE", "1"),
+            (
+                "FASTCULL_DRIVE",
+                "600:key:];800:key:ctrl+shift+b;1000:dump.a;\
+                 1200:key:ctrl+];1400:dump.h1;1600:key:ctrl+];1700:key:ctrl+];1900:dump.h3;\
+                 2100:key:ctrl+shift+b;2300:dump.two;\
+                 2500:key:ctrl+right;2700:dump.cr;2900:key:ctrl+pgdn;3100:dump.cpd;\
+                 3300:key:ctrl+home;3500:dump.ch;3700:key:ctrl+end;3900:dump.ce;\
+                 4100:key:ctrl+[;4300:dump.cb;\
+                 4500:key:ctrl+space;4700:dump.t1;4900:key:ctrl+left;5000:key:ctrl+space;5200:dump.t2;\
+                 5400:key:ctrl+space;5600:dump.t3;5800:key:ctrl+up;6000:dump.cu;\
+                 6200:key:];6400:dump.plain;\
+                 6600:key:escape;6800:key:home;7000:key:ctrl+space;7200:key:ctrl+right;7300:key:ctrl+right;\
+                 7500:key:ctrl+space;7700:key:ctrl+right;7900:key:ctrl+space;8100:dump.three;\
+                 8300:key:ctrl+space;8500:dump.two2",
+            ),
+        ],
+        &out,
+    );
+    // (cursor image id, selection count) at a dump.
+    let at = |label: &str| -> (usize, usize) {
+        let d = qedump(&stderr, label);
+        (
+            dump_field(d, "cursor").parse().unwrap(),
+            dump_field(d, "selected").parse().unwrap(),
+        )
+    };
+    assert_eq!(at("a"), (1, 5), "Ctrl+Shift+B on A's opener takes A whole");
+    // --- Ctrl+`]` walks with the selection in hand (AC3) -------------------
+    assert_eq!(at("h1"), (6, 5), "Ctrl+`]` lands on the single, keeps A");
+    assert_eq!(at("h3"), (10, 5), "three hops: B's opener, then C's");
+    assert_eq!(
+        at("two"),
+        (10, 13),
+        "the second Ctrl+Shift+B adds C to A — two non-adjacent bursts (AC3)"
+    );
+    // --- and so does every other Ctrl-move --------------------------------
+    assert_eq!(at("cr"), (11, 13), "Ctrl+Right moves, keeps");
+    let (cpd_cursor, cpd_sel) = at("cpd");
+    assert!(
+        cpd_cursor > 11,
+        "Ctrl+PgDn did not move the cursor (it was at 11, it is at {cpd_cursor})"
+    );
+    assert_eq!(cpd_sel, 13, "Ctrl+PgDn keeps the selection");
+    assert_eq!(at("ch"), (0, 13), "Ctrl+Home");
+    assert_eq!(at("ce"), (39, 13), "Ctrl+End");
+    assert_eq!(
+        at("cb"),
+        (34, 13),
+        "Ctrl+`[` from mid-G re-anchors on G's opener, like `[`"
+    );
+    // --- Ctrl+Space toggles the frame under the cursor (AC4) --------------
+    assert_eq!(at("t1"), (34, 14), "Ctrl+Space adds 34, cursor unmoved");
+    assert_eq!(at("t2"), (33, 15), "Ctrl+Left then Ctrl+Space adds 33");
+    assert_eq!(at("t3"), (33, 14), "Ctrl+Space again removes it");
+    let (cu_cursor, cu_sel) = at("cu");
+    // The row width follows the window and the zoom, so what is pinned is
+    // that the cursor MOVED, never where to.
+    assert_ne!(cu_cursor, 33, "Ctrl+Up did not move the cursor");
+    assert_eq!(cu_sel, 14, "Ctrl+Up keeps the selection");
+    // --- Ctrl+Space builds a discontiguous selection from nothing (AC4) ---
+    assert_eq!(
+        at("three"),
+        (3, 3),
+        "Ctrl+Space on three frames, walked between with Ctrl+Right"
+    );
+    assert_eq!(at("two2"), (3, 2), "and one press takes one away");
+    // `dump.plain` — the plain `]` at 6200 — is deliberately not read here
+    // yet: it is the contrast this test exists to draw (Ctrl keeps, plain
+    // does not), and the assertion lands with rule 1 in the commit that
+    // makes a plain move collapse. Until then it reads 14, which is the
+    // behaviour the user reported.
+    // The status bar counts what the dump counts.
+    assert!(
+        dump_text(qedump(&stderr, "two"), "status").contains("· 13 selected"),
+        "{}",
+        qedump(&stderr, "two")
     );
 }
 

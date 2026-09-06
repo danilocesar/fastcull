@@ -64,6 +64,15 @@ const CARD_ROWS_FOR: &[(&str, &[&str])] = &[
         &["Shift+[ / ]"],
     ),
     ("`Ctrl+Shift+B`", &["Ctrl+Shift+B"]),
+    // Two card rows carry three map rows (brief 002, 2026-09-06): the
+    // Ctrl+`[`/`]` row shares the Ctrl+arrows cell, whose action text says
+    // "any MOVE key" — `[ / ]` is a MOVE row on this same card. A third row
+    // was not affordable: the card was 44 px from its clamp at 1000x700 and
+    // a row costs 23 (ui-grid.md, "Seven sections"), which is also why
+    // SELECT and MOUSE swapped columns in the same commit.
+    ("Ctrl+arrows / PgUp / PgDn / Home / End", &["Ctrl+arrows"]),
+    ("Ctrl+`[` / Ctrl+`]`", &["Ctrl+arrows"]),
+    ("Ctrl+Space", &["Ctrl+Space"]),
     ("`Ctrl+O`", &["Ctrl+O"]),
     ("`Ctrl+Q`", &["Ctrl+Q"]),
     ("`Ctrl+E` (menu: Copy picks…)", &["Ctrl+E"]),
@@ -79,7 +88,7 @@ const CARD_ROWS_FOR: &[(&str, &[&str])] = &[
 /// the string each is named by on the card instead of in a `KeyRow`.
 /// Adding to this list is a decision about the CARD — that a binding is
 /// better taught where the reader already is than filed under a heading —
-/// so it is made here, once, and not by leaving a `&[]` in a table of 27
+/// so it is made here, once, and not by leaving a `&[]` in a table of 30
 /// rows where nobody would see it.
 const HINTED_INSTEAD_OF_ROWED: &[(&str, &str)] = &[("`?` / `F1`", "? or F1 to open")];
 
