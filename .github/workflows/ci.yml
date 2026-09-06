@@ -179,8 +179,57 @@ jobs:
       # main throws away everything it had already compiled and the next
       # run starts cold -- which is exactly the 20 extra minutes the
       # 2026-09-04 cold Windows cache cost.
+      #
+      # `prefix-key` IS THE PROFILE'S VERSION NUMBER, BUMPED BY HAND. The
+      # key the action computes never reads the workspace `Cargo.toml`.
+      # From its source at the commit the `v2` tag resolves to (v2.9.2,
+      # 6323deb, `src/config.ts`): prefix + job id + OS + arch (lines
+      # 73-95); then 8 hex digits of a SHA-1 over `rustc -vV` and every
+      # env var whose name starts CARGO/CC/CFLAGS/CXX/CMAKE/RUST
+      # (104-131); then 8 more over `.cargo/config.toml`,
+      # `rust-toolchain{,.toml}`, the manifests of the workspace MEMBERS
+      # that `cargo metadata --no-deps` lists, and the Cargo.lock entries
+      # that carry a `source` or `checksum` (156-261) -- e.g.
+      # `v1-rust-test-Linux-x64-91e3cbda-aacf1ed2`. A `[profile]` table
+      # counts only in the workspace root (cargo: "profiles for the non
+      # root package will be ignored"), and this root `Cargo.toml` is a
+      # virtual manifest -- no `[package]`, not a member, never read. The
+      # log's `Lockfiles considered` is Cargo.lock plus the three
+      # `crates/*/Cargo.toml`, nothing else.
+      #
+      # So #76's `[profile.dev.package."*"]` line did not move the key.
+      # The main run that landed it (34007321960; 34013585441 after it
+      # did the same) restored the stock-profile entry under the
+      # unchanged `v0-rust-...` key, rebuilt the dev-profile dependencies
+      # (238 `Compiling` lines in the clippy step and 454 in `Tests`,
+      # against 1 and 3 on the last cached run, 33986518746), and its
+      # post step said `Cache up-to-date.` and saved nothing: a
+      # full-match restore leaves `save.ts` no state to save from (lines
+      # 25-28). Every run after it paid the same cold build -- 26-31 min
+      # ubuntu, 58-62 min windows, against 17 m 33 s / 33 m 48 s cached
+      # -- until the bump to `v1-rust` (brief 003, 2026-09-06;
+      # `specs/01-architecture.md`, "Build profiles", has the
+      # measurements).
+      #
+      # BUMP THE PREFIX WHENEVER A `[profile]` TABLE IN THE ROOT
+      # `Cargo.toml` CHANGES, and for nothing else: rustc releases,
+      # RUSTFLAGS, the lockfile, the member manifests,
+      # `.cargo/config.toml` and `rust-toolchain` already move the key by
+      # themselves. Not a `key:` of `hashFiles('Cargo.toml')` -- that
+      # also moves it on every release's version bump and every comment
+      # edit, a cold pair of jobs each time, silently. A bump costs once:
+      # the first main run under the new prefix is cold and saves, pull
+      # requests before it are cold too, and the old prefix's entries sit
+      # orphaned until GitHub evicts them (unused for 7 days, or oldest
+      # access first over the 10 GB limit). On a pull request the proof
+      # that the key moved is the RESTORE step -- `Cache Key:` shows the
+      # new prefix and the line after `... Restoring cache ...` is `No
+      # cache found.` -- and the post step is silent (`save-if` false
+      # returns before it logs anything), so its silence is not a failed
+      # save.
       - uses: Swatinem/rust-cache@v2
         with:
+          prefix-key: v1-rust
           save-if: ${{ github.ref == 'refs/heads/main' }}
           cache-on-failure: true
 
