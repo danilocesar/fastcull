@@ -2290,12 +2290,16 @@ the user confirms, all cheap to change):**
       122 ms — soft at 20593, sharp at 23886, the wait satisfied after
       3682 ms, `one2one=true` at 30186; the release runners 767 ms and
       343 ms), so the RE-RAISE pin is exercised by the local load recipe
-      only — 19 of 19 healthy loaded debug runs of the M1 script across
-      the three roles' evidence sets re-raised after the bounded drop
-      (the re-raise-deleted mutant's runs excluded, which is the pin
-      working; QE 2026-09-05, D7) — and a CI run would pass with the
-      re-raise deleted. The drop-and-re-raise itself DID occur once in
-      that Windows debug pass, in the soft-transit script where no
+      only — 20 of 20 healthy loaded debug runs of the M1 script
+      re-raised after the bounded drop: every trace on disk carrying the
+      `(hold cap)` drop of idx 8 is 25 once byte-identical copies are
+      removed, the five runs of the re-raise-deleted mutant are the five
+      with no re-raise, which is the pin working, and the remaining 20
+      (developer 7, senior developer 8, QE 3, review 2) all re-raised
+      (QE 2026-09-05, D7; count corrected 2026-09-05, senior-developer
+      review F6) — and a CI run would pass with the re-raise deleted.
+      The drop-and-re-raise itself DID occur once in that Windows debug
+      pass, in the soft-transit script where no
       assertion reads it (hold 953 ms, `(hold cap)` at 1393, soft at
       1445, sharp at 4939). What the M1 test does prove on CI is not
       nothing: the hold engaged, the rescue thumb landed inside the cap,
