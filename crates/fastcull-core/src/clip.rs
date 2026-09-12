@@ -647,6 +647,15 @@ fn plan_with_free(
                 (natural, ClipAction::Clash)
             }
             ClashPolicy::Overwrite => (natural, ClipAction::Replace),
+            // The video export's question never offers "New only" (brief
+            // 005 D9 2026-09-12; video-export.md "Clash"): this export
+            // writes ONE file, and for one file "skip" IS Cancel — the app
+            // not executing anything at all. The arm exists only because
+            // the policy enum is shared with Copy Picks, and it marks the
+            // plan unanswered so the executor refuses it: a wiring mistake
+            // that ever sent this policy here writes nothing and replaces
+            // nothing, instead of guessing an answer.
+            ClashPolicy::NewOnly => (natural, ClipAction::Clash),
             ClashPolicy::CreateCopies => (
                 dest.join(crate::fileops::first_free_name(dest, &name)),
                 ClipAction::WriteRenamed,

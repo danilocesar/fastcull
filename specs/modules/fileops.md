@@ -560,7 +560,13 @@ not in `CopyReport::landed` (this run verified nothing about it), so no
 record is made for it; a record the session already holds for it
 survives, because `SessionCopies::refresh` finds the file still there —
 the badge follows the disk (Manager decision D8 2026-09-12; persona:
-SHRUG, honest either way).
+SHRUG, honest either way). The "copied earlier but gone" note is computed
+BEFORE the answer and under every policy, so it is not a promise about
+what a given answer will do (added 2026-09-12, brief 005, senior-developer
+plan OQ3): a hand-deleted RAW whose sidecar was left behind reads "1
+copied earlier but gone — copying again" on the preview, and under New
+only that pick is a sidecar-only clash and is LEFT — the report's stray
+`.xmp` line, not the note, is then what happened.
 
 **6. Wording and keys** (settled with the persona 2026-08-21; the New
 only row, its key and the lines that change with it settled with the

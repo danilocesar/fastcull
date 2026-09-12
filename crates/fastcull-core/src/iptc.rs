@@ -425,6 +425,42 @@ pub fn expand(
     Ok(out)
 }
 
+/// Does this template use the `{seq}` variable — `{seq}` or `{seq:N}`?
+/// Walks the SAME brace grammar as [`expand`], so the literal `{{seq}}`
+/// (which expands to the text `{seq}`) is not a hit: a substring test
+/// would false-positive on exactly the form the grammar exists to allow.
+/// Core's fact behind the copy plan's `{seq}` note (fileops.md §6, brief
+/// 005). An unclosed brace answers `false` — `expand` refuses such a
+/// template before anyone asks this.
+pub fn template_uses_seq(text: &str) -> bool {
+    let mut chars = text.chars().peekable();
+    while let Some(c) = chars.next() {
+        match c {
+            '{' if chars.peek() == Some(&'{') => {
+                chars.next();
+            }
+            '}' if chars.peek() == Some(&'}') => {
+                chars.next();
+            }
+            '{' => {
+                let mut var = String::new();
+                loop {
+                    match chars.next() {
+                        Some('}') => break,
+                        Some(v) => var.push(v),
+                        None => return false,
+                    }
+                }
+                if var == "seq" || var.starts_with("seq:") {
+                    return true;
+                }
+            }
+            _ => {}
+        }
+    }
+    false
+}
+
 // ------------------------------------------------------------------- apply
 
 /// Apply a template to a batch (spec tri-state, 2026-07-25: ABSENT fields
@@ -944,5 +980,27 @@ mod tests {
             .templates
             .is_empty());
         std::fs::remove_dir_all(&dir).ok();
+    }
+
+    /// The `{seq}` fact behind the copy plan's re-run note (brief 005)
+    /// walks `expand`'s brace grammar rather than searching for text: the
+    /// LITERAL `{{seq}}` expands to the characters `{seq}` and numbers
+    /// nothing, so a `contains("{seq")` would warn about a template that
+    /// has no sequence in it at all.
+    #[test]
+    fn template_uses_seq_walks_the_brace_grammar() {
+        for yes in ["{seq}", "{seq:3}", "x{{seq}}{seq}", "{date}_{seq}.{ext}"] {
+            assert!(template_uses_seq(yes), "{yes} uses {{seq}}");
+        }
+        for no in [
+            "{{seq}}", // the literal text `{seq}`
+            "{date}_{filename}.{ext}",
+            "seq",        // not a variable at all
+            "{sequence}", // an unknown variable is `expand`'s error
+            "{seq",       // unclosed: `expand` refuses it first
+            "",
+        ] {
+            assert!(!template_uses_seq(no), "{no} does not use {{seq}}");
+        }
     }
 }
