@@ -244,8 +244,10 @@ as user-verified or NOT VERIFIED.
   refused `Clash` marker (added 2026-09-12, senior-developer review F1),
   so a wiring mistake that ever sent that policy here writes nothing and
   replaces nothing rather than guessing an answer — the UI offers Keep
-  both, Overwrite and Cancel only. Nothing is ever replaced without the
-  Overwrite answer.
+  both, Overwrite and Cancel only — pinned by the `n` round of
+  the_video_export_asks_before_replacing_a_file (QE 2026-09-12, D4), which
+  asserts the key leaves the question up; the nudge it raises stays
+  review-verified. Nothing is ever replaced without the Overwrite answer.
 - **Write**: the copy-engine shape — one worker thread, a progress event
   per frame, cancel between frames, unique temp name, no-clobber commit
   (`hard_link` + unlink, rename only for an answered Overwrite), **never a

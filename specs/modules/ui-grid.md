@@ -4376,6 +4376,14 @@ Documented because they ship in release builds (validator finding):
   whether an inert key raised it) and `warning=` (the amber line under the
   rows): the fourth answer's row, its key and its inert companions (`Y`,
   `Ctrl+N`) are otherwise assertable only down to `copystate=3`.
+  Since 2026-09-12 it also carries `copyprogress=` — the running line
+  (`Copying 2 / 2 — c.ARW`; `Checking 1 / 12 — …` under Overwrite), the
+  copy's twin of `clipprogress=`. Its last value survives into the report
+  card because nothing resets `copy-progress` when a run ends
+  (`start_copy` writes "Starting…", the pump's `File` arm writes each
+  line, nothing else writes it), so a driven test reads the FINAL line
+  after `wait:copy finished run N` instead of sampling a running one (QE
+  2026-09-12, D3).
   Since 2026-08-27 the same block exists for the video export —
   `clip=`, `clipstate=` (the same four states), `clipavail=` (is there
   anything to export), `clipsummary=` (the plan line), `clipskipped=`,

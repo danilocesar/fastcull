@@ -939,7 +939,12 @@ split the archive.
 - [ ] **Brief 005 AC4 — the progress total equals the number of picks
       copied; no event for a left pick** —
       new_only_emits_one_event_per_copied_pick_and_none_for_a_left_one
-      (the `CopyEvent::File` stream is counted and its names checked).
+      (the `CopyEvent::File` stream is counted and its names checked);
+      app-level, the rendered line itself — `Copying 2 / 2 — c.ARW`
+      through `copyprogress=` after `wait:copy finished run 1`, and
+      `Starting…` (no Copying, no Skipping) after the all-left run, in
+      copy_picks_new_only_copies_the_new_pick_and_leaves_the_rest_alone
+      (QE 2026-09-12, D3).
 - [ ] **Brief 005 AC5 — the report prints the left line (and the
       stray-sidecar line when it applies), the green light attaches to
       copied files only, and an all-left run prints the left line, no
@@ -948,7 +953,10 @@ split the archive.
       a_new_only_run_reports_what_it_left_and_earns_no_green_light_for_it
       (singular and plural of both lines, and their order after the
       copied line); app-level, the left line in the report after `N` —
-      copy_picks_new_only_copies_the_new_pick_and_leaves_the_rest_alone.
+      copy_picks_new_only_copies_the_new_pick_and_leaves_the_rest_alone;
+      the counts carried through a cancel at the executor —
+      a_cancelled_new_only_run_still_reports_what_it_left (QE 2026-09-12,
+      D2).
 - [ ] **Brief 005 AC6 — free space: only the clash-free bytes must fit
       under New only** — the_free_space_check_follows_the_answer,
       extended with the fourth policy (an existing test that changes by

@@ -729,6 +729,7 @@ fn dispatch(win: &MainWindow, state: &Rc<RefCell<AppState>>, key: &str, layout: 
                          soft={} vx={:.1} vy={:.1} pan={:.4},{:.4} zf={:.3} \
                          copynote={:?} report={:?} copystate={} confirm={:?} \
                          newonly={:?} nudge={:?} nudged={} warning={:?} \
+                         copyprogress={:?} \
                          clip={} clipstate={} clipavail={} clipsummary={:?} clipskipped={:?} \
                          cliperror={:?} clipreport={:?} clipconfirm={:?} clipprogress={:?} \
                          cliphint={:?} exported={} curexported={} \
@@ -771,6 +772,13 @@ fn dispatch(win: &MainWindow, state: &Rc<RefCell<AppState>>, key: &str, layout: 
             win.get_copy_confirm_nudge().as_str(),
             win.get_copy_confirm_nudged(),
             win.get_copy_confirm_warning().as_str(),
+            // The running line the user reads (`Copying 2 / 2 — c.ARW`),
+            // the copy's twin of `clipprogress=` — and persona G1's
+            // MUST-HAVE, which had no end-to-end assertion until now (QE
+            // 2026-09-12). Nothing resets `copy-progress` when a run
+            // ends, so a dump gated on `copy finished run N` reads the
+            // run's LAST line rather than sampling a running one.
+            win.get_copy_progress().as_str(),
             // The video export (M9): the same reasoning as
             // the copy block above — this is the second
             // operation in the app that writes files the user

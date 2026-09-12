@@ -6489,16 +6489,22 @@ fn copy_picks_new_only_copies_the_new_pick_and_leaves_the_rest_alone() {
         std::fs::remove_dir_all(d).ok();
         std::fs::create_dir_all(d).unwrap();
     }
-    let (a_bytes, b_bytes) = (vec![0xABu8; 2048], vec![0xCDu8; 2048]);
+    // THREE picks, and the third is what makes the N row's two counts
+    // DIFFER (2 new, 1 already here). With two picks both numbers were 1,
+    // and a label with `{n}` and `{clashes}` transposed shipped green (QE
+    // 2026-09-12, minor 1).
+    let (a_bytes, b_bytes, c_bytes) = (vec![0xABu8; 2048], vec![0xCDu8; 2048], vec![0xEFu8; 2048]);
     std::fs::write(src.join("a.ARW"), &a_bytes).unwrap();
     std::fs::write(src.join("b.ARW"), &b_bytes).unwrap();
+    std::fs::write(src.join("c.ARW"), &c_bytes).unwrap();
     // The user's own earlier copy of `a`, byte for byte …
     std::fs::write(dest.join("a.ARW"), &a_bytes).unwrap();
     // … and the sidecar beside it, which is NOT ours any more.
     let developed = b"<a darktable history stack, developed at the destination>".to_vec();
     std::fs::write(dest.join("a.ARW.xmp"), &developed).unwrap();
-    // The {seq} round's clash: `pick_{seq}.{ext}` over two picks expands
-    // to pick_1.ARW and pick_2.ARW, and the first of those is here.
+    // The {seq} round's clash: `pick_{seq}.{ext}` over three picks expands
+    // to pick_1.ARW, pick_2.ARW and pick_3.ARW (width 1 for a batch of 3),
+    // and the first of those is here.
     std::fs::write(dest.join("pick_1.ARW"), b"an earlier run's frame").unwrap();
     let untouched_before = ["a.ARW", "a.ARW.xmp"].map(|n| {
         let path = dest.join(n);
@@ -6510,7 +6516,7 @@ fn copy_picks_new_only_copies_the_new_pick_and_leaves_the_rest_alone() {
     // copy is gated on its own run's mark, never on a clock — a budget
     // the Windows runner does not keep (issue #70).
     let script = format!(
-        "1500:key:y;1700:key:y;1900:copydest:{dest};2100:key:ctrl+e;2400:dump.preview;\
+        "1500:key:y;1650:key:y;1800:key:y;1900:copydest:{dest};2100:key:ctrl+e;2400:dump.preview;\
          2600:key:return;2900:dump.question;3100:key:y;3300:dump.inert_y;\
          3500:key:ctrl+n;3700:dump.accel_n;\
          3900:key:n;4000:wait:copy finished run 1;4600:dump.newonly;4900:key:escape;\
@@ -6537,6 +6543,9 @@ fn copy_picks_new_only_copies_the_new_pick_and_leaves_the_rest_alone() {
     let landed_b = std::fs::read(dest.join("b.ARW")).ok();
     let landed_b_xmp = std::fs::read(dest.join("b.ARW.xmp")).ok();
     let src_b_xmp = std::fs::read(src.join("b.ARW.xmp")).ok();
+    let landed_c = std::fs::read(dest.join("c.ARW")).ok();
+    let landed_c_xmp = std::fs::read(dest.join("c.ARW.xmp")).ok();
+    let src_c_xmp = std::fs::read(src.join("c.ARW.xmp")).ok();
     let untouched_after = ["a.ARW", "a.ARW.xmp"].map(|n| {
         let path = dest.join(n);
         std::fs::metadata(&path).unwrap().modified().unwrap()
@@ -6550,7 +6559,7 @@ fn copy_picks_new_only_copies_the_new_pick_and_leaves_the_rest_alone() {
     assert_eq!(dump_field(preview, "copystate"), "0", "{preview}");
     let note = dump_text(preview, "copynote");
     assert!(
-        note.contains("1 new · 1 already exist here"),
+        note.contains("2 new · 1 already exist here"),
         "the preview does not pre-announce the split: {note}"
     );
     assert!(
@@ -6563,15 +6572,17 @@ fn copy_picks_new_only_copies_the_new_pick_and_leaves_the_rest_alone() {
     assert_eq!(dump_field(question, "copystate"), "3", "{question}");
     let asked = dump_text(question, "confirm");
     assert!(
-        asked.contains("1 of your 2 picks already have files with these names in")
-            && asked.contains("The other 1 copies normally"),
+        asked.contains("1 of your 3 picks already have files with these names in")
+            && asked.contains("The other 2 copy normally"),
         "the question does not state the counts: {asked}"
     );
     assert_eq!(
         dump_text(question, "newonly"),
-        "New only — copy the 1, leave the 1 already here untouched",
-        "the N row must name both counts, and begin with New so N reads \
-         as New and not as No: {question}"
+        "New only — copy the 2, leave the 1 already here untouched",
+        "the N row must name both counts IN THE RIGHT ORDER — this is the \
+         label the user reads to decide, and with the numbers transposed \
+         it promises the opposite of what the answer does — and begin with \
+         New so N reads as New and not as No: {question}"
     );
     assert_eq!(
         dump_text(question, "nudge"),
@@ -6633,11 +6644,22 @@ fn copy_picks_new_only_copies_the_new_pick_and_leaves_the_rest_alone() {
     assert_eq!(dump_field(done, "copystate"), "2", "{done}");
     let report = dump_text(done, "report");
     assert!(
-        report.contains("1 copied, all checksums verified")
+        report.contains("2 copied, all checksums verified")
             && report.contains(
                 "1 already had a file with this name here — left untouched, not re-checked"
             ),
         "the report does not say what was copied and what was left: {report}"
+    );
+    // The line the user actually watched, end to end (persona G1's
+    // MUST-HAVE): the total is the picks this run COPIES, never the
+    // whole pick count. Read at the report card, which is safe because
+    // nothing resets `copy-progress` when a run ends — this dump is
+    // gated on `copy finished run 1`, so the value is the run's last.
+    assert_eq!(
+        dump_text(done, "copyprogress"),
+        "Copying 2 / 2 — c.ARW",
+        "the progress line must count the picks this run copies and \
+         nothing else — never / 3 (persona G1, fileops.md §6)"
     );
     for never in [
         "identical",
@@ -6658,12 +6680,12 @@ fn copy_picks_new_only_copies_the_new_pick_and_leaves_the_rest_alone() {
     assert_eq!(dump_field(all, "copystate"), "3", "{all}");
     let asked = dump_text(all, "confirm");
     assert!(
-        asked.contains("2 of your 2 picks") && !asked.contains("The other"),
+        asked.contains("3 of your 3 picks") && !asked.contains("The other"),
         "the question claims something still copies normally: {asked}"
     );
     assert_eq!(
         dump_text(all, "newonly"),
-        "New only — nothing new to copy, leave the 2 already here untouched",
+        "New only — nothing new to copy, leave the 3 already here untouched",
         "the N row must stay offered and say there is nothing new — a row \
          that appears and disappears moves B and O under the pointer on \
          exactly the destructive question: {all}"
@@ -6676,9 +6698,16 @@ fn copy_picks_new_only_copies_the_new_pick_and_leaves_the_rest_alone() {
     assert_eq!(dump_field(left, "copystate"), "2", "{left}");
     assert_eq!(
         dump_text(left, "report"),
-        "2 already had files with these names here — left untouched, not re-checked",
+        "3 already had files with these names here — left untouched, not re-checked",
         "a run that left everything must say so — no green light, and \
          never \"Nothing needed copying\": {left}"
+    );
+
+    assert_eq!(
+        dump_text(left, "copyprogress"),
+        "Starting…",
+        "a run that copied nothing must show no Copying and no Skipping \
+         line (fileops.md §6)"
     );
 
     // --- the row answers on click too -----------------------------------
@@ -6696,7 +6725,7 @@ fn copy_picks_new_only_copies_the_new_pick_and_leaves_the_rest_alone() {
     );
     assert_eq!(
         dump_text(clicked, "report"),
-        "2 already had files with these names here — left untouched, not re-checked"
+        "3 already had files with these names here — left untouched, not re-checked"
     );
 
     // --- the {seq} note, on the plan line where every answer is ahead ---
@@ -6706,7 +6735,7 @@ fn copy_picks_new_only_copies_the_new_pick_and_leaves_the_rest_alone() {
     assert!(
         note.contains(
             "{seq} numbers the whole session — the names already here may now belong to other frames"
-        ) && note.contains("1 new · 1 already exist here"),
+        ) && note.contains("2 new · 1 already exist here"),
         "the plan line does not warn that {{seq}} renumbers what is \
          already there: {note}"
     );
@@ -6719,6 +6748,8 @@ fn copy_picks_new_only_copies_the_new_pick_and_leaves_the_rest_alone() {
             "a.ARW.xmp".to_string(),
             "b.ARW".to_string(),
             "b.ARW.xmp".to_string(),
+            "c.ARW".to_string(),
+            "c.ARW.xmp".to_string(),
             "pick_1.ARW".to_string()
         ],
         "unexpected destination contents"
@@ -6747,6 +6778,15 @@ fn copy_picks_new_only_copies_the_new_pick_and_leaves_the_rest_alone() {
     assert!(
         landed_b_xmp.is_some() && landed_b_xmp == src_b_xmp,
         "the new pick's sidecar did not travel with its RAW"
+    );
+    assert_eq!(
+        landed_c.as_deref(),
+        Some(c_bytes.as_slice()),
+        "the second new pick did not land"
+    );
+    assert!(
+        landed_c_xmp.is_some() && landed_c_xmp == src_c_xmp,
+        "the second new pick's sidecar did not travel with its RAW"
     );
 }
 
@@ -7632,7 +7672,8 @@ fn the_video_export_asks_before_replacing_a_file() {
     let script = format!(
         "1500:select-all;1700:clipdest:{dest};1900:key:ctrl+shift+e;\
          2200:dump.plan;2400:key:return;2700:dump.question;\
-         2900:key:return;3100:dump.inert;3300:key:ctrl+o;3500:dump.accel;\
+         2900:key:return;3100:dump.inert;3150:key:n;3250:dump.inert_n;\
+         3300:key:ctrl+o;3500:dump.accel;\
          3700:key:b;3800:wait:clip export finished run 1;5000:dump.kept;\
          5300:key:escape;\
          5600:key:ctrl+shift+e;5900:key:return;6200:key:o;\
@@ -7694,6 +7735,25 @@ fn the_video_export_asks_before_replacing_a_file() {
         dump_field(qedump(&stderr, "inert"), "clipstate"),
         "3",
         "Enter answered the question — Ctrl+Shift+E, Enter, Enter must never replace a file"
+    );
+    // `N` is NOT an answer here. Copy Picks grew a fourth answer on
+    // 2026-09-12 (brief 005), and this question deliberately did not: it
+    // writes ONE file, and for one file "skip" IS Cancel (Manager D9), so
+    // `n` must stay a swallowed key. The NUDGE half of that sentence —
+    // that the swallow raises the "Pick one" line — stays review-verified:
+    // there is no `clipnudged=` dump field, and adding one for a line
+    // this unit does not touch is not worth the facility (QE 2026-09-12,
+    // senior-developer integrity review, proposal 4).
+    let inert_n = qedump(&stderr, "inert_n");
+    assert_eq!(
+        dump_field(inert_n, "clipstate"),
+        "3",
+        "N answered the video question — it has no New only (brief 005 \
+         D9): one file, and skip is Cancel"
+    );
+    assert!(
+        dump_text(inert_n, "clipconfirm").contains("a-c.mov"),
+        "the question is no longer the question after an inert key: {inert_n}"
     );
     // An accelerator reaches this scope as a plain letter plus a modifier;
     // unguarded, the Open Folder reflex answers with the DESTRUCTIVE one.

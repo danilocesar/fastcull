@@ -3839,4 +3839,104 @@ mod tests {
         }
         std::fs::remove_dir_all(&dir).ok();
     }
+
+    /// fileops.md §6: the left counts are decided at PLAN time, from the
+    /// filesystem, before anything is written — like "replaced" — and the
+    /// report carries them "whether or not the run finished (a cancel
+    /// between files changes what was copied, not what was left)".
+    /// `run_plan` seeds them into the report before its loop for exactly
+    /// that reason, and until this test nothing made that seeding
+    /// falsifiable: zeroing the counts in the cancel branch passed all 356
+    /// core tests, because the report_lines test hand-builds its
+    /// `CopyReport` (QE 2026-09-12, minor 2).
+    ///
+    /// Deterministic by construction, like its model
+    /// `cancel_between_files_keeps_finished_copies`: the cancel is set
+    /// when the worker ANNOUNCES the first file, while that file is still
+    /// being copied, so the between-files check at the next iteration is
+    /// what stops the run.
+    #[test]
+    fn a_cancelled_new_only_run_still_reports_what_it_left() {
+        let dir = tmp();
+        let big = vec![9u8; 3_000_000];
+        let sources = src_with(
+            &dir,
+            &[
+                // The RAW clash — left, and big enough to notice if it moved.
+                ("a.ARW", b"aaaa"),
+                // The three clash-free picks, big enough that the cancel
+                // lands between files rather than after the last one.
+                ("b.ARW", big.as_slice()),
+                ("c.ARW", big.as_slice()),
+                ("d.ARW", big.as_slice()),
+                // The sidecar-only clash — left, and counted apart.
+                ("e.ARW", b"ee"),
+            ],
+        );
+        let dest = dir.join("out");
+        std::fs::create_dir_all(&dest).unwrap();
+        let archive = b"the archive's copy".to_vec();
+        let stray = b"stray".to_vec();
+        std::fs::write(dest.join("a.ARW"), &archive).unwrap();
+        std::fs::write(dest.join("e.ARW.xmp"), &stray).unwrap();
+
+        let p = super::plan(
+            &sources,
+            &dest,
+            None,
+            ClashPolicy::NewOnly,
+            &SessionCopies::default(),
+        )
+        .unwrap();
+        assert_eq!(
+            (p.left_untouched, p.left_sidecar_only, p.jobs.len()),
+            (2, 1, 3)
+        );
+        assert_eq!(p.jobs[0].dst_raw, dest.join("b.ARW"));
+
+        let (h, rx) = execute(p);
+        match rx.recv().expect("first file event") {
+            CopyEvent::File { index, name, .. } => {
+                assert_eq!((index, name.as_str()), (1, "b.ARW"))
+            }
+            other => panic!("expected the first file event, got {other:?}"),
+        }
+        h.cancel();
+        let report = drain(rx);
+
+        assert!(report.cancelled, "the between-files check never fired");
+        assert!(
+            report.copied < 3,
+            "cancel is between files, so the rest must not go out: {report:?}"
+        );
+        assert_eq!(
+            (report.left_untouched, report.left_sidecar_only),
+            (2, 1),
+            "the left counts are decided at plan time and carried through \
+             a cancel (fileops.md §6)"
+        );
+        assert!(!report.earned_the_green_light());
+        assert!(
+            !report.landed.iter().any(|(_, path)| matches!(
+                path.file_name().and_then(|n| n.to_str()),
+                Some("a.ARW") | Some("e.ARW")
+            )),
+            "a left pick reached `landed`: {:?}",
+            report.landed
+        );
+        assert_eq!(std::fs::read(dest.join("a.ARW")).unwrap(), archive);
+        assert_eq!(std::fs::read(dest.join("e.ARW.xmp")).unwrap(), stray);
+        assert!(
+            !dest.join("e.ARW").exists(),
+            "the RAW landed beside a sidecar that describes another photograph"
+        );
+        // Whatever finished is complete and verified — nothing partial.
+        for j in ["b.ARW", "c.ARW", "d.ARW"] {
+            let p = dest.join(j);
+            if p.exists() {
+                assert_eq!(std::fs::metadata(&p).unwrap().len(), 3_000_000);
+            }
+        }
+        std::fs::remove_dir_all(&dir).ok();
+    }
 }
