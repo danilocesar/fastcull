@@ -1052,7 +1052,7 @@ split the archive.
       dialog does, in the same commit** — review-verified at the gate (no
       driven test reads the docs); the pages are part of this spec change
       and ship with the implementation commit.
-- [ ] **Brief 006 AC1 — the formatter prints `1.0 KB`, `1.0 MB`, `1.0 GB`,
+- [x] **Brief 006 AC1 — the formatter prints `1.0 KB`, `1.0 MB`, `1.0 GB`,
       `1.0 TB` and `12.0 TB` at the boundaries and `1023 B` below the
       first, one decimal on every tiered value and none on bytes, and
       rounds inside the tier the threshold picked (`1024.0 KB` at
@@ -1071,7 +1071,12 @@ split the archive.
       pump::the_verified_line_of_a_video_export_is_earned (`344.0 MB`),
       clip_bridge::the_two_untestable_messages_now_have_a_test (`4.5 GB`,
       `1.1 GB`), and the driven `0 B to copy` guard in
-      copy_picks_rerun_recopies_hand_deleted_files (0 stays `0 B`).
+      copy_picks_rerun_recopies_hand_deleted_files (0 stays `0 B`). RED
+      before the change on this seat 2026-09-12: the 2^10 row read
+      `1024 B`, the 2^40 row `1024.0 GB`, 1,029,480 B `1029480 B` and the
+      NAS figure `1228.8 GB` (developer 2026-09-12, the old three-tier
+      body run over every row of the test); all ten mutants red, each at
+      the row named above.
 - [ ] **Brief 006 AC2 — a copy plan refused for space shows `The copy
       needs {needed} and there is {free} free at the destination.` with
       both sizes through the formatter, on the plan preview and on the

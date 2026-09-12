@@ -259,11 +259,36 @@ fn plan_sources(st: &AppState) -> Vec<fastcull_core::fileops::PlanSource> {
         .collect()
 }
 
+/// A byte count in the units a person reads (fileops.md, dialog
+/// minimums, "Sizes on screen"): five binary tiers chosen by threshold —
+/// bytes below 1,024, then KB, MB, GB and TB from 2^10, 2^20, 2^30 and
+/// 2^40 — with one decimal on every tiered value and none on a plain
+/// byte count.
+///
+/// The tier is picked FIRST and the value rounded inside it (brief 006
+/// D6), so one byte short of a megabyte is `1024.0 KB` and never
+/// `1.0 MB`: no line may claim a boundary the count has not reached.
+/// Above the TB tier the number simply runs on (`1024.0 TB`) — there is
+/// no PB tier, because no volume a photographer copies to needs one.
+/// Binary, because `df -h`, Windows Explorer and a NAS dashboard are
+/// (the user, brief 006 OQ1: "I don't compare them").
+///
+/// This is the ONE formatter both dialogs share: the copy summary line
+/// and the Keep both row's cost, the copy's free-space refusal, and the
+/// video export's plan line, refusal and report line.
 pub(crate) fn human_bytes(b: u64) -> String {
-    if b >= 1 << 30 {
-        format!("{:.1} GB", b as f64 / (1u64 << 30) as f64)
-    } else if b >= 1 << 20 {
-        format!("{:.1} MB", b as f64 / (1u64 << 20) as f64)
+    const KB: u64 = 1 << 10;
+    const MB: u64 = 1 << 20;
+    const GB: u64 = 1 << 30;
+    const TB: u64 = 1 << 40;
+    if b >= TB {
+        format!("{:.1} TB", b as f64 / TB as f64)
+    } else if b >= GB {
+        format!("{:.1} GB", b as f64 / GB as f64)
+    } else if b >= MB {
+        format!("{:.1} MB", b as f64 / MB as f64)
+    } else if b >= KB {
+        format!("{:.1} KB", b as f64 / KB as f64)
     } else {
         format!("{b} B")
     }
@@ -616,5 +641,51 @@ pub(crate) fn recompute_bursts(st: &mut AppState) {
             st.bursts.badge[*id] = size;
         }
         st.bursts.pos[*id] = positions[pos_in_order];
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// Every size either dialog shows, at the boundary of each tier
+    /// (fileops.md, dialog minimums, "Sizes on screen"; brief 006 AC1).
+    /// The pairs are exact strings on purpose: this is the text a user
+    /// reads at a glance, and a tier that rounds into its neighbour or
+    /// loses its decimal is a wrong number, not a cosmetic wobble.
+    #[test]
+    fn a_byte_count_reads_in_its_tier_with_one_decimal() {
+        for (bytes, want) in [
+            // Below the first tier there is no decimal at all: a count of
+            // bytes is exact, and `1023.0 B` would imply a rounding that
+            // did not happen.
+            (0u64, "0 B"),
+            (1023, "1023 B"),
+            (1 << 10, "1.0 KB"),
+            // The tier is chosen by THRESHOLD and the value rounded
+            // INSIDE it (brief 006 D6), so one byte short of a megabyte
+            // is `1024.0 KB` and never `1.0 MB`: no line may claim a
+            // boundary the count has not reached.
+            ((1 << 20) - 1, "1024.0 KB"),
+            (1 << 20, "1.0 MB"),
+            (1 << 30, "1.0 GB"),
+            ((1u64 << 40) - 1, "1024.0 GB"),
+            (1u64 << 40, "1.0 TB"),
+            (12u64 << 40, "12.0 TB"),
+            // The two figures issue #88 was opened on: a ~1 MB clash on
+            // the Keep both row printed `1029480 B`, and a 1.2 TB NAS's
+            // free space printed `1228.8 GB`.
+            (1_029_480, "1005.4 KB"),
+            (1_319_413_953_331, "1.2 TB"),
+            // The values the two existing readers of a size string pin
+            // (clip_bridge's video refusal, pump's report line): they sit
+            // inside their tiers under the old three-tier rule and the
+            // new five-tier one alike, which is why those tests stay
+            // green with no change.
+            (4_823_456_789, "4.5 GB"),
+            (344 << 20, "344.0 MB"),
+        ] {
+            assert_eq!(human_bytes(bytes), want, "{bytes}");
+        }
     }
 }
