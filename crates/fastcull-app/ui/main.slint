@@ -55,7 +55,7 @@ component Chip inherits Rectangle {
 
 // One answer to the Copy dialog's clash question (fileops.md): a
 // full-width row carrying the key that answers it, what it does, and what
-// it costs. Deliberately not a std Button — none of the three answers may
+// it costs. Deliberately not a std Button — none of the four answers may
 // look like the default action, and the labels are far too long to sit
 // side by side in the card.
 component AnswerRow inherits Rectangle {
@@ -64,6 +64,31 @@ component AnswerRow inherits Rectangle {
     in property <string> cost;
     in property <color> label-color: #e8e8f0;
     callback clicked();
+    // Where the layout put this row (brief 005): a script clicks a row BY
+    // NAME (`click:copy answer B`) instead of at a coordinate measured on
+    // one platform, and a test reads the four marks to assert the row
+    // ORDER without pinning a pixel. An EMPTY mark reports nothing, which
+    // is how the video export's rows stay exactly as they were (D9).
+    in property <string> mark;
+    callback laid-out(string, length, length, length, length);
+    init => {
+        if (root.mark != "") {
+            root.laid-out(root.mark, root.absolute-position.x, root.absolute-position.y,
+                root.width, root.height);
+        }
+    }
+    changed absolute-position => {
+        if (root.mark != "") {
+            root.laid-out(root.mark, root.absolute-position.x, root.absolute-position.y,
+                root.width, root.height);
+        }
+    }
+    changed height => {
+        if (root.mark != "") {
+            root.laid-out(root.mark, root.absolute-position.x, root.absolute-position.y,
+                root.width, root.height);
+        }
+    }
     height: 34px;
     border-radius: 6px;
     background: ta.has-hover ? #33333d : #26262e;
@@ -477,10 +502,11 @@ export component MainWindow inherits Window {
     // The clash question (copy-state 3, fileops.md "The clash question"):
     // a STATE of this dialog, not a second modal — the same key scope, the
     // same Esc rules, no new stacking surface (issue #42). Every string is
-    // built in Rust; the two answers' keys are printed in their rows, so
-    // no mnemonic has to be guessed.
+    // built in Rust; the answers' keys are printed in their rows, so no
+    // mnemonic has to be guessed.
     in property <string> copy-confirm: "";
     in property <string> copy-confirm-examples: "";
+    in property <string> copy-confirm-new-only: "";
     in property <string> copy-confirm-keep-both: "";
     in property <string> copy-confirm-keep-both-cost: "";
     in property <string> copy-confirm-overwrite: "";
@@ -792,6 +818,7 @@ export component MainWindow inherits Window {
     callback copy-pick-dest();
     callback copy-replan();
     callback copy-start();
+    callback copy-answer-new-only();
     callback copy-answer-keep-both();
     callback copy-answer-overwrite();
     callback copy-answer-cancel();
@@ -2242,6 +2269,10 @@ export component MainWindow inherits Window {
                         // matched as well.
                         if (!event.modifiers.control && !event.modifiers.alt
                             && !event.modifiers.meta) {
+                            if (event.text == "n" || event.text == "N") {
+                                root.copy-answer-new-only();
+                                return accept;
+                            }
                             if (event.text == "b" || event.text == "B") {
                                 root.copy-answer-keep-both();
                                 return accept;
@@ -2251,8 +2282,10 @@ export component MainWindow inherits Window {
                                 return accept;
                             }
                         }
-                        // Enter, Space, Y, N, everything: swallowed, and
-                        // the question says out loud that it is waiting.
+                        // Enter, Space, Y, everything else: swallowed,
+                        // and the question says out loud that it is
+                        // waiting (`N` answers since 2026-09-12, brief
+                        // 005; `Y` is still inert).
                         root.copy-confirm-nudged = true;
                         return accept;
                     }
@@ -2448,10 +2481,11 @@ export component MainWindow inherits Window {
                             }
                             // THE CLASH QUESTION (copy-state 3). The rows are
                             // stacked, not side by side: three outcome-labelled
-                            // answers do not fit across a 560px card (persona
-                            // measurement 2026-08-21), and a vertical list reads
-                            // as what it is — a menu of three choices, in order of
-                            // increasing consequence, with Cancel set apart.
+                            // answers did not fit across a 560px card (persona
+                            // measurement 2026-08-21) and four do not either, and
+                            // a vertical list reads as what it is — a menu of four
+                            // choices, in order of increasing consequence — New
+                            // only first, Cancel set apart (brief 005, 2026-09-12).
                             if root.copy-state == 3: VerticalLayout {
                                 spacing: 6px;
                                 Text {
@@ -2468,9 +2502,27 @@ export component MainWindow inherits Window {
                                 }
                                 Rectangle { height: 2px; }
                                 AnswerRow {
+                                    key: "N";
+                                    label: root.copy-confirm-new-only;
+                                    // The ordinary colour, and no cost column:
+                                    // New only is the least consequential answer
+                                    // that still does something, and it adds
+                                    // nothing beyond the clash-free copy every
+                                    // answer but Cancel makes (fileops.md §6).
+                                    mark: "copy answer N";
+                                    laid-out(what, x, y, w, h) => {
+                                        root.dbg-card-laid-out(what, x, y, w, h);
+                                    }
+                                    clicked => { root.copy-answer-new-only(); }
+                                }
+                                AnswerRow {
                                     key: "B";
                                     label: root.copy-confirm-keep-both;
                                     cost: root.copy-confirm-keep-both-cost;
+                                    mark: "copy answer B";
+                                    laid-out(what, x, y, w, h) => {
+                                        root.dbg-card-laid-out(what, x, y, w, h);
+                                    }
                                     clicked => { root.copy-answer-keep-both(); }
                                 }
                                 AnswerRow {
@@ -2481,12 +2533,20 @@ export component MainWindow inherits Window {
                                     // primary-styled destructive button gets
                                     // pressed reflexively within a week (persona).
                                     label-color: #ffb84d;
+                                    mark: "copy answer O";
+                                    laid-out(what, x, y, w, h) => {
+                                        root.dbg-card-laid-out(what, x, y, w, h);
+                                    }
                                     clicked => { root.copy-answer-overwrite(); }
                                 }
                                 Rectangle { height: 4px; }
                                 AnswerRow {
                                     key: "Esc";
                                     label: root.copy-confirm-cancel;
+                                    mark: "copy answer Esc";
+                                    laid-out(what, x, y, w, h) => {
+                                        root.dbg-card-laid-out(what, x, y, w, h);
+                                    }
                                     clicked => { root.copy-answer-cancel(); }
                                 }
                                 if root.copy-confirm-warning != "": Text {
