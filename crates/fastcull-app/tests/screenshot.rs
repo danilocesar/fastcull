@@ -7091,6 +7091,144 @@ fn the_copy_refusal_reaches_the_dialog_on_the_drop_back_after_keep_both() {
     );
 }
 
+/// The copy dialog's free-space refusal on the PLAN PREVIEW — the other
+/// path fileops.md's plan-time error list names ("on the plan preview
+/// and on the drop-back after an answer alike"; brief 006 AC2). The twin
+/// of `the_copy_refusal_reaches_the_dialog_on_the_drop_back_after_keep_both`,
+/// which drives the drop-back and whose preview is built to PASS (it
+/// asserts `copyerror=""` there), so the preview's refusing branch was
+/// driven by nobody (QE 2026-09-12, D3).
+///
+/// Two picks and no clash: the tiny one first — its plan FITS and prints
+/// the destination's free figure — then the 8 TiB one joins it and the
+/// preview itself refuses. The fitting plan line is what the refusal's
+/// second size is held against, the check the twin's assertion 4 makes
+/// against ITS plan line: the two figures are one `statvfs` answer about
+/// a second apart. The fixture's three reasons (`#[cfg(unix)]`, 8 TiB,
+/// the TIFF front) are the twin's, written there.
+///
+/// The gaps between the steps are not a race, for the twin's reason:
+/// `copy_replan_with` runs synchronously inside the Ctrl+E handler on the
+/// UI thread, Escape closes the dialog on that thread, and every `dump.`
+/// is a later event on it. The one gate that waits for work is the load,
+/// and it is a `wait:`.
+#[test]
+#[cfg(unix)]
+fn the_copy_refusal_reaches_the_dialog_on_the_plan_preview() {
+    if !has_display() {
+        eprintln!("screenshot smoke skipped: no display server");
+        return;
+    }
+    let _s = serial();
+    let src = out_dir().join("refusal-preview-src");
+    let dest = out_dir().join("refusal-preview-dest");
+    for d in [&src, &dest] {
+        std::fs::remove_dir_all(d).ok();
+        std::fs::create_dir_all(d).unwrap();
+    }
+    // The names sort the tiny pick FIRST: the first `y` picks it and
+    // advances the cursor to the big one, which the second `y` picks
+    // after Escape has closed the fitting plan.
+    write_synthetic_raw(&src.join("a-small.ARW"), 400, 300, 1, 4096);
+    write_synthetic_raw(&src.join("b-big.ARW"), 400, 300, 1, 4096);
+    std::fs::OpenOptions::new()
+        .write(true)
+        .open(src.join("b-big.ARW"))
+        .unwrap()
+        .set_len(8 << 40)
+        .unwrap();
+
+    let script = format!(
+        "500:wait:load settled gen 0;1000:key:y;1300:copydest:{dest};\
+         1500:key:ctrl+e;1800:dump.fits;2000:key:escape;2300:key:y;\
+         2600:key:ctrl+e;2900:dump.refused",
+        dest = dest.display()
+    );
+    let out = out_dir().join("copy-refusal-preview.jpg");
+    let stderr = shoot_env_stderr(
+        &[src.to_str().unwrap()],
+        &[("FASTCULL_TRACE", "1"), ("FASTCULL_DRIVE", script.as_str())],
+        &out,
+    );
+    let on_disk: Vec<String> = std::fs::read_dir(&dest)
+        .unwrap()
+        .map(|e| e.unwrap().file_name().to_string_lossy().into_owned())
+        .collect();
+    let fixture_len = std::fs::metadata(src.join("b-big.ARW")).unwrap().len();
+    for d in [&src, &dest] {
+        std::fs::remove_dir_all(d).ok();
+    }
+
+    // 1. The one gate that waits for real work fired.
+    assert!(
+        stderr.contains("wait:load settled gen 0 (satisfied"),
+        "the session never settled, so nothing below was driven:\n{stderr}"
+    );
+
+    // 2. The tiny pick alone: the plan fits, and its line carries the
+    //    free figure the refusal is held against. `4.1 KB` is the KB
+    //    tier at app level (brief 006 AC1): the three-tier formatter
+    //    printed `4170 B to copy` here.
+    let fits = qedump(&stderr, "fits");
+    assert_eq!(dump_field(fits, "copystate"), "0", "{fits}");
+    assert_eq!(
+        dump_text(fits, "copyerror"),
+        "",
+        "the preview refused a plan that fits: {fits}"
+    );
+    let fitting = dump_text(fits, "summary");
+    assert!(
+        fitting.starts_with("1 picked · 4.1 KB to copy · ") && fitting.ends_with(" free"),
+        "the fitting plan line is not the one-pick line: {fitting}"
+    );
+    let planned_free = size_token_bytes(
+        fitting
+            .rsplit_once(" · ")
+            .and_then(|(_, last)| last.strip_suffix(" free"))
+            .unwrap_or_else(|| panic!("no free figure on the plan line: {fitting}")),
+    )
+    .unwrap_or_else(|| panic!("the plan line's free figure is not a formatted size: {fitting}"));
+
+    // 3. Both picks: the PREVIEW refuses, in the dialog's words, before
+    //    any question is asked.
+    let refused = qedump(&stderr, "refused");
+    assert_eq!(dump_field(refused, "copystate"), "0", "{refused}");
+    assert_eq!(dump_text(refused, "report"), "", "{refused}");
+    let refusal = dump_text(refused, "copyerror");
+    let said_it = format!(
+        "the preview did not say why in the dialog's words (fileops.md, \
+         brief 006 R2) — or this seat has 8 TiB or more free on its temp \
+         filesystem, which the fixture assumes it does not: {refusal}"
+    );
+    let (head, tail) = refusal.split_once(" and there is ").expect(&said_it);
+    assert_eq!(head, "The copy needs 8.0 TB", "{said_it}");
+    let free_token = tail
+        .strip_suffix(" free at the destination.")
+        .expect(&said_it);
+    let refused_free = size_token_bytes(free_token).unwrap_or_else(|| panic!("{said_it}"));
+    let drift = refused_free.abs_diff(planned_free) as f64 / planned_free as f64;
+    assert!(
+        drift < 0.02,
+        "the refusal's second size is not the destination's free space: \
+         {refused_free} B against the plan line's {planned_free} B ({refusal})"
+    );
+
+    // 4. Nothing ran and nothing landed.
+    assert!(
+        !stderr.contains("copy finished run"),
+        "a refused plan was executed:\n{stderr}"
+    );
+    assert!(
+        on_disk.is_empty(),
+        "the refused copy left files at the destination: {on_disk:?}"
+    );
+    assert_eq!(
+        fixture_len,
+        8 << 40,
+        "the app wrote to the source RAW (hard rule 1)"
+    );
+}
+
 // ---------------------------------------------------------------------------
 // M9, Export Frames as Video (video-export.md). Two driven tests: one over
 // the REAL A1 frames, which is the only place the whole chain — preview

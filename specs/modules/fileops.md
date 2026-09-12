@@ -250,8 +250,15 @@ explicitly deferred to a later discussion; modal dialog accepted)
   dialog's summary line (`148 picked · 7.3 GB to copy · 1.2 TB free`),
   the Keep both row's cost (`+590.3 MB`, §6), the free-space refusal in
   the plan-time error list above, and the video dialog's plan line,
-  refusal and report line (video-export.md, "Dialog"). Five tiers,
-  binary, chosen by threshold: `{n} B` below 1,024 bytes (no decimal —
+  refusal and report line (video-export.md, "Dialog") — every count of
+  bytes that is a SIZE. The one other byte count either dialog can print
+  is the video's name-length refusal (video-export.md: a name over 255
+  bytes is refused at plan time — core's *"the file name would be {len}
+  bytes long, which no filesystem accepts: {name}"*, reaching the video
+  dialog through its `other` arm), which is a length, not a size, and
+  stays as it is: `0.3 KB` for a file name would be worse (QE
+  2026-09-12, D4). Five tiers, binary, chosen by threshold: `{n} B`
+  below 1,024 bytes (no decimal —
   `0 B`, `1023 B`), then `{:.1} KB` from 2^10, `{:.1} MB` from 2^20,
   `{:.1} GB` from 2^30 and `{:.1} TB` from 2^40, labelled KB/MB/GB/TB,
   one decimal on every tiered value (`1.0 KB`, `12.0 TB`; `1.0 TB` at
@@ -280,7 +287,12 @@ explicitly deferred to a later discussion; modal dialog accepted)
   persona's own list): a units preference, GiB/TiB labels, a
   decimal/binary switch, per-file sizes, a free-space bar, an ETA.
   Pinned by copy_bridge::a_byte_count_reads_in_its_tier_with_one_decimal
-  (the acceptance list, brief 006 AC1).
+  (the acceptance list, brief 006 AC1); its 2^50 row is what pins the
+  run-on rule — a PB arm at 2^50 passed every test in the workspace
+  until it was added (QE 2026-09-12, D1) — and its `u64::MAX` row that
+  the largest count still prints without a panic (senior-developer
+  integrity review 2026-09-12: an integer rewrite of the TB arm
+  overflows there and nowhere else).
 - **The card's height follows its content and its text region scrolls**,
   the rule video-export.md records for issue #62: a 480 px floor (the
   height it always had, so nothing moves in the ordinary case), the window
@@ -1065,14 +1077,26 @@ split the archive.
       `1228.8 GB`). Mutants, one per tier: each threshold moved by one
       byte, each divisor swapped for its neighbour's, `{:.0}` or `{:.2}`
       on any tier, and the KB or the TB arm deleted — every one must turn
-      the test red. Both runners, debug and release (an app-crate unit
-      test runs under `cargo test --workspace` on both seats). The
-      existing readers of a size string stay green with no change:
+      the test red. Added at QE round 1 (2026-09-12, D1/P1): the rows
+      `2^50 → 1024.0 TB` and `u64::MAX → 16777216.0 TB`, red under a PB
+      arm at 2^50 (`1.0 PB`) and under an integer rewrite of the TB arm
+      (`attempt to multiply with overflow`, seen by the `u64::MAX` row
+      alone). Debug on both runners (`cargo test --workspace --locked`,
+      ci.yml's Tests step); release on the development seat only — CI's
+      release steps run the screenshot target and the perf budgets, not
+      the unit tests (corrected 2026-09-12, QE S3: this entry first said
+      "debug and release" of both runners). The existing readers of a
+      size string stay green with no change:
       pump::the_verified_line_of_a_video_export_is_earned (`344.0 MB`),
       clip_bridge::the_two_untestable_messages_now_have_a_test (`4.5 GB`,
-      `1.1 GB`), and the driven `0 B to copy` guard in
-      copy_picks_rerun_recopies_hand_deleted_files (0 stays `0 B`). RED
-      before the change on this seat 2026-09-12: the 2^10 row read
+      `1.1 GB`), and the driven guard in
+      copy_picks_rerun_recopies_hand_deleted_files, which asserts the
+      re-run is NOT an empty plan (`!summary.contains("0 B to copy")` —
+      a negative that would also hold if zero printed `0.0 KB`) and
+      stays green because 0 still prints `0 B`; the row `(0, "0 B")` of
+      the unit test is what pins that (corrected 2026-09-12, QE D2: this
+      entry first credited the guard with pinning the form). RED before
+      the change on this seat 2026-09-12: the 2^10 row read
       `1024 B`, the 2^40 row `1024.0 GB`, 1,029,480 B `1029480 B` and the
       NAS figure `1228.8 GB` (developer 2026-09-12, the old three-tier
       body run over every row of the test); all ten mutants red, each at
@@ -1118,7 +1142,22 @@ split the archive.
       2026-09-12: `copyerror="not enough free space: need 8796093026378
       bytes, 10101223424 available"` (developer 2026-09-12); the preview
       line `2 picked · 8.0 TB to copy` read `8192.0 GB to copy` before
-      commit 1, which the third driven mutant re-measured.
+      commit 1, which the third driven mutant re-measured. The drop-back
+      is that round's; the PREVIEW's own refusal — the one the
+      twin's preview cannot show, because its preview is built to pass
+      and asserts `copyerror=""` — is driven by
+      the_copy_refusal_reaches_the_dialog_on_the_plan_preview (QE
+      2026-09-12, D3/P2; senior-developer integrity review 2026-09-12):
+      two clash-free picks, the 4,170 B one alone first (its plan fits
+      and prints the free figure the refusal is held against; `4.1 KB to
+      copy` is the KB tier on screen), Escape, the 8 TiB one joins it
+      and the preview refuses with `copystate=0` and the sentence,
+      nothing written. RED on commit 1 with the field and the test but
+      the arm unchanged: `copyerror="not enough free space: need
+      8796093026378 bytes, 10142629888 available"` (developer
+      2026-09-12); and — alone among the two rounds — RED when the
+      preview path words the refusal differently from the drop-back (a
+      policy-conditional arm), which the drop-back round cannot see.
 - [x] **Brief 006 AC3 — the illustrative sizes in this spec, in
       video-export.md and in `docs/` are the screen's form, and
       docs/copy-picks.md says what the dialog says when the destination

@@ -706,6 +706,11 @@ mod tests {
             ((1u64 << 40) - 1, "1024.0 GB"),
             (1u64 << 40, "1.0 TB"),
             (12u64 << 40, "12.0 TB"),
+            // Above the TB tier the number runs on — there is no PB tier
+            // (fileops.md "Sizes on screen") — and the largest count a
+            // `u64` can hold still prints, without a panic or an overflow.
+            (1u64 << 50, "1024.0 TB"),
+            (u64::MAX, "16777216.0 TB"),
             // The two figures issue #88 was opened on: a ~1 MB clash on
             // the Keep both row printed `1029480 B`, and a 1.2 TB NAS's
             // free space printed `1228.8 GB`.
