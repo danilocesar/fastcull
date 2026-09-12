@@ -236,8 +236,10 @@ as user-verified or NOT VERIFIED.
   folder). Once chosen, remembered separately. Never the RAW folder by
   default; allowed if chosen (ADR 0004).
 - **Clash**: the same question as Copy Picks (fileops.md "The clash
-  question"): a name already there → Keep both (`_1`, `_2`, …) / Overwrite
-  / Cancel. Nothing is ever replaced without the Overwrite answer.
+  question") minus its fourth answer: a name already there → Keep both
+  (`_1`, `_2`, …) / Overwrite / Cancel — no "New only" here, because this
+  export writes one file and for one file "skip" is Cancel (brief 005 D9,
+  2026-09-12). Nothing is ever replaced without the Overwrite answer.
 - **Write**: the copy-engine shape — one worker thread, a progress event
   per frame, cancel between frames, unique temp name, no-clobber commit
   (`hard_link` + unlink, rename only for an answered Overwrite), **never a

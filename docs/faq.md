@@ -20,8 +20,12 @@ folder — will FastCull touch my edits?**
 Only if you answer **Overwrite** to the clash question. darktable stores
 its history in `DSC01234.ARW.xmp`, which is exactly the sidecar name
 FastCull writes, so Overwrite replaces it along with the RAW. Answer
-**Keep both** (the new files land as `DSC01234_1.ARW`) or copy into a
-fresh folder when the destination has been edited elsewhere. See
+**New only** (`N`) instead: it copies the picks that are not there yet
+and leaves every file already in the folder alone — not replaced, not
+even read. Keep both (`DSC01234_1.ARW` twins) and a fresh folder still
+work, but they duplicate what is there. One caveat: with a `{seq}` rename
+template the numbers shift when you add picks, so add under original
+names or export the whole set again. See
 [Copy Picks](copy-picks.md#when-the-names-are-already-taken).
 
 **Does Lightroom read the sidecars?**
