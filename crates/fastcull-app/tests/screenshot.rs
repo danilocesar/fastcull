@@ -6203,40 +6203,43 @@ fn copy_picks_asks_once_and_each_answer_does_what_it_says() {
     // Every other answer here is a key press, and the answer rows live
     // inside the dialog's scrolling body since issue #62 — a change to
     // Slint's drag threshold, or to what a ScrollView does with a press,
-    // would take mouse answers away silently. `700,483` is the Keep-both
-    // row at the default 1440x900 (probed, 2026-08-30); a coordinate that
-    // drifts off it leaves `copystate` at 3 and the assertion below says
-    // so. Gated like the other coordinate-dependent strands: the rows sit
-    // under a Text whose height is a font metric.
-    let mouse_answer = menu_clicks_are_calibrated();
-    let mouse_round = if mouse_answer {
-        // The dump waits for the copy this click starts (QE 2026-09-02):
-        // 700 ms is tighter than the 800 ms the keyboard round used, which
-        // is what went red on Windows, and a 900 ms copy reddens it on
-        // either tree. This is the ONE answer given with the pointer, so
-        // the click can also miss — and then the wait ends the run after
-        // 30 s naming `copy finished run 1`, which says the same thing the
-        // `copystate` assertion below would have: the click answered
-        // nothing and no copy ever ran.
-        format!(
-            "1900:copydest:{dest0};2100:key:ctrl+e;2400:key:return;2700:dump.qclick;\
-             2900:click.700,483;3000:wait:copy finished run 1;\
-             3600:dump.clicked;3900:key:escape;",
-            dest0 = dest0.display()
-        )
-    } else {
-        String::new()
-    };
+    // would take mouse answers away silently.
+    //
+    // The row is clicked BY NAME (issue #70). It used to be
+    // `click.700,483` — the Keep-both row probed at 1440x900 on
+    // 2026-08-30 — and that is exactly the coordinate brief 005 would
+    // have broken in silence: adding the New only row on top made that
+    // point a DIFFERENT answer, so the round would have copied nothing
+    // new while still passing its `copystate` check. A name resolves
+    // against the layout this run actually produced, which is also why
+    // the round no longer carries the `menu_clicks_are_calibrated()` gate
+    // the coordinate needed (Manager ruling on the plan's OQ-1,
+    // 2026-09-12): it now runs on Windows too, and a red there would mean
+    // a mouse-only user cannot answer this question at all — a defect to
+    // diagnose, not a platform to gate off.
+    //
+    // The dump waits for the copy this click starts (QE 2026-09-02)
+    // rather than allowing it a budget: this is the ONE answer given with
+    // the pointer, so the click can also miss — and then the wait ends
+    // the run after 30 s naming `copy finished run 1`, which says the
+    // same thing the `copystate` assertion below would have: the click
+    // answered nothing and no copy ever ran.
+    let mouse_round = format!(
+        "1900:copydest:{dest0};2100:key:ctrl+e;2400:key:return;2700:dump.qclick;\
+         2900:click:copy answer B;3000:wait:copy finished run 1;\
+         3600:dump.clicked;3900:key:escape;",
+        dest0 = dest0.display()
+    );
     // Which copy of this PROCESS each answer below starts: the mouse round
-    // ran one already. The two dumps that read a finished copy wait for
-    // THAT run's report card instead of allowing it 800 ms — a budget the
-    // Windows runner does not keep (issue #70: `copystate` read 1, the
-    // copy was still going), and one no runner is obliged to keep.
-    let n = if mouse_answer { 2 } else { 1 };
-    let (n2, kept_wait, over_wait) = (
-        n + 1,
+    // ran one already, on every platform now. The two dumps that read a
+    // finished copy wait for THAT run's report card instead of allowing it
+    // 800 ms — a budget the Windows runner does not keep (issue #70:
+    // `copystate` read 1, the copy was still going), and one no runner is
+    // obliged to keep.
+    let (n, n2) = (2, 3);
+    let (kept_wait, over_wait) = (
         format!("wait:copy finished run {n} (satisfied"),
-        format!("wait:copy finished run {} (satisfied", n + 1),
+        format!("wait:copy finished run {n2} (satisfied"),
     );
     let script = format!(
         "1500:key:y;1700:key:y;{mouse_round}\
@@ -6287,31 +6290,31 @@ fn copy_picks_asks_once_and_each_answer_does_what_it_says() {
     }
 
     // --- the one answer given with the mouse ------------------------------
-    if mouse_answer {
-        assert_eq!(
-            dump_field(qedump(&stderr, "qclick"), "copystate"),
-            "3",
-            "the mouse round never reached the question:\n{stderr}"
-        );
-        assert!(
-            stderr.contains("wait:copy finished run 1 (satisfied"),
-            "the mouse round's `wait:` never fired — its dump was timed, \
-             not gated:\n{stderr}"
-        );
-        assert_eq!(
-            dump_field(qedump(&stderr, "clicked"), "copystate"),
-            "2",
-            "the click on the Keep-both row did not answer the question — \
-             a mouse-only user cannot answer it at all (or the coordinate \
-             drifted off the row):\n{stderr}"
-        );
-        let names: Vec<&str> = mouse_disk.iter().map(|(n, _)| n.as_str()).collect();
-        assert_eq!(
-            names,
-            vec!["a.ARW", "a_1.ARW", "a_1.ARW.xmp", "b.ARW", "b.ARW.xmp"],
-            "the clicked Keep-both did not land the pick under a fresh name: {mouse_disk:?}"
-        );
-    }
+    assert_eq!(
+        dump_field(qedump(&stderr, "qclick"), "copystate"),
+        "3",
+        "the mouse round never reached the question:\n{stderr}"
+    );
+    assert!(
+        stderr.contains("wait:copy finished run 1 (satisfied"),
+        "the mouse round's `wait:` never fired — its dump was timed, \
+         not gated:\n{stderr}"
+    );
+    // The click resolved against the row the app itself reported, and
+    // landed inside it: the guard that replaced the measured coordinate.
+    assert_click_resolved(&stderr, "copy answer B");
+    assert_eq!(
+        dump_field(qedump(&stderr, "clicked"), "copystate"),
+        "2",
+        "the click on the Keep-both row did not answer the question — \
+         a mouse-only user cannot answer it at all:\n{stderr}"
+    );
+    let names: Vec<&str> = mouse_disk.iter().map(|(n, _)| n.as_str()).collect();
+    assert_eq!(
+        names,
+        vec!["a.ARW", "a_1.ARW", "a_1.ARW.xmp", "b.ARW", "b.ARW.xmp"],
+        "the clicked Keep-both did not land the pick under a fresh name: {mouse_disk:?}"
+    );
 
     // --- the question exists, and states the split -----------------------
     let preview = qedump(&stderr, "preview");
@@ -6461,6 +6464,329 @@ fn copy_picks_asks_once_and_each_answer_does_what_it_says() {
         landed_a.as_deref(),
         Some(a_bytes.as_slice()),
         "overwrite did not replace the file that was there"
+    );
+}
+
+/// The fourth answer, driven through the real dialog (brief 005, issue
+/// #86; fileops.md "The clash question" §2 and §6). The fixture is the
+/// user's own case in miniature: a destination that already holds one of
+/// the picks, with a sidecar beside it that has been DEVELOPED since (the
+/// darktable history stack this answer exists to protect — Overwrite
+/// byte-replaces it, and until 2026-09-12 no answer added picks to such a
+/// folder). Three rounds answer `N` — by key, with nothing new to copy,
+/// and by mouse — and a fourth reads the `{seq}` warning off the plan
+/// line. AC1 (app level), AC5, AC7 and AC8.
+#[test]
+fn copy_picks_new_only_copies_the_new_pick_and_leaves_the_rest_alone() {
+    if !has_display() {
+        eprintln!("screenshot smoke skipped: no display server");
+        return;
+    }
+    let _s = serial();
+    let src = out_dir().join("newonly-src");
+    let dest = out_dir().join("newonly-dest");
+    for d in [&src, &dest] {
+        std::fs::remove_dir_all(d).ok();
+        std::fs::create_dir_all(d).unwrap();
+    }
+    // THREE picks, and the third is what makes the N row's two counts
+    // DIFFER (2 new, 1 already here). With two picks both numbers were 1,
+    // and a label with `{n}` and `{clashes}` transposed shipped green (QE
+    // 2026-09-12, minor 1).
+    let (a_bytes, b_bytes, c_bytes) = (vec![0xABu8; 2048], vec![0xCDu8; 2048], vec![0xEFu8; 2048]);
+    std::fs::write(src.join("a.ARW"), &a_bytes).unwrap();
+    std::fs::write(src.join("b.ARW"), &b_bytes).unwrap();
+    std::fs::write(src.join("c.ARW"), &c_bytes).unwrap();
+    // The user's own earlier copy of `a`, byte for byte …
+    std::fs::write(dest.join("a.ARW"), &a_bytes).unwrap();
+    // … and the sidecar beside it, which is NOT ours any more.
+    let developed = b"<a darktable history stack, developed at the destination>".to_vec();
+    std::fs::write(dest.join("a.ARW.xmp"), &developed).unwrap();
+    // The {seq} round's clash: `pick_{seq}.{ext}` over three picks expands
+    // to pick_1.ARW, pick_2.ARW and pick_3.ARW (width 1 for a batch of 3),
+    // and the first of those is here.
+    std::fs::write(dest.join("pick_1.ARW"), b"an earlier run's frame").unwrap();
+    let untouched_before = ["a.ARW", "a.ARW.xmp"].map(|n| {
+        let path = dest.join(n);
+        std::fs::metadata(&path).unwrap().modified().unwrap()
+    });
+
+    // Runs are numbered at `start_copy`: 1 the keyboard `N`, 2 the
+    // all-left `N`, 3 the clicked one. Every dump that reads a finished
+    // copy is gated on its own run's mark, never on a clock — a budget
+    // the Windows runner does not keep (issue #70).
+    let script = format!(
+        "1500:key:y;1650:key:y;1800:key:y;1900:copydest:{dest};2100:key:ctrl+e;2400:dump.preview;\
+         2600:key:return;2900:dump.question;3100:key:y;3300:dump.inert_y;\
+         3500:key:ctrl+n;3700:dump.accel_n;\
+         3900:key:n;4000:wait:copy finished run 1;4600:dump.newonly;4900:key:escape;\
+         5100:key:ctrl+e;5400:key:return;5700:dump.allclash;5900:key:n;\
+         6000:wait:copy finished run 2;6600:dump.allleft;6900:key:escape;\
+         7100:key:ctrl+e;7400:key:return;7700:click:copy answer N;\
+         7800:wait:copy finished run 3;8400:dump.clicked;8700:key:escape;\
+         8900:key:ctrl+e;9200:copytemplate:pick_{{seq}}.{{ext}};9500:dump.seqnote",
+        dest = dest.display()
+    );
+    let out = out_dir().join("copy-new-only.jpg");
+    let stderr = shoot_env_stderr(
+        &[src.to_str().unwrap()],
+        &[("FASTCULL_TRACE", "1"), ("FASTCULL_DRIVE", script.as_str())],
+        &out,
+    );
+    let mut on_disk: Vec<String> = std::fs::read_dir(&dest)
+        .unwrap()
+        .map(|e| e.unwrap().file_name().to_string_lossy().into_owned())
+        .collect();
+    on_disk.sort();
+    let landed_a = std::fs::read(dest.join("a.ARW")).ok();
+    let landed_a_xmp = std::fs::read(dest.join("a.ARW.xmp")).ok();
+    let landed_b = std::fs::read(dest.join("b.ARW")).ok();
+    let landed_b_xmp = std::fs::read(dest.join("b.ARW.xmp")).ok();
+    let src_b_xmp = std::fs::read(src.join("b.ARW.xmp")).ok();
+    let landed_c = std::fs::read(dest.join("c.ARW")).ok();
+    let landed_c_xmp = std::fs::read(dest.join("c.ARW.xmp")).ok();
+    let src_c_xmp = std::fs::read(src.join("c.ARW.xmp")).ok();
+    let untouched_after = ["a.ARW", "a.ARW.xmp"].map(|n| {
+        let path = dest.join(n);
+        std::fs::metadata(&path).unwrap().modified().unwrap()
+    });
+    for d in [&src, &dest] {
+        std::fs::remove_dir_all(d).ok();
+    }
+
+    // --- the plan preview: no {seq} in the template, so no note ---------
+    let preview = qedump(&stderr, "preview");
+    assert_eq!(dump_field(preview, "copystate"), "0", "{preview}");
+    let note = dump_text(preview, "copynote");
+    assert!(
+        note.contains("2 new · 1 already exist here"),
+        "the preview does not pre-announce the split: {note}"
+    );
+    assert!(
+        !note.contains("numbers the whole session"),
+        "the {{seq}} note appeared over a template that has no {{seq}} in it: {note}"
+    );
+
+    // --- the question, its fourth row, and the order of the four --------
+    let question = qedump(&stderr, "question");
+    assert_eq!(dump_field(question, "copystate"), "3", "{question}");
+    let asked = dump_text(question, "confirm");
+    assert!(
+        asked.contains("1 of your 3 picks already have files with these names in")
+            && asked.contains("The other 2 copy normally"),
+        "the question does not state the counts: {asked}"
+    );
+    assert_eq!(
+        dump_text(question, "newonly"),
+        "New only — copy the 2, leave the 1 already here untouched",
+        "the N row must name both counts IN THE RIGHT ORDER — this is the \
+         label the user reads to decide, and with the numbers transposed \
+         it promises the opposite of what the answer does — and begin with \
+         New so N reads as New and not as No: {question}"
+    );
+    assert_eq!(
+        dump_text(question, "nudge"),
+        "Pick one: N, B, O or Esc.",
+        "the nudge does not offer the fourth answer: {question}"
+    );
+    assert_eq!(
+        dump_field(question, "nudged"),
+        "false",
+        "the question is nudging before any key was pressed: {question}"
+    );
+    assert!(
+        dump_text(question, "warning")
+            .ends_with("(darktable) are lost. New only leaves them alone."),
+        "the amber line warns about the lost edits without naming the \
+         answer that avoids them, in the same breath: {question}"
+    );
+    // The ROW ORDER, from the rows' own layout marks: increasing
+    // consequence, New only first, Cancel set apart. RELATIVE y only —
+    // a font metric moves a layout by up to 40 px per seat (2026-09-04),
+    // so no absolute geometry is pinned here.
+    let (_, y_n, _, h_n) = laid_out_rect(&stderr, "copy answer N", question);
+    let (_, y_b, _, h_b) = laid_out_rect(&stderr, "copy answer B", question);
+    let (_, y_o, _, h_o) = laid_out_rect(&stderr, "copy answer O", question);
+    let (_, y_esc, _, h_esc) = laid_out_rect(&stderr, "copy answer Esc", question);
+    assert!(
+        y_n < y_b && y_b < y_o && y_o < y_esc,
+        "the answers are not in order of increasing consequence \
+         (N {y_n}, B {y_b}, O {y_o}, Esc {y_esc}): a habitual top-row \
+         click must land on the least consequential answer"
+    );
+    assert!(
+        h_n > 0.0 && h_b > 0.0 && h_o > 0.0 && h_esc > 0.0,
+        "an answer row has no height: it is drawn but cannot be clicked \
+         ({h_n}, {h_b}, {h_o}, {h_esc})"
+    );
+
+    // --- Y is inert, and says so; Ctrl+N is not an answer ---------------
+    let inert = qedump(&stderr, "inert_y");
+    assert_eq!(
+        (dump_field(inert, "copystate"), dump_field(inert, "nudged")),
+        ("3", "true"),
+        "Y answered the question, or died silently — a dead key reads as \
+         a frozen dialog: {inert}"
+    );
+    assert_eq!(
+        dump_field(qedump(&stderr, "accel_n"), "copystate"),
+        "3",
+        "Ctrl+N answered the question — the answers are BARE letters only: {stderr}"
+    );
+
+    // --- N: the new pick copies, the rest is left -----------------------
+    assert!(
+        stderr.contains("wait:copy finished run 1 (satisfied"),
+        "the `wait:copy finished run 1` step never fired — the dump was \
+         timed, not gated:\n{stderr}"
+    );
+    let done = qedump(&stderr, "newonly");
+    assert_eq!(dump_field(done, "copystate"), "2", "{done}");
+    let report = dump_text(done, "report");
+    assert!(
+        report.contains("2 copied, all checksums verified")
+            && report.contains(
+                "1 already had a file with this name here — left untouched, not re-checked"
+            ),
+        "the report does not say what was copied and what was left: {report}"
+    );
+    // The line the user actually watched, end to end (persona G1's
+    // MUST-HAVE): the total is the picks this run COPIES, never the
+    // whole pick count. Read at the report card, which is safe because
+    // nothing resets `copy-progress` when a run ends — this dump is
+    // gated on `copy finished run 1`, so the value is the run's last.
+    assert_eq!(
+        dump_text(done, "copyprogress"),
+        "Copying 2 / 2 — c.ARW",
+        "the progress line must count the picks this run copies and \
+         nothing else — never / 3 (persona G1, fileops.md §6)"
+    );
+    for never in [
+        "identical",
+        "replaced",
+        "landed under new names",
+        "Nothing needed copying",
+    ] {
+        assert!(
+            !report.contains(never),
+            "New only reported {never:?} — it neither re-verifies, nor \
+             replaces, nor renames, nor copies nothing: {report}"
+        );
+    }
+
+    // --- nothing new at all: the row says so, and answering it is an
+    //     honest no-op with the left line as its whole report ------------
+    let all = qedump(&stderr, "allclash");
+    assert_eq!(dump_field(all, "copystate"), "3", "{all}");
+    let asked = dump_text(all, "confirm");
+    assert!(
+        asked.contains("3 of your 3 picks") && !asked.contains("The other"),
+        "the question claims something still copies normally: {asked}"
+    );
+    assert_eq!(
+        dump_text(all, "newonly"),
+        "New only — nothing new to copy, leave the 3 already here untouched",
+        "the N row must stay offered and say there is nothing new — a row \
+         that appears and disappears moves B and O under the pointer on \
+         exactly the destructive question: {all}"
+    );
+    assert!(
+        stderr.contains("wait:copy finished run 2 (satisfied"),
+        "the `wait:copy finished run 2` step never fired:\n{stderr}"
+    );
+    let left = qedump(&stderr, "allleft");
+    assert_eq!(dump_field(left, "copystate"), "2", "{left}");
+    assert_eq!(
+        dump_text(left, "report"),
+        "3 already had files with these names here — left untouched, not re-checked",
+        "a run that left everything must say so — no green light, and \
+         never \"Nothing needed copying\": {left}"
+    );
+
+    assert_eq!(
+        dump_text(left, "copyprogress"),
+        "Starting…",
+        "a run that copied nothing must show no Copying and no Skipping \
+         line (fileops.md §6)"
+    );
+
+    // --- the row answers on click too -----------------------------------
+    assert_click_resolved(&stderr, "copy answer N");
+    assert!(
+        stderr.contains("wait:copy finished run 3 (satisfied"),
+        "the `wait:copy finished run 3` step never fired:\n{stderr}"
+    );
+    let clicked = qedump(&stderr, "clicked");
+    assert_eq!(
+        dump_field(clicked, "copystate"),
+        "2",
+        "the click on the New only row did not answer the question — a \
+         mouse-only user cannot reach the new answer at all: {clicked}"
+    );
+    assert_eq!(
+        dump_text(clicked, "report"),
+        "3 already had files with these names here — left untouched, not re-checked"
+    );
+
+    // --- the {seq} note, on the plan line where every answer is ahead ---
+    let seqnote = qedump(&stderr, "seqnote");
+    assert_eq!(dump_field(seqnote, "copystate"), "0", "{seqnote}");
+    let note = dump_text(seqnote, "copynote");
+    assert!(
+        note.contains(
+            "{seq} numbers the whole session — the names already here may now belong to other frames"
+        ) && note.contains("2 new · 1 already exist here"),
+        "the plan line does not warn that {{seq}} renumbers what is \
+         already there: {note}"
+    );
+
+    // --- what the disk says ---------------------------------------------
+    assert_eq!(
+        on_disk,
+        vec![
+            "a.ARW".to_string(),
+            "a.ARW.xmp".to_string(),
+            "b.ARW".to_string(),
+            "b.ARW.xmp".to_string(),
+            "c.ARW".to_string(),
+            "c.ARW.xmp".to_string(),
+            "pick_1.ARW".to_string()
+        ],
+        "unexpected destination contents"
+    );
+    assert_eq!(
+        landed_a_xmp.as_deref(),
+        Some(developed.as_slice()),
+        "the destination sidecar was rewritten — a darktable history \
+         stack lives in a file of exactly that name, and New only never \
+         opens it"
+    );
+    assert_eq!(
+        untouched_after, untouched_before,
+        "New only touched the pair it left (mtime moved)"
+    );
+    assert_eq!(
+        landed_a.as_deref(),
+        Some(a_bytes.as_slice()),
+        "the RAW that was already there is not the one that was there"
+    );
+    assert_eq!(
+        landed_b.as_deref(),
+        Some(b_bytes.as_slice()),
+        "the new pick did not land"
+    );
+    assert!(
+        landed_b_xmp.is_some() && landed_b_xmp == src_b_xmp,
+        "the new pick's sidecar did not travel with its RAW"
+    );
+    assert_eq!(
+        landed_c.as_deref(),
+        Some(c_bytes.as_slice()),
+        "the second new pick did not land"
+    );
+    assert!(
+        landed_c_xmp.is_some() && landed_c_xmp == src_c_xmp,
+        "the second new pick's sidecar did not travel with its RAW"
     );
 }
 
@@ -7346,7 +7672,8 @@ fn the_video_export_asks_before_replacing_a_file() {
     let script = format!(
         "1500:select-all;1700:clipdest:{dest};1900:key:ctrl+shift+e;\
          2200:dump.plan;2400:key:return;2700:dump.question;\
-         2900:key:return;3100:dump.inert;3300:key:ctrl+o;3500:dump.accel;\
+         2900:key:return;3100:dump.inert;3150:key:n;3250:dump.inert_n;\
+         3300:key:ctrl+o;3500:dump.accel;\
          3700:key:b;3800:wait:clip export finished run 1;5000:dump.kept;\
          5300:key:escape;\
          5600:key:ctrl+shift+e;5900:key:return;6200:key:o;\
@@ -7408,6 +7735,25 @@ fn the_video_export_asks_before_replacing_a_file() {
         dump_field(qedump(&stderr, "inert"), "clipstate"),
         "3",
         "Enter answered the question — Ctrl+Shift+E, Enter, Enter must never replace a file"
+    );
+    // `N` is NOT an answer here. Copy Picks grew a fourth answer on
+    // 2026-09-12 (brief 005), and this question deliberately did not: it
+    // writes ONE file, and for one file "skip" IS Cancel (Manager D9), so
+    // `n` must stay a swallowed key. The NUDGE half of that sentence —
+    // that the swallow raises the "Pick one" line — stays review-verified:
+    // there is no `clipnudged=` dump field, and adding one for a line
+    // this unit does not touch is not worth the facility (QE 2026-09-12,
+    // senior-developer integrity review, proposal 4).
+    let inert_n = qedump(&stderr, "inert_n");
+    assert_eq!(
+        dump_field(inert_n, "clipstate"),
+        "3",
+        "N answered the video question — it has no New only (brief 005 \
+         D9): one file, and skip is Cancel"
+    );
+    assert!(
+        dump_text(inert_n, "clipconfirm").contains("a-c.mov"),
+        "the question is no longer the question after an inert key: {inert_n}"
     );
     // An accelerator reaches this scope as a plain letter plus a modifier;
     // unguarded, the Open Folder reflex answers with the DESTRUCTIVE one.

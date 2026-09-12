@@ -11,9 +11,9 @@
 //! decides, never the session's memory. A plan is built with a
 //! [`ClashPolicy`]; the default [`ClashPolicy::Ask`] only MARKS the names
 //! that are already occupied at the destination (`PlanAction::Clash`) and
-//! refuses to run, so the app can ask its one question. The answer —
-//! overwrite everything, create copies, or cancel — is a policy for the
-//! whole run, and the plan is rebuilt with it.
+//! refuses to run, so the app can ask its one question. The answer — new
+//! only, overwrite everything, create copies, or cancel — is a policy for
+//! the whole run, and the plan is rebuilt with it.
 
 use std::collections::{HashMap, HashSet};
 use std::io::{Read as _, Write as _};
@@ -29,10 +29,12 @@ use crate::xmp::sidecar_path;
 /// user's answer to the clash question (fileops.md), as a policy for the
 /// whole run rather than a per-file list.
 ///
-/// There is no "skip the clashing files" answer: v1's four-way
-/// `ExistsMode` (rename / skip / overwrite / abort) and its forced
-/// session-skip are gone. Cancel is not a policy either — it is the app
-/// not executing anything at all.
+/// There is no FORCED skip: v1's four-way `ExistsMode` (rename / skip /
+/// overwrite / abort) and its session-decided skip are gone (issue #14).
+/// [`ClashPolicy::NewOnly`] (2026-09-12, issue #86) is the user's explicit
+/// per-run answer to leave the clashing pairs alone, decided from what is
+/// on disk tonight — never from memory. Cancel is not a policy either — it
+/// is the app not executing anything at all.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum ClashPolicy {
     /// Build the plan and MARK every image whose destination pair is
@@ -52,6 +54,14 @@ pub enum ClashPolicy {
     /// "Create copies": clashing images land under the first free numeric
     /// suffix, from `_1`, RAW and sidecar moving as a pair.
     CreateCopies,
+    /// "New only" (the user, issue #86, brief 005, 2026-09-12): every
+    /// clash-free image copies exactly as under the other answers, and a
+    /// clashing pair is LEFT as the disk has it — it gets no job at all,
+    /// so the executor never learns it exists: nothing opens either
+    /// member, no event names it, its bytes are not in the total. The
+    /// plan carries how many were left (`CopyPlan::left_untouched`,
+    /// `CopyPlan::left_sidecar_only`) for the report.
+    NewOnly,
 }
 
 /// One image's planned transfer.
@@ -156,6 +166,21 @@ pub struct CopyPlan {
     /// plan looked (the user deleted the copy by hand). The dialog's amber
     /// note; it decides nothing.
     pub recopied: usize,
+    /// [`ClashPolicy::NewOnly`] only: images whose destination pair was
+    /// occupied and which this plan therefore carries NO job for — left
+    /// as the disk has them, not opened. Copied into the report by the
+    /// executor; 0 under every other policy.
+    pub left_untouched: usize,
+    /// Of those, the ones where only the sidecar name was taken — a stray
+    /// `.xmp` beside no RAW. Under New only that is a photograph that did
+    /// not land, and the report says so apart (persona G2, brief 005).
+    pub left_sidecar_only: usize,
+    /// The template in play uses `{seq}` (any form) AND at least one name
+    /// clashes: `{seq}` numbers the whole session, so the names found
+    /// occupied may now belong to other frames. Computed under every
+    /// policy; the preview prints the note (fileops.md §6, the `{seq}`
+    /// note — the user's decision on brief 005 OQ1, no refusal).
+    pub seq_meets_clashes: bool,
 }
 
 /// What this session copied WHERE: image id → the RAW path(s) it landed
@@ -372,6 +397,9 @@ pub fn plan(
     let mut taken: HashSet<String> = HashSet::new();
     let (mut clashes, mut sidecar_only, mut renamed, mut recopied, mut shared_name) =
         (0usize, 0usize, 0usize, 0usize, 0usize);
+    // New only's two counts: they ride on the plan into the report, so a
+    // run that was cancelled between files still says what it left.
+    let (mut left_untouched, mut left_sidecar_only) = (0usize, 0usize);
     let mut keep_both_example: Option<String> = None;
     // Per-base-name walk cursor; see `first_free_suffix`.
     let mut suffix_cursor: HashMap<String, usize> = HashMap::new();
@@ -446,6 +474,23 @@ pub fn plan(
                     (natural, PlanAction::Clash)
                 }
                 ClashPolicy::Overwrite => (natural, PlanAction::Replace),
+                ClashPolicy::NewOnly => {
+                    // Left as the disk has it (fileops.md §2, brief 005):
+                    // NO job, so the executor never learns the pair
+                    // exists — nothing opens either member, no event
+                    // names it, its bytes are not in the total. Its two
+                    // names are still CLAIMED, so a later pick in this
+                    // run with the same name is suffixed and copied,
+                    // exactly as under every other answer ("two picks,
+                    // one name").
+                    left_untouched += 1;
+                    if !raw_here {
+                        left_sidecar_only += 1;
+                    }
+                    taken.insert(xmp_name.clone());
+                    taken.insert(name.clone());
+                    continue;
+                }
                 ClashPolicy::CreateCopies => {
                     renamed += 1;
                     (
@@ -463,7 +508,10 @@ pub fn plan(
         };
         // The amber note: a copy this session landed in THIS folder and
         // the user then deleted by hand. Information only — under every
-        // answer the image goes out again (there is no skip any more).
+        // answer but New only the image goes out again, and under New
+        // only it goes out again exactly when it is GONE (a hand-emptied
+        // folder holds no clash), which is the property that separates
+        // New only from the forced skip of issue #14.
         let landed_here = session.landed_paths(s.id).find(|p| {
             p.parent().is_some_and(|dir| {
                 *is_dest
@@ -516,13 +564,21 @@ pub fn plan(
     let free_bytes = fs2::available_space(existing_ancestor(dest)).ok();
     let needed = match policy {
         ClashPolicy::CreateCopies => total_bytes,
-        ClashPolicy::Ask | ClashPolicy::Overwrite => clash_free_bytes,
+        ClashPolicy::Ask | ClashPolicy::Overwrite | ClashPolicy::NewOnly => clash_free_bytes,
     };
     if let Some(free) = free_bytes {
         if needed > free {
             return Err(PlanError::InsufficientSpace { needed, free });
         }
     }
+
+    // The `{seq}` re-run trap (fileops.md §6, the `{seq}` note): the new
+    // picks renumber everything after them, so names found occupied may
+    // belong to other frames. The FACT is core's; the preview prints the
+    // sentence. Phase 1 above has already refused an unclosed brace, so
+    // the helper never sees an invalid template here.
+    let seq_meets_clashes =
+        templated && clashes > 0 && template.is_some_and(crate::iptc::template_uses_seq);
 
     Ok(CopyPlan {
         jobs,
@@ -535,6 +591,9 @@ pub fn plan(
         shared_name,
         keep_both_example,
         recopied,
+        left_untouched,
+        left_sidecar_only,
+        seq_meets_clashes,
     })
 }
 
@@ -733,6 +792,14 @@ pub struct CopyReport {
     /// `.xmp` beside it is not — the report says so rather than leaving
     /// the user to find out from darktable (QE finding 2026-08-21).
     pub foreign_sidecars_left: usize,
+    /// Picks the New only answer left as the disk had them — their names
+    /// were taken, so this run carried no job for them: not written, not
+    /// read, not hashed. Decided at plan time, from the filesystem, and
+    /// carried whether or not the run finished (fileops.md §6).
+    pub left_untouched: usize,
+    /// Of those, the sidecar-only clashes — a stray `.xmp` beside no RAW —
+    /// which under New only are photographs that did NOT land.
+    pub left_sidecar_only: usize,
     /// The first name that actually landed under a `_k` suffix — the
     /// report shows one real example, because the names are how the user
     /// finds those frames in the destination folder afterwards.
@@ -818,6 +885,11 @@ fn run_plan(plan: CopyPlan, tx: &Sender<CopyEvent>, cancel: &AtomicBool) {
     let total = plan.jobs.len();
     let mut report = CopyReport {
         all_verified: true,
+        // Decided at PLAN time, before anything is written — like
+        // `replaced` is decided by the answer — so a run cancelled
+        // between files still reports what it left (fileops.md §6).
+        left_untouched: plan.left_untouched,
+        left_sidecar_only: plan.left_sidecar_only,
         ..Default::default()
     };
     // Every FILE this run has already put on disk, by identity. An
@@ -2897,10 +2969,12 @@ mod tests {
     }
 
     /// Free space follows the answer (fileops.md rule 3): before the
-    /// answer, and under overwrite, only the CLASH-FREE bytes have to fit
-    /// — the clashing files mostly replace bytes that are already there.
-    /// "Create copies" writes all of them as new files, so its whole total
-    /// must fit.
+    /// answer, under overwrite and under NEW ONLY (brief 005), only the
+    /// CLASH-FREE bytes have to fit — under overwrite the clashing files
+    /// mostly replace bytes that are already there, and under New only
+    /// they are not written at all, so a nearly-full archive plus four
+    /// new frames must not be refused. "Create copies" writes all of them
+    /// as new files, so its whole total must fit.
     #[test]
     fn the_free_space_check_follows_the_answer() {
         let dir = tmp();
@@ -2911,7 +2985,11 @@ mod tests {
         // `a` clashes and is (claimed to be) bigger than any disk.
         sources[0].size = u64::MAX / 2;
 
-        for policy in [ClashPolicy::Ask, ClashPolicy::Overwrite] {
+        for policy in [
+            ClashPolicy::Ask,
+            ClashPolicy::Overwrite,
+            ClashPolicy::NewOnly,
+        ] {
             let p = super::plan(&sources, &dest, None, policy, &SessionCopies::default())
                 .unwrap_or_else(|e| panic!("{policy:?} must not error on space: {e}"));
             assert!(p.free_bytes.is_some(), "the fixture volume answers statvfs");
@@ -2935,6 +3013,7 @@ mod tests {
             ClashPolicy::Ask,
             ClashPolicy::Overwrite,
             ClashPolicy::CreateCopies,
+            ClashPolicy::NewOnly,
         ] {
             assert!(
                 matches!(
@@ -3009,6 +3088,438 @@ mod tests {
         assert_eq!((p.clashes, p.recopied), (2, 0));
         let report = run(&sources, &dest, None, ClashPolicy::Overwrite, &session);
         assert_eq!((report.copied, report.identical), (0, 2));
+        std::fs::remove_dir_all(&dir).ok();
+    }
+
+    /// "New only" (the user, issue #86; brief 005, fileops.md §2): the
+    /// clash-free picks copy exactly as under every other answer, and a
+    /// clashing pair is LEFT as the disk has it — bytes AND mtime, the
+    /// destination sidecar included. The differing sidecar here stands in
+    /// for a darktable history stack, which is the thing this answer
+    /// exists to protect: under Overwrite it is byte-replaced (the
+    /// 2026-08-22 ruling), and there was no other answer that adds picks
+    /// to that folder until this one (AC1, AC2).
+    #[test]
+    fn new_only_leaves_a_clashing_pair_untouched_and_copies_the_rest() {
+        let dir = tmp();
+        let mut sources = src_with(
+            &dir,
+            &[("a.ARW", b"aaaa"), ("b.ARW", b"bb"), ("c.ARW", b"cccc")],
+        );
+        for s in &sources {
+            crate::xmp::write_pick(&s.path, PickState::Picked).unwrap();
+        }
+        // A pick from ANOTHER folder wanting the name the left pick just
+        // claimed: a name taken by another pick IN THIS RUN is not a
+        // clash under any answer — it is suffixed and copied ("two picks,
+        // one name"), and New only must not change that.
+        let mut second_folder = src_with(&dir.join("two"), &[("a.ARW", b"AAAA")]);
+        crate::xmp::write_pick(&second_folder[0].path, PickState::Picked).unwrap();
+        second_folder[0].id = 3;
+        sources.append(&mut second_folder);
+
+        let dest = dir.join("out");
+        std::fs::create_dir_all(&dest).unwrap();
+        // `a`: the user's own earlier copy — the RAW is byte-identical,
+        // and the sidecar beside it has been developed since.
+        std::fs::write(dest.join("a.ARW"), b"aaaa").unwrap();
+        std::fs::write(dest.join("a.ARW.xmp"), b"<darktable history stand-in>").unwrap();
+        // `c`: the other body's frame, under a name this run wants.
+        std::fs::write(dest.join("c.ARW"), b"foreign").unwrap();
+        std::fs::write(dest.join("c.ARW.xmp"), b"foreign sidecar").unwrap();
+        let before: Vec<(PathBuf, Vec<u8>, std::time::SystemTime)> =
+            ["a.ARW", "a.ARW.xmp", "c.ARW", "c.ARW.xmp"]
+                .iter()
+                .map(|n| {
+                    let path = dest.join(n);
+                    let mtime = std::fs::metadata(&path).unwrap().modified().unwrap();
+                    let bytes = std::fs::read(&path).unwrap();
+                    (path, bytes, mtime)
+                })
+                .collect();
+
+        let p = super::plan(
+            &sources,
+            &dest,
+            None,
+            ClashPolicy::NewOnly,
+            &SessionCopies::default(),
+        )
+        .unwrap();
+        assert_eq!(
+            (
+                p.clashes,
+                p.sidecar_only_clashes,
+                p.left_untouched,
+                p.left_sidecar_only,
+                p.shared_name,
+                p.renamed
+            ),
+            (2, 0, 2, 0, 1, 0),
+            "under New only every clash is left, and only the same-run \
+             shared name takes a suffix"
+        );
+        assert_eq!(
+            p.jobs.len(),
+            2,
+            "a left pick must carry NO job — the executor never learns it \
+             exists: {:?}",
+            p.jobs
+        );
+        assert_eq!(
+            p.total_bytes, 6,
+            "the left picks' bytes are not in the plan's total"
+        );
+        assert!(
+            !p.jobs.iter().any(|j| matches!(
+                j.dst_raw.file_name().and_then(|n| n.to_str()),
+                Some("a.ARW") | Some("c.ARW")
+            )),
+            "a job names a left pick's destination: {:?}",
+            p.jobs
+        );
+        assert_eq!(
+            (p.jobs[1].dst_raw.clone(), p.jobs[1].action),
+            (dest.join("a_1.ARW"), PlanAction::CopyRenamed)
+        );
+        assert!(!p.seq_meets_clashes, "no template in play, no {{seq}} note");
+
+        let (_h, rx) = execute(p);
+        let report = drain(rx);
+        assert_eq!(
+            (
+                report.copied,
+                report.renamed,
+                report.left_untouched,
+                report.left_sidecar_only,
+                report.identical,
+                report.replaced
+            ),
+            (2, 1, 2, 0, 0, 0)
+        );
+        assert_eq!(report.renamed_example.as_deref(), Some("a_1.ARW"));
+        assert!(report.failed.is_empty(), "{:?}", report.failed);
+        assert!(
+            report.earned_the_green_light(),
+            "the copied picks were verified, so the run earned the sentence"
+        );
+        assert_eq!(
+            report.landed,
+            vec![(1, dest.join("b.ARW")), (3, dest.join("a_1.ARW"))],
+            "a left pick is not in `landed`: this run verified nothing about it"
+        );
+        assert_eq!(
+            names_in(&dest),
+            vec![
+                "a.ARW",
+                "a.ARW.xmp",
+                "a_1.ARW",
+                "a_1.ARW.xmp",
+                "b.ARW",
+                "b.ARW.xmp",
+                "c.ARW",
+                "c.ARW.xmp"
+            ]
+        );
+        for (path, bytes, mtime) in &before {
+            assert_eq!(
+                &std::fs::read(path).unwrap(),
+                bytes,
+                "New only rewrote {} — nothing under a clashing name may be \
+                 written, the destination sidecar least of all",
+                path.display()
+            );
+            assert_eq!(
+                &std::fs::metadata(path).unwrap().modified().unwrap(),
+                mtime,
+                "New only touched {}",
+                path.display()
+            );
+        }
+        assert_eq!(std::fs::read(dest.join("a_1.ARW")).unwrap(), b"AAAA");
+        assert_eq!(
+            std::fs::read(dest.join("a_1.ARW.xmp")).unwrap(),
+            std::fs::read(sidecar_path(&sources[3].path)).unwrap(),
+            "a_1.ARW.xmp must be the sidecar of the RAW beside it"
+        );
+        std::fs::remove_dir_all(&dir).ok();
+    }
+
+    /// AC1's teeth: "left untouched" means NOT OPENED — not written, not
+    /// read, not hashed. A destination file nobody can open under a
+    /// clashing name cannot fail a New only run (fileops.md §4), which a
+    /// read-only "verification pass" over the left picks would (persona
+    /// C6: IN-MY-WAY, Manager D5).
+    #[test]
+    #[cfg(unix)]
+    fn new_only_never_opens_a_clashing_pair() {
+        use std::os::unix::fs::PermissionsExt;
+        // Inline and private to this test: a `#[cfg(unix)]` test takes
+        // its helpers with it, or the windows-latest clippy job refuses
+        // the item nothing on that platform uses (the v0.13.0 lesson).
+        fn chmod(path: &Path, mode: u32) {
+            std::fs::set_permissions(path, std::fs::Permissions::from_mode(mode)).unwrap();
+        }
+        let dir = tmp();
+        let sources = src_with(&dir, &[("a.ARW", b"aaaa"), ("b.ARW", b"bb")]);
+        for s in &sources {
+            crate::xmp::write_pick(&s.path, PickState::Picked).unwrap();
+        }
+        let dest = dir.join("out");
+        std::fs::create_dir_all(&dest).unwrap();
+        std::fs::write(dest.join("a.ARW"), b"cannot be read").unwrap();
+        std::fs::write(dest.join("a.ARW.xmp"), b"cannot be read either").unwrap();
+        chmod(&dest.join("a.ARW"), 0o000);
+        chmod(&dest.join("a.ARW.xmp"), 0o000);
+
+        let report = run(
+            &sources,
+            &dest,
+            None,
+            ClashPolicy::NewOnly,
+            &SessionCopies::default(),
+        );
+        assert!(
+            report.failed.is_empty(),
+            "a file New only never opens failed the run — something read \
+             (or wrote) the left pair: {:?}",
+            report.failed
+        );
+        assert_eq!((report.copied, report.left_untouched), (1, 1));
+        assert!(report.earned_the_green_light());
+
+        // Restorable rubbish, or the scratch directory outlives the test.
+        chmod(&dest.join("a.ARW"), 0o644);
+        chmod(&dest.join("a.ARW.xmp"), 0o644);
+        std::fs::remove_dir_all(&dir).ok();
+    }
+
+    /// A stray `.xmp` with no RAW beside it takes the pair's name, so the
+    /// pick is left like any other clash — landing a RAW beside a sidecar
+    /// that describes another photograph is the one thing this module
+    /// never produces — and it is counted APART, because under this answer
+    /// it is a photograph that did NOT land (persona G2, AC3).
+    #[test]
+    fn a_sidecar_only_clash_is_left_and_counted_apart_under_new_only() {
+        let dir = tmp();
+        let sources = src_with(&dir, &[("a.ARW", b"aaaa"), ("b.ARW", b"bb")]);
+        for s in &sources {
+            crate::xmp::write_pick(&s.path, PickState::Picked).unwrap();
+        }
+        let dest = dir.join("out");
+        std::fs::create_dir_all(&dest).unwrap();
+        std::fs::write(dest.join("a.ARW.xmp"), b"stray").unwrap();
+        let stray = dest.join("a.ARW.xmp");
+        let mtime = std::fs::metadata(&stray).unwrap().modified().unwrap();
+
+        let p = super::plan(
+            &sources,
+            &dest,
+            None,
+            ClashPolicy::NewOnly,
+            &SessionCopies::default(),
+        )
+        .unwrap();
+        assert_eq!(
+            (
+                p.clashes,
+                p.sidecar_only_clashes,
+                p.left_untouched,
+                p.left_sidecar_only,
+                p.jobs.len()
+            ),
+            (1, 1, 1, 1, 1)
+        );
+        let (_h, rx) = execute(p);
+        let report = drain(rx);
+        assert_eq!((report.copied, report.left_sidecar_only), (1, 1));
+        assert_eq!(names_in(&dest), vec!["a.ARW.xmp", "b.ARW", "b.ARW.xmp"]);
+        assert_eq!(std::fs::read(&stray).unwrap(), b"stray");
+        assert_eq!(
+            std::fs::metadata(&stray).unwrap().modified().unwrap(),
+            mtime
+        );
+        assert!(
+            !dest.join("a.ARW").exists(),
+            "the RAW landed beside a sidecar that describes another \
+             photograph — the invariant this module never breaks"
+        );
+        std::fs::remove_dir_all(&dir).ok();
+    }
+
+    /// The progress line counts the picks this run COPIES and nothing
+    /// else: `Copying 1 / 1`, never `Copying 1 / 3`, and no event names a
+    /// pick that was left (persona G1, AC4). The events are collected
+    /// one by one rather than drained, because their absence is the point.
+    #[test]
+    fn new_only_emits_one_event_per_copied_pick_and_none_for_a_left_one() {
+        let dir = tmp();
+        let sources = src_with(
+            &dir,
+            &[("a.ARW", b"aaaa"), ("b.ARW", b"bb"), ("c.ARW", b"cc")],
+        );
+        for s in &sources {
+            crate::xmp::write_pick(&s.path, PickState::Picked).unwrap();
+        }
+        let dest = dir.join("out");
+        std::fs::create_dir_all(&dest).unwrap();
+        std::fs::write(dest.join("a.ARW"), b"foreign").unwrap();
+        std::fs::write(dest.join("c.ARW.xmp"), b"stray").unwrap();
+
+        let p = super::plan(
+            &sources,
+            &dest,
+            None,
+            ClashPolicy::NewOnly,
+            &SessionCopies::default(),
+        )
+        .unwrap();
+        let (_h, rx) = execute(p);
+        let mut files = Vec::new();
+        let report = loop {
+            match rx.recv().expect("event") {
+                CopyEvent::Finished(r) => break r,
+                CopyEvent::File {
+                    index,
+                    total,
+                    name,
+                    action,
+                } => files.push((index, total, name, action)),
+                CopyEvent::Failed { name, reason, .. } => {
+                    panic!("a left pick failed the run: {name}: {reason}")
+                }
+            }
+        };
+        assert_eq!(
+            files,
+            vec![(1, 1, "b.ARW".to_string(), PlanAction::Copy)],
+            "the total is the number of picks this run copies, and a left \
+             pick gets no event at all"
+        );
+        assert_eq!(
+            (
+                report.copied,
+                report.left_untouched,
+                report.left_sidecar_only
+            ),
+            (1, 2, 1)
+        );
+        std::fs::remove_dir_all(&dir).ok();
+    }
+
+    /// Why New only is not v1's forced skip (issue #14): the DISK decides
+    /// what clashes, never the session's memory. A folder the user
+    /// emptied by hand holds no clash, so the gone copies are new picks
+    /// and go out again — RAW and sidecar together — under exactly the
+    /// answer whose name sounds like a skip (AC2).
+    #[test]
+    fn a_hand_emptied_folder_holds_no_clash_so_new_only_copies_it_again() {
+        let dir = tmp();
+        let sources = src_with(&dir, &[("a.ARW", b"aaaa"), ("b.ARW", b"bb")]);
+        // `a` has a source sidecar (every real pick does), `b` has none:
+        // the two symptom variants of the 2026-08-21 bug.
+        crate::xmp::write_pick(&sources[0].path, PickState::Picked).unwrap();
+        let dest = dir.join("out");
+        let mut session = SessionCopies::default();
+        let report = run(
+            &sources,
+            &dest,
+            None,
+            ClashPolicy::Ask,
+            &SessionCopies::default(),
+        );
+        for (id, path) in report.landed {
+            session.record(id, path);
+        }
+        for name in ["a.ARW", "a.ARW.xmp", "b.ARW"] {
+            std::fs::remove_file(dest.join(name)).unwrap();
+        }
+        session.refresh();
+
+        let p = super::plan(&sources, &dest, None, ClashPolicy::NewOnly, &session).unwrap();
+        assert_eq!(
+            (p.clashes, p.left_untouched, p.recopied, p.jobs.len()),
+            (0, 0, 2, 2),
+            "an emptied folder holds nothing to leave: memory does not decide"
+        );
+        assert_eq!(
+            (p.jobs[0].action, p.jobs[1].action),
+            (PlanAction::Copy, PlanAction::Copy)
+        );
+        let (_h, rx) = execute(p);
+        let report = drain(rx);
+        assert_eq!((report.copied, report.left_untouched), (2, 0));
+        assert!(report.earned_the_green_light());
+        assert!(dest.join("a.ARW").exists() && dest.join("a.ARW.xmp").exists());
+        for (id, path) in report.landed {
+            session.record(id, path);
+        }
+
+        // Now only `b` is gone: `a` is there and is left, `b` is new again.
+        std::fs::remove_file(dest.join("b.ARW")).unwrap();
+        let p = super::plan(&sources, &dest, None, ClashPolicy::NewOnly, &session).unwrap();
+        assert_eq!(
+            (p.clashes, p.left_untouched, p.recopied, p.jobs.len()),
+            (1, 1, 1, 1)
+        );
+        assert_eq!(p.jobs[0].dst_raw, dest.join("b.ARW"));
+        let (_h, rx) = execute(p);
+        let report = drain(rx);
+        assert_eq!((report.copied, report.left_untouched), (1, 1));
+        assert_eq!(names_in(&dest), vec!["a.ARW", "a.ARW.xmp", "b.ARW"]);
+        std::fs::remove_dir_all(&dir).ok();
+    }
+
+    /// The `{seq}` re-run trap (the user's decision on brief 005 OQ1:
+    /// warn, no refusal). `{seq}` numbers the whole session, so when a
+    /// template that uses it meets a folder that already holds files, the
+    /// names found occupied may belong to OTHER frames. The fact is
+    /// core's; the preview prints the sentence (AC8). Note the literal
+    /// `{{seq}}` case: it expands to the TEXT `{seq}` and numbers
+    /// nothing, so a substring test for "{seq" would warn about a
+    /// template that has no sequence in it.
+    #[test]
+    fn plan_flags_a_seq_template_that_meets_a_clash() {
+        let dir = tmp();
+        let sources = src_with(&dir, &[("a.ARW", b"aaaa"), ("b.ARW", b"bb")]);
+        let dest = dir.join("out");
+        std::fs::create_dir_all(&dest).unwrap();
+        let plan_with = |template: Option<&str>, policy| {
+            super::plan(&sources, &dest, template, policy, &SessionCopies::default()).unwrap()
+        };
+
+        // {seq} over an empty folder: nothing is occupied, no note.
+        let p = plan_with(Some("pick_{seq}.{ext}"), ClashPolicy::Ask);
+        assert_eq!((p.clashes, p.seq_meets_clashes), (0, false));
+
+        // The same template over a folder that already holds the name.
+        std::fs::write(dest.join("pick_1.ARW"), b"earlier").unwrap();
+        let p = plan_with(Some("pick_{seq}.{ext}"), ClashPolicy::Ask);
+        assert_eq!((p.clashes, p.seq_meets_clashes), (1, true));
+        // Computed under every policy — the preview shows it before the
+        // question, and the answer does not change the fact.
+        assert!(plan_with(Some("pick_{seq}.{ext}"), ClashPolicy::NewOnly).seq_meets_clashes);
+
+        // The padded form is the same variable.
+        std::fs::write(dest.join("pick_001.ARW"), b"earlier").unwrap();
+        assert!(plan_with(Some("pick_{seq:3}.{ext}"), ClashPolicy::Ask).seq_meets_clashes);
+
+        // A clash with no {seq} anywhere: no note.
+        std::fs::write(dest.join("a.ARW"), b"foreign").unwrap();
+        let p = plan_with(None, ClashPolicy::Ask);
+        assert_eq!((p.clashes, p.seq_meets_clashes), (1, false));
+
+        // The LITERAL {{seq}}: whatever name it makes, planting it makes
+        // a clash — and still no note, because nothing is numbered.
+        let literal = plan_with(Some("pick_{{seq}}.{ext}"), ClashPolicy::Ask);
+        let name = literal.jobs[0].dst_raw.file_name().unwrap().to_owned();
+        std::fs::write(dest.join(&name), b"earlier").unwrap();
+        let p = plan_with(Some("pick_{{seq}}.{ext}"), ClashPolicy::Ask);
+        assert_eq!(
+            (p.clashes, p.seq_meets_clashes),
+            (1, false),
+            "the literal {{{{seq}}}} expands to text, not to a number"
+        );
         std::fs::remove_dir_all(&dir).ok();
     }
 
@@ -3321,6 +3832,106 @@ mod tests {
         );
         // Whatever finished is complete and verified — nothing partial.
         for j in ["a.ARW", "b.ARW", "c.ARW"] {
+            let p = dest.join(j);
+            if p.exists() {
+                assert_eq!(std::fs::metadata(&p).unwrap().len(), 3_000_000);
+            }
+        }
+        std::fs::remove_dir_all(&dir).ok();
+    }
+
+    /// fileops.md §6: the left counts are decided at PLAN time, from the
+    /// filesystem, before anything is written — like "replaced" — and the
+    /// report carries them "whether or not the run finished (a cancel
+    /// between files changes what was copied, not what was left)".
+    /// `run_plan` seeds them into the report before its loop for exactly
+    /// that reason, and until this test nothing made that seeding
+    /// falsifiable: zeroing the counts in the cancel branch passed all 356
+    /// core tests, because the report_lines test hand-builds its
+    /// `CopyReport` (QE 2026-09-12, minor 2).
+    ///
+    /// Deterministic by construction, like its model
+    /// `cancel_between_files_keeps_finished_copies`: the cancel is set
+    /// when the worker ANNOUNCES the first file, while that file is still
+    /// being copied, so the between-files check at the next iteration is
+    /// what stops the run.
+    #[test]
+    fn a_cancelled_new_only_run_still_reports_what_it_left() {
+        let dir = tmp();
+        let big = vec![9u8; 3_000_000];
+        let sources = src_with(
+            &dir,
+            &[
+                // The RAW clash — left, and big enough to notice if it moved.
+                ("a.ARW", b"aaaa"),
+                // The three clash-free picks, big enough that the cancel
+                // lands between files rather than after the last one.
+                ("b.ARW", big.as_slice()),
+                ("c.ARW", big.as_slice()),
+                ("d.ARW", big.as_slice()),
+                // The sidecar-only clash — left, and counted apart.
+                ("e.ARW", b"ee"),
+            ],
+        );
+        let dest = dir.join("out");
+        std::fs::create_dir_all(&dest).unwrap();
+        let archive = b"the archive's copy".to_vec();
+        let stray = b"stray".to_vec();
+        std::fs::write(dest.join("a.ARW"), &archive).unwrap();
+        std::fs::write(dest.join("e.ARW.xmp"), &stray).unwrap();
+
+        let p = super::plan(
+            &sources,
+            &dest,
+            None,
+            ClashPolicy::NewOnly,
+            &SessionCopies::default(),
+        )
+        .unwrap();
+        assert_eq!(
+            (p.left_untouched, p.left_sidecar_only, p.jobs.len()),
+            (2, 1, 3)
+        );
+        assert_eq!(p.jobs[0].dst_raw, dest.join("b.ARW"));
+
+        let (h, rx) = execute(p);
+        match rx.recv().expect("first file event") {
+            CopyEvent::File { index, name, .. } => {
+                assert_eq!((index, name.as_str()), (1, "b.ARW"))
+            }
+            other => panic!("expected the first file event, got {other:?}"),
+        }
+        h.cancel();
+        let report = drain(rx);
+
+        assert!(report.cancelled, "the between-files check never fired");
+        assert!(
+            report.copied < 3,
+            "cancel is between files, so the rest must not go out: {report:?}"
+        );
+        assert_eq!(
+            (report.left_untouched, report.left_sidecar_only),
+            (2, 1),
+            "the left counts are decided at plan time and carried through \
+             a cancel (fileops.md §6)"
+        );
+        assert!(!report.earned_the_green_light());
+        assert!(
+            !report.landed.iter().any(|(_, path)| matches!(
+                path.file_name().and_then(|n| n.to_str()),
+                Some("a.ARW") | Some("e.ARW")
+            )),
+            "a left pick reached `landed`: {:?}",
+            report.landed
+        );
+        assert_eq!(std::fs::read(dest.join("a.ARW")).unwrap(), archive);
+        assert_eq!(std::fs::read(dest.join("e.ARW.xmp")).unwrap(), stray);
+        assert!(
+            !dest.join("e.ARW").exists(),
+            "the RAW landed beside a sidecar that describes another photograph"
+        );
+        // Whatever finished is complete and verified — nothing partial.
+        for j in ["b.ARW", "c.ARW", "d.ARW"] {
             let p = dest.join(j);
             if p.exists() {
                 assert_eq!(std::fs::metadata(&p).unwrap().len(), 3_000_000);

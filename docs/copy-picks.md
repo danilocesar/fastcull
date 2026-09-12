@@ -11,7 +11,10 @@ copy is **read back and re-checksummed** before the original name is
 even used. The line **"all checksums verified"** appears only when this
 run really did verify something — either files it copied, or files it
 found already identical at the destination and re-checked (see
-*Overwrite* below). A run that moved and checked nothing claims nothing.
+*Overwrite* below). A run that moved and checked nothing claims nothing,
+and the line never covers files a **New only** answer left alone: those
+were not opened at all, and the report says so — *"left untouched, not
+re-checked"*.
 
 That line is the format-the-card signal when you cull straight off a
 card mount.
@@ -39,10 +42,26 @@ symlink counts too), it asks once, for the whole run:
 > …/2026-08-21-osprey/selects
 > The other 136 copy normally. Choose once for the whole run:
 >
+> **N** — New only: copy the 136, leave the 12 already here untouched
 > **B** — Keep both: the 12 land as `DSC01234_1.ARW`  (+590 MB)
 > **O** — Overwrite those 12: identical files are re-checked, not re-sent
 > **Esc** — Cancel: copy nothing at all, not even the 136
 
+- **New only** copies the picks whose names are free and leaves every
+  clashing one exactly as it is: the RAW and its `.xmp` are not replaced,
+  not read, not even checksummed. It is the answer for adding a few more
+  picks to a folder you have already worked on — your darktable edits in
+  the destination stay where they are. The report says what happened:
+  *"4 copied, all checksums verified"* and *"144 already had files with
+  these names here — left untouched, not re-checked"*. Two things worth
+  knowing. A stray `.xmp` with no RAW beside it counts as a taken name
+  too, so that pick is not copied, and the report tells you — *"1 of
+  those is a stray .xmp with no RAW beside it — that pick was not
+  copied"*; delete the stray sidecar and run again. And if the taken
+  names belong to another camera's files (two bodies, one
+  `DSC01234.ARW`), New only leaves *your* frames out — **Keep both** is
+  the answer that lands them under `_1`. The row is always there: when
+  nothing is new it says so, and answering it copies nothing.
 - **Keep both** gives each clashing pick the first free number — `_1`,
   then `_2`, … — with the sidecar in lockstep, so a pair never splits
   across two numbers and nothing already there is touched. The button
@@ -65,7 +84,7 @@ symlink counts too), it asks once, for the whole run:
   pointing it at another folder is one step.
 - `Enter` deliberately does nothing on this question: `Ctrl+E`, `Enter`,
   `Enter` must never replace or duplicate 148 files by reflex. Answer
-  with `B`, `O`, `Esc` — or click.
+  with `N`, `B`, `O`, `Esc` — or click.
 
 **Two of your own picks sharing a name** — two bodies, two cards, the
 same `DSC01234.ARW` — never raise this question at all: the second one
@@ -80,8 +99,10 @@ in your sort order.
 > developing the copies in darktable, its edit history lives in
 > `DSC01234.ARW.xmp` — the same file name FastCull writes — and
 > Overwrite replaces it. This is deliberate: overwrite means overwrite,
-> and nothing is merged behind your back. Answer **Keep both**, or copy
-> into a fresh folder, when the destination has been edited elsewhere.
+> and nothing is merged behind your back. Answer **New only** when the
+> destination has been edited elsewhere: it adds the picks that are not
+> there yet and opens nothing that is. (Keep both and a fresh folder
+> still work, but they duplicate what is already there.)
 
 If a caption refresh cannot land — something else is sitting under the
 `.xmp` name, or the destination filled up — the RAW beside it is still
@@ -111,10 +132,25 @@ continues.
 
 ## Running it again
 
-Added a caption or a few more picks after copying? Hit `Ctrl+E` again.
-The folder still holds your earlier copies, so you get the question
-above — **Overwrite** is the answer that adds the new picks and
-re-verifies the old ones instead of re-sending them.
+Added a few more picks after copying? Hit `Ctrl+E` again. The folder
+still holds your earlier copies, so you get the question above —
+**New only** adds the new picks and touches nothing else, edits
+included.
+
+Changed captions on frames you already copied, or want the bit-perfect
+check before you wipe the card? **Overwrite** re-verifies the old ones
+(identical files are re-checked, not re-sent) and rewrites their
+sidecars — darktable edits included, so on a folder you have opened in
+darktable it is not the answer; captions belong before the first copy.
+
+> If you rename with a `{seq}` template, don't add to a folder later.
+> The numbers follow your whole session's sort order, so four new picks
+> in the middle renumber everything after them: the names "already here"
+> would now belong to different frames, and New only would copy the
+> wrong ones under a clean report. The plan line warns you — *"{seq}
+> numbers the whole session — the names already here may now belong to
+> other frames"*. Add to a folder under original names, or export the
+> whole set again into a fresh folder.
 
 Before you press Copy, the dialog already shows the split: *"3 new · 148
 already exist here — Copy will ask what to do"*. That line is also your

@@ -61,6 +61,10 @@ the `DestExists`/abort error are gone from the code. What survives is the
 SHAPE of the rename (a numeric suffix before the extension, sidecar in
 lockstep — now from `_1`, as the answer "keep both" and, without asking,
 when two picks in one run share a name) and the no-148-row-table rule.
+The "New only" answer added 2026-09-12 (§2 of "The clash question",
+issue #86) is NOT v1's skip come back: `ExistsMode::Skip` was a forced
+skip decided by session memory; New only is the user's explicit per-run
+answer about names the plan found occupied on disk.
 
 **Execute** (on a worker thread, progress events per file):
 1. Flush pending sidecar writes for all picked images (hard barrier).
@@ -127,7 +131,11 @@ run verified nothing and must not print the format-the-card green light.
 Since 2026-08-22 that rule is `CopyReport::earned_the_green_light()` in
 CORE (it is a fact about the copy, not about the dialog — CLAUDE.md rule
 5); a run an overwrite found byte-identical counts as verified, because
-that check is a BLAKE3 comparison of both ends.
+that check is a BLAKE3 comparison of both ends. A New only run that left
+every pick (2026-09-12, §2 of "The clash question") is that all-skipped
+run made live: it prints what it left and no green light, and never
+"Nothing needed copying"; the picks it left are neither copied nor
+identical, so the rule needs no change to keep the sentence off them.
 
 ## Dialog + scope decisions (persona review 2026-07-26; the user CONFIRMED
 2026-07-26: "metadata is added before copying. once the copy is done,
@@ -147,10 +155,14 @@ explicitly deferred to a later discussion; modal dialog accepted)
   re-run must not duplicate every already-copied file) and the answer is
   now a question rather than a silent skip: the user answers "overwrite
   everything", which re-verifies the copies that are there instead of
-  re-sending them. What is GONE: the forced session-skip, the "N already
-  at destination (skipped)" plan line, and the skip toggle. What SURVIVES:
-  the sidecar-alone refresh, now inside overwrite (the caption-after-copy
-  recovery), and the ✓ copied badge as a glanceable, non-deciding hint.
+  re-sending them — or, since 2026-09-12, "New only", which adds the
+  picks whose names are free and opens nothing that is there (§2). What
+  is GONE: the forced session-skip, the "N already at destination
+  (skipped)" plan line, and the skip toggle — New only is none of them:
+  the disk decides what clashes and the user answers, per run. What
+  SURVIVES: the sidecar-alone refresh, now inside overwrite (the
+  caption-after-copy recovery), and the ✓ copied badge as a glanceable,
+  non-deciding hint.
 - **"Already copied" means "still there" (bug fix 2026-08-21, issue #14;
   its PLANNING half superseded the same day by "The clash question")**:
   the session records, per image and PER DESTINATION, the exact RAW path a
@@ -173,8 +185,9 @@ explicitly deferred to a later discussion; modal dialog accepted)
   the selects folder.
 - **Exists-handling UI** — **SUPERSEDED 2026-08-21**: the rename default,
   the "Skip existing" toggle and "overwrite is never exposed" are all
-  replaced by the three answers of the clash question (which does expose
-  overwrite — see the recorded consequence at the end of that section).
+  replaced by the answers of the clash question — three on 2026-08-21,
+  four since 2026-09-12 (which does expose overwrite — see the recorded
+  consequence at the end of that section).
 - **Ctrl+E commits any in-progress panel field edit** (G7 click-away
   semantics) BEFORE the plan and the flush barrier — a half-typed caption
   must ship.
@@ -189,6 +202,12 @@ explicitly deferred to a later discussion; modal dialog accepted)
   ui-grid.md, *Provisional order while loading*.
   time default) — same caller contract as IPTC apply; with all-picks
   scope, "view order" would be ambiguous under an active filter.
+  A `{seq}` template into a folder that already holds an earlier copy is
+  the re-run trap the persona named on 2026-09-12 (brief 005, G3): the
+  new picks renumber everything after them, so the names the clash check
+  finds occupied may belong to other frames. The plan preview says so
+  (§6 of "The clash question", the `{seq}` note — the user's decision on
+  brief 005 OQ1: warn on the plan line and in the docs, no refusal).
 - Dialog minimums: destination picker (must allow creating a folder) with
   the remembered path displayed PROMINENTLY (yesterday's job is the
   failure mode); template field defaults to EMPTY = keep names; the remembered
@@ -280,8 +299,43 @@ identically in both places.
 option is valid the whole operation"*). No clashes → no question, today's
 flow unchanged. Any clash → the dialog asks, in the spirit of *"We
 detected clashes on filenames"*, naming the destination and the counts,
-with three answers:
+with four answers (three until 2026-09-12; the fourth, New only, is the
+user's decision on issue #86, brief 005, and the first row — §6):
 
+- **New only** (labelled *"New only — copy the 4, leave the 144 already
+  here untouched"* in the dialog; key `N`; the user, 2026-09-12) — every
+  clash-free pick copies exactly as under the other answers (temp name,
+  BLAKE3-verified, no-clobber commit; a name claimed by another pick in
+  this same run is suffixed and copied, as under every answer — "two
+  picks, one name" below), and a clashing pick — RAW name or sidecar name
+  occupied, the pair-is-the-unit rule of §1 — is left exactly as the disk
+  has it: its RAW and its sidecar are not written, not read and not
+  hashed; neither member is opened. A sidecar-only clash (a stray `.xmp`
+  beside no RAW) is left like any other clash, because landing a RAW
+  beside a sidecar that describes another photograph is the one thing
+  this module never produces — and it is counted APART in the report,
+  because under this answer it is a photograph that did not land
+  (persona G2 2026-09-12: "without that line I believe the photo is
+  archived and it is not"). The run's work is the clash-free picks only:
+  the executed plan carries no work for a left pick — nothing opens
+  either member, no progress event names it, its bytes are not in the
+  plan's total and only the clash-free bytes must fit (§3) — and the
+  report says what was left, in NAMES not photographs, with the green
+  light on the copied line only (§6). The case it exists for (the user,
+  issue #86): four more picks into an archive of 144 frames already
+  developed in darktable — Overwrite replaces the history stacks, Keep
+  both duplicates the 144 as `_1` twins, a fresh folder splits the
+  archive; New only adds the four and opens nothing else. Not a
+  verification pass in disguise (persona C6: IN-MY-WAY if built — 7 GB
+  over the wire to add four files, and every darktable sidecar "fails"
+  by design; Manager decision D5): the left picks are not read, so "left
+  untouched" means not opened, and Overwrite remains the "is my export
+  still bit-perfect?" pass. Why this is not v1's skip: `ExistsMode::Skip`
+  was a FORCED skip decided by session memory, which is what caused issue
+  #14; New only is the user's explicit answer, once per run, about names
+  the plan found occupied on disk tonight — `SessionCopies` still reads
+  and never decides (§5), so a hand-emptied folder holds no clash and New
+  only copies everything, RAW and sidecar together.
 - **Overwrite everything** (labelled *"Overwrite those N"* in the dialog
   — the count is what stops the word overstating what happens; §6) —
   clashing files are replaced in place; clash-free files copy normally. A clashing RAW whose destination copy is
@@ -394,18 +448,27 @@ Free space and the "N to copy" summary are computed for the chosen
 policy; the pre-answer summary states the worst case (clash-free +
 clashing bytes).
 
-*Which total has to FIT* (implementation decision 2026-08-21): before the
-answer and under **overwrite**, only the CLASH-FREE total — the clashing
-images mostly replace bytes that are already there, one verified temp file
-at a time, and a destination that really is full then fails those files
-one by one with an honest reason without ever destroying the file that was
-there. Under **create copies** the whole total must fit, because every
-clashing image is a new file. Blocking an overwrite re-run on a
-nearly-full destination that it would barely grow is the failure this
-avoids; the cost is that a genuinely full disk is discovered per file
-rather than up front.
+*Which total has to FIT* (implementation decision 2026-08-21; New only
+added 2026-09-12): before the answer, under **overwrite** and under **New
+only**, only the CLASH-FREE total — under overwrite the clashing images
+mostly replace bytes that are already there, one verified temp file at a
+time, and a destination that really is full then fails those files one
+by one with an honest reason without ever destroying the file that was
+there; under New only the clashing images are not written at all, so the
+clash-free total is also the whole total the plan states. Under **create
+copies** the whole total must fit, because every clashing image is a new
+file. Blocking an overwrite re-run on a nearly-full destination that it
+would barely grow is the failure this avoids; the cost is that a
+genuinely full disk is discovered per file rather than up front. A
+nearly-full archive plus four new frames must not be refused (persona
+2026-09-12, MUST-HAVE), which the clash-free rule gives New only for
+free — and the replan after that answer cannot surface a free-space
+error the preview did not already show.
 
-**4. Nothing is replaced unless the user answered Overwrite.** The
+**4. Nothing is replaced unless the user answered Overwrite.** Under New
+only (2026-09-12) nothing under a clashing name is even OPENED — not the
+RAW, not the sidecar, not for a read — so a destination file made
+unreadable under such a name cannot fail a New only run. The
 executor commits its verified temp file into place without clobbering; a
 name that got occupied between the question and the copy fails THAT file
 honestly ("a file appeared at the destination during the copy") and the
@@ -489,15 +552,31 @@ that has no sidecar of its own — its write failed, or the card is
 read-only — can overwrite a RAW and leave a foreign `.xmp` beside it,
 because nothing at the destination is ever deleted (§4). "Keep both" is
 the answer that walks the pair clear of it. The v1 "Skip
-existing" toggle and the four-way `ExistsMode` are replaced by the three
-answers.
+existing" toggle and the four-way `ExistsMode` are replaced by the
+answers of the question — three on 2026-08-21, and New only, the fourth,
+on 2026-09-12, which is an explicit per-run answer about names found on
+disk, not the session-decided skip that is gone. A pick New only left is
+not in `CopyReport::landed` (this run verified nothing about it), so no
+record is made for it; a record the session already holds for it
+survives, because `SessionCopies::refresh` finds the file still there —
+the badge follows the disk (Manager decision D8 2026-09-12; persona:
+SHRUG, honest either way). The "copied earlier but gone" note is computed
+BEFORE the answer and under every policy, so it is not a promise about
+what a given answer will do (added 2026-09-12, brief 005, senior-developer
+plan OQ3): a hand-deleted RAW whose sidecar was left behind reads "1
+copied earlier but gone — copying again" on the preview, and under New
+only that pick is a sidecar-only clash and is LEFT — the report's stray
+`.xmp` line, not the note, is then what happened.
 
-**6. Wording and keys** (settled with the persona 2026-08-21; the
+**6. Wording and keys** (settled with the persona 2026-08-21; the New
+only row, its key and the lines that change with it settled with the
+persona 2026-09-12 and decided by the Manager, brief 005 D1-D7; the
 question is a STATE of the Copy dialog — `copy-state 3` — not a second
 modal, so there is one key scope and no new stacking surface, issue #42).
 The question states what each answer does and what it costs, rather than
 yes/no (persona: at 9pm "proceed" reads as "proceed with the copy I asked
-for"). As shipped:
+for"). As specified (the three-row form shipped 2026-08-21; the `N` row
+and the warning line's last sentence are brief 005's, 2026-09-12):
 
 ```
 12 of your 148 picks already have files with these names in
@@ -505,9 +584,13 @@ for"). As shipped:
 The other 136 copy normally. Choose once for the whole run:
 e.g. DSC01234.ARW, DSC01235.ARW, DSC01240.ARW …
 
+ N    New only — copy the 136, leave the 12 already here untouched
  B    Keep both — the 12 land as DSC01234_1.ARW        +590 MB
  O    Overwrite those 12 — identical files are re-checked, not re-sent
  Esc  Cancel — copy nothing at all, not even the 136
+
+Overwriting also replaces those files' .xmp sidecars — edits made at the
+destination by another app (darktable) are lost. New only leaves them alone.
 ```
 
 - The "keep both" row names the file that answer would REALLY make — the
@@ -517,6 +600,23 @@ e.g. DSC01234.ARW, DSC01235.ARW, DSC01240.ARW …
   recorded: because a suffix can also be claimed IN-PLAN, the number of
   renames can exceed the clash count when a pick is literally named
   `<other>_1.<ext>`.
+- **The New only row** (2026-09-12) reads `New only — copy the {free},
+  leave the {clashes} already here untouched`, singular forms following
+  the question's habit (`copy the 1`, `leave the 1`). Its first word is
+  "New", so `N` reads as New, not No (persona C3; Manager D2). "Already
+  here" is allowed on the ROW because the header just qualified it
+  ("already have files with these names") and the `e.g.` line is how a
+  two-body night is told apart; the REPORT may not say it (C5, below).
+  No cost column: New only adds nothing beyond the clash-free copy every
+  answer but Cancel makes, so "bytes on keep both only" stands. Its label
+  is the ordinary colour. **It is always offered** (Manager decision D6
+  2026-09-12, best practice over the persona's SHRUG-leaning-USEFUL to
+  hide it): with no clash-free pick the row reads `New only — nothing new
+  to copy, leave the {clashes} already here untouched`, and answering it
+  runs a copy of nothing whose report is the left line below — a row that
+  appears and disappears moves `B` and `O` under the pointer on exactly
+  the destructive question, and a stable layout outweighs one row of
+  noise.
 - Counts are in **picks**, never files (148 picks are 296 files on disk;
   a count the user cannot reconcile is a count they stop trusting), and
   the "other N copy normally" clause is mandatory: once Cancel drops
@@ -527,37 +627,75 @@ e.g. DSC01234.ARW, DSC01235.ARW, DSC01240.ARW …
   "keep both" ONLY: it is the one answer whose cost is knowable up front,
   and a worst-case number on overwrite would state a cost the identity
   check means the user never pays.
-- Three answers do not fit side by side in the 560px card (measured), so
-  they are stacked rows in order of increasing consequence, Cancel set
-  apart. **No answer carries accent/default styling** — a destructive
-  answer that looks pre-chosen gets pressed reflexively. The overwrite
-  row's LABEL is amber; no row carries an accent box.
-- Keys: `B`, `O`, `Esc`. **Enter and Space are inert** (Ctrl+E, Enter,
-  Enter must never mass-replace or mass-duplicate; Space is the pick key),
-  as are `Y`/`N`, and no button takes initial focus. A key that is not an
-  answer is swallowed AND flips a visible "Pick one: B, O or Esc" line —
-  a silently dead Enter reads as a frozen dialog.
+- The answers do not fit side by side in the 560px card (three did not,
+  measured 2026-08-21; four do not either), so they are stacked rows in
+  order of increasing consequence, Cancel set apart: `N`, `B`, `O`, then
+  `Esc` (persona C2, Manager D3 2026-09-12 — the safe, common answer is
+  the first row read, and a habitual top-row click lands on the least
+  consequential answer instead of on Overwrite; "safest next to Cancel"
+  was rejected because Cancel does nothing and New only does something,
+  and grouping them reads as two flavours of giving up). **No answer
+  carries accent/default styling** — a destructive answer that looks
+  pre-chosen gets pressed reflexively. The overwrite row's LABEL is
+  amber; the New only row's label is the ordinary colour; no row carries
+  an accent box.
+- Keys: `N`, `B`, `O`, `Esc`. **Enter and Space are inert** (Ctrl+E,
+  Enter, Enter must never mass-replace or mass-duplicate; Space is the
+  pick key), as is `Y`, and no button takes initial focus. A key that is
+  not an answer is swallowed AND flips a visible "Pick one: N, B, O or
+  Esc." line — a silently dead Enter reads as a frozen dialog. **`N` was
+  inert until 2026-09-12** (this bullet read "as are `Y`/`N`" — the
+  2026-08-21 worry was a "No" reading, and `N` is the grid's reject key).
+  The user chose `N` for the new answer (issue #86; brief 005 D1), and
+  the persona's two reasons hold at the screen (C1): the question is a
+  stop, not a rhythm — it appears only after Ctrl+E then Enter, so the
+  N-N-N cadence of rejecting never reaches it and a held key cannot
+  arrive there — and New only is the least consequential answer that
+  still does something: a stray `N` copies what was asked minus the
+  clashes and touches nothing that exists. The row's first word kills the
+  "No" reading. `Y` stays inert (persona: SHRUG, correct). The video
+  export's question is UNTOUCHED (Manager D9): one `.mov` file, for which
+  "skip" is Cancel, so `N` there stays a swallowed key with a nudge.
 - **The answers are BARE letters only, and the question swallows every
   accelerator** (gate finding 2026-08-21): `Ctrl+O` — Open Folder, a
   reflex — arrives in this scope as a plain `o` plus a modifier, and
   unguarded it ANSWERED the question with the destructive answer. While
   the question is up, `Ctrl+Q`, `Ctrl+E` and the rest are inert too; the
   menu bar remains the way out for the mouse. A destructive answer may
-  never be reachable by a key the user presses for something else.
+  never be reachable by a key the user presses for something else. `N`
+  answers under the same guard — a bare `n`/`N` only; `Ctrl+N`, if ever
+  bound, stays out (2026-09-12).
 - **Esc returns to the plan preview** with destination and template
   intact (a second Esc closes the dialog): the topmost-first Esc rule, and
   it makes "cancel, then copy somewhere else" one step.
 - The plan preview pre-announces the split — `3 new · 148 already exist
   here — Copy will ask what to do` — which cross-session (no ✓ badges
   after a restart) is the only signal that the folder already holds this
-  shoot.
+  shoot. **The `{seq}` note** (the user, 2026-09-12, on brief 005 OQ1:
+  "Warn on the plan line + docs"): when the template in play contains
+  `{seq}` (any form, `{seq:3}` included) AND the plan has at least one
+  clash, the preview carries, beside that split, `{seq} numbers the whole
+  session — the names already here may now belong to other frames`; with
+  no `{seq}` in the template, or no clash, it does not appear. The FACT
+  is core's (a `CopyPlan` field, `seq_meets_clashes`); the sentence is
+  the bridge's. No refusal: every answer stays available. The trap
+  (persona G3): the new picks renumber everything after them, so
+  "already here" is judged on shifted names and New only would copy the
+  wrong frames under a clean report; Overwrite would re-send and replace
+  all of them under shifted names, which is worse — so the note sits on
+  the preview, where every answer is still ahead.
 - The destination is shown TAIL-first (`…/2026-08-21-osprey/selects`)
   wherever it is elided: Slint's elide cuts the end, i.e. exactly the part
   that tells two shoots apart.
 - The progress line says WHICH work it is doing (`Checking 12 / 148` for
   an overwrite, which starts by hashing, vs `Copying 2 / 3`) — counting to
   148 while saying "copying" reads as "it is sending my whole export
-  again".
+  again". Under New only the total is the number of picks this run
+  copies and nothing else: `Copying 1 / 4`, never `Copying 1 / 148`, and
+  no "Skipping" line either — a skip takes no time and deserves no line
+  (persona G1 2026-09-12, MUST-HAVE within the feature). The
+  `CopyEvent::File` total is that count, and no event is emitted for a
+  left pick.
 - The report counts what actually happened: `3 copied`, `145 already
   identical — re-verified in place`, `12 landed under new names
   (DSC01234_1.ARW …)`, `12 replaced`, `N sidecars replaced beside an
@@ -570,6 +708,29 @@ e.g. DSC01234.ARW, DSC01235.ARW, DSC01240.ARW …
   re-verified files: an identity check IS a BLAKE3 verification of the
   destination against the source, so a re-run doubles as a free "is my
   export still bit-perfect?" pass before the card is wiped (persona).
+- **The New only report** (persona C5, Manager D4 2026-09-12) prints,
+  after the lines that count what the run did (`4 copied, all checksums
+  verified`; a `landed under new names` line for same-run shared names)
+  and before `cancelled`/`FAILED`: `144 already had files with these
+  names here — left untouched, not re-checked` (singular: `1 already had
+  a file with this name here — left untouched, not re-checked`), then,
+  only when it happens, `1 of those is a stray .xmp with no RAW beside it
+  — that pick was not copied` (plural: `N of those are stray .xmp files
+  with no RAW beside them — those picks were not copied`). The wording
+  says the NAMES were taken, never that the photographs are there — on a
+  two-body night the 12 clashes are the other camera's frames, and a
+  report that says they are "here" is the kind of sentence the user stops
+  trusting — and "not re-checked" is said out loud so the green light on
+  the copied line can never be read across. "All checksums verified"
+  stays on the copied line; `earned_the_green_light` is unchanged (copied
+  + identical > 0, all verified, no failure, not cancelled): a run that
+  left everything and copied nothing prints the left line, no green
+  light, and never "Nothing needed copying". The left counts are decided
+  at plan time, from the filesystem, before anything is written — like
+  "replaced" — and the report carries them whether or not the run
+  finished (a cancel between files changes what was copied, not what was
+  left): `CopyReport::left_untouched` and `CopyReport::left_sidecar_only`,
+  core's, like every count on the report.
 
 **Recorded consequence**: exposing Overwrite reverses the v1 decision
 "overwrite is never exposed in v1 — it is the one that can destroy a
@@ -582,23 +743,31 @@ user edited in place.
 **Recorded consequence**: a re-run into a folder that still holds the
 session's own copies now ASKS (they are clashes like any others) —
 confirmed by the user 2026-08-21: *"it's fine. If you're saving where
-there are files already, it should ask."* The answer that adds the new
-picks is Overwrite, which re-verifies the existing ones rather than
-skipping them; identical RAWs are not re-transferred (see above), so the
-cost is a read, not a write. On a network destination that read is real:
-~2× the clashing bytes over the wire to add three frames (persona; open
-question 5 to the user).
+there are files already, it should ask."* The answer that added the new
+picks was, until 2026-09-12, Overwrite, which re-verifies the existing
+ones rather than skipping them; identical RAWs are not re-transferred
+(see above), so the cost is a read, not a write. On a network destination
+that read is real: ~2× the clashing bytes over the wire to add three
+frames (persona; open question 5 to the user). **Corrected 2026-09-12
+(brief 005)**: New only now adds the new picks without that read —
+nothing under a clashing name is opened — and Overwrite remains the
+answer that also re-verifies; the "~2×" is the price of the re-verify,
+no longer of adding picks.
 
 **Recorded consequence, and the persona's blocker** (2026-08-21, relayed
-to the user, NOT decided here): a destination sidecar that DIFFERS is
-byte-replaced under Overwrite — and darktable's history stack lives in a
-file of exactly the name FastCull uses (`DSC01234.ARW.xmp`,
-xmp-sidecars.md invariant 2). A user who has started developing the
-copies in darktable and then answers Overwrite loses those history
-stacks; with "skip" gone there is no other answer that adds new picks to
-that folder. The question therefore says so out loud
-("Overwriting also replaces those files' .xmp sidecars — edits made at the
-destination by another app (darktable) are lost").
+to the user, NOT decided here; RESOLVED 2026-09-12, below): a
+destination sidecar that DIFFERS is byte-replaced under Overwrite — and
+darktable's history stack lives in a file of exactly the name FastCull
+uses (`DSC01234.ARW.xmp`, xmp-sidecars.md invariant 2). A user who has
+started developing the copies in darktable and then answers Overwrite
+loses those history stacks; with "skip" gone there was, until
+2026-09-12, no other answer that adds new picks to that folder — New
+only is that answer now (corrected in place 2026-09-12, brief 005). The
+question therefore says so out loud, and since 2026-09-12 names the way
+out in the same breath (persona C4, Manager D7: "(darktable)" stays — it
+is the word that makes the user stop): "Overwriting also replaces those
+files' .xmp sidecars — edits made at the destination by another app
+(darktable) are lost. New only leaves them alone."
 
 **DECIDED 2026-08-22 — "overwrite means overwrite"** (the user, asked
 directly): the sidecar is replaced like any other file, and the persona's
@@ -610,6 +779,20 @@ sidecar would differ from the source and could not be checksum-verified
 against it, so overwrite-means-overwrite is the only answer that leaves
 every copied byte verifiable. Recovery if it happens anyway: delete that
 copy at the destination and copy again, or re-import in darktable.
+
+**RESOLVED 2026-09-12 — "New only" (the user, issue #86; brief 005)**:
+the ruling above stands unchanged — overwrite means overwrite, no merge,
+and the warning line is Overwrite's whole mitigation — but the escapes
+are three now, and the first of them adds picks: New only (§2), which
+copies the clash-free picks and opens nothing under a clashing name, so
+a folder developed in darktable and a copy re-run can coexist. Keep both
+and a fresh folder remain for the case New only does not serve (a
+two-body clash, where the "taken" names are the other camera's
+photographs and New only would leave the user's frames out — the report
+says how many). What the user met that the 2026-08-22 escapes did not
+cover: four more picks into an archive of 144 edited frames — Keep both
+would have duplicated the 144 as `_1` twins, a fresh folder would have
+split the archive.
 
 ## Acceptance criteria (tests)
 
@@ -729,6 +912,83 @@ copy at the destination and copy again, or re-import in darktable.
       template chip's confinement to the plan state — asserting the absence
       of a control by clicking where it would be is a test that passes when
       the click misses (main.slint).
+- [x] **Brief 005 AC1 — New only opens nothing under a clashing name**
+      (2026-09-12): both members of a clashing pair are byte-for-byte and
+      mtime-identical after the run, a destination sidecar that DIFFERS
+      from the source included (the darktable case), and a destination
+      RAW or sidecar made unreadable under a clashing name (unix:
+      `chmod 000`) does not fail the run —
+      new_only_leaves_a_clashing_pair_untouched_and_copies_the_rest,
+      new_only_never_opens_a_clashing_pair (`#[cfg(unix)]`, which takes
+      its private helpers with it); app-level, the differing destination
+      sidecar byte-for-byte after `N` —
+      copy_picks_new_only_copies_the_new_pick_and_leaves_the_rest_alone.
+      Mutants: the New only arm of `plan()` mapped to Replace turns the
+      sidecar-bytes assertion red; a read of the left pair's destination
+      (a hash, a verification pass) turns the `chmod 000` run red.
+- [x] **Brief 005 AC2 — every clash-free pick copies and verifies exactly
+      as under the other answers; a same-run shared name is suffixed and
+      copied** — asserted in
+      new_only_leaves_a_clashing_pair_untouched_and_copies_the_rest; the
+      issue #14 shape under the new answer — a hand-emptied folder holds
+      no clash, so the gone copies are new and copy again, RAW and
+      sidecar together, with the "copied earlier but gone" note —
+      a_hand_emptied_folder_holds_no_clash_so_new_only_copies_it_again.
+- [x] **Brief 005 AC3 — a sidecar-only clash is left and reported apart**
+      — a_sidecar_only_clash_is_left_and_counted_apart_under_new_only.
+- [x] **Brief 005 AC4 — the progress total equals the number of picks
+      copied; no event for a left pick** —
+      new_only_emits_one_event_per_copied_pick_and_none_for_a_left_one
+      (the `CopyEvent::File` stream is counted and its names checked);
+      app-level, the rendered line itself — `Copying 2 / 2 — c.ARW`
+      through `copyprogress=` after `wait:copy finished run 1`, and
+      `Starting…` (no Copying, no Skipping) after the all-left run, in
+      copy_picks_new_only_copies_the_new_pick_and_leaves_the_rest_alone
+      (QE 2026-09-12, D3).
+- [x] **Brief 005 AC5 — the report prints the left line (and the
+      stray-sidecar line when it applies), the green light attaches to
+      copied files only, and an all-left run prints the left line, no
+      green light and never "Nothing needed copying"** — pump.rs
+      `report_lines` unit test
+      a_new_only_run_reports_what_it_left_and_earns_no_green_light_for_it
+      (singular and plural of both lines, and their order after the
+      copied line); app-level, the left line in the report after `N` —
+      copy_picks_new_only_copies_the_new_pick_and_leaves_the_rest_alone;
+      the counts carried through a cancel at the executor —
+      a_cancelled_new_only_run_still_reports_what_it_left (QE 2026-09-12,
+      D2).
+- [x] **Brief 005 AC6 — free space: only the clash-free bytes must fit
+      under New only** — the_free_space_check_follows_the_answer,
+      extended with the fourth policy (an existing test that changes by
+      the plan, not a loosening: it gains an arm).
+- [x] **Brief 005 AC7 — the dialog**: the N row first with its counts,
+      `N` answering as a bare letter only, `Y`/Enter/Space/accelerators
+      inert, the nudge `Pick one: N, B, O or Esc.`, the warning line's
+      "New only leaves them alone." clause, and the row still offered —
+      with its "nothing new to copy" wording — when every pick clashes,
+      answering it then reporting the left line and no green light:
+      driven through the real dialog like
+      copy_picks_asks_once_and_each_answer_does_what_it_says —
+      copy_picks_new_only_copies_the_new_pick_and_leaves_the_rest_alone,
+      reading `copystate`, `confirm` and `report`, the N row's label and
+      the nudge through dump fields the plan names (ui-grid.md's "Debug
+      facilities" paragraph follows in the same commit), and the row
+      ORDER from the rows' own layout marks (relative y, never a pixel —
+      a font metric moves a layout by up to 40 px per seat, 2026-09-04).
+      The label colour is review-verified only (no dump carries a
+      colour).
+- [x] **Brief 005 AC8 — the `{seq}` note appears on the preview when a
+      `{seq}` template meets a clash, and only then** — core:
+      plan_flags_a_seq_template_that_meets_a_clash (`{seq}` with a clash
+      → true; `{seq}` with none → false; a clash with no `{seq}` →
+      false); app-level, the note's text in `copynote` on a `{seq}`
+      template over a folder that holds the templated name, and its
+      absence otherwise — a round of
+      copy_picks_new_only_copies_the_new_pick_and_leaves_the_rest_alone.
+- [x] **Brief 005 AC9 — docs/copy-picks.md and docs/faq.md say what the
+      dialog does, in the same commit** — review-verified at the gate (no
+      driven test reads the docs); the pages are part of this spec change
+      and ship with the implementation commit.
 - [ ] NOT VERIFIED ANYWHERE, carried forward (QE 2026-08-21, extended
       2026-08-22 — the same-run guard's folding-destination behaviour and
       the recording of a RAW whose sidecar failed are reachable ONLY on a
@@ -747,7 +1007,10 @@ copy at the destination and copy again, or re-import in darktable.
       planned_paths_never_leave_the_destination cannot see it;
       network destinations (the recorded "~2× the clashing bytes over the
       wire" consequence); a real darktable round-trip of the
-      overwrite-replaces-sidecars warning.
+      overwrite-replaces-sidecars warning, and (2026-09-12) of New only
+      leaving a real darktable history stack intact — the core test's
+      stand-in is a destination sidecar whose bytes differ from the
+      source, which is all the executor could ever see of one.
 - [ ] Cross-platform: paths with spaces/Unicode; Windows reserved-name rejection
       — DEFERRED with the user's explicit OK (2026-07-26, "low priority"),
       tracked as issue #10; spaces/Unicode half already QE-verified

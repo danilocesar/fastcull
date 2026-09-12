@@ -4156,7 +4156,12 @@ Documented because they ship in release builds (validator finding):
   `click:<element>` (issue #70) is the same click at the CENTRE of the
   rectangle the app last reported for a self-reporting element — the
   names of the layout marks above: `iptc field N`, `copy card`, `copy
-  buttons`, `clip card`, `clip buttons`. The harness keeps those
+  buttons`, `copy answer N` / `copy answer B` / `copy answer O` / `copy
+  answer Esc` (the four rows of the clash question, which report
+  themselves the way the cards do — brief 005, 2026-09-12: the mouse round
+  of `copy_picks_asks_once_and_each_answer_does_what_it_says` clicked a
+  coordinate that became the New only row when that row was added on top,
+  so it clicks `copy answer B` by name now), `clip card`, `clip buttons`. The harness keeps those
   rectangles in a table written by the same callbacks that emit the marks,
   UNCONDITIONALLY (a resolved click must not depend on whether the run
   also asked for a trace log), and resolves the name AT DISPATCH TIME, so
@@ -4365,6 +4370,20 @@ Documented because they ship in release builds (validator finding):
   so `copy=true` alone cannot tell a plan preview from a question about
   replacing files — without those two fields the one irreversible
   operation in the app would be assertable only down to "a dialog exists".
+  Since 2026-09-12 (brief 005) it also carries `newonly=` (the New only
+  row's label — its zero-new form says whether the run has anything to
+  copy), `nudge=` and `nudged=` (the "Pick one: …" line's text, and
+  whether an inert key raised it) and `warning=` (the amber line under the
+  rows): the fourth answer's row, its key and its inert companions (`Y`,
+  `Ctrl+N`) are otherwise assertable only down to `copystate=3`.
+  Since 2026-09-12 it also carries `copyprogress=` — the running line
+  (`Copying 2 / 2 — c.ARW`; `Checking 1 / 12 — …` under Overwrite), the
+  copy's twin of `clipprogress=`. Its last value survives into the report
+  card because nothing resets `copy-progress` when a run ends
+  (`start_copy` writes "Starting…", the pump's `File` arm writes each
+  line, nothing else writes it), so a driven test reads the FINAL line
+  after `wait:copy finished run N` instead of sampling a running one (QE
+  2026-09-12, D3).
   Since 2026-08-27 the same block exists for the video export —
   `clip=`, `clipstate=` (the same four states), `clipavail=` (is there
   anything to export), `clipsummary=` (the plan line), `clipskipped=`,

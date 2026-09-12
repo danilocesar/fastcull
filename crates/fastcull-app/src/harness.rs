@@ -728,6 +728,8 @@ fn dispatch(win: &MainWindow, state: &Rc<RefCell<AppState>>, key: &str, layout: 
                          shortcuts={} copy={} summary={:?} template={:?} revert={:?} status={:?} \
                          soft={} vx={:.1} vy={:.1} pan={:.4},{:.4} zf={:.3} \
                          copynote={:?} report={:?} copystate={} confirm={:?} \
+                         newonly={:?} nudge={:?} nudged={} warning={:?} \
+                         copyprogress={:?} \
                          clip={} clipstate={} clipavail={} clipsummary={:?} clipskipped={:?} \
                          cliperror={:?} clipreport={:?} clipconfirm={:?} clipprogress={:?} \
                          cliphint={:?} exported={} curexported={} \
@@ -760,6 +762,23 @@ fn dispatch(win: &MainWindow, state: &Rc<RefCell<AppState>>, key: &str, layout: 
             // assertable only down to "a dialog exists".
             win.get_copy_state(),
             win.get_copy_confirm().as_str(),
+            // The fourth answer's row, its nudge and the amber warning
+            // (brief 005, 2026-09-12): the N row's label is where the
+            // question says whether the run has anything NEW to copy, and
+            // without these three a driven run can see `copystate=3` but
+            // not which answers are on offer, nor that an inert key was
+            // noticed rather than swallowed in silence.
+            win.get_copy_confirm_new_only().as_str(),
+            win.get_copy_confirm_nudge().as_str(),
+            win.get_copy_confirm_nudged(),
+            win.get_copy_confirm_warning().as_str(),
+            // The running line the user reads (`Copying 2 / 2 — c.ARW`),
+            // the copy's twin of `clipprogress=` — and persona G1's
+            // MUST-HAVE, which had no end-to-end assertion until now (QE
+            // 2026-09-12). Nothing resets `copy-progress` when a run
+            // ends, so a dump gated on `copy finished run N` reads the
+            // run's LAST line rather than sampling a running one.
+            win.get_copy_progress().as_str(),
             // The video export (M9): the same reasoning as
             // the copy block above — this is the second
             // operation in the app that writes files the user

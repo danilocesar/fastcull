@@ -144,6 +144,15 @@ pub(crate) fn wire(window: &MainWindow, state: &Rc<RefCell<AppState>>) {
     {
         let state = Rc::clone(state);
         let win = window.as_weak();
+        window.on_copy_answer_new_only(move || {
+            let Some(win) = win.upgrade() else { return };
+            let mut st = state.borrow_mut();
+            answer_clash_question(&win, &mut st, ClashPolicy::NewOnly);
+        });
+    }
+    {
+        let state = Rc::clone(state);
+        let win = window.as_weak();
         window.on_copy_answer_cancel(move || {
             let Some(win) = win.upgrade() else { return };
             // Cancel copies NOTHING — not even the clash-free files (user
@@ -351,6 +360,20 @@ fn show_clash_question(win: &MainWindow, plan: &fastcull_core::fileops::CopyPlan
         )
         .into()
     });
+    // The FIRST row (fileops.md §6, brief 005): the safe, common answer.
+    // "New" first, so `N` reads as New and not as No. ALWAYS offered
+    // (Manager decision D6) — with nothing new it says so, and answering
+    // it copies nothing: a row that appears and disappears moves `B` and
+    // `O` under the pointer on exactly the destructive question.
+    win.set_copy_confirm_new_only(
+        match free {
+            0 => format!(
+                "New only — nothing new to copy, leave the {clashes} already here untouched"
+            ),
+            n => format!("New only — copy the {n}, leave the {clashes} already here untouched"),
+        }
+        .into(),
+    );
     // The name core says the FIRST clashing pick would really land under
     // — `_1` when `_1` is free, `_2` when it is not (gate finding: the
     // question promised a name the copy would not use on the second
@@ -379,16 +402,20 @@ fn show_clash_question(win: &MainWindow, plan: &fastcull_core::fileops::CopyPlan
     );
     // The one thing this question destroys, said out loud: a sidecar at
     // the destination is byte-replaced, and darktable's history stack
-    // lives in a file of exactly that name (persona finding 2026-08-21 —
-    // relayed to the user as an open question about merging instead).
+    // lives in a file of exactly that name (persona finding 2026-08-21).
+    // Since 2026-09-12 it names the way out in the SAME breath: the word
+    // that makes the user stop is "(darktable)", and the answer that does
+    // not do it belongs in the next clause, not two rows above (persona
+    // C4, Manager D7).
     win.set_copy_confirm_warning(
         concat!(
             "Overwriting also replaces those files' .xmp sidecars — edits made ",
-            "at the destination by another app (darktable) are lost."
+            "at the destination by another app (darktable) are lost. New only ",
+            "leaves them alone."
         )
         .into(),
     );
-    win.set_copy_confirm_nudge("Pick one: B, O or Esc.".into());
+    win.set_copy_confirm_nudge("Pick one: N, B, O or Esc.".into());
     win.set_copy_confirm_nudged(false);
     win.set_copy_state(3);
 }
@@ -487,6 +514,18 @@ fn copy_replan_with(win: &MainWindow, st: &mut AppState, policy: ClashPolicy) {
                     p.jobs.len().saturating_sub(p.clashes),
                     p.clashes
                 ));
+            }
+            if p.seq_meets_clashes {
+                // The {seq} re-run trap (the user's decision on brief 005
+                // OQ1: warn on the plan line, no refusal — every answer
+                // stays available). The new picks renumber everything
+                // after them, so the names found occupied here may belong
+                // to other frames. A plain literal, NOT a `format!`: the
+                // braces are the text the user typed.
+                notes.push(
+                    "{seq} numbers the whole session — the names already here may now belong to other frames"
+                        .to_string(),
+                );
             }
             if p.shared_name > 0 {
                 // Not a question — two picks that share a name always get

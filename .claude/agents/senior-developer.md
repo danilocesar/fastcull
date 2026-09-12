@@ -474,3 +474,23 @@ on the answer. The Manager relays them verbatim; the user is the customer.
   drift) A number in an agent file, a spec or a code comment is a claim
   with a date; when you rely on one, measure it, and when it is wrong, the
   correction is part of your report.
+- **A plan's "file X untouched" is checked against the compiler, not
+  assumed; a finding's fixture value is read from the fixture.** (unit
+  005, 2026-09-12) Before a plan says a file is untouched by a change to a
+  shared enum or trait, grep every exhaustive `match` on it —
+  `ClashPolicy::` hit clip.rs's exhaustive match while the plan said
+  clip.rs was untouched, the developer had to add an arm the plan never
+  specified, and it shipped without a test until the review caught it.
+  And before a finding names a fixture value, read that test's fixture:
+  F1 of the same unit told the developer to plant `a-b.mov` from another
+  test's fixture where the planner makes `a-c.mov`.
+- **Kill spinners by PID captured at spawn, and confirm with a
+  self-safe pattern.** (unit 005, 2026-09-12; QE hit the same trap the
+  same day) `pkill -f '<pattern>'` and `pgrep -af '<pattern>'` match the
+  shell running them whenever the pattern appears in its own command
+  line — one killed its own call, and a `kill -9` on the `timeout`
+  parents left the `sh` children spinning. Capture the PIDs when you
+  spawn a load recipe and kill those; when a pattern is the only handle,
+  the self-safe form is `pkill -9 -f 'whil[e] :; do :; done'` (a bracketed
+  character never matches its own text) and the check is `ps -eo pid,args`
+  filtered the same way.

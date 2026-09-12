@@ -303,3 +303,13 @@ if it works, say it works.
   builds in debug and release and the driven tests run headlessly — never
   assume the app crate is unbuildable. The perf budgets skip themselves in
   debug and bind on an idle machine only.
+- **Kill spinners by PID captured at spawn, and confirm with a
+  self-safe pattern.** (unit 005, 2026-09-12; the senior developer hit
+  the same trap the same day) `pkill -f '<pattern>'` and `pgrep -af
+  '<pattern>'` match the shell running them whenever the pattern appears
+  in its own command line, which reads as "a spinner survived" when none
+  did — or kills your own call. Capture the PIDs when you spawn a load
+  recipe and kill those; when a pattern is the only handle, the self-safe
+  form is `pkill -9 -f 'whil[e] :; do :; done'` (a bracketed character
+  never matches its own text) and the check is `ps -eo pid,args` filtered
+  the same way, never `pgrep` on the plain text.
