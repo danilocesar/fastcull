@@ -557,13 +557,34 @@ pub(crate) fn report_lines(report: &fastcull_core::fileops::CopyReport) -> Vec<S
             format!("{n} destination sidecars left in place — those picks have none of their own")
         });
     }
+    // THE HEADLINE, decided BEFORE the left block and independently of it
+    // (senior-developer review F2, 2026-09-12). A New only run whose every
+    // clash-free copy failed has copied nothing, and it must still lead
+    // with "Nothing was copied — N files failed": pushing the left line
+    // first would make `lines` non-empty and swallow that headline, and
+    // the report is one colour, so the left line would then read as the
+    // outcome of the run. "Nothing needed copying" is the OTHER half of
+    // this decision and needs both conditions — no failure AND nothing
+    // left — because a run that left 148 picks is not a run with nothing
+    // to do; it says what it left, on the line below.
+    if lines.is_empty() {
+        if !report.failed.is_empty() {
+            lines.push(format!(
+                "Nothing was copied — {} file{} failed",
+                report.failed.len(),
+                plural(report.failed.len())
+            ));
+        } else if report.left_untouched == 0 {
+            lines.push("Nothing needed copying".to_string());
+        }
+    }
     if report.left_untouched > 0 {
         // New only (fileops.md §6, brief 005): the NAMES were taken —
         // never "the photographs are there" (two bodies, one name) — and
         // "not re-checked" is said out loud so the green light on the
-        // copied line is never read across these. ABOVE the
-        // `lines.is_empty()` check below, which is load-bearing: a run
-        // that left everything must never print "Nothing needed copying".
+        // copied line is never read across these. After the lines that
+        // count what the run DID (the headline above included) and before
+        // cancelled/FAILED, exactly as fileops.md §6 places it.
         let n = report.left_untouched;
         lines.push(if n == 1 {
             "1 already had a file with this name here — left untouched, not re-checked".to_string()
@@ -584,17 +605,6 @@ pub(crate) fn report_lines(report: &fastcull_core::fileops::CopyReport) -> Vec<S
                 )
             });
         }
-    }
-    if lines.is_empty() {
-        lines.push(if report.failed.is_empty() {
-            "Nothing needed copying".to_string()
-        } else {
-            format!(
-                "Nothing was copied — {} file{} failed",
-                report.failed.len(),
-                plural(report.failed.len())
-            )
-        });
     }
     if report.cancelled {
         lines.push("cancelled — finished files remain".into());
@@ -933,6 +943,26 @@ mod tests {
                     .to_string()
             ]
         );
+
+        // A New only run that copied NOTHING because every clash-free
+        // copy failed still LEADS with the failure (review F2): the left
+        // line is not the outcome of this run, and the report is one
+        // colour, so a headline that is merely absent reads as one.
+        let lines = report_lines(&CopyReport {
+            copied: 0,
+            left_untouched: 3,
+            all_verified: false,
+            failed: failed(2),
+            ..Default::default()
+        });
+        assert_eq!(lines[0], "Nothing was copied — 2 files failed");
+        assert_eq!(
+            lines[1],
+            "3 already had files with these names here — left untouched, not re-checked"
+        );
+        assert!(lines[2].starts_with("FAILED f0.ARW"));
+        assert!(lines[3].starts_with("FAILED f1.ARW"));
+        assert_eq!(lines.len(), 4, "{lines:?}");
 
         // Order: what the run DID, then what it left.
         let lines = report_lines(&CopyReport {

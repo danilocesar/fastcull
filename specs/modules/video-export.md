@@ -239,7 +239,13 @@ as user-verified or NOT VERIFIED.
   question") minus its fourth answer: a name already there → Keep both
   (`_1`, `_2`, …) / Overwrite / Cancel — no "New only" here, because this
   export writes one file and for one file "skip" is Cancel (brief 005 D9,
-  2026-09-12). Nothing is ever replaced without the Overwrite answer.
+  2026-09-12). The policy enum is SHARED with Copy Picks, so the planner
+  still has to answer for it: over a taken name it maps New only to the
+  refused `Clash` marker (added 2026-09-12, senior-developer review F1),
+  so a wiring mistake that ever sent that policy here writes nothing and
+  replaces nothing rather than guessing an answer — the UI offers Keep
+  both, Overwrite and Cancel only. Nothing is ever replaced without the
+  Overwrite answer.
 - **Write**: the copy-engine shape — one worker thread, a progress event
   per frame, cancel between frames, unique temp name, no-clobber commit
   (`hard_link` + unlink, rename only for an answered Overwrite), **never a

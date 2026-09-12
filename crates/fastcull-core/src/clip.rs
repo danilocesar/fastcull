@@ -2696,6 +2696,65 @@ mod tests {
         std::fs::remove_dir_all(&dir).ok();
     }
 
+    /// The FOURTH answer of the copy question does not exist here, and
+    /// the code says so safely (brief 005 D9, 2026-09-12; video-export.md
+    /// "Clash"): this export writes ONE file, and for one file "skip" IS
+    /// Cancel — the app not executing anything at all. `ClashPolicy` is
+    /// shared with Copy Picks, so the planner still has to answer for
+    /// `NewOnly`, and it answers with the marker the executor already
+    /// refuses. A free name is unaffected (nothing clashes, so no policy
+    /// has anything to decide); a taken name yields a plan that writes
+    /// NOTHING and replaces nothing, which is the promise this module
+    /// never trades away — "nothing is ever replaced without the
+    /// Overwrite answer". The UI cannot reach this arm today
+    /// (`clip_bridge.rs` offers Keep both, Overwrite and Cancel only);
+    /// this test is what keeps a future wiring mistake from turning into
+    /// a silent replace.
+    #[test]
+    fn the_video_export_has_no_new_only_answer_and_refuses_the_policy() {
+        let dir = scratch_dir("clip-newonly");
+        let src = dir.join("src");
+        let dest = dir.join("out");
+        let sources = burst(&src);
+        std::fs::create_dir_all(&dest).unwrap();
+
+        // A free name: no clash, so the policy decides nothing and the
+        // export is an ordinary write.
+        let free = plan(&sources, &dest, ClashPolicy::NewOnly).unwrap();
+        assert_eq!(free.action, ClipAction::Write);
+        assert_eq!(free.dst, dest.join("a-c.mov"));
+
+        // A taken name: the plan carries the unanswered-clash marker.
+        let foreign = b"another day's export".to_vec();
+        std::fs::write(dest.join("a-c.mov"), &foreign).unwrap();
+        let clash = plan(&sources, &dest, ClashPolicy::NewOnly).unwrap();
+        assert_eq!(
+            clash.action,
+            ClipAction::Clash,
+            "New only is not an answer this export has: a plan under it \
+             must not write, and must not replace"
+        );
+        assert_eq!(clash.dst, dest.join("a-c.mov"));
+
+        // And the executor refuses it: not one frame is read, the file
+        // that was there is byte for byte what it was, and the report
+        // names the reason instead of guessing an answer.
+        let (report, events) = run(&clash);
+        assert!(
+            report
+                .failed
+                .as_deref()
+                .is_some_and(|r| r.contains("unanswered clash question")),
+            "the run must refuse by name: {:?}",
+            report.failed
+        );
+        assert!(!report.earned_the_green_light());
+        assert!(events.is_empty(), "not one frame may be read: {events:?}");
+        assert_eq!(std::fs::read(dest.join("a-c.mov")).unwrap(), foreign);
+        assert_eq!(listing(&dest), ["a-c.mov"]);
+        std::fs::remove_dir_all(&dir).ok();
+    }
+
     /// ADR 0003, which this module inherits through ADR 0004: the RAWs
     /// and their sidecars are read and NOTHING else. Byte-compared before
     /// and after a real export, sidecars included.
