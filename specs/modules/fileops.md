@@ -912,7 +912,7 @@ split the archive.
       template chip's confinement to the plan state — asserting the absence
       of a control by clicking where it would be is a test that passes when
       the click misses (main.slint).
-- [ ] **Brief 005 AC1 — New only opens nothing under a clashing name**
+- [x] **Brief 005 AC1 — New only opens nothing under a clashing name**
       (2026-09-12): both members of a clashing pair are byte-for-byte and
       mtime-identical after the run, a destination sidecar that DIFFERS
       from the source included (the darktable case), and a destination
@@ -926,7 +926,7 @@ split the archive.
       Mutants: the New only arm of `plan()` mapped to Replace turns the
       sidecar-bytes assertion red; a read of the left pair's destination
       (a hash, a verification pass) turns the `chmod 000` run red.
-- [ ] **Brief 005 AC2 — every clash-free pick copies and verifies exactly
+- [x] **Brief 005 AC2 — every clash-free pick copies and verifies exactly
       as under the other answers; a same-run shared name is suffixed and
       copied** — asserted in
       new_only_leaves_a_clashing_pair_untouched_and_copies_the_rest; the
@@ -934,9 +934,9 @@ split the archive.
       no clash, so the gone copies are new and copy again, RAW and
       sidecar together, with the "copied earlier but gone" note —
       a_hand_emptied_folder_holds_no_clash_so_new_only_copies_it_again.
-- [ ] **Brief 005 AC3 — a sidecar-only clash is left and reported apart**
+- [x] **Brief 005 AC3 — a sidecar-only clash is left and reported apart**
       — a_sidecar_only_clash_is_left_and_counted_apart_under_new_only.
-- [ ] **Brief 005 AC4 — the progress total equals the number of picks
+- [x] **Brief 005 AC4 — the progress total equals the number of picks
       copied; no event for a left pick** —
       new_only_emits_one_event_per_copied_pick_and_none_for_a_left_one
       (the `CopyEvent::File` stream is counted and its names checked);
@@ -945,7 +945,7 @@ split the archive.
       `Starting…` (no Copying, no Skipping) after the all-left run, in
       copy_picks_new_only_copies_the_new_pick_and_leaves_the_rest_alone
       (QE 2026-09-12, D3).
-- [ ] **Brief 005 AC5 — the report prints the left line (and the
+- [x] **Brief 005 AC5 — the report prints the left line (and the
       stray-sidecar line when it applies), the green light attaches to
       copied files only, and an all-left run prints the left line, no
       green light and never "Nothing needed copying"** — pump.rs
@@ -957,11 +957,11 @@ split the archive.
       the counts carried through a cancel at the executor —
       a_cancelled_new_only_run_still_reports_what_it_left (QE 2026-09-12,
       D2).
-- [ ] **Brief 005 AC6 — free space: only the clash-free bytes must fit
+- [x] **Brief 005 AC6 — free space: only the clash-free bytes must fit
       under New only** — the_free_space_check_follows_the_answer,
       extended with the fourth policy (an existing test that changes by
       the plan, not a loosening: it gains an arm).
-- [ ] **Brief 005 AC7 — the dialog**: the N row first with its counts,
+- [x] **Brief 005 AC7 — the dialog**: the N row first with its counts,
       `N` answering as a bare letter only, `Y`/Enter/Space/accelerators
       inert, the nudge `Pick one: N, B, O or Esc.`, the warning line's
       "New only leaves them alone." clause, and the row still offered —
@@ -977,7 +977,7 @@ split the archive.
       a font metric moves a layout by up to 40 px per seat, 2026-09-04).
       The label colour is review-verified only (no dump carries a
       colour).
-- [ ] **Brief 005 AC8 — the `{seq}` note appears on the preview when a
+- [x] **Brief 005 AC8 — the `{seq}` note appears on the preview when a
       `{seq}` template meets a clash, and only then** — core:
       plan_flags_a_seq_template_that_meets_a_clash (`{seq}` with a clash
       → true; `{seq}` with none → false; a clash with no `{seq}` →
@@ -985,7 +985,7 @@ split the archive.
       template over a folder that holds the templated name, and its
       absence otherwise — a round of
       copy_picks_new_only_copies_the_new_pick_and_leaves_the_rest_alone.
-- [ ] **Brief 005 AC9 — docs/copy-picks.md and docs/faq.md say what the
+- [x] **Brief 005 AC9 — docs/copy-picks.md and docs/faq.md say what the
       dialog does, in the same commit** — review-verified at the gate (no
       driven test reads the docs); the pages are part of this spec change
       and ship with the implementation commit.

@@ -297,3 +297,39 @@ in fileops.md "What that fix does NOT do", not this unit).
   sentence; no refusal.
 - D11 (Manager): G4 (plan-time stat cost on a NAS) is pre-existing and
   recorded in fileops.md; not this unit.
+- D12 (Manager, 2026-09-12, review round 1): the senior developer's two
+  minors — the video planner's compile-forced `NewOnly => Clash` arm had
+  no test; a New only run whose every copy failed lost its "Nothing was
+  copied" headline — fixed in 77f98c7 rather than deferred.
+- D13 (Manager, 2026-09-12, QE round 1): QE's four test proposals (the N
+  row's counts pinned on unequal numbers; a cancelled run's left counts
+  at the executor; `copyprogress=` in the dump with the rendered line
+  asserted; `N` inert on the video question), all APPROVED by the
+  integrity review, implemented in cb501ec; the four minors close with
+  them. No product code changed in that commit.
+- D14 (deferred, not this unit; QE observation 2026-09-12): `human_bytes`
+  has no KB tier, so the Keep both row reads `+1029480 B` for a ~1 MB
+  clash. Pre-existing and cosmetic; a bookkeeping issue for a later unit.
+
+## Outcome (2026-09-12)
+
+Commits on `copy-only-new`: 6cd287f (this brief), e0c3071 (the spec
+change), dc96f1c (core: the policy, the plan, the report, T1-T8),
+0750b33 (the dialog: the N row first, the key arm, the layout marks, the
+`{seq}` note, T9, the mouse round by name), 77f98c7 (review round 1's two
+minors), cb501ec (QE round 1's four proposals). PR #87. Verdicts: senior
+developer APPROVED (round 1 with two minors, fixed; round 2 APPROVED;
+integrity review: four proposals APPROVED; round 3 APPROVED); QE PASS
+(round 1 with four minors, all closed; round 2 PASS, no defects). CI green
+on both runners at every head; the un-gated mouse rounds answer by name
+on the Windows runner in debug and release.
+
+Untested, carried (agreed by QE and the senior developer): the ✓ copied
+badge surviving a New only run (no dump field reads the badge); a
+sidecar-only clash on a name a same-run twin also wants (both halves
+covered separately); the video question's nudge on an inert key
+(`clipstate` asserted, the line is not); a real darktable round trip and
+a NAS destination (fileops.md's NOT-VERIFIED list); 2,000 picks under New
+only (1,000 reached; the arm calls no `occupied()`); Windows-specific
+hostile names (issue #10); a mid-run sample of `copyprogress` (the
+assertions read the final line by design, now a contract in ui-grid.md).
