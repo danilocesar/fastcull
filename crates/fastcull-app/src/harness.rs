@@ -729,7 +729,7 @@ fn dispatch(win: &MainWindow, state: &Rc<RefCell<AppState>>, key: &str, layout: 
                          soft={} vx={:.1} vy={:.1} pan={:.4},{:.4} zf={:.3} \
                          copynote={:?} report={:?} copystate={} confirm={:?} \
                          newonly={:?} nudge={:?} nudged={} warning={:?} \
-                         copyprogress={:?} \
+                         copyprogress={:?} copyerror={:?} \
                          clip={} clipstate={} clipavail={} clipsummary={:?} clipskipped={:?} \
                          cliperror={:?} clipreport={:?} clipconfirm={:?} clipprogress={:?} \
                          cliphint={:?} exported={} curexported={} \
@@ -779,6 +779,18 @@ fn dispatch(win: &MainWindow, state: &Rc<RefCell<AppState>>, key: &str, layout: 
             // ends, so a dump gated on `copy finished run N` reads the
             // run's LAST line rather than sampling a running one.
             win.get_copy_progress().as_str(),
+            // The plan-time refusal on the copy dialog — the free-space
+            // sentence, a destination that is a file, a template that
+            // makes a path — the copy's twin of `cliperror=` (brief 006,
+            // 2026-09-12). Without it a driven run sees `copystate=0`
+            // after an answer but not whether the drop-back said why in
+            // the dialog's words or in core's raw byte counts.
+            //
+            // `format!` matches placeholders to arguments BY POSITION, so
+            // this argument must sit where its `{:?}` does: right after
+            // `copyprogress`. Slipping it shifts every clip field one
+            // place and turns the video suite red.
+            win.get_copy_error().as_str(),
             // The video export (M9): the same reasoning as
             // the copy block above — this is the second
             // operation in the app that writes files the user

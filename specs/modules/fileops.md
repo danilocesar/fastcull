@@ -1077,7 +1077,7 @@ split the archive.
       NAS figure `1228.8 GB` (developer 2026-09-12, the old three-tier
       body run over every row of the test); all ten mutants red, each at
       the row named above.
-- [ ] **Brief 006 AC2 — a copy plan refused for space shows `The copy
+- [x] **Brief 006 AC2 — a copy plan refused for space shows `The copy
       needs {needed} and there is {free} free at the destination.` with
       both sizes through the formatter, on the plan preview and on the
       drop-back after an answer; every other `PlanError` keeps its text;
@@ -1096,9 +1096,16 @@ split the archive.
       WIRING on the real dialog — both replan paths reaching that
       function — is driven (Manager ruling 2026-09-12, brief 006 D5: the
       defect this half fixes IS a wiring defect, and only a driven round
-      goes red if the arm is never rewired): a sparse `.ARW`
-      (`File::set_len` past the destination's free space, no block
-      allocated) as the CLASHING pick beside a tiny clash-free one, so
+      goes red if the arm is never rewired): a TIFF-fronted `.ARW` — the
+      video suite's `write_synthetic_raw` bytes extended by
+      `File::set_len` to 8 TiB, above any runner's or seat's free space
+      and below ext4's 16 TiB per-file ceiling; the front stays a real
+      TIFF because a file the in-tree walker rejects goes to rawler,
+      whose `RawSource::new` maps it with `MAP_POPULATE` and pre-faults
+      every page (an 8 TiB zero-filled file stalled the load past the
+      30 s wait cap at 22.6 GB RSS, senior-developer plan 2026-09-12);
+      the tail is a hole — as the CLASHING pick beside a tiny clash-free
+      one, so
       the preview passes, Enter asks, `B` replans under Keep both and the
       drop-back refuses with `copystate=0` and the sentence in a new
       `copyerror=` QEDUMP field (ui-grid.md "Debug facilities" moves in
@@ -1107,7 +1114,12 @@ split the archive.
       in the test: NTFS allocates real clusters on `set_len` without the
       sparse attribute, so the fixture cannot exist on the Windows
       runner's disk; the unit test above is what pins the sentence there.
-- [ ] **Brief 006 AC3 — the illustrative sizes in this spec, in
+      RED on commit 1 with the field and the test but the arm unchanged,
+      2026-09-12: `copyerror="not enough free space: need 8796093026378
+      bytes, 10101223424 available"` (developer 2026-09-12); the preview
+      line `2 picked · 8.0 TB to copy` read `8192.0 GB to copy` before
+      commit 1, which the third driven mutant re-measured.
+- [x] **Brief 006 AC3 — the illustrative sizes in this spec, in
       video-export.md and in `docs/` are the screen's form, and
       docs/copy-picks.md says what the dialog says when the destination
       lacks the room** (2026-09-12) — review-verified at the gate, like

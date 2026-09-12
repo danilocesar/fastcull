@@ -294,6 +294,37 @@ pub(crate) fn human_bytes(b: u64) -> String {
     }
 }
 
+/// The free-space refusal in the units a person reads — the video
+/// dialog's sentence shape (`clip_bridge::no_room_for_it`) with this
+/// dialog's subject (fileops.md, plan-time errors; brief 006 R2). Core
+/// keeps its byte counts, which are right for core and useless on
+/// screen: until 2026-09-12 this dialog printed them straight through
+/// and the user counted digits to learn whether the shortfall was
+/// 100 MB or 100 GB.
+fn no_room_for_the_copy(needed: u64, free: u64) -> String {
+    format!(
+        "The copy needs {} and there is {} free at the destination.",
+        human_bytes(needed),
+        human_bytes(free)
+    )
+}
+
+/// What the copy dialog prints for a plan-time refusal. ONE function for
+/// both paths that can refuse — the plan preview and the drop-back after
+/// an answer — so neither can drift back to core's raw text.
+///
+/// Only the free-space refusal is re-worded. Every other `PlanError`
+/// keeps core's `Display` text (fileops.md: "Every other `PlanError`
+/// keeps the text it has"), which is what the `other` arm below does:
+/// in Rust, `to_string()` on an error calls exactly that `Display`.
+pub(crate) fn copy_error_text(e: &fastcull_core::fileops::PlanError) -> String {
+    use fastcull_core::fileops::PlanError;
+    match e {
+        PlanError::InsufficientSpace { needed, free } => no_room_for_the_copy(*needed, *free),
+        other => other.to_string(),
+    }
+}
+
 /// The destination as the dialog shows it: the whole path while it is
 /// short, otherwise its TAIL — `…/2026-08-21-osprey/selects`.
 ///
@@ -410,10 +441,12 @@ fn show_clash_question(win: &MainWindow, plan: &fastcull_core::fileops::CopyPlan
         }
         .into(),
     );
-    // Bytes belong HERE and nowhere else: this is the only answer whose
-    // cost is knowable up front (the overwrite answer re-checks identical
-    // files instead of re-sending them, so a worst-case number on it
-    // would be a cost the user never pays).
+    // Bytes belong on THIS answer row and no other: it is the only
+    // answer whose cost is knowable up front (the overwrite answer
+    // re-checks identical files instead of re-sending them, so a
+    // worst-case number on it would be a cost the user never pays). The
+    // plan line above and the free-space refusal state sizes too — they
+    // are not answer rows.
     win.set_copy_confirm_keep_both_cost(format!("+{}", human_bytes(plan.clash_bytes)).into());
     win.set_copy_confirm_overwrite(
         format!("Overwrite those {clashes} — identical files are re-checked, not re-sent").into(),
@@ -449,7 +482,8 @@ fn show_clash_question(win: &MainWindow, plan: &fastcull_core::fileops::CopyPlan
 /// only that fresh plan (fileops.md rule 3 — the plan built before the
 /// question is never executed). A policy that no longer fits (free space,
 /// a destination that moved) drops back to the plan preview with the
-/// error on it, having copied nothing.
+/// error on it — in the dialog's words, through `copy_error_text` —
+/// having copied nothing.
 fn answer_clash_question(win: &MainWindow, st: &mut AppState, policy: ClashPolicy) {
     if let Some(writer) = &st.session.writer {
         writer.flush();
@@ -592,7 +626,7 @@ fn copy_replan_with(win: &MainWindow, st: &mut AppState, policy: ClashPolicy) {
             | PlanError::Template(_)),
         ) => {
             win.set_copy_summary(format!("{} picked images.", sources.len()).into());
-            win.set_copy_error(e.to_string().into());
+            win.set_copy_error(copy_error_text(&e).into());
         }
     }
 }
@@ -687,5 +721,45 @@ mod tests {
         ] {
             assert_eq!(human_bytes(bytes), want, "{bytes}");
         }
+    }
+
+    /// The plan-time refusal the dialog prints, and the line the user
+    /// reads on the night the card is nearly full (fileops.md,
+    /// plan-time errors; brief 006 AC2). The first assertion is the twin
+    /// of `clip_bridge::the_two_untestable_messages_now_have_a_test` —
+    /// the two dialogs say the same thing about the same situation.
+    ///
+    /// The WIRING — that both replan paths actually reach this function
+    /// — is what the driven round
+    /// `the_copy_refusal_reaches_the_dialog_on_the_drop_back_after_keep_both`
+    /// pins; on Windows, where that round cannot run (NTFS allocates on
+    /// `set_len`), this test is what pins the sentence.
+    #[test]
+    fn the_copy_refusal_reads_in_units_a_person_reads() {
+        use fastcull_core::fileops::PlanError;
+
+        assert_eq!(
+            no_room_for_the_copy(7_834_567_890, 1_234_567_890),
+            "The copy needs 7.3 GB and there is 1.1 GB free at the destination."
+        );
+        assert_eq!(
+            copy_error_text(&PlanError::InsufficientSpace {
+                needed: 7_834_567_890,
+                free: 1_234_567_890
+            }),
+            "The copy needs 7.3 GB and there is 1.1 GB free at the destination."
+        );
+        // Core's developer-facing form never leaks through this function,
+        // whatever the numbers are.
+        assert!(
+            !copy_error_text(&PlanError::InsufficientSpace { needed: 1, free: 0 })
+                .contains("bytes")
+        );
+        // Every other refusal keeps core's words (fileops.md): this
+        // sentence is the space one's alone.
+        assert_eq!(
+            copy_error_text(&PlanError::DestNotADirectory),
+            "the destination is not a folder"
+        );
     }
 }
