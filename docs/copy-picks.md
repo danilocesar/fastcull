@@ -4,6 +4,12 @@
 will go, their total size, and the destination's free space — glance,
 `Enter`, done. Sidecars travel with their RAWs automatically.
 
+If the destination hasn't got the room, the dialog says so before
+anything moves — *"The copy needs 7.3 GB and there is 1.1 GB free at the
+destination."* — and Copy stays greyed out until you point it at another
+folder. (Sizes are the GB and TB that `df -h` and Windows Explorer show,
+so a brand-new 12 TB drive reads as 10.9 TB free here as it does there.)
+
 ## What "verified" means
 
 Every copied file is checksummed while it's written and the destination
@@ -43,7 +49,7 @@ symlink counts too), it asks once, for the whole run:
 > The other 136 copy normally. Choose once for the whole run:
 >
 > **N** — New only: copy the 136, leave the 12 already here untouched
-> **B** — Keep both: the 12 land as `DSC01234_1.ARW`  (+590 MB)
+> **B** — Keep both: the 12 land as `DSC01234_1.ARW`  (+590.3 MB)
 > **O** — Overwrite those 12: identical files are re-checked, not re-sent
 > **Esc** — Cancel: copy nothing at all, not even the 136
 

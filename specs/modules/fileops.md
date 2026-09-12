@@ -47,7 +47,28 @@ Plan-time errors (block execution, shown to user):
   from this rule**: `{camera}` expanding to nothing at all in the app is
   its own bug (`copy_bridge::plan_sources` passes `camera: None`) while
   the template docs offer the variable.
-- Insufficient free space (sum of sizes vs `statvfs`/`GetDiskFreeSpaceEx`).
+- Insufficient free space (the total §3 of "The clash question" requires
+  for the policy in play vs `statvfs`/`GetDiskFreeSpaceEx`). **The
+  dialog says it in units a person reads** (user decision 2026-09-12,
+  brief 006 R2; the persona's IN-MY-WAY on the raw form): `The copy
+  needs {needed} and there is {free} free at the destination.`, both
+  sizes through the shared formatter ("Sizes on screen", dialog
+  minimums) — *"The copy needs 7.3 GB and there is 1.1 GB free at the
+  destination."* — the video dialog's sentence shape (video-export.md
+  "Free space": *"This video would be 4.5 GB and there is 1.1 GB free at
+  the destination."*), on the plan preview and on the drop-back after
+  an answer alike. `{needed}` is the total §3 requires to fit for the
+  policy in play — the clash-free bytes before the answer and under
+  Overwrite and New only, every byte under Keep both — so it can read
+  smaller than the summary line's worst case, and the drop-back after
+  Keep both can refuse what the preview allowed. Until 2026-09-12 the
+  dialog printed core's error text verbatim — `not enough free space:
+  need 7834567890 bytes, 123456789 available` — and the user counted
+  digits to learn whether the shortfall was 100 MB or 100 GB (persona,
+  brief 006). Core's text is unchanged: `PlanError`'s `Display` is the
+  developer-facing message, and this sentence is shared with no report,
+  so it lives beside the video's in the bridge (brief 006 non-goal: no
+  move to core). Every other `PlanError` keeps the text it has.
 
 Destination file already exists (per-file modes): **rename (default)** / skip /
 overwrite / abort. Rename appends a numeric suffix before the extension
@@ -221,6 +242,45 @@ explicitly deferred to a later discussion; modal dialog accepted)
   Ctrl+E with zero picks opens with "No picked images", never a silent
   no-op. Modal in v1. Cut from v1: per-file mode selectors, speed/ETA
   displays, pause, background copy.
+- **Sizes on screen — one formatter, five binary tiers, one decimal**
+  (user decision 2026-09-12, brief 006, persona-validated; issue #88).
+  Every byte count either dialog prints goes through the ONE formatter
+  the two bridges share (`human_bytes` — presentation, not a rule about
+  files, so it stays in the app crate: brief 006 non-goal): this
+  dialog's summary line (`148 picked · 7.3 GB to copy · 1.2 TB free`),
+  the Keep both row's cost (`+590.3 MB`, §6), the free-space refusal in
+  the plan-time error list above, and the video dialog's plan line,
+  refusal and report line (video-export.md, "Dialog"). Five tiers,
+  binary, chosen by threshold: `{n} B` below 1,024 bytes (no decimal —
+  `0 B`, `1023 B`), then `{:.1} KB` from 2^10, `{:.1} MB` from 2^20,
+  `{:.1} GB` from 2^30 and `{:.1} TB` from 2^40, labelled KB/MB/GB/TB,
+  one decimal on every tiered value (`1.0 KB`, `12.0 TB`; `1.0 TB` at
+  exactly 2^40). The tier is picked first and the value rounded inside
+  it, so a count just under a boundary rounds within its own tier —
+  1,048,575 B is `1024.0 KB`, never `1.0 MB` — and above the TB tier the
+  number runs on (`1024.0 TB`: no PB tier, no volume a photographer
+  owns). Binary because that is what `df -h`, Explorer's drive tile and
+  a NAS dashboard print — the persona's comparison points; the user,
+  brief 006 OQ1: "I don't compare them" — so a brand-new 12 TB volume
+  reads `10.9 TB free` here as it does there; GNOME Files and Finder are
+  decimal and read ~7 % higher on every GB line, recorded and not a
+  bug. Until 2026-09-12 there were three tiers: bytes ran to
+  `1048575 B` (the Keep both row read `+1029480 B` for a ~1 MB clash,
+  issue #88) and GB ran on past a terabyte — `1228.8 GB free` for a
+  1.2 TB NAS, `12288.0 GB free` for a 12 TB volume — four digits and a
+  division on the one line meant for a glance (persona 2026-09-12: TB
+  tier USEFUL, weekly on the NAS and the 2 TB SSD; KB tier SHRUG — it
+  can never reach the cost column, because a clash always costs at
+  least its RAW, and shows only through a "free" figure on a
+  nearly-full card or a refusal). ONE rule on every line (Manager D2):
+  the illustrative sizes in this spec, in video-export.md and in `docs/`
+  are the screen's form, one decimal — `328.4 MB` and `358.2 GB free`,
+  never `328 MB` and `358 GB free` (the video spec's plan line drifted
+  from the screen and is corrected the same day). Not built (D4, the
+  persona's own list): a units preference, GiB/TiB labels, a
+  decimal/binary switch, per-file sizes, a free-space bar, an ETA.
+  Pinned by copy_bridge::a_byte_count_reads_in_its_tier_with_one_decimal
+  (the acceptance list, brief 006 AC1).
 - **The card's height follows its content and its text region scrolls**,
   the rule video-export.md records for issue #62: a 480 px floor (the
   height it always had, so nothing moves in the ordinary case), the window
@@ -585,7 +645,7 @@ The other 136 copy normally. Choose once for the whole run:
 e.g. DSC01234.ARW, DSC01235.ARW, DSC01240.ARW …
 
  N    New only — copy the 136, leave the 12 already here untouched
- B    Keep both — the 12 land as DSC01234_1.ARW        +590 MB
+ B    Keep both — the 12 land as DSC01234_1.ARW        +590.3 MB
  O    Overwrite those 12 — identical files are re-checked, not re-sent
  Esc  Cancel — copy nothing at all, not even the 136
 
@@ -626,7 +686,10 @@ destination by another app (darktable) are lost. New only leaves them alone.
   label is what stops the word overstating what happens. Bytes appear on
   "keep both" ONLY: it is the one answer whose cost is knowable up front,
   and a worst-case number on overwrite would state a cost the identity
-  check means the user never pays.
+  check means the user never pays. The cost goes through the shared
+  formatter (`+590.3 MB` — "Sizes on screen" in the dialog minimums,
+  2026-09-12), and because a clash always costs at least its RAW no KB
+  figure can reach this row with real files (persona, brief 006).
 - The answers do not fit side by side in the 560px card (three did not,
   measured 2026-08-21; four do not either), so they are stacked rows in
   order of increasing consequence, Cancel set apart: `N`, `B`, `O`, then
@@ -989,6 +1052,64 @@ split the archive.
       dialog does, in the same commit** — review-verified at the gate (no
       driven test reads the docs); the pages are part of this spec change
       and ship with the implementation commit.
+- [ ] **Brief 006 AC1 — the formatter prints `1.0 KB`, `1.0 MB`, `1.0 GB`,
+      `1.0 TB` and `12.0 TB` at the boundaries and `1023 B` below the
+      first, one decimal on every tiered value and none on bytes, and
+      rounds inside the tier the threshold picked (`1024.0 KB` at
+      2^20 - 1, `1024.0 GB` at 2^40 - 1)** (2026-09-12, issue #88) — app
+      (unit): copy_bridge::a_byte_count_reads_in_its_tier_with_one_decimal,
+      the exact string at 0, 1023, 2^10, 2^20 - 1, 2^20, 2^30, 2^40 - 1,
+      2^40 and 12 × 2^40, plus the two figures the issue was opened on:
+      1,029,480 B reads `1005.4 KB` (was `+1029480 B` on the Keep both
+      row) and a 1.2 TB NAS's 1,319,413,953,331 B reads `1.2 TB` (was
+      `1228.8 GB`). Mutants, one per tier: each threshold moved by one
+      byte, each divisor swapped for its neighbour's, `{:.0}` or `{:.2}`
+      on any tier, and the KB or the TB arm deleted — every one must turn
+      the test red. Both runners, debug and release (an app-crate unit
+      test runs under `cargo test --workspace` on both seats). The
+      existing readers of a size string stay green with no change:
+      pump::the_verified_line_of_a_video_export_is_earned (`344.0 MB`),
+      clip_bridge::the_two_untestable_messages_now_have_a_test (`4.5 GB`,
+      `1.1 GB`), and the driven `0 B to copy` guard in
+      copy_picks_rerun_recopies_hand_deleted_files (0 stays `0 B`).
+- [ ] **Brief 006 AC2 — a copy plan refused for space shows `The copy
+      needs {needed} and there is {free} free at the destination.` with
+      both sizes through the formatter, on the plan preview and on the
+      drop-back after an answer; every other `PlanError` keeps its text;
+      the video dialog's refusal is unchanged** (2026-09-12) — app
+      (unit): copy_bridge::the_copy_refusal_reads_in_units_a_person_reads
+      — the exact sentence for `needed: 7_834_567_890, free:
+      1_234_567_890` (*"The copy needs 7.3 GB and there is 1.1 GB free at
+      the destination."*) and `DestNotADirectory` still reading "the
+      destination is not a folder", asserted on the bridge's
+      error-to-text function, which both replan paths (the preview and
+      the drop-back) call; mutants: the space arm mapped back to
+      `e.to_string()` turns the first assertion red, the `other` arm
+      given a sentence of its own turns the second red. The video's
+      sentence stays pinned by
+      clip_bridge::the_two_untestable_messages_now_have_a_test. The
+      WIRING on the real dialog — both replan paths reaching that
+      function — is driven (Manager ruling 2026-09-12, brief 006 D5: the
+      defect this half fixes IS a wiring defect, and only a driven round
+      goes red if the arm is never rewired): a sparse `.ARW`
+      (`File::set_len` past the destination's free space, no block
+      allocated) as the CLASHING pick beside a tiny clash-free one, so
+      the preview passes, Enter asks, `B` replans under Keep both and the
+      drop-back refuses with `copystate=0` and the sentence in a new
+      `copyerror=` QEDUMP field (ui-grid.md "Debug facilities" moves in
+      the same commit) — the_copy_refusal_reaches_the_dialog_on_the_
+      drop_back_after_keep_both, `#[cfg(unix)]` with its reason written
+      in the test: NTFS allocates real clusters on `set_len` without the
+      sparse attribute, so the fixture cannot exist on the Windows
+      runner's disk; the unit test above is what pins the sentence there.
+- [ ] **Brief 006 AC3 — the illustrative sizes in this spec, in
+      video-export.md and in `docs/` are the screen's form, and
+      docs/copy-picks.md says what the dialog says when the destination
+      lacks the room** (2026-09-12) — review-verified at the gate, like
+      brief 005 AC9 (no driven test reads the specs or the docs): the
+      screen's form itself is what the two existing unit tests above pin
+      (`344.0 MB`, `4.5 GB`), and the docs sentence ships with the
+      implementation commit.
 - [ ] NOT VERIFIED ANYWHERE, carried forward (QE 2026-08-21, extended
       2026-08-22 — the same-run guard's folding-destination behaviour and
       the recording of a RAW whose sidecar failed are reachable ONLY on a

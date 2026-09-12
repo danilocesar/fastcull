@@ -61,23 +61,33 @@ the byte sizes the copy dialog shows.
   free }` as `The copy needs {needed} and there is {free} free at the
   destination.` (the two sizes through `human_bytes`), on the plan
   preview and on the drop-back after an answer; every other `PlanError`
-  keeps its current text. Core's error text is unchanged (it is core's
-  message for the CLI and the logs).
+  keeps its current text. Core's error text is unchanged: `PlanError`'s
+  `Display` is the developer-facing message, and this sentence is shared
+  with no report, so it lives beside the video's in the bridge
+  (corrected 2026-09-12 — this line first said "for the CLI and the
+  logs", but nothing in the CLI or a log reads a `PlanError`).
 - R3. Spec: fileops.md's dialog minimums gain the format rule (the five
   tiers, binary, one decimal, both dialogs share the formatter) and the
-  refusal sentence; video-export.md's illustrative report and free-space
-  lines take the form the screen prints (`328.4 MB`, `358.2 GB free`);
-  the acceptance criteria below land in fileops.md.
+  refusal sentence; every illustrative size line takes the form the
+  screen prints — video-export.md's plan and report lines (`328.4 MB`,
+  `358.2 GB free`) and fileops.md §6's `+590 MB` → `+590.3 MB` (amended
+  2026-09-12: the Keep both row has printed one decimal since
+  2026-08-21); the acceptance criteria below land in fileops.md.
 - R4. Docs: `docs/copy-picks.md` says what the dialog says when the
-  destination lacks the room (one sentence); no other docs sentence
-  quotes a size that changes.
+  destination lacks the room (one sentence, plus one parenthetical on
+  the binary units — D7), and its clash-question block's `+590 MB` takes
+  the screen's form; no other docs sentence quotes a size that changes.
 - R5. Tests: a unit test on the tier boundaries (1023 B, 1 KB, 1 MB - 1,
   1 MB, 1 GB, 1 TB - 1, 1 TB, 12 TB → the exact strings) with a mutant
   per boundary that must go red; a unit test on the copy refusal
   sentence (the exact string for a needed/free pair, and that a
-  different `PlanError` is untouched); the existing driven tests that
-  read a size line (`copy_summary`, the video report's `344.0 MB`) stay
-  green unchanged.
+  different `PlanError` is untouched); a driven Linux-only round that
+  proves the refusal's WIRING on the real dialog (D5); the existing
+  readers of a size string stay green unchanged — pump's `344.0 MB` unit
+  test, clip_bridge's `4.5 GB` / `1.1 GB` unit test, and the driven
+  `0 B to copy` guard in copy_picks_rerun_recopies_hand_deleted_files
+  (amended 2026-09-12: this line first named a `copy_summary` test that
+  does not exist).
 
 ## Acceptance criteria (also land in fileops.md)
 
@@ -85,7 +95,9 @@ the byte sizes the copy dialog shows.
   TB` at the boundaries and `1023 B` below the first; one decimal on
   every tiered value.
 - AC2. A copy plan refused for space shows the sentence of R2 with both
-  sizes formatted; the video dialog's refusal is unchanged.
+  sizes formatted, on the preview and on the drop-back after an answer
+  (the wiring driven on the real dialog, D5); the video dialog's refusal
+  is unchanged.
 - AC3. The spec's illustrative lines match the screen's form; the docs
   sentence of R4 exists.
 
@@ -125,3 +137,14 @@ ETA.
   video dialog's sentence shape through the same formatter.
 - D4 (Manager, persona): no units preference, no GiB labels, no
   per-file sizes, no bar, no ETA.
+- D5 (Manager, 2026-09-12, on the senior developer's OQ2, M3): the copy
+  refusal's wiring is proven by a driven round, not by review — a sparse
+  `.ARW` past the destination's free space as the clashing pick, `B`, the
+  drop-back refuses with the sentence in a new `copyerror=` dump field;
+  `#[cfg(unix)]` with the reason written (NTFS allocates on `set_len`).
+- D6 (Manager, senior developer's OQ1): at a tier boundary the threshold
+  picks the tier and the value rounds inside it — `1024.0 KB` at
+  2^20 - 1, never `1.0 MB`; the current behaviour, stated.
+- D7 (Manager, senior developer's OQ4): the docs parenthetical on binary
+  units stays (a sentence is not a preference; it pre-empts the one
+  support question the persona named).

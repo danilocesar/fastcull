@@ -265,7 +265,13 @@ as user-verified or NOT VERIFIED.
   A destination whose filesystem cannot hold a file of that size (FAT32
   above 4 GB) fails honestly at write time with the OS error and the temp
   file removed — recorded, not pre-detected (there is no portable way to
-  ask).
+  ask). The refusal reads *"This video would be 4.5 GB and there is
+  1.1 GB free at the destination."* (M9, 2026-08-28: "say the free-space
+  refusal in units a person reads"), both sizes through the formatter the
+  two dialogs share — fileops.md, "Sizes on screen": five binary tiers,
+  one decimal (brief 006, 2026-09-12). It is the sentence shape the Copy
+  Picks refusal adopted that day; this one is unchanged by it and stays
+  pinned by `the_two_untestable_messages_now_have_a_test`.
 
 ## Dialog (minimums)
 
@@ -276,13 +282,21 @@ fire from a fat finger mid `]`/`N` (persona 2026-08-27). Disabled with its
 reason in the status line, never a silent grey item. One dialog in the
 Copy Picks style:
 destination row with a Choose… button and the remembered path; one plan
-line — *"30 frames · 8640×5760 · 30.3 fps · 1.0 s · 328 MB →
-DSC05010-DSC05039.mov · 358 GB free"*, whose cadence field carries the
-fallback wording instead of the bare rate when there is one; a skipped
+line — *"30 frames · 8640×5760 · 30.3 fps · 1.0 s · 328.4 MB →
+DSC05010-DSC05039.mov · 358.2 GB free"*, whose cadence field carries the
+fallback wording instead of the bare rate when there is one (the two
+sizes are the screen's form — one decimal on every tiered value, the
+formatter of fileops.md "Sizes on screen"; this line read `328 MB` and
+`358 GB free` until 2026-09-12, a form the screen never printed —
+corrected, brief 006 D2); a skipped
 line
 when there is one; **Export** (Enter, when the plan is clean) and Cancel
 (Esc); progress "n / N" with Cancel while writing; the report with the
-verified line and an Open folder action. No other control. The clash
+verified line — *"Exported 30 frames · 1.0 s · 30.3 fps · 328.4 MB →
+DSC05010-DSC05039.mov, all checksums verified"*, the same formatter,
+pinned at `344.0 MB` by pump's
+the_verified_line_of_a_video_export_is_earned — and an Open folder
+action. No other control. The clash
 question is the same dialog state as Copy Picks. Modal, keyboard-contained
 (issue #42 rules), never marks, never moves the cursor, never touches the
 selection (stated 2026-09-06, brief 002 — true by omission before).
