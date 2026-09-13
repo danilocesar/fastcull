@@ -38,7 +38,7 @@ until you move, or press `Esc` again on the grid. Hold Ctrl to move
 without letting go (see
 [the selection](culling.md#working-on-several-photos-at-once-the-selection)).
 
-> **Changed after 0.13.1**: the second video used to contain the previous
+> **Changed in 0.14.0**: the second video used to contain the previous
 > export's frames as well as the new ones — arrowing away kept the old
 > selection, and a new Shift+arrow selection was added to it. If a video
 > you exported earlier held more than you had selected, that was this.
