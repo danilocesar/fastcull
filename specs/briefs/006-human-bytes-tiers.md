@@ -148,3 +148,32 @@ ETA.
 - D7 (Manager, senior developer's OQ4): the docs parenthetical on binary
   units stays (a sentence is not a preference; it pre-empts the one
   support question the persona named).
+- D8 (Manager, 2026-09-12, QE round 2, deferred): QE's D5 — nothing in
+  the suite goes red if the copy dialog stops clearing a stale refusal
+  (`set_copy_error("")` at the top of `copy_replan_with`, present since
+  a6af43f) — is a pre-existing test gap over correct behaviour, not this
+  unit's; recorded here rather than looped once more. A driven round that
+  refuses, then fixes the destination and expects `copyerror=""`, is the
+  proposal, for the next unit that touches the copy dialog's tests.
+- D9 (Manager, review round 2's F1): the QE-round fix commit's message
+  carried an absolute home path with the user's login (M7); amended to
+  `<repo>/…` before the merge (2f28911 → 90c87a9), a commit-wording fixup
+  exempt from the gate.
+
+## Outcome (2026-09-12)
+
+Commits on `human-bytes-tiers`: 58ec381 (this brief), d183a53 (the spec
+change), 1ade069 (the five tiers, AC1), 176e649 (the refusal sentence,
+the `copyerror=` dump field, the driven drop-back round, AC2/AC3),
+90c87a9 (QE round 1: the above-TB run-on and `u64::MAX` rows, the
+preview-path driven round, four spec over-claims corrected). PR #90.
+Verdicts: senior developer APPROVED (round 1, two nits; round 2, one
+minor — D9); integrity review: all five of QE's items APPROVED; QE PASS
+(round 1 with two proposals and three spec corrections, all landed;
+round 2 PASS with one pre-existing gap — D8). CI green on both runners
+at every head. The senior developer's plan was prototyped end to end
+before the developer started (the 8 TiB TIFF-fronted sparse fixture),
+and the rawler `MAP_POPULATE` exposure it found is issue #89.
+
+Untested, carried (QE round 2):
+
