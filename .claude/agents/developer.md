@@ -275,3 +275,10 @@ smuggled in under another name.
   it; do not push through an ad-hoc `GIT_SSH_COMMAND` to the raw URL — it
   works but leaves `origin/main` stale (an 18-commits-ahead false alarm on
   2026-08-27), so if you must, `git fetch` afterwards.
+- **The driven suite no longer fits one foreground call.** (senior
+  developer, unit 006, 2026-09-12) The screenshot suite is 87 tests and
+  about 600 s in debug on this seat — over the 600000 ms cap, so a single
+  `cargo test --test screenshot` call is cut off mid-suite. Run it as two
+  `--exact` halves split from `cargo test -p fastcull-app --test
+  screenshot -- --list`, each its own foreground call (measured: 318 s +
+  288 s), never a background run and never a shorter list than the whole.
