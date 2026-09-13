@@ -110,6 +110,81 @@ before code, validator + QE with the module's hostile-input list, docs
 page `docs/export-video.md` in the same commit as the behaviour, one
 README bullet. Explicitly out for a year: any editing surface.
 
+## v0.14.0 (released 2026-09-12)
+
+Everything since v0.13.1: a fourth answer to the Copy Picks clash
+question, the file-manager selection rule, the keyboard-shortcuts card
+rebuilt, readable sizes on every dialog line, and the first six units
+through the spec-first pipeline (briefs 001 to 006 under `specs/briefs/`).
+
+**Copy Picks: "New only" adds picks to a folder you have already worked
+on, and touches nothing else** (issue #86, brief 005, `modules/fileops.md`
+"The clash question"). The question had three answers, and none of them
+could add four more picks to an archive already developed in darktable:
+Overwrite byte-replaces the `.xmp` sidecars darktable keeps its history
+stacks in, Keep both duplicates every edited frame as a `_1` twin, and a
+fresh folder splits the archive. The fourth answer, `N`, is the first
+row now: "New only — copy the 4, leave the 144 already here untouched".
+A clashing pick is never opened — not written, not read, not hashed —
+which is the promise a darktable folder needs; the clash-free picks copy
+and verify as before; the progress line counts only the new ones; the
+report says "144 already had files with these names here — left
+untouched, not re-checked", and names a stray `.xmp` with no RAW beside
+it as a pick that was not copied, so nothing reads as archived that is
+not. The plan preview warns when a `{seq}` template meets a folder that
+already holds files, because the numbers shift with the new picks (the
+user's call: warn, never refuse). The docs now recommend New only for
+adding picks and Overwrite for the re-verify pass; the video export's
+question is unchanged (one file: skip is Cancel). Proved by nine core
+tests, a driven round through the real dialog, and a red mutant behind
+every guard — including the one that writes issue #14's forced skip back
+in.
+
+**The selection follows the file-manager rule** (brief 002,
+`modules/ui-grid.md`). The user's report: frames exported as a video,
+a different set selected next, and the second video held both. It was
+designed behaviour — plain arrows kept the selection and a fresh
+Shift-span was unioned with it, a rule no surveyed product has. Now a
+plain navigation key (arrows, PgUp/PgDn, Home/End, `[`/`]`) and the Y/N
+advance end the selection; Ctrl+the same keys move without touching it;
+a fresh Shift-span replaces the whole selection; Ctrl+Space toggles the
+frame under the cursor; the "· N selected" count is drawn in the
+selection's blue. Researched across Photo Mechanic, Lightroom, Capture
+One, Bridge, darktable, digiKam, the file managers and the HIGs; the
+persona rated the rule IN-MY-WAY for its silent-loss hazard, the user
+chose it, and the spec records both.
+
+**The keyboard-shortcuts card** (PR #75) is 780 px wide, sized to its
+content, seven labelled groups in two columns with a right-aligned key
+cell beside every action, all 24 bindings on it, and `?` or F1 opens it.
+It was one `Text` with 23 newline-separated lines and a hard-coded
+480×560 box before.
+
+**Sizes in the dialogs get their KB and TB tiers, and the copy dialog's
+refusal reads like the video's** (issue #88, brief 006): a 1.2 TB NAS
+reads `1.2 TB free` instead of `1228.8 GB free` on the Copy Picks and
+video-export lines, every size carries one decimal from KB to TB, and
+the not-enough-space refusal on the copy dialog now says "The copy needs
+7.3 GB and there is 1.1 GB free at the destination." instead of core's
+raw byte counts. The refusal is driven through the real dialog on both
+of its paths with an 8 TiB sparse fixture, which is how the plan found
+issue #89 (a large non-TIFF file misnamed as a RAW is pre-faulted whole
+by the import's rawler fallback).
+
+**Underneath, nothing a user sees.** The screenshot shutter fires exactly
+once on every seat (#77: it fired twice on Wayland, so a local green
+could be a green of the second capture); dependencies compile optimised
+in debug (#76: the full-res decode took 26-40 s against the shutter's
+60 s cap at opt-level 0); the CI cache key is computed from the dev
+profile, so a profile change can never leave every run cold again (#82,
+#83, briefs 003 and 004); the driven suite runs serially and sixteen
+scripts gate on the app's own marks instead of the clock (#72); the
+load-settled mark is emitted at every zoom (#73); CI hygiene — a
+concurrency group that cannot orphan a main run, a 90-minute cap, an
+evidence artifact per run (#74); and the agent organisation is five
+roles, spec first, with every standing instruction a dated directive in
+the repo (#79, #81, #85, CLAUDE.md M1-M9).
+
 ## v0.13.1 (released 2026-09-02)
 
 A fix a user can feel, and the CI round it uncovered. No new features.

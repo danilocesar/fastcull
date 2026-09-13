@@ -61,7 +61,7 @@ column so you can run your eye down them; `Esc`, `?`, `F1` or a click
 anywhere closes it. On Windows those menus are the system menu bar Windows
 draws for the window, not a bar inside it — the same menus either way.
 
-> **Changed after 0.13.1**: the card used to be one 23-line block in
+> **Changed in 0.14.0**: the card used to be one 23-line block in
 > which the key and its description ran together at the same size, weight
 > and colour, in no useful order, inside a box that was the same height
 > whatever was in it. It is now a two-column sheet with seven headed
@@ -329,7 +329,7 @@ has a job. To put a second keyword on the same run, select it again (one
 loses it the same way, and there is no undo for that: one chord rebuilds
 a burst, a hand-built span costs its keys again.
 
-> **Changed after 0.13.1**: until now a plain arrow *kept* the selection —
+> **Changed in 0.14.0**: until now a plain arrow *kept* the selection —
 > it stayed lit behind you until you pressed `Esc` — and a new Shift+arrow
 > span was **added** to it. Export a burst, close the report, arrow to the
 > next burst, Shift+arrow over it, export: the second video held both
