@@ -107,6 +107,12 @@ pub enum PlanError {
     DestInsideSource,
     #[error("rename template: {0}")]
     Template(#[from] IptcError),
+    /// The copy dialog shows this one in units a person reads
+    /// (`copy_bridge::copy_error_text`, fileops.md "Sizes on screen");
+    /// the text below is the developer-facing form and is what the
+    /// bridge's test asserts it does NOT print. Do not turn it into a
+    /// sentence here — the screen's wording lives beside the video
+    /// dialog's, in the app crate.
     #[error("not enough free space: need {needed} bytes, {free} available")]
     InsufficientSpace { needed: u64, free: u64 },
     #[error("the destination is not a folder")]

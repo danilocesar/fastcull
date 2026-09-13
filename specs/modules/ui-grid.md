@@ -4384,6 +4384,14 @@ Documented because they ship in release builds (validator finding):
   line, nothing else writes it), so a driven test reads the FINAL line
   after `wait:copy finished run N` instead of sampling a running one (QE
   2026-09-12, D3).
+  Since 2026-09-12 (brief 006) it also carries `copyerror=` — the
+  plan-time refusal on the copy dialog (the free-space sentence *"The
+  copy needs 8.0 TB and there is 358.2 GB free at the destination."*, a
+  destination that is a file, a template that makes a path), the copy's
+  twin of `cliperror=`: the refusal's wiring is driven (fileops.md, brief
+  006 AC2), and without the field a driven run could see `copystate=0`
+  after an answer but not whether the drop-back said why in the dialog's
+  words or in core's raw byte counts.
   Since 2026-08-27 the same block exists for the video export —
   `clip=`, `clipstate=` (the same four states), `clipavail=` (is there
   anything to export), `clipsummary=` (the plan line), `clipskipped=`,

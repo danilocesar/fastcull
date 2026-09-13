@@ -313,3 +313,10 @@ if it works, say it works.
   form is `pkill -9 -f 'whil[e] :; do :; done'` (a bracketed character
   never matches its own text) and the check is `ps -eo pid,args` filtered
   the same way, never `pgrep` on the plain text.
+- **The driven suite no longer fits one foreground call.** (senior
+  developer, unit 006, 2026-09-12) The screenshot suite is 87 tests and
+  about 600 s in debug on this seat — over the 600000 ms cap, so a single
+  `cargo test --test screenshot` call is cut off mid-suite. Run it as two
+  `--exact` halves split from `cargo test -p fastcull-app --test
+  screenshot -- --list`, each its own foreground call (measured: 318 s +
+  288 s), never a background run and never a shorter list than the whole.

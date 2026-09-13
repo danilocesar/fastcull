@@ -6873,6 +6873,362 @@ fn camera_template_stamps_the_exif_model() {
     );
 }
 
+/// `"8.0 TB"` back into bytes — and, by returning `None` for anything
+/// else, the check that a size on screen really went through the
+/// formatter: `<digits>.<one digit>` and a KB/MB/GB/TB label, never a
+/// raw count of bytes. Used so the refusal's "free" figure can be held
+/// against the plan line's without pinning a number that belongs to
+/// whichever disk this seat's temp directory sits on.
+#[cfg(unix)]
+fn size_token_bytes(token: &str) -> Option<u64> {
+    let (number, unit) = token.split_once(' ')?;
+    let (whole, frac) = number.split_once('.')?;
+    if whole.is_empty() || !whole.bytes().all(|b| b.is_ascii_digit()) {
+        return None;
+    }
+    if frac.len() != 1 || !frac.bytes().all(|b| b.is_ascii_digit()) {
+        return None;
+    }
+    let shift = match unit {
+        "KB" => 10,
+        "MB" => 20,
+        "GB" => 30,
+        "TB" => 40,
+        _ => return None,
+    };
+    Some((number.parse::<f64>().ok()? * (1u64 << shift) as f64) as u64)
+}
+
+/// The copy dialog's free-space refusal, driven through the REAL dialog
+/// on the path that can refuse after the user has already answered
+/// (fileops.md plan-time errors; brief 006 AC2, D5).
+///
+/// What this pins is WIRING, which is why it is a driven round and not
+/// another unit test: the sentence can be perfect in the bridge and the
+/// dialog still print core's developer-facing byte counts, because the
+/// arm that fills `copy-error` is a different line from the one that
+/// words the sentence. Only a real run through the dialog goes red when
+/// that arm is left unrewired.
+///
+/// The round: two picks, the big one already present at the destination
+/// under the same name. The plan preview PASSES — before an answer only
+/// the clash-free bytes have to fit (fileops.md §3) — Enter raises the
+/// clash question, and `B` (Keep both) replans with every byte counted,
+/// which no destination can hold. The dialog drops back to the preview
+/// with the refusal on it, having copied nothing.
+///
+/// Three things about the fixture, each measured (senior-developer plan,
+/// 2026-09-12):
+///
+/// 1. `#[cfg(unix)]`: NTFS allocates real clusters on `set_len` unless
+///    the file carries the sparse attribute, so an 8 TiB fixture cannot
+///    exist on the Windows runner's disk at all. There the sentence is
+///    pinned by the unit test
+///    `copy_bridge::the_copy_refusal_reads_in_units_a_person_reads`.
+/// 2. 8 TiB, fixed, and not a petabyte: ext4 — the ubuntu runner's
+///    `/tmp` — caps a single file at 16 TiB, so anything larger fails
+///    there with EFBIG. 8 TiB is half that ceiling and far above the
+///    free space of any runner (~75 GB) or seat, so the test needs no
+///    free-space call of its own. (A seat with 8 TiB free on its temp
+///    filesystem would see the drop-back NOT refuse; assertion 4 says
+///    so in its message.)
+/// 3. The fixture is a real synthetic TIFF EXTENDED by `set_len`, never
+///    an empty file of that length. A file the in-tree TIFF walker
+///    rejects is handed to `rawler::rawsource::RawSource::new`, which
+///    maps it with `MAP_POPULATE` and therefore pre-faults every page of
+///    the mapping: an 8 TiB zero-filled `.ARW` never finished loading —
+///    30.8 s of system time, 22.6 GB RSS, the 30 s wait cap missed. With
+///    a TIFF at the front the walker answers in a few targeted reads,
+///    rawler is never called, and the session settles in 34 ms.
+///
+/// The gaps between the steps are not a race: `copy_replan_with` runs
+/// synchronously inside the Ctrl+E, Enter and `B` handlers on the UI
+/// thread, and a `dump.` step is a later event on that same thread, so
+/// each dump is ordered after its key by the event loop rather than by
+/// the clock. The one gate that genuinely has to wait for work is the
+/// load, and it is a `wait:`.
+#[test]
+#[cfg(unix)]
+fn the_copy_refusal_reaches_the_dialog_on_the_drop_back_after_keep_both() {
+    if !has_display() {
+        eprintln!("screenshot smoke skipped: no display server");
+        return;
+    }
+    let _s = serial();
+    let src = out_dir().join("refusal-src");
+    let dest = out_dir().join("refusal-dest");
+    for d in [&src, &dest] {
+        std::fs::remove_dir_all(d).ok();
+        std::fs::create_dir_all(d).unwrap();
+    }
+    // The CLASHING pick: a real TIFF front (reason 3 above) and 8 TiB of
+    // hole behind it. `set_len` allocates no blocks, so this costs the
+    // disk nothing and `remove_dir_all` is instant.
+    write_synthetic_raw(&src.join("big.ARW"), 400, 300, 1, 4096);
+    std::fs::OpenOptions::new()
+        .write(true)
+        .open(src.join("big.ARW"))
+        .unwrap()
+        .set_len(8 << 40)
+        .unwrap();
+    // The clash-free pick, tiny, so the PREVIEW passes.
+    write_synthetic_raw(&src.join("small.ARW"), 400, 300, 1, 4096);
+    // The destination already holds the big one's name — the clash.
+    std::fs::write(
+        dest.join("big.ARW"),
+        b"another camera's frame under the same name",
+    )
+    .unwrap();
+
+    let script = format!(
+        "500:wait:load settled gen 0;1000:key:y;1150:key:y;1300:copydest:{dest};\
+         1500:key:ctrl+e;1800:dump.preview;2000:key:return;2300:dump.question;\
+         2500:key:b;2800:dump.dropback",
+        dest = dest.display()
+    );
+    let out = out_dir().join("copy-refusal.jpg");
+    let stderr = shoot_env_stderr(
+        &[src.to_str().unwrap()],
+        &[("FASTCULL_TRACE", "1"), ("FASTCULL_DRIVE", script.as_str())],
+        &out,
+    );
+    let mut on_disk: Vec<String> = std::fs::read_dir(&dest)
+        .unwrap()
+        .map(|e| e.unwrap().file_name().to_string_lossy().into_owned())
+        .collect();
+    on_disk.sort();
+    let fixture_len = std::fs::metadata(src.join("big.ARW")).unwrap().len();
+    for d in [&src, &dest] {
+        std::fs::remove_dir_all(d).ok();
+    }
+
+    // 1. The one gate that waits for real work fired.
+    assert!(
+        stderr.contains("wait:load settled gen 0 (satisfied"),
+        "the session never settled, so nothing below was driven:\n{stderr}"
+    );
+
+    // 2. The preview: no refusal yet, and the summary's worst case is the
+    //    sparse pick plus the small one — `8.0 TB`, which on the
+    //    three-tier formatter read `8192.0 GB to copy` (measured
+    //    2026-09-12). This line is brief 006 AC1 at app level.
+    let preview = qedump(&stderr, "preview");
+    assert_eq!(dump_field(preview, "copystate"), "0", "{preview}");
+    assert_eq!(
+        dump_text(preview, "copyerror"),
+        "",
+        "the preview refused a plan that fits: {preview}"
+    );
+    let summary = dump_text(preview, "summary");
+    assert!(
+        summary.starts_with("2 picked · 8.0 TB to copy · ") && summary.ends_with(" free"),
+        "the plan line does not print 8 TiB in the TB tier: {summary}"
+    );
+    assert!(
+        dump_text(preview, "copynote")
+            .contains("1 new · 1 already exist here — Copy will ask what to do"),
+        "the preview does not pre-announce the clash: {preview}"
+    );
+
+    // 3. The clash question came up for the big one.
+    let question = qedump(&stderr, "question");
+    assert_eq!(dump_field(question, "copystate"), "3", "{question}");
+    assert!(
+        dump_text(question, "confirm")
+            .contains("1 of your 2 picks already have files with these names in"),
+        "the question does not state the counts: {question}"
+    );
+
+    // 4. The drop-back after Keep both: back on the plan preview, no
+    //    report, and the refusal in the DIALOG's words. Split once on the
+    //    joint so each half is asserted for what it is.
+    let dropback = qedump(&stderr, "dropback");
+    assert_eq!(dump_field(dropback, "copystate"), "0", "{dropback}");
+    assert_eq!(dump_text(dropback, "report"), "", "{dropback}");
+    let refusal = dump_text(dropback, "copyerror");
+    let said_it = format!(
+        "the drop-back did not say why in the dialog's words (fileops.md, \
+         brief 006 R2) — or this seat has 8 TiB or more free on its temp \
+         filesystem, which the fixture assumes it does not: {refusal}"
+    );
+    let (head, tail) = refusal.split_once(" and there is ").expect(&said_it);
+    assert_eq!(head, "The copy needs 8.0 TB", "{said_it}");
+    let free_token = tail
+        .strip_suffix(" free at the destination.")
+        .expect(&said_it);
+    let refused_free = size_token_bytes(free_token).unwrap_or_else(|| panic!("{said_it}"));
+    // The second size must be the FREE figure, not `needed` again and not
+    // a constant: it is the same `statvfs` answer the plan line printed a
+    // second earlier, so the two agree to well within a tier's rounding.
+    let planned_free = size_token_bytes(
+        summary
+            .rsplit_once(" · ")
+            .and_then(|(_, last)| last.strip_suffix(" free"))
+            .unwrap_or_else(|| panic!("no free figure on the plan line: {summary}")),
+    )
+    .unwrap_or_else(|| panic!("the plan line's free figure is not a formatted size: {summary}"));
+    let drift = refused_free.abs_diff(planned_free) as f64 / planned_free as f64;
+    assert!(
+        drift < 0.02,
+        "the refusal's second size is not the destination's free space: \
+         {refused_free} B against the plan line's {planned_free} B ({refusal})"
+    );
+
+    // 5. Nothing ran and nothing landed.
+    assert!(
+        !stderr.contains("copy finished run"),
+        "a refused plan was executed:\n{stderr}"
+    );
+    assert_eq!(
+        on_disk,
+        vec!["big.ARW".to_string()],
+        "the refused copy left files at the destination"
+    );
+    assert_eq!(
+        fixture_len,
+        8 << 40,
+        "the app wrote to the source RAW (hard rule 1)"
+    );
+}
+
+/// The copy dialog's free-space refusal on the PLAN PREVIEW — the other
+/// path fileops.md's plan-time error list names ("on the plan preview
+/// and on the drop-back after an answer alike"; brief 006 AC2). The twin
+/// of `the_copy_refusal_reaches_the_dialog_on_the_drop_back_after_keep_both`,
+/// which drives the drop-back and whose preview is built to PASS (it
+/// asserts `copyerror=""` there), so the preview's refusing branch was
+/// driven by nobody (QE 2026-09-12, D3).
+///
+/// Two picks and no clash: the tiny one first — its plan FITS and prints
+/// the destination's free figure — then the 8 TiB one joins it and the
+/// preview itself refuses. The fitting plan line is what the refusal's
+/// second size is held against, the check the twin's assertion 4 makes
+/// against ITS plan line: the two figures are one `statvfs` answer about
+/// a second apart. The fixture's three reasons (`#[cfg(unix)]`, 8 TiB,
+/// the TIFF front) are the twin's, written there.
+///
+/// The gaps between the steps are not a race, for the twin's reason:
+/// `copy_replan_with` runs synchronously inside the Ctrl+E handler on the
+/// UI thread, Escape closes the dialog on that thread, and every `dump.`
+/// is a later event on it. The one gate that waits for work is the load,
+/// and it is a `wait:`.
+#[test]
+#[cfg(unix)]
+fn the_copy_refusal_reaches_the_dialog_on_the_plan_preview() {
+    if !has_display() {
+        eprintln!("screenshot smoke skipped: no display server");
+        return;
+    }
+    let _s = serial();
+    let src = out_dir().join("refusal-preview-src");
+    let dest = out_dir().join("refusal-preview-dest");
+    for d in [&src, &dest] {
+        std::fs::remove_dir_all(d).ok();
+        std::fs::create_dir_all(d).unwrap();
+    }
+    // The names sort the tiny pick FIRST: the first `y` picks it and
+    // advances the cursor to the big one, which the second `y` picks
+    // after Escape has closed the fitting plan.
+    write_synthetic_raw(&src.join("a-small.ARW"), 400, 300, 1, 4096);
+    write_synthetic_raw(&src.join("b-big.ARW"), 400, 300, 1, 4096);
+    std::fs::OpenOptions::new()
+        .write(true)
+        .open(src.join("b-big.ARW"))
+        .unwrap()
+        .set_len(8 << 40)
+        .unwrap();
+
+    let script = format!(
+        "500:wait:load settled gen 0;1000:key:y;1300:copydest:{dest};\
+         1500:key:ctrl+e;1800:dump.fits;2000:key:escape;2300:key:y;\
+         2600:key:ctrl+e;2900:dump.refused",
+        dest = dest.display()
+    );
+    let out = out_dir().join("copy-refusal-preview.jpg");
+    let stderr = shoot_env_stderr(
+        &[src.to_str().unwrap()],
+        &[("FASTCULL_TRACE", "1"), ("FASTCULL_DRIVE", script.as_str())],
+        &out,
+    );
+    let on_disk: Vec<String> = std::fs::read_dir(&dest)
+        .unwrap()
+        .map(|e| e.unwrap().file_name().to_string_lossy().into_owned())
+        .collect();
+    let fixture_len = std::fs::metadata(src.join("b-big.ARW")).unwrap().len();
+    for d in [&src, &dest] {
+        std::fs::remove_dir_all(d).ok();
+    }
+
+    // 1. The one gate that waits for real work fired.
+    assert!(
+        stderr.contains("wait:load settled gen 0 (satisfied"),
+        "the session never settled, so nothing below was driven:\n{stderr}"
+    );
+
+    // 2. The tiny pick alone: the plan fits, and its line carries the
+    //    free figure the refusal is held against. `4.1 KB` is the KB
+    //    tier at app level (brief 006 AC1): the three-tier formatter
+    //    printed `4170 B to copy` here.
+    let fits = qedump(&stderr, "fits");
+    assert_eq!(dump_field(fits, "copystate"), "0", "{fits}");
+    assert_eq!(
+        dump_text(fits, "copyerror"),
+        "",
+        "the preview refused a plan that fits: {fits}"
+    );
+    let fitting = dump_text(fits, "summary");
+    assert!(
+        fitting.starts_with("1 picked · 4.1 KB to copy · ") && fitting.ends_with(" free"),
+        "the fitting plan line is not the one-pick line: {fitting}"
+    );
+    let planned_free = size_token_bytes(
+        fitting
+            .rsplit_once(" · ")
+            .and_then(|(_, last)| last.strip_suffix(" free"))
+            .unwrap_or_else(|| panic!("no free figure on the plan line: {fitting}")),
+    )
+    .unwrap_or_else(|| panic!("the plan line's free figure is not a formatted size: {fitting}"));
+
+    // 3. Both picks: the PREVIEW refuses, in the dialog's words, before
+    //    any question is asked.
+    let refused = qedump(&stderr, "refused");
+    assert_eq!(dump_field(refused, "copystate"), "0", "{refused}");
+    assert_eq!(dump_text(refused, "report"), "", "{refused}");
+    let refusal = dump_text(refused, "copyerror");
+    let said_it = format!(
+        "the preview did not say why in the dialog's words (fileops.md, \
+         brief 006 R2) — or this seat has 8 TiB or more free on its temp \
+         filesystem, which the fixture assumes it does not: {refusal}"
+    );
+    let (head, tail) = refusal.split_once(" and there is ").expect(&said_it);
+    assert_eq!(head, "The copy needs 8.0 TB", "{said_it}");
+    let free_token = tail
+        .strip_suffix(" free at the destination.")
+        .expect(&said_it);
+    let refused_free = size_token_bytes(free_token).unwrap_or_else(|| panic!("{said_it}"));
+    let drift = refused_free.abs_diff(planned_free) as f64 / planned_free as f64;
+    assert!(
+        drift < 0.02,
+        "the refusal's second size is not the destination's free space: \
+         {refused_free} B against the plan line's {planned_free} B ({refusal})"
+    );
+
+    // 4. Nothing ran and nothing landed.
+    assert!(
+        !stderr.contains("copy finished run"),
+        "a refused plan was executed:\n{stderr}"
+    );
+    assert!(
+        on_disk.is_empty(),
+        "the refused copy left files at the destination: {on_disk:?}"
+    );
+    assert_eq!(
+        fixture_len,
+        8 << 40,
+        "the app wrote to the source RAW (hard rule 1)"
+    );
+}
+
 // ---------------------------------------------------------------------------
 // M9, Export Frames as Video (video-export.md). Two driven tests: one over
 // the REAL A1 frames, which is the only place the whole chain — preview

@@ -259,13 +259,69 @@ fn plan_sources(st: &AppState) -> Vec<fastcull_core::fileops::PlanSource> {
         .collect()
 }
 
+/// A byte count in the units a person reads (fileops.md, dialog
+/// minimums, "Sizes on screen"): five binary tiers chosen by threshold —
+/// bytes below 1,024, then KB, MB, GB and TB from 2^10, 2^20, 2^30 and
+/// 2^40 — with one decimal on every tiered value and none on a plain
+/// byte count.
+///
+/// The tier is picked FIRST and the value rounded inside it (brief 006
+/// D6), so one byte short of a megabyte is `1024.0 KB` and never
+/// `1.0 MB`: no line may claim a boundary the count has not reached.
+/// Above the TB tier the number simply runs on (`1024.0 TB`) — there is
+/// no PB tier, because no volume a photographer copies to needs one.
+/// Binary, because `df -h`, Windows Explorer and a NAS dashboard are
+/// (the user, brief 006 OQ1: "I don't compare them").
+///
+/// This is the ONE formatter both dialogs share: the copy summary line
+/// and the Keep both row's cost, the copy's free-space refusal, and the
+/// video export's plan line, refusal and report line.
 pub(crate) fn human_bytes(b: u64) -> String {
-    if b >= 1 << 30 {
-        format!("{:.1} GB", b as f64 / (1u64 << 30) as f64)
-    } else if b >= 1 << 20 {
-        format!("{:.1} MB", b as f64 / (1u64 << 20) as f64)
+    const KB: u64 = 1 << 10;
+    const MB: u64 = 1 << 20;
+    const GB: u64 = 1 << 30;
+    const TB: u64 = 1 << 40;
+    if b >= TB {
+        format!("{:.1} TB", b as f64 / TB as f64)
+    } else if b >= GB {
+        format!("{:.1} GB", b as f64 / GB as f64)
+    } else if b >= MB {
+        format!("{:.1} MB", b as f64 / MB as f64)
+    } else if b >= KB {
+        format!("{:.1} KB", b as f64 / KB as f64)
     } else {
         format!("{b} B")
+    }
+}
+
+/// The free-space refusal in the units a person reads — the video
+/// dialog's sentence shape (`clip_bridge::no_room_for_it`) with this
+/// dialog's subject (fileops.md, plan-time errors; brief 006 R2). Core
+/// keeps its byte counts, which are right for core and useless on
+/// screen: until 2026-09-12 this dialog printed them straight through
+/// and the user counted digits to learn whether the shortfall was
+/// 100 MB or 100 GB.
+fn no_room_for_the_copy(needed: u64, free: u64) -> String {
+    format!(
+        "The copy needs {} and there is {} free at the destination.",
+        human_bytes(needed),
+        human_bytes(free)
+    )
+}
+
+/// What the copy dialog prints for a plan-time refusal. ONE function for
+/// both paths that can refuse — the plan preview and the drop-back after
+/// an answer — so neither can drift back to core's raw text.
+///
+/// Only the free-space refusal is re-worded. Every other `PlanError`
+/// keeps core's `Display` text (fileops.md: "Every other `PlanError`
+/// keeps the text it has"), which is what the `other` arm below does:
+/// in Rust, `to_string()` on an error calls exactly that `Display`.
+pub(crate) fn copy_error_text(e: &fastcull_core::fileops::PlanError) -> String {
+    use fastcull_core::fileops::PlanError;
+    match e {
+        PlanError::InsufficientSpace { needed, free } => no_room_for_the_copy(*needed, *free),
+        other => other.to_string(),
     }
 }
 
@@ -385,10 +441,12 @@ fn show_clash_question(win: &MainWindow, plan: &fastcull_core::fileops::CopyPlan
         }
         .into(),
     );
-    // Bytes belong HERE and nowhere else: this is the only answer whose
-    // cost is knowable up front (the overwrite answer re-checks identical
-    // files instead of re-sending them, so a worst-case number on it
-    // would be a cost the user never pays).
+    // Bytes belong on THIS answer row and no other: it is the only
+    // answer whose cost is knowable up front (the overwrite answer
+    // re-checks identical files instead of re-sending them, so a
+    // worst-case number on it would be a cost the user never pays). The
+    // plan line above and the free-space refusal state sizes too — they
+    // are not answer rows.
     win.set_copy_confirm_keep_both_cost(format!("+{}", human_bytes(plan.clash_bytes)).into());
     win.set_copy_confirm_overwrite(
         format!("Overwrite those {clashes} — identical files are re-checked, not re-sent").into(),
@@ -424,7 +482,8 @@ fn show_clash_question(win: &MainWindow, plan: &fastcull_core::fileops::CopyPlan
 /// only that fresh plan (fileops.md rule 3 — the plan built before the
 /// question is never executed). A policy that no longer fits (free space,
 /// a destination that moved) drops back to the plan preview with the
-/// error on it, having copied nothing.
+/// error on it — in the dialog's words, through `copy_error_text` —
+/// having copied nothing.
 fn answer_clash_question(win: &MainWindow, st: &mut AppState, policy: ClashPolicy) {
     if let Some(writer) = &st.session.writer {
         writer.flush();
@@ -567,7 +626,7 @@ fn copy_replan_with(win: &MainWindow, st: &mut AppState, policy: ClashPolicy) {
             | PlanError::Template(_)),
         ) => {
             win.set_copy_summary(format!("{} picked images.", sources.len()).into());
-            win.set_copy_error(e.to_string().into());
+            win.set_copy_error(copy_error_text(&e).into());
         }
     }
 }
@@ -616,5 +675,96 @@ pub(crate) fn recompute_bursts(st: &mut AppState) {
             st.bursts.badge[*id] = size;
         }
         st.bursts.pos[*id] = positions[pos_in_order];
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// Every size either dialog shows, at the boundary of each tier
+    /// (fileops.md, dialog minimums, "Sizes on screen"; brief 006 AC1).
+    /// The pairs are exact strings on purpose: this is the text a user
+    /// reads at a glance, and a tier that rounds into its neighbour or
+    /// loses its decimal is a wrong number, not a cosmetic wobble.
+    #[test]
+    fn a_byte_count_reads_in_its_tier_with_one_decimal() {
+        for (bytes, want) in [
+            // Below the first tier there is no decimal at all: a count of
+            // bytes is exact, and `1023.0 B` would imply a rounding that
+            // did not happen.
+            (0u64, "0 B"),
+            (1023, "1023 B"),
+            (1 << 10, "1.0 KB"),
+            // The tier is chosen by THRESHOLD and the value rounded
+            // INSIDE it (brief 006 D6), so one byte short of a megabyte
+            // is `1024.0 KB` and never `1.0 MB`: no line may claim a
+            // boundary the count has not reached.
+            ((1 << 20) - 1, "1024.0 KB"),
+            (1 << 20, "1.0 MB"),
+            (1 << 30, "1.0 GB"),
+            ((1u64 << 40) - 1, "1024.0 GB"),
+            (1u64 << 40, "1.0 TB"),
+            (12u64 << 40, "12.0 TB"),
+            // Above the TB tier the number runs on — there is no PB tier
+            // (fileops.md "Sizes on screen") — and the largest count a
+            // `u64` can hold still prints, without a panic or an overflow.
+            (1u64 << 50, "1024.0 TB"),
+            (u64::MAX, "16777216.0 TB"),
+            // The two figures issue #88 was opened on: a ~1 MB clash on
+            // the Keep both row printed `1029480 B`, and a 1.2 TB NAS's
+            // free space printed `1228.8 GB`.
+            (1_029_480, "1005.4 KB"),
+            (1_319_413_953_331, "1.2 TB"),
+            // The values the two existing readers of a size string pin
+            // (clip_bridge's video refusal, pump's report line): they sit
+            // inside their tiers under the old three-tier rule and the
+            // new five-tier one alike, which is why those tests stay
+            // green with no change.
+            (4_823_456_789, "4.5 GB"),
+            (344 << 20, "344.0 MB"),
+        ] {
+            assert_eq!(human_bytes(bytes), want, "{bytes}");
+        }
+    }
+
+    /// The plan-time refusal the dialog prints, and the line the user
+    /// reads on the night the card is nearly full (fileops.md,
+    /// plan-time errors; brief 006 AC2). The first assertion is the twin
+    /// of `clip_bridge::the_two_untestable_messages_now_have_a_test` —
+    /// the two dialogs say the same thing about the same situation.
+    ///
+    /// The WIRING — that both replan paths actually reach this function
+    /// — is what the driven round
+    /// `the_copy_refusal_reaches_the_dialog_on_the_drop_back_after_keep_both`
+    /// pins; on Windows, where that round cannot run (NTFS allocates on
+    /// `set_len`), this test is what pins the sentence.
+    #[test]
+    fn the_copy_refusal_reads_in_units_a_person_reads() {
+        use fastcull_core::fileops::PlanError;
+
+        assert_eq!(
+            no_room_for_the_copy(7_834_567_890, 1_234_567_890),
+            "The copy needs 7.3 GB and there is 1.1 GB free at the destination."
+        );
+        assert_eq!(
+            copy_error_text(&PlanError::InsufficientSpace {
+                needed: 7_834_567_890,
+                free: 1_234_567_890
+            }),
+            "The copy needs 7.3 GB and there is 1.1 GB free at the destination."
+        );
+        // Core's developer-facing form never leaks through this function,
+        // whatever the numbers are.
+        assert!(
+            !copy_error_text(&PlanError::InsufficientSpace { needed: 1, free: 0 })
+                .contains("bytes")
+        );
+        // Every other refusal keeps core's words (fileops.md): this
+        // sentence is the space one's alone.
+        assert_eq!(
+            copy_error_text(&PlanError::DestNotADirectory),
+            "the destination is not a folder"
+        );
     }
 }
