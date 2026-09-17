@@ -143,7 +143,8 @@ make fixes fast.
 FastCull is **pre-1.0 and under heavy development** — the core workflow (open →
 cull → tag → copy with verification) is in place, with Copy Picks as the most
 recent addition. Expect rough edges and rapid change. The roadmap lives in
-[specs/milestones.md](specs/milestones.md).
+[specs/milestones.md](specs/milestones.md); the release notes in
+[CHANGELOG.md](CHANGELOG.md).
 
 ## Learn more
 
