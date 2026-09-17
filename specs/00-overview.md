@@ -6,7 +6,10 @@ A Photo Mechanic-class culling tool, open source (GPL-3.0-or-later), for Linux a
 Windows. The user opens a folder of thousands of ~100 MB RAW files, sees thumbnails
 near-instantly, culls with the keyboard, applies IPTC metadata individually or in
 groups, and copies the picks to a destination folder. The selects are then edited in
-darktable, which must see every pick/reject and IPTC field FastCull wrote.
+an external editor, which must see every pick/reject and IPTC field FastCull wrote.
+darktable is the **reference editor** — the contract is written against it and
+enforced in the test suite (ADR 0003); digiKam, Lightroom and Photo Mechanic read
+the same sidecars, best-effort.
 
 **Speed is the product.** Every design decision defers to interactive latency.
 
@@ -20,7 +23,7 @@ file for full RAW decode.
 
 ## Non-goals (v1)
 
-- No RAW development/editing of any kind (that is darktable's job).
+- No RAW development/editing of any kind (that is the editor's job).
 - No catalog/database of the user's library — a session is one folder.
 - No card ingest (v2), no star ratings/color labels (v2), no monitor ICC color
   management (v2), no macOS (v2), no video files IN the grid (video OUTPUT
