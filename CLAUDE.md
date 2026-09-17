@@ -288,6 +288,20 @@ developer owns re-verifying such claims against reality.
   invalidates the measurements of every role still running. Never a full
   `cargo clean`, which costs a ~9-10 minute cold rebuild since #76. The
   report states what was freed.
+- **M10 — Spec bookkeeping against verified evidence is fixed, not
+  asked.** (the user, 2026-09-17: "things like A-items you should fix") A
+  spec sentence the Manager has verified false against the code, the
+  tests, git or the tracker — an acceptance box left unticked though its
+  test exists, a ledger entry that calls a shipped thing pending, a
+  milestone with no closure marker, a paragraph spliced into the wrong
+  sentence, a table that no longer lists what it claims to list — is
+  corrected directly by the Manager in a spec commit that names the
+  evidence, outside the pipeline. The line: a correction that would change
+  a behaviour claim, a contract, a budget or a test's promise is not
+  bookkeeping and goes through M1; a promise found unimplemented is
+  recorded as such and put to the user (M8), never quietly deleted. An
+  unticked box always carries its reason — a bare one is the silence the
+  gate forbids.
 
 ### Open decisions the Manager tracks (do not re-ask unless relevant)
 
