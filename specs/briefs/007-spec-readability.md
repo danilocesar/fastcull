@@ -171,8 +171,8 @@ behind each fix. This unit relocates; it never deletes.
   references resolve.
 - AC8. The user has seen the first rewritten module and said the shape
   is right (R10) — recorded in this brief's decisions log with the date.
-- AC9. `specs/history/<module>.md` exists for every module whose text
-  moved, and the module's `History` section links it.
+- AC9. `specs/history/<spec>.md` holds the pre-rewrite text of every spec
+  that was rewritten, verbatim; no live spec depends on the folder (OQ1).
 
 ## Applicable directives
 
@@ -196,10 +196,13 @@ for features and user-visible changes only).
 
 ## Open questions
 
-- OQ1 (Manager, decided): where relocated text lives —
-  `specs/history/<module>.md`, one file per module, plus
-  `specs/history/ci-cache-key.md`. Not deleted, and not left to git
-  history alone: `specs/` stays the source of truth for the reasons too.
+- OQ1 (the user, 2026-09-17, superseding the Manager's earlier answer):
+  `specs/history/` holds DEAD text only — superseded rules and evidence
+  narratives — one file per spec, `specs/history/<spec>.md`, the
+  pre-rewrite text verbatim. The user expects to delete the folder later
+  ("git log is our history if necessary"), so nothing live may depend on
+  it: a module's `History` section cites briefs, issues and commits, and
+  mentions the folder in one line at most.
 - OQ2 (for the plan): which module goes first as the template (R10), and
   the order of the rest. The Manager's suggestion: the mechanical
   extractions of R4(a)–(c) and R5 first, as their own commits — no
@@ -217,9 +220,19 @@ for features and user-visible changes only).
   is things should be simple. Easy to read descriptions of behaviors in
   the spec."
 - 2026-09-17, Manager: persona gate skipped (not user-visible);
-  relocation rather than deletion, into `specs/history/`; `CHANGELOG.md`
-  at the root; `test-harness.md` as a module spec; the user checks the
-  first module before the rest (R10, AC8); the developer executes, the
-  senior developer plans and reviews, QE runs the relocation diff, the
-  link check and the suite. M9 cleanup ran at the unit's start (figures
-  in the Manager's report).
+  `CHANGELOG.md` at the root; `test-harness.md` as a module spec; the user
+  checks the first module before the rest (R10, AC8). M9 cleanup ran at
+  the unit's start: 75 GB from `target/`, 15 GB from a July agent
+  worktree, its branch deleted.
+- 2026-09-17, the user, asked "why a pipeline — are we rebuilding
+  anything?": nothing is rebuilt, so the Manager writes the rewrite
+  itself ("1: you"); the developer and QE stages do not run; questions go
+  to the senior developer or the persona before the user ("for
+  everything else, try the senior developer or the almosthuman first
+  before coming to me"). The relocation diff, the link check and the
+  heading check run as a script on every commit (the Manager's, recorded
+  in the Outcome); one independent `senior-developer` read of the
+  finished set checks that each Behaviour still says what it said; CI
+  covers the parity test.
+- 2026-09-17, the user, on relocate-or-toss: history holds dead
+  decisions only, and is disposable (OQ1 above).
