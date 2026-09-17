@@ -231,7 +231,7 @@ at opt-level 0 a debug build decoded the A1's 8640×5760 full-res JPEG in
 26-40 s on the Windows CI runner and 31 s on the development seat
 (rotated; 13 s landscape), against the screenshot shutter's 60 s readiness
 cap: ten Windows CI jobs failed that way on 2026-07-27 and 2026-08-01
-(issues #33 and #76; `modules/ui-grid.md`, "Debug facilities"). Same
+(issues #33 and #76; `modules/test-harness.md`). Same
 source, one profile line apart, measured on the development seat on
 2026-09-05 (senior developer, #73 discussion): `decode_oriented` on
 `A1_full_lossless_compressed.ARW` 31,020 ms → 1,720 ms rotated (13,000 →
@@ -625,7 +625,7 @@ durations). The two-shot shutter of issue #77 was fixed FIRST, in its own
 commit, because its cleanest reproduction is a stock-profile capture that
 overruns the poll's 250 ms period: with the line the capture is shorter,
 and the reproduction keeps only the scripts whose window is large enough
-to overrun it (`modules/ui-grid.md`, "Debug facilities").
+to overrun it (`modules/test-harness.md`).
 
 ## Shutdown policy (recorded 2026-07-25)
 

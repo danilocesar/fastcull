@@ -47,7 +47,7 @@ The session-close flush is OBSERVABLE from the app (2026-09-03):
 `SidecarWriter::close` shuts the writer down and returns how many writes its
 final drain performed — the marks still inside their debounce when the session
 went away — and a session swap traces that number as `sidecar writer closed
-gen N: K pending flushed` (harness section of ui-grid.md). It exists so a
+gen N: K pending flushed` (test-harness.md). It exists so a
 driven session swap can assert a structural fact about the writer instead of
 timing the pick against the swap with a stopwatch.
 The count is WRITES, not marks: re-marks on one image coalesced into one

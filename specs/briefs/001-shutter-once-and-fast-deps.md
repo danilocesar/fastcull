@@ -111,7 +111,7 @@ Windows double-run stays open and is not part of this unit.
   `specs/modules/raw-pipeline.md` (the ladder residual "~30 s worst case in
   debug"; the 60 s cap history), `specs/modules/ui-grid.md` (the 60 s cap
   paragraph "which in a debug build over a 50 MP frame is a real margin";
-  the #61/#73 paragraphs quoting debug timings; the harness section on the
+  the #61/#73 paragraphs quoting debug timings; the test-harness.md on the
   shutter), `specs/01-architecture.md` (perf budgets "Skipped in debug
   builds where decode timing is meaningless" — still true for wall-clock
   budgets, say so), `specs/milestones.md` where it quotes #33. The senior

@@ -389,8 +389,7 @@ the failure is left visible rather than papered over.
   idiom. A screenshot cannot see this — an escaped row is drawn looking
   almost right — and the property is a relation between two rectangles:
   `buttons.y + buttons.h <= card.y + card.h`.
-- Two marks make the driven test clock-free (issue #62, harness section of
-  ui-grid.md): `clip export finished run N` fires when the report card
+- Two marks make the driven test clock-free (issue #62, test-harness.md): `clip export finished run N` fires when the report card
   goes up — N counting the exports this process started, so a script that
   exports twice can wait for the second one (issue #70) — and `load
   settled gen N` carries the session generation so a script can wait for
