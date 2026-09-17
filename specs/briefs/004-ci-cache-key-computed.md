@@ -82,7 +82,7 @@ since the profile line, and it fills unit 003's placeholder.
   rule; the ledger ticks unit 003's AC1 (run 34014978820, both jobs `No
   cache found.` under `v1-rust-…`) and AC3's save half (run 34018510289:
   1.88 GiB and 1.62 GiB saved, v0 deleted, usage 5.61 GiB); the placeholder
-  (~270-274) is re-worded to name the run after THIS unit's merge as the
+  is re-worded to name the run after THIS unit's merge as the
   first cached one; D1 (a prefix bump also discards the release half:
   33 m 28 s / 1 h 09 m 58 s on 34014978820), D2 (`ui-grid.md` 2575-2577:
   the worst cold Windows job is 1 h 09 m 58 s, 20 min of headroom; the

@@ -65,7 +65,7 @@ and 33 m 48 s for the last cached run before the profile line (run
   about rust-cache corrected — the key ignores the profile; the first
   cached run came only after the prefix bump of this unit; the
   once-per-toolchain-change cost holds from then on. The "cached job
-  durations" placeholder (~255-256) stays, to be filled by the Manager from
+  durations" placeholder stays, to be filled by the Manager from
   the first cached run after this merges.
 - R3. Proof that the key changed, on this PR's own run: the rust-cache
   restore step logs a miss on the new primary key (a PR never saves), and
