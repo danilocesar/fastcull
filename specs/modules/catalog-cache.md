@@ -38,13 +38,11 @@
   deferral until 2026-09-17.)
 - Pre-existing sidecars are read during load (pipeline metadata pass) so picks and
   IPTC from a previous session (or Photo Mechanic) appear in the UI.
-- Folder watching (`notify` crate): files added/removed while a session is open are
-  reflected; removal of a file with unsaved state logs and drops it.
-  **NOT BUILT as of v0.14.0** (recorded 2026-09-17): no `notify` dependency
-  exists in any manifest and nothing watches the folder — `catalog.rs` still
-  says it "arrives with the UI session in M2". Open, put to the user under M8
-  on 2026-09-17: build it, defer it with a date, or drop it from v1. Until
-  answered this sentence is a promise, not a description of the product.
+- **No folder watching in v1** (user decision 2026-09-17: "not important"): a
+  session is a snapshot of the folder at open; files added or removed while it
+  is open appear, or disappear, on the next open. (Until 2026-09-17 this bullet
+  promised `notify`-based watching that was never built — a line from M1's
+  plan that `catalog.rs` carried as "arrives with M2".)
 
 ## Cache (SQLite via rusqlite, bundled)
 

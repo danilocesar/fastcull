@@ -25,7 +25,8 @@ budget table in `01-architecture.md`.
 ## Non-goals (v1)
 
 - No RAW development/editing of any kind (that is the editor's job).
-- No catalog/database of the user's library — a session is one folder.
+- No catalog/database of the user's library — a session is one folder, and a
+  snapshot of it at open: no folder watching (user decision 2026-09-17).
 - No card ingest (v2), no star ratings/color labels (v2), no monitor ICC color
   management (v2), no macOS (v2), no video files IN the grid (video OUTPUT
   of a burst's embedded JPEGs is an export — `modules/video-export.md`,

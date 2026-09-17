@@ -67,9 +67,9 @@ fileops.md.)
 burst.rs grouping + border rendering + in-burst filter. cargo-dist packaging:
 Linux AppImage, Windows zip/MSI. DoD: full manual acceptance script in
 specs/00-overview terms: open **5,000** A1 files → cull → IPTC → copy →
-darktable sees everything. (That manual script has no recorded run as of
-v0.14.0 — it is the per-release "Manual acceptance" box at the end of
-ui-grid.md's acceptance list, still open; recorded 2026-09-17.)
+darktable sees everything. (That manual script was never recorded as run;
+the user retired it on 2026-09-17, together with ui-grid.md's per-release
+"Manual acceptance" box.)
 
 **Packaging partially pulled forward into M5** (2026-07-25), because the user
 needs a Windows executable to test the app long before M7. What already landed:

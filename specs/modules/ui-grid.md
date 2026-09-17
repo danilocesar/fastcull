@@ -3659,9 +3659,14 @@ the user confirms, all cheap to change):**
       `ctrl_navigation_keeps_the_selection_and_ctrl_space_toggles`
       (senior-developer re-review N-2; the mutant that keeps the anchor
       reads (7, 7) against (7, 2)).
-- [ ] Manual acceptance (per release): 5,000-file A1 folder (a bad evening, per
-      persona review) scrolls at 60 fps after thumbs load; pick→auto-advance→pick
-      loop in loupe has no perceived latency.
+- RETIRED 2026-09-17 (user decision — a spec acceptance criterion leaves the
+  list only with the user's OK): *Manual acceptance (per release): 5,000-file
+  A1 folder (a bad evening, per persona review) scrolls at 60 fps after thumbs
+  load; pick→auto-advance→pick loop in loupe has no perceived latency.* It was
+  never recorded as run across seventeen releases. Both claims stay product
+  intent, guarded by the release-mode perf budgets, the driven suite and daily
+  use on real shoots rather than a per-release script; a regression is a bug
+  report like any other.
 
 ## Debug facilities (env vars, app-level)
 
