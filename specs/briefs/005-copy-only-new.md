@@ -1,8 +1,7 @@
 # Brief 005 — a fourth answer to the clash question: copy only the new picks, leave what is already there untouched (issue #86)
 
 Date: 2026-09-12. Issue #86. Branch `copy-only-new` from `main` 0209d8f.
-Scratch: `.qe-scratch/pipeline-005/` (persona hand-off and report, plan,
-review and QE reports). A feature — a fourth answer on an existing
+A feature — a fourth answer on an existing
 question — so the persona gate ran (verdicts below).
 
 ## Context
@@ -235,8 +234,7 @@ follow the question's existing habit ("The other 1 copies normally").
   meets a clash, and only then.
 - AC9. The docs pages of R9 say what the dialog does, in the same commit.
 
-## Persona verdicts (almost-human-user, 2026-09-12; report in
-`.qe-scratch/pipeline-005/PERSONA.md`)
+## Persona verdicts (almost-human-user, 2026-09-12)
 
 MUST-HAVE: the N answer ("the first time the copy re-run and my darktable
 folder have been allowed to coexist"); skip the whole pair, never read or

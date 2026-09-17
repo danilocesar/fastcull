@@ -1,9 +1,10 @@
 # Brief 002 — the file-manager selection rule: plain navigation collapses the selection, a fresh span replaces it
 
-Date: 2026-09-06. Branch `selection-collapse` (worktree
-`.qe-scratch/unit-002-selection/wt` while unit 004 holds the main checkout).
-Scratch: `.qe-scratch/unit-002-selection/` (research, mechanism, synthesis,
-persona report, screenshots). A feature-level change to what keys mean:
+Date: 2026-09-06. Branch `selection-collapse` (worked in a scratch
+worktree while unit 004 held the main checkout; its research, mechanism note,
+synthesis, persona report and screenshots were garbage-collected with it —
+what they established is this brief's Context and `ui-grid.md`'s selection
+rule). A feature-level change to what keys mean:
 the persona gate ran, its IN-MY-WAY verdict was discussed, the user decided.
 
 ## Context
@@ -188,10 +189,11 @@ confirmed; E-b rejected; the peek workflow does not exist for this user.
   (~1191-1213), the shortcuts card section; `burst-grouping.md` (~120-160);
   `video-export.md` (~52-72, 250-264); `iptc-templates.md` (~65-72);
   `docs/culling.md`, `docs/export-video.md`, `docs/metadata.md`.
-- Evidence: `.qe-scratch/unit-002-selection/` — `SYNTHESIS.md` (options C,
-  B, A1, A3 with their touch lists and the tests at risk), `code/MECHANISM.md`
-  (§7 tests that assert selection behaviour), `PERSONA.md`, the five
-  research reports, the screenshots.
+- Evidence: the unit's scratch, since garbage-collected, held the synthesis
+  of options C, B, A1 and A3 with their touch lists and the tests at risk,
+  the mechanism note (its §7: the tests that assert selection behaviour), the
+  persona report, five research reports and the screenshots. What survives
+  of them is this brief, PR #84 and the tests it added.
 
 ## Persona verdicts
 

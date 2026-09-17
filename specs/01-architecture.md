@@ -409,8 +409,7 @@ canonical JSON is
 both runners, AC1) — and the whole key
 `v1-rust-profile-a66a9ea8-test-Linux-x64-<env8>-<lock8>`. What moves it
 and what does not, each a mutant on a copy of the manifest run through
-the step's own command (senior-developer plan 2026-09-06, under
-`.qe-scratch/pipeline-004/mutants/`; re-run by QE for AC2): `opt-level =
+the step's own command (senior-developer plan 2026-09-06; re-run by QE for AC2): `opt-level =
 2` → `3` in `[profile.dev.package."*"]`, the #76 shape, moves it to
 `1395f519`; a `[workspace.package] version` bump, a comment edit, a
 reordering of the profile tables and of the keys inside one, and a CRLF

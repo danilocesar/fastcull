@@ -1,7 +1,6 @@
 # Brief 004 — the CI cache key is computed from the profile, not bumped by hand
 
-Date: 2026-09-06. Branch `ci-cache-key-computed` from main d4da1ac. Scratch:
-`.qe-scratch/pipeline-004/`. CI plumbing, nothing user-visible; persona gate
+Date: 2026-09-06. Branch `ci-cache-key-computed` from main d4da1ac. CI plumbing, nothing user-visible; persona gate
 skipped. Follows unit 003 (PR #82) and closes it.
 
 ## Context
@@ -118,9 +117,9 @@ since the profile line, and it fills unit 003's placeholder.
 - CLAUDE.md hard rules (none touched); M1 (spec first), M3 (Manager
   bookkeeping, decided as above), M7, M9 (cleanup ran at the unit's start).
 - `specs/01-architecture.md` "Build profiles" and "The CI cache key and the
-  profile"; unit 003's brief, plan, review and QE report under
-  `.qe-scratch/pipeline-003/` (the six mutants in `qe/lockhash.py`, the job
-  logs, the action's source under `rust-cache-src/`).
+  profile"; unit 003's brief, and its plan, review and QE report (scratch, since
+  garbage-collected: the six mutants of `lockhash.py`, the job logs, the
+  action's source at 6323deb).
 - The test-integrity rule applies to the computing step: a step whose
   failure degrades silently to "the key never moves" is the original bug in
   a new form; the senior developer reviews it as it would a test.

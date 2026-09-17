@@ -1167,7 +1167,7 @@ brightening during wheel scrolling (needs an activity decay timer).
   spec sentence ever stated). The user's report of 2026-09-06 was that
   product: a video exported, Esc on its report, two arrows, a new
   Shift-span, and the second video held both sets (measured 4 → 4 → 6
-  selected, `.qe-scratch/unit-002-selection/code/MECHANISM.md` §4).
+  selected; brief 002).
   **The selection rule since 2026-09-06 (user decision, brief 002: "file
   manager style"):**
   1. **Plain navigation collapses the selection.** Every unmodified cursor
@@ -2044,7 +2044,7 @@ restore — see Focus continuity in the Filter & sort bar section.
     ordering-independent.
     **Decision (validator 2026-09-01): the deferral is no longer a
     mutation-tested invariant.** Of the three 2026-08-30 mutants the gate
-    kept (`.qe-scratch/dev/focus/3b/`), the synchronous-arm one is GREEN
+    kept, the synchronous-arm one is GREEN
     by design with the `Timer` — that is the fix working, not the mutant
     escaping — and the no-stamp one is red only under the forced EARLY
     ordering (6/6 alive unforced on this seat, 0/6 forced); only the

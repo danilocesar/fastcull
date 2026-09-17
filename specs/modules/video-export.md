@@ -63,8 +63,7 @@ re-encode, i.e. the first step into the editor.
   Until that date the first burst's selection survived the hop and a
   Shift-span made after it was unioned with it, which is the user's
   report of 2026-09-06 — the second video held the old frames and the new
-  (`.qe-scratch/unit-002-selection/code/MECHANISM.md` §4, measured:
-  `f1-f4.mov`, then `f1-f7.mov`). Nothing here consumes a selection: a
+  (brief 002; measured: `f1-f4.mov`, then `f1-f7.mov`). Nothing here consumes a selection: a
   finished export leaves it as it was, Cancel changes nothing, and Esc in
   any dialog state closes the dialog and leaves the selection intact — the
   next plain move, or a second Esc on the grid, ends it (the persona's
