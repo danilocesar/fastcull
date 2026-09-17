@@ -287,7 +287,12 @@ developer owns re-verifying such claims against reality.
   then between stages, never under a running role, because a clean
   invalidates the measurements of every role still running. Never a full
   `cargo clean`, which costs a ~9-10 minute cold rebuild since #76. The
-  report states what was freed.
+  report states what was freed. Stale is deleted, not kept (the user,
+  2026-09-17: "I don't care about stale data. if it's not being used,
+  toss it"): a worktree, a branch or a scratch directory a finished unit
+  left behind goes without asking once its work is on `main` — `git
+  cherry` by patch and by title is the check, git's reflog the safety
+  net — and the report names what went.
 - **M10 — Spec bookkeeping against verified evidence is fixed, not
   asked.** (the user, 2026-09-17: "things like A-items you should fix") A
   spec sentence the Manager has verified false against the code, the
