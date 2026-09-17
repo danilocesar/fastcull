@@ -32,8 +32,9 @@ Plan-time errors (block execution, shown to user):
   *(Two images expanding to the same destination name used to be a
   plan-time error. It is not any more — see "two picks, one name" below.)*
 - A rename TEMPLATE whose expansion has no stem — anything starting with
-  `.`, which `{camera}.{ext}` produces today because the app never fills
-  `{camera}` (QE finding 2026-08-22). It would write `.ARW`: a hidden file
+  `.`, which `{camera}.{ext}` produced while the app never filled `{camera}`
+  (QE finding 2026-08-22; fixed the same day, below) and still produces for
+  an image whose metadata has not landed. It would write `.ARW`: a hidden file
   whose whole name is its extension, which FastCull's own scan skips (no
   extension left to match) and darktable never sees, and the suffix walk
   then yields `.ARW_1`, which has lost the extension as well. Perfect
@@ -43,10 +44,12 @@ Plan-time errors (block execution, shown to user):
   extension alone, so a macOS AppleDouble stub `._DSC0001.ARW` is a
   pickable cell, and one such pick blocked every other file with a message
   about a template that was never typed. The user's own file names are
-  their business; only names WE invent have to be sane. **Open, separate
-  from this rule**: `{camera}` expanding to nothing at all in the app is
-  its own bug (`copy_bridge::plan_sources` passes `camera: None`) while
-  the template docs offer the variable.
+  their business; only names WE invent have to be sane. The separate bug
+  this rule was found beside — `{camera}` expanding to nothing because
+  `copy_bridge::plan_sources` passed `camera: None` — is CLOSED 2026-08-22
+  (v0.10.0; iptc-templates.md's panel-step ledger): both bridges pass the
+  session's EXIF model, and `{camera}` is empty only for an image whose
+  metadata has not landed yet. (This sentence read "Open" until 2026-09-17.)
 - Insufficient free space (the total §3 of "The clash question" requires
   for the policy in play vs `statvfs`/`GetDiskFreeSpaceEx`). **The
   dialog says it in units a person reads** (user decision 2026-09-12,
@@ -213,6 +216,8 @@ explicitly deferred to a later discussion; modal dialog accepted)
   semantics) BEFORE the plan and the flush barrier — a half-typed caption
   must ship.
 - **`{seq}` for rename templates follows the SESSION SORT ORDER** (capture
+  time default) — same caller contract as IPTC apply; with all-picks
+  scope, "view order" would be ambiguous under an active filter.
   While a folder is still LOADING that order is deliberately not what the
   grid shows: issue #25 holds the view in filename order until every
   metadata job finishes, but `{seq}` keeps following the true sort, because
@@ -221,8 +226,6 @@ explicitly deferred to a later discussion; modal dialog accepted)
   order matching neither the screen nor the same copy run a few seconds
   later — the capture sort is only partial until the load ends. See
   ui-grid.md, *Provisional order while loading*.
-  time default) — same caller contract as IPTC apply; with all-picks
-  scope, "view order" would be ambiguous under an active filter.
   A `{seq}` template into a folder that already holds an earlier copy is
   the re-run trap the persona named on 2026-09-12 (brief 005, G3): the
   new picks renumber everything after them, so the names the clash check

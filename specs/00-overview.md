@@ -19,7 +19,8 @@ Never decode RAW sensor data on the interactive path. Cameras embed camera-rende
 JPEG previews inside every RAW file; FastCull reads only those bytes. Measured on a
 32-thread Ryzen AI MAX+ 395 (since retired; real Sony A1 files — see
 `adr/0001-embedded-jpeg-strategy.md`): grid pipeline ~300 files/sec vs 0.6–1.2 s per
-file for full RAW decode.
+file for full RAW decode. The numbers a gate round compares against today are the
+budget table in `01-architecture.md`.
 
 ## Non-goals (v1)
 
@@ -44,8 +45,8 @@ ARW variants (compressed / lossless-compressed / uncompressed). Every A1 ARW emb
 | Embedded image | Dimensions | Size | Used for |
 |---|---|---|---|
 | Thumbnail | 160×120 | ~13 KB | never (too small) |
-| Preview | 1616×1080 | ~0.5 MB | grid thumbnails |
-| Full-res JPEG | 8640×5760 | ~10–12 MB | loupe fit + 1:1 |
+| Preview | 1616×1080 | ~0.5 MB | grid thumbnails; loupe fit on displays up to ~2K; the transit rung under a held key |
+| Full-res JPEG | 8640×5760 | ~10–12 MB | 1:1 and every factor above fit; loupe fit on wider displays (the 25 % ladder rule, `modules/raw-pipeline.md`) |
 
 Other cameras: best-effort — TIFF-shaped RAWs (NEF/CR2/DNG…) read EXIF via the
 same in-tree walker as ARW; non-TIFF containers (CR3/RAF/X3F) fall back to

@@ -406,8 +406,9 @@ from the fixed-gate era.
 
 ## Priority queue contract
 
-- Three levels: `Visible` > `Prefetch` (loupe ±2) > `Background` (sequential file
-  order — cold-cache/card-reader friendly).
+- Three levels: `Visible` > `Prefetch` (loupe ±2 at rest, ±2/±8 leaning the way
+  of travel under a held key — ui-grid.md's transit contract) > `Background`
+  (sequential file order — cold-cache/card-reader friendly).
 - Scroll/zoom calls `set_visible(range)`; already-queued jobs are reprioritized, not
   re-enqueued. In-flight jobs are never cancelled mid-decode (they're ≤150 ms).
 - Duplicate requests for the same (image, asset) coalesce.
@@ -420,25 +421,47 @@ from the fixed-gate era.
 
 ## Acceptance criteria (tests)
 
-- [ ] **MANDATORY zoom-quality gate (user mandate 2026-07-25)**:
+Every box below was ticked on 2026-09-17 against the test that holds it: none
+had been ticked since M1 closed on them (2026-07-24), which left this list
+reading as unmet while the convention everywhere else is that an unticked box
+carries its reason.
+
+- [x] **MANDATORY zoom-quality gate (user mandate 2026-07-25)**:
       `tests/zoom_walk.rs` (the user's 2-column forward-walk repro + the
       fast-scroll starvation variant) MUST pass — in release mode, against
       the real A1 files — before ANY zoom-quality problem is declared fixed.
+      → `walking_at_two_columns_never_leaves_an_image_below_its_rung`,
+      `fast_scroll_backlog_does_not_starve_final_window`.
 
-- [ ] For each of the 3 A1 test files: grid thumb is produced from the 1616×1080
+- [x] For each of the 3 A1 test files: grid thumb is produced from the 1616×1080
       preview (assert source dimensions), FullRes is 8640×5760.
-- [ ] No test may observe a read of more than 20 MB from a 100 MB A1 file for the
+      → `tests/pipeline.rs::a1_files_produce_320px_thumbs_and_metadata`,
+      `tests/embedded_jpeg.rs`.
+- [x] No test may observe a read of more than 20 MB from a 100 MB A1 file for the
       grid path (instrument with a counting reader).
-- [ ] A file with a truncated/garbage preview yields `Failed` and does not poison
+      → `tests/embedded_jpeg.rs` (the counting reader asserts
+      `bytes_read <= 20 * 1024 * 1024` per file).
+- [x] A file with a truncated/garbage preview yields `Failed` and does not poison
       the pipeline (subsequent jobs complete).
-- [ ] Hostile decode dimensions (issue #31): a sub-KB stream whose SOF claims
+      → `tests/pipeline.rs::corrupt_file_fails_alone_others_complete`,
+      `pipeline::tests::truncated_bare_jpeg_yields_failed_not_a_blank_thumb`.
+- [x] Hostile decode dimensions (issue #31): a sub-KB stream whose SOF claims
       30000x30000 is rejected before any pixel allocation (unit-tested on
       `decode_oriented`, both orientation paths), and a scan cut off before
       EOI yields `Failed` — never a blank "success" — on both the loupe and
       grid-thumb decode paths.
-- [ ] `set_visible` promotion: with a saturated queue, a newly visible image's thumb
+      → `raw::tests::decoded_pixel_cap_boundaries`,
+      `raw::tests::read_jpeg_rejects_implausible_length`,
+      `raw::jpeg::tests::scan_termination_detects_truncation`,
+      `loupe::tests::decode_oriented_rejects_a_truncated_scan`,
+      `loupe::tests::truncated_full_rung_keeps_the_good_mid_and_no_failed_badge`,
+      `pipeline::tests::truncated_bare_jpeg_yields_failed_not_a_blank_thumb`.
+- [x] `set_visible` promotion: with a saturated queue, a newly visible image's thumb
       arrives before ≥90% of background items (deterministic test with a fake
       2-thread pool and instrumented job order).
-- [ ] The budgets in `01-architecture.md` are enforced by release-mode tests
+      → `tests/pipeline.rs::promoted_jobs_finish_before_background_bulk`.
+- [x] The budgets in `01-architecture.md` are enforced by release-mode tests
       (`tests/perf_budgets.rs`, dedicated CI step); criterion benches
       (`benches/hot_path.rs`) provide the numbers for humans.
+      → the six `budget_*` tests in `tests/perf_budgets.rs`, one per row of the
+      table; `benches/hot_path.rs`.

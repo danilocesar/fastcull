@@ -34,21 +34,33 @@ coupling. `fastcull-cli` deliberately stays console-subsystem: it is a
 terminal tool. CI asserts both PE subsystem fields on every Windows build
 (ci.yml "Verify Windows artifact": app = 2/GUI, cli = 3/console).
 
-## Core modules (one spec each in `modules/`)
+## Core modules (every file in `fastcull-core/src`, and the spec in `modules/` that owns it)
 
-| Module | File | Responsibility |
-|---|---|---|
-| catalog | `catalog.rs` | folder scan, `ImageRecord`, session state |
-| raw | `raw/` | rawler wrapper, preview extraction, A1 full-res extractor |
-| pipeline | `pipeline.rs` | priority thread pool: visible > prefetch > background |
-| cache | `cache.rs` | SQLite: thumbs + EXIF keyed by (path, size, mtime) |
-| xmp | `xmp.rs` | sidecar read/merge/write, darktable field mapping |
-| iptc | `iptc.rs` | IPTC model, templates, variable expansion |
-| burst | `burst.rs` | burst grouping |
-| fileops | `fileops.rs` | copy/rename engine with sidecar lockstep |
-| filter | `filter.rs` | filter/sort predicates over the session |
-| clip | `clip.rs`, `clip/qt.rs` | export frames as video: cadence from capture timestamps, Motion JPEG `.mov` muxer (in-tree), derived-output contract (ADR 0004) |
-| transit | `transit.rs` | loupe render ladder + full-res ring eviction, as pure decision functions (spec'd in `ui-grid.md`) |
+| Module | File | Responsibility | Spec |
+|---|---|---|---|
+| catalog | `catalog.rs` | folder scan, `ImageRecord`, session state | catalog-cache |
+| cache | `cache.rs` | SQLite: thumbs + EXIF keyed by (path, size, mtime) | catalog-cache |
+| raw | `raw/` | the in-tree TIFF/IFD walker (`tiff.rs`, `endian.rs`), embedded-JPEG discovery and hostile-header bounds (`jpeg.rs`), bare-JPEG EXIF (`jpeg_exif.rs`), the Sony maker-note reader (`sony.rs`), the orientation kernel (`orient.rs`); rawler only as the RAW-decode and non-TIFF EXIF fallback | raw-pipeline |
+| exif | `exif.rs` | `ExifSummary` and the capture-time sort key, read through the walker | raw-pipeline |
+| pipeline | `pipeline.rs` | priority thread pool: visible > prefetch > background | raw-pipeline |
+| loupe | `loupe.rs` | the loupe engine: two backlog workers + one focus-reserved lane, the rung ladder, the full-res byte-budget LRU | raw-pipeline (ladder), ui-grid (transit contract) |
+| viewassets | `viewassets.rs` | which rung the UI holds per grid cell; adopts engine-cached rungs that emit no event | raw-pipeline |
+| transit | `transit.rs` | loupe render ladder + full-res ring eviction, as pure decision functions | ui-grid |
+| zoompan | `zoompan.rs` | the ×1.5 zoom ladder and pan-anchor math | ui-grid |
+| pointer | `pointer.rs` | the pointer state machine: (state, input) → (state, action) | ui-grid |
+| grid | `grid.rs` | grid layout, the windowed model's visible range, the re-sort reveal | ui-grid |
+| selection | `selection.rs` | the multi-selection: batch, spans, burst spans, the collapse rule | ui-grid, burst-grouping |
+| filter | `filter.rs` | filter/sort predicates over the session, the cursor rules | ui-grid |
+| burst | `burst.rs` | burst grouping | burst-grouping |
+| xmp | `xmp.rs` | sidecar read/merge/write, darktable field mapping | xmp-sidecars |
+| sidecar_writer | `sidecar_writer.rs` | the dedicated debounced writer thread | xmp-sidecars |
+| iptc | `iptc.rs` | IPTC model, templates, variable expansion | iptc-templates |
+| fileops | `fileops.rs` | copy/rename engine with sidecar lockstep, the clash question | fileops |
+| clip | `clip.rs`, `clip/qt.rs` | export frames as video: cadence from capture timestamps, Motion JPEG `.mov` muxer (in-tree), derived-output contract (ADR 0004) | video-export |
+
+(The table listed 11 of 19 files until 2026-09-17 — `exif`, `loupe`, `viewassets`,
+`zoompan`, `pointer`, `grid`, `selection` and `sidecar_writer` had no row — and
+described `raw/` as a "rawler wrapper", which it stopped being on 2026-07-27.)
 
 ## Data flow
 

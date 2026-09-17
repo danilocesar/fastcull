@@ -8,12 +8,14 @@ burst badges, and the IPTC side panel shell.
 
 ## Zoom model (one axis, seamless)
 
-Zoom levels: column count `N ∈ {12, 8, 6, 4, 3, 2, 1}` (Ctrl+scroll / `+`/`-`
-step through; pinch later). At `N = 1` the view is the **loupe**:
-- First stop: fit-to-screen (full-res asset GPU-scaled — see the recorded
-  FitPreview fold in raw-pipeline.md). **Fit means the WHOLE frame is on
-  screen** — the requirement, not an aspiration: see *One-column cell
-  bounding* below.
+Zoom levels: column count `N ∈ {12, 8, 6, 4, 3, 2, 1}` (`+`/`-` step through;
+Ctrl+scroll is the M2 deferral, reserved in the pointer contract below; pinch
+later). At `N = 1` the view is the **loupe**:
+- First stop: fit-to-screen, rendered from the best rung in hand — the mid
+  rung on displays up to ~2K, the full-res above that (raw-pipeline.md's
+  loupe asset ladder, which folded the separate FitPreview). **Fit means the
+  WHOLE frame is on screen** — the requirement, not an aspiration: see
+  *One-column cell bounding* below.
 - Further zoom-in: the ×1.5 ladder below, capped at 1:1 (FullRes asset as GPU
   texture, panning with drag; arrows NAVIGATE at every zoom level — they are
   never repurposed for panning, the burst focus-check loop depends on it).
@@ -2242,8 +2244,11 @@ the user confirms, all cheap to change):**
 
 - [x] `filter.rs` unit tests: every filter/sort combination over a synthetic
       session, counts included.
-- [ ] Windowed-model tests (core side): visible-range → model-window computation,
-      incl. partial rows, tiny folders, and N=1.
+- [x] Windowed-model tests (core side): visible-range → model-window computation,
+      incl. partial rows, tiny folders, and N=1 — `grid.rs`:
+      `visible_range_windows_with_margin`, `visible_range_edges`,
+      `visible_range_at_single_column` (ticked 2026-09-17; the tests date from
+      M2).
 - [x] **Menu bar readable under any desktop colour scheme** (dark-only
       palette pin): `menu_bar_labels_survive_a_light_scheme_desktop` forces
       the failing scheme-resolution branch deterministically (an
@@ -3613,9 +3618,14 @@ the user confirms, all cheap to change):**
       head's in the same shot: 18.0 against 4.1; both mutants red — the
       accent set to `#a8a8b0` gives 0.0 of difference and the 25 % wash
       blend 3.3, against a threshold of 8.0).
-- [ ] **Brief 002, AC8 — suite, card, checksums**: the full suite green on
+- [x] **Brief 002, AC8 — suite, card, checksums**: the full suite green on
       both runners; `the_shortcuts_card_lists_every_binding_in_the_spec`
-      carries the three new pairings; RAW checksums unchanged. R2's core
+      carries the three new pairings; RAW checksums unchanged. TICKED
+      2026-09-17 — the unit closed without a closing spec commit (brief 002
+      has no Outcome section, unlike briefs 005 and 006): PR #84 merged as
+      `ff034a6` with both CI checks green, which branch protection requires;
+      the parity test is `crates/fastcull-app/tests/shortcuts_map.rs`;
+      `testdata/` is untouched between `4405d27` and `ff034a6`. R2's core
       rule: `selection.rs`
       `a_fresh_span_replaces_the_whole_selection_a_continued_one_replaces_its_span`
       (rewritten from `toggle_and_anchor_reset`, which asserted the union;

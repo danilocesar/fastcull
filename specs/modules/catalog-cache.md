@@ -30,21 +30,26 @@
 - `ImageRecord`: path, size, mtime, load state (Placeholder → Loaded → Failed),
   EXIF summary (capture time, camera model/serial, sequence number), pick state,
   IPTC data, burst id, copied flag.
-- **Deferral (recorded)**: the Sony maker-note SequenceNumber is NOT in
-  `ExifSummary` until the burst milestone (M7) — rawler 0.7 exposes no maker
-  notes (upstream has the parsing commented out), so M7 needs an in-tree Sony
-  maker-note reader. When the field is added it must be `#[serde(default)]`
-  and the cache `schema_ver` must be bumped, or pre-M7 cached rows silently
-  lack sequence numbers.
+- **Sony SequenceNumber (deferred at M1, DONE with M7, 2026-07-26)**: rawler
+  0.7 exposes no maker notes (upstream has the parsing commented out), so the
+  in-tree reader `raw/sony.rs` fills `ExifSummary::sequence_number`; the field
+  is `#[serde(default)]` and the cache schema was bumped (v3) so pre-M7 rows
+  re-read instead of silently lacking it. (This entry read as a pending
+  deferral until 2026-09-17.)
 - Pre-existing sidecars are read during load (pipeline metadata pass) so picks and
   IPTC from a previous session (or Photo Mechanic) appear in the UI.
 - Folder watching (`notify` crate): files added/removed while a session is open are
   reflected; removal of a file with unsaved state logs and drops it.
+  **NOT BUILT as of v0.14.0** (recorded 2026-09-17): no `notify` dependency
+  exists in any manifest and nothing watches the folder — `catalog.rs` still
+  says it "arrives with the UI session in M2". Open, put to the user under M8
+  on 2026-09-17: build it, defer it with a date, or drop it from v1. Until
+  answered this sentence is a promise, not a description of the product.
 
 ## Cache (SQLite via rusqlite, bundled)
 
-- One DB per user (config-dir; location wiring lands with the CLI/app — until
-  then the DB path is caller-provided). Table:
+- One DB per user in the config dir, resolved by `cache::default_cache_path()`
+  at CLI/app startup; tests pass an explicit path. Table:
   `previews(path TEXT PRIMARY KEY, size, mtime_ns, exif_json, thumb_jpeg BLOB,
   last_used)`, schema version via `PRAGMA user_version`. Lookup hit requires
   path + size + mtime_ns to all match; a store replaces the path's row.
@@ -86,13 +91,20 @@
       contents (`thousand_entry_scan_yields_placeholders_without_reading_them`);
       its wall-clock budget (< 50 ms, release, idle dev machine) is a perf
       budget in `perf_budgets.rs`, advisory on CI like the rest of the table.
-- [ ] Cache hit round-trip: store → lookup returns identical thumb bytes + EXIF;
-      touching mtime invalidates.
-- [ ] Reopen-from-cache produces no RAW-file reads at all (permission-based
+- [x] Cache hit round-trip: store → lookup returns identical thumb bytes + EXIF;
+      touching mtime invalidates
+      (`cache::tests::store_lookup_roundtrip_and_mtime_invalidation`; ticked
+      2026-09-17 — the test dates from M1).
+- [x] Reopen-from-cache produces no RAW-file reads at all (permission-based
       pipeline test; historically "no `RawSource` opens" — the EXIF pass moved
       to the in-tree walker 2026-07-27, so RawSource only appears in the
-      non-TIFF fallback and full-res decode paths).
-- [ ] Eviction respects the cap; corrupt DB file self-heals.
+      non-TIFF fallback and full-res decode paths)
+      (`tests/pipeline.rs::second_run_serves_from_cache_without_touching_raws`;
+      ticked 2026-09-17).
+- [x] Eviction respects the cap; corrupt DB file self-heals
+      (`cache::tests::eviction_respects_cap_and_lru_order`,
+      `corrupt_db_self_heals`, `future_schema_version_recreates`; ticked
+      2026-09-17).
 - [x] Sidecar-at-open: existing `.ARW.xmp` files yield Sidecar events with
       pick state (pipeline test). Keywords populate in M5 with the IPTC panel
       (recorded scope split, see xmp-sidecars.md).
