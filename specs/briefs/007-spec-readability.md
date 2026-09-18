@@ -244,3 +244,74 @@ for features and user-visible changes only).
   done, make sure the repository is updated on github." The Manager
   finishes every module in the same shape, runs the senior developer's
   meaning check, writes the Outcome, and merges on green.
+
+## Outcome (2026-09-17)
+
+Commits on `spec-readability`, carried to `main` by PR #92 together with
+the ledger corrections of the same day:
+
+- `f4e277e` Brief 007: specs that read as behaviour — the shape, the relocation rule, the four extractions
+- `63f9fda` Brief 007: the Manager writes; history/ is dead text only and disposable (user decisions 2026-09-17)
+- `ec7100a` Brief 007: fileops.md rewritten as behaviour — 1,194 lines to 667, nothing lost
+- `51ed4d0` Brief 007: the release notes move from milestones.md to CHANGELOG.md, verbatim
+- `623db43` Brief 007: the test harness leaves ui-grid.md — test-harness.md, verbatim
+- `b8e6da3` Brief 007: no spec cites the scratch tree as where its evidence lives
+- `0a99ded` Brief 007: the glossary covers the terms the specs use, and the roles older text names
+- `346f14f` Brief 007: 01-architecture.md keeps the build-profile and cache-key rules, history keeps the forensics
+- `af73009` Brief 007: briefs cite spec sections by name, not by line range
+- `29484aa` Brief 007: the user waives the check-in read — conclude on the Manager's judgement, then push
+- `81cc3f0` Brief 007: catalog-cache.md rewritten as behaviour — Purpose, Behaviour, Contracts, Acceptance criteria, History
+- `df329e4` Brief 007: xmp-sidecars.md rewritten as behaviour — Purpose, Behaviour, Contracts, Acceptance criteria, History
+- `9abf25f` Brief 007: iptc-templates.md rewritten as behaviour — Purpose, Behaviour, Contracts, Acceptance criteria, History
+- `fcf0a3b` Brief 007: burst-grouping.md rewritten as behaviour — Purpose, Behaviour, Contracts, Acceptance criteria, History
+- `f5689c9` Brief 007: raw-pipeline.md rewritten as behaviour — Purpose, Behaviour, Contracts, Acceptance criteria, History
+- `dc1ae6f` Brief 007: video-export.md rewritten as behaviour — Purpose, Behaviour, Contracts, Acceptance criteria, History
+- `1b8ea1a` Brief 007: test-harness.md reshaped — the env vars, the drive script, the marks, the dump, the shutter, the rules for authors
+- `9d6cd8f` Brief 007: ui-grid.md rewritten as behaviour — 3,673 lines to 1,083, the keyboard map and the pointer table byte-identical
+- `4182d9c` Brief 007: the six budget tests named in raw-pipeline.md; 01-architecture.md's budget preamble in two paragraphs
+- `d91813c` directive: the shape of a module spec, one home per rule, evidence outside Behaviour, history/ disposable (brief 007)
+- `e35a9a5` Brief 007: the agent files point at test-harness.md for the harness contract
+- `d5f660f` Brief 007: the senior developer's meaning check — 4 HIGH and 25 MEDIUM fixed, the LOW errors corrected
+
+**Verdicts.** The senior developer's meaning check — every live/history
+pair, four forked readers, read-only — returned CHANGES_REQUESTED: 4 HIGH,
+25 MEDIUM, 58 LOW; the spliced tables byte-identical; every test name,
+budget, key binding and threshold found with the same meaning; the
+release notes byte-identical in `CHANGELOG.md`. All 4 HIGH and all 25
+MEDIUM are fixed in `d5f660f`, together with the LOW items that were errors
+or overclaims in the new text (a test's file, an internal API named as
+core's, `AUX`, the ring stated two-sided, the loading pill's rule, six
+History dates git contradicts, and two wrong claims the old text carried —
+the export scope as `Selection::batch`, "decoded with turbojpeg"). The
+remaining LOW items are nuance restorations, left in `specs/history/` by
+the user's rule that history is dead and disposable. The fixes were not
+re-reviewed: the Manager's judgement stands in, per the user's
+instruction to conclude. The user's own read of the shape (AC8) was
+waived by the user.
+
+**Checks.** The relocation script (`spec_check.py --base f4e277e`, in the
+session scratchpad; its logic: every date, issue reference, identifier of
+three or more segments, short commit hash, number with a unit, N-of-M
+count and backticked token in the base tree must appear in the tree
+after — history included; what left the LIVE text is printed for review)
+reports 0 lost of 26 dates, 73 issue references, 275 identifiers, 36
+hashes, 491 numbers, 103 counts and 1,735 backticked tokens; AC1 — nine
+of nine module specs in the five-heading shape; AC3 — no broken relative
+link in `specs/`, `docs/`, README or RELEASING; AC4 — no scratch path in a
+live spec. `the_shortcuts_card_lists_every_binding_in_the_spec` green
+locally on the rewritten `ui-grid.md` (the table it parses is
+byte-identical to the base). CI: PR #92's `test (ubuntu-latest)` green on
+`e35a9a5`; the merge head's run is the PR's own record.
+
+**Line counts, base → final** (the live corpus went from ~9,100 lines to
+~4,400; history holds ~10,300, disposable): ui-grid 4,453 → ~1,120 plus
+test-harness 379; fileops 1,197 → ~690; video-export 911 → ~560;
+01-architecture 644 → ~320; milestones 727 → 124 plus CHANGELOG 613;
+raw-pipeline 467 → ~440; the five small modules reshaped at about their
+old length; the overview 64 → 134 (the glossary).
+
+**Untested, carried.** The History dates were checked against git for
+the entries the review named, not for every entry; the LOW nuances
+listed in the review's report (this brief's decisions log names where it
+lives: the senior developer's hand-back of 2026-09-17) are in history
+only.
