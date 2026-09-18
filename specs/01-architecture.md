@@ -121,41 +121,34 @@ copy picks
 
 ## Performance budgets (regression-tested)
 
-Enforcement: `crates/fastcull-core/tests/perf_budgets.rs` (release-mode
-tests), run in every local gate round **on an idle development machine** —
-that is the machine class the thresholds bind on (issue #27 decision,
-2026-08-02). They are wall-clock numbers, so a loaded machine fails them
-without any regression existing: measured on the dev laptop (i7-8665U,
-4 cores / 8 threads, 2026-08-02), the full-res row is still green with
-2 of 8 logical CPUs busy (~326 ms) and red with 4 busy (~528 ms).
-Thermal state shifts the same bands: immediately after a long release
-build the 2-busy case measured red (~411 ms), and green again (~313 ms)
-after cooldown. A red under load is a measurement, not a verdict —
-re-run idle before treating it as a failing change. The CI step is advisory-only (`continue-on-error`, user decision
-2026-07-25): shared virtualized runners cannot meaningfully gate
-wall-clock budgets. Skipped in debug builds, where a wall clock is not
-the shipped number: since 2026-09-05 dependencies compile optimised in the
-dev profile too, but the workspace crates' own code — the rotate kernel,
-the pipeline, the kitchen fills — stays at opt-level 0 (see "Build
-profiles" below; corrected 2026-09-05, senior-developer plan). Numbers for humans: criterion benches in
-`crates/fastcull-core/benches/hot_path.rs` (`cargo bench -p fastcull-core`).
+Enforced by `crates/fastcull-core/tests/perf_budgets.rs` — release-mode
+tests, one per row, run in every local gate round **on an idle development
+machine**: that is the machine class the thresholds bind on (issue #27,
+2026-08-02). They are wall-clock numbers, so a loaded or hot machine fails
+them without any regression existing (the full-res row measured green with
+2 of 8 logical CPUs busy and red with 4, and red straight after a long
+release build) — a red under load is a measurement, not a verdict; re-run
+idle before treating it as a failing change. The CI step is advisory
+(`continue-on-error`, user decision 2026-07-25: shared virtualized runners
+cannot gate wall clocks). Skipped in debug builds, where the workspace
+crates' own code — the rotate kernel, the pipeline, the kitchen fills —
+runs at opt-level 0 even though dependencies compile optimised since
+2026-09-05 ("Build profiles" below). Criterion benches in
+`crates/fastcull-core/benches/hot_path.rs` (`cargo bench -p fastcull-core`)
+give the numbers for humans.
 
-Thresholds were set ~2× looser than the decode-bound baselines to absorb
-variance (the EXIF row has huge headroom on purpose — anything near 1 ms
-means a whole-file read or mmap snuck back; the folder-scan row sits 20×
-above its idle median, keeping the number the catalog-cache criterion always
-carried — what it can and cannot prove is spelled out under the table). The
-original baselines were measured on a 32-thread machine retired 2026-07-28;
-since then the development machine is an i7-8665U laptop (4 cores /
-8 threads). Both
-columns are kept: the historical baseline for provenance, the laptop idle
-medians as the numbers a gate round actually compares against today. The
-thresholds themselves are untouched by this rewrite (the last one to
-change was the EXIF row, tightened 10 ms → 1 ms on 2026-07-27, after the
-in-tree-walker fix) — the laptop meets them with headroom since the issue-#27 orientation rework (PR #32), whose spec
-record lives in `modules/raw-pipeline.md`. Note the full-res row now
-includes the orientation-8 rotate (the shipped `loupe::decode_oriented`
-path); the 130–150 ms baseline predates that and timed the decode alone.
+Thresholds sit ~2× above the decode-bound baselines to absorb variance; the
+EXIF row has huge headroom on purpose (anything near 1 ms means a whole-file
+read or an mmap snuck back), and the folder-scan row sits 20× above its
+idle median. The baselines were measured on a 32-thread machine retired
+2026-07-28; the development seat since is an i7-8665U laptop (4 cores /
+8 threads), whose idle medians are what a gate round compares against
+today. The thresholds themselves last moved on 2026-07-27 (the EXIF row,
+10 ms → 1 ms, after the in-tree walker), and the laptop meets them with
+headroom since the issue-#27 orientation rework (PR #32, recorded in
+`modules/raw-pipeline.md`). The full-res row includes the orientation-8
+rotate (the shipped `loupe::decode_oriented` path); the 130–150 ms baseline
+predates that and timed the decode alone.
 
 | Operation | 32-thread baseline (retired 2026-07-28) | i7-8665U laptop, idle (2026-08-02) | Threshold (enforced) |
 |---|---|---|---|

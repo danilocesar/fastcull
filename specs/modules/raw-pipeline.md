@@ -369,8 +369,12 @@ medium's measured behaviour:
       image's thumb arrives before ≥ 90 % of background items —
       `tests/pipeline.rs::promoted_jobs_finish_before_background_bulk`.
 - [x] The budgets of 01-architecture.md are enforced by release-mode tests —
-      the six `budget_*` tests of `tests/perf_budgets.rs`; the criterion
-      benches of `benches/hot_path.rs` give the numbers for humans.
+      `tests/perf_budgets.rs`: `budget_open_exif_under_1ms`,
+      `budget_grid_thumb_under_25ms`, `budget_fullres_decode_under_350ms`,
+      `budget_pipeline_throughput_over_60_per_sec`,
+      `budget_video_export_30_frames_under_2s`,
+      `budget_folder_scan_1000_entries_under_50ms`; the criterion benches of
+      `benches/hot_path.rs` give the numbers for humans.
 - [x] The read pool: clamp arithmetic in a pure struct with clock-free unit
       tests; the clocked decisions (thresholds, dead band, growth veto,
       stall, shrink throttle) at the pool level with test-injected
