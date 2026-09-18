@@ -4,6 +4,22 @@ Spec-driven repo: **specs/ is the source of truth.** Read the relevant
 `specs/modules/*.md` before touching a module; if implementation must deviate,
 update the spec in the same commit and say why in the commit message.
 
+**The shape of a module spec (brief 007, 2026-09-17)**: every
+`specs/modules/*.md` has five sections in this order — `Purpose` (five
+lines), `Behaviour` (the rules, present tense, each stated once, a rule
+ending with its provenance in parentheses and nothing else inline),
+`Contracts` (what other modules and the tests rely on), `Acceptance
+criteria` (one line per criterion with its test names; an open box carries
+its reason) and `History` (dated, newest first, citing the brief, issue or
+commit). A rule lives in exactly one spec; every other place points at it in
+one sentence. Evidence — run ids, mutant readings, campaign counts, seat
+measurements — belongs in the brief or the commit, never in Behaviour, and a
+spec never cites the gitignored scratch tree as where its evidence lives.
+`specs/history/` holds dead text only and is disposable: nothing live may
+depend on it. The release notes are `CHANGELOG.md`; `specs/milestones.md`
+is the plan. `ui-grid.md`'s `## Keyboard map` stays an H2 because the
+shortcuts parity test locates the table by that heading.
+
 **docs/ follows specs/ (M8)**: `docs/` is the user-facing guide distilled from
 the specs. A commit that changes user-visible behavior (or its module spec)
 updates the affected `docs/` page in the same commit — the page map is
