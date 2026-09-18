@@ -1,496 +1,195 @@
-# Module spec: grid & loupe UI (`fastcull-app` + `filter.rs`)
+# Module spec: grid & loupe UI (`fastcull-app` + `filter.rs`, `grid.rs`, `zoompan.rs`, `pointer.rs`, `selection.rs`, `transit.rs`)
 
 ## Purpose
 
-The one continuous view: a zoomable virtualized grid that morphs from many columns
-to a single-image loupe with 1:1 pixel zoom. Plus the filter/sort bar, pick badges,
-burst badges, and the IPTC side panel shell.
+The one continuous view: a zoomable virtualized grid that morphs from many
+columns to a single-image loupe with 1:1 pixel zoom — plus the filter/sort
+bar, the badges, the window chrome and the IPTC panel shell. Every policy
+is a pure function in core; the app crate bridges Slint and applies what
+core decides.
 
-## Zoom model (one axis, seamless)
+## Behaviour
 
-Zoom levels: column count `N ∈ {12, 8, 6, 4, 3, 2, 1}` (`+`/`-` step through;
-Ctrl+scroll is the M2 deferral, reserved in the pointer contract below; pinch
-later). At `N = 1` the view is the **loupe**:
-- First stop: fit-to-screen, rendered from the best rung in hand — the mid
-  rung on displays up to ~2K, the full-res above that (raw-pipeline.md's
-  loupe asset ladder, which folded the separate FitPreview). **Fit means the
-  WHOLE frame is on screen** — the requirement, not an aspiration: see
-  *One-column cell bounding* below.
-- Further zoom-in: the ×1.5 ladder below, capped at 1:1 (FullRes asset as GPU
-  texture, panning with drag; arrows NAVIGATE at every zoom level — they are
-  never repurposed for panning, the burst focus-check loop depends on it).
-- Zooming out from loupe returns to the grid **centered on the current image**.
+### The zoom model (one axis, seamless)
 
-### One-column cell bounding (bug found 2026-07-30, user-approved fix)
+- Column count `N ∈ {12, 8, 6, 4, 3, 2, 1}`; `+`/`-` step through
+  (Ctrl+scroll is the M2 deferral, reserved in the pointer contract; pinch
+  later). At `N = 1` the view is the **loupe**: first stop fit — **the
+  WHOLE frame on screen**, the requirement — rendered from the best rung in
+  hand (the mid on displays up to ~2K, the full-res above; raw-pipeline.md's
+  ladder); then the ×1.5 ladder, capped at 1:1. Arrows NAVIGATE at every
+  zoom, never pan. Zooming out of the loupe returns to the grid centred on
+  the current image.
+- **One-column cell bounding** (2026-07-30, user-approved): cells are 3:2
+  (`CELL_ASPECT`) and span the grid width, which made the one-column cell
+  taller than the viewport on every normal window (16.6 % of the frame
+  hidden at 1440×900, 23.4 % fullscreen on 1080p, unreachable by any input).
+  At one column the cell is bounded by the grid viewport (`cell_height =
+  min(cell_width / CELL_ASPECT, viewport_height − 2·CELL_GAP)`,
+  `GridLayout::new`), so the image contain-fits with pillarbox bars. The
+  photo renders ~17-23 % smaller than the old fill-width crop (persona: pay
+  it happily — completeness is what fit is for; sharpness is the ladder's
+  job). Multi-column grids are NOT bounded. The bars stay pure black — no
+  filmstrip, no histogram, no info panel. Pre-layout refreshes skip the
+  bound. Residual: the zoom overlay covers the filter bar while the fit view
+  does not, so the overlay's factor-1.0 extent is ~6 % larger than the fit
+  cell and the first rung magnifies ~1.59× rather than 1.5× — size only.
+- **The badge policy in the loupe**: the `✓ copied`, `▶ exported` and `×N
+  burst` cell badges, anchored to the cell bottom, are visible at one
+  column, while the MARK is suppressed there (cells get `pick = 0`): the
+  state pill owns the mark, and the grid's 40 % reject dim stays out of the
+  loupe; "already copied", "already in a video" and "burst of N" have no
+  pill and are what a last pass before bed wants to see. One channel per
+  fact.
+- **The ladder** (user decisions 2026-07-25): each `+` multiplies the factor
+  by 1.5 from fit, computed as `fit × 1.5ⁿ` so `-` retraces the stops with
+  no drift (a stop within rounding of 1:1 folds into it); a step that would
+  exceed 1:1 lands exactly at 1:1; zoom never passes 1:1 (beyond it you
+  judge the embedded JPEG, not focus); when 1:1 ≤ fit, `+` at fit does
+  nothing. **Anchor**: every keyboard step keeps the centre of the visible
+  region fixed — at fit the image centre, after a pan the subject the user
+  panned to. **`Z`**: fit → 1:1; from 1:1 or any factor → back to fit. A
+  single click above fit is "centre HERE" and at fit does nothing;
+  double-click reaches 1:1 (the pointer contract).
+- **Persistence across images**: navigating or Y/N-advancing keeps BOTH the
+  factor and the pan centre, carried as a fractional centre of the image
+  and clamped for differing dimensions and orientations (lock 1:1 on the
+  eye, arrow through the burst, Y/N each frame). Returning to fit forgets
+  the pan; `G`/Esc from a factor return to the grid at the previous grid
+  zoom and discard the factor (persistence is for walking images inside
+  the loupe, not across grid round-trips). The persistence holds visually
+  across EVERY frame, decoded or not (the render ladder).
+- Two implementation rules: the overlay is a PERMANENT element whose
+  visibility toggles, never a conditional — a re-created element
+  initializes its viewport before the offset write lands, one 0,0 frame per
+  transition (issue #6); and Rust is the ONLY writer of the overlay's
+  viewport offsets (issue #46) — a drag is reported by the overlay's touch
+  surface as an explicit `loupe-dragged` event, folded through the pointer
+  machine into the pan centre, and the offsets are rewritten synchronously
+  from that centre; no Flickable, no read-back. Intent is only ever claimed
+  from a POSITIVE input signal, never inferred from displacement — no
+  elimination list of displacement causes stays complete.
 
-The loupe IS the grid at one column, so the fit view is an `N = 1` grid
-cell. Cells are 3:2 (`CELL_ASPECT`) and span the grid width, which makes the
-one-column cell TALLER than the viewport on any window wider than 1.5× the
-grid area's height — i.e. every normal window. `scroll_to_reveal` top-aligns
-a cell it cannot fit, so the bottom of every frame sat below the fold:
-**measured 16.6 % hidden on a 1440×900 window, 23.4 % fullscreen on 1080p**,
-with nothing on screen to say so. The shipped `docs/assets/fastcull-loupe.jpg`
-shows it.
+### Transit and settled (user requirement 2026-08-01)
 
-That silently contradicted this section ("fit-to-screen"), the pointer
-contract's `Fit` state ("the whole image is on screen") and its drag row
-("nothing is off-screen, so there is no pan axis"). Worse, issue #11 gave
-the wheel to zoom and made drag inert at fit, so after it the hidden band
-was unreachable by **any** input — a culling tool cannot show you 80 % of a
-photograph and let you decide its fate.
+*"While I'm holding a key and rapidly moving between shots I don't need the
+image to be as good as possible, I need it to move fast, feeling almost
+like a video. But when I release the key, then I want quality to be high."*
+Three request states govern what is ASKED of the decoder, never what is
+DISPLAYED — the renderer always shows the best rung in cache:
 
-Requirement: **at one column the cell is bounded by the grid viewport**
-(`cell_height = min(cell_width / CELL_ASPECT, viewport_height - 2·CELL_GAP)`,
-`GridLayout::new`), so the image contain-fits inside it with pillarbox bars
-and the whole frame is on screen. Consequences, all intended:
+| state | trigger | request |
+|---|---|---|
+| TRANSIT | frame changes < `TRANSIT_GAP` (250 ms) apart | the mid rung ONLY, over a wide ring leaning the way of travel |
+| SETTLED | the user stops (~250 ms, the reserved lane's `FOCUS_DEBOUNCE`) | the app's real target for the focused frame |
+| SETTLED-AND-IDLE | after that lands | full-res look-ahead on the ±`PREFETCH` neighbours |
 
-- The photo renders ~17-23 % smaller in each dimension than the old
-  fill-width crop. Persona verdict: pay it happily — completeness is what
-  fit is *for*; sharpness is what the ×1.5 ladder and 1:1 are for.
-- **Multi-column grids are NOT bounded.** Their cells are far shorter than
-  the viewport anyway, and capping `N = 2` would shrink the side-by-side
-  comparison pair for nothing (persona review).
-- The bars stay pure black — no filmstrip, no histogram, no info panel
-  (persona: an instant IN-MY-WAY).
-- The `✓ copied`, `▶ exported` and `×N burst` cell badges, anchored to the
-  cell bottom,
-  become visible in the loupe again; they had been rendering below the fold
-  while the app deliberately populated them at `N = 1`. **This is the
-  intended loupe badge policy, not an accident of the new geometry**: the
-  MARK is suppressed at `N = 1` (`pick: 0`) because the issue #20 pill owns
-  state display and the grid's 40% reject dim must stay out of the loupe,
-  while "already copied", "already in a video" and "burst of N" have no
-  pill and are exactly what
-  a last pass before bed wants to see on the full-screen frame (persona).
-  One channel per fact: pill for the mark, cell badges for the rest. The
-  three are set unconditionally in `fill_grid_cells` — the loupe
-  visibility is the POLICY, not an omission (issue #56 extended it to the
-  `▶` badge on the same reasoning).
-- Pre-layout refreshes (issue #4) see a zero/negative viewport height; the
-  bound is skipped there rather than collapsing the cell.
-- Residual, accepted: the zoom OVERLAY covers the filter bar while the fit
-  view does not, so the overlay's factor-1.0 extent is ~6 % larger than the
-  rendered fit cell and the first ladder rung magnifies ~1.59× rather than
-  exactly 1.5×. That is a size-only discontinuity; the *positional* lurch
-  (the old fit was vertically off-centre by the crop) is gone. Making the
-  ladder's 1.0 the fit cell itself is the follow-up if it ever shows.
+- **Every ring is a VIEW-ORDER ring** (issue #46): transit, settled,
+  look-ahead and the deferred-revival gate are planned in view positions
+  and mapped to ids at request time (`LoupeEngine::set_view`, re-keyed by
+  the app on every view recompute). An id-space ring on a capture-sorted
+  multi-body folder warmed frames no arrow could reach while every real
+  neighbour stayed cold — the deterministic per-step fit-flash of #46. The
+  travel-direction latch compares view positions for the same reason.
+- **The geometry never changes in transit**: the carried factor and pan
+  centre, never a drop to fit, in every reachable path — jumps (`[`/`]`,
+  PgUp/PgDn, Home/End) included; the render ladder below covers them. The
+  renderer traces `loupe overlay dropped` if any path re-opens it, and the
+  regression tests assert the excuse-less form away.
+- SETTLED-AND-IDLE is not optional: requesting only the focused frame on
+  settle would make tap-stepping through a burst at 1:1 pay a full decode
+  on every frame, forever.
+- The same rule at every factor, fit included: on displays up to ~2K, fit
+  asks for less than the mid, so `transit_request` is a no-op; on QHD and
+  4K, transit DOES engage at fit and a hold shows mids upscaled ~1.6–2.4×
+  until release — the designed trade applied consistently, not yet
+  eyeballed by the user on a 4K monitor (issue #60 is parked).
+- Direction is latched at the index change, never re-derived per call: the
+  app re-focuses the SAME index on every refresh, and per-call derivation
+  flipped the ring forward within milliseconds of every backward step.
+- The transit request is a rung the mid actually SERVES: `serves` allows a
+  1.25× upscale, so a 1616 mid covers 2020 px; requesting 2048 sent every
+  transit frame to full-res and measured as no improvement at all.
+- The settle guarantee lives in the engine's reserved lane, not in the app
+  (the app's refresh loop goes quiet exactly when nothing is decoding);
+  the settle the user feels is ~250 ms — `SETTLE_DEBOUNCE` (150 ms) only
+  decays `in_transit`, and both run from the same origin, so they do not
+  add. The "◌ loading" pill is up throughout a hold — a steady pill, not a
+  flicker (784 of 787 rendered frames, one state change).
+- Measured on the 8-core laptop, cold cache, 1:1: a 150-key hold at 40 ms
+  puts 139 of 150 frames on screen (was 12 of 150), key→pixels median 2 ms
+  (was 119 ms), p90 3 ms (was 9.3 s); an 800-key hold makes 2 full-res
+  decodes (was 182); 20 keys at 120 ms show 18 (was 9). Two limits: a short
+  burst barely benefits (the first ~340 ms of a hold from a cold loupe
+  stall either way), and stop-to-sharp is ~40 ms slower at 120 ms repeats —
+  accepted, motion-first. An adaptive settle was measured and rejected: it
+  sharpened 200 ms sooner but a 60 ms floor was fragile to repeat jitter.
+- Known and deferred (none a spec acceptance criterion): a `Y`/`N` chain
+  faster than 4 marks/s is classified as travelling and judged from the mid
+  — DOCUMENTED AS INTENDED (user decision 2026-08-01: at 4/s nothing
+  changes; above ~4.2/s the old code showed BLANK frames where this shows
+  soft ones; the recorded fix if a rating workflow ever bites is an
+  exclusion keyed on the mark keys); a wraparound cursor would lean the ring
+  wrong for one refocus; stop-to-sharp at the ENGINE is 371–408 ms ±20 ms
+  while the APP-level 721–1047 ms is compositor overhead — measure at the
+  right layer before tuning; no hysteresis on `moving` (a stretched gap
+  mid-hold fires a full-res ring); entering a hold commits up to two
+  uninterruptible full-res decodes; transit queues with `focus_origin =
+  true`, so leaving the loupe mid-hold leaves up to 11 stale entries ahead
+  of grid cells; the settle guarantee's `Slot::Wait` is untimed for a
+  core-only consumer.
 
-### Loupe zoom ladder (user decisions 2026-07-25, persona-validated)
+### The render ladder (issues #21, #46; core `transit`)
 
-The user request that drove this: "+ should not be a big jump to 1:1 — slow
-increase — and it must never show the corner of the image; keep the center
-where it is."
+Any factor above fit requests the top rung outright (`display_long =
+u32::MAX`). **Never show upscaled pixels UNFLAGGED, and never leave a frame
+at rest unsharp without the cue**: an above-fit view rendered from below the
+top rung shows the top-left "◌ loading" pill, removed atomically when the
+sharp texture swaps in. The ladder: full-res (sharp) → the mid rung (soft)
+→ the cursor's own 320 px THUMB (soft — ~25× mush at 1:1, and right during
+transit, where position and identity continuity is what the eye tracks;
+persona MUST-HAVE) → the residual HOLD. When not even the thumb exists (a
+cold-start edge), the overlay keeps the PREVIOUS image's pixels at the
+carried geometry, pill on — the video-player dropped-frame convention; the
+alternatives were the fit strobe (the bug) or a black frame. That is a
+knowing, bounded breach of "never the previous frame": the mark badge and
+the status bar name the NEW image over the old pixels (addressing is
+correct; only the judged pixels lag). The bound is double: a decode FAILURE
+of the cursor image drops to fit immediately (the strip owns the failed
+badge), and `OVERLAY_HOLD_CAP` (250 ms, one settle window, PER CURSOR IMAGE)
+caps a wedged decode; a capped drop traces `loupe overlay dropped … (hold
+cap)` and the overlay re-raises the moment any rung of the cursor image
+lands. A cold ENTRY with no pixels of the image keeps the overlay down until
+the first rung. A decode-FAILED cursor skips the thumb rescue — a live thumb
+texture would otherwise sit at 1:1 behind a pill that can never complete,
+hiding the failed badge; fit plus the badge is the honest floor. One
+causally unavoidable transient is accepted: the first focus of a freshly
+dead file MAY render the thumb until its decode attempt fails, and nothing
+may be asserted on that order (issue #50). A VIRGIN pin (nothing resolved
+yet this session) renders the mid at its native resolution, floored at fit;
+an INFINITY-pinned desire (`Z` during transit) renders at the last resolved
+factor. Same behaviour at all factors.
 
-- **Steps**: from fit, each `+` multiplies the zoom factor by **1.5**
-  (fit → 1.5× → 2.25× → …), computed as `fit × 1.5ⁿ` so `-` retraces the
-  ladder's stops with no drift (a stop within rounding distance of the
-  1:1 ceiling folds into it rather than producing a duplicate press). A step that would exceed 1:1 lands
-  **exactly at 1:1** (a `+` that visibly does almost nothing reads as a
-  broken key). Zoom NEVER passes 1:1 (user: beyond that you are judging the
-  embedded JPEG, not focus). When 1:1 ≤ fit (small file), `+` at fit does
-  nothing — clamped, no flicker.
-- **Anchor**: every zoom step (in or out, `+`/`-`/`Z`/click entry alike)
-  keeps the **center of the currently visible region** fixed. At fit that
-  equals the image center (fixes the corner-entry bug); after a pan it means
-  repeated `+` stays on the subject the user panned to. Zooming out clamps
-  the offset to image bounds as the frame approaches fit; at fit the offset
-  is definitionally zero.
-- **`Z`**: from fit → 1:1; from 1:1 OR any intermediate factor → back to fit
-  (user decision: `Z` below 1:1 is the escape hatch, not "show me pixels").
-  One keystroke each way, always.
-- **Click-to-zoom**: a single click is always "center HERE" (user decision
-  2026-07-25: "single clicks centralize the image in the clicked point"),
-  and **double-click** is the gesture that reaches 1:1 (user decision
-  2026-07-26, superseding the earlier "single click at fit jumps to 1:1"
-  rule). Full gesture table in *Mouse & pointer contract* below — that
-  section is the source of truth for anything the mouse does.
-- **Persistence across images (contract, was accident)**: navigating or
-  pick/reject-advancing to another image keeps BOTH the zoom factor and the
-  pan center, carried as a **fractional center of the image** and clamped
-  for differing dimensions/orientations (lock 1:1 on the eye, arrow through
-  the burst, Y/N each frame). Returning to fit forgets the pan spot — a
-  fresh zoom-in re-centers (a stale pan from three images ago is a trap).
-  During held-arrow transit the carried factor/pan render from whatever
-  rung exists (quality rule below) — the persistence promise holds
-  visually across EVERY frame, not just the decoded ones (issue #21).
-  Implementation rule (issue #6): the zoom overlay is a PERMANENT element
-  whose visibility is toggled — never a conditional (`if`) element. A
-  conditional is re-created on every texture gap during held-arrow
-  navigation, and a freshly created element initializes its viewport
-  before the offset write lands: one 0,0 frame per transition, a visible
-  top-left stream under key repeat.
-  **Single-writer rule (issue #46, superseding the read-back scheme)**:
-  Rust is the ONLY writer of the overlay's viewport offsets. A drag is
-  reported by the overlay's touch surface as an explicit `loupe-dragged`
-  event, folded through the pointer machine into the pan centre, and the
-  offsets are rewritten synchronously from that centre — there is no
-  Flickable, no offset read-back, and no `capture_pan`. The retired
-  read-back inferred "the user dragged" from displacement, which is the
-  #16/#22 disease in a new organ: a fling's deceleration binding fed it
-  ANIMATED offsets nobody was touching, and every refresh of the decay
-  folded them into the pan centre as phantom drags until the carried
-  centre was permanently lost (issue #46 M3, `pan fold` traces with no
-  hand on the mouse). The doctrine holds here as everywhere: **intent is
-  only ever claimed from a POSITIVE input signal — the drag event itself
-  — never inferred from displacement**, because no elimination list of
-  displacement causes stays complete.
-- **Transit vs settled (user requirement 2026-08-01)**: the user's words —
-  *"while I'm holding a key and rapidly moving between shots I don't need
-  the image to be as good as possibile, I need it to move fast. feeling
-  almost like a video. But when I release the key, then I want quality to
-  be high."*
-  The loupe therefore has three request states. They govern **what is
-  ASKED of the decoder, never what is DISPLAYED** — the renderer always
-  shows the best rung in cache.
+The whole block is core (`fastcull_core::transit`, 2026-08-11):
+`render_rung(&RungInputs) -> RenderDecision` — which rungs are in hand,
+whether the cursor's decode failed, whether the overlay is wanted and was
+up, the hold's pair — is TOTAL and swept over all 320 input combinations
+against the pre-move app ladder, so the extraction is pinned as an
+equivalence; `evict_fullres(held, cursor, view)` — the cursor's texture is
+never the victim, an out-of-view entry goes first, a tie goes to the LATER
+slot; `FULLRES_RING = 2·PREFETCH + 1`. The cap duration is passed in as a UI
+tuning value. The app keeps what only the app can do: texture lookup, the
+clock, the extent math, the property writes.
 
-  | state | trigger | request |
-  |---|---|---|
-  | TRANSIT | frame changes < `TRANSIT_GAP` (250 ms) apart | mid rung ONLY, wide ring biased in the direction of travel |
-  | SETTLED | the user stops (see the timing note below) | the app's real target for the focused frame |
-  | SETTLED-AND-IDLE | after that lands | full-res look-ahead on the ±`PREFETCH` neighbours |
-
-  **Every ring is a VIEW-ORDER ring (issue #46).** The engine's rings —
-  transit, settled, look-ahead, and the deferred-upgrade revival gate —
-  are planned in view POSITIONS and mapped to image ids at request time
-  (`LoupeEngine::set_view`; the app re-keys it on every view recompute,
-  so a filter or sort change re-keys the ring the same tick). The old
-  ±`PREFETCH` in image-id space was wrong the moment view order diverged
-  from id order — a capture-time sort over interleaved filenames (two
-  bodies; repeated capture times) is the everyday case — and there it
-  warmed frames no arrow could reach while EVERY actual neighbor stayed
-  cold: the deterministic per-step fit-flash of issue #46 M1. The
-  travel-direction latch compares view positions for the same reason (a
-  forward hold FALLS in id half the time on an interleaved view). The
-  policy (ring widths, lean, transit capping) stays in core; the app
-  supplies only the position↔id mapping it already owns. An engine whose
-  consumer never calls `set_view` keeps identity order — the pre-#46
-  behavior, exactly, which is what the pre-#46 core tests still pin.
-
-  - **The geometry never changes.** Transit keeps the carried factor and
-    pan centre; it does NOT drop to fit — **in every reachable path,
-    including jumps** (`[`/`]`, PgUp/PgDn, Home/End land outside any
-    ring; the thumb rung below covers them). The spec already learned
-    this once — "the old drop-to-fit strobed the whole burst-transit
-    loop and trained the user to tap instead of hold" — and zoom/pan
-    persistence is what makes 1:1 burst comparison work at all. Until
-    issue #46 this sentence was aspiration: with neither the full-res
-    nor the mid rung in hand, the renderer's fallback arm dropped the
-    overlay and the N=1 strip showed the whole next frame at fit for
-    1.5–75 ms per step (one or two pump ticks) — the user's "shows it at
-    0,0 briefly, then snaps back". The thumb rung and the residual hold
-    (quality rule below) closed the gap; the renderer traces
-    `loupe overlay dropped` if any future path re-opens it, and the
-    regression tests grep for that line and assert `one2one` across a
-    cook-widened transit.
-  - **SETTLED-AND-IDLE is not optional.** Requesting only the focused frame
-    on settle would make tap-stepping through a burst at 1:1 pay a full
-    decode on every frame, forever. It needs no new code — it is the
-    pre-existing behaviour, which is precisely the SETTLED behaviour.
-  - **Same rule at every factor, fit included**, no threshold to learn.
-    On displays up to ~2 K wide, holding at fit is unchanged: fit asks for
-    less than the mid, so `transit_request` is a no-op and QE measured the
-    trace as byte-identical to the old behaviour. **On wider displays (QHD,
-    4K) transit DOES engage at fit** — fit there is 2560/3840 px, above
-    what the mid serves — so a hold shows mids upscaled ~1.6–2.4× until
-    release (QE 2026-08-01: 6/30 frames at full during a hold vs main's
-    30/30, which cost main 7.2 s of CPU for frames never seen). This is the
-    designed trade applied consistently, not an exemption failing: an
-    earlier revision of this bullet claimed fit was ALWAYS a no-op, which
-    was only true on the ≤2 K displays it had been measured on. The visible
-    softness of an upscaled mid on a 4K monitor during a hold has not been
-    eyeballed by the user — worth one look before anyone tunes constants
-    around it.
-  - **Direction is latched at the index change**, never re-derived per
-    call. The app re-focuses the SAME index on every `refresh()`, and
-    `refresh()` runs on every decode landing — of which transit produces
-    one per ring member per frame. `index >= prev` is trivially true for
-    all of those, so deriving direction per call flipped the ring forward
-    within milliseconds of every backward step: a backward hold prefetched
-    the frames the user was moving AWAY from, an effectively 21-wide ring
-    doing half its work behind the user. Found by the gate, not by the
-    tests, which is why `a_backward_hold_keeps_leaning_backward_across_refocus`
-    now drives the real engine through `focus()` and simulates that
-    re-focus storm.
-  - **The transit request must be a rung the mid actually SERVES.**
-    `serves` allows a 1.25x upscale, so a 1616 mid covers 2020 px:
-    requesting `MID_RUNG_MAX_LONG` (2048) is 28 px too high and silently
-    sends every transit frame up the ladder to full-res anyway. The first
-    implementation did exactly that and measured as no improvement at all.
-  - **The settle guarantee lives in the reserved lane, not in the app.**
-    Transit asks only for the mid, so something must ask for the real
-    target once the user stops — and the app cannot, because its refresh
-    loop goes quiet exactly when nothing is decoding. The reserved worker
-    already wakes on a timer. Its `in_flight` and sufficiency guards are
-    both load-bearing: without the first, releasing the key while the
-    transit mid is still decoding queues a duplicate full-res job (a
-    worker and ~149 MB of transient); without the second, the lane spins
-    push/pop forever **while holding the state mutex**, freezing all three
-    workers.
-
-  **Timing note — the settle is ~250 ms, not `SETTLE_DEBOUNCE`.**
-  `SETTLE_DEBOUNCE` (150 ms) is what `in_transit` decays on, but it is not
-  what the user feels. The settle guarantee runs in the reserved lane,
-  which is gated first by `FOCUS_DEBOUNCE` (250 ms) on `focused_at` — and
-  `note_focus` resets `focused_at` and `last_index_change` from the same
-  index change, so the lane cannot act before 250 ms and the `settled`
-  check inside it is always true when reached. It is kept as an explicit
-  belt-and-braces statement of intent, not as live logic. QE measured the
-  overhead at ~215 ms over a bare decode, and confirmed by injecting a
-  poke at T+150 ms that the engine had NOT yet acted.
-  An earlier draft of this section claimed the two debounces would
-  otherwise "stack into most of a second"; that is arithmetically wrong —
-  both are measured from the same origin, so they do not add.
-
-  **The pill is shown throughout a hold.** An earlier draft claimed the
-  soft-cue pill stays settle-only, on the reasoning that an 8 Hz flicker
-  in peripheral vision would be worse than nothing. Nothing in the app is
-  transit-aware, so that was never true: every transit frame renders
-  through the soft branch and the "◌ loading" pill is up for the whole
-  hold. Measured over a 24 s hold: on for 784 of 787 rendered frames, with
-  **one** state change — so it is a steady pill, not a flicker, and the
-  feared failure mode does not occur. Accepted as-is; "never leave a frame
-  at rest unsharp without the cue" is still honoured.
-
-  **Measured** on the 8-core development laptop, real A1 frames, cold
-  cache, at 1:1. "On screen" counts distinct frames whose pixels actually
-  reached the display while the key was down — not decode landings, which
-  include the look-ahead frames the cursor never reaches (an earlier draft
-  of this table conflated the two and overstated the short-burst figures).
-
-  | held arrow | | before | after |
-  |---|---|---|---|
-  | 150 keys @ 40 ms | frames on screen | 12 of 150 | **139 of 150** |
-  | | key→pixels, median | 119 ms | **2 ms** |
-  | | key→pixels, p90 | 9.3 s | **3 ms** |
-  | 800 keys @ 30 ms | frames on screen | — | **787 of 800** |
-  | | full-res decodes during the hold | 182 | **2** |
-  | 20 keys @ 120 ms | frames on screen | 9 | **18** |
-  | | full-res on the frame stopped on | 988 ms | 1027 ms |
-
-  The win is in **steady travel**, and it is large: a held arrow tracks the
-  key frame-for-frame instead of showing one frame in twelve with a p90 of
-  over nine seconds. Two honest limits:
-
-  - **A short burst barely benefits.** Over only 20 keys at 40 ms the
-    figure is 3-4 → 8 of 20, because the first ~340 ms of a hold from a
-    cold loupe stalls identically on both sides, and that is most of an
-    800 ms burst. Stop-to-sharp at that rate is a wash (829-890 ms before,
-    801-935 ms after).
-  - **Stop-to-sharp is ~40 ms slower at 120 ms repeats** — the settle,
-    paid on every stop. Accepted: the user's priority was explicit and
-    motion-first, and both figures are under a second.
-
-  **Measured and rejected — an adaptive settle.** Since the debounce is
-  pure stop latency, it was made to learn the user's repeat rate and wait
-  1.25x the observed gap (60 ms floor). It sharpened 200 ms sooner and far
-  more consistently (749 ms, spread 705-754) but cost five frames of
-  smoothness: a 60 ms threshold is fragile to repeat jitter, and one long
-  gap settles mid-hold and fires a full-res decode that blocks the frames
-  behind it. A middle setting (2x, 100 ms floor) was worse on both axes and
-  swung 8-18 frames across three runs. Dropped rather than tuned on that
-  spread.
-
-  Recorded gap (historical — closed 2026-08-02): at the time of this
-  experiment stop-to-sharp was decode-bound — the full-res decode alone
-  medianed 614 ms under the transit workload, and
-  `budget_fullres_decode_under_350ms` failed on the `main` of that day
-  (issue #27). Scheduling could not close it; the PR #32 orientation
-  rework did (raw-pipeline.md — the budget now passes idle with headroom).
-
-  **Known and deferred** (recorded per the CLAUDE.md gate; none is a spec
-  acceptance criterion, and all predate or are unchanged by this change):
-
-  - A `Y`/`N` cull chain faster than 4 marks/second is classified as
-    travelling, so those frames are judged from the mid. Marking is a
-    judgment workflow, not a travel one — but **DOCUMENTED AS INTENDED,
-    user decision 2026-08-01**, closing the deferral: the measurement
-    below shows the trade only exists at cadences where the old code
-    showed BLANK frames, so excluding marking from transit would trade a
-    soft-but-present frame for a missing one. If a rating-speed workflow
-    ever makes this bite, the recorded fix is an exclusion keyed on the
-    mark keys, not a wider `TRANSIT_GAP`.
-    **The measurement** (QE 2026-08-01): at the actual 4/s cadence
-    (250 ms gaps, exactly `TRANSIT_GAP`) BOTH sides judge every frame at
-    full-res — nothing changes. The mid-judging regime begins only above
-    ~4.2/s, where main is strictly worse: at 6.2–8/s the branch judges
-    17/20 at mid with zero blanks, while main leaves 2–5 of 20 frames with
-    NOTHING decoded at all. So the trade only exists at cadences where the
-    old code showed blank frames; the knife-edge at exactly `TRANSIT_GAP`
-    is the part worth a deliberate decision.
-  - Wraparound direction latch: if the app ever wraps cursor 0 → count−1
-    on backward travel, the position comparison in `note_focus` (view
-    positions since issue #46; was `index >= prev` in id space) reads
-    that one step as "forward" and leans the ring the wrong way for one
-    refocus cycle. Self-corrects at the next step; no main-relative
-    regression (main has no lean at all); recorded so a future
-    wraparound feature knows to fix the latch with it.
-  - Sharpness-on-stop variance: at the ENGINE level stop-to-sharp is
-    371–408 ms with ±20 ms spread across hold lengths 4–64 (QE
-    2026-08-01) — extremely consistent. The wider swings observed at the
-    APP level (721–1047 ms across whole-app runs) are compositor/refresh
-    overhead on top, not engine scheduling; measure at the right layer
-    before tuning any constant against that number.
-  - No hysteresis on `moving`: a single stretched gap > `TRANSIT_GAP`
-    mid-hold drops back to SETTLED and fires a full-res ring that is never
-    cancelled, precisely when the machine is already behind. Same mechanism
-    on `main`; transit simply does not help across a hiccup.
-  - The first focus of a hold is never transit, so entering one commits up
-    to two uninterruptible full-res decodes (~600 ms each) at the moment
-    the hold starts. This is what makes short bursts benefit least.
-  - Transit queues with `focus_origin = true`, which `want()`'s cull
-    deliberately spares, so leaving the loupe mid-hold leaves up to 11
-    stale entries ahead of visible grid cells.
-  - The settle guarantee's `Slot::Wait` when the frame is in flight is an
-    untimed wait; today the app's refresh loop re-drives it, but a
-    core-only consumer that calls `focus()` once has no such rescue.
-
-- **Quality rule (revised by issue #21, user-approved 2026-07-27)**:
-  intermediate factors are rendered from the **full-res rung** once
-  cached (GPU-downscaled): ANY factor above fit requests the top rung
-  outright (`display_long = u32::MAX`). While the top rung is still
-  decoding, the view stays at the CARRIED factor and pan center,
-  rendered from the mid rung upscaled — soft but positionally
-  continuous (the old drop-to-fit strobed the whole burst-transit
-  loop and trained the user to tap instead of hold). The rule is now:
-  **never show upscaled pixels UNFLAGGED, and never leave a frame at
-  rest unsharp without the cue** — any above-fit view rendered from
-  below the top rung shows the top-left cue pill ("you are never
-  silently looking at soft pixels"), removed atomically when the sharp
-  texture swaps in place.
-  **The soft ladder gained a bottom rung (issue #46), and the identity
-  rule gained one bounded, recorded exception.** The above-fit render
-  ladder is now: full-res (sharp) → mid rung (soft) → the cursor's own
-  320 px grid THUMB (soft — ~25× mush at 1:1, and exactly right during
-  transit: position and identity continuity is what the eye tracks at
-  video speed, persona-reviewed MUST-HAVE) → residual HOLD. The old
-  behavior below the mid — drop to fit — was the M1 fit-flash and is
-  GONE from every reachable path. A decode-FAILED cursor image skips
-  the thumb rescue (validator finding on the first cut): an image with
-  a live thumb TEXTURE but no decodable loupe rung would otherwise sit
-  at 1:1 behind a "◌ loading" pill that can never complete, hiding the
-  strip's failed badge — fit plus the badge is the honest floor. The
-  shape is unreachable as a static file (QE, gate round 2: the grid
-  thumb and the loupe's first rung decode the same `grid_source()`
-  bytes, so on disk they live or die together); it is the MID-SESSION
-  route that is real — a file that dies on disk (or a stale cache's
-  thumb for a since-corrupted file) after its thumb reached memory.
-  One causally unavoidable transient is accepted: the first focus of a
-  freshly dead file MAY render the thumb for the milliseconds until its
-  decode attempt fails, because the failure does not exist as
-  knowledge yet; the gate binds from the Failed event on. Accepted, not
-  required — whether that first focus renders the thumb at all depends
-  on which of the two lands first (the thumb texture or the failure),
-  and both orders are honest. Nothing may be asserted on the order
-  (issue #50: a test that did reddened CI ~15 % of runs); what binds is
-  every focus AFTER the failure is known.
-  **Residual HOLD (the recorded exception; persona-reviewed USEFUL with
-  the bound demanded and applied)**: when not even the thumb exists (a
-  cold-start edge: the thumb pipeline has not served that image yet),
-  the overlay keeps the PREVIOUS image's pixels at the carried
-  geometry, cue pill on — the video-player dropped-frame convention;
-  the alternatives were the fit strobe (the bug) or a black frame
-  (retinal pumping in a dark room). This is knowingly a bounded breach
-  of "never the previous frame": during the hold the mark badge and
-  status bar name the NEW image over the old pixels (marks still land
-  on the intended image — addressing is correct; only the judged
-  pixels lag). The bound is double: a decode FAILURE of the cursor
-  image drops to fit immediately (the strip owns the failed badge),
-  and `OVERLAY_HOLD_CAP` (250 ms, one settle window) caps a wedged
-  decode — never an unbounded wrong-pixels hold. The cap is PER
-  CURSOR IMAGE (recorded, validator finding): a hold-arrow run across
-  consecutively cold frames re-times it at each cursor change, so the
-  same stale pixels can exceed 250 ms in aggregate across images in
-  the wedged-decode pathology — the bound is on how long any one
-  photograph can be misrepresented, not on the pixels' total tenure.
-  In any healthy release-profile session the thumb or mid lands well
-  inside the cap;
-  a CONGESTED adoption queue (observed in debug-profile runs, where
-  149 MB texture fills stack up behind the cook hold) can legitimately
-  fire the cap first — the capped drop traces its reason
-  (`loupe overlay dropped … (hold cap)`, distinct from the outlawed
-  excuse-less `(no rung in hand)` form) and the overlay RE-RAISES the
-  moment any rung of the cursor image lands. A cold ENTRY into zoom
-  with no pixels of the image at all (nothing to hold) keeps the
-  overlay down until the first rung lands — the pre-existing honest
-  behavior, unchanged.
-  **Recorded deferral — CLOSED 2026-08-11 (raised as a validator
-  concern, gate 2026-08-09)**: the deferral read "the hold state
-  machine (cap timing, failure gating, re-raise) and the view-distance
-  full-res texture eviction live in the APP crate as stateful policy
-  with no core unit pins — only the timing-sensitive integration tests
-  cover them. Precedented (the render ladder was already app-side) but
-  each #46-class bug so far lived exactly in untestable app-side
-  state; the next transit-affecting change should force this block
-  into core as a pure decision function. Deferred explicitly, not
-  silently." That trigger was honored: the whole block is now
-  `fastcull_core::transit`, and the app-side state it named no longer
-  decides anything.
-  * `render_rung(&RungInputs) -> RenderDecision` is the ladder above,
-    entire: which rungs are in hand, whether the cursor's decode
-    failed, whether the overlay is wanted and whether it was up, and
-    the hold's (is-it-this-cursor, how-long) pair go in; Sharp /
-    Soft{is_thumb} / Hold{start} / Drop{reason} comes out. The
-    function is TOTAL — every input combination yields a decision, and
-    the table sweeps all 320 of them (2^6 booleans × 5 hold states)
-    against the pre-move app ladder transcribed in its own shape, so
-    the extraction is pinned as an equivalence, not as a description.
-    Both residuals recorded above have their own named rows: the
-    causally-unavoidable thumb transient before a failure is knowledge,
-    and the cap re-timing at each cursor change.
-  * `evict_fullres(held, cursor, view) -> Option<slot>` is the
-    view-distance eviction, with the three rules the app had left
-    implicit now written down and tested: the cursor's texture is
-    never the victim, an out-of-view entry (or any entry when the
-    cursor itself has left the view) goes first, and a tie goes to the
-    LATER slot. `FULLRES_RING` is `2·PREFETCH+1`, derived rather than
-    the bare `5` the app used to carry beside a comment saying so.
-  * The cap DURATION (`OVERLAY_HOLD_CAP`, 250 ms) stays an app
-    constant and is passed in as `hold_cap`. That is deliberate: it is
-    a UI tuning value beside its siblings, and passing it makes the
-    cap a table row instead of a hardwired duration.
-  What the app kept is what only the app can do: texture lookup, the
-  clock read, the zoompan extent math, and the property writes each
-  decision names. The claim that this policy lives in "untestable
-  app-side state" is therefore retired — the timing-sensitive
-  integration tests are no longer the only cover, they are the
-  integration pins over a unit-covered policy. The release-profile
-  exercise of the `(hold cap)` drop-and-re-raise (recorded below with
-  the acceptance log) still wants a decode-wedge knob, but now only for
-  integration-level exercise: the policy itself is unit-covered.
-  An INFINITY-pinned desire (Z) during transit renders at the last
-  RESOLVED factor (the carried magnification, not the sentinel); a
-  VIRGIN pin (nothing resolved yet this session) renders the mid at its
-  own native resolution, floored at fit — the most zoom the data
-  truthfully supports at that instant (QE finding: the earlier
-  undefined case left fit showing with a usable mid in hand). The soft
-  source is the cursor's own mid rung or a warm sub-top texture the
-  engine re-announced (revisits beyond the retained window). The
-  magnification never carries across sessions. Same
-  behavior at all factors (user decision — no special 1.5-2.25x
-  handling). The landing frame's full-res preempts transit backlog via
-  the existing focus/want-culling priority; sharpness-on-stop within
-  ~300ms is the contract.
-- `G`/Esc from an intermediate factor → grid at the previous grid zoom, the
-  factor is discarded (re-entering the loupe starts at fit; persistence is
-  for walking images INSIDE the loupe, not across grid round-trips).
-
-## Mouse & pointer contract (state machine) — user request 2026-07-26, issue #11
+### The pointer contract (state machine; user request 2026-07-26, issue #11)
 
 The mouse means different things in the grid and in the loupe, and the
-difference is not a pile of `if`s scattered through the app crate: **pointer
-behavior is defined by an explicit state machine whose state is the zoom
-level**. This section is the source of truth for every mouse gesture; the
-transition table below is the specification the implementation's tests are
-written against.
-
-The driving user requirement (2026-07-26, verbatim intent): *in the
-multi-image view the wheel scrolls the grid as it does today; once a single
-image is shown the wheel stops scrolling and starts zooming; a click centers
-the clicked point; a double-click goes to 1:1 with the clicked point
-centered; click-and-drag moves the image once you are in the single-image
-view or deeper; dragging in the multi-image view is reserved for later.*
-
-### States
+difference is an explicit state machine whose state is the zoom level —
+the source of truth for every gesture. The user's intent: *in the
+multi-image view the wheel scrolls; once a single image is shown the wheel
+zooms; a click centres the clicked point; a double-click goes to 1:1 with
+the clicked point centred; drag moves the image in the single-image view;
+dragging in the multi-image view is reserved.*
 
 | State | Meaning |
 |---|---|
@@ -499,26 +198,16 @@ view or deeper; dragging in the multi-image view is reserved for later.*
 | `Zoomed { factor }`, `1.0 < factor ≤ max` | single image, above fit; `factor == max` is 1:1 |
 
 `N = 1` is not a grid state — one column IS the loupe, i.e. `Fit` or
-`Zoomed`. The state machine holds no other state: marks, cursor, filter and
-selection are untouched by it.
-
-### Inputs
-
-Raw Slint pointer events are normalized before they reach the machine:
-`Wheel { notches, pos }`, `Click { pos }`, `DoubleClick { pos }`,
-`DragStart { pos }`, `Drag { dx, dy }`, `DragEnd`. `pos` is a point in the
-view area; the machine converts it to a fractional image coordinate via the
-existing `zoompan::contain_click_frac`.
-
-Explicitly NOT inputs of this feature (persona review 2026-07-26, user
-decision): **Ctrl+wheel** ("no Ctrl+wheel yet" — grid Ctrl+scroll zoom stays
-the M2 deferral, and in the loupe the modifier is ignored, i.e. reserved),
-**right / middle / thumb buttons** (the user has no use for back/forward
-buttons; they get an explicit reserved no-op so nobody grows a context menu
-into the culling grid by accident). Pinch/trackpad gestures and momentum
-scrolling are out of scope; they reuse this machine when they land.
-
-### Transition table (the contract)
+`Zoomed`. Marks, cursor, filter and selection are untouched by the machine.
+Inputs, normalized from Slint: `Wheel { notches, pos }`, `Click { pos }`,
+`DoubleClick { pos }`, `Drag { dx, dy }` (the press/release edges live in
+the overlay's drag latch); `pos` converts to a fractional image coordinate
+through `zoompan::contain_click_frac`. NOT inputs (persona review, user
+decision): **Ctrl+wheel** (grid zoom stays the M2 deferral; in the loupe
+the modifier is ignored — reserved), **right/middle/thumb buttons**
+(explicit reserved no-ops, so nobody grows a context menu into the grid by
+accident), pinch and trackpad gestures (out of scope; two-finger scroll
+over the overlay image walks the ladder like the wheel since #46).
 
 | Input | `Grid { N }` | `Fit` | `Zoomed { factor }` |
 |---|---|---|---|
@@ -529,750 +218,301 @@ scrolling are out of scope; they reuse this machine when they land.
 | Double-click | **open that image in the loupe at fit** (user decision 2026-07-26 — the first click has already moved the cursor there, so this is purely "enter the loupe"); the previous grid zoom is remembered for `G`/`Esc` | → **1:1 with the clicked point centered** | → **1:1 with the clicked point centered** (already at 1:1: re-center only) |
 | Drag | scroll the view (Flickable kinetic drag, today's behavior — **kept**); rubber-band multi-select is the reserved future gesture | **nothing** — nothing is off-screen, so there is no pan axis | **pan the image**, 1:1 with pointer motion, clamped so the image never detaches from the viewport edges; **release stops the image dead — no fling, no inertia** (issue #46, see below) |
 
-Rules that the table alone does not carry:
+Rules the table does not carry:
 
-- **The wheel no longer browses images in the loupe — knowingly** (user
-  decision 2026-07-26 after persona review). Until now, at `N = 1` the view
-  was a one-column strip and wheel-scrolling stepped to the next image with
-  the cursor following (the "cursor follows scrolling" exception in the
-  cursor contract). The user confirmed using that gesture AND chose to
-  replace it with zoom. Consequence, spelled out so nobody re-discovers it
-  as a bug: **inside the loupe, moving between images is keyboard-only** —
-  arrows / PgUp / PgDn / Home / End, `Y`/`N` auto-advance, `[`/`]`. The
-  cursor contract's 1-column exception survives only for the scrollbar-drag
-  route, and is reworded accordingly.
-- **A click at fit does not arm the next zoom** (user decision 2026-07-26,
-  Q5 — resolving a contradiction between this section and the Loupe zoom
-  ladder above). `+`/`-`/`Z` stay center-anchored at every factor,
-  including immediately after a click at fit. The click at fit therefore
-  stores nothing and does nothing; the only pointer-anchored zoom route is
-  the wheel, which uses the pointer's live position and needs no click.
-- **Wheel anchor is the pointer, not the center** (user decision
-  2026-07-26): the image point under the cursor stays under the cursor as
-  the factor changes — you wheel toward an eye without clicking first. This
-  deliberately differs from `+`/`-`/`Z`, which keep the *view center* fixed
-  (Loupe zoom ladder above); both are correct, because a key has no
-  position and the wheel does. When the pan clamp makes the anchor
-  impossible (image edge), the clamp wins and the anchor drifts — the image
-  never detaches from an edge.
-- **One notch = one ladder stop.** The wheel walks the identical `1.5ⁿ`
-  stops as `+`/`-` (`zoompan::ladder_up`/`ladder_down`), so wheel and keys
-  can never desync. High-resolution / kinetic wheels accumulate delta and
-  emit one stop per notch-equivalent — never one stop per delta event.
-- **Click/double-click need no timer.** Slint fires `clicked` before
-  `double-clicked`, and single-click's action (center on P) is a strict
-  prefix of double-click's (center on P, then go to 1:1 at P) — so the
-  intermediate state is invisible and no click needs to be held back
-  waiting for a possible second one. **Why the target point survives the
-  prefix** (recorded 2026-07-30; expression updated for the issue #46
-  restructure — it is a cancellation, not an accident anyone should
-  have to re-derive): the two `clicked` calls re-centre the view and
-  `refresh()` rewrites `loupe-vx/vy` SYNCHRONOUSLY, so by the time
-  `double-clicked` evaluates `zoomed-img.x + mouse-x` (the image's `x`
-  carries the pan offset since the Flickable's removal — the same sum
-  the old `+ loupe-vx` term spelled explicitly) its frozen `mouse-x`
-  and the new offset cancel exactly and the machine recovers the point
-  actually pressed. This holds only while that refresh is synchronous —
-  if the pan write is ever deferred to a timer or animated, the 1:1
-  landing point silently moves by roughly `max/factor ×` the click
-  offset (most of the viewport on an A1 frame).
-- **Drag beats click.** A click fires only on press+release without
-  movement beyond the drag threshold; once a drag starts, the release
-  produces no click and no double-click. (Since issue #46 the loupe
-  overlay enforces this itself — an 8 logical px latch on its touch
-  surface, matching the retired Flickable's grab threshold — because
-  nothing steals the grab anymore. The below-threshold prefix of a drag
-  is not lost: the first applied event carries the full displacement
-  since the press.)
-- **Loupe pan has NO inertia — decided, not omitted (issue #46).** The
-  contract above always promised "pan 1:1 with pointer motion" and
-  named kinetic behavior only for the GRID's drag-scroll; the shipped
-  overlay nevertheless used a Flickable, whose flick physics installed
-  a deceleration animation binding on the viewport offsets at release.
-  That binding SURVIVES programmatic sets (the write is stored; the
-  next tick overwrites it from the simulation until the decay ends), so
-  an arrow pressed during the decay rendered the NEXT image at the
-  still-animating offsets — crossing exactly 0,0 — and the read-back
-  then folded those offsets into the pan centre as phantom drags until
-  the carried position was permanently lost (M3). The fix removes the
-  physics rather than fencing it: the overlay has no Flickable; drags
-  pan 1:1 while the button is down and **release stops the image where
-  the hand stopped**. Persona verdict (MUST-HAVE): inertia at 1:1 is
-  hostile to focus judgment — a glide overshoots the feather every
-  time — and long travel already has a better gesture (click
-  re-centers). Flicking a grid is browsing; gliding at 1:1 is judging:
-  different verbs, different physics. The grid keeps its kinetic
-  scroll unchanged.
-- **A double-click needs proximity, not just timing** (persona finding —
-  scanning an intermediate factor by clicking eye, then beak, then wingtip
-  in quick succession is two independent re-centers, not a jump to 1:1):
-  the second press must land near the first. **Slint enforces this itself**
-  and the app must NOT re-implement it: `check_repeat` restarts the click
-  count unless the second press is within 10 logical px of the first
-  (`i-slint-core`, `square_length() < 100`), so `double-clicked` cannot fire
-  for distant presses at all. A bridge-level re-check is not merely
-  redundant — the one shipped with #11 VETOED the gesture it guarded, see
-  the deviations list below.
-- **Clicks outside the image rect are ignored** (persona finding): at fit a
-  landscape frame on a 16:9 screen has fat pillarbox bars, and
-  `contain_click_frac` clamps them to the nearest image edge — so a
-  double-click on black would slam to 1:1 on a frame edge. Clicks and
-  double-clicks in the bars produce no action at all (the clamp stays for
-  the drag/pan path, where it is correct). **The WHEEL is deliberately not
-  bar-rejected** (recorded 2026-07-30): a wheel notch over a bar still steps
-  the ladder, anchored at the nearest frame edge by the ordinary pan clamp.
-  A key has no position and a wheel does, but "zoom in" is unambiguous
-  wherever the pointer sits, whereas "1:1 centred HERE" is not. Note this
-  became routine rather than unreachable when *One-column cell bounding*
-  gave a 3:2 frame real bars (~255 px per side on a 1440-wide window).
-- **The wheel only zooms over the image.** Wheel events over the IPTC
-  panel, the filter bar or the overlay scrollbar are not loupe input —
-  they scroll that widget or do nothing (persona finding: the pointer
-  parks over the panel while keywording; a photo that zooms under it is a
-  nightly accident).
-- Everything else in the loupe is unchanged: the 1:1 ceiling, the
-  center-anchored keyboard ladder, zoom/pan persistence across images, and
-  the full-res quality rule (any factor above fit renders from the top
-  rung) all apply exactly as specified above.
+- **The wheel no longer browses images in the loupe** (user decision
+  2026-07-26): movement inside the loupe is keyboard-only — arrows, PgUp/
+  PgDn, Home/End, `Y`/`N`, `[`/`]`; the scrollbar drag is the one scroll
+  route left.
+- **A click at fit does not arm the next zoom** (Q5): `+`/`-`/`Z` stay
+  centre-anchored, including right after a click at fit, which stores
+  nothing and only claims the cursor.
+- **The wheel anchor is the pointer, not the centre**: you wheel toward an
+  eye without clicking first. A key has no position and the wheel does. When
+  the pan clamp makes the anchor impossible (an image edge), the clamp wins.
+- **One notch = one ladder stop** — the identical `1.5ⁿ` stops as the keys
+  (`zoompan::ladder_up`/`ladder_down`); high-resolution wheels accumulate
+  delta and emit one stop per notch-equivalent (60 logical px — one winit
+  notch), remainders carry over, a direction flip resets them; the fit
+  surface and the overlay keep separate accumulators.
+- **Click and double-click need no timer**: Slint fires `clicked` before
+  `double-clicked`, and a click's action (centre on P) is a strict prefix of
+  the double-click's. The target point survives because the two `clicked`
+  calls rewrite the offsets SYNCHRONOUSLY, so the frozen `mouse-x` and the
+  new offset cancel exactly — if the pan write is ever deferred or animated,
+  the 1:1 landing point silently moves by most of the viewport.
+- **Drag beats click**: an 8 logical px latch on the overlay's touch
+  surface; once a drag starts, the release produces no click.
+- **Loupe pan has NO inertia — decided, not omitted** (issue #46): release
+  stops the image where the hand stopped. The shipped Flickable's fling
+  physics survived programmatic sets, so an arrow pressed during the decay
+  rendered the next image at the still-animating offsets and the read-back
+  folded them into the pan centre until the carried position was lost. The
+  grid keeps its kinetic scroll: flicking a grid is browsing; gliding at
+  1:1 is judging (persona MUST-HAVE).
+- **A double-click needs proximity** and Slint enforces it (`check_repeat`
+  restarts the click count beyond 10 logical px); the app holds NO
+  proximity state of its own — the bridge re-check shipped with #11 vetoed
+  the gesture above fit (2026-07-30) and was deleted, not repaired.
+- **Clicks in the letterbox bars do nothing**; the wheel over a bar still
+  steps the ladder, anchored at the nearest frame edge ("zoom in" is
+  unambiguous wherever the pointer sits; "1:1 centred HERE" is not). The
+  wheel only zooms over the image: over the IPTC panel, the filter bar or
+  the scrollbar it scrolls that widget or nothing.
 
-### Implementation contract (user requirement: "managed by a state machine")
+Implementation: the machine is `fastcull-core::pointer` — a pure
+`step(state, input, geometry) -> (state, action)` with no Slint types and
+an explicit `Reserved` variant for every reserved pair; the app normalizes
+events and applies actions, with NO zoom/pan branching of its own. The
+fit-state interception is a permanent, visibility-toggled `TouchArea`
+(`fit-ta`) covering the grid area exactly when `columns == 1` and no
+overlay is up; above fit the overlay's image `TouchArea` takes the wheel.
+Recorded deviations: `Zoomed` × Click is applied directly by
+`on_loupe_clicked` (Slint delivers image fractions there), so that arm is
+exercised only by its unit tests; a pinned-unresolved 1:1 desire (INFINITY
+while the full-res decodes) makes gestures through the machine inert until
+the render clamp resolves it (a click in the overlay still re-centres);
+while the ceiling is unknown the wheel climbs optimistically but CAPPED
+(`pointer::OPTIMISTIC_MAX` — an unbounded ladder reached ~1e38 and a NaN pan
+centre); extreme coalesced wheel deltas may emit fewer stops than notches;
+a drag started in a bar is inert; the scrollbar's wheel swallow deadens its
+18 px strip in grid view; and the machine's state is the DESIRED factor,
+which the screen may not show yet — during a decode gap anchors compute
+against the virtual viewport and self-correct on adoption.
 
-- The machine lives in **`fastcull-core`** (rule 5 — the app crate is a thin
-  Slint bridge): a pure `ViewState` + `PointerInput` → `(ViewState, Action)`
-  step function with no Slint types and no I/O. Geometry (viewport size,
-  native size, fit scale, 1:1 ceiling, current pan center) is passed in per
-  call; the machine calls the existing `zoompan` math rather than
-  duplicating it.
-- The app crate's job is only to normalize Slint events into `PointerInput`
-  and to apply the returned `Action`s. **No zoom/pan branching in the app
-  crate** — a gesture whose behavior cannot be read off the table above is
-  a bug in the machine, not in the bridge.
-- Every (state, input) pair is handled explicitly. Reserved combinations
-  (grid drag → rubber-band, Ctrl+wheel in the loupe, right/middle/thumb
-  buttons) return an explicit "no action, reserved" variant, never a silent
-  fallthrough — that is what keeps the next gesture cheap and visible.
-- **Known Slint risk — RESOLVED at implementation (issue #11,
-  2026-07-26)**: the feared fit-state interception worked. Mechanism: a
-  permanent, visibility-toggled `TouchArea` (`fit-ta`) covers the grid
-  area exactly when `columns == 1` and no zoom overlay is up; its
-  `scroll-event` consumes the wheel (one ladder stop per 60px
-  notch-equivalent — exactly one winit wheel notch, verified in the
-  backend source; remainders carry over, a direction flip resets them),
-  its `clicked` only claims the cursor, its `double-clicked` goes to 1:1.
-  The machine receives the fit
-  view's REAL geometry (the N=1 grid cell rect, scroll-dependent) so
-  anchors and letterbox rejection follow what is actually on screen. Because it swallows presses wholesale it also implements
-  "click at fit does nothing" and "drag at fit does nothing" — and it
-  sits BELOW the overlay scrollbar, which keeps its drag route. Above
-  fit, the wheel is taken by a `scroll-event` on the zoom overlay's
-  image TouchArea (children see scroll before the Flickable, so drag-pan
-  stays native while the wheel zooms). The retired browse-at-fit wheel
-  gesture is gone as decided; movement inside the loupe is
-  keyboard-only.
+### Virtualization (the M2 risk)
 
-  **Defect fixed 2026-07-30 (validator FAIL-1 / QE D1) — the bridge vetoed
-  its own headline gesture.** `handle_loupe_double_click` re-checked
-  double-click proximity by comparing the last two clicks as FRACTIONAL
-  IMAGE coordinates. But Slint fires `clicked` before `double-clicked`, and
-  the first click's handler re-centers the view and refreshes — moving the
-  image under a stationary pointer. The second press therefore landed on
-  the same screen pixel but a different image fraction, so the measured
-  "distance" was really the recenter displacement — which is exactly the
-  click's own offset from the view centre. QE replayed the verbatim guard:
-  a double-click 13 px off-centre measured 13 px and was vetoed, 200 px
-  off-centre measured 200 px and was vetoed; only within ~12 px of the
-  centre did it survive. **Above fit, double-click never reached 1:1**;
-  only from
-  fit (where a click re-centers nothing) did it work, which is why it
-  passed review and shipped. The check is now DELETED, not repaired —
-  Slint's own 10 px repeat gate already implements the rule (see the
-  proximity bullet above), so any bridge-level re-check can only contribute
-  false negatives.
+Slint virtualizes ListView only, so the grid is a windowed model
+maintained in Rust: a `VecModel<CellData>` holding only the visible rows
+±1, mutated in place on scroll and zoom (reuse, never recreate); textures
+are `slint::Image` handles; placeholder cells render at once (gray +
+filename). `CellData`: image id, texture, pick state, burst count (> 0 only
+on a group's first frame), failed, copied, exported, selected — `selected`
+drives both the outline and the wash, and the window carries
+`selection-wash` and `selection-wash-opacity`. All pixel work happens in
+the kitchen (01-architecture.md; user decision 2026-08-02): the UI thread
+only wraps a finished `SharedPixelBuffer` into a `slint::Image`; a texture
+becomes visible one pump tick after its pixels are ready at worst, and
+adoption is UNBUDGETED so a stopped fling fills the viewport in one tick.
+Only MID requests are culled to the visible set; thumb jobs are never
+culled (their bytes were moved into them); a landed thumb for a
+scrolled-away cell is adopted, a landed MID for an invisible cell is
+adopted then dropped by the visible-set retain. Ctrl+scroll zoom stays
+deferred: Slint's Flickable consumes wheel events and an overlay TouchArea
+would steal the drag and click gestures; `+`/`-` cover it.
 
-  Recorded deviations/deferrals (gate 2026-07-26, revised 2026-07-30):
-  a pinned-unresolved 1:1 desire (INFINITY while full-res decodes) makes
-  every pointer gesture that goes THROUGH THE MACHINE inert until the
-  render clamp resolves it (no anchor math on infinite extents); a click
-  in the zoom overlay is the exception — it is applied by the bridge
-  directly and still re-centers, harmlessly, since its fraction comes from
-  Slint rather than from anchor math. While the ceiling is unknown the
-  wheel climbs optimistically but is CAPPED (`pointer::OPTIMISTIC_MAX`):
-  an unbounded ladder reached ~1e38 in ~223 notches and produced a NaN pan
-  centre that persisted across images (QE D4). Wheel over the overlay
-  scrollbar is swallowed (not loupe input, per this contract); extreme
-  coalesced wheel deltas may emit fewer stops than notches (single emit per
-  event — accepted), and the two surfaces keep separate accumulators whose
-  residue carries over until a direction flip resets it; two-finger
-  trackpad scroll over the overlay IMAGE now walks the zoom ladder at
-  every factor (issue #46: the Flickable that used to intercept it as a
-  pan is gone, so the surface's scroll handler sees it like the wheel —
-  the old fit/zoomed asymmetry is closed by accident; trackpads remain
-  declared out of scope, revisit with gesture support); wheel in the
-  zoom overlay's letterbox BARS is not loupe input — with the Flickable
-  gone (issue #46) nothing on the overlay consumes it, and the
-  validator's live probes (700x1100 window, factor 1.5, 180 px bars)
-  found bar wheel, bar click, bar double-click and a 900 px bar drag
-  ALL INERT: an earlier revision of this bullet claimed the wheel
-  reaches the grid Flickable behind the overlay and scrolls the strip
-  invisibly, which did not reproduce — recorded as inert until a
-  geometry is found where it is not (extend the wheel surface over the
-  bars if one ever shows);
-  a drag STARTED in a letterbox bar is inert since issue #46 (the drag
-  surface is the image, and bars only exist at moderate factors where
-  one axis has no pan anyway — deep 1:1 has no bars; extend the drag
-  surface over the bars if it ever shows); the scrollbar's wheel
-  swallow also deadens its 18px strip in GRID view (was native scroll —
-  tiny strip, accepted).
+### Panel docking (issue #12)
 
-  **One table cell is implemented OUTSIDE the machine** (recorded
-  2026-07-30, narrowed by issue #46): `Zoomed` × Click is applied
-  directly by `on_loupe_clicked`, because Slint already delivers
-  image-relative fractions there and routing them through `step()`
-  would add a lossy coordinate round-trip for no behavioural gain —
-  so the `Zoomed`+`Click` arm is exercised only by its unit tests, and
-  a future change to it silently changes nothing in the app. `Zoomed` ×
-  Drag, previously the second outside cell (the overlay Flickable's
-  kinetic pan folded back by `capture_pan`), now DOES route through the
-  machine: the overlay's touch surface reports `loupe-dragged(dx, dy)`,
-  the bridge feeds `PointerInput::Drag` to `step()`, and the returned
-  `Recenter` is applied like every other action — the machine's Drag
-  row finally has its production caller. The enum still carries a
-  single `Drag` input rather than the `DragStart`/`Drag`/`DragEnd`
-  triple listed under *Inputs* above (the press/release edges live in
-  the overlay's drag latch, which owns only the threshold and
-  click-suppression bookkeeping).
+The IPTC panel takes its 300 px from the RIGHT edge; the grid reflows into
+the remaining width, pinned flush LEFT — never centred, never partly under
+the panel; everything in the grid area (overlay, empty-state message,
+scrollbar) sizes to the grid area, not the window; clicks inside the panel
+never reach the grid. The 1:1 anchor recomputes across a toggle (issue
+#18): on open the crop re-centres for the docked width in the next frame
+("I zoomed on the eye; the eye stays put when chrome docks"); on close it
+restores the full-width anchor with no stale intermediate frame.
 
-  **The machine's state is the DESIRED factor, which the screen may not be
-  showing yet.** `machine_ctx` derives `Fit`/`Zoomed` from the clamped
-  desired factor while the overlay only rises once a texture of the cursor
-  image exists. In that window (a decode gap after a fast wheel burst, and
-  also the longer honest-degradation case where neither the full-res nor
-  the mid rung is in hand) anchors compute against the already-zoomed
-  virtual viewport while the screen still shows fit: a double-click is
-  interpreted against the virtual extents rather than the visible frame, a
-  click does nothing though the machine says `Recenter`, and wheel-down
-  needs a few visually inert notches. Self-corrects on texture adoption.
+### The overlay scrollbar (task #21)
 
-## Virtualization (the M2 prototype risk)
+On the grid's right edge, inside the grid area (between grid and panel when
+docked): 6 px and faint whenever content overflows — NEVER fully hidden;
+the "where am I?" glance is the point — widening to 10 px and brightening
+on hover or drag, with an 18 px grab zone. The thumb is sized
+viewport/content and draggable; a TRACK CLICK JUMPS to the spot (PgUp/PgDn
+already page via the cursor). While dragging, a floating hint shows
+"first-visible / total" of the filtered view, with the first visible
+capture time under a capture sort (`795 / 1450 · 15:42`). Scrollbar use
+never moves the cursor except through the loupe's follow rule; hidden under
+the overlay and on empty views. Deferred polish: brightening during wheel
+scrolling.
 
-Slint virtualizes ListView only, so the grid uses a **windowed model** maintained in
-Rust: the app crate exposes a `VecModel<CellData>` containing only visible rows ±1
-row margin; scroll/zoom recomputes the window and mutates the model in place
-(reuse, don't recreate). Cell textures are `slint::Image` handles produced from
-pipeline `Thumb` events. Placeholder cells render immediately (gray + filename)
-before their thumb arrives.
+### The cursor
 
-`CellData`: image id, texture, pick state, burst count (`burst-count: int`,
->0 only on a group's first frame — the "×N" badge; 0 = no badge),
-failed flag, copied flag, exported flag, selected flag. (Fields arrive with
-their milestones:
-M2 ships texture/failed/cursor; pick badge M3, copied M6, burst M7,
-exported #56.)
-The `selected` flag drives BOTH the outline and the wash; the window carries
-`selection-wash` (color) and `selection-wash-opacity` (float) so the tint is
-settable from outside the UI without touching the cell model.
+- Exactly one cell of a non-empty view is the cursor; keyboard actions
+  (mark, zoom) land on it. Visual: a 3 px accent border drawn as a top-most
+  overlay, visible on every cell state.
+- After any keyboard navigation or zoom change the cursor is fully visible:
+  the grid's virtual height is updated BEFORE the scroll offset is written.
+- Mouse and wheel scrolling never move the cursor in multi-column views —
+  scrolling is browsing; the cursor may leave the viewport and the next
+  arrow key first brings it back.
+- A plain click on a cell moves the cursor there (and claims it) and
+  COLLAPSES the selection; Ctrl+click toggles membership; Shift+click spans
+  cursor..clicked in view order, FRESH after a plain click. Clicks live in
+  per-cell touch areas inside the Flickable, so a drag remains scrolling;
+  clicking the grid returns keyboard focus to it.
+- **At one column the visible image IS the cursor**, and the cursor follows
+  the ONE scroll route left — the overlay scrollbar drag — POSITIVE-GATED
+  on scrollbar activity (`sb-activity`, a flag Rust consumes). A GEOMETRY
+  change (panel toggle, resize) or a VIEW MUTATION (a re-sort, a filter
+  removal, capture keys streaming in) is never scrolling and never claims
+  or moves the cursor; the viewport re-anchors to it instead (issues #16,
+  #22 — a displacement-based claim once inverted the rule into marks
+  landing on a photo the user had left). The dock state is published to
+  the window BEFORE any geometry read in the toggle path.
+- **Grid-level resize anchoring** (user report 2026-07-26): a relayout
+  anchors CONTENT, not pixels — the top-visible row keeps its fractional
+  position; at the bottom clamp the bottom stays the bottom; a cursor that
+  was visible stays visible; scroll 0 stays 0 — except that CURSOR
+  VISIBILITY WINS; the cursor itself never moves; a reveal marks its
+  geometry consumed so corrections never stack.
+- The status bar always names the cursor image (filename, position N/M)
+  and its mark in words (`· ★ picked / · ✕ rejected / · unmarked`).
+- **The untouched-cursor rule** (issue #4; narrowed 2026-07-31): from
+  session open until the user's first interaction the cursor is "the first
+  image of the view", not a pinned id, and a folder never opens with the
+  cursor stranded mid-grid. It is CLAIMED — id-pinned from then on — by a
+  mark, a navigation key, a loupe scroll-follow with laid-out geometry, or
+  a click on an image; NOT by zoom keys, filter and sort changes (pre-touch
+  these snap to the new view's first image) or engine events. Open Folder
+  resets it to unclaimed; pre-layout geometry never claims or moves it.
+  Once the folder has loaded, ENGINE recomputes — the re-sort, a decode
+  landing, a sidecar arriving — leave even an untouched cursor's image
+  alone (user decision 2026-07-31: "whatever is currently selected stays
+  selected, and stays visible on the screen"); only the USER asking for a
+  different view — a chip, the sort control — snaps pre-touch to the new
+  head. `filter::cursor_after_recompute` is the one place the two rules
+  meet. Accepted cost: on a folder whose filename order runs contrary to
+  capture order, an untouched cursor that started at the top ends up
+  mid-grid once the real order lands (image 1 of 3,000 becomes 2001/3000),
+  and the viewport scrolls to keep it in view — the app finishing a job,
+  not the user asking to see something else.
+- **Provisional order while loading** (issue #25): the view is in FILENAME
+  order until every image's metadata job has finished, then sorted once by
+  the user's key (`filter::view`'s `metadata_complete`). EXIF is read inside
+  the per-file thumbnail job, so "loading" is the whole load (~15 s for
+  3,000 files on the laptop with a warm cache; a card reader much slower),
+  and a capture sort with keys streaming in changed the head identity over
+  and over: one `right` at open landed 870 frames away, and a `Y` typed 4 s
+  after opening wrote the sidecar of a file the user never saw — with NO
+  input the cursor moved from image 0 to image 2000. Filename order comes
+  free from the scan and for a single card in shooting order IS capture
+  order. Rejected (persona 2026-07-30): deferring input until the load
+  finishes (IN-MY-WAY — "an app that is dead for 11 seconds after opening a
+  folder is an app I'd stop using"); accepting it with documentation (fine
+  for navigation, not for a silent wrong mark). The one re-sort can happen
+  after culling has begun; at one column the loupe re-anchors, and at
+  multi-column zoom a one-shot reveal fires on the false→true edge of
+  completion — only if the cursor cell was ON SCREEN at the previous
+  refresh (`grid::scroll_after_resort`; sampled on the previous pass on
+  purpose, because the flip moves the cursor): a browsing user keeps their
+  OFFSET, not their content. The edge is consumed only on a refresh that
+  can act on it. The status bar reads `LOADED/TOTAL loaded · sorting by name
+  until loaded` while loading, then `N thumbs loaded`. Known divergences
+  while provisional — deferred, not accepted as correct: the sort chip
+  reads the chosen key ("Capture ↑" over a name-ordered grid, and clicking
+  it mid-load reverses the grid without changing the key); the scrollbar
+  hint appends capture times that run non-monotonically; `[`/`]` walk view
+  positions over a name-ordered view — an `effective_sort(query, complete)`
+  in core that every consumer reads is the fix. No fallback if a job never
+  finishes: a wedged worker leaves the session in filename order with the
+  status bar stuck one short (a per-file give-up or "sort anyway" is the
+  fix). Burst grouping and Copy Picks always use the TRUE sort
+  (`filter::view_true_sort`): a burst is a fact about capture times, and
+  `{seq}` is baked into permanent file names.
 
-Recorded deviations/decisions (M2, REVISED 2026-08-02 — user decision:
-"no decoding should be done on the UI thread"):
-- ~~Thumb JPEG→texture decode on the UI thread (~32/refresh)~~ and
-  ~~full-res→mid downscale on the UI thread (2 adoptions/refresh)~~ are
-  RETIRED. All pixel work — thumb JPEG decode, the full-res 149 MB
-  SharedPixelBuffer fill, and full→mid downscales — moves to the
-  texture-preparation worker (01-architecture.md § Threading model). The
-  UI thread's only texture duty is wrapping a finished SharedPixelBuffer
-  into a `slint::Image` (O(1); `Image` is not `Send`, the buffer is).
-  Consequence, accepted: a texture becomes visible one pump tick after its
-  pixels are ready rather than within the same refresh in the WORST case —
-  the kitchen's completion nudge (`invoke_from_event_loop`) makes the
-  typical added latency milliseconds, and adoption is UNBUDGETED so a
-  stopped fling fills the whole viewport in one tick, never a trickle
-  (persona conditions, both honored). Stale-request rules, stated
-  precisely (an earlier draft overclaimed): only MID-downscale requests
-  are culled to the visible set at submission waves; Thumb jobs are never
-  culled because their encoded bytes were MOVED into the job, and
-  Full/Wrap jobs serve the loupe, which already governs its own requests.
-  A landed thumb for a scrolled-away cell is adopted into
-  `st.textures.images`
-  (paid-for work; the pruned-and-revisited rule); a landed MID for an
-  invisible cell is adopted and then dropped by the visible-set retain on
-  the next refresh — the adopt is cheap, the retain is the existing
-  memory policy, and re-scrolling re-requests it.
-- Ctrl+scroll zoom is deferred: Slint's Flickable consumes wheel events and
-  an overlay TouchArea would steal the drag/click gestures. Keyboard `+`/`-`
-  covers M2; revisit during M4 polish (needs user OK to defer past v1 if it
-  stays unsolved).
+### Visual language
 
-## Panel docking model (made explicit after issue #12)
-
-When the IPTC panel is visible it takes its 300px from the RIGHT edge and
-the grid reflows into the remaining width, pinned flush to the LEFT edge
-— never centered, never partially under the panel. Everything that
-belongs to the grid area (loupe/zoom overlay, empty-state message,
-overlay scrollbar) sizes to the grid area, not the window. Clicks inside
-the panel never reach the grid (a stray click on panel whitespace while
-keywording must not move the cursor or collapse a multi-selection).
-Slint trap recorded from the incident: an element with a bound width but
-no `x:` (or bound height but no `y:`) is CENTERED in its parent — every
-non-layout child with a computed size needs its position bound
-explicitly.
-The 1:1 anchor RECOMPUTES across a panel toggle (issue #18, verified
-resolved 2026-07-27 by the issue #16 early-dock-publish fix): on OPEN
-the crop re-centers for the docked width in the next frame ("I zoomed
-on the eye; the eye stays put when chrome docks"); on CLOSE it
-restores the full-width anchor with NO stale intermediate frame (the
-one-frame zoom-pop sub-symptom is gone — 12/12 clean transitions in
-the re-baseline). Pinned by the reanchor screenshot regression test.
-
-## Overlay scrollbar (task #21, user request 2026-07-25, persona-reviewed)
-
-A modern overlay scrollbar on the GRID's right edge (inside the grid area —
-when the IPTC panel docks, the bar sits between grid and panel, never on
-the window edge): thin (6px) and faint whenever content overflows — NEVER
-fully hidden (the "where am I?" glance is the whole point) — widening to
-10px and brightening on hover/drag, with an 18px grab zone (persona: a
-tired mouse hand must not hunt a 6px strip). Thumb sized
-viewport/content, draggable; a TRACK CLICK JUMPS TO THE SPOT (persona
-IN-MY-WAY on page-jump: PgUp/PgDn already page via the cursor; the bar
-teleports). While dragging, a floating hint shows "first-visible / total"
-of the filtered view, with the first visible image's capture time
-appended ("795 / 1450 · 15:42") when sorting by capture time — numbers
-only under filename sort. Scrollbar use NEVER moves the cursor
-(scrolling is browsing); hidden under the zoom overlay and on empty
-views. Panel toggle reflows anchor on the cursor. Deferred polish:
-brightening during wheel scrolling (needs an activity decay timer).
-
-## Cursor (the selector) — behavior contract (added after user bug report 2026-07-25)
-
-- Exactly one cell is the cursor at any time; it marks where keyboard actions
-  (pick/reject/zoom) land.
-- Visual: a 3 px accent (blue) border drawn as an overlay ON TOP of the cell's
-  content — never underneath the image (Slint renders children above a
-  Rectangle's own border, so the border must be a top-most child overlay).
-  It must be visible on every cell state: placeholder, loaded, failed.
-- After any keyboard navigation or zoom change, the cursor must be fully
-  visible: the grid's virtual height is updated BEFORE the scroll offset is
-  written, so the Flickable never clamps the reveal against stale bounds.
-- Mouse/wheel scrolling does not move the cursor in multi-column grid views —
-  scrolling is browsing, the cursor stays where the user parked it (it may
-  leave the viewport; the next arrow key first brings it back into view).
-- **Grid click moves the cursor (user requirement 2026-07-25, issue #7 —
-  IMPLEMENTED with the panel step)**: a plain click on a cell moves the
-  cursor to that image (and claims it, per the untouched-cursor rule) and
-  COLLAPSES any multi-selection — one of the deselect gestures, and since
-  2026-09-06 no longer the only implicit one: every PLAIN keyboard move
-  collapses the selection the same way (user decision 2026-09-06, brief
-  002 — the file-manager rule, stated in full under "Selection" in the
-  Visual language section); Esc clears the selection from anywhere (user
-  decision 2026-08-28) and G does at a grid zoom. Ctrl+click toggles
-  membership; Shift+click spans cursor..clicked in view order, and after
-  a plain click that span starts FRESH and is the whole selection (brief
-  002 R2). Clicks live in per-cell
-  touch areas INSIDE the Flickable, so drag remains scrolling (the
-  press+release-without-movement disambiguation comes from the Flickable's
-  drag grab); clicks never scroll the view as a side effect. Clicking the
-  grid returns keyboard focus to it (a stranded panel-field focus must
-  never turn grid keys into text).
-- Exception at 1-column (loupe) zoom: the visible image IS the cursor — the
-  cursor follows scrolling so full-res loading and marks always apply to what
-  the user is looking at. **Scope narrowed by issue #11 (2026-07-26)**: the
-  WHEEL no longer scrolls at `N = 1` (it zooms — see the Mouse & pointer
-  contract), so this rule now covers only the remaining scroll route, the
-  overlay scrollbar drag. Image-to-image movement inside the loupe is
-  keyboard-only. **Relayout carve-out (issue #16, 2026-07-26; extended by issue #22)**: a
-  GEOMETRY change — panel toggle, window resize, anything that alters
-  (grid width, viewport height) between refreshes — is NEVER scrolling
-  and must NEVER claim or move the cursor; the viewport re-anchors to
-  the cursor instead. The same rule covers a VIEW MUTATION (issue #22):
-  a cursor displaced because the view re-sorted or changed membership
-  between refreshes (capture keys streaming in during folder load, live
-  filter removal) is not scrolling either — during load the claim used
-  to move the cursor with no input at all. FINAL FORM (after a Windows
-  DPI-timing variant slipped past both guards): the claim is
-  POSITIVE-GATED on actual scrollbar activity (drag move or track
-  click sets a flag Rust consumes) — displacement alone NEVER claims,
-  because the scrollbar is the only legitimate trigger the contract
-  names and no elimination list of displacement causes stays complete (the whole point of the follow rule is that marks
-  land on what the user is looking at — a relayout claim inverted it
-  into marks landing on a photo the user already left). The dock state
-  is published to the window BEFORE any geometry read in the toggle
-  path, so reveals never compute against a stale width (that stale
-  width was also issue #17's grid-under-panel state). **Grid-level
-  resize anchoring (user report 2026-07-26)**: at N>1, row pitch is a
-  pure function of the grid width, so keeping the raw pixel offset
-  across a relayout lands on different content (shrink = "the list
-  scrolls up", grow = "scrolls down"). A grid relayout anchors CONTENT,
-  not pixels: the top-visible row keeps its fractional position; at the
-  bottom clamp the bottom stays the bottom (growing at End must not
-  strand the viewport mid-list); a cursor that was visible stays
-  visible (reveal semantics, same as the panel toggle); scroll 0 stays
-  0 — except that CURSOR VISIBILITY WINS: with the cursor on the last
-  visible row, a pitch-growing resize may scroll away from 0 to keep it
-  in view; the cursor itself NEVER moves. A reveal marks its geometry
-  as consumed, so anchor corrections never stack.
-- The status bar always names the cursor image (filename, position N/M).
-- **Untouched-cursor rule (issue #4, 2026-07-25; NARROWED 2026-07-31 — see
-  *Provisional order while loading* below: once a folder has finished
-  loading, ENGINE recomputes no longer move an untouched cursor, only a
-  USER-requested view change does)**: from session open until the
-  user's FIRST interaction, the cursor is "the first image of the view", not a
-  pinned id, and a folder must never open with the cursor stranded mid-grid
-  (real case: name order vs capture order put it at position 795/1450).
-  The original rationale — "capture keys stream in progressively and re-sort
-  the view under it" — no longer describes the code: the view now holds a
-  stable filename order until the load completes, which is what made the
-  narrowing possible. The cursor
-  is CLAIMED (id-pinned from then on, all rules above apply) by: any mark,
-  any navigation key, loupe scroll-follow with laid-out geometry, and any
-  click on an image — loupe, fit, or grid cell (issue #7). NOT claiming it: zoom keys (they don't move it), filter
-  and sort changes (pre-touch these snap to the new view's first image —
-  overriding the nearest-survivor rule until the claim), and engine events.
-  Open Folder resets to unclaimed. Pre-layout geometry (a refresh before the
-  window has a real height) must never claim or move the cursor.
-- **Provisional order while loading (issue #25, 2026-07-30)**: the sentence
-  above — "capture keys stream in progressively and re-sort the view under
-  it" — described a real hazard, not just a quirk, and the rule that fixed
-  issue #4 is what created it. **The view is now ordered by FILENAME until
-  every image's metadata job has finished**, then sorted once by the user's
-  sort key (`filter::view`'s `metadata_complete`). Rationale, measured:
-  - EXIF is read INSIDE the per-file thumbnail job (`pipeline.rs`, its only
-    production caller), so "still loading" is the WHOLE load — measured
-    ~15 s for 3,000 files on the development laptop with a warm page
-    cache (the 32-thread machine retired 2026-07-28 — see
-    01-architecture.md — would do it in ~2 s; a card reader, much
-    slower) — not a blink.
-  - The capture sort puts keyed images ahead of still-keyless ones, so when
-    filename order runs contrary to capture order (two bodies or two cards
-    in one folder, a counter rollover mid-event) the HEAD changes identity
-    over and over for that entire window.
-  - Navigation rode it: one `right` at open landed 870 frames from the
-    intended second image on a 3,000-file fixture.
-  - **Marks rode it too, and that is the serious half**: `Y`/`N`/`U` write
-    to the cursor, and an unclaimed cursor is re-pinned to that moving head
-    on every refresh, so a head change inside a photographer's reaction time
-    lands the mark on a frame they never looked at — silently, and invisibly
-    under an Unmarked-only filter. Reproduced with NO input at all: the
-    cursor moved from image 0 to image 2000 mid-load.
-  Filename order comes free from the directory scan (~13 ms for 3,000
-  files) and for a single card in shooting order IS capture order, so the
-  eventual re-sort is invisible in the common case. Rejected alternatives
-  (persona review 2026-07-30): deferring or queueing input until the load
-  finishes — IN-MY-WAY, "an app that is dead for 11 seconds after opening a
-  folder is an app I'd stop using", and the user types ahead by design;
-  and accepting it with documentation — fine for navigation, not for a
-  silent wrong mark. Consequences, accepted: the one re-sort can happen
-  after culling has begun, so a claimed cursor keeps its image while the
-  frames around it move once. **The viewport follows it — but only if the
-  user was looking at it**: this is the only view mutation that reorders the
-  WHOLE grid at once, so the scroll offset is meaningless afterwards and the
-  cursor cell can be left off-screen entirely. At `N = 1` the loupe's own
-  re-anchor covers it; at multi-column zoom a dedicated one-shot reveal
-  does, fired on the false→true edge of completion only — the relayout
-  branch cannot see it, being gated on GEOMETRY changes while this is a
-  CONTENT change (validator FAIL, 2026-07-30). Not fired on every view
-  mutation, which would fight live filter removal and per-mark recomputes.
-  **And gated on the cursor cell having been ON SCREEN at the previous
-  refresh** (`grid::scroll_after_resort` — the decision lives in core and is
-  unit-tested both ways, because the app-level version shipped into review
-  with this guard missing): wheel and scrollbar browsing do not claim the
-  cursor, and this contract already says an off-screen cursor stays
-  off-screen until the next arrow key, so restoring it under a browsing
-  user's mouse would be the same "moved with no input" defect in a new place
-  (validator FAIL, 2026-07-31: without the guard a user browsed to 20,000 px
-  was snapped to 0). Visibility is sampled on the PREVIOUS pass on purpose —
-  the flip changes the cursor's position, so asking afterwards answers a
-  different question. What that browsing user keeps is their OFFSET, not
-  their content: the grid beneath has re-sorted, so they see a different
-  stretch of the shoot at the same scroll position. Accepted trade — a
-  viewport that stays put is recoverable by looking, one that teleports is
-  not. The edge is consumed only on a refresh that can act on it, so a
-  pre-layout or minimized pass cannot swallow it for the session. Note this
-  is looser than it sounds: `view_len > 0` is part of the condition, so a
-  load that completes while an EMPTY filter is showing defers the edge until
-  some later refresh with a non-empty view — carrying a visibility sample
-  from before the view emptied. Benign today because a filter change reveals
-  the cursor anyway. Accepted
-  residual: if completion lands on the same tick as a resize or panel
-  toggle, the relayout branch rescales an offset this branch already
-  corrected — rare, self-heals on the next key, and the price of a third
-  `vp_y` writer in one pass; one anchoring pass is the real fix.
-  Burst grouping always uses the TRUE capture order, never the provisional
-  one, because a burst is a fact about capture times. **Copy Picks likewise
-  always uses the true sort**: `{seq}` is baked into permanent filenames —
-  the one irreversible artifact this app produces — and fileops.md promises
-  the session sort, so a copy started mid-load must not encode a transient
-  view state forever.
-  **The UNCLAIMED cursor keeps its image too** (user decision 2026-07-31,
-  narrowing issue #4 — his words: "during the loading
-  phase, whatever is currently selected stays selected, and stays visible
-  on the screen"). Earlier drafts re-pinned it to the new head, so a folder
-  opened with no input still moved the photograph under the user once.
-  It no longer does — and the rule is a STATE, not an edge: once the folder
-  has loaded, ENGINE recomputes (the re-sort itself, a decode landing, a
-  sidecar arriving) leave the photograph alone, while the USER asking for a
-  different view — a filter chip, the sort control — still snaps pre-touch
-  to the new head exactly as issue #4 specifies. An earlier edge-shaped
-  attempt held the cursor for a single refresh and the next background
-  decode snapped it away again (validator FAIL, 2026-07-31, reproduced
-  live). `filter::cursor_after_recompute` is the one place the two rules
-  meet.
-  Accepted cost, chosen knowingly: on a folder whose filename order runs
-  contrary to capture order, an untouched cursor that started at the top
-  ends up mid-grid once the real order lands — the stranding issue #4 was
-  written to prevent (measured: image 1 of 3,000 becomes 2001/3000) — and
-  the viewport scrolls to keep it in view. The flip is the app finishing a
-  job, not the user asking to see something else, and that is the
-  distinction that decides it.
-- **Load progress in the status bar** (persona ask, same review): WHILE
-  loading the counter reads `LOADED/TOTAL loaded · sorting by name until
-  loaded` — a number with no denominator makes the user hunt for the total
-  to know whether to start now, and the grid looks identical in either
-  order, so the status bar is the only honest place to say which one is on
-  screen. Once complete it returns to the plain `N thumbs loaded`; the
-  cursor's own `(N/M)` carries the total from then on.
-- **Known divergences while the order is provisional** (recorded 2026-07-31
-  rather than left to a commit message, since specs/ is the source of
-  truth): the SORT CHIP still reads the user's chosen key — "Capture ↑"
-  over a name-ordered grid — and clicking it mid-load reverses the grid
-  without changing the key, because the ascending flag is applied after the
-  override; and the scrollbar's drag hint still appends capture times,
-  which therefore run non-monotonically over a name-ordered view. Both read
-  `query.sort` directly, which is no longer a truthful description of what
-  is on screen. `[`/`]` burst jumps resolve over VIEW positions while groups
-  are computed in true capture order, so they walk oddly over a name-ordered
-  view for the same window. The status bar is the compensating control. Closing this
-  properly means an `effective_sort(query, complete)` in core that every
-  consumer reads — deferred, not accepted as correct.
-- **No fallback if a job never finishes** (recorded): completion is
-  all-or-nothing, so one worker wedged in uninterruptible I/O (a dying
-  card, a stalled network mount — the case 01-architecture.md's shutdown
-  policy already names) leaves the session in filename order permanently,
-  with the status bar stuck one short and no way to force the sort. Before
-  this change a wedged file cost only its own position. The fix is a
-  per-file give-up or a "sort anyway" affordance; neither is in this step.
-- **Copy Picks mid-load** (recorded): `{seq}` deliberately follows the TRUE
-  sort, never the provisional one, because it is baked into permanent
-  filenames. With keys still streaming that sort is partial — unkeyed
-  images sort to the tail — so a copy started mid-load numbers files in an
-  order matching neither the grid on screen nor the same button pressed ten
-  seconds later. Unchanged from before this step, but newly reachable now
-  that the status bar invites working during the load.
-
-## Visual language
-
-- **FastCull is DARK-ONLY, and the palette is PINNED to say so** (user bug
-  + decision 2026-08-02, verbatim: "I don't want a light mode. I don't
-  want a toggle. Keep the design as is"). Every surface in `main.slint` is
-  a hand-picked dark colour, but native `std-widgets` (MenuBar, LineEdit,
-  ComboBox, Button) take their colours from the style palette, which
-  follows the PLATFORM colour scheme — the winit backend reads the
-  xdg-desktop-portal `color-scheme` key and live-updates it. On a
-  light-mode desktop the fluent MenuBar therefore drew its labels in
-  90%-alpha black over the app's `#161618` bar: invisible yet clickable,
-  while the OPENED menus stayed readable because a popup draws its own
-  palette background (the bar is the only palette-text-over-app-surface
-  in the tree; QE's inventory found the other std-widgets draw their own
-  palette surfaces and merely clashed in light mode). An unreachable
-  portal resolves the scheme to Unknown, and fluent's Unknown fallback is
-  ALSO light — which is what every headless/CI run gets, so the suite had
-  been capturing light-palette chrome on some days and dark on others,
-  green either way; the uncontrolled scheme, not the untested GPU
-  renderer, was the real screenshot blind spot. The fix:
-  `Palette.color-scheme = ColorScheme.dark` at the root window's `init`
-  — one declaration, and every palette-derived colour follows the app's
-  one design regardless of desktop theme, portal reachability, or
-  anything added from `std-widgets` later. A future light mode, should it
-  ever be wanted, is a deliberate feature (every hardcoded surface needs
-  a light twin), never an inherited default.
-- Pick: small star badge (top-left; user decision — "mark the ones taken with a
-  little star"). Reject: red X badge + 40% dimmed thumb.
-- **Loupe state indicator (issue #20, user request 2026-07-26,
-  persona-reviewed MUST-HAVE/HIGH; implemented 2026-07-27)**: the loupe
-  (fit AND zoomed — one continuous view) shows the image's mark as a
-  badge overlaid in the image's TOP-LEFT corner (same location as the
-  grid badge): ★ for picked, ✕ for rejected, on a small dark
-  semi-transparent pill (own contrast backing — white-on-blown-sky and
-  red-on-red must stay readable). Constraints, all persona-validated:
-  an OVERLAY, never a reserved strip (the image must not reflow or
-  shrink); a left-aligned pill that can grow horizontally to hold up to
-  five stars when ratings (reserved keys 1–5) land, anchor unmoved;
-  badge only for picked/rejected — unmarked is absence, backstopped by
-  the STATUS BAR always spelling the state in words ("★ picked /
-  ✕ rejected / unmarked"); a rejected frame is NEVER dimmed in the
-  loupe (deliberate divergence from the grid's 40% dim — a reject may
-  be re-judged for rescue at full brightness); pointer-inert (no hit
-  area — the pointer state machine owns every gesture); permanent
-  element with state toggled, state swap ATOMIC with the image swap
-  (the issue #6 stale-frame class: a wrong-frame badge is a confident
-  lie, worse than none); scope-guarded to the glyph pill only — no
-  filename/metadata creep (the status bar owns those), top-right stays
-  free for a future histogram/focus indicator. All three design choices
-  CONFIRMED by the user (2026-07-27): badge at the top of the image
-  (overlay, not a reserved strip); badge-only rejects at full
-  brightness; no explicit unmarked glyph. Also confirmed for the
-  composed issue #21 cue: same behavior at all zoom factors, loading
-  indicator acceptable. Implementation notes: at N=1 the app sends
-  cells `pick = 0` — the badge pill owns state display in the loupe,
-  which is what keeps the grid's 40% reject dim (and the cell glyph)
-  out of it; the badge property is written by the same refresh pass
-  that swaps the image/cells (atomicity); the #21 loading cue stacks
-  BELOW the badge slot (14 px / 44 px) so the two pills never overlap
-  and their visibility contracts stay independent; the status bar
-  appends the cursor's mark in words (" · ★ picked / · ✕ rejected /
-  · unmarked") after the position counter whenever the cursor is in
-  view — in every view, not only the loupe.
-- **Exported as video (issue #56, 2026-08-29)**: `▶` on every frame that
-  went into a video THIS SESSION whose file is still on disk —
-  bottom-left, immediately right of the `✓` (which keeps `x: 8px`), in
-  the `×N` pill's palette (`#d8d8e0` on `#202028cc`) rather than ✓'s
-  green, because green is the data-safety signal and this is not one, and
-  because a bare glyph washes out under the 40 % reject dim these frames
-  usually wear. Per FRAME, never per burst: the export's scope is an
-  arbitrary set, so an opener-only badge would lie about a partial burst.
-  Visible in the loupe, per the badge policy above. The memory behind it
-  is session-only and reads-never-decides — video-export.md, "Exported
-  badge and hint", owns the contract.
-- **Burst context**: see burst-grouping.md — the ×N badge and "burst
-  7/23" status fragment already serve burst position; the state
-  indicator composes with them, it does not replace them.
-- Burst (M7, persona-redesigned): count badge "×N" on each group's first
-  frame + optional thin two-tone bottom strip; NEVER a full-perimeter
-  border (cursor/selection own borders). See burst-grouping.md UI
-  contract.
-- Selection (wash added 2026-07-28 on user request, persona-reviewed
-  MUST-HAVE): a translucent **accent-blue wash over the whole cell**, plus
-  the existing accent outline; multi-select via Ctrl/Shift-click,
-  Shift+arrows, Ctrl+Space, and the burst chords Shift+`[`/`]` and
-  Ctrl+Shift+B (burst-grouping.md, issue #55; Ctrl+Space and the
-  Ctrl-navigation keys since 2026-09-06, brief 002). Rationale — the selection is what the **IPTC panel** stamps
-  (`Selection::batch()`; field commit/clear, keyword add/remove, template
-  apply), so it can write metadata across hundreds of images at once, and
-  the 2px outline alone was unreadable at 8–12 columns, leaving that reach
-  invisible. **Marks (`Y`/`N`/`U`) are deliberately NOT batch operations** —
-  they act on the cursor image only, per the marking rules' "net cursor
-  movement per mark is exactly one image, always" (the same incoherence of
-  advancing after a multi-image action is recorded separately for keyword
-  commit, decision G4); do not let the wash's presence suggest otherwise.
-  A filled area is
-  the only selection indicator whose legibility does not shrink with the
-  cell. The wash also draws selection and cursor as two SEPARATE channels —
-  filled = selected, bright border = cursor, both compose on one cell —
-  replacing the old "two blue borders differing only in width" language.
-  Two channels for DRAWING, not for MOVING (corrected 2026-09-06, brief
-  002): until that date this sentence read "ORTHOGONAL channels" and the
-  code made it so — a plain arrow moved the cursor and left the selection
-  lit, so that a captioned run could be walked with `Y`/`N` afterwards and
-  two non-adjacent bursts could be chorded with plain `]` hops — and a
-  Shift-span started after such a walk was UNIONED with the old selection
-  (`selection.rs`, commit 7ed0949: a rule no surveyed product has and no
-  spec sentence ever stated). The user's report of 2026-09-06 was that
-  product: a video exported, Esc on its report, two arrows, a new
-  Shift-span, and the second video held both sets (measured 4 → 4 → 6
-  selected; brief 002).
-  **The selection rule since 2026-09-06 (user decision, brief 002: "file
-  manager style"):**
+- **DARK-ONLY, and the palette is PINNED** (user decision 2026-08-02: "I
+  don't want a light mode. I don't want a toggle. Keep the design as is"):
+  `Palette.color-scheme = ColorScheme.dark` at the root window's `init`.
+  Native `std-widgets` take their colours from the platform scheme
+  otherwise, and on a light-mode desktop the fluent MenuBar drew its labels
+  in 90 %-alpha black over the app's `#161618` bar — invisible yet
+  clickable; an unreachable portal resolves the scheme to Unknown, whose
+  fluent fallback is ALSO light, which is what every headless run got. A
+  light mode, should it ever be wanted, is a deliberate feature, never an
+  inherited default.
+- Pick: a small star badge top-left. Reject: a red ✕ badge and a 40 %
+  dimmed thumb.
+- **The loupe state pill** (issue #20; user-confirmed 2026-07-27): the
+  image's mark as ★ or ✕ on a small dark semi-transparent pill in the
+  image's TOP-LEFT (its own contrast backing), an OVERLAY that never
+  reflows the image, left-aligned so it can grow to hold up to five stars
+  when ratings land; unmarked is absence, backstopped by the status bar's
+  words; a rejected frame is NEVER dimmed in the loupe (a reject may be
+  re-judged for rescue at full brightness); pointer-inert; state swap
+  ATOMIC with the image swap (a wrong-frame badge is a confident lie); no
+  filename or metadata creep; the top-right stays free. The #21 loading cue
+  stacks BELOW the badge slot (14 px / 44 px), so the two pills never
+  overlap.
+- **Exported** (`▶`, issue #56): video-export.md owns the contract; the
+  memory is session-only and reads, never decides. **Burst** (`×N` badge,
+  the optional strip): burst-grouping.md. **Failed**: a warning badge and a
+  tooltip with the reason.
+- **The selection wash** (2026-07-28, persona MUST-HAVE): a translucent
+  accent-blue wash over the whole cell, 25 % (chosen by eye against 12 %
+  and 18 %; a property, `selection-wash`/`selection-wash-opacity`, destined
+  to become a setting — above ~15 % the tint can shift colour judgement on
+  a final scan, accepted knowingly), plus the accent outline. The wash
+  renders on EVERY selected cell, the cursor cell included; GRID ONLY,
+  never in the loupe at fit or above (gated on `at-fit`/`one2one`);
+  painted above the image and the reject dim, BELOW the badges. Filled =
+  selected, bright border = cursor: two channels for DRAWING, not for
+  moving. Marks are NOT batch operations — `Y`/`N`/`U` act on the cursor
+  image only; net cursor movement per mark is exactly one image. The
+  selection is what the IPTC panel stamps (`Selection::batch()`) and what
+  the exports take.
+- **The selection count**: `· N selected` in the status bar whenever the
+  selection is non-empty, counted over the view (`Selection::count_in_view()`,
+  matching `Selection::batch()` exactly — images selected but filtered out
+  are excluded from both: what you see is what you stamp); an empty
+  selection is silent. Drawn in the selection accent (`#4da3ff`, 6.2:1 on
+  the bar's `#202024`; brief 002), because in the loupe, where no wash
+  shows, this fragment is the ONLY sign a selection is live; it is its own
+  `Text` and reports its rectangle (`status selected laid out …`).
+- **The selection rule** (user decision 2026-09-06, brief 002: "file
+  manager style"; until then a plain arrow kept the selection lit and a
+  fresh Shift-span was UNIONED with it — a rule no surveyed product has,
+  which the user met as a second video holding the first video's frames):
   1. **Plain navigation collapses the selection.** Every unmodified cursor
-     move — Left, Right, Up, Down, PgUp, PgDn, Home, End, `[`, `]` — and
-     the `Y`/`N` mark auto-advance leave the selection EMPTY: the cursor
-     is the batch, the count is silent, no wash. Grid and loupe alike, at
-     every zoom. The clear happens whether or not the move changed the
-     cursor (a Right at the last frame still clears — the intent is the
-     same) and whether or not the advance after `Y`/`N` found a next
-     frame; `U` stays put and leaves the selection alone, unless the mark
-     removed the frame from the view and the live-removal rule moved the
-     cursor on (a cursor move like any other). Not navigation, and never
-     touching the selection: the zoom keys, the wheel and the scrollbar
-     (browsing, including the loupe's follow-scroll claim), a modal's Esc,
-     the IPTC panel, the export, and every cursor move the ENGINE makes
-     (the load-settled re-sort, a filter or a landing sidecar moving the
-     cursor to a survivor) — those are not the user's navigation. Esc, a
-     plain click and G at a grid zoom clear as before; G from the loupe
-     keeps.
-  2. **Ctrl-navigation keeps it.** Ctrl+Left/Right/Up/Down,
-     Ctrl+PgUp/PgDn/Home/End and Ctrl+`[`/`]` move the cursor exactly as
-     the plain key would, reset the Shift anchor, and leave the selection
-     alone — the file-manager companion (Explorer, GTK, Qt, Thunderbird:
-     "move the focus without affecting the selection").
+     move — Left, Right, Up, Down, PgUp, PgDn, Home, End, `[`, `]` — and the
+     `Y`/`N` mark auto-advance leave the selection EMPTY: the cursor is the
+     batch, the count is silent, no wash. Grid and loupe alike, at every
+     zoom; whether or not the move changed the cursor (a Right at the last
+     frame still clears; an arrow under a filter that matches nothing still
+     clears). `U` stays put and leaves the selection alone unless its mark
+     removed the frame from the view and the cursor moved on. Not
+     navigation, never touching the selection: the zoom keys, the wheel and
+     the scrollbar, a modal's Esc, the IPTC panel, the export, and every
+     cursor move the ENGINE makes (the load-settled re-sort, a filter or a
+     landing sidecar moving the cursor to a survivor). Esc, a plain click
+     and `G` at a grid zoom clear as before; `G` from the loupe keeps.
+  2. **Ctrl-navigation keeps it.** Ctrl+Left/Right/Up/Down, Ctrl+PgUp/PgDn/
+     Home/End and Ctrl+`[`/`]` move the cursor exactly as the plain key
+     would, reset the Shift anchor, and leave the selection alone — the
+     file-manager companion (Explorer, GTK, Qt, Thunderbird). They claim
+     the cursor.
   3. **A fresh Shift-span REPLACES the whole selection**, Ctrl-added frames
-     included (user decision 2026-09-06, answer 3): Shift+arrows and
-     Shift+`[`/`]` whose anchor arms on this press — after a plain click,
-     after Ctrl-navigation, on an empty selection — ARE the selection. A
-     span that continues a live anchor (Shift held on, or the anchor
-     armed by Ctrl+click, Ctrl+Space or Ctrl+Shift+B) replaces only the
-     live span, so shrink and flip work as before. Ctrl+click, Ctrl+Space
-     and Ctrl+Shift+B add; Ctrl+A is exactly the view.
+     included: Shift+arrows, Shift+page keys and Shift+`[`/`]` whose anchor
+     arms on this press — after a plain click, after Ctrl-navigation, on an
+     empty selection — ARE the selection. A span that continues a live
+     anchor (Shift held on, or the anchor armed by Ctrl+click, Ctrl+Space or
+     Ctrl+Shift+B) replaces only the live span, so shrink and flip work.
+     Ctrl+click, Ctrl+Space and Ctrl+Shift+B add; Ctrl+A is exactly the view
+     and arms no anchor.
   4. **Ctrl+Space toggles the cursor frame's membership** — additive like
-     Ctrl+click, cursor unmoved, anchor armed on the cursor: the
-     keyboard's way to build a discontiguous selection.
-  What the rule buys: "export, `]`, export" and "caption, `]`,
-  Ctrl+Shift+B, caption" act on the new burst only, a fresh span can never
-  carry an old one along, and no stale selection can beat the burst under
-  the cursor at the next Ctrl+Shift+E. What it costs, recorded because the
-  persona rated the rule IN-MY-WAY (2026-09-06, `PERSONA.md` §3 C): a stray
-  arrow after a 40-frame chord loses the selection silently and there is
-  no undo (one Ctrl+Shift+B rebuilds a burst; a hand-built span costs its
-  keys again); Ctrl+arrow is a chord the research calls "essentially
-  undiscoverable", so the shortcuts card and docs/culling.md name it
-  beside the plain arrows; the walk-and-mark of a captioned run ends at
-  the first `Y` (the caption is already on the sidecars — a second batch
-  on the same run is a re-select away); the two-burst union is Ctrl+`]`.
-  The persona's alternative — drop the selection only when a key lands
-  OUTSIDE it — was put to the user with this trade-off; the user chose
-  the file-manager rule ("when I move the arrow or press ] to a new burst
-  after an export, I expected the older frames to be not selected"), and
-  rejected a finished export consuming its selection ("I don't think auto
-  deselecting is intuitive", answer 5).
-  Acceptance criteria:
-  - The wash renders on **every** selected cell **including the cursor
-    cell**. (The pre-wash rule was `selected && !is-cursor`, which hid the
-    selection state of the one cell whose batch membership is genuinely
-    ambiguous: per `batch()`, with a non-empty selection the cursor is in
-    the batch only if it is itself selected.)
-  - **GRID ONLY — never in the loupe**, at fit or above ("in the loupe I am
-    judging pixels"). Note the loupe fit view IS the grid at one column, so
-    this requires an explicit gate on `at-fit`/`one2one`, not just placement.
-  - Painted above the image and above the 40% reject dim, but BELOW the
-    badges, so ★ / ✕ / ×N / ✓ / ▶ / ! stay legible on a selected cell.
-  - Hue and strength are **properties, not literals** (`selection-wash`,
-    `selection-wash-opacity`; Rust owns the defaults). User decision
-    2026-07-28: strength is 25%, chosen by eye against 12% and 18% renders,
-    and is destined to become a user setting — a settings pane writes the
-    property and no rendering code changes. Recorded persona caveat: above
-    ~15% the tint is strong enough to shift colour judgement on a final
-    pre-`N` scan; the user accepted this trade knowingly, and the variable
-    is what makes it revisable.
-- Selection count in the status bar (persona MUST-HAVE companion to the
-  wash): `· N selected` whenever the selection is non-empty, counted over
-  the view so it matches `Selection::batch()` exactly — computed by
-  `Selection::count_in_view()` in fastcull-core (rule 5: the semantics live
-  in core, the app only renders them), with a unit test pinning the two
-  together. An empty selection is silent — the batch is then just the
-  cursor, and "1 selected" on every image would be noise. The wash says
-  WHICH images the IPTC batch covers; the count says HOW MANY, including
-  selected images scrolled off-screen, which no on-cell indicator can
-  convey. Images selected but filtered OUT of the view are excluded from
-  both, matching "what you see is what you stamp". **Drawn in the
-  selection accent** (2026-09-06, brief 002 R5; persona A1 USEFUL): the
-  fragment is painted in `selection-wash`'s hue at full opacity — the
-  cursor outline's blue, `#4da3ff`, 6.2:1 computed on the bar's `#202024`
-  beside the grey `#a8a8b0` at 6.9:1 — because in the loupe, where no
-  wash shows, this fragment is the ONLY sign that a selection is live
-  (`code/persona-loupe-stale.jpg`: grey status text is prose, blue is a
-  state light). It is its own `Text` between the two grey halves of the
-  line, in the same place in the sentence as before; the `status`
-  property stays the whole line, so the trace's `status at shutter:` and
-  the QEDUMP `status=` field read exactly what they always did; and the
-  fragment reports its rectangle as `status selected laid out at X,Y size
-  WxH` (the grey head as `status head laid out …`) so a driven test can
-  read its pixels by name rather than by a coordinate. Pinned by
-  `the_selection_count_is_drawn_in_the_accent` (brief 002), which compares
-  the blue bias inside the two reported rectangles in one shot: measured
-  18.0 for the fragment against 4.1 for the grey head (the bar's own
-  background is +4), with the two mutants at 4.1 (the fragment painted
-  grey) and 7.4 (painted in the 25 % wash blend instead of the hue), so
-  the test's threshold of 8.0 sits between them.
-- Failed file: warning badge + tooltip with reason.
+     Ctrl+click, cursor unmoved, anchor armed on the cursor: the keyboard's
+     way to build a discontiguous selection.
+  What it buys: "export, `]`, export" and "caption, `]`, Ctrl+Shift+B,
+  caption" act on the new burst only; a fresh span can never carry an old
+  one along; no stale selection can beat the burst under the cursor at the
+  next Ctrl+Shift+E. What it costs (persona IN-MY-WAY, recorded with the
+  user's decision): a stray arrow after a 40-frame chord loses the
+  selection silently and there is no undo (one Ctrl+Shift+B rebuilds a
+  burst; a hand-built span costs its keys again); Ctrl+arrow is
+  "essentially undiscoverable", so the shortcuts card and docs/culling.md
+  name it beside the plain arrows; the walk-and-mark of a captioned run
+  ends at the first `Y`. The persona's alternative — drop the selection
+  only when a key lands OUTSIDE it — was put to the user, who chose the
+  file-manager rule and rejected a finished export consuming its selection.
 
-## Keyboard map (keyboard-first is a feature)
+## Keyboard map
+
+An H2 rather than a subsection because `the_shortcuts_card_lists_every_binding_in_the_spec`
+locates this table by the heading and reads its first column until the
+next `##`; a row may be paired with NO card row only if the card teaches
+the binding in prose, in that test's own short list.
 
 | Key | Action |
 |---|---|
@@ -1306,2368 +546,538 @@ brightening during wheel scrolling (needs an activity decay timer).
 | `?` / `F1` | open the keyboard-shortcuts card — and, while it is up, close it again (2026-09-04; the persona's finding was that the keyboard help of a keyboard-first app could be opened only with the mouse). `?` reaches the app as the shifted character on most layouts, so it is matched both with and without a reported Shift modifier, and `/`-with-Shift is matched too for layouts that report the unshifted key. The opener lives in the MAIN key scope beside the other bare letters, which is what keeps it from firing while an IPTC field, the keyword field or a dialog's own field holds the keyboard; the close arm is mirrored in the copy and export scopes (issue #42's topmost-first rule). About keeps `Esc` as its only key. **Both keys are therefore inert while a field or a dialog holds the keyboard, and for `F1` that is a decision, not a consequence** (2026-09-04): for `?` it is forced — the key is a typed character, and a help card that opened instead of typing a question mark into a keyword would be a defect — while `F1` is not a character and could have been given a scope of its own. It was not, because the help it opens is the GRID's help: none of its 29 rows applies while a text field has the keyboard, and a modal that appeared over a half-typed keyword would have to decide what happens to the edit. Esc leaves the field first; F1 works there |
 | `1`–`5`, `0` | reserved (star ratings, v2) — must not conflict |
 
-There is no undo stack in v1 (user decision): a mis-marked frame during
-auto-advance is fixed with arrow-back + re-mark, which costs one keystroke.
+### Marks and auto-advance
 
 Picking (`Y`) or rejecting (`N`) auto-advances the cursor to the next image
-at EVERY zoom level — grid and loupe alike (user decision 2026-07-25: "once
-I select Y or N, the UI should automatically move to the next image").
-Clearing (`U`) does not advance. The advance is a cursor move and collapses
-the selection like an arrow (brief 002 R1, Manager 2026-09-06, best
-practice: Lightroom's auto-advance collapses to the next photo, and an
-exemption would make `Y` and Right disagree about the selection); `U`,
-which does not move, leaves it alone. This becomes a configuration option
-(default: on) when the settings dialog lands (File menu placeholder,
-post-v1); until then it is always on.
+at EVERY zoom level, grid and loupe alike (user decision 2026-07-25);
+clearing (`U`) does not advance. The advance is a cursor move and collapses
+the selection like an arrow (Lightroom's auto-advance does; an exemption
+would make `Y` and Right disagree). It becomes a configuration option
+(default on) with the settings dialog; until then it is always on. When a
+mark removes the image from the active filtered view, the live-removal
+cursor rule IS the advance — auto-advance never applies on top of it — so
+net cursor movement per mark is exactly one image, always (persona gap G1:
+the rule that keeps the inbox-zero loop honest). There is no undo stack in
+v1: a mis-marked frame costs one arrow back and a re-mark.
 
-**Advance/removal composition (persona gap G1, 2026-07-25 — the rule that
-keeps the inbox-zero loop honest)**: when a mark removes the image from the
-active filtered view, the live-removal cursor rule IS the advance —
-auto-advance must NOT apply on top of it. Auto-advance applies only when
-the marked image stays in the view. Net cursor movement per mark is exactly
-one image, always.
+### Window chrome
 
-## Window chrome (menu bar — user-requested 2026-07-24, lands M5)
+- A slim menu bar; the keyboard remains the fast path — menus are
+  discoverability, never a required route. **Where the bar is drawn is the
+  platform's**: on Windows the winit backend supports a NATIVE menu bar
+  (`muda`), outside the client area; on Linux Slint draws it in-window, 40
+  px tall in the `fluent` style — so everything below sits exactly 40 px
+  higher on Windows (measured between the two CI runners, 2026-09-02). No
+  driven test clicks an in-window element at a coordinate measured on the
+  other platform (test-harness.md), and the menu-click strands are
+  Linux-only: a dispatched pointer event cannot reach an OS menu.
+- **File**: Open Folder… (native picker via `rfd`), Copy Picks… (`Ctrl+E`),
+  Export Frames as Video… (`Ctrl+Shift+E`, greyed when there is nothing to
+  export while the keystroke explains itself in the status line), Settings…
+  (placeholder, disabled until a settings dialog exists — post-v1), Quit.
+  **View**: Zoom In/Out (`+`/`-`), IPTC Panel (`I`), Filter Bar. **Help**:
+  Keyboard Shortcuts (the card below), About. Opening a folder via the menu
+  behaves identically to the CLI argument.
+- **The keyboard-shortcuts card** (rebuilt 2026-09-04 after the user's
+  verdict on the old one: "awful and cramped"): every row is a `KeyRow` — a
+  **104 px** right-aligned key cell (13 px, weight 600, `#e8e8f0`), a 14 px
+  gutter, a stretching action cell (13 px, `#c8c8d0`); the 104 px is a
+  CONSTANT, never a content measurement, which is what makes the action
+  column start at the same x on every row in any font, and right-alignment
+  gives a second hard edge; both cells wrap and neither elides. A `dim`
+  variant carries the reserved star-rating row (`#8a8a96`, 4.74:1 — a row
+  dimmed below AA is a missing statement, not a softer one). Seven one-word
+  sections in two columns — MOVE, MARK, MOUSE down the left; ZOOM, SELECT,
+  PANELS, FILE MENU down the right — 11 px `#8a8a96` headings with 1 px
+  `#6a6a76` rules (3.03:1, WCAG's non-text minimum, deliberately below the
+  heading), a 1 px hairline between the columns; MOUSE is its own section
+  because a card headed "Keyboard shortcuts" that files `wheel` among the
+  keys is lying; FILE MENU echoes the File menu character for character.
+  An action text fits ONE line of the 240 px action cell (38 characters at
+  13 px fit, 40 do not). The card GROUPS AND PARAPHRASES the map and lists
+  every binding in it (one map row may become four, two may share one;
+  `?`/F1 is named in the title-row hint). **780 px wide, content-driven
+  tall**: `min(780px, window − 48px)` by `ModalScrim`'s `card-fits-content`
+  clamped to `window − 40px`; it fits whole at 1000x700, the smallest
+  supported window (about 25 px of room there — the next binding replaces
+  a row or moves a section). Its height, 568 px on the development seat,
+  is a MEASUREMENT no test may pin: it is the sum of ~29 text line boxes
+  and ranges from 491 (Liberation Sans) to 627 (Noto Sans Mono) across
+  faces; the test pins only what is geometric — the width, inside the
+  layer, fits whole at 1000x700 (measured as slack, not as a ceiling), the
+  footer inside it, the same height at both window sizes. Every length is a
+  LOGICAL pixel (a 200 % seat at 1920x1080 is smaller than 1000x700).
+  Exactly three children of `ModalScrim`'s layout — the title row (the
+  closing hint flush right), the body, the footer (the zoom ladder, a
+  diagram, not a binding) — because its 8 px spacing is hard-coded; the
+  title row carries 18 px under it. The card CLIPS, in `ModalScrim`, for
+  every card it draws, and the title texts and the footer elide, so nothing
+  paints outside the card at any window size (measured at 400x320). Nothing
+  in the card takes the pointer or the keyboard — click anywhere closes,
+  no hover highlight, no search field. The body is a `Flickable {
+  interactive: false }`, deliberately not a `ScrollView`: where the card
+  fits both are transparent to the pointer, but once clamped a
+  `ScrollView`'s bar eats every click on the 14 px strip down the right
+  edge, and "click anywhere" would quietly stop being true there — a SAFETY
+  VALVE for windows under ~640 px tall, where the list clips and scrolls on
+  the wheel while the title and footer stay inside the rounded rect.
+  Recorded, not fixed: the export dialog's `?`/F1 close arm has never been
+  driven (the copy dialog's was; the export one cannot be reached on
+  synthetic data, and the two arms are character-identical).
+- **Folderless launch** (issue #5): `fastcull-app` with no arguments opens
+  the normal window in the empty state — "No folder open — File > Open
+  Folder… (Ctrl+O)" — with a working menu bar, never a usage error (a
+  desktop launcher has no arguments); distinct from the "No images" state
+  of a folder that opened empty. CLI usage errors remain for malformed
+  invocations, invisible on a Windows double-click by design
+  (01-architecture.md).
+- **About** (issue #23): a modal (Esc or click outside; clicks on the card
+  never close it): "FastCull", the version on its own line, the
+  two-sentence description, "Main contributor: Danilo de Paula" (the
+  user-directed exception to CLAUDE.md's M7), the repository URL as plain
+  retype-able text that never wraps or ellipsizes, and "GPL-3.0-or-later".
+  The version is composed by the BUILD, never hand-maintained: `X.Y.Z` when
+  HEAD sits exactly on the release tag, `X.Y.Z-devel-YYYYMMDD-<short-hash>`
+  otherwise (a bug report from a dev build must pin the commit; the hash
+  says WHICH code, the date HOW OLD — the COMMITTER date, so a rebased
+  commit dates when it came into existence, compact and before the hash so
+  builds sort; a hash with no usable date still yields
+  `X.Y.Z-devel-<hash>`), plain `X.Y.Z` without git. `build.rs` watches HEAD,
+  the branch ref and the TAG refs — `git tag && cargo build` once left a
+  `-devel-` string in a release binary (v0.5.0); a shared global
+  `CARGO_TARGET_DIR` across two checkouts of one version can still serve a
+  cached result (`cargo clean -p fastcull-app` fixes it). Traced at startup
+  (`about version …`). The title is split in two so the hash never clips.
+  Recorded gap: the test proves a date is present and well-shaped, not
+  WHICH date.
+- **Modal keyboard containment** (issue #23, user decision "swallow
+  everything in that screen"): while About or the shortcuts card is up, Esc
+  closes it and EVERY other key is swallowed — driven NAV keys identically.
+  The popups are declared last in the tree so their scrims render above
+  every layer; opening a modal steals the keyboard back to the main key
+  scope; ALL FOUR scrims swallow the wheel (issue #49 — Copy Picks and the
+  export dialog are hand-rolled copies of `ModalScrim`, because their focus
+  scope must WRAP the card, and a hand-rolled scrim must carry the
+  `scroll-event` arm); the menu bar stays live under a modal (File > Quit
+  works). **Esc closes the TOPMOST modal only** (issue #42): About over the
+  live copy dialog takes two Esc presses, the dialog's plan and destination
+  survive the first, and both key scopes contain modals identically.
 
-Slim native menu bar (Slint MenuBar); the keyboard remains the fast path —
-menus are discoverability, never a required route.
+### The filter and sort bar (M5)
 
-**Where that bar is drawn is the platform's choice, and it differs**
-(recorded 2026-09-02, issue #70 — existing behaviour, not a change): on
-Windows the winit backend supports a NATIVE menu bar (`muda`), so the
-menus belong to the OS window frame and sit outside the client area; on
-Linux there is none and Slint draws the bar in-window, 40 px tall in the
-`fluent` style. Everything below the bar should therefore sit about
-40 px higher on Windows. That mechanism is read from the backend source
-(`i-slint-backend-winit` 1.17.1: `supports_native_menu_bar` is true under
-`cfg(muda)`, and `muda` is active for Windows in Cargo.lock), and the
-first Windows artifact (PR #71, run 33675396904, 2026-09-02) measured it:
-`window geometry 1440x900 grid 1440x840` against ubuntu's `grid
-1440x800`, the Title field at `1150,121` against `1150,161` — the same
-`280x26` row, **exactly 40 px** apart, the menu bar and nothing else —
-and `click:iptc field 0` resolving to `1290,134` inside it. The 43 px
-this section used to name is a different distance and was never 40 + 3
-of font metrics (corrected 2026-09-02): it is how far the old hard-coded
-click at y=177 fell BELOW the Windows field's centre (177 − 134), and
-those 3 px are that click sitting 3 px low on the ubuntu runner too —
-the development seat lays the row at y=164 and ubuntu-latest at y=161,
-which is font metrics between two LINUX seats, not between platforms. No
-driven test may click an
-in-window element at a coordinate
-measured on the other platform (test-harness.md, `click:<element>`),
-and the menu-click strands are Linux-only: a dispatched pointer event
-cannot reach an OS menu.
+- SINGLE-choice chips — All / Picked / Rejected / Unmarked — with counts
+  (combinations dropped; the in-burst-only chip was cut at M7). Sort:
+  capture time (default) ↑↓, filename ↑↓. Pure predicates in
+  `fastcull-core::filter`; the grid binds to the filtered, sorted view.
+- **View mutation rules**: marking an image so it no longer matches the
+  filter removes it from the view LIVE; the cursor lands on the next image
+  in the filtered view (else the previous, else none); counts update at
+  once. When the filter itself changes, the cursor goes to the nearest
+  surviving image, else the first. The inbox-zero loop — filter Unmarked,
+  `Y`/`N` until empty — must work exactly; when the view empties the grid
+  shows the final counts ("0 unmarked — N picked, M rejected") with no
+  cursor, dropping out of the loupe if it was there.
+- **Focus containment**: while ANY text field has focus, no single-key
+  shortcut fires — typing "Xavier" must not reject a photo; Enter commits
+  the field and returns focus to the grid. Esc in a field is a no-op (the
+  LineEdit offers no hook); the field exits are iptc-templates.md's.
+- Persona defaults adopted 2026-07-25: a keyword commit returns to the grid
+  and the cursor STAYS (Save-and-advance rejected: it breaks the
+  K→type→Enter→Y loop and is incoherent on a multi-selection; the future
+  option is commit-and-advance-AND-keep-field-focus); the panel shell has a
+  template dropdown, Apply and "Revert last apply"; hiding the filter bar
+  resets the filter to All (a filter is never active while invisible);
+  click-away commits (G7); Tab cycles the panel fields; per-image
+  keywording is a same-evening flow (`K` into the keyword field,
+  comma-separated entry, Enter); no Open Recent, template UI or filter
+  hotkeys in M5.
 
-The menus:
+### Focus continuity (issues #41, #42, #63, #64)
 
-- **File**: Open Folder… (native picker via `rfd`; replaces CLI-only launch),
-  Copy Picks… (`Ctrl+E`, enabled from M6), Export Frames as Video…
-  (`Ctrl+Shift+E`, from M9 — greyed when there is nothing to export, and
-  the keystroke then explains itself in the status line rather than doing
-  nothing), Settings… (placeholder entry, disabled until a settings dialog
-  exists — post-v1 candidate), Quit.
-- **View**: Zoom In/Out (`+`/`-`), IPTC Panel (`I`, from M5), Filter Bar.
-- **Help**: Keyboard Shortcuts (the card below — the map in this spec is
-  the source of truth for what it lists), About.
-
-### The keyboard-shortcuts card (rebuilt 2026-09-04)
-
-The owner's verdict on the previous one was "awful and cramped", and the
-diagnosis was in the source rather than in the leading: the whole body was
-ONE `Text` with `\n` separators and three literal spaces between each key
-and its description, so the action text began wherever the key happened to
-end — 23 rows, 23 different left edges — the key had no more visual weight
-than the prose, there were no groups, and the card was a hard-coded 560 px
-that wasted 78 px at 1440x900 and covered 88 % of the modal layer at
-1100x700. It also lacked `drag`, which is in the map above, so the
-acceptance line below was false. What replaced it:
-
-- **A fixed key column, and that is the whole contract.** Every row is a
-  `KeyRow`: a **104 px** right-aligned key cell (13 px, weight 600,
-  `#e8e8f0`), a 14 px gutter, then a stretching action cell (13 px,
-  `#c8c8d0`). The 104 px IS A CONSTANT, never a content measurement — that
-  is what makes the action column start at the same x on all 29 rows, in
-  any font, on any platform, and right-alignment gives a SECOND hard edge
-  so the key list and the action list are each independently scannable.
-  Widest label measures ~83 px at 13 px semibold across Noto Sans /
-  Liberation Sans / Open Sans (`Y / P / Space`, `Shift+arrows`,
-  `Double-click`): 20 % headroom. Both cells `wrap` and neither elides — a
-  wider platform font costs a taller row, never a lost character of a
-  shortcut. A `dim` variant (both cells) carries the reserved star-rating
-  row: colour says "not yet" faster than a word. It is **`#8a8a96`,
-  4.74:1** on this card's `#202028` — not the `#707078` it shipped with on
-  2026-09-04, which measures **3.29:1**. A row dimmed below AA is not a
-  softer statement, it is a missing one, and that is the same number on
-  the same ground that took the closing hint off the same colour (the
-  "Exactly three children" bullet below): the two decisions are one. It still reads as
-  plainly inactive next to a live row, whose key measures 13.27:1 and
-  whose action measures 9.72:1 — the dim row keeps about half their
-  contrast. All four ratios are computed from the sRGB values; the ink as
-  RENDERED measures a little brighter (5.25:1 for the dim key, off the
-  1440x900 shot), which is antialiasing, and both readings clear 4.5.
-- **Seven sections in two columns**: MOVE, MARK, MOUSE down the left;
-  ZOOM, SELECT, PANELS, FILE MENU down the right (SELECT and MOUSE swapped
-  sides on 2026-09-06, brief 002 — the measurement is in this bullet's
-  last paragraph). Headings are ONE WORD
-  (a landmark is short), 11 px `#8a8a96` with 0.6 px tracking, each with a
-  1 px **`#6a6a76`** rule running to its column's edge; a 1 px `#6a6a76`
-  hairline separates the two columns over the body's full height. Those
-  two were `#33333d` and `#2c2c30` when the card shipped, which measure
-  **1.29:1** and **1.16:1** on this ground — ink under the threshold of
-  vision, which is not a subtle rule but an absent one, so the choice was
-  to draw them or drop them. `#6a6a76` measures **3.03:1** (WCAG's
-  non-text minimum) computed, 3.02:1 as rendered, and stays deliberately
-  BELOW the heading's 4.74:1 beside it: the word is the landmark, the rule
-  is what gives the group a body. MOUSE is a section of its own because a
-  card headed "Keyboard shortcuts" that files `wheel` and `double-click`
-  among the keys is lying — and because the heading is what shrinks
-  "Wheel in loupe" to "Wheel", which is most of what makes a fixed key
-  column fit at all. FILE MENU echoes the File menu
-  character for character, ellipses included, so a mouse user learns where
-  the four chords live. SELECT lists the collapse rule's companions as TWO
-  rows (brief 002, 2026-09-06): `Ctrl+arrows`, whose action text says "any
-  MOVE key" — which is what pairs the map's Ctrl+`[`/`]` row to this cell
-  in the parity test, `[`/`]` being a MOVE row on this same card — and
-  `Ctrl+Space`. **SELECT and MOUSE swapped columns in the same commit, and
-  the estimate that stood here until then was wrong** (corrected
-  2026-09-06, developer measurement with the senior developer's ruling;
-  the numbers below are measured off the `shortcuts card laid out at`
-  marks at both windows, this seat, Noto Sans): the clamp at 1000x700 is `layer − 40px` = **594**, not the 604
-  this bullet claimed, and the card was **549**, so the room was **44 px**,
-  not 55; and a one-line `KeyRow` costs **23 px** — an 18 px line box plus
-  the section's 5 px spacing — not the ~20 assumed. The card had room for
-  ONE row and needed two: with both rows on the left it measured **595**
-  and clamped to 594, leaving the 20 px of slack that means "clamped". The
-  left column also led the right by 27 px, so every pixel added there cost
-  the card a pixel while the right column's last 27 were free; swapping
-  SELECT (six rows after this brief) with MOUSE (four) moves 46 px across,
-  leaves the columns 19 px apart instead of 73, and puts the card at
-  **568**, 26 px under the clamp. Both columns are exactly
-  `(744 − 28) / 2 = 358 px`, so a section changing side cannot rewrap a
-  line. **An action text must fit ONE line of the 240 px action cell**: 38
-  characters fit at 13 px on this seat ("grid: open in loupe · loupe: 1:1
-  there"), 40 do not — "add or remove the frame under the cursor" wrapped
-  and cost 18 px — so the two new rows are written at 28 and 30. Two more
-  action texts spend that budget deliberately (QE 2026-09-06, M-7 and D1):
-  the MOVE section's `← / →` row reads "previous / next frame (ends
-  selection)" (38), which is where this brief's headline rule reaches the
-  card at last — in characters, since there was no room for it in rows —
-  and SELECT's `Shift+arrows` row reads "extend the selection (page keys
-  too)" (36), which is how the map's Shift+PgUp/PgDn/Home/End row is
-  listed without a row of its own. Measured after both: still 780x568 at
-  1440x900 and at 1000x700, so neither wrapped. The card
-  is now a fixed-height sheet with ~25 px of room at 1000x700: the next
-  binding either replaces a row or moves a section, and the fits-whole
-  test is what will say so. Until QE M-7 (2026-09-06) the card did not carry
-  this brief's headline rule — that a plain move ends the selection —
-  because no arrangement had the 15-20 px a row for it would cost; **it
-  now does**, in the `← / →` action text, at no cost in rows. The
-  constraint was rows, not characters, and that is the lesson to take from
-  it: the card teaches the companion beside it ("any MOVE key, selection
-  kept"), and docs/culling.md and the selection rule above carry the rule
-  in full.
-- **The card GROUPS AND PARAPHRASES the map, and lists every binding in
-  it.** One map row becomes four (`Arrows / PgUp / PgDn / Home / End` was
-  a 222 px key string that made any fixed column impossible, and named
-  five keys while explaining none); two map rows share one card row (the
-  two double-clicks); `drag` is a row at last. `?`/`F1` is named in the
-  title-row hint rather than given a row of its own: it is the key that
-  brought the reader here, and it belongs to no section.
-- **780 px wide, content-driven tall.** `card-width: min(780px, window −
-  48px)`; the height is `ModalScrim`'s opt-in `card-fits-content`, clamped
-  to `window − 40px`. Measured **780x568** on the development seat (Noto
-  Sans), at 1440x900 (x 330..1110, y 173..741) and unchanged at 1000x700
-  (x 110..890, y 73..641), where it leaves 33 px above the status bar — it
-  fits whole at the smallest supported window and never scrolls there. The
-  **780x549** this bullet gave until 2026-09-06 was the 27-row card of
-  2026-09-04, before brief 002 added the two SELECT rows and swapped
-  SELECT with MOUSE; both numbers are read from the `shortcuts card laid
-  out at` marks of
-  `shortcuts_card_is_a_two_column_sheet_that_fits_its_window`, which is
-  where the next editor re-measures them. **Every length in this section is a LOGICAL pixel**, the
-  unit Slint lays out in: a 200 % seat at 1920x1080 is 960x540 logical, so
-  it is a smaller window than 1000x700 and the card clamps there. "The
-  smallest supported window" is therefore a claim about logical size, and
-  a high-DPI seat is small in exactly the way a small monitor is.
-- **568 is a MEASUREMENT and no test may pin it.** It is the sum of ~29
-  text line boxes, so it belongs to whichever face the seat draws with,
-  and the numbers are far apart. Measured on the 27-row card of 2026-09-04
-  (two rows fewer than today's, so stale in absolute terms — the SPREAD
-  between faces is what this list is for): 549 in this machine's Noto
-  Sans, **491** in Liberation Sans, 512 in Nimbus Sans / Carlito /
-  Cantarell, 525 in Montserrat, 627 in Noto Sans Mono — that last one
-  already over the 594 clamp before this brief, so the fits-whole promise
-  has always been about the proportional faces. The ubuntu CI runner draws in DejaVu
-  Sans and the Windows runner in Segoe UI; neither is this seat's font,
-  and the suite already knows two Linux seats disagree about a panel row's
-  y by 3 px. The card's test therefore pins **only what is geometric**:
-  the 780 width, that the card lies inside the modal layer, that it FITS
-  WHOLE at 1000x700, that its footer is inside it, and — only after the
-  fits-whole check, so that it can no longer double as clamp detection in
-  disguise — that the height is the SAME at both window sizes, which
-  follows from the content and the width being the same. Fitting whole is
-  measured as slack rather than as a ceiling: a clamped card is exactly
-  `layer − 40` tall and so leaves exactly 20 px above the status bar,
-  while an unclamped one leaves more, and the status bar's top is the
-  modal layer's floor on both platforms where the layer's TOP is not (the
-  menu bar is in-window on Linux and the OS window frame's on Windows,
-  which moves the ceiling by 40 px between the runners). The card reports
-  its own rectangle through `ModalScrim`'s `card-laid-out` callback, as
-  the two dialog cards do, because a content-driven card has no arithmetic
-  a reader can check in the file.
-- **Exactly three children of `ModalScrim`'s layout** — title row, body,
-  footer — because that component's `spacing: 8px` is HARD-CODED and no
-  call site can override it: a fourth child is a gap nobody chose, and the
-  old card's four non-stretching children are why its leftover height was
-  sprayed into a 27 px gap under the title and a 45 px gap above the
-  footer. The closing hint moved onto the title row (flush right, 11 px
-  `#8a8a96` — `#707078` measured 3.29:1 on this ground, under AA, on the
-  only sentence saying how to leave), and the zoom ladder moved to the
-  footer: it is a diagram, not a binding, and as a row it was the widest
-  string on the card and therefore set the card's width. The title row
-  carries **18 px of padding under it**: without it the title's ink ended
-  12 px above the "MOVE" heading while a row's ink ends 21 px above the
-  NEXT heading, so the nearest thing to the title was the group under it
-  and the card read as one list with a caption. 18 px puts that gap at 30
-  — half again the section gap, measured on the render — which is the
-  cheapest of the three ways to say "this line is not part of that list"
-  (the others being a rule under the title, making eight rules on a card
-  that has seven, and a larger type size, which pushes both columns
-  further down).
-- **Nothing paints outside the card, at any window size.** The card
-  `clip`s, in `ModalScrim`, for every card it draws. A Slint layout does
-  not clip its children: handed less room than their minimum widths, a
-  `HorizontalLayout` gives each of them that minimum anyway and simply
-  overflows its parent, so a `Text` with neither `wrap` nor
-  `overflow: elide` draws its tail on the SCRIM, outside the rounded rect.
-  Measured before the fix, at 400x320: the title row's hint painted glyphs
-  at x 379..396 with the card's right border at 375 — 61 pixels of ink on
-  the scrim, and the same defect issue #26 treated as a real regression on
-  the About card's version string. Both Texts of the title row also
-  `overflow: elide` now (which drops a Text's layout minimum to the width
-  of one ellipsis, i-slint-core 1.17.1 `items/text.rs:656`, and is what
-  actually lets the row shrink), as does the footer; the clip is the floor
-  under them, not a substitute for them. Re-measured at 400x320 after: no
-  pixel outside the card differs from the scrim over the grid by more than
-  JPEG noise.
-- **What that changed about About, precisely.** The claim that this
-  rebuild left About byte-for-byte identical holds only for windows at
-  least **520 px wide** — below that the new `min(card-width, window −
-  40px)` clamp narrows a card that used to hang off both edges — and, from
-  the clip above, only for windows tall and wide enough that nothing in
-  About overflows. Below those sizes About changes, and for the better:
-  its content is cut at the card's edge instead of being drawn on the
-  scrim. That supersedes the accepted defect recorded under issue #26
-  below.
-- **Nothing in the card takes the pointer or the keyboard.** No TouchArea
-  (so a click falls through to the scrim's, and "click anywhere to close"
-  is TRUE — this card leaves `card-eats-clicks` false, unlike About), no
-  FocusScope, LineEdit or Button, so `focus-owner` stays 0 and the
-  containment guard in the root key scope keeps swallowing every stray key
-  (issue #23). A hover highlight on the rows would need a TouchArea and
-  would break click-to-close silently; do not add one, and do not add a
-  search field either — it would need focus, which is what issue #23 bought
-  containment against.
-- **The body is a `Flickable { interactive: false }`, deliberately not a
-  `ScrollView`.** A non-interactive Flickable returns ForwardAndIgnore for
-  every non-wheel pointer event and still handles Wheel
-  (i-slint-core 1.17.1 `items/flickable.rs:155`, `:168`), so a click on the
-  body reaches the scrim while a wheel over the card never reaches the
-  grid. **The reason first recorded for preferring it to a `ScrollView`
-  was wrong about the mechanism and is corrected here** (measured
-  2026-09-04, against i-slint-compiler 1.17.1
-  `widgets/fluent/scrollview.slint`): the fluent ScrollView's own Flickable
-  is `interactive: false` too (`:174-176`), and its ScrollBar is `visible`
-  only while `maximum > 0` (`:54`). So wherever the card FITS, a ScrollView
-  is as transparent to the pointer as this Flickable — swapping one in
-  leaves a click at the card's centre closing the card exactly as before.
-  The difference is real but narrower, and it appears precisely where the
-  safety valve is doing its job: once the card is clamped the bar becomes
-  visible and its TouchArea eats every click on the 14 px strip down the
-  body's right edge. Driven both ways at 1010x520 on that strip — the
-  Flickable closes the card, the ScrollView leaves it open — which is
-  "click anywhere" quietly ceasing to be true over a band of the card
-  while the hint still promises it, and it is the case the click assertion
-  in `shortcuts_card_is_a_two_column_sheet_that_fits_its_window` exists to
-  kill. It is a SAFETY VALVE, not a feature: below roughly a 640 px window
-  height the card is clamped, the deficit lands in the body (it is the only
-  child with `vertical-stretch: 1; min-height: 0px`), and the list clips
-  and scrolls on the wheel while the title and the footer stay inside the
-  rounded rect — issue #62's guarantee, verified at 640x300 (card 592x194,
-  footer at y 221..236 inside a card ending at 254). This is also the one
-  thing the wheel does over a modal, which `docs/culling.md` says.
-
-Acceptance: opening a folder via the menu behaves identically to the CLI
-argument (same session path); the shortcuts card lists every binding in
-this spec — `the_shortcuts_card_lists_every_binding_in_the_spec` parses
-the Keyboard map table above and the card's own rows and fails if either
-grows a row the other does not have, which is what makes this line
-checkable instead of aspirational (and a spec row may be paired with NO
-card row only if it is one of the bindings the card teaches in prose
-instead, which that test keeps its own short list of — an unexplained
-empty pairing is how the next `drag` would be missed) — and it closes
-with `Esc`, with `?`, with `F1` and with a click anywhere, including on
-the card, which is driven at two points: the card's centre where it fits,
-and the body's right edge where it is clamped. Persona
-(almost-human-user) reviews this section at M5 implementation start per the
-gate.
-
-Recorded against this card and NOT fixed, so that silence is not taken for
-acceptance (gate, 2026-09-04):
-
-- **The export dialog's `?`/F1 close arm has never been driven.** The copy
-  dialog's arm was driven end to end; the export one could not be reached
-  on synthetic data, which has nothing to export. The two arms are
-  character-identical, which is an argument and not a measurement, and it
-  is recorded as one.
-- **A full-suite run during the gate saw
-  `session_swap_mid_keyword_edit_never_writes_into_the_new_session` fail
-  once and then pass 3/3 in isolation.** This card touches neither keyword
-  commit nor session swap; it is the pre-existing load-sensitive flake of
-  the issue #54 family, and it is named here so the next reader does not
-  spend the afternoon on it.
-
-**Folderless launch (user requirement 2026-07-25, issue #5 — IMPLEMENTED
-2026-07-26)**: `fastcull-app` with NO arguments must open the normal
-window in the empty state with the message "No folder open — File > Open
-Folder… (Ctrl+O)" and a working menu bar — never exit with a usage error
-(a desktop launcher / double-clicked binary has no arguments; printing
-usage to a terminal nobody sees and exiting is a broken first run). The
-"No folder open" message is distinct from the "No images" message of a
-folder that opened empty (`session_open` flag). The CLI usage error
-remains for genuinely malformed invocations (unknown flags, nonexistent
-folder). Screenshot test: `no_args_launch_opens_empty_window`. On Windows
-the app is a GUI-subsystem exe (issue #40, 01-architecture.md), so those
-usage errors are by design invisible on a double-click launch — which is
-exactly why the no-argument path must open a window instead of printing;
-launched from a terminal, the errors still print via the parent-console
-attach.
-
-Chrome staging (updated with the panel step): IPTC Panel menu item, `I`,
-`K`, Shift+arrows and `Ctrl+A` all landed; the popup lists them live.
-
-**About dialog (issue #23, implemented 2026-07-27 — replaces the
-About→shortcuts placeholder)**: Help > About opens a dedicated modal
-(same scrim/close pattern as the shortcuts popup: Esc or click outside;
-clicks on the card never close it). Content, user-directed: "FastCull"
-with the version on its own line beneath it, the two-sentence
-description, "Main contributor: Danilo de Paula", the repository URL as
-plain RETYPE-ABLE text (no URL-opener dependency in v1; the URL must
-never wrap or ellipsize), and the
-license line "GPL-3.0-or-later" — moved here from the shortcuts footer
-(its intended home per the M5 deferral). The version string is composed
-by the BUILD, never hand-maintained: `X.Y.Z` when HEAD sits exactly on
-the release tag `vX.Y.Z`, **`X.Y.Z-devel-YYYYMMDD-<short-hash>`**
-otherwise (a bug report from a dev build must pin the commit); no git
-(tarball build) falls back to plain `X.Y.Z`. Traced at startup
-("about version ...") for headless assertions, and asserted by
-`about_dialog_renders_and_contains_the_keyboard` as a SHAPE: off a release
-tag a `-devel-` suffix is MANDATORY (CI checks out shallow with no tags,
-so it is always off-tag — without this the suffix could vanish entirely
-and the test would still pass), the date must be 8 digits when present,
-and the dateless fallback must still be a bare hex hash.
-Recorded gaps, mutation-measured: the test proves a date is present and
-well-shaped but not WHICH date — swapping the committer date for the
-author date ships a string wrong by years and stays green; the dateless
-fallback and the two-line split are likewise unpinned. Killing the first
-wants a fixture repo with divergent author/committer dates, which is
-heavier than the defect.
-
-**Date in the devel suffix (issue #26, user decision 2026-07-31)**: the
-hash says WHICH code is running, the date says HOW OLD it is — without
-anyone having to look the hash up, which is the point of a string people
-paste into bug reports. Date before hash so builds from one branch sort
-chronologically, and compact `YYYYMMDD` because dashes inside the date
-would stop reading as separators.
-- It is the COMMIT date, not the build date: reproducible — the same
-  commit always yields the same string, and two people on that commit
-  report the same version. QE confirmed the reproducibility claim is
-  timezone- and locale-independent (git renders the commit's own recorded
-  offset), and that the date and the hash always move together, since both
-  come from one build-script run against one HEAD.
-  Precisely: the date does not go stale in any case the HASH would not.
-  When `build.rs` does not re-run, the binary reports the previous
-  commit's date AND hash — self-consistent, but describing code that is
-  not running. `build.rs` therefore also watches the TAG refs, because
-  `git tag vX.Y.Z && cargo build` used to leave a `-devel-` string in a
-  release binary (it did, at 0.5.0). Remaining hole, recorded: a developer
-  who sets a global `CARGO_TARGET_DIR` shared between two checkouts of the
-  same version gets whichever build-script result cargo cached; `cargo
-  clean -p fastcull-app` fixes it. Pre-existing since #23 and identical
-  for the hash alone.
-- Specifically the COMMITTER date (`%cd`), not the author date: a
-  rebased or cherry-picked commit keeps its original author date, which
-  would describe when the code was first written rather than when the
-  commit being run came into existence.
-- A hash with no usable date still yields `X.Y.Z-devel-<hash>`; the date
-  is additive and never costs the hash.
-- **The title line is split in two** ("FastCull", then "version …" at
-  13 px with `wrap`). That Text had no `wrap:` while its neighbours did,
-  and Slint clips an unwrapped Text from the RIGHT — precisely where the
-  commit hash sits, the one part of the string a bug report cannot afford
-  to lose (persona review). Measured honestly: today's string occupies
-  ~365 px of the 444 px content box, so it would NOT have clipped yet —
-  the split is precaution against the next thing that lengthens the
-  suffix, not a fix for an observed truncation. `wrap` does not by itself
-  prevent a mid-token break (Unicode line breaking allows one after a
-  hyphen); the width margin is what does.
-  The card grew to 348 px with tighter padding to hold the extra line. QE
-  verified the version renders complete at every size down to 480x320,
-  including with `core.abbrev=20`. The accepted defect recorded here — that
-  below ~360 px of window height the redundant "Esc or click outside to
-  close" hint spilled outside the card — is CLOSED as of 2026-09-04: the
-  shared card clips (the shortcuts-card section above), so overflowing
-  content is now cut at the card's edge instead of drawn on the scrim.
-  The version string itself never clips at any usable size.
-
-**Modal keyboard containment (issue #23, user decision "swallow
-everything in that screen")**: while About OR the shortcuts popup is
-up, Esc closes it and EVERY other key is swallowed — the old Esc-only
-guard let N/Y/arrows act on the grid under the scrim (persona
-IN-MY-WAY: a stray N while reading About must never reject a photo;
-the shortcuts popup was the worse leak — the popup a new user has open
-while experimentally pressing keys). Driven NAV keys (`FASTCULL_DRIVE`)
-are contained identically, or the containment tests would test
-nothing. test-harness.md gained `about` and `shortcuts` toggle
-actions for those tests. Containment mechanics (validator findings on
-the first cut): the popups are declared LAST in the element tree so
-their scrims render above every layer — the old order left the IPTC
-panel clickable ON TOP of an "open" modal; opening a modal steals the
-keyboard back to the main key scope (a focused panel LineEdit is a
-sibling of that scope and would otherwise keep eating keys, including
-the closing Esc); the scrims swallow wheel events (the grid must not
-scroll under a modal). The MENU BAR stays live while a modal is up
-(File > Quit works) — standard desktop behavior, deliberate.
-**ALL FOUR scrims swallow the wheel (issue #49)**: About and the
-shortcuts popup get it from the shared `ModalScrim`; Copy Picks and
-Export Frames as Video are hand-rolled copies of that scaffolding (the
-focus scope has to WRAP the card, which the component cannot express —
-the migration blocker recorded in `main.slint`), and until 2026-08-29
-their scrim `TouchArea`s had no `scroll-event` arm, so a wheel over
-either dialog fell through to the grid's Flickable behind it and the
-user came back to a different place in the folder (persona: IN-MY-WAY
-when it bites). A hand-rolled scrim must carry the arm. All four scrims
-are driven now — the two copies plus `ModalScrim` itself, whose arm was
-correct but untested: each test wheels the grid once BEFORE the modal
-(so a grid that cannot scroll fails loudly instead of passing
-vacuously), wheels again with the modal up and requires `vpy` unmoved,
-and wheels a third time after Esc as the control that the token still
-reaches the grid. Each also wheels over a CHILD of the card — the copy
-dialog's rename field, About's click-eating `TouchArea` — which is the
-one place where "the card swallowed it" could be a child's doing rather
-than the scrim's.
-**Esc closes the TOPMOST modal only (issue #42)**: with About or the
-shortcuts popup opened over the live copy dialog (the live menu makes
-that reachable), keyboard focus stays in the dialog's scope, whose own
-containment branch closes the popup on top first — the dialog and its
-destination/plan state survive, and the next Esc closes the dialog;
-marks stay contained throughout. The previously recorded "known cost"
-here — that Esc would reach the copy dialog's scope so About closes by
-click-outside — understated reality: Esc actively closed the HIDDEN
-dialog and threw its plan state away. Both key scopes now contain
-modals identically. Opening a modal over a FOCUSED panel field steals
-the keyboard in a way that survives the menu's post-activation focus
-restore — see Focus continuity in the Filter & sort bar section.
-
-## Filter & sort bar (M5 decisions recorded 2026-07-25)
-
-- Filters: SINGLE-choice chips — All / Picked / Rejected / Unmarked (user
-  decision: single choice is enough; combinations dropped). The in-burst-only
-  chip was CUT at M7 kickoff (persona IN-MY-WAY, user-delegated: chips
-  are single-choice, so it would trade away Unmarked and break the
-  inbox-zero loop; the `[`/`]` burst-jump keys serve the actual need).
-- Sort: capture time (default) ↑↓, filename ↑↓.
-- Implemented as pure predicates in `fastcull-core::filter` over the session;
-  the grid binds to the filtered+sorted view. Counts shown per filter state.
-- **Filtered-view mutation rules (blocking spec gap closed pre-M5)**: marking
-  an image so it no longer matches the active filter removes it from view
-  LIVE; the cursor lands on the next image in the filtered view (else the
-  previous, else none); counts update immediately. When the filter itself
-  changes, the cursor goes to the nearest surviving image, else the first.
-  The inbox-zero loop (filter Unmarked, Y/N until empty) must work exactly.
-- **Focus containment (blocking spec gap closed pre-M5)**: while ANY text
-  field has focus, no single-key shortcut fires — typing "Xavier" must not
-  reject a photo. Enter commits the field and returns focus to the grid.
-  (The original wording here promised "Esc in a field abandons the edit;
-  second Esc acts on the panel/view" — that never shipped: Slint's
-  LineEdit offers no Esc hook in v1, so Esc in a field is a no-op. The
-  recorded deviation lives in iptc-templates.md's panel-step ledger; the
-  field exits that DO exist are listed there and in Focus continuity
-  below. Corrected 2026-08-03, gate finding — the stale promise
-  contradicted the ledger and docs/metadata.md.)
-- **Focus continuity (issues #41/#42)**: the inverse guarantee —
-  whenever the focused editor is DESTROYED (panel close via any route,
-  session swap) or COVERED (About/shortcuts opening over the panel or
-  over the copy dialog, and the copy dialog itself opening over a
-  focused panel field via File > Copy Picks — the strand RUN14 showed
-  held only by init-timing luck), keyboard focus deterministically
-  returns to the topmost surface's key scope. Never a dead keyboard,
-  never keys eaten by an invisible editor: pre-fix, closing the panel
-  from the menu left focus on NO element (at 1:1 with no discoverable
-  recovery), and a modal opened over a focused field was un-dismissable
-  while every keystroke landed invisibly in the field — committable as
-  metadata. Text disposition: a DESTROYED editor DISCARDS its
-  un-committed text (user decision 2026-08-03: no commit-on-destroy —
-  unchanged, and DETERMINISTIC since 2026-08-30: it used to depend on
-  whether Slint happened to deliver a `FocusOut` before dropping the
-  item, and a rebuild-generation stamp now decides it, see the owner
-  invariant below); a
-  COVERED editor exits like click-away — the text commits. The covered
-  case is NOT a new decision: it preserves the G7 semantics that
-  already shipped (opening a menu blurred the field and committed
-  exactly this way pre-fix — RUN17), stated here so the asymmetry with
-  destroy is deliberate and on the record. A session swap
-  additionally invalidates every in-flight edit by generation stamp
-  (editors stamp the session generation on focus gain; a blur commit
-  from a stale stamp discards), so the old session's half-typed text can
-  never be committed against the new session's images — the stamp, not
-  timing, is the guarantee, because the swap leaves the keyword editor
-  alive and the focus steal blurs it after the swap. Mechanics (the
-  menu is the hard case): Slint's MenuBar restores focus to the
-  previously-focused element AFTER the item activation runs, so a
-  synchronous steal inside an activation is overridden — the app
-  re-claims focus QUEUED behind the current event dispatch (a
-  zero-length timer cannot fire until the dispatch containing the
-  menu's restore has unwound), and the panel/copy editors additionally
-  BOUNCE any focus gain arriving while a modal covers them (belt and
-  braces, both deterministic). The 1:1 loupe click surface claims the
-  keyboard like every other click surface (defense in depth; the click
-  still re-centers — grid and loupe click semantics are unchanged, by
-  user decision).
-- **The owner invariant (issues #63/#64, 2026-08-30)**: *a destroyed
-  editor never keeps the focus token, and the keyboard goes back where
-  the user had it.* The mechanism the earlier fixes worked around without
-  naming: Slint's window holds a WEAK reference to its focus item
-  (`WindowInner::focus_item`), so an editor destroyed by a model
-  replacement delivers NO `FocusOut`, nothing reassigns focus, and the
-  reference simply dangles — every key event afterwards dies on an
-  `upgrade()` that returns `None`. Instrumented and measured, not
-  inferred: in 18 of 20 runs the dying editor never announced a loss at
-  all, and a `key:y` sent inside the window is provably lost (it lands on
-  a tree with the reclaim and is dropped on one without).
-  The app therefore carries the token itself, a root `focus-owner`
-  int — `0` the main key scope, `1..=N` panel field row i (written
-  `i + 1`), `N+1` the keyword field, `-1` a dialog's own scope.
-  **Only a GAIN ever writes it, never a loss**, for two measured reasons:
-  `changed has-focus` handlers run on the next event-loop iteration and
-  the GAINER's runs first here (click Title then Description: `iptc field
-  1 gained` at [3733], `iptc field 0 lost` at [3735]), so a loss-write
-  would land after the new owner's and blank it; and a row destroyed by a
-  rebuild shares its id with the row RECREATED in its place, so the dying
-  item's late blur cannot be told from the live one's ([3762] the new row
-  claims, [3835] the old one finally announces its loss — a
-  compare-and-clear was tried and zeroed a live token exactly there).
-  Every claim writes the token SYNCHRONOUSLY at the site — inside
-  `focus-keys()`, beside every bare `keys.focus()`, and in the rows' and
-  the keyword field's `init`-time claims (an `init` focus gain fires no
-  `changed has-focus` at all, the same Slint behaviour `edit-gen` already
-  works around; leaving it out is what made the `K` flow read
-  `focus-owner == 0` while the keyword editor held the keyboard, and made
-  a dialog scope read a panel row while the dialog owned the keys).
-  Leaving a claim unrecorded is not cosmetic: a rebuild in the gap reads
-  the stale EDITOR id and pulls the keyboard back out of the grid, which
-  measurably undid the shipped G4 "Enter returns to the grid" rule until
-  the writes were made synchronous.
-  The remaining staleness is focus leaving for something Slint owns — a
-  menu popup, or the WINDOW being deactivated — and staleness is the SAFE
-  direction: the reclaim then hands the keyboard back to the field the
-  user was editing, where it was. Clearing would strand it.
-  Reclaim points:
-  - **the field-rows rebuild — back to the SAME ROW**, armed immediately
-    after `set_iptc_fields` replaces the model and only when the token
-    names a field row. Rust cannot name a repeater's child, so it arms a
-    root `iptc-refocus-row` and the RECREATED row claims the keyboard and
-    clears the flag — the `iptc-focus-keywords` pattern, except that the
-    row cannot do it from `init` (see below), so it claims from a
-    `changed` handler or, when there was no edge to see, from its
-    `Timer`.
-    **The flag is armed one event-loop iteration LATE** (QE 2026-08-30;
-    that text read "and must be", which was true of the tree it
-    described and is no longer the whole story — see the early-arm
-    paragraph below). What stands: `self.focus()` called from a repeater
-    row's `init` DOES NOT TAKE EFFECT in Slint 1.17. It silently does
-    nothing — proven both ways, 10/10 dead with the claim in `init`,
-    10/10 alive with only the flag write deferred — so a row can take
-    the keyboard only from an event-loop callback that runs once it is
-    alive to the window: a `changed` handler, or its `Timer` tick. The
-    deferral is what makes the LATE ordering — the flag arriving after
-    the repeater has rebuilt, so the recreated row sees an edge and the
-    doomed one is already gone — the likely one; it is not a guarantee,
-    and the ordering it cannot promise is what the generation stamp and
-    the `Timer` answer. A `changed
-    absolute-position` belt was tried and does not rescue it: that
-    handler never fires for rows 0 and 1, whose first computed position
-    is already their last (0/6). **So this path leaves a real gap, and it
-    is not the 0 ms the swap path gets** — measured from the rebuild to
-    the claim, per profile, because the difference is large and only the
-    release figures describe what ships:
-
-    | build / load | min | median | max |
-    | --- | --- | --- | --- |
-    | **release, idle** | 5 ms | 5 ms | 6 ms |
-    | **release, six spinners** | 11 ms | 12 ms | 35 ms |
-    | debug, idle | 95 ms | 102 ms | 117 ms |
-    | debug, six spinners | 193 ms | 206 ms | 230 ms |
-
-    (QE measured the same shape independently at 5-10 ms release-idle and
-    12-31 ms release-loaded.) **A keystroke inside the gap is not lost
-    when the claim runs before it in the iteration** — the common case,
-    measured 12/12 by the validator and 20/20 by QE at 2026-08-30's
-    loads: the key is queued in the same event-loop batch and delivered
-    to the recreated editor after the claim, in order. It IS dropped when
-    the key is processed before the claim callback (QE 2026-09-02, issue
-    #69): under six spinners plus a build loop in a debug build the
-    iteration is one frame of 200-500 ms, the claim landed 190-540 ms
-    after the rebuild, and a `drive: key:w` at [5936] was lost to a
-    claim at [5937]. The cursor-move test's fixed-time keys after the
-    move fell in that gap once in 20 on that seat; its acting assertion
-    now names both readings, and the keys no longer run on the clock: the
-    script waits for the claim itself (`wait:row 0 (gen K)`, issue #69 —
-    test-harness.md's `wait:` paragraph says why the gen has to be in
-    the substring). The gap the table prices is unchanged; what closed is
-    a driven run's exposure to it. The loss case the FAIL-1 family was — "no
-    claim at all" — is closed on both orderings; a key inside the gap is
-    the residual the table above prices.
-    The arm that actually DELIVERS is the deferred RE-ASSERT
-    (`restore -> row N`), not the SameRow arm queued beside it: 40/40
-    observed runs across the three profiles above. The SameRow arm is
-    still the one that names the row, and it is what makes the re-assert
-    find a field-row token to re-assert. (Both are zero-length timers
-    queued in the same refresh, so they run in the same event-loop turn —
-    which is why, on the seat where that turn beats the repeater update,
-    NEITHER delivered and the row's `Timer` had to. See the early-arm
-    paragraph below.)
-    The gap is the price of going back to the ROW rather than to the
-    grid, which is the right trade — a claim on `keys` in between makes
-    the next caption character a cull command — but it is a residual, not
-    a clean win, and closing it needs either an in-place row update (the
-    follow-up below) or a Slint that can focus from `init`.
-    **An arm that fires before its row exists must SURVIVE — and the
-    `settled` edge that was meant to make it survive never could**
-    (CI red on the v0.13.0 commit, diagnosed 2026-09-01). A zero-length
-    arm timer can beat the repeater update; the flag is then already set
-    when the row is born, so `want-refocus` is true from its first
-    evaluation, `changed want-refocus` never fires, and the request is
-    armed, matched and silently never claimed — ownerless for good, with
-    every keystroke after it dead.
-    The first answer was half right: the flag is cleared ONLY by an
-    actual claim (never by an arm firing), so an early arm does survive
-    until its row exists. The other half — a `settled` property assigned
-    in the row's `init` to manufacture a false→true EDGE — **cannot
-    work**, and the generated Slint code says why: `user_init` runs the
-    `init` statements FIRST and installs the row's change trackers
-    AFTERWARDS, so anything written in `init` is the tracker's baseline,
-    not a change it can ever see. The 2026-08-30 campaigns did not catch
-    this because they never produced the early ordering; `settled` is
-    removed rather than left looking load-bearing.
-    **Which ordering a seat gets is not the app's to choose.** On the
-    developer's GPU-composited seat the repeater recreates the rows ~3 ms
-    after the model swap and the arm timer fires only ~87 ms later (LATE
-    arm — the path that always worked, and the only one the campaigns
-    ever measured). On the headless CI runner both arms fired inside the
-    model swap's own millisecond and the rows were recreated 16 ms
-    afterwards (EARLY arm), and the keyboard was stranded for the rest of
-    the run.
-    **What that runner is, corrected** (CI audit, 2026-09-04). This
-    paragraph and the two below it called it a "2-core" seat when the
-    finding was written on 2026-09-01. It is not, and was not: both CI
-    seats are 4 vCPU with ~16 GB — `ubuntu-24.04` and `windows-2025`
-    behind the workflow's `ubuntu-latest`/`windows-latest` labels. The
-    ORDERING FINDING IS UNCHANGED, because the core count was never its
-    evidence: the two arms firing inside one millisecond and the repeater
-    recreating the rows 16 ms later were READ OFF the failing run's own
-    timestamps, and the fix was then proven against the ordering itself
-    (0/5 claimed before the `Timer`, 10/10 after) rather than against a
-    machine size. What the wrong number did buy was a wrong INTUITION —
-    "few cores, therefore serialised, therefore early arm" — which is not
-    an inference anybody should draw again from this text; a 4-vCPU seat
-    with no GPU compositor produced the early ordering just as readily.
-    The `taskset -c 0,1` in the reproduction below is a local FORCING
-    device, not a model of the runner. Since 2026-09-04 the job writes
-    its own CPU count, memory, image and `rustc -vV` into the run summary
-    (ci.yml, `Record the runner's environment`), so the next reader does
-    not have to believe this paragraph either. The five CODE comments
-    that carried the same wrong number were corrected in place the same
-    day (`focus.rs`, `main.slint`, `screenshot.rs`, core's `loupe.rs` and
-    `zoom_walk.rs`) — a grep for it now finds the retraction and not four
-    fresh assertions of it.
-    **What answers both orderings is a per-row `Timer`** (1 ms, `running:
-    want-refocus`, the claim re-checked on the tick). A timer tick is the
-    one hook that runs after the change trackers are installed however
-    the race went, and a row CAN focus from it — unlike from `init`. It
-    costs nothing on the ordering that already worked: there the fast
-    path claims in the arm's own iteration, clearing the flag, so
-    `running` goes false and the timer never ticks.
-    Measured, with the arm forced early to make the CI ordering
-    deterministic (`arm_row_refocus` called synchronously and the
-    deferred re-assert removed): 0/5 claimed before the `Timer`, 10/10
-    after; the test itself 0/10 red before (the identical panic and line
-    CI reported) and 10/10 green after, under `taskset -c 0,1` plus four
-    spinners. On the unforced developer seat: 20/20 green before and
-    after — which is exactly why only CI could find this.
-    **The flag also carries a GENERATION (validator FAIL-1,
-    2026-08-30).** A Slint repeater does not tear its children down when
-    the model is replaced; they die at its next update. So the DOOMED row
-    instance is still alive, still watching the flag, and its `changed
-    want-refocus` runs FIRST: armed with the index alone and
-    SYNCHRONOUSLY, it consumed the flag in the rebuild's own millisecond,
-    focused itself, cleared the flag and then died — the recreated row
-    saw nothing, `focus-owner` still read that row, and no element owned
-    the keyboard. Measured dead 10 runs in 10 on a cursor-move rebuild.
-    The blur-triggered rebuild hid it (there the commit runs inside the
-    blur, so the timing differs), which is why every probe written before
-    this one missed it. So `iptc-refocus-row` is armed together with
-    `iptc-refocus-gen` = the current `iptc-rebuild-gen`, each row stamps
-    its own `born-gen` in `init`, and a row claims only if it was born
-    for the generation the flag names.
-    **Which of these is load-bearing on the shipped tree, honestly**
-    (re-measured 2026-09-01, because the 2026-08-30 answer was written
-    from the LATE ordering only). The DEFERRAL is not the guarantee it
-    was taken for — it decides which ordering is *likely*, not which one
-    happens, and CI got the other one. On this developer seat the arm is
-    late, so: making the arm synchronous again is 0/10 dead without the
-    `Timer` and 10/10 alive with it, and the generation stamp is not
-    independently demonstrable at all (the doomed instance is gone before
-    a late flag arrives; removing the stamp measures 15/15 alive,
-    validator 2026-08-30, and 6/6 alive here).
-    Force the EARLY ordering, which is what the headless CI seat actually
-    did (4 vCPU, not the 2 this paragraph used to claim — see the
-    correction above; forcing it is how it is made deterministic HERE, on
-    a GPU-composited developer machine that will not produce it on its
-    own), and both belts become load-bearing and measurable:
-    without the `Timer` 0/10, without the generation stamp 0/6 (the
-    still-alive doomed instance consumes the flag, FAIL-1's original
-    shape), with both 10/10. So the honest statement is that the arm's
-    timing is a race the app does not control, and the two belts —
-    generation stamp against a doomed instance claiming, `Timer` against
-    a live instance never getting an edge — are what make the claim
-    ordering-independent.
-    **Decision (validator 2026-09-01): the deferral is no longer a
-    mutation-tested invariant.** Of the three 2026-08-30 mutants the gate
-    kept, the synchronous-arm one is GREEN
-    by design with the `Timer` — that is the fix working, not the mutant
-    escaping — and the no-stamp one is red only under the forced EARLY
-    ordering (6/6 alive unforced on this seat, 0/6 forced); only the
-    disabled-synchronous-reclaim one is red on either ordering. The
-    deferral stays because it makes the fast path the likely one and
-    keeps the gap in the table above small, not because anything would
-    strand without it.
-    **Not to the grid**, which an earlier cut did and which is a HIGH
-    defect: the panel is a captioning surface, "focus stays where
-    clicked" is a shipped rule (iptc-templates.md), and the blur commit
-    of clicking from Title to Description itself rebuilds the rows — so
-    reclaiming to `keys` there made the very next character a cull
-    command. Measured: `x` rejected the photo and wrote a sidecar.
-    Synchronous is safe *here* precisely where it is not safe for the
-    menu: a rebuild runs in app code (a `refresh` pass), not inside the
-    MenuBar's activation dispatch, so no post-activation focus restore
-    follows it to override the claim.
-  - **a session SWAP — SYNCHRONOUS, to the topmost scope.** The same
-    rebuild, answered the other way, because the field's MEANING went
-    with the folder (#41 D3): there is no "same row" to go back to. The
-    panel cache carries the session generation it was built for, which is
-    how the two cases are told apart. A swap ALWAYS reaches this branch:
-    `IptcPanelState::begin_session` clears the row cache, so the next
-    refresh replaces the model even when the two folders' rows are
-    identical (both un-captioned) — verified 6/6.
-    The deferred re-assert additionally captures the session generation
-    when it is QUEUED and falls back to `focus-keys()` if a swap landed
-    before it fired (validator FAIL-4): the token would otherwise name a
-    field of a folder that is gone. Reachable only as menu-activation
-    then swap, i.e. File > Open Folder — which the harness cannot drive
-    (the native rfd dialog blocks the loop), so this guard is verified by
-    inspection and by the swap probes around it, not end to end.
-  - **panel CLOSE — SYNCHRONOUS *and* deferred**, the range covering the
-    keyword field too, because closing destroys the whole panel. The
-    deferred claim is the one that matters and it stays: while an editor
-    holds the keyboard the panel can only be closed from the MENU (`I`
-    types an `i` into the field — focus containment), and the MenuBar
-    restores focus to the destroyed editor after the activation returns,
-    which nothing synchronous can undo. So the close path is a few tens
-    of milliseconds (21-53 ms measured) BY DESIGN, and docs/culling.md
-    says so rather than claiming it is immediate. The synchronous half
-    covers the non-menu routes (the `iptc` drive token today).
-  - **the rebuild's own deferred re-assert**, queued behind the flag as a
-    belt: it re-reads the token when it fires, so it also routes to a
-    dialog that took over in between. Traced as `restore -> …`, where the
-    menu path is `menu -> …`, so a reader can tell which queued it.
-  - **any MENU ITEM — DEFERRED, and it re-asserts the TOKEN** rather than
-    claiming `keys` (QE finding 2026-08-30). Activating any item blurs a
-    focused field, the blur COMMITS it (G7), the commit rebuilds the rows
-    and destroys the editor, and then the MenuBar's restore hands focus
-    to the destroyed item: measured dead 5 times in 5 through View >
-    Filter Bar, which unlike View > IPTC Panel queued no claim of its
-    own. Every item now fires `menu-activated` first. It re-asserts the
-    token — a field row through `iptc-refocus-row`, the keyword field
-    through `iptc-focus-keywords`, anything else through `focus-keys()` —
-    because after a menu action the keyboard belongs where it belonged
-    before; blanket-claiming `keys` took it off the live keyword editor
-    and broke the shipped RUN17 behaviour on the first cut.
-  - **the other menu-driven paths — DEFERRED, unchanged**: a modal
-    opening, and the swap's own belt claim.
-  - **panel OPEN — DEFERRED, a belt**: queued when the panel opened and
-    `iptc-focus-keywords` was false on entry. Gated on that flag because
-    with `K` the keyword field's `init` claims focus during instantiation
-    and an unconditional claim would steal it straight back.
-  - **NOT after the keyword-chip or template model replacements.** Neither
-    holds an editor, and the keyword `LineEdit` is their SIBLING rather
-    than their child, so a reclaim there would fire while the editor it
-    "rescued" was alive and focused — taking the keyboard away from a
-    user mid-word every time another image's sidecar landed a keyword.
-    The rows model is the only one whose replacement destroys a focus
-    holder.
-  **The discard rule is unchanged and now deterministic.** "A DESTROYED
-  editor DISCARDS its un-committed text" (user decision 2026-08-03)
-  stands exactly as written. It used to hold by accident — the dying
-  editor usually got no `FocusOut`, so its blur handler simply never ran,
-  except in the 2 runs of 20 where it did and the text was committed
-  instead. It now holds by construction: Rust bumps a root
-  `iptc-rebuild-gen` immediately before every rows replacement, each
-  editor stamps that generation on focus gain, and the blur commits only
-  if the stamp still matches. A rebuild between gain and blur therefore
-  discards, every time; a real click-away or Tab (no rebuild in between)
-  commits, exactly as before. Measured on the same-session probe — type
-  into Title, then grow the batch so the row goes mixed — 9 of 9 clean
-  runs discard. Note how easily that rebuild is reached: it is ANY change
-  to what a row should show, the CURSOR image's own IPTC landing in a
-  single-image folder with nothing selected included (QE saw a title
-  committed with no Enter twice in ten runs on the pre-fix tree). Both
-  the docs and this spec therefore say "any rows rebuild", never "another
-  image of the selection". A boolean "suppress the next blur commit" could not do
-  this: `changed has-focus` is deferred, so a flag set and cleared around
-  the reclaim is already false when the handler reads it, and one held
-  for a whole refresh tick would swallow real click-away commits.
-  **Not done here, recorded as a follow-up**: updating changed rows IN
-  PLACE (`VecModel::set_row_data`) instead of replacing the model would
-  keep the editors alive and remove the hazard at its root. It is not a
-  drop-in. The row's `text` is a BINDING on `row.value`, and Slint drops
-  a binding permanently the first time a handler assigns `self.text` —
-  which every exit path here does — so today only the model replacement,
-  by re-creating the item, restores it; in place, an edited-then-blurred
-  field would sit on a stale value for the rest of the session. It would
-  also change what `session_swap_mid_field_edit_discards_and_keeps_the_
-  keyboard` proves: the editor would survive the swap, leaving the D3
-  discard resting entirely on the generation stamp and `changed seen-gen`
-  rather than on destruction. The owner-token reclaim is the fix; this is
-  an optimisation, and it needs its own step with those two questions
-  answered.
-  **A menu DISMISSED without activating anything** (validator FAIL-3,
-  2026-08-30) — the nastiest shape in the family, and closed by the same
-  deferral. Opening a menu over a focused field blurs it, the blur
-  commits (G7), the commit rebuilds the rows and destroys the editor;
-  then the menu is dismissed — a click elsewhere, Esc, a missed item —
-  and the MenuBar restores focus to the destroyed instance. Nothing
-  announces it: no `activated` fires, so the `menu-activated` claim never
-  runs, and Slint 1.17 exposes no menu open/dismiss callback to hang one
-  on. Measured dead 10/10 while the reclaim's flag was armed
-  synchronously. It needed no new claim in the end: armed one event-loop
-  iteration late (see the rebuild bullet), the flag lands on a row that
-  is alive and can actually take focus, and that claim survives the
-  restore. 15/15 alive on the Esc route and 5/5 on the click-elsewhere
-  route, against 0/10 on a tree with the arming made synchronous again.
-  A third "route" measured at the time — clicking the menu bar again —
-  was WITHDRAWN: it RE-OPENS the menu rather than dismissing it, so those
-  runs measured containment while a menu is up, not recovery after a
-  dismissal (validator, from the screenshots). Pinned by
-  `a_dismissed_menu_over_a_focused_field_row_keeps_the_keyboard`, which
-  drives the unambiguous Esc route.
-  **Open, found while measuring this (NOT fixed here)**: deactivating the
-  WINDOW mid-edit — alt-tab away with a half-typed caption — delivers a
-  real `FocusOut` to the live editor, whose blur handler then COMMITS,
-  exactly as a click-away would. It is pre-existing, it is invisible to
-  `keysfocus` reasoning, and it is the best current explanation for the
-  intermittent leak recorded against
-  `session_swap_mid_keyword_edit_never_writes_into_the_new_session`
-  (#54): measured here at 1 leak in 10 probe runs, correlating 1:1 with a
-  lone `focus: … lost` that no gain follows, and reproduced on the
-  unmodified tree at 1 failing group run in 6. QE's independent A/B puts
-  it at 3/10 on this tree against 4/10 with the reclaim removed, trace
-  shape identical — i.e. unchanged by this step, as it must be: the blur
-  arrives from OUTSIDE and commits BEFORE any rebuild, so the
-  rebuild-generation stamp that enforces the discard rule never gets to
-  see it. Telling a deactivation
-  blur from a click-away blur needs the window's activation state, which
+- **The guarantee**: whenever the focused editor is DESTROYED (the panel
+  closed by any route, a session swap, the field rows rebuilt) or COVERED
+  (About or the shortcuts card over the panel or the copy dialog; the copy
+  dialog over a focused field), keyboard focus deterministically returns
+  to the topmost surface's key scope — never a dead keyboard, never keys
+  eaten by an invisible editor (pre-fix, closing the panel from the menu
+  left focus on NO element, and a modal over a focused field was
+  un-dismissable while every keystroke landed in the hidden field,
+  committable as metadata). A destroyed editor DISCARDS its uncommitted
+  text (user decision 2026-08-03); a covered one commits like click-away,
+  the shipped G7 semantics. A session swap invalidates in-flight edits by
+  generation stamp, so the old session's text can never be committed
+  against the new session's images.
+- **The owner invariant** (2026-08-30): Slint's window holds a WEAK
+  reference to its focus item, so an editor destroyed by a model
+  replacement delivers no `FocusOut`, nothing reassigns focus, and every
+  key afterwards dies on a failed upgrade. The app carries the token
+  itself — a root `focus-owner`: `0` the main key scope, `1..=N` panel
+  field row i, `N+1` the keyword field, `-1` a dialog's own scope — written
+  SYNCHRONOUSLY at every claim site and ONLY by a gain, never by a loss
+  (the gainer's `changed has-focus` runs first, and a row destroyed by a
+  rebuild shares its id with the row recreated in its place). Staleness —
+  focus leaving for a menu popup or a deactivated window — is the safe
+  direction: the reclaim hands the keyboard back to the field the user was
+  in.
+- **Reclaim points**: the field-rows rebuild → back to the SAME ROW, never
+  the grid (a claim on `keys` there made the next caption character a cull
+  command): Rust arms `iptc-refocus-row` with the rebuild GENERATION, one
+  event-loop iteration late, and the recreated row claims from a `changed`
+  handler or from a 1 ms per-row `Timer` — never from `init`, where
+  `focus()` silently does nothing, and never the doomed instance, which
+  the generation excludes; both belts are load-bearing under the EARLY arm
+  ordering the headless CI seat produces. The residual gap is 5–6 ms
+  release-idle and 11–35 ms loaded (95–230 ms in debug); a keystroke inside
+  it is delivered in order when the claim runs first and dropped otherwise,
+  so scripts wait on `row 0 (gen K)`. A session SWAP → synchronous, to the
+  topmost scope (0 ms; the field's meaning went with the folder). Panel
+  CLOSE → synchronous AND deferred, because the MenuBar restores focus to
+  the destroyed editor after the activation returns (21–53 ms, by design;
+  docs/culling.md says so). Any MENU ITEM → deferred, re-asserting the
+  TOKEN (a `menu-activated` callback fires first; blanket-claiming `keys`
+  took the keyboard off a live keyword editor). Modals and panel OPEN →
+  deferred belts. NEVER after the keyword-chip or template model
+  replacements, which hold no editor. A menu DISMISSED without activating
+  anything — the nastiest shape — is closed by the same late arm.
+- **The discard rule is deterministic**: Rust bumps `iptc-rebuild-gen`
+  before every rows replacement, each editor stamps it on focus gain, and
+  the blur commits only if the stamp still matches — ANY rows rebuild
+  discards (the cursor image's own IPTC landing included; docs and this
+  spec say "any rows rebuild"), while a click-away or Tab commits.
+- **Open, issue #68**: deactivating the WINDOW mid-edit delivers a real
+  `FocusOut` and the blur COMMITS, exactly as a click-away would — the
+  likely root of the 1-in-4 keyword-swap intermittent (#54; unchanged by
+  the owner invariant, the blur arriving from outside before any rebuild).
+  Telling it from a click-away needs the window's activation state, which
   Slint 1.17 exposes only through `i-slint-core`'s internal
-  `WindowInner::active()` — so it needs its own step and a decision about
-  that dependency. Until then `docs/metadata.md` tells users plainly that
-  a window switch mid-word commits, and points at Revert.
-  **It makes every "no sidecar was written" assertion seat-sensitive**,
-  not just the two tests that name it: any script that leaves a field
-  focused with text and later reads the folder can be hit. Observed once
-  in a full suite run on `copy_picks_from_the_menu_over_a_focused_field_
-  owns_the_keyboard`, which is 0/8 in isolation and 0/6 when its script
-  is driven by hand. Those assertions now print the child's trace, so the
-  next occurrence can be read rather than guessed at: the signature is a
-  lone `focus: … lost` with no `gained` after it and no `focus-keys (…)`
-  before it.
-  **Do not read a standing `revert=…` in a dump as this defect** (learned
-  the expensive way on the 2026-09-01 CI red): a committed field and a
-  dead keyboard leave the same dumps from there on, and a script that
-  commits something earlier carries the line into every later dump
-  anyway. Only the TRACE separates them — this defect is a `lost` BEFORE
-  the rebuild with no claim preceding it; a stranded reclaim is a rebuild
-  with no `row N (gen …)` claim AFTER it. The cursor-move test now
-  asserts the two separately so a red run names the right one.
-- Per-image keywording is a same-evening flow (user decision): a focus-jump
-  key into the keyword field, comma-separated entry, Enter commits + returns
-  to the grid. Batch-apply perf target: picks-scale (hundreds), not
-  whole-folder (user decision).
-- No Open Recent / save-template-UI / filter hotkeys in M5 (user decision:
-  keep it minimal; templates.toml is hand-edited in v1).
+  `WindowInner::active()` — its own step. Until then docs/metadata.md tells
+  users a window switch mid-word commits, and points at Revert. Its
+  signature in a trace: a lone `focus: … lost` with no `gained` after it
+  and no `focus-keys (…)` before it; a stranded reclaim is a rebuild with
+  no `row N (gen …)` claim after it — and a standing `revert=…` in a dump
+  is NOT this defect (a committed field and a dead keyboard leave the same
+  dumps).
+- Recorded follow-up: updating changed rows IN PLACE (`set_row_data`)
+  instead of replacing the model would keep the editors alive and remove
+  the hazard at its root; not a drop-in (a binding a handler has assigned
+  once is dropped for good, and the swap test's proof would rest on the
+  stamp alone).
 
-**Persona-review defaults adopted 2026-07-25 (user AFK; provisional until
-the user confirms, all cheap to change):**
-- **Inbox-zero empty state (G2)**: when the filtered view empties, the grid
-  shows an empty-state message with final counts ("0 unmarked — N picked,
-  M rejected"), no cursor. If it happens while in loupe, the view drops
-  back to the grid empty state. The cursor contract's "exactly one cell"
-  rule applies only to non-empty views.
-- **Keyword commit (G4) — FINAL (persona verdict adopted by the user
-  2026-07-25 after PM research)**: Enter commits + returns focus to the
-  grid; cursor STAYS. PM's Save-and-advance was examined and rejected:
-  stacking advance sources breaks the K→type→Enter→Y loop (the Y would
-  mark the wrong frame), and advance is incoherent on a multi-selection.
-  The future config option is worded as commit-and-advance-AND-KEEP-FIELD-
-  FOCUS (the true PM caption loop) — advance without focus retention is
-  the version nobody wants.
-- **Template apply UI (G5)**: the IPTC panel shell includes a template
-  dropdown (reading templates.toml) + Apply button + "Revert last apply"
-  button — templates that cannot be applied from the UI are dead weight
-  (persona). Revert semantics per iptc-templates.md (single level).
-- **Filter-bar hide (G6)**: hiding the bar (View > Filter Bar) resets the
-  filter to All — a filter must never be active while invisible.
-- **Field edge cases (G7)**: click-away from a half-typed field commits
-  (same as Enter, without the focus return); Tab cycles panel fields;
-  default sort is capture time ascending.
+### Slint facts this module depends on (1.17)
+
+A `changed` tracker is installed AFTER a row's `init` runs, so anything
+written in `init` is the baseline, never a change; `focus()` from a
+repeater row's `init` does not take effect; a repeater does not tear its
+children down when the model is replaced — they die at its next update;
+the MenuBar restores focus to the previously focused element AFTER an
+item's activation runs; `WindowInner::focus_item` is weak; `keys.has-focus`
+reads false when the WINDOW is deactivated while keys still arrive; an
+element with a bound width but no `x:` (or height but no `y:`) is CENTRED
+in its parent; a conditional element is re-created; `check_repeat`
+restarts the click count beyond 10 logical px; a `Text` without `wrap`
+clips from the RIGHT; a layout does not clip its children; `Flickable {
+interactive: false }` forwards non-wheel pointer events and handles the
+wheel; a repeated timer re-arms BEFORE its callback runs; `quit_event_loop`
+is a user event that Wayland's loop delivers one dispatch later; a
+Flickable's fling binding survives programmatic sets; the software
+renderer's source offsets are `Fixed<u16, 4>`.
+
+## Contracts
+
+- Pure functions in core, the app only bridges: `pointer::step`; `zoompan`
+  (`ladder_up`, `ladder_down`, `contain_click_frac`); `grid::visible_range`,
+  `grid::scroll_after_resort`, `GridLayout::new`; `filter::view`,
+  `filter::view_true_sort`, `filter::cursor_after_recompute`; `selection`
+  (`batch`, `count_in_view`, `extend_to`, `extend_bursts`, `select_group`);
+  `transit::render_rung`, `transit::evict_fullres`, `FULLRES_RING`.
+- Constants: `TRANSIT_GAP` 250 ms, `SETTLE_DEBOUNCE` 150 ms,
+  `FOCUS_DEBOUNCE` 250 ms, `OVERLAY_HOLD_CAP` 250 ms, `PREFETCH` 2,
+  `TRANSIT_BEHIND`/`TRANSIT_AHEAD` 2/8, `MID_RUNG_MAX_LONG` 2048,
+  `UPSCALE_THRESHOLD` 1.25, 60 logical px per wheel notch,
+  `pointer::OPTIMISTIC_MAX`, `CELL_ASPECT` 3:2, the 300 px panel, the 25 %
+  wash, `#4da3ff`.
+- The marks and dump fields this module emits are test-harness.md's.
+- The keyboard-map table above is parsed by
+  `the_shortcuts_card_lists_every_binding_in_the_spec`.
+- The About dialog's credit line is the recorded exception to M7.
 
 ## Acceptance criteria
 
-- [x] `filter.rs` unit tests: every filter/sort combination over a synthetic
-      session, counts included.
-- [x] Windowed-model tests (core side): visible-range → model-window computation,
-      incl. partial rows, tiny folders, and N=1 — `grid.rs`:
-      `visible_range_windows_with_margin`, `visible_range_edges`,
-      `visible_range_at_single_column` (ticked 2026-09-17; the tests date from
-      M2).
-- [x] **Menu bar readable under any desktop colour scheme** (dark-only
-      palette pin): `menu_bar_labels_survive_a_light_scheme_desktop` forces
-      the failing scheme-resolution branch deterministically (an
-      unreachable session bus → portal unreadable → Unknown → fluent picks
-      the LIGHT palette) and asserts light glyph pixels over the dark bar,
-      with an anti-vacuity check that the bar itself is still the app's
-      dark chrome. Mutation-verified: removing the `Palette.color-scheme`
-      pin yields "only 0 bright pixels" and FAILS. NOT `dbus-run-session`
-      — an isolated bus auto-starts a fresh portal that re-reads the real
-      desktop setting and passes vacuously (QE 2026-08-02).
-- [x] **Transit vs settled** (user requirement 2026-08-01): a held key is
-      distinguished from deliberate taps and decays on release
-      (`transit_tracks_held_keys_and_decays_on_release`); the request while
-      moving is a rung the mid actually serves, and the old 2048 value still
-      fails (`transit_request_is_served_by_the_mid_rung`); the ring leans the
-      way the user travels and clamps at both folder edges
-      (`transit_ring_leans_in_the_direction_of_travel`); a settled frame
-      climbs even though transit only asked for the mid, without duplicating
-      an in-flight job and without spinning
-      (`a_settled_frame_climbs_even_though_transit_only_asked_for_the_mid`);
-      the settle poll does not disturb LRU order
-      (`the_settle_guarantee_does_not_disturb_the_lru_order`). Through the
-      PUBLIC api, so that disabling transit at the call site fails:
-      `a_held_key_reaches_transit_through_the_public_api` and
-      `a_backward_hold_keeps_leaning_backward_across_refocus`, the latter
-      simulating the app's same-index re-focus storm.
-      NOT covered by a test: the measured performance figures themselves —
-      nothing turns red if the frames-on-screen or stop-to-sharp numbers
-      regress (see issue #27 on the perf-budget rule).
-- [x] **No fit-drop, no fling, no phantom fold (issue #46)**. Core: the
-      ring maps view positions to ids and back
-      (`the_prefetch_ring_walks_view_order_not_id_order`), the direction
-      latch compares positions
-      (`travel_direction_is_latched_in_view_positions`), deferred
-      revival uses the same ring
-      (`deferred_revival_ring_follows_view_order`), and the public api
-      proves the ring decodes view neighbors and NOT id neighbors
-      (`prefetch_follows_the_view_order_through_the_public_api`).
-      App level, driven through real dispatched pointer/key events and
-      dump/trace state (pixels are useless here — a far-panned 1:1
-      snapshots black, and a wrong-position frame is a state nothing
-      re-renders): a cook-widened cold jump keeps `one2one` and the
-      carried pan centre and renders the thumb rung
-      (`transit_to_a_cold_frame_keeps_the_overlay_at_the_carried_center`);
-      drag pans 1:1 and folds into the centre, release stops the image
-      dead, and navigation after a flick keeps the drag-carried centre
-      with zero `pan fold` traces
-      (`loupe_drag_pans_one_to_one_and_a_fling_never_survives_navigation`);
-      paced taps over an interleaved-id session land warm — no overlay
-      drop, no thumb-rung rescue needed
-      (`paced_taps_over_an_interleaved_session_land_warm`). Every
-      bug-shaped assertion red-run-verified against the pre-fix build
-      (6d15ed1 + the drive-harness commit, release profile — the
-      profile the 5/5 and 3/3 reproductions were proven in); the slow-
-      drag half of the M3 test guards the surviving 1:1-pan contract,
-      and its fold-at-drag-time assertion is ALSO red on pre-fix code,
-      which deferred the fold to the next input. Recorded limitations: the F2 warm-landing pin (zero
-      thumb-rung rescues at a 600 ms cadence) binds in RELEASE builds
-      only — it is a timing pin, a decode raced against a clock, and
-      timing pins bind in the release profile like the perf budgets (the
-      perf_budgets precedent). The reason first written here, "a debug
-      build decodes a mid slower than the cadence", stopped being true on
-      2026-09-05, when dependencies — the mid decoder among them — started
-      compiling optimised in the dev profile (issue #76,
-      `01-architecture.md` "Build profiles"); the gate stays for the
-      precedent alone (corrected 2026-09-05, senior-developer plan) —
-      while its no-drop and `one2one` assertions still
-      bind, and the window that pin is judged over is the log after the
-      first tap's own `drive: right` echo rather than a trace-clock
-      comparison against the scripted offset (2026-09-03 — the Windows
-      debug runner fired that tap 1480 ms late); the M3 drag test runs
-      in BOTH profiles and gates its pointer
-      work on the sharp render's own mark (`wait:loupe idx 0 factor`,
-      scheduled at 20 s — test-harness.md's `wait:` paragraph says why
-      that placement is the cap arithmetic), where until 2026-09-03 it led
-      with a fixed 45 s sized for the debug decode; the M1 test and the
-      failed-cursor gate test run in BOTH profiles since 2026-09-05
-      (corrected 2026-09-05, senior-developer plan, issue #76). Until
-      then both ran in RELEASE only, because in debug both rode the app's
-      own 60 s screenshot-readiness cap: the cursor's 50 MP debug decode
-      landed at 58.5 s on a loaded 8-core laptop, and a 4-vCPU CI runner
-      under the cook hold had half those cores and no margin worth the
-      risk (validator, gate round 2; the vCPU count corrected from 2 to
-      the measured 4 by the CI audit of 2026-09-04). That 58.5 s was the
-      JPEG decoder — a dependency — compiled at opt-level 0; with
-      dependencies optimised in the dev profile the same decode lands in
-      about 2 s (`01-architecture.md`, "Build profiles"), the deferral has
-      nothing left to rest on, and a gate whose reason is gone is a
-      "cfg gate that removes a platform" the test-integrity rule would
-      refuse today — so both skips are lifted. What stays release-only is the ONE pin
-      whose reason was never the decoder: the M1 test's thumb-rung render
-      order, which a congested debug kitchen — workspace code, still at
-      opt-level 0 — can legitimately collapse into a single drain (its
-      own comment says so). Debug runs of both tests on the development
-      seat before the lift landed (developer 2026-09-05): the
-      failed-cursor gate 10 of 10 idle and 3 of 3 under the #76 load
-      recipe; the M1 test 10 of 10 idle and 0 of 3 under the recipe AS
-      WRITTEN — its recovery pin was a fixed clock (`dump.landed` at
-      26.5 s, 6.45 s after the End) racing the debug kitchen, workspace
-      code still at opt-level 0: under the recipe the cursor's rescue
-      rungs queue behind off-cursor 149 MB full-res fills of 3.5-5.5 s
-      each (the kitchen pops Full > Wrap > Thumb with no notion of the
-      cursor), the 250 ms hold cap fires at the next refresh — the
-      spec'd bounded drop, 14 of 14 loaded runs — and the first rung of
-      the new image lands 5.0-13.9 s after the End; the overlay
-      re-raised every time, in 8 of 11 runs after the dump had
-      photographed the honest fit (senior-developer diagnosis
-      2026-09-05; the same script in release under the same load: 3 of
-      3). The clock became the sharp rung's own mark (`wait:loupe idx 8
-      factor` at 20.2 s, the dump keeping its authored 26.5 s as its FLOOR —
-      it fires 6.3 s after the wait is satisfied, never earlier and never
-      on its own, measured at 28.32-28.37 s idle and 39.4-40.6 s under
-      the recipe, while a wait that never satisfies aborts the run at
-      50.2 s with no dump at all (QE 2026-09-05, D3) — the CI-audit shape rule, `(satisfied`
-      echo asserted), which is stricter, not looser: the sharp must land
-      within the wait's 30 s cap and the overlay must be up 6.3 s later;
-      with the wait, 10 of 10 idle and 3 of 3 under the recipe in debug,
-      3 of 3 in release. The PR's Windows debug pass is both tests'
-      first CI run in that profile. `paced_taps` keeps the debug profile's
-      no-drop coverage (it asserts no `loupe overlay dropped` at all);
-      `transit_at_zoom_stays_soft` pins the soft render and the sharp
-      landing, not the absence of a bounded drop — its own Windows debug
-      run of PR #80 carried a `(hold cap)` drop and passed (corrected
-      2026-09-05, senior-developer review F5); the M1 test
-      allows the spec'd reason-carrying drops (failure/hold-cap) while
-      asserting the excuse-less `(no rung in hand)` drop away, plus
-      recovery via the "landed" dump, gated since
-      2026-09-05 on the sharp rung's own mark rather than a clock (the
-      #76 paragraph above). The failed-cursor gate is
-      pinned by
-      `a_decode_failed_cursor_drops_to_fit_instead_of_masking_the_badge`
-      (mid-session corruption — a helper thread zeroes the file on disk
-      at the later of two moments: the app tracing that its embedded
-      thumb JPEG is in memory (`thumb bytes idx 11`, ~0.3 s) and a T+9 s
-      floor, which is the historical schedule and the one that decides on
-      any normal machine; the anchor engages only when a loaded runner
-      slows the scan past it. Either way, well before the End-jump that
-      focuses the file; red-run-verified against the pre-gate build: the
-      thumb rendered on every visit and the `(decode failed)` drop never
-      appeared). Its
-      non-vacuity guard is the thumb TEXTURE's arrival — `thumb landed
-      idx 11` before the second End-jump — not a thumb RENDER: the
-      texture and the failed full decode land ~17 ms apart inside that
-      first End-jump (the kitchen only decodes a thumb when its cell
-      comes near the view, which for the last image of a 1-column loupe
-      IS the End-jump itself), so
-      demanding a render asks a scheduling coin flip to come up heads,
-      and it reddened CI ~15 % of runs (issue #50, 2026-08-29). Both
-      orders are correct product behaviour. What binds is the SECOND
-      End-jump — failure known, texture in hand — where the rescue must
-      not render at all; the test counts renders only after the `t1`
-      dump, and bounds the whole run at the one unavoidable transient.
-      The zero count's own preconditions are asserted, not reasoned:
-      `cursor=11` and `zf=inf` at both dumps, plus the second End's own
-      `(decode failed)` drop — which `render_rung` emits only when the
-      overlay was wanted AND up, so it IS the proof that the rung was
-      attempted there. Without them a swallowed key, or a session simply
-      sitting at fit, would buy the zero. The residual that was recorded
-      here — the texture had to land inside the ~2 s between the two
-      End-jumps — is closed (issue #13, 2026-08-29): the second End-jump
-      is held by `wait:thumb landed idx 11`, so a runner slow enough to
-      take longer moves the End with it instead of losing the arming, and
-      the `thumb landed` assertion stays as the reading of that ordering
-      off the log. The wheel wiring the
-      restructure touched is
-      pinned by `overlay_wheel_still_zooms_one_stop_per_notch` (real
-      dispatched scroll events via the `wheel.` token; a guard — wheel
-      SEMANTICS did not change, only the surface wiring — non-vacuous
-      because a dead scroll path leaves the factor at 1.0; covers both
-      accumulators and the fit→overlay handoff). Since 2026-08-29 that
-      test also pins the NOTCH SIZE (issue #13): 59 logical px fire
-      nothing and the 60th fires exactly one stop, so winit's 60 px per
-      line — a number the accumulator is written against and that was
-      comment-only — fails a test if a backend upgrade changes it,
-      instead of quietly turning every notch into a fraction of a stop.
-      The same pair pins the residue carry (the accumulator subtracts 60
-      rather than zeroing), and a full notch DOWN at fit is asserted
-      inert, the reserved no-op's end-to-end half. Still without a
-      deterministic release-profile exercise (recorded, QE gate): the
-      `(hold cap)` drop-and-re-raise fires routinely in debug runs (as
-      of 2026-08-11, stock dev profile; with the decoder optimised in
-      debug it no longer fires idle — 0 of 15 idle debug runs of the M1
-      test on the development seat, the thumb rung landing 155 ms after
-      the End — and fires 14 of 14 under the #76 load recipe (six
-      spinners and the app on two cores), where the cursor's rescue
-      rungs queue behind off-cursor full-res fills; the recipe is
-      therefore a deterministic debug-profile exercise of the
-      drop-and-re-raise, senior-developer diagnosis 2026-09-05) and
-      the M1 test asserts the recovery whenever it fires — its landing
-      dump is mark-gated since 2026-09-05. On CI it never fired in that
-      test: on every runner of PR #80 the rescue thumb beat the 250 ms
-      cap (Windows debug `i46-m1`: hold at 20087 ms, thumb at 20209 —
-      122 ms — soft at 20593, sharp at 23886, the wait satisfied after
-      3682 ms, `one2one=true` at 30186; the release runners 767 ms and
-      343 ms), so the RE-RAISE pin is exercised by the local load recipe
-      only — 20 of 20 healthy loaded debug runs of the M1 script
-      re-raised after the bounded drop: every trace on disk carrying the
-      `(hold cap)` drop of idx 8 is 25 once byte-identical copies are
-      removed, the five runs of the re-raise-deleted mutant are the five
-      with no re-raise, which is the pin working, and the remaining 20
-      (developer 7, senior developer 8, QE 3, review 2) all re-raised
-      (QE 2026-09-05, D7; count corrected 2026-09-05, senior-developer
-      review F6) — and a CI run would pass with the re-raise deleted.
-      The drop-and-re-raise itself DID occur once in that Windows debug
-      pass, in the soft-transit script where no
-      assertion reads it (hold 953 ms, `(hold cap)` at 1393, soft at
-      1445, sharp at 4939). What the M1 test does prove on CI is not
-      nothing: the hold engaged, the rescue thumb landed inside the cap,
-      no excuse-less drop appeared, the sharp landed inside the wait's
-      30 s cap and the overlay was still up 6.3 s later (QE 2026-09-05,
-      D2, with the senior developer's two precisions). Forcing
-      it deterministically in release needs a decode-wedge knob —
-      deferred alongside the wedge affordances already recorded in
-      this spec. Narrowed 2026-08-11 (A3): the cap timing, the failure
-      gate and the re-raise are now unit-covered as
-      `transit::render_rung` table rows, so the missing knob costs an
-      integration-level exercise of a policy that is otherwise pinned,
-      not the only coverage of it.
-- [x] **Provisional order while loading** (issue #25):
-      `filter::provisional_order_is_stable_while_metadata_streams` feeds the
-      capture keys in one at a time and asserts the view is IDENTICAL at
-      every step, then that the real sort applies once — mutation-verified
-      (ignoring `metadata_complete` fails it at the first key), and
-      non-vacuous by construction (it asserts the settled order actually
-      differs from the provisional one).
-      `filter::provisional_order_still_respects_the_filter_and_direction`
-      pins that the override touches the SORT only, never membership or
-      direction. The RE-ANCHOR's rule is pinned by
-      `grid::resort_reveals_a_watched_cursor_and_spares_a_browsing_one`,
-      also mutation-verified, and the user's cursor rule by
-      `filter::engine_events_stop_moving_an_untouched_cursor_once_loaded`.
-      End-to-end, the two-file `cursor-order` fixture pins it through the
-      flip AND through later engine events
-      (`engine_events_after_loading_never_move_an_untouched_cursor`) — that
-      fixture used to assert the OPPOSITE (issue #4's capture-first open)
-      and was inverted by the user's decision. Recorded gap: the completion
-      predicate and the mark path still have no automated test — an
-      end-to-end one must catch the app mid-load, and a screenshot test that
-      tries dies in the profile CI actually runs it in: a 400-file attempt
-      passed in DEBUG having never finished loading, and `place_fixture`
-      COPIES on Windows, so it would have written ~33 GB per run (validator,
-      2026-07-31). Verified manually against 3,000-file fixtures instead;
-      making the load's completion point injectable is the way in.
-      QE enumerated the surviving mutations (2026-07-31); two were closed
-      structurally rather than merely tested — burst grouping and Copy Picks
-      now call `filter::view_true_sort`, a named function whose own test
-      pins that it ignores the provisional order, instead of passing a bare
-      `true` that reads as "metadata is complete" at the two places where it
-      emphatically is not. **Four survive and are accepted, not fixed**:
-      - `AppState::metadata_complete()` forced to `true` — i.e. the whole
-        feature off — leaves the suite green. The end-to-end test cannot see
-        it: with the flag true from the first refresh the cursor never
-        follows the head at all, so it reaches the same end state by a
-        different route. Catching it needs an assertion on the LOADING
-        status string, which needs a fixture still loading at shutter —
-        several hundred real RAWs, which `place_fixture` COPIES on Windows.
-      - counting only `MetadataReady` instead of finished jobs (a file whose
-        EXIF read fails would then strand the session forever).
-      - `user_changed_query` forced to `false` at both user call sites: the
-        issue #4 exception has no end-to-end coverage, because the filter
-        chips and sort control are click-only in Slint with no drive action.
-      - `last_cursor_visible` forced either way: the app-side sampling that
-        decides reveal-vs-spare is untested, which is exactly where the
-        guard was missing on the first cut.
-      The status bar's LOADING form is likewise unasserted (only the
-      completed form appears, as an anti-vacuity check).
-      `FASTCULL_DRIVE scroll:N` exists for the manual and QE verification of
-      the browsing case and is deliberately kept despite having no test
-      caller — it is the one gesture the harness could not otherwise
-      express. The way to close all of these at once is an injectable
-      load-completion point, not more screenshot fixtures.
-- [x] **The loupe fit view shows the WHOLE frame** (One-column cell bounding):
-      `grid.rs` units pin that the N=1 cell never exceeds the viewport and
-      that revealing it leaves nothing below the fold, while multi-column
-      cells keep their 3:2 aspect; the end-to-end pin is the screenshot test
-      `loupe_fit_shows_the_whole_frame_not_a_crop`, which measures the
-      RENDERED photo's aspect (a 3:2 frame drawn at ~1.8 is a crop) and
-      requires pillarbox bars on both sides. Both were verified BY MUTATION,
-      not by passing: disabling the bound yields "aspect 1.807 (1429x791)"
-      and FAILS. The 29 pre-existing screenshot tests all passed on both
-      sides of this change — mean luma and centre-region variance cannot see
-      a crop, which is how it shipped unnoticed since M2.
-- [x] Pointer state machine (core side, issue #11): a table-driven test that
-      enumerates EVERY (state, input) pair of the Mouse & pointer contract
-      table and asserts the resulting state + action — including the
-      reserved no-ops. Plus: wheel-up at fit anchors the pointer's image
-      point (not the center), wheel notches land on the same `1.5ⁿ` stops as
-      `+`/`-`, wheel-down at fit is inert, clicks outside the image rect do
-      nothing, and pan offsets stay clamped to the image bounds at every
-      factor (`fastcull-core/src/pointer.rs` tests). The anchor assertions
-      use an OFF-CENTRE pan and pointer: with everything at `(0.5, 0.5)` the
-      pointer anchor and the centre anchor coincide, and QE proved by
-      mutation (2026-07-30) that three criteria were consequently vacuous —
-      the zoomed wheel anchor, "wheel-down landing on fit forgets the pan",
-      and the drag's vertical axis all survived being deleted. Covered
-      OUTSIDE the core tests, recorded honestly: "a drag suppresses the
-      click" is Slint's TouchArea click definition (press+release without
-      movement); "a distant second click is two re-centers, not a
-      double-click" is enforced by SLINT, whose `check_repeat` restarts the
-      click count beyond 10 logical px — the app deliberately holds no
-      proximity state of its own (see the deviations above for the guard
-      that was deleted); "`+` after a click at fit is still center-anchored"
-      holds by construction (a fit click stores nothing at all — it only
-      claims the cursor — and the keyboard ladder reads no pointer state).
-      The first two of those are no longer taken on trust: issue #13's
-      `a_grid_drag_scrolls_without_clicking_the_cell_under_it` drives a
-      real four-event drag over the grid (it scrolls, the cursor does not
-      move) and `two_distant_clicks_are_two_clicks_not_a_double_click` two
-      real clicks 600 px apart (two cursor moves, no loupe), with the
-      same-point double-click as its control — two tests, because a click
-      after a fling lands at an offset no script can predict (QE finding
-      2026-08-29: the split retired a debug-only load flake). They
-      are tests of a DEPENDENCY on Slint's semantics rather than of the
-      app's own code, which is exactly why they are worth having: if a
-      Slint upgrade changes either rule, the app has no guard of its own.
-- [x] **Double-click reaches 1:1 from ABOVE fit**, not only from fit
-      (`loupe_double_click_above_fit_reaches_one_to_one`). This is the
-      gesture that shipped broken through both gates, and it broke in the
-      bridge, where no core test could see it: the `FASTCULL_DRIVE`
-      `dblclick:x,y` action replays Slint's real ordering (a `clicked` that
-      re-centers, then `double-clicked` on the same release) so the class of
-      defect is reachable from a test at all. That token does not
-      hit-test — it invokes the callbacks directly — but the ROUTING it
-      could not reach now has its own tests (issue #13, below).
-- [x] **Pointer ROUTING** (issue #13, closed 2026-08-29): which Slint
-      surface receives a physical click, drag or wheel, driven through real
-      dispatched events and Slint's own hit-testing. Five tests, each with
-      an intermediate assertion that fails loudly and specifically when a
-      click misses, and each pairing every "nothing happened" claim with a
-      control in the same run that proves the same token DOES act when it
-      should — a dead pointer path must never buy a green:
-      `a_click_inside_the_iptc_panel_never_reaches_the_grid` (issue #12's
-      deferral: neither panel chrome nor a panel field fires `cell-clicked`
-      — the cursor and a 300-cell selection survive both — while the field
-      click provably lands ON the field, proven the way a user would: the
-      `t` and the Enter after it COMMIT a Title across the selection and
-      arm the revert slot, which a click that missed cannot do (`t` is not
-      a binding on the main scope). The landing is still proven through
-      the COMMIT and not through `keysfocus` — they are different
-      questions, and only the commit says the pointer hit THIS field —
-      but the `keysfocus=true` assertion at the `before` dump is back
-      since the owner-invariant fix (2026-08-30). It was left out while
-      opening the panel with a real `I` after a real click stranded the
-      keyboard about one run in eight — **issue #64**, found here,
-      pre-existing, in the issue #41 family, and never reproducible
-      through the `iptc` nav token, i.e. only when the item tree changes
-      inside a key dispatch — because a pointer-routing test must not go
-      red for a focus bug it is not about. What the restored assertion
-      pins is bounded and stated in the test: the cell click before that
-      dump claims the keyboard itself, so it says "nothing between the
-      `I` and here left the keyboard ownerless", not "the `I` alone kept
-      it". A control click on the grid then moves the cursor and
-      collapses the selection);
-      `the_wheel_routing_table_holds_over_every_surface` (the grid scrolls;
-      the overlay scrollbar, the docked IPTC panel and the fit surface each
-      leave the grid where it was — the panel row also guards issue #12's
-      docking bug, where the Flickable really did extend under the panel);
-      `a_grid_drag_scrolls_without_clicking_the_cell_under_it` and
-      `two_distant_clicks_are_two_clicks_not_a_double_click` (above, and
-      deliberately two runs: sharing one script made every click after the
-      drag land wherever the flick's scroll had stopped, which under load
-      put one in a gutter); and `a_scrollbar_drag_in_the_loupe_claims_the_cursor` — the
-      POSITIVE half of the `sb-activity` claim, which until now had only
-      negative tests ("the claim does not fire") because nothing headless
-      could raise the flag; a `press./move./release.` on the overlay
-      scrollbar can, and the claim fires with the cursor following.
-      Coordinates are calibrated against measured geometry, not guessed:
-      the panel tests read the row rectangles the app traces
-      (`iptc field N laid out at X,Y size WxH`) and assert the point they
-      aimed at was inside, and the grid clicks sit in cell INTERIORS (at
-      8 columns x=900 lands in the 6 px gutter between two columns and hits
-      nothing — measured).
-      Every one is mutation-verified (2026-08-29, in a scratch worktree):
-      the scrollbar's `scroll-event` arm removed reddens the scrollbar row
-      (`vpy=-360` against `-180`); the fit surface's arm made to `reject`
-      reddens the fit row; `grid-width` ignoring `panel-w` — issue #12's
-      docking bug — reddens the panel WHEEL row on its own, and the panel
-      CLICK test together with the containment `TouchArea`'s removal (each
-      alone leaves the click test green: the two are defence in depth, and
-      the test binds on their conjunction — recorded in its comment);
-      `sb_activity` forced to `false` reddens the scrollbar-drag claim;
-      the wheel accumulator's 60 px changed to 50 reddens the notch pin.
-      The two Slint-dependency tests pin a DEPENDENCY rather than app
-      code: no app-side mutation can make a drag click (claiming the
-      cursor from the cell's raw pointer release does nothing, because the
-      Flickable takes the grab and the cell stops receiving events), so the
-      drag test is reddened from the other side — a non-interactive
-      Flickable, or a drag shortened below Slint's 8 px threshold, both
-      fail its "the drag scrolled" precondition — and the double-click rule
-      carries its control in the run (the same cadence on one point DOES
-      open the loupe).
-      All five are also load-verified in DEBUG, which on the Windows
-      runner is a profile CI really runs the screenshot suite in
-      (corrected 2026-09-02, issue #70): `has_display()` is
-      `cfg!(windows)` there, so `cargo test --workspace` runs the suite in
-      debug and the release step runs it a second time, while on Linux the
-      debug step has no display and only the xvfb release step runs it.
-      In debug: 20 runs each under six busy cores, after the
-      gesture spans were compressed to a third of Slint's `DURATION_THRESHOLD`
-      and `click_interval` (a 600 ms drag and a 150 ms click pair fit on an
-      idle machine and lost the race about one run in ten — those windows
-      are measured against a frame clock, which lags under load).
-      All FOUR test invocations — the two screenshot steps, the
-      `cargo test --workspace` step on either OS, and the advisory
-      release `perf_budgets` step — pass `--test-threads=1`, and the job
-      runs under `RUST_BACKTRACE=1` (2026-09-03, CI audit item 3; the
-      fourth invocation named here 2026-09-04). Every test in
-      `tests/screenshot.rs` takes one process-wide mutex as its first
-      statement and holds it to the end (core's `tests/loupe.rs` and
-      `tests/perf_budgets.rs` guard themselves the same way), so
-      libtest's default pool ran nothing in parallel there; all it did
-      was start each test's clock when it was QUEUED, which produced 39
-      `has been running for over 60 seconds` warnings in the v0.13.1 run
-      (33694019447: 34 on windows-latest, 5 on ubuntu-latest) for tests
-      whose own work is under a second — `two_distant_clicks…` warned at
-      60 s and finished 2.2 s later — and made every per-test time in
-      the log a lock-wait rather than a duration. Serial costs the
-      screenshot suite nothing (one app child at a time already: 74
-      libtest slots summing 497 s against 459 s of child lifetime in the
-      same step's uploaded traces; measured again locally, 892.5 →
-      892.8 s, and 872.0 → 870.6 s in a second round) and the rest of the
-      workspace between 12 s and 24 s, a debug workspace run 1031 →
-      1057 s. Only the total is quotable: the two rounds disagree on
-      which binary pays — core's `loupe.rs`, whose one unguarded test
-      `decode_oriented_actually_rotates` stops overlapping the guarded
-      eight, measured +14 s once and +0.8 s the next time — so the
-      per-binary attribution is noise at this size and is not a number to
-      defend. The `perf_budgets` step is on that list for the WARNINGS,
-      not for the numbers (corrected 2026-09-04, validator F2): every
-      budget test takes the same process-wide lock as its FIRST
-      statement and starts its own `Instant` inside the guarded region,
-      so a lock-wait never entered a budget — the first note here said
-      one could, and that was wrong. What the step does share is the
-      queued clock: libtest starts a test's 60 s warning timer when it
-      QUEUES the test, not when the mutex lets it run, so six budget
-      tests that serialise themselves can still warn about work they
-      have not begun. No warning has been observed from that step, and
-      serialising tests that already serialise themselves costs it
-      nothing — uniformity across the four invocations is the whole
-      case. It hides no cross-test
-      race: the pool only ever overlapped core's own test binaries,
-      whose scratch paths are unique per process and thread, and the two
-      contention-sensitive ones keep their concurrency inside a single
-      test — what the flag removes is CPU contention, not a detector.
-      The warnings were also the log's only heartbeat through these
-      silent steps; what replaces them is the harness's 90 s child
-      watchdog, the app's 30 s `wait:` cap and the shutter's 60 s
-      readiness cap, each of which names its own failure.
-      `RUST_BACKTRACE` is `1`, not `full`: the symbolised trace with the
-      test frame on top, +17 lines per failure against `full`'s +90
-      lines of runtime internals, which at 74 screenshot tests would
-      bury the assertion they explain. The app children inherit it and
-      the harness writes each child's stderr to `<shot>.trace.log`, so
-      an app panic now reaches the uploaded evidence with its backtrace.
-      **Four workflow facts a test author needs** (ci.yml, CI audit
-      2026-09-04, corrected the same day by the audit's own gate).
-      *Concurrency*: a pull request's runs share one group per ref with
-      `cancel-in-progress: true`, so a second push to a PR branch kills
-      the first job mid-suite and a run that vanishes without a verdict
-      is a cancel, not a hang. EVERY OTHER EVENT GETS ITS OWN GROUP,
-      keyed on `github.run_id`. The first cut of this text said main runs
-      shared a group with `cancel-in-progress: false` and therefore
-      "always finish", and that is not what GitHub does: a run whose
-      group is occupied is queued as PENDING, and queueing it CANCELS
-      whatever was already pending there. Shared, main pushes would have
-      serialised behind ~45–66-minute Windows jobs, and a third push
-      inside that window would have cancelled the middle one — a main
-      commit with no verdict. Main is pushed that fast here (runs
-      33693900007/33694019447 are 92 s apart; 33151667132/33151754695 are
-      77 s apart), so the group is per-run and cannot collide. A re-run
-      keeps its `run_id` and rejoins an empty group. *Timeout*: the job
-      is capped at 90 minutes. THE CAP MUST CLEAR A COLD WINDOWS JOB, NOT
-      A WARM ONE, and it is `save-if: main` that makes that the binding
-      case: pull requests restore and never save, so after every rustc
-      release each PR push rebuilds from scratch until a main push
-      repopulates the cache — and the toolchain is `@stable`, unpinned.
-      Measured Windows jobs: 40.1 and 45.3 minutes warm, 60.9 the earlier
-      record, 65.7 COLD (run 33839957294, the first run after rustc
-      1.98.1) and 59.5 cold on main the same day (33888473738). 75 left
-      the cold run 9.3 minutes; 90 left it 24.3 — and then #76 made a
-      cold job colder (dependencies compile optimised in debug,
-      2026-09-05) and a run under a NEW cache key rebuilds the release
-      half of the entry too (corrected 2026-09-06, QE D2): 61.7
-      (33996087777, PR #80's first run), 70.0 = 1 h 09 m 58 s
-      (34014978820, PR #82), 57.7 (34018510289, main, including its 2 m 15 s
-      cache save), 66.3 = 1 h 06 m 15 s (34043232886, PR #83) and 72.3 =
-      1 h 12 m 18 s (34047309575, main, including a 4 m 18 s save of a
-      1.63 GiB entry — the worst measured; corrected 2026-09-06, Manager's
-      closing commit for briefs 003/004) — samples of one shape 15
-      minutes apart, so the cold figure is a range; 90 leaves the worst
-      17.7 minutes, 20 %. A test that adds wall clock to the
-      Windows job is spending headroom that is measured, not spare, and
-      the worst cold job has 20 minutes of it. *The headless seat is a
-      constant*: the Linux screenshot step runs under `xvfb-run -a
-      --server-args="-screen 0 1920x1200x24"`. What the pin buys is a
-      STATED CONSTANT in place of a distro default — this spec reasons
-      about the seat, and the seat must not move because a runner image
-      bumped one. It does NOT fix an observed defect, and the first cut
-      of this text implied it did: xvfb-run's default `-screen 0
-      1280x1024x24` is indeed narrower than the widest geometry the suite
-      drives, but it was never seen to break anything and the evidence
-      says it would not — the shot is Slint's own `take_snapshot`
-      (shutter.rs), which renders the WINDOW's surface at the window's
-      size rather than grabbing the X screen; the suite's one
-      resolution-shaped assertion (`grid_shot`'s `w == 1440`) is a
-      scale-factor check that a screen size cannot move; and the suite
-      has been driving 1600x800 green on the 1280-wide server all along.
-      The suite drives NINE distinct geometries, not the two the first
-      cut listed — 640x300, 900x800, 1000x700, 1024x768, 1200x800,
-      1440x700, 1440x900, 1500x800, 1600x800 — plus the 1440x900 the app
-      opens at; widest 1600, tallest 900, all inside 1920x1200 with room
-      over. A test that drives past that raises the screen in the same
-      commit. *Evidence*: the
-      two suite passes now write to separate temp dirs, so the
-      `screenshot-evidence-<os>` artifact opens as `debug/` and
-      `release/` — the debug pass is the `cargo test --workspace` step
-      (Windows only; Linux has no display there) and the release pass is
-      the screenshot step. The artifact keeps only `*.jpg` and
-      `*.trace.log`, never the fixture RAWs beside them, and is retained
-      30 days against the binaries' 14, because an intermittent is often
-      only recognised as one when it comes back a fortnight later.
-      **Containment through the real path** — the fidelity trap this issue
-      names, closed in the two tests it bit:
-      `about_dialog_renders_and_contains_the_keyboard` and
-      `shortcuts_popup_contains_the_keyboard` used to open the popup with
-      the `about`/`shortcuts` drive token and press N/P as NAV tokens —
-      and the nav tokens never reach the `keys` FocusScope at all (the
-      harness mirrors the containment with an `if` of its own), so both
-      tests asserted the mirror and the shipped guard could have been
-      deleted with the suite green. They now open through the real Help
-      menu items where the geometry is calibrated, send real key events,
-      assert `keysfocus=true` while the popup is up (a stranded keyboard
-      swallows keys just as thoroughly and means the opposite), and end
-      with the control the mirror never needed: Esc, then the SAME key,
-      which must mark. The tokens themselves do not force focus (they have
-      run the menu item's own `activated` body — set visible +
-      `modal-opened` — since issue #41; unchanged here), so what they skip
-      is only the MenuBar's focus-restore strand, which the click-driven
-      tests cover. The nav-token mirror keeps its own coverage in
-      `a_wheel_over_the_help_popups_never_scrolls_the_grid_behind_them`,
-      which drives two nav actions under a token-opened About and asserts
-      both the `about toggled to true` line and the two
-      "drive swallowed by modal" ones — the assertions the migration
-      moved out of the About test rather than dropped.
-      Verified by mutation, both directions (2026-08-29): with the
-      FocusScope's containment arms cut back to Esc-only — the exact
-      pre-#23 bug the persona reported — the NEW tests fail ("a mark
-      leaked through the modal", `✕1` with the popup up) and the OLD
-      token-driven ones PASS. Demonstrated rather than argued.
-      Decision, recorded: `i-slint-backend-testing` is NOT adopted. Real
-      dispatched events already go through Slint's hit-testing, so its
-      `ElementHandle` would buy element lookup at the price of a dependency
-      on an internal, unstable crate — and would replace calibrated
-      coordinates (which are the same thing a user's pointer has) with
-      element identity, hiding exactly the class of bug where an element is
-      somewhere unexpected. Still out of reach and NOT covered by any of
-      this: the native rfd folder dialog's focus behaviour, OS- or
-      compositor-level focus (native menus on X11/Windows), and Tab-cycling
-      within panel fields (spec G7) — all three need input the app never
-      sees, and remain manual-acceptance items.
-- [x] Slint screenshot smoke tests (`fastcull-app --screenshot <out>` +
-      `tests/screenshot.rs`): grid placeholder (synthetic), loaded thumbnails
-      (texture-variance asserted), failed-badge session, loupe fit
-      (`--start-loupe`) and 1:1 (`--start-11`), bursts in a synthetic
-      session (`--synthetic N --bursts`: a fixed Sony-style pattern of
-      singles and bursts, since the real test RAWs are three single shots
-      — the burst keys of issue #55 are driven over it), and the IPTC-panel-open
-      docking state (issue #12 regression: left edge stays grid content,
-      right strip becomes panel; reached via the `FASTCULL_DRIVE`
-      `iptc` action). Recorded limitations:
-      snapshots are always JPEG q92 regardless of extension; `--screenshot`
-      forces the software renderer (take_snapshot yields black frames on the
-      GPU renderer), so these tests do NOT exercise the shipping femtovg
-      renderer — GPU-specific visual regressions need eyes or a future
-      GPU-capture harness. Tests set FASTCULL_NO_CACHE for hermeticity.
-      **A far-panned 1:1 view snapshots BLACK** (QE finding F1, 2026-07-30):
-      Slint's software renderer stores the source offset as `Fixed<u16, 4>`
-      (`i-slint-renderer-software`, `scene.rs`), so beyond ~4096 px of pan on
-      either axis the frame renders empty — bracketed at −4080 px (renders)
-      vs −4160 px (black). A pixel assertion on a far-panned 1:1 view would
-      therefore pass vacuously on black; assert on the TRACE instead, as
-      `loupe_double_click_above_fit_reaches_one_to_one` does. Believed
-      renderer-local (the shipping femtovg path is unaffected), but that is
-      unproven — no window capture was available to check it.
-      **A `--start-11` run whose FINAL cursor is a decode-FAILED image
-      while the desire is above fit trips the 60 s readiness cap and
-      exits 1** (QE, issue #46 gate round 2): the 1:1 readiness gate has
-      no failed-cursor escape, unlike the fit gate. Loud, arguably
-      intended — but a drive script that visits a failed image at 1:1
-      must END on a decodable cursor, as the failed-cursor gate test
-      does.
-      The `✓ copied` badge was not drivable headlessly either, because Copy
-      Picks opens a native folder dialog and `FASTCULL_DRIVE` had no copy
-      action (QE G2) — it was covered only by sharing the bottom-anchored
-      band with the `×N` burst badge. Since 2026-08-21 `copydest:PATH`
-      (below) drives a REAL copy: the re-run regression test copies,
-      deletes by hand, copies again, and asserts on disk and on the
-      dialog's note/report, and the clash-question test drives all three
-      answers (`key:b` / `key:o` / `key:escape`) plus an inert Enter,
-      asserting `copystate`, the question's text and what each answer left
-      on disk; the badge itself is still asserted only at the state level
-      (`SessionCopies::is_copied`), not by pixels.
-      The `▶` exported badge (issue #56) does NOT stop at that limit, and
-      the difference is worth stating because it is the first cell badge
-      that does not. `exported=` (how many frames of the VIEW carry it),
-      `curexported=` (the cursor's own flag) and `cliphint=` went into the
-      QEDUMP line, but those three prove the LEDGER, not the grid: with
-      them alone, sending `exported: false` from the presenter or deleting
-      the badge block from `main.slint` left the whole suite green
-      (validator finding, 2026-08-29). So
-      `an_exported_frame_wears_a_badge_until_its_video_is_gone` also
-      asserts the CELLS, in its own final screenshot: it copies one frame
-      first so all three badge layouts are on screen at once — no badge,
-      ✓ + stepped `▶`, and `▶` alone in the ✓'s slot — locates the first
-      cell row in the picture (the menu bar's height is a font metric, so
-      it is measured, not assumed) and MEASURES each pill's horizontal
-      extent in the badge band, plus the ✓'s greenness against the same
-      rectangle of a cell that has none. The `▶` glyph's MONOCHROME
-      rendering is mechanized in the same place: its strokes must be
-      bright and neutral, which is what proves the font gave us text in
-      the UI's own colour rather than a colour-emoji bitmap. Both
-      mutations above were confirmed RED against it, as was removing the
-      badge's 28 px step — all three against the ORIGINAL, dark-fraction
-      form of the criterion (2026-08-29). Against the edge form below,
-      what has been re-run is the pixel-equivalent pair: a shot with the
-      uncopied frame's pill moved 20 px out of its slot, and one with the
-      copied frame's pill removed.
-      **The criterion is the pill's LEFT EDGE, not the rectangle it fills
-      (issue #70, 2026-09-02).** A pill is found by scanning cell-local
-      x 0..70 across the band `cell_h-20 .. cell_h-6`, calling a pixel
-      column dark at a 0.3 dark fraction, merging runs separated by ≤ 4 px
-      (the glyph's own bright strokes split it) and taking the first
-      merged run ≥ 8 px: column 0 must have none, the uncopied frame's
-      pill must START at x 6..=12 (the ✓'s slot), the copied frame's at
-      x 26..=32 with nothing before x 20 (the ✓'s slot stays free), and
-      both spans must be 14..=34 px wide. That bound says "a pill, not the
-      photograph" at the bottom and "not two pills run together, and not
-      a badge drawn at twice its size" at the top — the widest measured
-      pill plus 8 px, which the fixed rectangle it replaces used to catch
-      incidentally (validator 2026-09-02). It cannot be tighter, because
-      the WIDTH is the font's: the Windows runner draws `▶` from a face
-      that BOXES it, so measured on PR #71's two CI artifacts the same
-      pills run x 9..28 / 28..47 on ubuntu and x 9..35 / 28..54 on Windows
-      — identical left edges, 19 px against 26 px, with the development
-      seat's own Linux face at 21 px. The fixed `x 30..46` control the
-      criterion replaced
-      read 0.26 dark on Windows against a `< 0.15` bound and was that
-      run's only red: a font difference, not a layout defect. The
-      criterion lives in `assert_badge_pixels`, which takes a decoded shot
-      so it can be replayed over a CI artifact from either platform; it
-      passes on both of them and fails on a mutant with the uncopied
-      frame's pill shifted 20 px right, or the copied frame's removed.
-      **Positional navigation in a drive script must be gated on the
-      settled sort.** The view is in provisional FILENAME order until the
-      last frame's metadata lands and then re-sorts to the user's sort
-      (issue #25), so `home`/`right`/`shift-right` fired during that
-      window silently address different images — which is how the #56
-      badge test selected the wrong pair and died in a clash question one
-      run in two under full-suite load (validator, 2026-08-29). The idiom:
-      dump before the first positional key and assert BOTH that every
-      thumb has loaded (metadata precedes each thumb on the same ordered
-      channel, so all-thumbs implies all-keys) and that the status line
-      names the image the script expects at that position; then GATE the
-      first positional key on the settle itself — `wait:load settled gen
-      N`, with the dump kept as the proof of what it meant (2026-09-03).
-      Seconds of slack were the pre-#61 form of this and the badge test
-      carried them until the CI audit; slack is still a clock, and a
-      loaded runner outruns it (that test's settle landed at 1.5 s on the
-      Windows debug runner against a 5 s `home`, while the six-copy
-      fixtures elsewhere in the suite settle at 4.7-5.7 s there). The
-      gate is available at EVERY zoom since issue #73 — the one-column
-      strip still re-anchors through its own block, but the MARK is the
-      session's fact and is emitted there too, so a `--start-11`/
-      `--start-loupe` script gates like any other. Renaming fixtures does not
-      help — a partially keyed view sorts the keyed ones first. And the
-      settle gates the KEY, not the picture: a script whose assertion
-      reads rendered pixels needs `wait:thumb landed idx N` on top of it
-      (the two selection-wash tests and the panel-dock test do exactly
-      that — see the item-6 ledger below).
-- [x] **The screenshot shutter fires exactly once per run (issue #77,
-      2026-09-05)**: on every seat and in every profile a `--screenshot`
-      run emits exactly one `status at shutter` and one `geometry at
-      shutter` mark and writes its JPEG once, because the poll returns at
-      once when `shot_written` is set (the mechanism, the source lines and
-      the measurements are in test-harness.md under "Debug
-      facilities"). Pinned by the spawn helper in `tests/screenshot.rs`
-      (`shoot_env_stderr_watching`), which counts emitted `status at
-      shutter` mark lines (prefix- and label-anchored, so a file name
-      that quotes the mark cannot inflate it — QE probe 2026-09-05) in
-      every successful traced run and fails on any count but one — so
-      every driven test enforces it, on the Windows debug pass too — and
-      by its mutant: with the guard deleted, the Wayland development seat
-      photographs twice — 10 of 10 loupe-resize runs in the stock dev
-      profile (26 of 26 across the #73 discussion's mixed set), 2 of 2
-      runs of a default-window script with dependencies optimised — and
-      the count goes red (the mutant is never red on CI:
-      its seats deliver the quit before the overdue poll). The two failure exits keep
-      their shape: the cap refusal and the write failure exit 1 with their
-      messages, and `finish` still exits 2 when the loop ends before a
-      shot; the readiness predicate is untouched.
-- [x] **The 60 s readiness cap is margin again in a debug build (issue
-      #76, user decision 2026-09-05)**: dependencies compile optimised in
-      the dev profile (`01-architecture.md`, "Build profiles"), so the
-      full-res decode of the 8640×5760 frame lands in at most 2 s in a
-      debug build on the development seat — measured by the #76 commit,
-      the first full-res rung of the center-anchor script at 1.15-1.36 s
-      against 15.3-17.2 s without the line, its sharp 1:1 render at
-      2.8-3.1 s against 17.9-19.6 s (three runs each, developer
-      2026-09-05; QE's independent sample on the same seat, same script:
-      14.73-15.96 s → 1.14-1.25 s and 17.10-18.38 s → 2.03-2.66 s — QE
-      2026-09-05, D5) — where the same decode took 26-40 s on the Windows
-      debug runner and 31 s here before, and
-      `window_resize_keeps_the_photo` —
-      the cap's recorded intermittent — is green 4 of 4 under the load
-      recipe that reproduces the CI refusals (0 of 4 before; 0 of 2 when
-      the #76 commit re-ran it on the stock profile, both runs refusing
-      with `full-res never adopted for the 1:1 frame`), its readiness
-      phase 7.1-18.9 s against the 60 s cap. Pinned by
-      measurement, not by a test: the before/after landing times and the
-      loaded runs are recorded in the #76 commit and in
-      `01-architecture.md`; the cap, the 1.5 s floor, the 30 s `wait:`
-      cap and the 90 s watchdog keep their values, and the only test
-      schedule that moved with it is the M1 transit test's landing dump,
-      which became mark-gated instead of clock-timed (the lift paragraph
-      above).
-- [x] **Focus continuity (issues #41/#42)**: driven through REAL key and
-      pointer dispatch (`key:`/`click.` — the nav tokens bypass focus and
-      cannot see this class), every bug-strand test red-run-verified
-      against the pre-fix build. Panel close from the menu keeps the
-      keyboard at 1:1 (`panel_close_from_the_menu_at_one_to_one_keeps_
-      the_keyboard` — the user's live hit) and in the grid; a modal over
-      a focused field owns the keyboard and writes NOTHING — no sidecar
-      on disk, revert never armed (`modal_over_a_focused_field_owns_the_
-      keyboard_and_writes_nothing`); a session swap mid-edit discards
-      and keeps the keyboard, both for a destroyed field editor and for
-      the surviving keyword editor — the latter pins the cross-session
-      write the fix's first cut produced (`session_swap_mid_keyword_
-      edit_never_writes_into_the_new_session` — **INTERMITTENTLY RED,
-      measured 2026-08-22: it fails roughly one run in four, and the
-      leaked sidecar really does contain the abandoned `wip` keyword, in
-      the OLD session's folder. So the discard rule has a race, not just a
-      slow test: the editor's commit sometimes wins against the
-      session-generation bump. Reproduced on `c060e7c`, i.e. it predates
-      the clash-question work; interleaved A/B runs of 6 gave 2/6 failures
-      before that change and 1/6 after, so nothing in that change caused
-      or worsened it. Needs a real fix — this is the one guard standing
-      between a half-typed keyword and someone else's photograph.
-      RE-MEASURED 2026-08-30 with the issue #63/#64 owner invariant, 20
-      runs of its script under six spinners on the fixed tree and 20 on
-      a tree with the reclaim disabled: 0 leaked sidecars on both sides,
-      so the race did not reproduce at all this time and the change
-      neither fixed nor worsened it. The recorded rate stands unrefuted,
-      not confirmed — do not quiet this test on the strength of 40 green
-      runs**); Esc
-      over stacked modals
-      closes the topmost first with the copy dialog's plan surviving
-      verbatim (`esc_over_stacked_modals_closes_the_topmost_first`); a
-      1:1 loupe click claims the keyboard (`one_to_one_click_claims_the_
-      keyboard`). Clean paths guarded: menu activation with keys
-      focused, the G4 Enter commit (which also pins the edit-generation
-      stamping — an init-time focus gain fires no `changed has-focus`,
-      and an unstamped editor once silently discarded committable text),
-      the copy-dialog Esc lifecycle, the filter-bar toggle mid-edit
-      (menu-open is a G7 click-away exit: the text commits), and File >
-      Copy Picks over a focused field — the RUN14 luck strand, now
-      backed by the same deferred claim as the modals
-      (`copy_picks_from_the_menu_over_a_focused_field_owns_the_
-      keyboard`; a guard, green on both sides of the hardening). Recorded
-      limitation: the menu-click tests are calibrated for the Linux
-      runners' font metrics and SKIP on Windows — the focus machinery is
-      platform-independent Slint core, and every non-menu strand still
-      runs there; each menu test asserts an intermediate state that
-      fails loudly if a click misses, so font drift cannot make one pass
-      vacuously.
-      **The owner-invariant campaigns (issues #63/#64, 2026-08-30)**, all
-      driving the real binary with the focus marks on, every log kept:
-      the session-swap script 20x under six spinners plus a full-core
-      build loop, asserting the post-swap keystroke ACTS (20/20); the
-      ownerless window on the SWAP path measured from the marks at
-      **0 ms** (min 0, median 0, max 1) against **199/254/479 ms** on the
-      same tree with only the reclaim removed — the same-session ROW path
-      keeps a smaller residual of its own (5-6 ms release-idle, 11-35 ms
-      release-loaded), tabulated in the owner-invariant section; the 1:1 loupe-click script 30x under 24 spinners; the
-      issue #64 repro 30x under six spinners (0 stranded, 0/90 with phase
-      3a's 60); the issue #13 panel-click script 10x under six spinners;
-      issue #54's script 20x on each side; and three A/B probes that are
-      the real behavioural evidence — the F3 probe (click Title, type,
-      click Description, press `x`: `x` must TYPE; 10/10 under six
-      spinners with focus staying in Description, where the earlier cut
-      REJECTED the photo and wrote a sidecar); the cursor-move probe
-      (validator FAIL-1 and QE's shape both: type, then rebuild the rows
-      without the editor's own blur causing it — once by moving the
-      cursor onto a titled image, once by growing the batch until the row
-      goes mixed — then type + Enter + `y`. 10/10 alive on each shape,
-      0/10 with the generation stamp removed, 0/10 with the flag armed
-      synchronously, 0/6 with the claim made from the row's `init`); and the
-      discard probe (type into Title, grow the batch so the row goes
-      mixed), which now asserts the KEYBOARD as well as the disk: the
-      text vanishes 10/10, the row holds the keyboard 10/10, and three
-      further keystrokes commit and mark 10/10. Asserting only the disk
-      was the hole FAIL-1 slipped through — a dead keyboard writes no
-      sidecar either.
-      The D3 test carries a KNOWN INTERMITTENT banner for the
-      deactivation-commit defect (below); it fails on the DISCARD
-      assertion only, with a lone `focus: … lost` in the trace, and must
-      not be quieted. `a_cursor_move_rebuild_keeps_the_keyboard_in_the_
-      field` INHERITS that intermittent: the same fingerprint appeared
-      ~2 times in 35 select-all probe runs (`Revert: … on 1 image(s)`,
-      ★0, a stale owner token), and QE caught a release-IDLE instance
-      that settles the attribution — a partial `n` committed with the
-      `lost` arriving 28 ms after the keystroke and the rebuild only
-      AFTER that, i.e. the blur came from outside and beat the rebuild
-      entirely.
-      **That banner is not what turned CI red on the v0.13.0 commit**
-      (run 33578204067: 2026-09-01 on the local clock, 2026-09-02T01:08Z
-      on GitHub's; ubuntu-latest, first run after the merge), and the
-      difference is worth keeping because the two look alike in a dump.
-      The deactivation fingerprint is a lone `focus: … lost` with no
-      claim before it. The CI trace has NO such `lost` between the click
-      that focused Title and the rebuild; its `revert="Revert: Title on
-      1 image(s)"` is the test's own seeding Enter three steps earlier
-      and is present in every GREEN run too. What the trace does show is
-      both arms firing in the rebuild's own millisecond and the rows
-      recreated 16 ms later with no claim after them — the EARLY-arm
-      ordering above, i.e. a live residual of FAIL-1's class, not #68.
-      Reading `revert` as a deactivation commit would have quieted a real
-      strand: on a dump, a committed field and a dead keyboard differ
-      only in whether a claim mark follows the rebuild.
-      **The exposure sweep for that ordering (2026-09-01)**, because one
-      red test is never the whole class: the WHOLE screenshot suite run
-      under `taskset -c 0,1` with the arm forced early and the row
-      `Timer` removed — the runner's ordering, made deterministic —
-      is **71 passed, 3 failed**, and the three are exactly the tests
-      that need a field ROW to reclaim after a rebuild:
-      `a_cursor_move_rebuild_keeps_the_keyboard_in_the_field`,
-      `a_menu_item_over_a_focused_field_row_keeps_the_keyboard`,
-      `a_dismissed_menu_over_a_focused_field_row_keeps_the_keyboard`.
-      Nothing else in the suite is exposed, and in particular the tests
-      that carry focus banners of their own are NOT: a session swap and a
-      panel close reclaim to the topmost SCOPE synchronously and never
-      arm the row flag, so `session_swap_mid_field_edit_discards_and_
-      keeps_the_keyboard`, `session_swap_mid_keyword_edit_never_writes_
-      into_the_new_session`, `modal_over_a_focused_field_owns_the_
-      keyboard_and_writes_nothing` and both `panel_close_from_the_menu_*`
-      all pass on that tree. Only the cursor-move test went red on the
-      real runner because the two menu tests get a THIRD arm from
-      `reassert_owner_deferred("menu")`, queued in a LATER dispatch than
-      the rebuild and therefore landing after the repeater update; the
-      sweep removes that arm, so it overstates their real-world exposure
-      while still naming them as the class. All three are green with the
-      `Timer` on the same forced ordering: 10/10 for the cursor-move
-      shape, 5/5 for each menu shape, under `taskset -c 0,1` plus four
-      spinners.
-      The dismiss and cursor-move shapes are pinned by their own acting
-      tests, and every one of these numbers was re-measured with a FRESH
-      fixture per run after an earlier round reported false reds from a
-      fixture whose pick counts accumulated (the `★1` check silently
-      stopped matching). A campaign that reuses a fixture across runs
-      must reset it or assert a delta.
-      **What kills the mutant, and what does not.** The post-swap
-      keystroke is the user's contract but a WEAK mutant-killer, and the
-      measurement says so: with the reclaim removed it still passes 19
-      runs in 20 idle and 19 in 20 under load. Both the claim it races
-      and the drive step that sends it are zero-length timers on the same
-      event loop, so the claim usually wins the 50 ms anyway — and under
-      load the drive timer itself slips 300-700 ms, which moves the
-      keystroke clean out of the window. The assertion that fails 20/20
-      on the mutant, and passes 40/40 on the fixed tree idle and loaded,
-      is on the ORDER of the marks: the reclaim must be the FIRST claim
-      after the rows rebuild that destroyed the editor — 20/0 on the
-      fixed tree, 0/20 on the mutant, idle and loaded. Both are in the
-      test; a scripted keystroke alone would have let this regress.
-      **And an assertion on the DISK alone proves nothing about the
-      keyboard** — the hole FAIL-1 hid in for a whole round. "No sidecar
-      was written" is equally true of a dead keyboard, so the discard
-      probes now assert the keyboard by ACTING as well: after the
-      rebuild the row holds the token, typing reaches it, Enter commits
-      and the key after that marks. Re-verified deliberately once the
-      refocus worked, because the earlier "9/9 discarded" was measured in
-      a state where the keyboard was dead and therefore said nothing
-      about the discard's interaction with a LIVE refocused editor:
-      10/10 idle and 10/10 under six spinners, all four properties at
-      once (row holds the keyboard, revert not armed, no sidecar, the
-      keyboard acts).
-      **Campaign pass rates are SEAT-SENSITIVE — read them with that in
-      mind.** Any campaign counted on `keysfocus` measures the desktop
-      seat as much as the app: on a seat where something else takes the
-      window focus, QE recorded 18/20 and 14/20 for scripts that ran
-      10/10 and 12/12 on a quiet one, with the keyboard alive in every
-      "failing" run. The rates above are from a quiet seat. The
-      action probe (`key:+` must zoom) and the mark-order assertion are
-      the contract, and neither can be moved by a deactivation; a
-      `keysfocus` count is context, never a verdict.
-      The range gate — "the keyword field is not in the destroyed range,
-      so a rows rebuild must not pull the keyboard out of it" — was NOT
-      evidenced by the first `K` campaign, and an earlier draft of this
-      section wrongly claimed it was: `K` takes the keyboard during
-      `init`, which at the time wrote no token, so the campaign passed
-      because the token read `0` and no reclaim was ever considered. It
-      is evidenced now, by the same campaign re-run after the `init`
-      claims were fixed: `focusowner=12` at the post-`K` dump in all 30
-      runs under 24 spinners — the token really does reach `N+1` — and
-      the rebuilds in those runs leave that editor alone.
-      **Gated on state, not on the clock (issue #61, 2026-08-29):** two of
-      these strands clicked at a script timestamp and failed under load —
-      `session_swap_mid_field_edit_discards_and_keeps_the_keyboard` 17 runs
-      in 20 under six busy cores, `one_to_one_click_claims_the_keyboard` 14
-      in 20 under 24. Both now `wait:` for what the click needs. The first
-      was not a layout race at all: it asked for a 1200x800 window and the
-      compositor did not answer for the life of the run, so the click at
-      x=1050 fell 90 px short of a panel still docked at the 1440 px
-      window's edge, onto the grid. That measurement is what issue #65
-      later generalised: `resize:` is a request, and every script that
-      CHANGES the geometry now gates on `wait:window geometry WxH` (see
-      test-harness.md for what a satisfied one does and does not
-      promise). The 16 `PIN_WINDOW` scripts are not in that set by
-      design: they ask for the size the window already has and gate on
-      their own layout waits.
-      Measured with the old script under six
-      spinners, 9 runs in 10: no `iptc field 0 laid out at 910` at all,
-      `geometry at shutter: grid 1140x800`, and a 1440 px-wide snapshot
-      12 s after the request — the row sat at 1150 instead of 910, a
-      240 px shift. It now pins the window at the size it already has and
-      waits on the Title row's layout report INCLUDING its x (`iptc field
-      0 laid out at 1150`), which is that row's place at that width and no
-      other — so the click happens in the state its coordinates were
-      measured in, or the run ends saying so. The second waits for the
-      zoom overlay to be UP at all (any
-      rung — `idx 0 factor`), because before the first rung that point
-      belongs to the fit surface, whose click also claims the keyboard: the
-      test went green having exercised the wrong element. Both keep the
-      preconditions they used to fail on, and both gained one: the field
-      click is RESOLVED against the rectangle the app reported (issue #70
-      — the script names the element and the test asserts the resolved
-      point is inside the rect; it used to name a coordinate and check
-      that), and the
-      loupe click is off-centre so the re-centre it produces proves it
-      reached the overlay's own surface rather than the cell behind it.
-      That sharper aim also made the 1:1 test able to fail for the right
-      reason: in one full debug suite it went red with the re-centre
-      assertion PASSING and `keysfocus=false` — the click reached the
-      overlay and the shipped `keys.focus()` did not stick, which is
-      **issue #64**'s family (a focus claim made while the panel's field
-      rows are rebuilt under the same dispatch), not a timing miss. It is
-      telling the truth when it does that; do not quiet it.
-      **Issue #64 does not reproduce on this tree** (measured 2026-08-30,
-      instrumented): its own repro — a real click, then a real `I` — ran
-      0 stranded in 90 runs (30 idle and 30 under six spinners in phase
-      3a, 30 more under six spinners after the fix), and the traces say
-      why rather than leaving it to luck: with `I` (not `K`)
-      `iptc-focus-keywords` stays false, so no editor ever takes focus,
-      `keys` holds the keyboard from startup and never emits a `lost`,
-      and the rebuild destroys eleven `LineEdit`s that were holding
-      nothing. The 1-in-8 was measured on 2026-08-29 and the tree has
-      moved through issues #13 and #62 since, both of which changed the
-      harness's key and focus paths. The second signature — the 1:1 test
-      above, where `K` really does park the keyboard in an editor before
-      the click — is the one the family fix covers by construction: the
-      owner token names that editor, and any rebuild that destroys a
-      field row reclaims in the same pass. Recorded, not closed by
-      assertion: the campaigns are in the issue. And the same caveat as
-      #63 applies to its evidence — the reported `keysfocus=false`
-      readings cannot distinguish a stranded keyboard from a deactivated
-      window, so the 1-in-8 was never established as a strand in the
-      first place.
-      **Issue #63, 2026-08-30: the ownerless window is closed; the
-      reported symptom was a different thing.** Two findings, and they
-      must not be conflated.
-      (1) The REPORTED reds — `keysfocus=false` at a dump 1.2 s after the
-      swap — are window-DEACTIVATION artifacts of the assertion, not
-      stranded keyboards: every one of those runs went on to zoom with a
-      `+`, and the test-harness.md records why `keysfocus` cannot
-      answer this question at all. The test now asserts by acting, so it
-      can no longer go red for that reason.
-      (2) The ownerless window it led us to is separately real and
-      separately measured. Instrumented, the rebuild destroyed the
-      focused editor with no `FocusOut` and nothing owned the keyboard
-      until the deferred claim's zero-length timer ran: **199 ms minimum,
-      254 ms median, 479 ms maximum** over 20 runs under six spinners
-      plus a full-core build loop, on 100 % of runs (A/B against this
-      tree with only the reclaim removed; an earlier run of the same
-      campaign, recomputed by the validator, gave 178/215/269). What that costs the
-      user is a lost keystroke, and it is provable in one A/B: a `key:+`
-      50 ms after the swap zooms on the fixed tree and is dropped on the
-      unmodified one. With the synchronous reclaim the window is **0 ms
-      in every run** (min 0, median 0, max 1) and the post-swap keystroke
-      acts 20/20. That 0 ms is the SWAP path only, where the reclaim goes
-      straight to the topmost scope; the same-session row refocus cannot
-      be synchronous (Slint cannot focus a row from `init`) and keeps the
-      residual tabulated in the owner-invariant section. The window, not the keystroke, is the measurement that
-      discriminates — see "what kills the mutant" in the test ledger.
-      The test also gained the gate this issue asked for — `wait:load
-      settled gen 1`, which the session generation in that mark finally
-      made expressible (`load settled` read identically for both
-      sessions, the #13 "next occurrence" limitation) — but it gates the
-      DISCARD dumps only. Putting the keyboard assertion behind it was a
-      mistake: it moved that dump seconds later and widened the
-      deactivation exposure, which is how it was caught.
-      **The remaining clock-gated steps (2026-09-03, CI audit item 6):** a
-      script step that waits for a variable-cost operation now waits for
-      that operation's own mark. The shape rule is fixed: keep the
-      absolute step as a harmless backstop, insert the wait in FRONT of
-      the consumer, and assert the `(satisfied` echo, so a satisfied-
-      instantly wait leaves the schedule untouched and a dropped token
-      cannot put a script back on the clock in silence. The audit's two
-      named sites went first. The issue #46 M3 drag test gates its
-      pointer work on `wait:loupe idx 0 factor` and is the one site
-      RE-TIMED rather than backstopped: the wait sits at 20 s and the
-      whole tail moved up by 24.9 s with every authored gap intact,
-      because a wait at 20 s with the tail left at 45 s would have landed
-      `dump.predrag` 25 s after the mark. Its 45 s lead is gone — 25 s
-      back on a release runner (the sharp render lands at 352 ms there),
-      and on the Windows debug runner the run ends at ~32.5 s instead of
-      47.4 s, leaving ~27 s of the shutter's 60 s readiness cap where it
-      had 12.9 s (stock dev profile, historical since 2026-09-05: with
-      dependencies optimised the sharp render lands seconds, not tens of
-      seconds, after launch there — the PR's Windows debug artifacts carry
-      the new figure, and the 20 s placement stays until it is re-timed on
-      that evidence; see the `wait:` paragraph of test-harness.md).
-      The swap-flush test's `gap < 700` stopwatch could not
-      become a wait at all — it asserts that the debounce had NOT fired,
-      and a wait only answers "has this happened yet" — so it reads the
-      writer's own close count instead (`sidecar writer closed gen 0: 1
-      pending flushed`), with a settle wait moving the load work out of
-      the 300 ms the debounce premise depends on (that pick fired 246 ms
-      BEFORE the settle on the Windows debug runner, putting a re-sort and
-      a full refresh inside the window). Two more scripts followed the
-      same rule. The #56 badge test gates its positional nav, its copy and
-      both exports (`load settled gen 0`, `copy finished run 1`, `clip
-      export finished run 1/2`), which is what makes the ENDS of its
-      helper thread's deletion window causal rather than hoped for; the
-      early end holds while the second export takes under 8.7 s, and a
-      slower one now fails at `dump.hint2` with the victim already gone
-      rather than at `dump.done2`. The hand-deletion re-run puts
-      `wait:copy finished run 1` right AFTER its trigger instead of before
-      its consumer, so the 8.7 s the script leaves for the helper's four
-      unlinks survives a slow copy too — CI run 98735565222 (Windows,
-      2026-08-28) is that failure, this suite's one proven red of the
-      shape — and the helper's own 11 s deadline becomes a 60 s liveness
-      escape, since the script's wait now ends a stalled copy long before
-      it. Kept on the clock on purpose in these four, each test saying so:
-      the M3 fling pair's +100/+400 ms samples and its 16 ms flick cadence
-      (the timing IS the property — "stops dead" is a statement about
-      elapsed time, and no event occurs; the block moved bodily with its
-      gaps), and the badge deleter's 10 s offset, an authored position
-      inside a window whose ends these waits make causal.
-      The rest of the audit's list is insert-only, one token in front of
-      one consumer, each with its `(satisfied` guard: the camera-template
-      copy and the video export wait for their own report cards
-      (`copy finished run 1`, `clip export finished run 1` — a refused
-      Ctrl+Shift+E starts no export, so the number still names the one
-      the Enter began); the swap re-arm test holds the shutter on
-      `load settled gen 1` rather than on a trailing zoom key; the
-      export-dialog wheel test waits for `load settled gen 0` before its
-      first wheel, because the settle WRITES `vp_y` itself and would
-      otherwise move the very number the test reads — and its
-      `settled < 1900` stopwatch became an ORDERING on the log (settle
-      line before the first wheel's echo), since the old form would have
-      gone red on exactly the loaded runner the wait exists for. Eight
-      focus-family scripts open the metadata panel behind the settle: a
-      rows rebuild the load adds after the `K`/`I` is indistinguishable
-      from the blur, menu and swap rebuilds those tests count, and the
-      margin was 1.1 s on the Windows debug runner. None of these
-      shortens a run — a wait polls from its OWN timestamp, so a
-      satisfied-instantly wait leaves every later step where the script
-      put it; what changes is that a slower runner now shifts the tail
-      instead of reading a half-finished operation.
-      Two of the conversions changed what is proven, and say so. The
-      1:1 panel-reanchor test gates its toggles on the sharp render's own
-      mark in RELEASE only (`wait:loupe idx 0 factor`, satisfied in
-      0.4 s there): its release-strength assertion used to double as a
-      timing claim — a runner too slow to decode 50 MP in 2 s failed
-      here — and behind the wait that half belongs to the perf budgets,
-      which measure the decode directly. DEBUG keeps the clock, because
-      the same mark lands at 28.3 s on the Windows debug runner and the
-      30 s cap runs from the step; the two scripts are one schedule and
-      must be edited together. And the paced-tap warm-landing pin splits
-      its log at the first tap's own `drive: right` echo instead of
-      filtering trace clocks against the scripted 8000 ms: the window is
-      then wherever the tap actually fired (that runner fired it at
-      9480 ms, 1480 ms late), and the shared `trace_ms` helper, whose
-      last two callers were these two stopwatches, is gone.
-      **A settle is not a texture (2026-09-03).** Three shots assert on
-      RENDERED pixels — the two selection-wash tests compare a blue-bias
-      difference over the same cells across two processes, and the
-      panel-dock test reads left-edge photo variance — and at grid zoom
-      the shutter has no texture gate of its own, it fires on its 1.5 s
-      floor. `load settled gen N` says every thumb's BYTES were drained
-      (`metadata_complete()` is `thumbs_done >= labels.len()`), not that
-      any texture was adopted: measured on this tree under six spinners,
-      the LAST `thumb landed` line follows the settle by 44-49 ms in all
-      four wash runs, and the Windows debug artifacts show 36-110 ms. Gating those shots on
-      the settle alone would therefore have moved them from a
-      consistently texture-free state (both Windows wash shots read
-      `0/3 loaded · sorting by name until loaded`) INTO the adoption
-      window, one run on each side of it. They wait for the textures they
-      read instead — `wait:thumb landed idx 0/1/2` as the final steps of
-      every run, the settle wait kept in front as the positional-key
-      premise — and under six spinners those waits held the panel-dock
-      shots for 1042 and 1096 ms, with all four wash shots reporting
-      `3 thumbs loaded` where the placeholders used to be. That token
-      carries NO session generation, no index terminator and no RETARGET
-      generation, so it is only usable in a single-session script over a
-      three-file fixture, and it says a texture EXISTS rather than that
-      it was cooked at the current cell size: `thumb_waits_from` in
-      tests/screenshot.rs is where those limits are written down. The
-      third one bites in the panel-dock pair (recorded 2026-09-04,
-      validator F6): its open run toggles the panel at 600 ms and waits
-      at 1000-1002 ms, and on a fast seat the pre-toggle adoptions
-      satisfy all three — two release runs here landed them at 42-46 ms
-      with every wait `satisfied after 0 ms`, while the cell went 173x116
-      to 136x90. What holds the shot 903 ms behind the toggle is still the
-      shutter's 1.5 s floor, i.e. the clock; the waits keep the shots off
-      placeholders, which is what they were added for, and claim nothing
-      about the re-cook.
-      **Done, and per script (issue #73, 2026-09-05)** — this entry
-      replaces the deferral that stood here, and one sentence of that
-      deferral was wrong; it is corrected below. The presenter now emits
-      the settle MARK at every zoom (`anchor_the_scroll`): the edge is the
-      session's, not the layout's, so only the SCROLL CORRECTION stays
-      multi-column, for the two reasons it always had (at N=1 the strip
-      re-anchors through `claim_cursor_at_loupe`, a second writer of `vp_y`
-      in the same pass, and `last_cursor_visible` is one pass stale there).
-      One emit site; the multi-column sentence is byte-identical to the one
-      the CI artifacts already carry, double space included; the
-      `geometry at shutter` line of all seven one-column scripts is
-      unchanged before and after, every line of it. Before the change,
-      `--start-11` plus `wait:load settled gen 0` burned the full 30 s cap
-      and exited 1; after it, the same run is `satisfied after 701 ms`.
-      THREE scripts were converted, and the motive is per script and is
-      NOT the ordering the issue led with. Ordering cannot bite any of the
-      six: `filter.rs` breaks a capture-time tie on the filename and
-      `exif.rs`'s `sort_key` has no filename term, so the six-copy
-      fixtures, the single-file fixture, the three fetched references and
-      `place_three_distinct` (15:29:13 / 15:29:40 / 15:29:55) all sort
-      identically by name and by capture time — the re-sort is a
-      mathematical no-op on five of them, and the sixth inverts on purpose
-      but has no positional key. What is live is VACUITY: a run that
-      passes having measured nothing.
-      `engine_events_after_loading_never_move_an_untouched_cursor` gates
-      `2900:wait:load settled gen 0` in front of its first engine step. Its
-      property is "engine events AFTER the settle never move an untouched
-      cursor"; a settle landing after `5000:zoom-out` leaves that property
-      unexercised while BOTH its anti-vacuity assertions (`2 thumbs
-      loaded`, `a_late.ARW (2/2)`) still pass at the shutter. Reproduced
-      by the QE gate of 2026-09-05 on an 8-core seat under load (the test
-      pinned to two cores against six spinners and a hashing churner): on
-      main the settle landed AFTER the first drive step in 10 of 10 runs —
-      settle 10115-15701 ms against `drive: zoom-out` at ~3000 ms — and
-      the test was GREEN all ten, 0 of the 10 emitting any settle mark at
-      all. Idle on main the same settle is 1164-1295 ms, so the race is
-      LOAD-dependent, which is why a quiet runner never showed it. On this
-      branch the gate held 10 of 10, dwelling 2.8-5.3 s of the 30 s cap.
-      That corrects the sentence this ledger used to carry — it said
-      the test "asserts the flip it depends on … so a run that lost that
-      race fails loudly instead of measuring the wrong cell". It fails
-      loudly for the WRONG-CELL case and not for the vacuity case, which
-      is exactly why it is converted. Cost: nil — the settle is at
-      1788-2061 ms on the Windows debug runner against a 2900 ms step, so
-      the wait is `satisfied after 0 ms` on every artifact measured and on
-      this seat, and `schedule_from` preserves the 1000 ms "keep the
-      engine busy" gaps behind it.
-      `loupe_survives_a_vertical_resize_with_one_whole_frame` gates
-      `1400:wait:load settled gen 0` in front of `1500:home`. Same motive:
-      at one column a settle reaches `claim_cursor_at_loupe` as a view
-      mutation, so a settle landing after the `3000:resize` fires a second
-      `relayout re-anchor` that REPAIRS the state under test — the hazard
-      this test's own comment already records for its About pair ("a
-      panel-toggle pair was tried and made this test vacuous — the mutant
-      passed"). Worst measured margin between the settle and that resize:
-      146 ms (settle 2854 ms, PR#71 Windows debug artifact). The QE gate
-      of 2026-09-05 reproduced the hazard itself under the same load: on
-      main the settle landed after `1500:home` AND after the `3000:resize`
-      under test in 10 of 10 runs, GREEN every time; the worst IDLE margin
-      ahead of `home` was 61 ms (settle 1439 ms against the 1500 ms step).
-      On this branch the gate held 10 of 10, dwelling 5.8-9.8 s, with the
-      authored 1500 ms `home`-to-`resize` gap preserved to ±2 ms in all
-      ten. Cost: +0.5 to +1.5 s of tail on the Windows debug runner
-      against 54 s of headroom, 0 on both release runners.
-      `panel_close_from_the_menu_at_one_to_one_keeps_the_keyboard` gates
-      `3400:wait:load settled gen 0` in front of `3500:key:k`, for the
-      motive its eight focus-family siblings already record: the IPTC rows
-      are REBUILT when the metadata lands, and a rebuild after the K is
-      indistinguishable from the blur the test measures. Free, and free on
-      the only runner that runs it — `menu_clicks_are_calibrated()` is
-      `!cfg!(windows)` and no Windows artifact contains a `focus-d1-11`
-      trace. One number is worth recording beside it, because this is the
-      smallest fixture in the suite and the synthetic-session hazard above
-      is the shape of the failure it would take. On the Linux release
-      runner its single file settles 29 ms after the `window geometry`
-      mark of the refresh that immediately precedes `harness::install`
-      (geometry [4], `thumb bytes idx 0` [33], both Linux artifacts on
-      disk); 984 ms of margin in debug on this seat, and in a release run
-      here the two round to the same millisecond with the wait still
-      `satisfied after 0 ms`. That last case is the one worth
-      understanding, because it shows the margin is an observable of a
-      STRUCTURAL fact rather than a race won: a folder session starts at
-      `thumbs_done: 0` and is incremented only in the pump, which runs on
-      the event loop — i.e. after `install` — so a folder settle cannot
-      precede registration however fast the disk is. Only a `--synthetic`
-      session, whose state is constructed with `thumbs_done: n`, can — and
-      only on a platform where the first laid-out refresh runs ahead of
-      install, which is the platform-dependence recorded above. And if it
-      ever did lose, the failure would be LOUD — `wait never satisfied`,
-      exit 1 — not silent.
-      Each of the three carries the `(satisfied` echo assertion AND a
-      permanent byte-offset ORDERING assertion (`stderr.find("load settled
-      gen 0") < stderr.find("drive: …")`, the idiom the export-dialog
-      wheel test already uses), because the echo alone proves a wait ran,
-      not that it ran in front of the key — a later re-time could take the
-      gate out with nothing going red. Verified by mutation: with the
-      gated step hand-shifted ahead of the settle each ordering assertion
-      goes red; with the wait step deleted each `(satisfied` assertion
-      goes red; with the token misspelled the run burns the 30 s cap and
-      exits 1.
-      THREE stay on the clock, deliberately.
-      `panel_toggle_at_one_to_one_keeps_the_photo` and
-      `window_resize_keeps_the_photo` place six copies of
-      `A1_full_compressed.ARW`: one capture key, so a gate protects
-      nothing, and it would be paid out of the one budget those tests are
-      known to lose. Measured cost on the Windows debug runner: +3.2 to
-      +4.9 s of tail, and the tail translates 1:1 — a controlled A/B on
-      the real `resize-cursor` script against the same script shifted
-      +3.80 s moved the shutter +3.895 s (n=3, ratio 1.03).
-      `window_resize_keeps_the_photo` has SIX recorded failing jobs, all
-      Windows, all 2026-07-27, and they split into TWO mechanisms: FOUR
-      are the shutter's 60 s readiness cap (runs 58, 62, 65, 70 — twice it
-      took three tests down in one job; the mechanism was the JPEG decoder,
-      a dependency, compiled at opt-level 0 in the debug pass — issue #76,
-      removed 2026-09-05 by compiling dependencies optimised in the dev
-      profile, `01-architecture.md` "Build profiles": reproduced and closed
-      on the development seat under the load recipe, 0 of 4 green stock →
-      4 of 4 green with the profile line) and TWO are `the relayout path
-      never fired — the resize wasn't exercised` (runs 60 and 71, bunched
-      resizes; run 60's trace reads `[1577] drive: resize:1000x700`
-      against `[1580] drive: resize:1440x900`). The cap is the DOMINANT
-      mechanism and the budget the tail is not spent out of; the second is
-      the very guard this change hardens, and the 4 s the schedule keeps
-      between its two resizes is what a bunching stall has to swallow
-      first. What was wrong there was the SCHEDULE'S NAME, not the
-      schedule: both comments claimed a settle they never waited for
-      ("Let the metadata stream SETTLE before driving"), while `home`
-      fires at 1.5-3.1 s against a 4.7-6.3 s settle. The comments now say
-      what is true — timed, order-neutral, and what the gate would cost.
-      `window_resize_keeps_the_photo`'s anti-vacuity guard is also
-      hardened in the same change: `relayout re-anchor` is not the
-      resize's private word, and QE watched a one-column SETTLE emit the
-      identical string with no resize in the script, so the order-blind
-      `contains` would have taken it for the resize. It is now positional
-      and reads the SUFFIX after the resize echo —
-      `stderr[find("drive: resize:1000x700")..].contains("relayout
-      re-anchor")` — not "the FIRST re-anchor came after the resize",
-      which a first-occurrence `find` pair would have asserted and which
-      is not the property: a re-anchor BEFORE the resize is somebody
-      else's, and what the guard has to see is one AFTER it. Verified by
-      mutation on 2026-09-05, direct-drive traces beside each test run.
-      Unmutated, the re-anchors are `[2501]` (the resize under test) and
-      `[6505]` (the 6500 restore). With an injected
-      `2200:resize:1200x700`, the injected resize takes the re-anchor at
-      `[2201]`, the resize under test at `[2501]` emits none, and the
-      restore emits one at `[6508]`: the suffix form is GREEN, the `find`
-      pair was RED and said "the only `relayout re-anchor` … happened
-      BEFORE the resize under test", which that trace contradicts. Dropping
-      the four `right` steps so the resize no longer dislodges the cursor
-      yields a trace with NO re-anchor at all — the vacuity the guard
-      exists for — and is RED under the suffix form, on its own message.
-      The suffix deliberately runs to the end of the trace, restore
-      included: the restore asks for the DEFAULT geometry, so it can only
-      re-anchor if the resize under test actually landed and moved the
-      layout, and the recorded bunched-resize failure (runs 60, 71) leaves
-      neither resize a re-anchor to emit.
-      The wash pair (`selection_wash_never_reaches_the_loupe`) keeps its
-      clock for a different reason, and it is this file's own rule: the
-      settle gates the KEY, not the picture. That test asserts on RENDERED
-      pixels — `region_variance > 100` and a blue-bias difference compared
-      ACROSS TWO PROCESSES — so it needs the landings, not the settle
-      alone; both shots are pinned today by the shutter's fixed 1.5 s
-      floor, which is a stable cross-process synchroniser, and a
-      settle-alone gate would swap it for a variable one inside the rung
-      ladder. The same experiment was tried on its GRID twin and rejected
-      (recorded in item 6 above and in that test's comment), and this test
-      has already gone red once on a rung difference (variance 99.2). If
-      it is ever gated it gates on the texture its samples read.
-      The shutter's own defect — a readiness budget set by script length,
-      11.8 s for the suite's longest script against 59.7 s for a 0.3 s one
-      over the same 50 MP frame — is real, is NOT what #73 was about, and
-      would not have saved any of the four recorded refusals (in every one
-      the stall had bunched the script to an end at 1.3-4.0 s). It has its
-      own issue, #76, settled on 2026-09-05 (user decision) not by moving
-      the budget but by removing the cost: the cap keeps its 60 s from
-      `shutter::arm`, and the frame it waited on — a 50 MP JPEG decoded by
-      a dependency compiled at opt-level 0, 26-40 s on the Windows debug
-      runner and 31 s on the development seat — decodes in about 2 s in a
-      debug build now that dependencies compile optimised in the dev
-      profile (`01-architecture.md`, "Build profiles"). The budget still
-      varies with script length; against a 2 s decode that variation is
-      noise, and a #73-style redesign of the budget stays rejected.
-- [x] **No modal scrolls the grid behind it (issue #49)**: a wheel over
-      any of the four scrims leaves the grid's `vpy` where it was, and all
-      four are now driven. The two hand-rolled scrims (Copy Picks, Export
-      Frames as Video) are pinned by
-      `a_wheel_over_the_copy_dialog_never_scrolls_the_grid_behind_it` and
-      `a_wheel_over_the_export_dialog_never_scrolls_the_grid_behind_it`;
-      the shared `ModalScrim` behind About and the shortcuts popup — never
-      broken, but until now resting on a reading of the component — by
-      `a_wheel_over_the_help_popups_never_scrolls_the_grid_behind_them`.
-      All three were red-run-verified against the same tree with the
-      relevant `scroll-event` arm removed (the `wheeled` dump read
-      `vpy=-360.0` against the required `-180.0`). Each also wheels over a
-      CHILD of the card rather than bare scrim — the rename field (the one
-      `TextInput` in either dialog, after a click and a keystroke prove the
-      pointer is really on it) and About's `card-eats-clicks` `TouchArea` —
-      so "the scrim swallowed it" is measured, not reasoned. Every script
-      pins the window with `resize:1440x900` first: the card coordinates
-      are that geometry and no other (at 1024x768 the card sits higher and the field click lands ~66 px below the field, on the summary line), and the over-the-field strand is not driven off the
-      Linux runners, where the font metrics above the field could drift the
-      click onto the destination picker. The export test runs over a folder
-      of tiny synthetic RAWs rather than a `--synthetic` session, because
-      the export offer is off for a session with no paths, and it needs a
-      grid DEEP enough to scroll — a three-frame folder does not scroll at
-      any zoom, which would make the control vacuous; it asserts the
-      load-settled edge landed before the first wheel, because that edge
-      writes `vp_y` itself.
-- [x] **Brief 002, AC1 — the user's scenario** (user decision 2026-09-06):
-      4 selected → export → Esc → Right, Right → Shift+Right → exactly 2
-      selected, the plan names only those two, no earlier-video hint, and
-      the second file holds two frames. Pinned by
-      `the_second_video_holds_only_the_new_span` (RED on the pre-fix tree
-      2026-09-06: 6 selected, `clipsummary` "6 frames … → a-g.mov" and
-      `cliphint` "4 of 6 frames are already in a-d.mov" — the user's
-      report, `code/MECHANISM.md` §4). The `]`-to-a-burst half is pinned by parts
-      — `a_plain_move_collapses_the_selection_in_the_grid` (a plain `]`
-      empties it) with `core: the_scope_is_the_selection_or_the_burst_under_the_cursor`
-      — because no fixture in the repository forms a burst from real files
-      (video-export.md's recorded deviation).
-- [x] **Brief 002, AC2 — caption, hop, caption**: Ctrl+Shift+B, an IPTC
-      commit, `]`, Ctrl+Shift+B, a second commit → the second commit lands
-      on the second burst only. Pinned by
-      `caption_then_hop_then_caption_lands_on_the_second_burst_only` (the
-      revert label counts the batch — 5, then 3, never 8; RED pre-fix with
-      the hop reading 5 selected).
-- [x] **Brief 002, AC3 — two bursts by Ctrl-hops**: Ctrl+Shift+B,
-      Ctrl+`]`×n, Ctrl+Shift+B → both bursts; a plain `]` anywhere in the
-      sequence → empty. Pinned by
-      `ctrl_navigation_keeps_the_selection_and_ctrl_space_toggles` (its
-      `plain` dump read 14 selected on the pre-fix tree); the core rule by
-      `selection.rs` `a_fresh_burst_span_replaces_ctrl_added_frames`.
-- [x] **Brief 002, AC4 — Ctrl+Space**: on three separate frames → 3
-      selected; again on one → 2; the Ctrl+Right between them keeps the
-      count. Same test as AC3, with `selection.rs`
-      `ctrl_space_toggles_additively_across_ctrl_navigation` for the rule.
-- [x] **Brief 002, AC5 — the mark advance collapses**: `Y` on a frame
-      inside a live selection → the selection is empty afterwards and the
-      mark is on that frame only; `U` leaves the selection alone. Pinned
-      by `a_plain_move_collapses_the_selection_in_the_grid` and
-      `a_plain_move_collapses_the_selection_in_the_loupe` (the loupe
-      strand also proves the zoom never changed).
-- [x] **Brief 002, AC6 — a dialog's Esc**: Esc in the export dialog closes
-      it and the selection is intact; a second Esc, on the grid, clears
-      it — unchanged, now in docs/culling.md. Pinned by
-      `the_second_video_holds_only_the_new_span` (`closed1`: dialog gone,
-      4 selected; `cleared`: 0).
-- [x] **Brief 002, AC7 — the count's colour**: "· N selected" renders in
-      the accent in the grid and in the loupe, absent when empty. Pinned
-      by `the_selection_count_is_drawn_in_the_accent` (the fragment's
-      rectangle is read by name and its blue bias compared with the grey
-      head's in the same shot: 18.0 against 4.1; both mutants red — the
-      accent set to `#a8a8b0` gives 0.0 of difference and the 25 % wash
-      blend 3.3, against a threshold of 8.0).
-- [x] **Brief 002, AC8 — suite, card, checksums**: the full suite green on
-      both runners; `the_shortcuts_card_lists_every_binding_in_the_spec`
-      carries the three new pairings; RAW checksums unchanged. TICKED
-      2026-09-17 — the unit closed without a closing spec commit (brief 002
-      has no Outcome section, unlike briefs 005 and 006): PR #84 merged as
-      `ff034a6` with both CI checks green, which branch protection requires;
-      the parity test is `crates/fastcull-app/tests/shortcuts_map.rs`;
-      `testdata/` is untouched between `4405d27` and `ff034a6`. R2's core
-      rule: `selection.rs`
-      `a_fresh_span_replaces_the_whole_selection_a_continued_one_replaces_its_span`
-      (rewritten from `toggle_and_anchor_reset`, which asserted the union;
-      RED against the pre-fix `extend_to`).
-- [x] **Brief 002, the Shift page keys** (QE 2026-09-06, M-1; Manager
-      ruling A): Shift+PgUp, Shift+PgDn, Shift+Home and Shift+End extend
-      by the same rule as Shift+arrows — a span from the anchor to where
-      the plain key lands, fresh or continued — and Shift+Space is inert.
-      Pinned by `shift_page_keys_extend_the_selection` (the page spans
-      asserted as arithmetic, never a page size; RED before the binding
-      with Shift+End reading (39, 0), the plain End's collapse).
-- [x] **Brief 002, an empty filtered view still collapses** (QE
-      2026-09-06, M-2): rule 1's "whether or not the move changed the
-      cursor" holds where there is nowhere to move at all, so a selection
-      cannot survive an arrow pressed under a filter that matches nothing
-      and come back when the filter widens. Pinned by the empty-view
-      strand of `a_plain_move_collapses_the_selection_in_the_grid` (RED
-      before the fix, reading 40).
-- [x] **Brief 002, the Ctrl chords claim the cursor** (QE 2026-09-06,
-      M-5): a Ctrl-move sets `cursor_touched`, so the view rules stop
-      moving the cursor afterwards. Pinned by
-      `ctrl_navigation_claims_the_cursor` through a FILTER CHANGE — the
-      `user_changed_query` half of `filter::cursor_after_recompute`'s
-      `follow_head`. **The load-settled half of that same condition, and
-      `Ctrl+Space`'s membership in the claim, are review-verified only**:
-      three real RAWs settle before any key a script can send (measured
-      2026-09-06 — the re-sort form of the test was vacuous and its own
-      ordering guard said so), and Ctrl+Space never moves the cursor, so
-      its claim cannot be observed on its own. The anchor reset that comes
-      with a Ctrl+`[`/`]` hop is pinned by the `hopfresh` strand of
-      `ctrl_navigation_keeps_the_selection_and_ctrl_space_toggles`
-      (senior-developer re-review N-2; the mutant that keeps the anchor
-      reads (7, 7) against (7, 2)).
-- RETIRED 2026-09-17 (user decision — a spec acceptance criterion leaves the
-  list only with the user's OK): *Manual acceptance (per release): 5,000-file
-  A1 folder (a bad evening, per persona review) scrolls at 60 fps after thumbs
-  load; pick→auto-advance→pick loop in loupe has no perceived latency.* It was
-  never recorded as run across seventeen releases. Both claims stay product
-  intent, guarded by the release-mode perf budgets, the driven suite and daily
-  use on real shoots rather than a per-release script; a regression is a bug
-  report like any other.
+`core:` a `fastcull-core` unit or integration test; `app:` a driven
+`tests/screenshot.rs` test (real dispatched events, dumps and traces).
 
-The debug facilities — the env vars, the `FASTCULL_DRIVE` script and its
-tokens, the marks and the dump fields — are `test-harness.md` (moved out of
-this file 2026-09-17, brief 007).
+- [x] `filter.rs`: every filter/sort combination over a synthetic session,
+      counts included — the `filter::tests`.
+- [x] The windowed model: visible-range → model-window computation, partial
+      rows, tiny folders, `N = 1` — `grid.rs`
+      `visible_range_windows_with_margin`, `visible_range_edges`,
+      `visible_range_at_single_column`.
+- [x] The menu bar is readable under any desktop colour scheme —
+      `menu_bar_labels_survive_a_light_scheme_desktop` forces the failing
+      scheme-resolution branch (an unreachable session bus, NOT
+      `dbus-run-session`, which passes vacuously) and asserts light glyphs
+      over the dark bar; removing the pin yields 0 bright pixels and fails.
+- [x] Transit vs settled: a held key is distinguished from taps and decays
+      on release; the request while moving is a rung the mid serves (2048
+      still fails); the ring leans the way of travel and clamps at both
+      edges; a settled frame climbs without duplicating an in-flight job or
+      spinning; the settle poll leaves LRU order alone; through the public
+      api, so disabling transit at the call site fails —
+      `transit_tracks_held_keys_and_decays_on_release`,
+      `transit_request_is_served_by_the_mid_rung`,
+      `transit_ring_leans_in_the_direction_of_travel`,
+      `a_settled_frame_climbs_even_though_transit_only_asked_for_the_mid`,
+      `the_settle_guarantee_does_not_disturb_the_lru_order`,
+      `a_held_key_reaches_transit_through_the_public_api`,
+      `a_backward_hold_keeps_leaning_backward_across_refocus` (the app's
+      same-index re-focus storm). Not covered: the measured performance
+      figures themselves.
+- [x] No fit-drop, no fling, no phantom fold (issue #46). Core: the ring
+      maps view positions to ids and back, the direction latch compares
+      positions, deferred revival uses the same ring, the public api decodes
+      view neighbours not id neighbours —
+      `the_prefetch_ring_walks_view_order_not_id_order`,
+      `travel_direction_is_latched_in_view_positions`,
+      `deferred_revival_ring_follows_view_order`,
+      `prefetch_follows_the_view_order_through_the_public_api`. App: a
+      cook-widened cold jump keeps `one2one` and the carried centre and
+      renders the thumb rung; drag pans 1:1, release stops dead, navigation
+      after a flick keeps the drag-carried centre with zero `pan fold`
+      traces; paced taps over an interleaved session land warm —
+      `transit_to_a_cold_frame_keeps_the_overlay_at_the_carried_center`
+      (both profiles since 2026-09-05; its landing dump gated on the sharp
+      rung's mark; the thumb-rung render-order pin release-only, since a
+      congested debug kitchen can collapse the order),
+      `loupe_drag_pans_one_to_one_and_a_fling_never_survives_navigation`
+      (both profiles; its pointer work gated on `wait:loupe idx 0 factor`),
+      `paced_taps_over_an_interleaved_session_land_warm` (its warm-landing
+      pin binds in release, a timing pin like the perf budgets; its no-drop
+      assertion in both), `transit_at_zoom_stays_soft` (the soft render and
+      the sharp landing). Every bug-shaped assertion was red on the pre-fix
+      build. The `(hold cap)` drop-and-re-raise fires under the #76 load
+      recipe in debug (14 of 14) and never on CI; a deterministic
+      release-profile exercise still wants a decode-wedge knob (deferred;
+      the policy itself is unit-covered as `render_rung` rows).
+- [x] A decode-FAILED cursor drops to fit instead of masking the badge —
+      `a_decode_failed_cursor_drops_to_fit_instead_of_masking_the_badge`
+      (a helper thread zeroes the file after `thumb bytes idx 11`; the
+      second End-jump — failure known, texture in hand — must not render
+      the rescue; both landing orders are correct product behaviour and
+      neither is asserted; its preconditions `cursor=11`, `zf=inf` and the
+      `(decode failed)` drop are asserted, not reasoned).
+- [x] The wheel: one stop per notch through the restructured wiring, the
+      notch size pinned (59 px nothing, 60 px one stop), residue carried, a
+      full notch down at fit inert —
+      `overlay_wheel_still_zooms_one_stop_per_notch`.
+- [x] Provisional order while loading (issue #25): the view is identical at
+      every step as keys stream in, then the real sort applies once
+      (mutation-verified; non-vacuous by construction); the override touches
+      the sort only; the re-anchor reveals a watched cursor and spares a
+      browsing one; engine events after loading never move an untouched
+      cursor, end to end through the flip —
+      `filter::provisional_order_is_stable_while_metadata_streams`,
+      `filter::provisional_order_still_respects_the_filter_and_direction`,
+      `grid::resort_reveals_a_watched_cursor_and_spares_a_browsing_one`,
+      `filter::engine_events_stop_moving_an_untouched_cursor_once_loaded`,
+      `app: engine_events_after_loading_never_move_an_untouched_cursor`
+      (gated on `load settled gen 0` since 2026-09-05: under load the settle
+      landed after the first drive step 10 of 10 times and the test was
+      green having measured nothing). Recorded gaps: the completion
+      predicate and the mark path have no automated test (an end-to-end one
+      must catch the app mid-load; an injectable load-completion point is
+      the way in); four surviving mutants are accepted — `metadata_complete`
+      forced true, counting only `MetadataReady`, `user_changed_query`
+      forced false (the chips are click-only), `last_cursor_visible` forced
+      either way; the LOADING status form is unasserted.
+- [x] The loupe fit view shows the WHOLE frame — `grid.rs` units pin the
+      bound and the reveal; `loupe_fit_shows_the_whole_frame_not_a_crop`
+      measures the rendered aspect and requires bars on both sides
+      (disabling the bound reads "aspect 1.807" and fails; the 29
+      pre-existing screenshot tests could not see a crop).
+- [x] The pointer state machine: a table-driven test over EVERY (state,
+      input) pair of the transition table, reserved no-ops included; the
+      wheel anchors the pointer's image point (asserted OFF-CENTRE — at
+      (0.5, 0.5) the pointer and centre anchors coincide, which made three
+      criteria vacuous once), wheel notches land on the keys' stops,
+      wheel-down at fit is inert, bar clicks do nothing, pan offsets stay
+      clamped at every factor — `pointer.rs` tests. Slint's own semantics —
+      a drag suppresses the click, a distant second click is two clicks —
+      are pinned as dependencies: `a_grid_drag_scrolls_without_clicking_the_cell_under_it`,
+      `two_distant_clicks_are_two_clicks_not_a_double_click`.
+- [x] Double-click reaches 1:1 from ABOVE fit —
+      `loupe_double_click_above_fit_reaches_one_to_one` (the `dblclick:`
+      token replays Slint's real ordering).
+- [x] Pointer ROUTING (issue #13): which surface receives a physical click,
+      drag or wheel, through real hit-testing, each test pairing every
+      "nothing happened" claim with a control that proves the same token
+      acts — `a_click_inside_the_iptc_panel_never_reaches_the_grid` (a
+      field click proven by the COMMIT it produces),
+      `the_wheel_routing_table_holds_over_every_surface`,
+      `a_grid_drag_scrolls_without_clicking_the_cell_under_it`,
+      `two_distant_clicks_are_two_clicks_not_a_double_click`,
+      `a_scrollbar_drag_in_the_loupe_claims_the_cursor` (the positive half
+      of the `sb-activity` claim). Coordinates calibrated against traced
+      geometry; every one mutation-verified; load-verified in debug under
+      six busy cores. `i-slint-backend-testing` is NOT adopted (an internal,
+      unstable crate that would hide exactly the class where an element is
+      somewhere unexpected). Still out of reach: the native folder dialog,
+      OS-level focus, Tab-cycling — manual-acceptance items.
+- [x] Containment through the real path: `about_dialog_renders_and_contains_the_keyboard`
+      and `shortcuts_popup_contains_the_keyboard` open through the real Help
+      menu items, send real keys, assert `keysfocus=true`, and end with
+      Esc then the same key, which must mark; with the containment arms cut
+      back to Esc-only they fail and the old token-driven tests passed;
+      `a_wheel_over_the_help_popups_never_scrolls_the_grid_behind_them`
+      keeps the nav-token mirror's coverage.
+- [x] Screenshot smoke tests: grid placeholder (synthetic), loaded
+      thumbnails (texture variance), a failed-badge session, loupe fit and
+      1:1, bursts in a synthetic session, the panel-open docking state —
+      and `no_args_launch_opens_empty_window`. The version string's SHAPE:
+      off a tag a `-devel-` suffix is MANDATORY (CI checks out shallow, so
+      it is always off-tag), an 8-digit date when present, a bare hex hash
+      otherwise — `about_dialog_renders_and_contains_the_keyboard`.
+- [x] No modal scrolls the grid behind it (issue #49) — the two hand-rolled
+      scrims and `ModalScrim`, each test wheeling the grid before, under and
+      after the modal, and over a CHILD of the card —
+      `a_wheel_over_the_copy_dialog_never_scrolls_the_grid_behind_it`,
+      `a_wheel_over_the_export_dialog_never_scrolls_the_grid_behind_it`,
+      `a_wheel_over_the_help_popups_never_scrolls_the_grid_behind_them`
+      (red with the `scroll-event` arm removed: `vpy=-360` against `-180`).
+- [x] Focus continuity, red-run-verified against the pre-fix build: panel
+      close from the menu keeps the keyboard at 1:1 and in the grid; a
+      modal over a focused field owns the keyboard and writes nothing; a
+      session swap mid-edit discards and keeps the keyboard, for a destroyed
+      field editor and for the surviving keyword editor; Esc over stacked
+      modals closes the topmost first with the copy dialog's plan intact; a
+      1:1 loupe click claims the keyboard; the guards on the clean paths
+      (menu activation with keys focused, the G4 Enter commit, the
+      copy-dialog Esc lifecycle, the filter-bar toggle mid-edit, File > Copy
+      Picks over a focused field) —
+      `panel_close_from_the_menu_at_one_to_one_keeps_the_keyboard`,
+      `modal_over_a_focused_field_owns_the_keyboard_and_writes_nothing`,
+      `session_swap_mid_field_edit_discards_and_keeps_the_keyboard` (asserts
+      by acting: `key:+` 50 ms after the swap must zoom, and the ORDER of the
+      marks — the reclaim is the first claim after the rebuild — which is
+      what kills the mutant 20/20),
+      `session_swap_mid_keyword_edit_never_writes_into_the_new_session`
+      (**KNOWN INTERMITTENT**, ~1 run in 4 measured 2026-08-22, 0 in 40 on
+      2026-08-30 — the recorded rate stands unrefuted; it fails on the
+      DISCARD assertion with a lone `focus: … lost`, the issue #68 shape,
+      and must not be quieted),
+      `esc_over_stacked_modals_closes_the_topmost_first`,
+      `one_to_one_click_claims_the_keyboard`,
+      `copy_picks_from_the_menu_over_a_focused_field_owns_the_keyboard`; the
+      owner-invariant strands `a_cursor_move_rebuild_keeps_the_keyboard_in_the_field`
+      (waits on `row 0 (gen K)`; asserts the stranded-reclaim and the
+      deactivation signatures separately),
+      `a_menu_item_over_a_focused_field_row_keeps_the_keyboard`,
+      `a_dismissed_menu_over_a_focused_field_row_keeps_the_keyboard`. The
+      menu-click strands skip on Windows (no in-window menu bar). Under the
+      forced EARLY arm ordering the whole suite is 71 passed, 3 failed
+      without the `Timer` and all green with it. Issue #64 (a real click
+      then a real `I`) does not reproduce on this tree (0 in 90).
+- [x] Geometry: the relayout path re-anchors on the cursor across a resize
+      and a panel toggle at 1:1 and in the grid; the loupe survives a
+      vertical resize with one whole frame; grid resizes keep content
+      anchored, the bottom at the bottom, the top at the top — every resize
+      gated on `wait:window geometry WxH` (6/6 red with the token
+      neutered): `window_resize_keeps_the_photo` (its anti-vacuity guard
+      reads the `relayout re-anchor` AFTER the resize echo),
+      `panel_toggle_at_one_to_one_keeps_the_photo`,
+      `panel_toggle_at_one_to_one_reanchors_the_crop` (release-strength
+      timing behind `wait:loupe idx 0 factor` in release; the clock kept in
+      debug), `loupe_survives_a_vertical_resize_with_one_whole_frame`
+      (gated on the settle in front of its `home`),
+      `grid_resize_shrink_keeps_content_anchored`,
+      `grid_resize_grow_at_bottom_stays_at_bottom`,
+      `grid_resize_at_top_stays_at_top` (on a seat that reverts `1200x800`
+      these run their post-resize steps at 1440x900 — the reaction is
+      genuine, the geometry the compositor's).
+- [x] The selection wash never reaches the loupe, and the count is drawn in
+      the accent — `selection_wash_never_reaches_the_loupe` (rendered pixels
+      across two processes, pinned by the shutter's 1.5 s floor; if ever
+      gated, on the textures it reads), `the_selection_count_is_drawn_in_the_accent`
+      (18.0 of blue bias against 4.1; the two mutants at 4.1 and 7.4 against
+      a threshold of 8.0).
+- [x] Brief 002, the selection rule: the user's scenario (4 selected →
+      export → Esc → Right, Right → Shift+Right → exactly 2, no earlier-video
+      hint) — `the_second_video_holds_only_the_new_span`; caption, hop,
+      caption lands on the second burst only —
+      `caption_then_hop_then_caption_lands_on_the_second_burst_only`; two
+      bursts by Ctrl-hops and Ctrl+Space's toggle —
+      `ctrl_navigation_keeps_the_selection_and_ctrl_space_toggles` (with
+      its `hopfresh` strand for the anchor reset), core
+      `a_fresh_burst_span_replaces_ctrl_added_frames`,
+      `ctrl_space_toggles_additively_across_ctrl_navigation`; the mark
+      advance collapses and `U` does not, in the grid and the loupe, and an
+      empty filtered view still collapses —
+      `a_plain_move_collapses_the_selection_in_the_grid`,
+      `a_plain_move_collapses_the_selection_in_the_loupe`; a dialog's Esc
+      leaves the selection intact and a second Esc clears it (in
+      `the_second_video_holds_only_the_new_span`); the Shift page keys
+      extend by the same rule and Shift+Space is inert —
+      `shift_page_keys_extend_the_selection`; the Ctrl chords claim the
+      cursor — `ctrl_navigation_claims_the_cursor` (through a filter change;
+      the load-settled half and Ctrl+Space's claim are review-verified);
+      the core rule — `a_fresh_span_replaces_the_whole_selection_a_continued_one_replaces_its_span`
+      (red against the pre-fix `extend_to`); the suite green on both
+      runners, the card carrying the new pairings, the checksums unchanged
+      (PR #84).
+- [x] The shortcuts card lists every binding in this spec —
+      `the_shortcuts_card_lists_every_binding_in_the_spec` parses the
+      Keyboard map above and the card's own rows and fails if either grows
+      a row the other lacks; the card is a two-column sheet that fits its
+      window and closes with Esc, `?`, F1 and a click anywhere, including on
+      the card's centre and on the body's right edge where it is clamped —
+      `shortcuts_card_is_a_two_column_sheet_that_fits_its_window`.
+- [x] The shutter fires exactly once per run; the 60 s readiness cap is
+      margin again in a debug build — test-harness.md and
+      01-architecture.md ("Build profiles").
+- RETIRED 2026-09-17 (user decision): the per-release manual acceptance
+  (a 5,000-file A1 folder at 60 fps; no perceived latency in the
+  pick→auto-advance loop) — never recorded as run; the perf budgets, the
+  driven suite and daily use guard the claims.
+
+## History
+
+- 2026-09-17 — Rewritten (brief 007); the harness section moved to
+  test-harness.md; the manual acceptance retired (the user). The
+  pre-rewrite text — every campaign, count and seat measurement — is
+  `specs/history/ui-grid.md`.
+- 2026-09-06 — The selection rule: plain navigation collapses, Ctrl keeps,
+  a fresh span replaces, Ctrl+Space toggles; the count in the accent; two
+  SELECT rows on the card (brief 002, user decision).
+- 2026-09-05 — The shutter fires once (issue #77); the settle mark at every
+  zoom (issue #73); dependencies optimised in debug lift two release-only
+  gates (issue #76).
+- 2026-09-04 — The keyboard-shortcuts card rebuilt (PR #75); the CI audit.
+- 2026-09-02/03 — Windows CI restored; clicks by name (issue #70), geometry
+  waits (issue #65), the `run N` and `gen N` marks; v0.13.1.
+- 2026-08-30/09-01 — The owner invariant (issues #63, #64): the token, the
+  gain-only rule, the generation-stamped rebuild reclaim and its `Timer`;
+  the discard rule deterministic; issue #68 found.
+- 2026-08-29 — Pointer routing through real events (issue #13); `wait:`
+  (issue #61); all four scrims swallow the wheel (issue #49); the exported
+  badge (issue #56); Esc clears from the loupe (issue #55).
+- 2026-08-11 — The render ladder and the eviction moved into core
+  (`transit`), the deferral of 2026-08-09 honoured.
+- 2026-08-09 — No fit-drop, no fling, no phantom fold (issue #46; v0.9.0):
+  view-order rings, the single-writer rule, the thumb rung and the residual
+  hold, the pan without inertia.
+- 2026-08-03 — Focus continuity (issues #41, #42); the Windows GUI
+  subsystem (issue #40); v0.8.1.
+- 2026-08-02 — The dark-only palette pin; the texture kitchen (issue #30);
+  v0.8.0.
+- 2026-08-01 — Transit vs settled (user requirement; v0.7.0).
+- 2026-07-30/31 — One-column cell bounding; the double-click defect fixed;
+  the provisional order while loading and the narrowed untouched-cursor
+  rule (issues #25, #4; user decisions).
+- 2026-07-27 — The loupe state pill (issue #20); soft transit (issue #21);
+  the About dialog (issue #23); the anchor across a panel toggle (#18).
+- 2026-07-26 — The pointer contract (issue #11, user decisions); panel
+  docking (issue #12); the relayout carve-out (#16, #22); folderless launch
+  (#5); the grid click (#7).
+- 2026-07-25 — The ladder, `Z`, persistence, the overlay scrollbar, the
+  cursor contract, the M5 filter-bar decisions and the persona defaults,
+  auto-advance (user decisions).
+- 2026-07-24 — M2: the windowed model.
