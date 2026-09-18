@@ -179,7 +179,8 @@ equivalence; `evict_fullres(held, cursor, view)` — the cursor's texture is
 never the victim, an out-of-view entry goes first, a tie goes to the LATER
 slot; `FULLRES_RING = 2·PREFETCH + 1`. The cap duration is passed in as a UI
 tuning value. The app keeps what only the app can do: texture lookup, the
-clock, the extent math, the property writes.
+clock, the extent math, the property writes. The landing frame's full-res
+preempts the transit backlog via the focus/want-culling priority.
 
 ### The pointer contract (state machine; user request 2026-07-26, issue #11)
 
@@ -254,8 +255,9 @@ Rules the table does not carry:
   restarts the click count beyond 10 logical px); the app holds NO
   proximity state of its own — the bridge re-check shipped with #11 vetoed
   the gesture above fit (2026-07-30) and was deleted, not repaired.
-- **Clicks in the letterbox bars do nothing**; the wheel over a bar still
-  steps the ladder, anchored at the nearest frame edge ("zoom in" is
+- **Clicks in the letterbox bars do nothing**; at fit, where the `fit-ta`
+  surface covers the bars, the wheel over a bar still steps the ladder,
+  anchored at the nearest frame edge ("zoom in" is
   unambiguous wherever the pointer sits; "1:1 centred HERE" is not). The
   wheel only zooms over the image: over the IPTC panel, the filter bar or
   the scrollbar it scrolls that widget or nothing.
@@ -275,7 +277,11 @@ the render clamp resolves it (a click in the overlay still re-centres);
 while the ceiling is unknown the wheel climbs optimistically but CAPPED
 (`pointer::OPTIMISTIC_MAX` — an unbounded ladder reached ~1e38 and a NaN pan
 centre); extreme coalesced wheel deltas may emit fewer stops than notches;
-a drag started in a bar is inert; the scrollbar's wheel swallow deadens its
+a drag started in a bar is inert, and so is the wheel in the zoom overlay's
+letterbox bars — nothing on the overlay consumes it since #46; probed inert
+at 700x1100, factor 1.5, 180 px bars (2026-08-09), and recorded as inert
+until a geometry is found where it is not (extend the wheel surface over the
+bars if one ever shows); the scrollbar's wheel swallow deadens its
 18 px strip in grid view; and the machine's state is the DESIRED factor,
 which the screen may not show yet — during a decode gap anchors compute
 against the virtual viewport and self-correct on adoption.
@@ -596,7 +602,14 @@ v1: a mis-marked frame costs one arrow back and a re-mark.
   An action text fits ONE line of the 240 px action cell (38 characters at
   13 px fit, 40 do not). The card GROUPS AND PARAPHRASES the map and lists
   every binding in it (one map row may become four, two may share one;
-  `?`/F1 is named in the title-row hint). **780 px wide, content-driven
+  `?`/F1 is named in the title-row hint). SELECT lists the collapse rule's
+  companions as TWO rows — `Ctrl+arrows`, whose action text says "any MOVE
+  key", which is what pairs the map's Ctrl+`[`/`]` row to that cell in the
+  parity test, and `Ctrl+Space`; the MOVE `← / →` row reads "previous / next
+  frame (ends selection)", which is where the collapse rule reaches the
+  card; SELECT's `Shift+arrows` row reads "extend the selection (page keys
+  too)", which is how the Shift+page-keys map row is listed without a row of
+  its own. **780 px wide, content-driven
   tall**: `min(780px, window − 48px)` by `ModalScrim`'s `card-fits-content`
   clamped to `window − 40px`; it fits whole at 1000x700, the smallest
   supported window (about 25 px of room there — the next binding replaces
@@ -721,8 +734,11 @@ v1: a mis-marked frame costs one arrow back and a re-mark.
   in.
 - **Reclaim points**: the field-rows rebuild → back to the SAME ROW, never
   the grid (a claim on `keys` there made the next caption character a cull
-  command): Rust arms `iptc-refocus-row` with the rebuild GENERATION, one
-  event-loop iteration late, and the recreated row claims from a `changed`
+  command): Rust arms `iptc-refocus-row` — only when the token names a
+  FIELD ROW, so a rebuild never pulls the keyboard out of a `K`-parked
+  keyword editor — with the rebuild GENERATION, one event-loop iteration
+  late; the flag is cleared only by an actual claim, never by an arm firing,
+  so an EARLY arm survives until its row exists; and the recreated row claims from a `changed`
   handler or from a 1 ms per-row `Timer` — never from `init`, where
   `focus()` silently does nothing, and never the doomed instance, which
   the generation excludes; both belts are load-bearing under the EARLY arm
@@ -730,7 +746,11 @@ v1: a mis-marked frame costs one arrow back and a re-mark.
   release-idle and 11–35 ms loaded (95–230 ms in debug); a keystroke inside
   it is delivered in order when the claim runs first and dropped otherwise,
   so scripts wait on `row 0 (gen K)`. A session SWAP → synchronous, to the
-  topmost scope (0 ms; the field's meaning went with the folder). Panel
+  topmost scope (0 ms; the field's meaning went with the folder); the
+  deferred re-assert captures the session generation when QUEUED and falls
+  back to `focus-keys()` if a swap landed before it fired — reachable only as
+  menu activation then File > Open Folder, which the harness cannot drive,
+  so review-verified only. Panel
   CLOSE → synchronous AND deferred, because the MenuBar restores focus to
   the destroyed editor after the activation returns (21–53 ms, by design;
   docs/culling.md says so). Any MENU ITEM → deferred, re-asserting the
@@ -969,7 +989,9 @@ renderer's source offsets are `Fixed<u16, 4>`.
       `copy_picks_from_the_menu_over_a_focused_field_owns_the_keyboard`; the
       owner-invariant strands `a_cursor_move_rebuild_keeps_the_keyboard_in_the_field`
       (waits on `row 0 (gen K)`; asserts the stranded-reclaim and the
-      deactivation signatures separately),
+      deactivation signatures separately; inherits the #68 intermittent —
+      ~2 in 35 runs, a lone `focus: … lost` before the rebuild — and must
+      not be quieted),
       `a_menu_item_over_a_focused_field_row_keeps_the_keyboard`,
       `a_dismissed_menu_over_a_focused_field_row_keeps_the_keyboard`. The
       menu-click strands skip on Windows (no in-window menu bar). Under the
@@ -992,7 +1014,12 @@ renderer's source offsets are `Fixed<u16, 4>`.
       `grid_resize_grow_at_bottom_stays_at_bottom`,
       `grid_resize_at_top_stays_at_top` (on a seat that reverts `1200x800`
       these run their post-resize steps at 1440x900 — the reaction is
-      genuine, the geometry the compositor's).
+      genuine, the geometry the compositor's). Two stay on the clock
+      deliberately: `panel_toggle_at_one_to_one_keeps_the_photo` and
+      `window_resize_keeps_the_photo` place six copies of one file — one
+      capture key, so a settle gate protects nothing and would cost +3.2 to
+      +4.9 s of Windows tail out of the one budget those tests are known to
+      lose.
 - [x] The selection wash never reaches the loupe, and the count is drawn in
       the accent — `selection_wash_never_reaches_the_loupe` (rendered pixels
       across two processes, pinned by the shutter's 1.5 s floor; if ever
@@ -1041,7 +1068,9 @@ renderer's source offsets are `Fixed<u16, 4>`.
 ## History
 
 - 2026-09-17 — Rewritten (brief 007); the harness section moved to
-  test-harness.md; the manual acceptance retired (the user). The
+  test-harness.md; the manual acceptance retired (the user). One stale
+  sentence — that the dialog answer rows report no rectangle — was dropped
+  rather than moved: the rows report themselves since brief 005. The
   pre-rewrite text — every campaign, count and seat measurement — is
   `specs/history/ui-grid.md`.
 - 2026-09-06 — The selection rule: plain navigation collapses, Ctrl keeps,
@@ -1068,7 +1097,9 @@ renderer's source offsets are `Fixed<u16, 4>`.
   subsystem (issue #40); v0.8.1.
 - 2026-08-02 — The dark-only palette pin; the texture kitchen (issue #30);
   v0.8.0.
-- 2026-08-01 — Transit vs settled (user requirement; v0.7.0).
+- 2026-08-01 — Transit vs settled (user requirement; v0.7.0), motion-first:
+  the quality rule's earlier contract, "sharpness-on-stop within ~300 ms",
+  gave way to the settle (371–408 ms at the engine), an accepted cost.
 - 2026-07-30/31 — One-column cell bounding; the double-click defect fixed;
   the provisional order while loading and the narrowed untouched-cursor
   rule (issues #25, #4; user decisions).

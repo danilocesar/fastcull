@@ -59,7 +59,8 @@ Lightroom and Photo Mechanic read the same fields (00-overview.md).
 
 ### What is read
 
-`read_sidecar` returns the pick state and the mapped IPTC fields. Both XMP
+`read_sidecar` returns the pick state and the mapped IPTC fields
+(`SidecarState.iptc`). Both XMP
 forms are accepted — element form (Alt/Seq container text or direct element
 text) and the compact attribute form on any `rdf:Description`. Properties
 match by XML LOCAL name (alias-prefix tolerant; a foreign attribute whose
@@ -99,7 +100,8 @@ closed it".
 - The darktable round-trip in CI runs `darktable-cli` with a throwaway
   `--configdir`/`--library` in a temp dir — never the user's real config
   (CLAUDE.md hard rule 3) — and is skipped gracefully where darktable-cli is
-  absent (the Linux runner has it).
+  absent; neither CI runner installs it, so the round-trip runs on the
+  development seat.
 - The trace mark `sidecar writer closed gen N: K pending flushed`.
 
 ## Acceptance criteria
@@ -132,4 +134,6 @@ closed it".
 - 2026-07-25 — The M3/M5 scope split, approved by the user: M3 ships
   ratings; keyword writing landed with M5 the same day; IPTC field reading
   and writing with the panel step, with the reader's recorded deviations.
-- 2026-07-24 — ADR 0003; M3's invariants and the writer thread.
+- 2026-07-25 — M3: the writer thread and the darktable round-trip
+  (`def458c`).
+- 2026-07-24 — ADR 0003 and the invariants.

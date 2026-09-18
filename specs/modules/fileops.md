@@ -171,8 +171,9 @@ shouldn't matter more than that."*
      `.xmp` is replaced like any other file, with no merge, which is what
      keeps every copied byte verifiable against its source. The question says
      so out loud, because darktable keeps its history stack in a file of
-     exactly that name. Recovery if it happens anyway: delete that copy and
-     copy again, or re-import in darktable. What Overwrite does replace: a
+     exactly that name. The escapes are New only, Keep both, or a fresh folder;
+     recovery if it happens anyway: delete that copy and copy again, or
+     re-import in darktable. What Overwrite does replace: a
      destination file that differs from the source — another body's frame
      under the same name, or a copy the user edited in place.
    - **Cancel** (`Esc`): nothing is copied, not even the clash-free files. The
@@ -352,7 +353,8 @@ holds the session's own copies asks like any other clash (the user,
 2026-08-21: "it's fine. If you're saving where there are files already, it
 should ask"); the answer that adds new picks without re-reading the old ones
 is New only, and Overwrite is the answer that also re-verifies — on a network
-destination that read is ~2× the clashing bytes over the wire.
+destination that read is ~2× the clashing bytes over the wire (the
+persona's open question 5 of 2026-08-21, answered by New only).
 
 ### Two picks, one name
 
@@ -401,7 +403,10 @@ is the eventual fix; no perf budget covers plan time.
   template is set; count, total size and free space up front — `148 picked ·
   7.3 GB to copy · 1.2 TB free`; collisions summarized, never tabulated (no
   148-row table between the user and the Copy button); Enter copies when the
-  plan is clean; per-file progress with Cancel; the report with its verified
+  plan is clean; per-file progress with Cancel (the plan state has no Cancel
+  BUTTON and the scrim swallows clicks without dismissing, so a mouse-only
+  user has no way out of it — recorded, unfixed; the video dialog has one);
+  the report with its verified
   line, the failures with reasons, and an *Open destination folder* action.
   Modal in v1. Cut from v1: per-file mode selectors, speed and ETA, pause,
   background copy.
@@ -423,13 +428,14 @@ is the eventual fix; no perf budget covers plan time.
 - **The card is 560 px wide and its height follows its content** (issue
   #62), between a 480 px
   floor — the height it always had, so nothing moves in the ordinary case —
-  and the window (`parent.height − 40px`). Past the ceiling the text body
-  scrolls in a `ScrollView`: by wheel, and by keyboard — Down/Up a line,
+  and the window (`parent.height - 40px`). Past the ceiling the text body
+  scrolls in a `ScrollView`: by wheel, and by keyboard — Down/Up a line (40 px),
   PgDn/PgUp a body, Home/End the ends — only while it overflows, so those
   keys keep their meaning otherwise. The header rows and the button row
   never give up a pixel; the body is the only row that shrinks, so the
   buttons stay inside the card wherever the window can still hold the fixed
-  rows (~190 px, about 300 px of window height). The report prints one
+  rows (~190 px, about 300 px of window height); below that the row leaves
+  the card, and that is accepted. The report prints one
   `FAILED name: reason` line per failed file, so a destination that goes
   read-only mid-run words itself as long as the run was — and it is all
   readable without a mouse. The clash answer rows sit inside the scrolling
@@ -590,7 +596,9 @@ dialog with real key events.
       nudge line, the warning's "New only leaves them alone." clause, the
       row still offered when every pick clashes, the row order from the
       rows' own layout marks; docs/copy-picks.md and docs/faq.md say what
-      the dialog does (review-verified) —
+      the dialog does (review-verified; the label colours — amber Overwrite,
+      ordinary New only — are review-verified only, no dump carries a
+      colour) —
       `new_only_leaves_a_clashing_pair_untouched_and_copies_the_rest`,
       `new_only_never_opens_a_clashing_pair` (`#[cfg(unix)]`),
       `a_hand_emptied_folder_holds_no_clash_so_new_only_copies_it_again`,
@@ -624,6 +632,11 @@ dialog with real key events.
       (`#[cfg(unix)]`: NTFS allocates real clusters on `set_len`):
       `the_copy_refusal_reaches_the_dialog_on_the_drop_back_after_keep_both`,
       `the_copy_refusal_reaches_the_dialog_on_the_plan_preview`.
+- [x] Brief 006 AC3: the illustrative sizes in this spec, in video-export.md
+      and in `docs/` are the screen's form, one decimal (`328.4 MB`, never
+      `328 MB`), and docs/copy-picks.md says what the dialog says when the
+      destination lacks the room — review-verified at the gate (no driven
+      test reads the specs or the docs).
 - [x] The button row never leaves the card: at the floor, grown to its
       content, or clamped at the ceiling with the body scrolling by wheel
       and by PgDn/Home —
@@ -652,8 +665,8 @@ dialog with real key events.
 - 2026-09-12 — New only, the fourth answer to the clash question (issue #86,
   brief 005, PR #87); sizes on screen in five tiers and the free-space
   sentence in units a person reads (issue #88, brief 006, PR #90).
-- 2026-09-02 — The suffix walk's probe count replaces a stopwatch (issue
-  #58, v0.13.0).
+- 2026-08-29 — The suffix walk's probe count replaces a stopwatch (issue
+  #58, `c8f73f1`; v0.13.0).
 - 2026-08-30 — The card's height follows its content and its body scrolls
   (issue #62, v0.13.0).
 - 2026-08-22 — Two picks with one name always get a suffix (`be9e76d`);

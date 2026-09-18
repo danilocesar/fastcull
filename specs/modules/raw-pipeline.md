@@ -100,7 +100,13 @@ BACKLOG workers and one FOCUS-RESERVED lane.
   and only after the focus has represented the same PENDING WORK for a
   ~250 ms debounce (`FOCUS_DEBOUNCE`): the clock re-arms when the focused
   index changes AND when its target escalates above the highest seen
-  during the current focus tenure. Transient focuses (the first frame
+  during the current focus tenure (both guards are load-bearing: without
+  the in-flight guard a key release during the transit mid's decode queues a
+  duplicate full-res job and a ~149 MB transient; without the sufficiency
+  guard the lane spins push/pop forever holding the state mutex and freezes
+  all three workers). Full-res decodes must never queue behind a background
+  thumbnail sweep — the rule the lane and the pool bypass serve. Transient
+  focuses (the first frame
   during load, transit frames for ~60-150 ms) are left to the backlog
   workers, which need no debounce, so the lane is free at the FIRST settle
   after sub-debounce transits.
@@ -113,7 +119,9 @@ BACKLOG workers and one FOCUS-RESERVED lane.
   #76). A decode itself is never interrupted.
 - **The ring is in VIEW order** (`set_view`; issue #46): ±`PREFETCH` (2)
   when settled, `TRANSIT_BEHIND`/`TRANSIT_AHEAD` (2/8, leaning the way of
-  travel) while moving. A deferred upgrade — an in-flight index whose
+  travel) while moving; an engine whose consumer never calls `set_view`
+  keeps identity order — the pre-#46 behaviour, which the pre-#46 core tests
+  still pin. A deferred upgrade — an in-flight index whose
   wanted rung grew mid-decode — is revived at land time only while the
   index is still inside ±`PREFETCH`, and a ring neighbour never outranks
   the focused frame's own pending work (a stale revival at top priority
@@ -133,8 +141,8 @@ BACKLOG workers and one FOCUS-RESERVED lane.
   index-change-only clock was beaten by rest-then-escalate (~20 % of the
   time, QE); a lane with no boundary check committed to a frame the user
   had left (the double-settle, which fired on the v0.4.0 release-commit
-  Windows run). All three were caught by the screenshot shutter's 60 s cap
-  in the Windows debug pass, while a stock-profile full-res decode took
+  Windows run). The first failed validation, the second failed QE, and the third was
+  caught by the screenshot shutter's 60 s cap in the Windows debug pass, while a stock-profile full-res decode took
   26-40 s. With dependencies optimised in debug the cap catches only a
   stall of tens of seconds, and that sensitivity is spent deliberately
   (user decision 2026-09-05): the ladder's contracts are pinned by their
@@ -246,7 +254,8 @@ medium's measured behaviour:
   controller; the EXIF section is pool-managed but not sampled; cache hits
   bypass the pool; reads larger than 2 MB feed NO decision — neither
   completion nor stall — or the non-A1 full-res-as-grid fallback would
-  stall-shrink a healthy medium to the floor.
+  stall-shrink a healthy medium to the floor (the size is known before the
+  bulk read, so the probe is neutralized as soon as its payload is chosen).
 - **Control** (AIMD with a hysteresis dead band): probe < 200 ms → +1
   (clamped at the cap); probe > 500 ms → HALVE (clamped at the floor);
   otherwise hold. Halving, not −1: recovering from a warm-cache-pumped
@@ -254,11 +263,10 @@ medium's measured behaviour:
 - **Growth requires "the loader is not stuck", literally** (live incident
   2026-07-25: warm 0 ms page-cache probes pumped the limit 4 → 22 while
   every cold read sat wedged — fast probes have survivorship bias, stuck
-  reads never report): a fast probe grows the limit only when no other
+  reads never report; issue #1 tracks the class): a fast probe grows the limit only when no other
   in-flight non-excluded read is older than the grow threshold. An
   excluded (> 2 MB) read neither vouches nor indicts: a genuinely wedged
-  large read vetoes nothing and triggers no shrink — accepted residual
-  (issue #1 tracks the class).
+  large read vetoes nothing and triggers no shrink — accepted residual.
 - **Stall watching covers EVERY in-flight read**, not just the probe (in
   the original incident reads did not come back slow — they did not come
   back). If the oldest non-excluded in-flight read exceeds the shrink
@@ -266,7 +274,8 @@ medium's measured behaviour:
   on every pool touch plus a periodic re-check by blocked waiters. Shrinks
   are throttled to one per shrink-threshold window: a persistent wedge
   walks cap → floor in ~3 windows (~1.5 s) with no cascade. Blind spot,
-  recorded: with every worker wedged inside a read, no thread touches the
+  recorded: if the limit equals the worker count and every worker is
+  wedged inside a read, no thread touches the
   pool until the first read returns, so the cascade starts late — harm
   bounded to the reads already in flight.
 - Retirement is non-preemptive: a shrink only lowers the limit; reads in
@@ -280,12 +289,12 @@ medium's measured behaviour:
   N, including above the core count (QE observed 94 readers with `=999` on
   32 cores — useful for saturating a high-latency NAS, self-inflicted
   otherwise). An env var, not a CLI flag, so the app and the CLI honour the
-  same knob (`FASTCULL_NO_CACHE`, by contrast, is app-only; the CLI has
-  `--no-cache`).
+  same knob; unset is fully adaptive (`FASTCULL_NO_CACHE`, by contrast, is
+  app-only; the CLI has `--no-cache`).
 - Every limit change is logged to stderr, the diagnostics channel:
   `fastcull: read pool N -> M workers (probe read X ms | read stalled for
   X ms; K reading)`, K being the reads actually in flight. Steady state
-  logs nothing.
+  logs nothing (a clamped no-op change is not printed).
 - **Scope**: the thumbnail pipeline only. Loupe full-res reads bypass the
   pool (user decision 2026-07-25: "full-res should bypass it, as full-res
   has priority"; a 12 MB read would also poison a latency-threshold
@@ -319,7 +328,7 @@ medium's measured behaviour:
 ## Contracts
 
 - `LoupeEngine`: `focus(index, display_long)`, `want(range, cell_width)`,
-  `set_view`, `revive_deferred`; events `Ready` (with the `terminal` flag)
+  `set_view` (deferred revival is internal); events `Ready` (with the `terminal` flag)
   and `Failed`; constants `PREFETCH = 2`, `TRANSIT_BEHIND = 2`,
   `TRANSIT_AHEAD = 8`, `FOCUS_DEBOUNCE` (~250 ms), `MID_RUNG_MAX_LONG =
   2048`, `UPSCALE_THRESHOLD = 1.25`.
@@ -384,16 +393,26 @@ medium's measured behaviour:
       large-read exclusion from every decision, priority handoff, and the
       grant invariant `concurrent readers <= the limit at grant time <=
       cap` (readers granted before a non-preemptive shrink may transiently
-      exceed the new lower limit, by design).
+      exceed the new lower limit, by design) — `pipeline.rs`
+      `pool_warm_probe_cannot_outvote_stuck_read`, `pool_dead_band_holds`,
+      `pool_cap_is_at_least_the_floor`, `pool_concurrency_never_exceeds_limit`,
+      `pool_releases_highest_priority_waiter_first`,
+      `pool_probe_grows_shrinks_and_excludes_large_reads`,
+      `pool_large_probe_never_stall_shrinks`,
+      `pool_slow_completion_shrinks_without_other_touches`,
+      `pool_stalled_probe_shrinks_once`, `test_controller`.
 - [x] All 8 orientations byte-identical to the reference implementation at
       sizes with partial tiles and partial thread bands; `decode_oriented`
-      actually rotates — `loupe.rs` `decode_oriented_actually_rotates` and
+      actually rotates — `tests/loupe.rs` `decode_oriented_actually_rotates` and
       the `raw/orient.rs` unit tests.
 
 ## History
 
 - 2026-09-17 — Rewritten (brief 007); the seven M1-era boxes had been
-  ticked the same day against the tests that hold them. The pre-rewrite
+  ticked the same day against the tests that hold them. The old text's
+  "decoded with turbojpeg" for the full-res source was wrong — zune-jpeg
+  decodes it and turbojpeg is not a dependency — and was dropped rather than
+  moved. The pre-rewrite
   text is `specs/history/raw-pipeline.md`.
 - 2026-09-12 — Issue #89 found: rawler's `MAP_POPULATE` on a
   walker-rejected file (brief 006's plan).
@@ -405,8 +424,9 @@ medium's measured behaviour:
 - 2026-08-02 — The orientation rework (issue #27, PR #32: 518 → 277 ms);
   the hostile-input bounds (issue #31); the transit request states
   (2026-08-01, ui-grid.md).
-- 2026-07-30 — The soft-transit contract (issue #21) and the reserved
-  lane's three rules, each after a starvation caught by the shutter's cap.
+- 2026-07-27 — The soft-transit contract (issue #21) and the reserved
+  lane's debounced worker (`986b36f`, `53907bd`, v0.4.0); the lane's other
+  two rules followed the QE and CI findings of the days after.
 - 2026-07-27 — The in-tree EXIF walker replaces rawler on the hot path
   (the `mmap_lock` serialization; v0.4.0).
 - 2026-07-26 — Bare JPEG sources (issue #8).

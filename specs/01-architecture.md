@@ -220,8 +220,8 @@ and `jpeg-encoder` produce a `--screenshot` frame — and at opt-level 0 a
 debug build decoded the A1's full-res JPEG in 26-40 s on the Windows CI
 runner and 31 s on the development seat, against the screenshot shutter's
 60 s readiness cap; ten Windows CI jobs failed that way (issues #33, #76).
-With the line the same decode lands in about 1.2-1.7 s in debug (release:
-373 ms).
+With the line the same decode lands in about 1.7 s rotated and 0.8 s
+landscape in debug (release: 373 ms).
 
 What it costs: a cold debug build compiles every dependency optimised once
 — 4-4.7× the stock cold build on the development seat (2 m 17 s → 10 m 43 s
@@ -239,13 +239,12 @@ What it changed in the test suite (ui-grid.md, test-harness.md): the
 debug-profile margin under the 60 s cap; two release-only gates that rested
 on the debug decode were lifted; the M1 transit test's landing dump moved
 from a fixed clock to the sharp rung's own mark; the two-shot shutter of
-issue #77 was fixed first, in its own commit. The measurements behind every
-sentence above are in `specs/history/01-architecture.md`.
+issue #77 was fixed first, in its own commit.
 
 ## The CI cache key (briefs 003 and 004, 2026-09-06)
 
-`Swatinem/rust-cache` keys on the toolchain, the `CARGO`/`RUST`/`CC`-family
-environment, `.cargo/config.toml`, `rust-toolchain`, the workspace MEMBERS'
+`Swatinem/rust-cache` keys on the toolchain, every environment variable
+whose name starts with `CARGO`, `CC`, `CFLAGS`, `CXX`, `CMAKE` or `RUST`, `.cargo/config.toml`, `rust-toolchain`, the workspace MEMBERS'
 manifests and the lockfile — never the virtual root manifest. So a
 `[profile]` change alone never moved the key, and the #76 line cost five
 cold CI runs across two days before anyone counted `Compiling` lines; a
@@ -254,10 +253,22 @@ day, because a forgotten bump is silent.
 
 The rule (brief 004): a `shell: bash` step before rust-cache parses the root
 `Cargo.toml` with Python's `tomllib`, serialises its `[profile]` table as
-canonical JSON (`{}` when there is none), and exposes the first eight hex
+canonical JSON (keys sorted at every level, no whitespace; `{}` when there
+is none) — only `[profile]`, because the save step drops the workspace
+members' own artifacts, `[workspace.package]` and `[workspace.lints]` shape
+nothing cached, and a `[patch]` table changes `Cargo.lock`, which the action
+already hashes — and exposes the first eight hex
 digits of its SHA-256 as `key: profile-<hash>`, which the action puts in the
 restore key and the primary key alike; a parse error fails the job, and a
-guard step fails it unless the component reads `profile-<8 hex>`. A comment
+guard step fails it unless the component reads `profile-<8 hex>`. The
+guard's residual: an edit to the rust-cache `key:` line alone — dropped, or
+replaced by a well-formed constant — is invisible to it; the check is
+comparing the restore step's `Cache Key:` with the guard's printed line
+(AC1), or offline a pyyaml assertion that `with.key` is
+`profile-${{ steps.profile.outputs.hash }}` and that neither new step
+carries `if:` or `continue-on-error:`. On a pull request the proof that the
+key moved is the restore step alone — `Cache Key:` shows the component and
+`No cache found.` follows; the post step prints nothing on a PR. A comment
 edit, a version bump, a reordered table or a CRLF copy do not move the key;
 an `opt-level` change does. `prefix-key: v1-rust` is bumped only for a
 change to the action or to the key's format, never for a profile change.
@@ -270,7 +281,8 @@ A key move costs one cold pair of jobs — 27-35 min ubuntu and 58-72 min
 windows, against 15 and 36 min cached — and only a main run saves
 (`save-if: main`); pull requests before that main run are cold too. The
 Manager deletes the orphaned entries once the new pair exists and checks
-usage against the 10 GB limit (5.6 GiB over four entries, 2026-09-06);
+usage against the 10 GB limit (3.96 GiB over four entries once the v0 pair
+went, 5.6 GiB with the computed pair saved, 2026-09-06);
 thrash goes to the user with options.
 
 Acceptance (briefs 003 and 004; every box ticked 2026-09-06 — the run ids,

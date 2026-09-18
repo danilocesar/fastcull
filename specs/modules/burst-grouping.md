@@ -42,7 +42,8 @@ its own body's run.
    and the threshold is `max(max_gap, 1 s)`: equal timestamps are gap 0 and
    a one-second step is within-burst.
 4. Groups carry a dense per-recompute index; nothing persists group
-   identity in v1. A stable `BurstId` becomes necessary only if identity
+   identity in v1. A stable `BurstId` (a hash of the first frame's path, say)
+   becomes necessary only if identity
    must survive recomputes — stacks, post-v1.
 
 `max_gap` and `min_run` are config values with fixed defaults; no settings
@@ -107,11 +108,13 @@ exposes no maker notes). The user guide surfaces the differences
   interleaved bodies or a non-capture sort the frames between come along,
   and the OTHER body's burst can straddle the range's edge (body 1 =
   {1,3,5}, body 2 = {2,4,6}: Shift+`]` from single 0 selects 0..=5 and
-  leaves 6 out) — Ctrl+Shift+B is the exact tool there. Landing on the
+  leaves 6 out) — Ctrl+Shift+B is the exact tool there; only the two bursts the gesture
+  spans are widened whole. Landing on the
   opener, not the selection's last frame, keeps the `]` rhythm and makes
   "look ahead with `]`, then Shift+`[` to grab the previous burst" work.
   On a US layout the keys arrive as `}` and `{`; both spellings work. Loupe
-  and grid alike. Core: `Selection::extend_bursts`.
+  and grid alike; claims the cursor and carries loupe zoom/pan persistence
+  like `]`. Core: `Selection::extend_bursts`.
 - **Ctrl+Shift+B — select this burst** (the user's proposal, 2026-08-28):
   every frame of the burst under the cursor that is in the current view
   joins the selection (a single selects itself). The cursor does NOT move —
@@ -138,20 +141,23 @@ exposes no maker notes). The user guide surfaces the differences
   follow view order.
 - **Cut from v1** (persona IN-MY-WAY, adopted): the in-burst-only filter
   chip — chips are single-choice, so it would trade away Unmarked and break
-  the inbox-zero loop. Stack/collapse stays post-v1; auto-collapse is
+  the inbox-zero loop; if ever requested it returns only as an orthogonal
+  AND-toggle, never as a chip. Stack/collapse stays post-v1; auto-collapse is
   disqualifying for frame-by-frame culling.
 
 ## Contracts
 
 - Pure functions in core, the app only dispatches: the grouping
-  (`BurstIndex`, `next_boundary` over (view, group-of)),
+  (`burst::group(frames, cfg) -> Grouping`; the app's `state::BurstIndex`
+  only holds the outputs per image id; `next_boundary` over (view,
+  group-of)),
   `Selection::extend_bursts`, `Selection::select_group`.
 - Grouping reads `filter::view_true_sort`; `[`/`]` resolve over VIEW
   positions, so they walk oddly over a name-ordered view while a folder
   loads (ui-grid.md, *Provisional order while loading*).
 - `--synthetic N --bursts` builds a fixed Sony-style pattern of singles and
   bursts for driven tests: the real test RAWs are three single shots
-  (test-harness.md).
+  (`testdata/fetch.sh`; test-harness.md for the flag).
 
 ## Acceptance criteria
 

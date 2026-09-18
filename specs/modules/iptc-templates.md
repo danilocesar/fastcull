@@ -48,7 +48,7 @@ before the casefold dedup.
   `{{` and `}}`.
 - `{camera}` is the EXIF model from the session
   (`SessionState::camera_models`, filled from `MetadataReady` beside the
-  capture-time sort key) — the model alone, since burst grouping prefers
+  capture-time sort key) — the model alone — not `FrameMeta::camera`, since burst grouping prefers
   the serial. It is empty for an image whose metadata has not landed yet,
   exactly as the capture-time sort is provisional during a load.
 
@@ -102,8 +102,9 @@ continuity in full: ui-grid.md, *Focus continuity*.
   reader all read it.
 - `SidecarWriter::iptc` routes the writes; keyword-only messages merge into
   a pending full write, so fields are never dropped (xmp-sidecars.md).
-- `Selection::batch` is the apply input, and the video export's
-  (ui-grid.md, video-export.md).
+- `Selection::batch` is the apply input (ui-grid.md); the video export
+  takes the selected ids in view order WITHOUT `batch`'s cursor fallback
+  (video-export.md).
 - Copy Picks' rename templates are this engine (fileops.md).
 
 ## Acceptance criteria
@@ -147,7 +148,8 @@ continuity in full: ui-grid.md, *Focus continuity*.
   template is refused at plan time (fileops.md).
 - 2026-08-03 — The field exits settled: no commit-on-destroy,
   generation-stamped edits across a swap (issue #41, user decision).
-- 2026-07-25 — Tri-state apply (user decision after the PM research), the
+- 2026-07-25 — Tri-state apply (user decision after the PM research,
+  superseding the earlier "empty preserves" rule), the
   single revert slot, live-reload on open and Apply, the error semantics;
   the panel step's ledger — writer routing, IPTC serialization,
   sanitization, the immediate clear control.

@@ -15,8 +15,9 @@ an editor; it is never one.** The export has no options.
 
 ### What is exported
 
-- **The selection**, when there is one (`Selection::batch`, the IPTC batch's
-  input); otherwise **the burst under the cursor**; neither → the menu item
+- **The selection**, when there is one — the selected ids in view order,
+  deliberately NOT `Selection::batch`, whose cursor fallback would make one
+  frame a video (`clip_bridge.rs`); otherwise **the burst under the cursor**; neither → the menu item
   is disabled with its reason ("select frames or stand in a burst"). One
   frame is not a video: the item is disabled for a single frame too.
 - A selection means the selected frames that are IN THE VIEW — what you see
@@ -194,7 +195,8 @@ express.
 
 ### The dialog
 
-- Menu **File › Export Frames as Video…**, keystroke **Ctrl+Shift+E** —
+- Menu **File › Export Frames as Video…** (the user's wording — "video",
+  never "clip", in the menu), keystroke **Ctrl+Shift+E** —
   beside Copy Picks' Ctrl+E as "the other exit", a chord so it cannot fire
   from a fat finger mid `]`/`N`. The item is disabled when there is nothing
   to export, but the chord always works: it appends *"Export Frames as
@@ -225,11 +227,15 @@ express.
   the selection.
 - **The card's height follows its content** (issue #62): a floor of 260 px
   (380 px while the clash question is up), the window as the ceiling
-  (`parent.height − 40px`), and past the ceiling the text body scrolls in a
-  `ScrollView` — by wheel, and by Down/Up (a line), PgDn/PgUp (a body),
+  (`parent.height - 40px`), and past the ceiling the text body scrolls in a
+  `ScrollView` (not a bare `Flickable`, which scrolled but showed nothing to
+  say so and clipped a cut-off report to look complete, 2026-08-30) — by
+  wheel, and by Down/Up (a line, 40 px), PgDn/PgUp (a body),
   Home/End, only while it overflows. The header rows and the button row
   never give up a pixel, so the buttons stay inside the card wherever the
-  window can hold the fixed rows. A wheel over the dialog scrolls its body
+  window can hold the fixed rows; below ~300 px of window height they
+  cannot, the row leaves the card, and that is accepted — a 560 px-wide card
+  is not a dialog anyone can use there. A wheel over the dialog scrolls its body
   or nothing — never the grid behind the scrim (issue #49). Below ~500 px
   of window height the clash answer rows need a scroll to come into view
   and answer by key wherever the body stands (recorded; not a size the app
@@ -273,8 +279,9 @@ The dangerous case — re-exporting the same span — is already caught by the
   a false negative, the safe direction; not to be "fixed" with a
   last-known-present flag. Accepted cost: one `stat` per export made this
   session, on the UI thread, at dialog open.
-- **The badge**: `▶` (U+25B6, monochrome in the app's font; `▸` is the
-  recorded fallback) on every frame that went into a clip, bottom-left,
+- **The badge**: `▶` (U+25B6, monochrome in the app's font on Linux — the
+  Windows runner draws it boxed, 26 px against 19, an accepted residual; `▸`
+  is the recorded fallback for a colour-emoji face) on every frame that went into a clip, bottom-left,
   immediately right of the ✓ when there is one (the ✓ keeps `x: 8px`), in
   the ✓'s place when there is not; the `×N` burst pill keeps the
   bottom-right. Per FRAME, not per burst — the export's scope is an
@@ -291,7 +298,8 @@ The dangerous case — re-exporting the same span — is already caught by the
   The count binds to the VIDEOS, never to the named one (naming one file
   beside a count it does not hold is a claim the user cannot check). One
   line means elided, not wrapped, so the name is LAST and every count comes
-  before it. Counted over the SCOPE the user chose, not the plan's kept
+  before it (`and N more` is the one thing allowed behind it — it repeats the
+  video count already stated). Counted over the SCOPE the user chose, not the plan's kept
   frames, so the line stands when the plan itself refuses. Plan state only;
   grey, not amber — the skipped line above it is the warning and must stay
   the loudest thing in the card. The wording is core's
@@ -305,7 +313,7 @@ The dangerous case — re-exporting the same span — is already caught by the
   accepted by NTFS — conservative, never wrongly permissive); Windows'
   260-character `MAX_PATH` applies to the whole path, so an accepted name
   can still fail at commit in a deep destination without long-path
-  support; reserved names (`CON`, `NUL`, trailing dot or space) are not
+  support; reserved names (`CON`, `NUL`, `AUX`, a trailing dot or space) are not
   checked — reachable only through the equal-stem collapse from a share
   written by another OS.
 - A second export that loses a race for the same `_k` name gives up ("a
@@ -356,7 +364,8 @@ are skipped, not failed, elsewhere.
   swap emits none), `clip card laid out …`, `clip buttons laid out …`,
   `clip body scrolled to Y`; the dump fields `clip=`, `clipstate=`,
   `clipavail=`, `clipsummary=`, `clipskipped=`, `cliperror=`,
-  `clipreport=`, `clipconfirm=`, `cliphint=`, `exported=`, `curexported=`;
+  `clipreport=`, `clipconfirm=`, `clipprogress=`, `cliphint=`, `exported=`,
+  `curexported=`;
   the tokens `clipdest:PATH` (before the `Ctrl+Shift+E` that should see
   it), `key:ctrl+shift+e`.
 
@@ -430,7 +439,8 @@ Windows runner too. `core:` = a `fastcull-core` unit test, `muxer:` =
       `core: planning_writes_nothing_at_all`,
       `core: qt::offsets_past_four_gigabytes_are_written_as_64_bit`,
       `app: the_video_export_asks_before_replacing_a_file` (whose `n` round
-      asserts New only leaves the question up).
+      asserts New only leaves the question up; the nudge it raises is
+      review-verified only).
 - [x] Verified: a tampered byte in the written file is caught and the
       verified line withheld; a `moov` that stopped describing the samples
       is caught; the green light only for a run that earned it —
@@ -510,7 +520,9 @@ Windows runner too. `core:` = a `fastcull-core` unit test, `muxer:` =
       `core: a_long_list_of_reasons_is_bounded_and_still_adds_up`,
       `core: the_tail_names_a_kind_only_when_the_whole_tail_is_that_kind`,
       `app: a_long_refusal_keeps_the_export_buttons_inside_the_card`,
-      `app: a_failure_report_longer_than_the_window_keeps_the_copy_buttons_inside_the_card`.
+      `app: a_failure_report_longer_than_the_window_keeps_the_copy_buttons_inside_the_card`
+      (the Copy Picks half; Unix only — a `chmod 555` destination;
+      review-only on Windows).
 - [ ] USER-VERIFIED (2026-08-27, not automatable): InShot on the phone
       imports and plays a 2880×1920 MJPEG `.mov` and the untouched
       8640×5760 30-frame file. NOT VERIFIED: portrait rotation honoured by
@@ -535,12 +547,16 @@ Windows runner too. `core:` = a `fastcull-core` unit test, `muxer:` =
   the selection (brief 002).
 - 2026-08-30 — The card's height follows its content and the body scrolls;
   the skipped sentence bounded (issue #62, v0.13.0).
-- 2026-08-29 — The exported badge and the hint (issue #56); the clash
-  rows and the wheel over the scrim (issue #49).
-- 2026-08-28 — The as-built decisions of the M9 gate: the cadence window
-  settled, the name length checked on the planned name, the CR3/RAF
+- 2026-08-29 — The exported badge and the hint (issue #56); the wheel over
+  the scrim (issue #49).
+- 2026-08-28 — The as-built decisions of the M9 gate (validator and QE
+  findings): the name length checked on the planned name, the CR3/RAF
   correction, the session-swap flag, the two limits of cancel, the mirrored
-  frames kept (validator and QE findings); v0.11.0.
+  frames kept, the Keep both row's wording (`fad52ea`); v0.11.0.
 - 2026-08-27 — M9: Motion JPEG of the untouched camera JPEGs (three-persona
   review, the phone test), the cadence from the median gap, the seeded
-  destination and the chord (persona gate), ADR 0004.
+  destination and the chord (persona gate), ADR 0004; at implementation time
+  the cadence window settled at [9 ms, 100 ms], replacing a draft that named
+  two disagreeing windows (a 10–1000 ms trigger and a [10, 120] fps target),
+  and "filter state is irrelevant" gave way to the two halves — a selection
+  is the frames in view, a burst is the whole burst.

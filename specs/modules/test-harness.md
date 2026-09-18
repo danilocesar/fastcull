@@ -28,7 +28,8 @@ explain itself on stderr.
   `--no-cache`). The screenshot harness sets both unconditionally.
 - `FASTCULL_KITCHEN_COOK_MS=N` — hold every kitchen cook for N ms before the
   pixel work: the pacing knob for the `open:PATH` session-swap test, which
-  must catch the queue mid-flight in both profiles. Announced once on
+  must catch the queue mid-flight in both profiles; default 0, off. Announced
+  once on
   stderr when set (`fastcull: FASTCULL_KITCHEN_COOK_MS=N — every texture
   cook is held`); with tracing, the retarget reports how many queued jobs
   it dropped.
@@ -67,7 +68,7 @@ sidecars — scripts target throwaway copies of test data only.
   pipeline/loupe restart, marks flush, fresh grid zoom), live under a modal
   like the menu bar; `copydest:PATH` / `clipdest:PATH` — the destination
   pickers minus the native dialog, used BEFORE the `Ctrl+E` /
-  `Ctrl+Shift+E` that should see them; `copytemplate:TEXT` — fills the
+  `Ctrl+Shift+E` that should see them (neither replans an open dialog); `copytemplate:TEXT` — fills the
   rename field and replans as its `edited` callback would, used AFTER the
   `Ctrl+E` (opening clears the field); `filter:all|picked|rejected|
   unmarked` — the chip's own `set-filter` callback, the whole path; only
@@ -186,7 +187,9 @@ sidecars — scripts target throwaway copies of test data only.
   1-based, carried across a session swap; a bare `wait:copy finished`
   matches as a substring; a run cancelled by a session swap emits none —
   cancelled is not finished.
-- `sidecar writer closed gen N: K pending flushed` (xmp-sidecars.md).
+- `sidecar writer closed gen N: K pending flushed` — N is the CLOSED
+  session's generation, K the writes still inside their debounce; startup
+  and process exit never trace it (xmp-sidecars.md).
 - **Focus**: `focus: <what> gained|lost` from the `changed has-focus`
   handlers of the main scope (`keys`), each `iptc field N`, the keyword
   field, `copy dialog` and `clip dialog` — a `gained` with no matching
@@ -234,14 +237,16 @@ by ACTING or by the token. `focusowner=` is that token: `0` the main key
 scope, `1..=N` panel field row i (written `i + 1`), `N+1` the keyword
 field, `-1` a dialog's own scope. Then: the loupe and zoom state with the
 pan block (`soft`, `vx`/`vy`, the fractional centre, the desired factor,
-`one2one`, `zf`, `cursor`, `landed`); panel and modal visibility;
-`status=` (the whole line); `revert=`; the copy block — `copy=`,
+`one2one`, `zf`, `cursor`, `zoom=`); panel and modal visibility;
+`status=` (the whole line); `revert=`; `selected=` (the selection count);
+`template=` (the rename template); the copy block — `copy=`,
 `copystate=` (0 plan, 1 running, 2 report, 3 the clash question),
 `confirm=`, `summary`, `copynote=`, `report=`, `newonly=`, `nudge=`,
 `nudged=`, `warning=`, `copyprogress=` (`Starting…`, then each running
 line, the last surviving into the report), `copyerror=`; the clip block —
 `clip=`, `clipstate=`, `clipavail=`, `clipsummary=`, `clipskipped=`,
-`cliperror=`, `clipreport=`, `clipconfirm=`, `cliphint=`, `exported=`,
+`cliperror=`, `clipreport=`, `clipconfirm=`, `clipprogress=` (the export's
+running line, the twin of `copyprogress=`), `cliphint=`, `exported=`,
 `curexported=`; and `vpy=`, the grid Flickable's offset in Slint's sign (0
 at the top, negative going down). New fields are APPENDED; `dump_field`
 finds `name=` by prefix.
@@ -309,7 +314,12 @@ shot 2.
   not a hang); every other event gets its own group; the job cap is 90
   minutes, set to clear a COLD Windows job (58-72 min measured), so a test
   that adds wall clock to the Windows job spends headroom that is measured;
-  both runners are 4 vCPU with ~16 GB, recorded in each run's summary.
+  both runners are 4 vCPU with ~16 GB, recorded in each run's summary. The
+  profile matrix: `has_display()` is `cfg!(windows)`, so on Windows `cargo
+  test --workspace` runs the screenshot suite in DEBUG and the release step
+  runs it a second time; on Linux the debug step has no display and only the
+  xvfb release step runs it; CI's release steps run the screenshot target
+  and the perf budgets, not the unit tests.
 
 ## Contracts
 
@@ -363,17 +373,17 @@ shot 2.
 - 2026-09-03 — `load settled gen N`, the `run N` finish marks, `sidecar
   writer closed`; the suite serial under `RUST_BACKTRACE=1`; settle is not
   texture.
-- 2026-09-02 — `click:<element>` (issue #70), `window geometry` (issue #65),
-  the Windows menu-bar fact.
+- 2026-09-02 — `click:<element>` (issue #70), the Windows menu-bar fact.
+- 2026-08-31 — `window geometry` (issue #65).
 - 2026-08-30 — The focus marks and `focusowner=` (issues #63, #64).
-- 2026-08-29 — `wait:` (issues #13, #61), `vpy=`, `dblclick`, the routing
-  tests.
+- 2026-08-29 — `wait:` (issues #13, #61), `vpy=`, the routing tests.
 - 2026-08-27 — `clipdest:`, `key:ctrl+shift+<k>`, the clip dump block.
 - 2026-08-21/22 — `copydest:`, `copytemplate:`, `copystate=`, `confirm=`.
 - 2026-08-09 — `press.`/`move.`/`release.`/`wheel.` (issue #46).
 - 2026-08-03 — `key:`, `click.`, `dump.`, `FASTCULL_NO_CONFIG` (issue #41).
 - 2026-08-02 — `FASTCULL_KITCHEN_COOK_MS`, `open:PATH` (issue #34).
 - 2026-07-31 — `scroll:N`.
+- 2026-07-30 — `dblclick:X,Y` (issue #11).
 - 2026-07-27 — The shutter waits for the whole script.
 - 2026-07-25/26 — `FASTCULL_DRIVE`, `resize:` (issue #16), `about`/
   `shortcuts` (issue #23), `iptc` (issue #12).
