@@ -1,22 +1,27 @@
-# Module spec: XMP sidecars (`xmp.rs`)
+# Module spec: XMP sidecars (`xmp.rs`, `sidecar_writer.rs`)
 
 ## Purpose
 
-Persist all user-authored state (pick/reject, IPTC) as XMP sidecar files that
-darktable imports correctly. This is the interoperability contract of the product.
+Persist every piece of user-authored state — pick/reject and IPTC — as XMP
+sidecar files that darktable imports correctly. This is the interoperability
+contract of the product: darktable is the reference editor, and digiKam,
+Lightroom and Photo Mechanic read the same fields (00-overview.md).
 
-## Invariants (non-negotiable)
+## Behaviour
 
-1. **A RAW file is never opened for writing.** Not to embed metadata, not "just this
-   once". Sony ARW rewrites can corrupt embedded previews.
-2. Sidecar name: `<name>.<ext>.xmp` (e.g. `DSC01234.ARW.xmp`) — darktable's native
-   convention. Never `<name>.xmp` (known darktable import bugs).
-3. **Read-modify-write with preservation**: if a sidecar exists (Photo Mechanic,
-   Lightroom…), unknown XML nodes/namespaces are preserved byte-faithfully where
-   possible, and never silently dropped.
-4. Writes are atomic: write temp file in same dir, fsync, rename over.
+### Invariants
 
-## Field mapping (what we write; what darktable reads)
+1. **A RAW file is never opened for writing.** Not to embed metadata, not
+   "just this once": Sony ARW rewrites can corrupt embedded previews
+   (ADR 0003).
+2. The sidecar is `<name>.<ext>.xmp` (`DSC01234.ARW.xmp`), darktable's
+   native convention. Never `<name>.xmp` (known darktable import bugs).
+3. **Read-modify-write with preservation**: an existing sidecar — Photo
+   Mechanic's, Lightroom's, darktable's own — keeps its unknown nodes and
+   namespaces byte-faithfully where possible, never silently dropped.
+4. Writes are atomic: a temp file in the same directory, fsync, rename over.
+
+### What is written
 
 | FastCull state | XMP property | Notes |
 |---|---|---|
@@ -34,86 +39,97 @@ darktable imports correctly. This is the interoperability contract of the produc
 | Job identifier | `photoshop:TransmissionReference` | |
 | Location detail | `Iptc4xmpCore:Location` | |
 
-Serialization: standard `x:xmpmeta`/`rdf:RDF` envelope, UTF-8, namespaces declared
-once on `rdf:Description`. Property order deterministic (golden-file testable).
+- Serialization: the standard `x:xmpmeta`/`rdf:RDF` envelope, UTF-8,
+  namespaces declared once on `rdf:Description`, deterministic property
+  order (golden-file tested).
+- The rating is written in attribute form; legacy element and `xap:` forms
+  are removed or replaced on rewrite.
+- `write_keywords` replaces the `dc:subject` and `lr:hierarchicalSubject`
+  bags wholesale — the session's keyword list is the full truth for those
+  two properties; an empty list removes the bags; everything else, foreign
+  keyword stores like `digiKam:TagsList` included, is preserved.
+- `write_iptc` serializes the full `IptcData` — fields and both bags — in
+  one atomic rewrite. A `None` field REMOVES the property (an empty value is
+  never emitted); ownership is matched by XML local name, symmetrically with
+  the reader, so a foreign-namespace element whose local name collides is
+  replaced (recorded trade-off); foreign nodes and the rating pass through;
+  an identical rewrite is byte-stable (removed elements take their
+  indentation text nodes with them).
+- A write failure is surfaced: a status-bar warning and stderr.
 
-## Write scheduling
+### What is read
 
-Owned by the dedicated sidecar-writer thread (`01-architecture.md`): mutations are
-debounced ≤1 s per image, flushed on session close and on copy-picks start (a copy
-plan must never race a pending sidecar write).
+`read_sidecar` returns the pick state and the mapped IPTC fields. Both XMP
+forms are accepted — element form (Alt/Seq container text or direct element
+text) and the compact attribute form on any `rdf:Description`. Properties
+match by XML LOCAL name (alias-prefix tolerant; a foreign attribute whose
+local name collides, say `xxx:City`, is accepted — recorded trade-off).
+Values are trimmed and whitespace-only values are ignored in both forms; the
+first value wins per field, attributes before child elements; a self-closed
+or empty property reads as unset and never affects a neighbour. Known
+deviation: inside an `rdf:Alt` the first `rdf:li` wins regardless of
+`xml:lang` — x-default priority is not implemented (darktable emits
+x-default first; revisit if multi-language Lightroom sidecars surface
+translated values). At load, `SessionEvent::Sidecar` carries the full
+`IptcData`; the app seeds its state from it, guarded like picks so a stale
+read racing the debounced writer never reverts a fresh panel edit.
 
-The session-close flush is OBSERVABLE from the app (2026-09-03):
+### Write scheduling
+
+A dedicated writer thread (01-architecture.md) owns every sidecar write.
+Mutations are debounced per image — `sidecar_writer::DEBOUNCE` is 700 ms,
+inside the ≤ 1 s the architecture promises — ordered, and never lost:
+flushed on session close and before a copy plan is built (a plan must never
+race a pending write; fileops.md), panic-safe through `Drop`.
 `SidecarWriter::close` shuts the writer down and returns how many writes its
-final drain performed — the marks still inside their debounce when the session
-went away — and a session swap traces that number as `sidecar writer closed
-gen N: K pending flushed` (test-harness.md). It exists so a
-driven session swap can assert a structural fact about the writer instead of
-timing the pick against the swap with a stopwatch.
-The count is WRITES, not marks: re-marks on one image coalesced into one
-pending entry count once, and a failed write counts too (its failure has its
-own channel). Dropping the writer drains identically and reports nothing, so
-the mark means "a swap closed it". The debounce constant itself is 700 ms
-(`sidecar_writer::DEBOUNCE`), inside the ≤1 s the paragraph above promises.
+final drain performed — writes, not marks: re-marks on one image coalesce
+into one entry, and a failed write counts, its failure having its own
+channel. A session swap traces that number as `sidecar writer closed gen N:
+K pending flushed` (test-harness.md), so a driven swap asserts a structural
+fact instead of timing a pick against the swap with a stopwatch. Dropping
+the writer drains identically and reports nothing: the mark means "a swap
+closed it".
 
-## M3/M5 scope split (recorded and APPROVED by the user 2026-07-25)
+## Contracts
 
-M3 ships pick/reject only: `xmp:Rating` write (attribute form; legacy element
-and `xap:` forms are removed/replaced on rewrite), sidecar-at-open, writer
-thread, darktable round-trip asserting RATINGS. Keyword WRITING landed with
-M5 (2026-07-25): `write_keywords` replaces the `dc:subject` +
-`lr:hierarchicalSubject` bags wholesale (the session's keyword list is the
-full truth for those two properties; everything else — including foreign
-keyword stores like `digiKam:TagsList` — is preserved), an empty list
-removes the bags, and the darktable round-trip asserts all three keyword
-shapes (plain, Unicode, pipe-hierarchy) land as tags. IPTC FIELD writing
-(title/creator/city/…) lands with the IPTC panel step.
-Write failures are surfaced to the UI (status-bar warning + stderr).
+- The sidecar name and the never-write-a-RAW invariant are ADR 0003's; the
+  copy engine moves sidecars in lockstep with their RAWs (fileops.md).
+- The barrier: the writer flushes before any copy plan; keyword-only
+  messages merge into a pending full write, so fields are never dropped.
+- The darktable round-trip in CI runs `darktable-cli` with a throwaway
+  `--configdir`/`--library` in a temp dir — never the user's real config
+  (CLAUDE.md hard rule 3) — and is skipped gracefully where darktable-cli is
+  absent (the Linux runner has it).
+- The trace mark `sidecar writer closed gen N: K pending flushed`.
 
-**IPTC field WRITING (M5 panel step)**: `write_iptc` serializes the full
-IptcData (fields + both keyword bags) in one atomic rewrite: `None` fields
-REMOVE the property (tri-state clear; an empty value is never emitted),
-ownership is matched by XML local name symmetrically with the reader (a
-foreign-namespace element whose local name collides is replaced — same
-recorded trade-off as reading), foreign nodes/rating pass through, and
-identical rewrites are byte-stable (removed elements take their
-indentation text nodes with them — QE measured unbounded growth
-otherwise).
+## Acceptance criteria
 
-**IPTC field READING (M5, 2026-07-25)**: `read_sidecar` also returns the
-mapped IPTC fields (`SidecarState.iptc`). Contract: both XMP forms are
-accepted — element form (Alt/Seq container text or direct element text) and
-compact attribute form on any `rdf:Description`; properties match by XML
-LOCAL name (alias-prefix tolerant, symmetric with the keyword reader — a
-foreign attribute whose local name collides, e.g. a hypothetical
-`xxx:City`, is accepted; recorded trade-off); values are trimmed and
-whitespace-only values are ignored in both forms; the FIRST value wins per
-field (attributes are scanned before child elements). Self-closed or empty
-properties read as unset and must never affect neighboring properties
-(gate H1 regression test). KNOWN DEVIATION: inside an `rdf:Alt`, the first
-`rdf:li` wins regardless of `xml:lang` — x-default priority is not
-implemented (darktable emits x-default first; revisit if multi-language
-Lightroom sidecars surface translated values). CLOSED with the panel step:
-`SessionEvent::Sidecar` carries the full IptcData; the app seeds its
-session state from it, guarded (like picks) so a stale sidecar read
-racing the debounced writer never reverts a fresh panel edit.
+- [x] Golden files: each pick state and the IPTC set serialize
+      byte-identically to `tests/golden/*.xmp`.
+- [x] Keyword round-trip over a hostile set — Unicode, quotes, `&`, `<`/`>`,
+      CJK, pipe hierarchies, 40-item lists; idempotent rewrite; composes
+      with rating writes both ways; the IPTC field strings with the panel
+      step.
+- [x] Preservation: a sidecar with fake `crs:` and `darktable:history`
+      blocks survives our edits with those nodes intact —
+      `foreign_nodes_survive_rating_edits` (plus a 50-cycle fuzz at QE).
+- [x] darktable round-trip (integration, Linux): an A1 file plus our sidecar
+      imported by `darktable-cli`; the rating (since M3) and all three
+      keyword shapes — plain, Unicode, pipe hierarchy — land as tags (since
+      M5) — `tests/darktable_roundtrip.rs`.
+- [x] Atomicity: `kill -9` during a write storm leaves only valid XML files
+      — `tests/xmp_crash.rs` (the child storms writes, the parent SIGKILLs,
+      15 rounds).
+- [x] A self-closed or empty property never affects its neighbours (the
+      gate H1 regression test).
 
-## Acceptance criteria (tests)
+## History
 
-- [x] Golden-file tests: each pick state serializes byte-identically to
-      checked-in fixtures (`tests/golden/*.xmp`); the IPTC set joins in M5.
-- [x] Round-trip (keywords half, M5): write → read yields the identical
-      keyword list over a deterministic hostile set (Unicode, quotes, `&`,
-      `<`/`>`, CJK, pipe hierarchies, 40-item lists); idempotent rewrite;
-      composes with rating writes both ways. IPTC field strings join with
-      the panel step.
-- [x] Preservation: a fixture sidecar containing foreign nodes (fake
-      `crs:`/darktable `darktable:history` blocks) survives our edit with those
-      nodes intact (`foreign_nodes_survive_rating_edits` + QE 50-cycle fuzz).
-- [x] **darktable round-trip (integration, Linux)**: `darktable-cli` with throwaway
-      `--configdir`/`--library` in a temp dir (NEVER the user's real config)
-      imports an A1 file + our sidecar; exported/queried state shows our rating and
-      keywords (ratings since M3; keywords asserted against data.db/tagged_images
-      since M5). Skipped gracefully when darktable-cli is absent.
-- [x] Atomicity: kill -9 during a write storm leaves only valid XML files
-      (`tests/xmp_crash.rs`: child storms writes, parent SIGKILLs 15 rounds).
+- 2026-09-17 — Rewritten (brief 007). The pre-rewrite text is
+  `specs/history/xmp-sidecars.md`.
+- 2026-09-03 — `SidecarWriter::close` returns its flush count and the swap
+  traces it.
+- 2026-07-25 — The M3/M5 scope split, approved by the user: M3 ships
+  ratings; keyword writing landed with M5 the same day; IPTC field reading
+  and writing with the panel step, with the reader's recorded deviations.
+- 2026-07-24 — ADR 0003; M3's invariants and the writer thread.
