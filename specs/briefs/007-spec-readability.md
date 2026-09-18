@@ -170,7 +170,10 @@ behind each fix. This unit relocates; it never deletes.
   `ui-grid.md` has no "Debug facilities" section; the four inbound
   references resolve.
 - AC8. The user has seen the first rewritten module and said the shape
-  is right (R10) — recorded in this brief's decisions log with the date.
+  is right (R10) — WAIVED 2026-09-17 by the user ("I don't want to read
+  more … can you conclude on your own using common sense? If yes,
+  continue and finish it"); the Manager's judgement stands in for the
+  read, and the senior developer's meaning check is the independent eye.
 - AC9. `specs/history/<spec>.md` holds the pre-rewrite text of every spec
   that was rewritten, verbatim; no live spec depends on the folder (OQ1).
 
@@ -236,3 +239,8 @@ for features and user-visible changes only).
   covers the parity test.
 - 2026-09-17, the user, on relocate-or-toss: history holds dead
   decisions only, and is disposable (OQ1 above).
+- 2026-09-17, the user, after `fileops.md` was delivered as the template:
+  no check-in read — "conclude on your own using common sense … once it's
+  done, make sure the repository is updated on github." The Manager
+  finishes every module in the same shape, runs the senior developer's
+  meaning check, writes the Outcome, and merges on green.
