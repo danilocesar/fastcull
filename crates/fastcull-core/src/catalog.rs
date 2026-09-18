@@ -10,7 +10,8 @@
 //!
 //! M1 scope: records carry load state, EXIF summary slot, and pick state.
 //! IPTC data, burst ids, and the copied flag join the record in their own
-//! milestones; folder watching (`notify`) arrives with the UI session in M2.
+//! milestones. No folder watching: a session is a snapshot of the folder at
+//! open (catalog-cache.md, user decision 2026-09-17).
 
 use std::collections::HashSet;
 use std::path::{Path, PathBuf};

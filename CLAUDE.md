@@ -4,6 +4,22 @@ Spec-driven repo: **specs/ is the source of truth.** Read the relevant
 `specs/modules/*.md` before touching a module; if implementation must deviate,
 update the spec in the same commit and say why in the commit message.
 
+**The shape of a module spec (brief 007, 2026-09-17)**: every
+`specs/modules/*.md` has five sections in this order — `Purpose` (five
+lines), `Behaviour` (the rules, present tense, each stated once, a rule
+ending with its provenance in parentheses and nothing else inline),
+`Contracts` (what other modules and the tests rely on), `Acceptance
+criteria` (one line per criterion with its test names; an open box carries
+its reason) and `History` (dated, newest first, citing the brief, issue or
+commit). A rule lives in exactly one spec; every other place points at it in
+one sentence. Evidence — run ids, mutant readings, campaign counts, seat
+measurements — belongs in the brief or the commit, never in Behaviour, and a
+spec never cites the gitignored scratch tree as where its evidence lives.
+`specs/history/` holds dead text only and is disposable: nothing live may
+depend on it. The release notes are `CHANGELOG.md`; `specs/milestones.md`
+is the plan. `ui-grid.md`'s `## Keyboard map` stays an H2 because the
+shortcuts parity test locates the table by that heading.
+
 **docs/ follows specs/ (M8)**: `docs/` is the user-facing guide distilled from
 the specs. A commit that changes user-visible behavior (or its module spec)
 updates the affected `docs/` page in the same commit — the page map is
@@ -287,7 +303,26 @@ developer owns re-verifying such claims against reality.
   then between stages, never under a running role, because a clean
   invalidates the measurements of every role still running. Never a full
   `cargo clean`, which costs a ~9-10 minute cold rebuild since #76. The
-  report states what was freed.
+  report states what was freed. Stale is deleted, not kept (the user,
+  2026-09-17: "I don't care about stale data. if it's not being used,
+  toss it"): a worktree, a branch or a scratch directory a finished unit
+  left behind goes without asking once its work is on `main` — `git
+  cherry` by patch and by title is the check, git's reflog the safety
+  net — and the report names what went.
+- **M10 — Spec bookkeeping against verified evidence is fixed, not
+  asked.** (the user, 2026-09-17: "things like A-items you should fix") A
+  spec sentence the Manager has verified false against the code, the
+  tests, git or the tracker — an acceptance box left unticked though its
+  test exists, a ledger entry that calls a shipped thing pending, a
+  milestone with no closure marker, a paragraph spliced into the wrong
+  sentence, a table that no longer lists what it claims to list — is
+  corrected directly by the Manager in a spec commit that names the
+  evidence, outside the pipeline. The line: a correction that would change
+  a behaviour claim, a contract, a budget or a test's promise is not
+  bookkeeping and goes through M1; a promise found unimplemented is
+  recorded as such and put to the user (M8), never quietly deleted. An
+  unticked box always carries its reason — a bare one is the silence the
+  gate forbids.
 
 ### Open decisions the Manager tracks (do not re-ask unless relevant)
 

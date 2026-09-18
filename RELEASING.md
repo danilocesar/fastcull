@@ -54,7 +54,9 @@ release `0.1.1`:
 cargo check --workspace
 # 2. see exactly which archives the tag will produce, before creating it
 dist plan
-# 3. commit, tag, push
+# 3. write the release's notes at the top of CHANGELOG.md — the same words
+#    the release commit carries
+# 4. commit, tag, push
 git commit -am "Release 0.1.1"
 git tag v0.1.1
 git push && git push --tags

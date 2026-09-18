@@ -1,0 +1,613 @@
+# Changelog
+
+Release notes, newest first, in the words each release shipped with. Written
+at release time (RELEASING.md, "Cutting a release"); the milestone plan and
+its closures are `specs/milestones.md`. Moved here from that file on
+2026-09-17 (brief 007), verbatim.
+
+## v0.14.0 (released 2026-09-12)
+
+Everything since v0.13.1: a fourth answer to the Copy Picks clash
+question, the file-manager selection rule, the keyboard-shortcuts card
+rebuilt, readable sizes on every dialog line, and the first six units
+through the spec-first pipeline (briefs 001 to 006 under `specs/briefs/`).
+
+**Copy Picks: "New only" adds picks to a folder you have already worked
+on, and touches nothing else** (issue #86, brief 005, `modules/fileops.md`
+"The clash question"). The question had three answers, and none of them
+could add four more picks to an archive already developed in darktable:
+Overwrite byte-replaces the `.xmp` sidecars darktable keeps its history
+stacks in, Keep both duplicates every edited frame as a `_1` twin, and a
+fresh folder splits the archive. The fourth answer, `N`, is the first
+row now: "New only — copy the 4, leave the 144 already here untouched".
+A clashing pick is never opened — not written, not read, not hashed —
+which is the promise a darktable folder needs; the clash-free picks copy
+and verify as before; the progress line counts only the new ones; the
+report says "144 already had files with these names here — left
+untouched, not re-checked", and names a stray `.xmp` with no RAW beside
+it as a pick that was not copied, so nothing reads as archived that is
+not. The plan preview warns when a `{seq}` template meets a folder that
+already holds files, because the numbers shift with the new picks (the
+user's call: warn, never refuse). The docs now recommend New only for
+adding picks and Overwrite for the re-verify pass; the video export's
+question is unchanged (one file: skip is Cancel). Proved by nine core
+tests, a driven round through the real dialog, and a red mutant behind
+every guard — including the one that writes issue #14's forced skip back
+in.
+
+**The selection follows the file-manager rule** (brief 002,
+`modules/ui-grid.md`). The user's report: frames exported as a video,
+a different set selected next, and the second video held both. It was
+designed behaviour — plain arrows kept the selection and a fresh
+Shift-span was unioned with it, a rule no surveyed product has. Now a
+plain navigation key (arrows, PgUp/PgDn, Home/End, `[`/`]`) and the Y/N
+advance end the selection; Ctrl+the same keys move without touching it;
+a fresh Shift-span replaces the whole selection; Ctrl+Space toggles the
+frame under the cursor; the "· N selected" count is drawn in the
+selection's blue. Researched across Photo Mechanic, Lightroom, Capture
+One, Bridge, darktable, digiKam, the file managers and the HIGs; the
+persona rated the rule IN-MY-WAY for its silent-loss hazard, the user
+chose it, and the spec records both.
+
+**The keyboard-shortcuts card** (PR #75) is 780 px wide, sized to its
+content, seven labelled groups in two columns with a right-aligned key
+cell beside every action, all 24 bindings on it, and `?` or F1 opens it.
+It was one `Text` with 23 newline-separated lines and a hard-coded
+480×560 box before.
+
+**Sizes in the dialogs get their KB and TB tiers, and the copy dialog's
+refusal reads like the video's** (issue #88, brief 006): a 1.2 TB NAS
+reads `1.2 TB free` instead of `1228.8 GB free` on the Copy Picks and
+video-export lines, every size carries one decimal from KB to TB, and
+the not-enough-space refusal on the copy dialog now says "The copy needs
+7.3 GB and there is 1.1 GB free at the destination." instead of core's
+raw byte counts. The refusal is driven through the real dialog on both
+of its paths with an 8 TiB sparse fixture, which is how the plan found
+issue #89 (a large non-TIFF file misnamed as a RAW is pre-faulted whole
+by the import's rawler fallback).
+
+**Underneath, nothing a user sees.** The screenshot shutter fires exactly
+once on every seat (#77: it fired twice on Wayland, so a local green
+could be a green of the second capture); dependencies compile optimised
+in debug (#76: the full-res decode took 26-40 s against the shutter's
+60 s cap at opt-level 0); the CI cache key is computed from the dev
+profile, so a profile change can never leave every run cold again (#82,
+#83, briefs 003 and 004); the driven suite runs serially and sixteen
+scripts gate on the app's own marks instead of the clock (#72); the
+load-settled mark is emitted at every zoom (#73); CI hygiene — a
+concurrency group that cannot orphan a main run, a 90-minute cap, an
+evidence artifact per run (#74); and the agent organisation is five
+roles, spec first, with every standing instruction a dated directive in
+the repo (#79, #81, #85, CLAUDE.md M1-M9).
+
+## v0.13.1 (released 2026-09-02)
+
+A fix a user can feel, and the CI round it uncovered. No new features.
+
+**The keyboard is never ownerless after a panel rebuild — on any machine**
+(#63's residual, `modules/ui-grid.md`). 0.13.0 promised that a rebuild of
+the IPTC field rows puts the keyboard back in the field you were typing
+in. On some machines it did; on others the hand-back lost a race and the
+keyboard was simply dead until the next click — no typing, no Y/N,
+nothing but the mouse. It depended on how fast the machine drew the
+panel, so it hit one computer every time and another never, which is why
+only CI found it. The mechanism: the request to reclaim can be armed
+BEFORE the rows exist, and a row born with the request already standing
+never sees the change it was waiting for — Slint installs a row's change
+trackers after its `init` body has run, so the property flip 0.13.0 used
+to manufacture that signal could never work. Each row now also claims
+from a 1 ms timer, the one hook that runs after the trackers exist
+whichever way the race went. Measured on the ordering the CI runner
+produces: 0 of 10 runs claimed before, 10 of 10 after.
+
+**Windows CI had been blind since v0.12.0.** The Windows job died at a
+clippy error — a helper used only by a `#[cfg(unix)]` test is dead code
+there, and `-D warnings` refuses to build the test target — so the whole
+v0.12.0→v0.13.0 round was tested on Linux only. With that fixed the
+suite ran there and five tests failed, none of them a product defect:
+three clicked a coordinate measured on Linux, one read a dump on a clock
+the slower runner missed, one measured a pixel rectangle sized to a Linux
+glyph. What they exposed instead is worth writing down: on Windows the
+menu bar is the OS one, outside the client area, while Slint draws its
+own 40 px bar in-window on Linux, so every in-window y differs by exactly
+that (`grid 1440x840` against `1440x800`, confirmed from the runner's own
+trace); and the ▶ badge glyph comes from a different font there, 26 px
+wide against 19.
+
+**So the suite stopped assuming one platform's layout** (#70). A driven
+click now names its target — `click:iptc field 0` resolves at dispatch
+time to the centre of the rectangle the app itself reported — and the
+rule is in the spec: a traced element is clicked by NAME, never by
+coordinate. The copy and export finish marks carry a run number, so a
+script waits for ITS copy instead of a stopwatch. The badge test asserts
+the pill's left edge, which is identical on every platform, instead of a
+width that is not. And every run now writes its trace next to its
+screenshot, with both uploaded as CI artifacts on green runs too, because
+a Windows red is read by comparing it against the same test's Linux
+green — this release's own diagnosis was done that way.
+
+Also #69: the cursor-move test's keys waited on a clock that, under heavy
+load, could fire before the reclaim it depends on — 19 runs in 20 with
+the margin measured at 6 ms. It waits for the claim mark now.
+
+Gate: a design review before the code, then the validator and
+qe-engineer agents on each step, with both Windows failure classes
+reproduced locally first — the click miss by deleting the in-window menu
+bar, the copy race by slowing the copy — and the new badge criterion
+replayed against both runners' real screenshots plus five mutant images.
+Three findings were caught that would have re-reddened CI: a temp-dir
+redirect onto the runner's small work drive, a sanity bound sitting
+exactly on the Windows value, and a width tolerance loose enough to
+accept two pills.
+
+## v0.13.0 (released 2026-09-01)
+
+One feature, three fixes a user can feel, and a testing round that turned
+several "review-verified only" claims into tests.
+
+**Exported as video, at a glance** (issue #56, `modules/video-export.md`).
+Copy Picks has always left a ✓ on the frames it copied; a burst turned into
+a `.mov` left nothing, so the next morning there was no way to see which
+frames were already in a clip. Every frame that went into a video this
+session now wears a small ▶ pill beside the ✓, and the export dialog says
+what it already knows: "2 of 3 frames are already in c-b.mov", or "all 30
+frames are already in 3 videos — NAME.mov and 2 more". Both follow the
+disk: delete the file and the badge and the line go with it. Session-only,
+like ✓ — the persona gate rated persisting it in the cache IN-MY-WAY,
+because a memory that vanishes on a schema self-heal or a folder move is a
+memory whose ABSENCE cannot be trusted, and the dangerous case (exporting
+the same span twice) is already caught by the file-name clash.
+
+**Three fixes.** A wheel over the Copy Picks or Export Frames as Video
+dialog scrolled the grid behind it, so closing the dialog left you
+somewhere else in the folder (#49). A dialog with a lot to say pushed its
+own buttons off the card — 29 px on the export card, 830 px and off the
+bottom of the window on Copy Picks with a read-only destination — and the
+skip sentence could name a dozen frame sizes (#62): the sentence now names
+at most three reasons and counts the rest, both cards size to their content
+between a floor and the window, and the text scrolls inside the card by
+wheel or PgDn while the buttons stay put. And the keyboard could be
+ownerless for a fifth of a second after a folder swap or a panel rebuild —
+a key pressed in that gap did nothing at all (#63, #64): a destroyed editor
+now never keeps the focus, the swap path reclaims synchronously (0 ms), and
+a same-session rebuild puts the keyboard back in the field you were typing
+in, not on the grid.
+
+**The testing round.** Pointer ROUTING stopped being review-verified only
+(#13): four driven tests through real dispatched events now cover a click
+inside the IPTC panel, the wheel-routing table over every surface, drag
+versus click, and the scrollbar's cursor claim — each one red under a named
+mutation. Scripts gained `wait:<trace substring>` (#61), so a driven test
+waits for an app fact instead of guessing a timestamp; that retired two
+click-timing flakes, made the failed-cursor gate assert an ordering rather
+than a coin flip (#50), and let the resize tests wait for the geometry to
+land — three of them had been passing without ever resizing anything (#65).
+Two wall-clock guards became counts of what they actually guard: the Copy
+Picks suffix walk asserts its probe count (#58, a mutant the old stopwatch
+passed reads 17,978 probes against 7,998), and the folder scan's clock
+moved to the release perf budgets while the functional test proves
+structurally that a scan reads no file contents (#59).
+
+Two findings outgrew their tickets and are recorded rather than folklore:
+`keys.has-focus` reads false when the WINDOW is deactivated even though
+keystrokes still arrive, so every focus assertion in the suite now asserts
+by acting or by an owner token; and a window switch mid-word still commits
+half-typed metadata, which is the likely root cause of the recorded
+1-in-4 keyword-swap intermittent — filed as issue #68 with its measured
+signature, not fixed here.
+
+Gate: every step went through an architect review plus the validator and
+qe-engineer agents. Three of them came back FAIL and were redone — the
+first focus fix made typing destructive (a caption key rejected photos),
+the second never landed the keyboard at all, and a dialog fix left the
+buttons off-screen at the ceiling. Three false readings (a dirty fixture,
+a mis-derived arithmetic, a gesture that re-opened the menu it was meant to
+dismiss) are recorded next to the numbers they produced.
+
+## v0.12.0 (released 2026-08-29)
+
+One follow-up from the M9 persona gate, issue #55: **selecting by
+bursts** (`modules/burst-grouping.md`, UI contract).
+
+The heron takes off in burst 40 and lands in burst 41, and selecting
+both for a caption or a video was forty Shift+arrows in the loupe.
+Now **Shift+`]`** and **Shift+`[`** are `]` and `[` that also select:
+the cursor lands exactly where the plain key would, and every whole
+burst between the burst the gesture started in and the cursor's burst
+becomes the selection — press again to add a burst, the opposite key
+to drop one, never half a burst in a capture-sorted view. A Shift+arrow
+afterwards stays frame-precise from the burst's edge. On a US keyboard
+the keys arrive as `}` and `{`; both spellings work. **Ctrl+Shift+B**
+(the user's own proposal) selects the whole burst under the cursor
+without moving it — the caption-this-burst move from whichever frame
+is being judged; additive, so two bursts apart are one chord each, and
+a double-tap changes nothing. And **Esc now always clears the
+selection**, from inside the loupe too (the user's decision, and the
+persona's one condition for shipping: the loupe shows no wash, and a
+one-press selection left behind there would silently take the next
+IPTC commit). `G` is unchanged.
+
+The rules live in `fastcull-core` with pure-function tests; the app
+only dispatches. Two driven tests send the real key events over a new
+`--synthetic N --bursts` session (the test RAWs are three single
+shots). Gate: persona before code (both USEFUL, ship both), validator
+(three wording findings, fixed), QE PASS with the old-code proof, and
+a driven run over a real 1,450-frame A1 session in the grid and the
+loupe. Recorded caveat: with two bodies interleaved, a Shift+`]` chain
+selects the view range between the two bursts, so the other body's
+burst can be cut at the edge — Ctrl+Shift+B is the exact tool there.
+
+## v0.11.0 (released 2026-08-28)
+
+One feature, the first thing FastCull writes that is neither a sidecar
+nor a copy: **Export Frames as Video** (M9, `modules/video-export.md`,
+ADR 0004).
+
+The idea came from the user: a 30 fps burst that produced a lovely second
+of motion but no keeper is not garbage — it is a Story. Select the frames
+(or just stand in the burst), `Ctrl+Shift+E`, and one QuickTime `.mov`
+lands in a folder you chose. Every frame in it is the camera's own
+embedded full-res JPEG, **copied byte for byte** — nothing decoded,
+scaled, cropped, rotated or re-compressed — and it plays at the speed
+you actually shot it, measured from the millisecond capture timestamps
+the camera wrote (the median gap, so two bursts selected together do not
+stretch each other). No options. Any crop, speed change or effect belongs
+in the phone editor afterwards: FastCull hands frames to an editor, it is
+never one. Your RAWs, sidecars and marks are not touched.
+
+Why Motion JPEG, and why no encoder: a three-persona product review
+(marketing, product owner, product manager; ~50 sources) found that no
+culling tool does this, that there is no H.264 encoder a static GPL
+binary can ship cleanly on Linux and Windows today (OpenH264 compiled
+from source is outside Cisco's royalty cover until November 2027; the
+pure-Rust AV1 encoder took 110 s for 30 frames and Meta does not accept
+AV1), and that the honest first mile — which frames, straight from the
+RAW folder, no develop step — is the part nobody serves. Muxing the
+camera's JPEGs needs no encoder and no licence, takes half a second for
+30 full-res frames, and the user tested the untouched 8640×5760 file in
+InShot on the phone: it imported and played.
+
+What the file is: `moov` before `mdat` so it plays while it copies;
+64-bit offsets always, because a 400-frame selection is 4.4 GB (QE
+exported a real 4.58 GB file and checked the last sample byte for byte);
+portrait bursts carry the rotation in the track matrix, pixels untouched;
+a frame that does not share the first frame's size or orientation is
+skipped and named in the dialog, never scaled. The write goes through the
+Copy Picks contract — one worker, temp name, no-clobber commit, the clash
+question with its three answers, and a verification that reads the
+finished file back and checks every sample against the hash taken on the
+way in before the file takes its name.
+
+Gate: persona review before code (nothing IN-MY-WAY; it chose the chord,
+the seeded destination and the fallback wording), then two validator and
+two QE rounds; fourteen deliberate mutations each turned exactly the
+expected test red; CI green on Linux and Windows on the final commit.
+Still unverified, and said so in the docs: a FastCull-made file on a
+phone (the phone test used ffmpeg's file of the same shape), InShot
+honouring the rotation flag on a portrait burst, other bodies' JPEG
+flavours. Follow-ups filed: #55 (select this burst / Shift+`]`), #56 (an
+exported badge), #58 (a Copy Picks stopwatch that should assert an
+invariant, not a clock).
+
+## v0.10.0 (released 2026-08-22)
+
+Copy Picks. One bug report started it, and answering it properly
+replaced how the whole operation deals with names that are already
+taken.
+
+**The report**: copy the picks, delete some of those copies by hand in
+the destination folder, press `Ctrl+E` again — and nothing came back.
+Sometimes the `.xmp` reappeared without its RAW; usually nothing at
+all, and the only way out was copying to a different folder and moving
+files by hand. The session remembered which images it had copied to a
+folder and turned that memory into a forced skip WITHOUT ever checking
+the copy was still there; the one thing it did re-check was the
+sidecar, which is why the sidecar was the one thing that came back.
+That memory now reads only — it feeds the ✓ badge and the "copied
+earlier but gone" note, and decides nothing.
+
+**The rule, from the user**: *"if I ask to copy the files to a folder,
+you copy the files — maybe add a warning that the files already exist.
+Context shouldn't matter more than that."* So the disk decides. Every
+name the copy would write — the RAW **and** its sidecar, after the
+rename template — is checked against the destination, and if anything
+is already there you get ONE question whose answer governs the whole
+run:
+
+- **Keep both** — the clashing picks land under the first free number,
+  `_1`, `_2`, `_3`… on the file-name stem before the extension, sidecar
+  always sharing the number.
+- **Overwrite those N** — replaces them in place. A destination RAW
+  that is already byte-for-byte identical is NOT sent again: it is
+  checksummed, kept, and only its sidecar is rewritten if captions
+  changed, which makes a second `Ctrl+E` a free "is my export still
+  bit-perfect?" pass before the card is wiped. Overwrite means
+  overwrite — including a destination `.xmp`, which is where darktable
+  keeps its edit history, and the question says so.
+- **Cancel** — copies nothing at all, not even the files that had no
+  clash. `Esc` does the same.
+
+`Enter` deliberately does nothing on that question, and the destructive
+answer is not on `Y` or `N`: those are the culling keys, and
+`Ctrl+E, Enter, Enter` must never replace 148 files by reflex.
+
+**Two picks that share a name never ask.** Two bodies producing the
+same `DSC01234.ARW`, or a template that gives several frames one name:
+the later pick just takes a suffix, under every answer, because
+overwriting one of the user's photographs with another is not a choice
+worth offering. The plan preview says how many that is.
+
+**Nothing is written outside the destination folder** — an invariant
+now, not an assumption. A rename template that produces a path (`/`,
+`\`, `..`) or a name with no stem (`{camera}.{ext}` used to write a
+hidden `.ARW`) is refused before anything moves, on every platform.
+
+**`{camera}` works again** in both the rename field and the IPTC panel;
+it had been handed a literal `None` since the feature shipped and
+stamped an empty string.
+
+Under the hood the copy engine stopped trusting `rename`: every commit
+that is not an answered overwrite goes through a no-clobber primitive,
+so a file that appears between the question and the copy fails that one
+file honestly instead of being destroyed, and two same-run names that a
+case-folding volume treats as one cannot eat each other. Temp files are
+unique per copy after a hard-quit hazard was found: the old shared name
+could alias a freshly committed RAW and truncate a copy the report had
+already called verified. The plan's suffix search resumes instead of
+restarting, after it turned out to freeze the UI for ~3 s per keystroke
+while typing a template over a thousand picks.
+
+Closes #14 (a `_2` copy was judged under its natural name, so a caption
+refresh could land on a different camera's file — structurally
+impossible now: a sidecar is only ever written beside its own RAW).
+Nine gate rounds, and every claim in the spec is a test.
+
+## v0.9.0 (released 2026-08-09)
+
+One report drove this release (#46, reported by the user): at deep
+1:1, arrowing onto a photo nothing had decoded yet flashed the ENTIRE
+next frame at fit for a split second before snapping back to the
+carried spot — and sometimes the next photo appeared parked at its
+top-left corner with the carried position silently lost. Three
+mechanisms were underneath, and fixing the third changes how the loupe
+feels under the hand, which is why this is 0.9.0 and not a patch.
+
+First, **the loupe never drops to fit in transit**. Landing on a frame
+with no decoded pixels used to fall back to the whole-photo fit view;
+now a rough placeholder-quality frame renders at the carried zoom and
+position — with the "◌ loading" pill — until the real pixels land
+moments later. During transit the eye tracks position, not detail, so
+mush at the right spot beats a sharp flash of the wrong framing. A
+decode that outright fails still surfaces its Failed badge instead of
+a stale placeholder.
+
+Second, **read-ahead follows the screen, not the filenames**. The
+prefetch ring warmed neighbours by file order while the arrow keys
+walk the order on screen — in folders where capture time interleaves
+the filenames (two bodies, two cards) it warmed frames no arrow would
+ever reach while every real neighbour stayed cold, which is what made
+the flash so common. Every ring now works in on-screen view order, so
+the frames being warmed are the frames the arrows will actually hit.
+
+Third, **no coasting into a navigation** — this is the felt change. A
+fast drag-flick used to set the image gliding, and an arrow pressed
+while it still coasted rendered the next photo at the wrong spot; the
+animation's writes were being misread as hand drags and folded into
+the stored pan centre until the carried position was gone for good.
+Dragging in the loupe now has no glide at all: the image tracks the
+hand exactly and stops dead on release, and the stored position only
+ever moves on a real drag. (The grid keeps its kinetic scroll —
+flicking through a grid is browsing; at 1:1 the user is judging a
+spot, and a glide would carry past it.)
+
+Under the hood the drive harness learned pointer dispatch (`press.`,
+`move.`, `release.`, `wheel.` tokens) and a loupe-pan dump block, so
+drag/flick/navigate sequences finally have red-proven tests.
+
+## v0.8.1 (released 2026-08-03)
+
+Bug fixes only — two strands since v0.8.0, both from live reports.
+
+The first is **focus continuity** (#41, #42, reported by the user):
+closing the IPTC panel from the menu left the keyboard dead — no key
+did anything, and at 1:1 there was no discoverable way out — and a
+Help > About opened over a focused field was worse: undismissable,
+with every keystroke landing invisibly in the hidden field, where a
+blind-typed "keyword" could be silently committed onto an image. The
+rule now is deterministic: whenever the focused editor is destroyed
+(panel closed by any route, session swap) or covered (About,
+shortcuts, or the copy dialog over it), the keyboard returns to the
+topmost surface. A destroyed editor discards its half-typed text —
+a session swap can no longer commit the old session's half-edit onto
+the new session's image — while a covered one commits exactly like
+clicking away always has. Esc now always closes the topmost modal
+first: About over the copy dialog takes two Esc presses, and the
+dialog's state survives the first one. Under the hood the drive
+harness learned real key and click dispatch (`key:`, `click.`,
+`dump.` tokens) plus a `FASTCULL_NO_CONFIG` sandbox, so this whole
+bug class finally has red-proven tests.
+
+The second is **the Windows console window** (#40): a double-clicked
+fastcull-app.exe no longer drags a console window along, and closing
+a stray terminal can no longer take the app down with it. Launched
+*from* a terminal, diagnostics still work — `FASTCULL_TRACE` output
+attaches to that terminal (with the standard trade-off, recorded in
+the FAQ, that closing that terminal closes the app). The CLI stays a
+console program on purpose, and CI now asserts both PE subsystems on
+every Windows build so neither can silently flip again.
+
+## v0.8.0 (released 2026-08-02)
+
+Everything since v0.7.0 — two performance overhauls, a hardening pass,
+and the truth-telling that closed #27.
+
+The headline is the **texture kitchen** (#30, the user's requirement
+verbatim: "No decoding should be done on the UI thread"). The
+architecture spec had said it from the start — the M2-era budgeted
+deviations (~32 thumb decodes per refresh, 149 MB full-res copies)
+had been violating it since the beginning. One kitchen worker now owns
+every pixels-to-texture conversion; the UI thread's remaining duty is
+an O(1) buffer wrap, and the old paths are deleted, not bypassed.
+Measured A/B on identical drives: UI stalls during a settled 1:1 walk
+21–24 ms in 4 of 5 runs → **zero in all runs**; held-walk stalls of up
+to 78 ms → zero; stop-to-sharp 677–731 → 627–636 ms. The gate earned
+its keep again: a replace-latest dedupe was cancelling a ring
+neighbour's queued fill (flaky 60 s shutter refusals), and QE's
+mutation campaign found three contracts with no red test — all pinned.
+
+Second, **full-res orientation reworked** (#27): the A1's full-res
+JPEG has zero restart markers, so its ~220 ms Huffman decode is
+strictly serial while seven cores idle — that dead time now pays the
+page faults (decode into a pre-faulted buffer, transpose scratch built
+on a spare thread during decode), and the rotate kernel routes writes
+through exact chunks with the bounds check hoisted. Full-res
+decode+rotate 518 → ~277 ms (three independent witnesses, ordering
+preserved in every round), peak memory unchanged. The
+under-350 ms budget is green on the 8-core laptop for the first time —
+the machine on which #27 declared it unpassable.
+
+Third, **the decoder stops trusting JPEG header claims** (#31). A
+639-byte hostile stream claiming 30000x30000 used to decode as Ok
+while committing 2.64 GB; it is now rejected at 2.3 MB peak by a
+500 MP output cap, and truncated scans (which zune reports as
+*successful* decodes) are detected on the raw bytes and surface as the
+Failed badge instead of a giant mostly-blank frame. Residual accepted
+and documented: a crafted stream with plausible dims, a valid EOI and
+too-little entropy data still decodes as a bounded blank success.
+
+With the budget genuinely green, **#27 closed as a documentation
+fix**: no thresholds moved — the spec now says the truth, that they
+bind on an idle run of the development machine (the 32-thread
+reference hardware retired 2026-07-28 stays as provenance), and the
+measured load/thermal boundary is written down so a red on a busy
+machine gets re-run idle instead of read as a regression.
+
+Also: the drive harness learned `open:PATH` (#34), so the real
+Open Folder session swap — kitchen retarget, marks-flush barrier,
+order-flip re-arm — has its first tests, each proven against a
+mutation that turns it red.
+
+## v0.7.0 (released 2026-08-02)
+
+Everything since v0.6.0. The headline is the **transit quality model** —
+the user's requirement verbatim: "I don't need the image to be as good
+as possible, I need it to move fast, feeling almost like a video. But
+when I release the key, then I want quality to be high." The loupe used
+to request the full-res rung for every frame even under a held key
+(~390 ms decode vs ~120 ms repeat: two of three frames never seen).
+Three request states now govern what is ASKED of the decoder, never
+what is displayed: TRANSIT (frame changes < 250 ms apart — mid rung
+only, over a wide ring leaning the direction of travel), SETTLED
+(150 ms of quiet — the real target), then the pre-existing full-res
+look-ahead. Measured on the 8-core dev machine, interleaved A/B vs the
+old code: frames reaching the screen during a 20-key hold 14 → 37; CPU
+during a 30 s hold 59.9 s → 3.1 s; grid thumbnails after exiting a hold
+mid-flight 3.5–4.1 s → 15 ms; 3-minute-marathon peak RSS 2.37 GB →
+517 MB; fast-cull chains stop producing BLANK frames (the old code left
+2–5 of 20 undecoded above ~6 marks/s). Accepted cost, chosen
+motion-first: sharpness-on-stop 710 → 840 ms median. The gate caught a
+real bug before merge (the prefetch ring leaned FORWARD during a
+backward hold — the app's same-index re-focus storm re-derived the
+direction every call; now latched at the real index change) and two
+review rounds re-measured every published number. The fast-Y/N
+deferral is closed as intended, with data: at 4 marks/s nothing
+changes; only above ~4.2/s do frames get judged from the mid — where
+the old code judged them from nothing.
+
+Also: **dark-only means dark-only** — on a light-mode desktop the
+menu bar's labels were invisible (native fluent MenuBar text follows
+the platform colour scheme; the app's surfaces are hand-picked dark).
+As old as the menu bar itself, surfaced by the user's desktop theme.
+The palette is now pinned dark at the root window (user decision: "I
+don't want a light mode. I don't want a toggle. Keep the design as
+is"), with a deterministic regression test that forces the failing
+scheme via an unreachable session bus — QE proved the pin holds even
+across a LIVE mid-session theme flip, and that the screenshot suite
+had been silently capturing whichever scheme the desktop happened to
+be in (the real blind spot behind two different one-off Windows CI
+reds, both also fixed: the loupe-fit shutter now waits for the
+mid-or-better texture instead of a 1.5 s clock).
+
+## v0.6.0 (released 2026-07-31)
+
+Everything since v0.5.0 — two issues, both of which turned out to be
+bigger than their titles.
+
+- **#25: the load stops moving the photo under your hands.** EXIF is read
+  inside the per-file THUMBNAIL job, so the metadata sweep runs for the
+  whole load (~15 s for 3,000 files locally, far longer off a card), and
+  for all of it the capture sort put keyed images ahead of keyless ones —
+  so the view order, and the head with it, changed on almost every
+  arrival whenever filename order ran contrary to capture order. The
+  issue called this "cursor lands off-by-N". Measured, one `right` at
+  1 ms landed 870 frames away; worse, MARKS write to the cursor, and a
+  `Y` typed 4 s after opening wrote the sidecar for a file the user had
+  never seen. The view now holds FILENAME order until every job finishes,
+  then sorts once. Per the user's decision, whatever is selected stays
+  selected through that flip and every engine event after it — which
+  narrows issue #4 knowingly: an untouched cursor can end up mid-grid
+  rather than at the start of the shoot.
+- **#26: a dev build's version says how old it is.**
+  `X.Y.Z-devel-YYYYMMDD-<hash>`, using the commit date so the string is
+  reproducible. The fix that matters most is smaller than the feature:
+  `build.rs` did not watch tag refs, so `git tag && cargo build` left a
+  `-devel-` string inside a release binary — which happened at 0.5.0 and
+  made every version string suspect.
+
+Also: `loupe_survives_a_vertical_resize` was flaking 4-in-20 on main and
+is fixed; the About card holds its extra line; and a `rerun-if-changed`
+path that did not exist was costing ~4.7 s on every no-op build.
+
+## v0.5.0 (released 2026-07-30)
+
+Everything since v0.4.0. The selection wash (a multi-selection is
+readable at a glance, and the status bar states its size — the IPTC
+panel stamps that selection, so its reach had to be visible), and the
+issue #11 closure, which turned out to be two real defects rather than
+a sign-off:
+
+- **Double-click never reached 1:1 above fit** — the headline gesture of
+  the pointer contract, dead since it shipped. The bridge's proximity
+  guard compared two clicks as image fractions taken either side of the
+  first click's re-centre, so the "distance" it measured was the click's
+  own offset from the view centre; anything beyond ~12 px was vetoed. It
+  worked from fit (where a click re-centres nothing), which is why two
+  gates passed it. The guard is deleted — Slint's own 10 px repeat gate
+  already enforces the rule it was written for.
+- **The loupe "fit" view was a crop.** The one-column grid cell is 3:2 and
+  spans the grid width, so it was taller than the viewport on every normal
+  window: 16.6 % of the frame height hidden at 1440×900, 23.4 % fullscreen
+  on 1080p, with nothing on screen to say so — and after #11 gave the wheel
+  to zoom and made drag inert, unreachable by any input. The cell is now
+  bounded by the viewport at N=1 (persona MUST-HAVE, user-approved); the
+  photo renders ~20 % smaller with pillarbox bars, and the whole frame is
+  there. The `✓ copied` and `×N burst` badges, anchored below the fold,
+  came back with it.
+
+Also: an unbounded optimistic zoom climb that reached 1e38 and poisoned
+the pan centre with NaN; three `zoompan` functions that could panic on
+non-finite geometry (7,992,116 panicking combinations in a 108.8 M-case
+sweep, now zero); and four acceptance criteria that had no real test —
+every pointer assertion sat at dead centre, where the pointer anchor and
+the centre anchor coincide. A `FASTCULL_DRIVE dblclick:X,Y` action makes
+bridge-level pointer defects reachable from a test for the first time;
+pointer ROUTING remains review-verified only (issue #13 — closed
+2026-08-29 by real dispatched pointer events; see ui-grid.md's
+Pointer ROUTING criterion).
+
+## v0.4.0 (released 2026-07-27)
+
+Everything since v0.3.0: the import-performance overhaul (EXIF summaries
+via the in-tree TIFF walker — the rawler whole-file mmap serialized all
+import workers on mmap_lock; a real 1,450-ARW folder on an ntfs-3g
+backup drive went from 99–133 s to ~1–3 s, local NVMe 5k from ~14.5 s to
+~3.1 s, per-file EXIF 1.71 ms → 5 µs), the loupe soft-transit contract
+(#21 — the view never strobes to fit during held-arrow transit) with the
+loupe-engine scheduling fixes it exposed (ring-gated deferred revival +
+the debounced focus-reserved worker), the loupe state badge (#20 — mark
+visible without leaving the loupe; rejects no longer dimmed at fit), the
+About dialog (#23 — build-composed version string,
+X.Y.Z-devel-<hash> off-tag; the commit DATE joined it in #26) with full modal keyboard containment for both popups, the #18
+anchor closure (verified fixed by the #16 relayout work, regression-
+pinned), and the drive/shutter harness determinism work. No docs
+release-note debt: culling.md gained its sections with the features.

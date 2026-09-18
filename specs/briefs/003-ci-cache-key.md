@@ -1,6 +1,6 @@
 # Brief 003 — the CI cache key must change when the dev profile changes
 
-Date: 2026-09-06. Branch `ci-cache-key`. Scratch: `.qe-scratch/pipeline-003/`.
+Date: 2026-09-06. Branch `ci-cache-key`.
 A Manager bookkeeping unit (M3): CI plumbing, nothing user-visible, persona
 gate skipped. Brief 002 (the selection) is a separate unit awaiting the
 user's answers.
@@ -65,7 +65,7 @@ and 33 m 48 s for the last cached run before the profile line (run
   about rust-cache corrected — the key ignores the profile; the first
   cached run came only after the prefix bump of this unit; the
   once-per-toolchain-change cost holds from then on. The "cached job
-  durations" placeholder (~255-256) stays, to be filled by the Manager from
+  durations" placeholder stays, to be filled by the Manager from
   the first cached run after this merges.
 - R3. Proof that the key changed, on this PR's own run: the rust-cache
   restore step logs a miss on the new primary key (a PR never saves), and
@@ -96,8 +96,9 @@ and 33 m 48 s for the last cached run before the profile line (run
   change), M3 (this is the Manager's bookkeeping, decided on the evidence
   above), M7, M9 (cleanup ran at the unit's start).
 - `specs/01-architecture.md` "Build profiles" (the cost paragraph); the CI
-  audit's findings in `.qe-scratch/ci-audit-*` (cache quota, the cold
-  Windows cache of 2026-09-04) as inherited evidence.
+  audit's findings of 2026-09-04 (cache quota, the cold Windows cache) as
+  inherited evidence — its scratch is garbage-collected; what it established
+  is in `01-architecture.md`.
 - The pipeline's test-integrity rule: no test changes are expected; any
   `ci.yml` change beyond the key is out of scope.
 

@@ -2,7 +2,7 @@
 
 Date: 2026-09-12. Issue #88 (Manager bookkeeping, M3, from QE's
 observation on unit 005). Branch `human-bytes-tiers` from `main` c912f7f.
-Scratch: `.qe-scratch/pipeline-006/`. A user-visible formatting fix, so
+A user-visible formatting fix, so
 the persona gate ran (verdicts below).
 
 ## Context
@@ -101,8 +101,7 @@ the byte sizes the copy dialog shows.
 - AC3. The spec's illustrative lines match the screen's form; the docs
   sentence of R4 exists.
 
-## Persona verdicts (almost-human-user, 2026-09-12; report in
-`.qe-scratch/pipeline-006/PERSONA.md`)
+## Persona verdicts (almost-human-user, 2026-09-12)
 
 KB tier SHRUG (unreachable on the cost column — a sidecar-only clash
 still costs its RAW under Keep both; reachable only through a "free"

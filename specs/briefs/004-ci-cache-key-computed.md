@@ -1,7 +1,6 @@
 # Brief 004 — the CI cache key is computed from the profile, not bumped by hand
 
-Date: 2026-09-06. Branch `ci-cache-key-computed` from main d4da1ac. Scratch:
-`.qe-scratch/pipeline-004/`. CI plumbing, nothing user-visible; persona gate
+Date: 2026-09-06. Branch `ci-cache-key-computed` from main d4da1ac. CI plumbing, nothing user-visible; persona gate
 skipped. Follows unit 003 (PR #82) and closes it.
 
 ## Context
@@ -83,7 +82,7 @@ since the profile line, and it fills unit 003's placeholder.
   rule; the ledger ticks unit 003's AC1 (run 34014978820, both jobs `No
   cache found.` under `v1-rust-…`) and AC3's save half (run 34018510289:
   1.88 GiB and 1.62 GiB saved, v0 deleted, usage 5.61 GiB); the placeholder
-  (~270-274) is re-worded to name the run after THIS unit's merge as the
+  is re-worded to name the run after THIS unit's merge as the
   first cached one; D1 (a prefix bump also discards the release half:
   33 m 28 s / 1 h 09 m 58 s on 34014978820), D2 (`ui-grid.md` 2575-2577:
   the worst cold Windows job is 1 h 09 m 58 s, 20 min of headroom; the
@@ -118,9 +117,9 @@ since the profile line, and it fills unit 003's placeholder.
 - CLAUDE.md hard rules (none touched); M1 (spec first), M3 (Manager
   bookkeeping, decided as above), M7, M9 (cleanup ran at the unit's start).
 - `specs/01-architecture.md` "Build profiles" and "The CI cache key and the
-  profile"; unit 003's brief, plan, review and QE report under
-  `.qe-scratch/pipeline-003/` (the six mutants in `qe/lockhash.py`, the job
-  logs, the action's source under `rust-cache-src/`).
+  profile"; unit 003's brief, and its plan, review and QE report (scratch, since
+  garbage-collected: the six mutants of `lockhash.py`, the job logs, the
+  action's source at 6323deb).
 - The test-integrity rule applies to the computing step: a step whose
   failure degrades silently to "the key never moves" is the original bug in
   a new form; the senior developer reviews it as it would a test.

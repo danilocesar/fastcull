@@ -1,8 +1,9 @@
 # Brief 001 — the screenshot shutter fires once everywhere; dependencies compile optimised in debug
 
 Date: 2026-09-05. Issues: #77, #76 (and #33, retired by #76). Branch:
-`shutter-once-and-fast-deps`. Scratch for this unit: `.qe-scratch/pipeline-001/`
-(plan, review and QE reports) and `target-qe-*` build dirs. The first unit of
+`shutter-once-and-fast-deps`. The plan, review and QE reports were produced in
+the unit's scratch directory, since garbage-collected; what they established is
+in this brief and in PR #80. The first unit of
 work through the pipeline of CLAUDE.md, "The workflow".
 
 ## Context
@@ -40,8 +41,9 @@ and needs 26–40 s against a 60 s cap that starts at `shutter::arm`
 refusals: stock 0/4 green, `[profile.dev.package."*"] opt-level = 2` 4/4
 green. Cold debug build of the screenshot test binary: about 2m19s → about
 9m on the laptop while competing with other work (ratio not clean).
-Evidence of that discussion: `.qe-scratch/plan-73/` (DISCUSSION.md, the GATE
-reports) — inherited evidence, not verified work.
+The evidence of that discussion was a stopped session's scratch, since
+garbage-collected — inherited evidence, not verified work; what it established
+is the two sentences above.
 
 **#73's design** (readiness budget from the end of the drive script, 85 s
 cap) was rejected in the four-party discussion: in every recorded refusal
@@ -111,7 +113,7 @@ Windows double-run stays open and is not part of this unit.
   `specs/modules/raw-pipeline.md` (the ladder residual "~30 s worst case in
   debug"; the 60 s cap history), `specs/modules/ui-grid.md` (the 60 s cap
   paragraph "which in a debug build over a 50 MP frame is a real margin";
-  the #61/#73 paragraphs quoting debug timings; the harness section on the
+  the #61/#73 paragraphs quoting debug timings; the test-harness.md on the
   shutter), `specs/01-architecture.md` (perf budgets "Skipped in debug
   builds where decode timing is meaningless" — still true for wall-clock
   budgets, say so), `specs/milestones.md` where it quotes #33. The senior
@@ -195,7 +197,7 @@ Skipped: test and CI plumbing, nothing user-visible (workflow step 2).
   branch `debug-fast` was deleted) and its PR draft is not evidence.
 - 2026-09-05, senior developer (duty 1, agreed by the Manager): the spec
   change in `ui-grid.md`, `raw-pipeline.md` and `01-architecture.md`
-  (list: `.qe-scratch/pipeline-001/SPEC-CHANGE.md`); OQ1 settled — the two
+  (the list is the spec commit of PR #80); OQ1 settled — the two
   release-only gates that rested on the debug decode are lifted, the F2
   warm-landing pin and the M1 thumb-rung pin stay release-only for reasons
   that survive; no ADR (a reversible profile line is not architecture);

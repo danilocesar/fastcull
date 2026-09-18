@@ -1,9 +1,10 @@
 # Brief 002 — the file-manager selection rule: plain navigation collapses the selection, a fresh span replaces it
 
-Date: 2026-09-06. Branch `selection-collapse` (worktree
-`.qe-scratch/unit-002-selection/wt` while unit 004 holds the main checkout).
-Scratch: `.qe-scratch/unit-002-selection/` (research, mechanism, synthesis,
-persona report, screenshots). A feature-level change to what keys mean:
+Date: 2026-09-06. Branch `selection-collapse` (worked in a scratch
+worktree while unit 004 held the main checkout; its research, mechanism note,
+synthesis, persona report and screenshots were garbage-collected with it —
+what they established is this brief's Context and `ui-grid.md`'s selection
+rule). A feature-level change to what keys mean:
 the persona gate ran, its IN-MY-WAY verdict was discussed, the user decided.
 
 ## Context
@@ -130,14 +131,13 @@ confirmed; E-b rejected; the peek workflow does not exist for this user.
   a second Esc clears); `docs/export-video.md` where it describes selecting
   frames. The shortcuts card (`?`/F1) gains the Ctrl+arrow and Ctrl+Space
   rows and its Esc row stays true.
-- R7. Spec: `ui-grid.md` — the orthogonal-channels paragraph (~1149-1152)
-  rewritten, the deselect gestures (~856-862), the key table rows for
+- R7. Spec: `ui-grid.md` — the orthogonal-channels paragraph
+  rewritten, the deselect gestures, the key table rows for
   arrows, Shift+arrows, Shift+`[`/`]`, new rows for Ctrl+arrows and
   Ctrl+Space, the Esc/G rows re-read, the pointer contract row for click;
   `burst-grouping.md` ~134-153 (Ctrl+Shift+B's `]`×7 rationale rewritten
   with Ctrl+`]`); `video-export.md` where it relies on a surviving
-  selection (~54-70, the "select frames or stand in a burst" fallback now
-  the normal rhythm); `iptc-templates.md` if it names the walk-and-mark
+  selection; `iptc-templates.md` if it names the walk-and-mark
   workflow. Every changed sentence dated and tagged; the persona's
   IN-MY-WAY and the user's decision recorded where the orthogonal model was
   recorded.
@@ -183,15 +183,16 @@ confirmed; E-b rejected; the peek workflow does not exist for this user.
 - CLAUDE.md hard rules 1-6 (rule 5: `Selection` semantics in core); M1, M2
   (the two conventions decided above), M5, M7, M8 (the user answered the
   persona's questions), M9 (cleanup ran at the unit's start).
-- Specs: `ui-grid.md` pointer contract (~519-528), deselect gestures
-  (~856-867), selection wash and count (~1134-1180), key table
-  (~1191-1213), the shortcuts card section; `burst-grouping.md` (~120-160);
-  `video-export.md` (~52-72, 250-264); `iptc-templates.md` (~65-72);
+- Specs: `ui-grid.md` pointer contract (the transition table), deselect gestures
+  (the Cursor contract), selection wash and count (Visual language, Selection), key table
+  (the Keyboard map), the shortcuts card section; `burst-grouping.md` (UI contract);
+  `video-export.md` (Scope; Dialog); `iptc-templates.md` (Apply semantics);
   `docs/culling.md`, `docs/export-video.md`, `docs/metadata.md`.
-- Evidence: `.qe-scratch/unit-002-selection/` — `SYNTHESIS.md` (options C,
-  B, A1, A3 with their touch lists and the tests at risk), `code/MECHANISM.md`
-  (§7 tests that assert selection behaviour), `PERSONA.md`, the five
-  research reports, the screenshots.
+- Evidence: the unit's scratch, since garbage-collected, held the synthesis
+  of options C, B, A1 and A3 with their touch lists and the tests at risk,
+  the mechanism note (its §7: the tests that assert selection behaviour), the
+  persona report, five research reports and the screenshots. What survives
+  of them is this brief, PR #84 and the tests it added.
 
 ## Persona verdicts
 
