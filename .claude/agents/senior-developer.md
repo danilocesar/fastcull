@@ -192,7 +192,7 @@ somebody else can repeat, it is not finished.
    `key:`, `click.`, `click:<element>`, `press./move./release.`, `wheel.`,
    `resize:`, `scroll:`, `open:`, `copydest:`/`clipdest:`/`copytemplate:`,
    `wait:<substring>`, `dump.<label>`; the QEDUMP line — the contract is
-   the "Debug facilities" section of `specs/modules/ui-grid.md`). Add marks
+   `specs/modules/test-harness.md`). Add marks
    where the mechanism would show itself — an ownership change, a model
    rebuild, a claim, a landing — and diff a failing run's last few hundred
    milliseconds against a passing one. The line that is MISSING is usually

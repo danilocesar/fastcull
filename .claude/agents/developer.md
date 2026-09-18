@@ -95,7 +95,7 @@ are the one implementer on this tree while you hold it.
   something to quiet. Tests carrying a banner "when this fails this way, it
   is that defect, do not quiet it" mean it.
 - Driven tests (`crates/fastcull-app/tests/screenshot.rs`) follow the
-  harness contract in `specs/modules/ui-grid.md`, "Debug facilities": gate
+  harness contract in `specs/modules/test-harness.md`: gate
   on the app's own marks (`wait:<substring>`, a 30 s cap that runs from the
   step), never on a clock guess; click a traced element BY NAME
   (`click:iptc field 0`), never by a coordinate measured on one platform
