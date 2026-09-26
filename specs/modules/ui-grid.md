@@ -88,7 +88,7 @@ raw-pipeline.md ("The ring", its request table, and "Above fit"):
 |---|---|---|
 | TRANSIT | frame changes < `TRANSIT_GAP` (250 ms) apart | never more than the fit box for the frame on screen, and the ring by the engine's plan |
 | SETTLED | the user stops (~250 ms, the reserved lane's `FOCUS_DEBOUNCE`) | the app's real target for the focused frame |
-| SETTLED-AND-IDLE | after that lands | the ring around it, at the same quality |
+| SETTLED-AND-IDLE | after that lands, or at once when the focused frame needed nothing | the ring around it, at the same quality |
 
 - **The held key is never paced** (user decision 2026-09-26, brief 008):
   advancing only when the next frame's rung is ready was put to the user
@@ -119,9 +119,10 @@ raw-pipeline.md ("The ring", its request table, and "Above fit"):
   flipped the ring forward within milliseconds of every backward step.
 - The settle guarantee lives in the engine's reserved lane, not in the app
   (the app's refresh loop goes quiet exactly when nothing is decoding): the
-  lane asks for the real target once the user stops, and its idle cook
-  brings the cursor's full-res behind a stop at fit on a wide viewport
-  (raw-pipeline.md). The settle the user feels is ~250 ms —
+  lane asks for the real target once the user stops, asks for the settled
+  ring itself when the frame needed nothing (so nothing lands to refresh the
+  app), and its idle cook brings the cursor's full-res behind a stop at fit
+  on a wide viewport (raw-pipeline.md). The settle the user feels is ~250 ms —
   `SETTLE_DEBOUNCE` (150 ms) only decays `in_transit`, and both run from the
   same origin, so they do not add. The "◌ loading" pill follows the render
   ladder below: up at least while the rung on screen does not serve the
@@ -197,12 +198,14 @@ both loupe forms, never a reserved strip, so the image never reflows.
 
 **The pill never flickers** (brief 008, the pill rule: Manager M2 on the
 persona's redesign check, 2026-09-26): while travelling, the pill, once on,
-stays on for at least `CUE_MIN_ON` (250 ms), and it clears the moment a
-sharp frame is on screen after the key is released — a minimum on-time errs
-toward flagging a sharp frame, never toward hiding a soft one. Refused: "the
-pill never lights for a single frame", which would show a soft frame
-unflagged; the switch rule's clean steps (raw-pipeline.md) are what keep
-single soft frames rare.
+stays on until `CUE_MIN_ON` (250 ms) has passed since the last soft frame on
+screen, so soft and sharp frames alternating in a hold keep it lit rather
+than blinking (Manager ruling 2026-09-26, brief 008 Q-B); and it clears the
+moment a sharp frame is on screen after the key is released. A minimum
+on-time errs toward flagging a sharp frame, never toward hiding a soft one.
+Refused: "the pill never lights for a single frame", which would show a soft
+frame unflagged; the switch rule's clean steps (raw-pipeline.md) are what
+keep single soft frames rare.
 
 The whole block is core (`fastcull_core::transit`, 2026-08-11):
 `render_rung(&RungInputs) -> RenderDecision` — which rungs are in hand
@@ -364,7 +367,12 @@ adoption is UNBUDGETED so a stopped fling fills the viewport in one tick.
 Which queued kitchen jobs are culled is the kitchen's staleness rule
 (01-architecture.md); a landed thumb for a scrolled-away cell is adopted, a
 landed MID for an invisible cell is adopted then dropped by the visible-set
-retain. Ctrl+scroll zoom stays
+retain, except at the loupe, where a mid inside the rung ring's texture
+window (`LoupeEngine::texture_windows()`) is kept too: on a viewport the mid
+serves it is the frame's fit-box rung, which a hold at fit must find in hand
+as it finds the screen rung on a wide one — dropped, the fit cell would show
+the thumb, cued, until a re-wrap landed (Manager ruling 2026-09-26, brief
+008 Q-A). Ctrl+scroll zoom stays
 deferred: Slint's Flickable consumes wheel events and an overlay TouchArea
 would steal the drag and click gestures; `+`/`-` cover it.
 
@@ -1162,10 +1170,14 @@ renderer's source offsets are `Fixed<u16, 4>`.
       review-verified: no driven test reads the cue in a synthetic session.
       Open: lands with the app's fit cue.
 - [ ] **The pill never flickers** (Manager M2, 2026-09-26): core — while
-      travelling a lit pill stays on at least `CUE_MIN_ON`; it clears at once
-      on a sharp frame after the key is released; any soft frame lights it,
-      however brief — `the_cue_pill_keeps_its_minimum_while_travelling`.
-      Open: lands with the app's fit cue.
+      travelling a lit pill stays on until `CUE_MIN_ON` has passed since the
+      last soft frame, so a sharp frame shown inside that time keeps it lit
+      and one shown after it clears it — with a row where a second soft
+      frame restarts the minimum, red when it is counted from the lighting
+      (the reading brief 008 Q-B ruled); it clears at once on a sharp frame
+      after the key is released; any soft frame lights it, however brief —
+      `the_cue_pill_keeps_its_minimum_while_travelling`. Open: lands with
+      the app's fit cue.
 - [ ] **The texture rings hold their leaned windows** (brief 008): core — an
       entry inside the window is never evicted while one outside it is held,
       both leans; a symmetric window is the old distance rule exactly, which
@@ -1199,6 +1211,15 @@ renderer's source offsets are `Fixed<u16, 4>`.
       the latest-first pop restored, red on the kitchen's pop test;
       `next_fill` ignoring the lean, red on the core test's tie rows. Open:
       lands with the app's rung textures.
+- [ ] **A hold at fit on a viewport the mid serves keeps each frame's mid in
+      hand** (brief 008 Q-A): app, debug and release, the default window —
+      its fit box served by the mid — over a folder of 24, the three
+      fixtures cycled: after a rest that waited for the mid of each of the
+      fifteen frames ahead, a 15-key hold at 60 ms shows each frame's mid,
+      cue off, on its first `loupe fit` mark, never the thumb; red when the
+      loupe's mids are pruned to the visible set alone —
+      `a_held_arrow_at_fit_on_a_mid_served_viewport_keeps_each_mid_in_hand`.
+      Open: lands with the app's rung textures.
 - [ ] **A held arrow at fit on a 4K viewport stays at the rung** (brief 008
       A5): app, release, a 3840×2160 window over real A1 files linked on the
       RAWs' volume (test-harness.md) — the three fixtures cycled into a folder
@@ -1229,10 +1250,12 @@ renderer's source offsets are `Fixed<u16, 4>`.
       `FASTCULL_A5_REQUIRE_4K` (test-harness.md) turns the skip into a
       failure. The numbers for humans — frames at the rung, the p90 frame
       interval, the transit-state landings, the app's `VmHWM`, `Z` after a
-      stop, the 1:1 hold, and at 1:1 the delay from the hold's first key and
-      from a step-down to the first screen-rung adoption (the kitchen's
-      Full-before-Wrap order, 01-architecture.md) — go per seat in brief 008's
-      Outcome — `a_held_arrow_at_fit_on_4k_stays_at_the_rung_and_never_slows`.
+      stop, the 1:1 hold, and at 1:1 the delay from the hold's first key to
+      the first screen-rung adoption and from the first screen rung a member
+      ahead brought to the app during a hold to its adoption (the kitchen's
+      Full-before-Wrap order, 01-architecture.md) — go per seat in brief
+      008's Outcome —
+      `a_held_arrow_at_fit_on_4k_stays_at_the_rung_and_never_slows`.
       Open: lands with the driven test.
 - [ ] **The hold never slows** (brief 008 A6 and the redesign's G1): app,
       release, on A5's folder and window, at fit (A5's 400-key hold) and at
@@ -1305,7 +1328,14 @@ renderer's source offsets are `Fixed<u16, 4>`.
   home (01-architecture.md); the #46 box's `transit_at_zoom_stays_soft` is
   `transit_at_zoom_stays_soft_never_drops_to_fit`. The first cut of the unit —
   rings derived from a memory budget, 6 / 12 in transit and a 2 / 6 look-ahead
-  above fit — never reached `main` (brief 008's decisions log).
+  above fit — never reached `main` (brief 008's decisions log). Ruled the same
+  day on the plan's questions: at the loupe the mids inside the rung ring's
+  window are kept, so a 1080p hold at fit finds them (Q-A); the pill's
+  minimum counts from the last soft frame (Q-B); SETTLED-AND-IDLE comes at
+  once when the stopped-on frame needed nothing (Q-I, raw-pipeline.md); and
+  A5's 1:1 delay is measured on the kitchen leg the marks can see — it read
+  "from a step-down to the first screen-rung adoption", an instant no mark
+  records, since core decides the step-down and traces nothing (Q-L).
 - 2026-09-17 — Rewritten (brief 007); the harness section moved to
   test-harness.md; the manual acceptance retired (the user). One stale
   sentence — that the dialog answer rows report no rectangle — was dropped

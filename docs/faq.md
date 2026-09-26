@@ -60,22 +60,30 @@ rebuilds thumbnails on the next open. After some upgrades the app
 rebuilds it once by itself; the only cost is a slower first open.
 
 **How much memory does FastCull use, and can I change it?**
-About a quarter of your computer's memory for decoded photos — never less
-than 2 GB, never more than 10 GB — plus the frames on screen and the
-decoders' working space. That memory is what keeps the frames ahead of you
-and the ones you've recently passed ready — at full quality when you're at
-1:1 — so stepping forward and back is usually instant. In the worst case —
-a long session at 1:1 — the whole app can reach, as your system monitor
-counts it, 6 GB or more on an 8 GB machine, about 8 to 12 GB on a 16 GB
-one, 12 to 16 GB on a 32 GB one and 14 to 18 GB on a 64 GB one: the more
-processor cores, the higher, because every core decodes in parallel and
-needs working space. At fit it uses a good deal less, and
-thumbnails add about 200 MB per thousand photos. (This is memory, not the
-cache folder on disk described above.) FastCull decides it once, when it
-starts, from your machine's total memory and processor cores, and prints
-what it chose in the terminal if you start it from one. There is no
-setting for it. It does not shrink while it runs yet, so on a machine with
-16 GB or less, close other big programs before a long session at 1:1.
+About a quarter of your computer's memory for decoded photos — never
+less than 2 GB, never more than 10 GB — plus the frames on screen and
+the decoders' working space. That memory is what keeps the frames ahead
+of you and the ones you've recently passed ready — at full quality when
+you're at 1:1 — so stepping forward and back is usually instant. In the
+worst case — a long session at 1:1 — the whole app can reach, as your
+system monitor counts it, about 5 GB on an 8 GB machine, 8 to 9 GB on a
+16 GB one, 12 to 16 GB on a 32 GB one and 14 to 18 GB on a 64 GB one:
+the more processor cores, the higher, because every core decodes in
+parallel and needs working space. On a machine with 12 GB or more it
+keeps that worst case under 60 % of the memory — it runs no more
+decoders than one per 2 GB of memory, and on a machine under about 20 GB
+it reads fewer frames ahead at full quality (three on an 8 GB machine,
+about ten on a 16 GB one, fifteen above that). On an 8 GB machine the
+worst case is about 60 % of the memory, and more the less of it your
+system reports as usable (a processor with built-in graphics can keep a
+gigabyte or more for itself). At fit it uses a good deal less, and
+thumbnails add about 200 MB per thousand photos. (This is memory, not
+the cache folder on disk described above.) FastCull decides it once,
+when it starts, from your machine's total memory and processor cores,
+and prints what it chose in the terminal if you start it from one. There
+is no setting for it. It does not shrink while it runs yet, so on a
+machine with 16 GB or less, close other big programs before a long
+session at 1:1.
 
 **Thumbnails load slowly from my NAS / slow card.**
 Set `FASTCULL_MAX_READERS=4` (or 2) in the environment. It caps how
@@ -90,10 +98,15 @@ truncated file is flagged honestly instead of being shown as a
 half-blank frame (and a corrupt file claiming absurd dimensions is
 rejected outright instead of eating gigabytes of memory). Your original
 file is never touched — try re-copying it from the card; if the badge
-persists, the file really is damaged. One exception: if the grid thumbnail
-shows the photo but the loupe says Failed, the file may be fine — the
-loupe's decoder refuses a JPEG it has any complaint about, even a harmless
-one, and the project would like to hear about it.
+persists, the file really is damaged. One exception: if the grid
+thumbnail shows the photo but the loupe says Failed, the file may be
+fine — the loupe's decoder refuses a JPEG it has any complaint about,
+even a harmless one, and the project would like to hear about it. A RAW
+whose full-size preview is damaged shows no badge at all: the loupe keeps
+the smaller preview, so at 1:1 — and at fit on a large screen (1440p or
+more) — that one frame stays soft under the "◌ loading" pill however long
+you wait, and FastCull prints a line naming the file in the terminal, if
+you started it from one.
 
 **Something misbehaves — what should I attach to a bug report?**
 Run with `FASTCULL_TRACE=1` from a terminal and attach the output: it

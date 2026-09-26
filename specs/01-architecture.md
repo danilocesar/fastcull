@@ -44,7 +44,7 @@ terminal tool. CI asserts both PE subsystem fields on every Windows build
 | exif | `exif.rs` | `ExifSummary` and the capture-time sort key, read through the walker | raw-pipeline |
 | pipeline | `pipeline.rs` | priority thread pool: visible > prefetch > background | raw-pipeline |
 | loupe | `loupe.rs` | the loupe engine: one decode worker per physical core, one of them the focus-reserved lane; the rung ladder — mid, screen rung, full-res — decoded by libjpeg-turbo (ADR 0005; CMYK and YCCK streams by zune-jpeg); the one ring and the switch rule above fit; the pixel cache (the byte-budget LRU) | raw-pipeline (ladder, ring and what it asks, decoders, memory), ui-grid (the request states) |
-| budget | `budget.rs` | the machine-derived loupe sizes: the pixel cache from total RAM, the decoder count from physical cores and `FASTCULL_DECODERS`, the startup line; the Windows total-RAM probe, core's one `unsafe` block | raw-pipeline |
+| budget | `budget.rs` | the machine-derived loupe sizes: the pixel cache from total RAM, the decoder count from physical cores, total RAM and `FASTCULL_DECODERS`, the startup line; the Windows total-RAM probe, core's one `unsafe` block | raw-pipeline |
 | viewassets | `viewassets.rs` | which rung the UI holds per grid cell; adopts engine-cached rungs that emit no event | raw-pipeline |
 | transit | `transit.rs` | loupe render ladder (the cue at fit and the pill's minimum on-time included) + the eviction of the app's two texture rings by the engine's leaned windows, as pure decision functions | ui-grid |
 | zoompan | `zoompan.rs` | the ×1.5 zoom ladder and pan-anchor math | ui-grid |
@@ -159,14 +159,19 @@ Enforced by `crates/fastcull-core/tests/perf_budgets.rs` — release-mode
 tests, one per row, run in every local gate round **on an idle development
 machine**: that is the machine class the thresholds bind on (issue #27,
 2026-08-02). They are wall-clock numbers, so a loaded or hot machine fails
-them without any regression existing (the full-res row measured green with
-2 of 8 logical CPUs busy and red with 4, and red straight after a long
-release build) — a red under load is a measurement, not a verdict; re-run
-idle before treating it as a failing change. The CI step is advisory
+them without any regression existing (the full-res row measured green with 2
+of 8 logical CPUs busy and red with 4, and red straight after a long release
+build) — a red under load is a measurement, not a verdict; re-run idle
+before treating it as a failing change. The CI step is advisory
 (`continue-on-error`, user decision 2026-07-25: shared virtualized runners
-cannot gate wall clocks). Skipped in debug builds, where the workspace
-crates' own code — the rotate kernel, the pipeline, the kitchen fills —
-runs at opt-level 0 even though dependencies compile optimised since
+cannot gate wall clocks), and it runs with `--nocapture`, so every row's
+`BUDGET-MEDIAN` line reaches both jobs' logs, green or red: the step never
+fails its job, so its numbers are read from the log or not at all — brief
+008's unoptimised Windows decoder (Native dependencies, below) showed first
+as red rows inside a green job (Manager ruling 2026-09-26, brief 008;
+senior-developer review 2026-09-26, F1). Skipped in debug builds, where the
+workspace crates' own code — the rotate kernel, the pipeline, the kitchen
+fills — runs at opt-level 0 even though dependencies compile optimised since
 2026-09-05 ("Build profiles" below). Criterion benches in
 `crates/fastcull-core/benches/hot_path.rs` (`cargo bench -p fastcull-core`)
 give the numbers for humans.
@@ -280,8 +285,12 @@ library, built by the `cmake` crate at the CMake profile cargo's opt-level
 implies (opt-level 0 → `Debug`, 1–3 with debug info → `RelWithDebInfo`,
 without → `Release`; `turbojpeg-sys` sets none of its own), so under this
 line the dev profile builds it `RelWithDebInfo` and without the line it
-would be a `-O0` build: the line is what keeps the loupe's debug decode
-optimised (Native dependencies, below).
+would be a `Debug` build at `-O0`: the line keeps the loupe's debug decode
+optimised — on the MSVC target only because that target names its CMake
+generator, without which the crate strips every `/O` flag and MSVC compiles
+the library unoptimised in every profile, release included (Native
+dependencies, below; corrected 2026-09-26, senior-developer review F1: this
+said the line alone kept the decode optimised).
 
 What it costs: a cold debug build compiles every dependency optimised once
 — 4-4.7× the stock cold build on the development seat (2 m 17 s → 10 m 43 s
@@ -374,19 +383,54 @@ rung).
   `cmake` crate drives the vendored libjpeg-turbo's own build, NASM
   assembles its SIMD kernels — or, on Linux, a system libjpeg-turbo 3.0 or
   newer found through `pkg-config` (`TURBOJPEG_SOURCE=pkg-config`; Fedora
-  44 ships 3.1.3, Ubuntu 24.04's 2.1.x is too old). The default is the
-  vendored sources, built and linked statically on both targets; README's
-  build block and `docs/index.md` name the requirement, and ADR 0002's
-  "contributors need only rustup" is narrowed by it.
+  44 ships 3.1.3, Ubuntu 24.04's 2.1.x is too old). A Windows seat also
+  needs Visual Studio 2022, whose CMake generator the MSVC target names
+  (below). The default is the vendored sources, built and linked statically
+  on both targets; README's build block and `docs/index.md` name the
+  requirement, and ADR 0002's "contributors need only rustup" is narrowed
+  by it.
 - **Without NASM the build FAILS**: `require-simd` passes
   `-DREQUIRE_SIMD=ON`, and libjpeg-turbo's `simd/CMakeLists.txt` then
   raises a CMake `FATAL_ERROR` instead of falling back to a C-only
   library. Deliberate: a SIMD-less decoder is 1.95× slower at full size
   and would break every promise of the loupe silently. The runtime half of
   the guard is the landscape full-res perf row above.
-- **The C library follows cargo's opt-level** through the `cmake` crate
-  (Build profiles, above): the #76 line is what keeps it optimised in
-  debug.
+- **The C library follows cargo's opt-level — on MSVC only because the
+  target names its CMake generator** (Manager ruling 2026-09-26, brief 008;
+  senior-developer review 2026-09-26, F1). The `cmake` crate maps cargo's
+  opt-level to a CMake profile (Build profiles, above), and where it leaves
+  CMake's own flags for that profile alone — on Linux, and on MSVC once a
+  generator is named — the #76 line keeps the library optimised in debug and
+  a release build is CMake's `Release`. When the crate picks the Visual
+  Studio generator itself, on the MSVC target, it sets the C flags of the
+  configuration it builds — `CMAKE_C_FLAGS_<BUILD_TYPE>`, the other
+  configurations keeping CMake's defaults — to the `cc` crate's, each `/O`
+  flag stripped (cmake 0.1.58, `src/lib.rs` 722-766), and MSVC compiles
+  libjpeg-turbo at its default, unoptimised, in every profile, release
+  included. So a workspace `.cargo/config.toml` names the generator in its
+  `[env]` table, which cargo hands to every build script run inside the
+  checkout, the release workflow's included:
+  `CMAKE_GENERATOR_x86_64_pc_windows_msvc = "Visual Studio 17 2022"`, a name
+  the crate reads for that target only. Setting `CFLAGS=/O2` instead would
+  do nothing: the same stripping drops it. A seat without Visual Studio 2022
+  fails the configure loudly, never silently unoptimised, unless it sets
+  `CMAKE_GENERATOR_x86_64_pc_windows_msvc` itself — `[env]` never overrides
+  a variable the environment already holds, while a plain `CMAKE_GENERATOR`
+  does not win over it, the crate reading the target's own name first; the
+  line moves when the runner images move to a newer Visual Studio. The file
+  is part of rust-cache's key (The CI cache key, above), so landing or
+  editing it costs one cold pair of CI jobs. The check: "Verify Windows
+  artifact" reads each `turbojpeg-sys` build's `CMakeCache.txt` and its
+  build output and fails, printing the lines, unless the flags of the
+  configuration the cache's `CMAKE_BUILD_TYPE` names carry `/O2` and the
+  output says `WITH_SIMD = 1` — for the release build
+  `CMAKE_C_FLAGS_RELEASE`, while `[profile.release]` carries no debug info:
+  with debug info the crate builds `RelWithDebInfo` and overrides that
+  configuration's flags, while `CMAKE_C_FLAGS_RELEASE` keeps CMake's default
+  `/O2`, so a check reading it would pass an unoptimised library. (Corrected
+  2026-09-26: this bullet read "the #76 line is what keeps it optimised in
+  debug" and said nothing of MSVC, where the first Windows artifact of brief
+  008 carried the library unoptimised.)
 - **CI** installs `nasm` on both jobs — `apt-get` on ubuntu, `choco install
   nasm` on Windows, which CMake finds in `C:\Program Files\NASM` without a
   PATH step — and `cmake` is on both runner images; both jobs build the
@@ -423,24 +467,36 @@ rung).
   have SIMD only at 4×4 and 2×2, so the 3/8 rung runs a C 3×3 IDCT; a
   lossless stream cannot be DCT-scaled; CMYK and YCCK are refused for RGB
   output ("Unsupported color conversion request"), which is why those
-  streams go through zune-jpeg; and the `cmake` crate's opt-level → CMake
-  profile mapping.
+  streams go through zune-jpeg; `TJPARAM_SCANLIMIT` defaults to no limit,
+  which is why the loupe sets 100, zune-jpeg 0.4's own default; the `cmake`
+  crate's opt-level → CMake profile mapping; and that crate's override of
+  the C flags of the configuration it builds, `/O` stripped, when it picks
+  the MSVC generator itself — why the MSVC target names one
+  (senior-developer review 2026-09-26, F1).
 - **No upstream contribution** (hard rule 2): the crates are used as
   published; a patch, if ever needed, stays in-tree.
 
 Acceptance (brief 008; each box is ticked by the commit or run that
 carries its evidence):
-- [ ] CI green on both runners with the C dependency (brief 008 A10): both
-      checks green on the PR; the Windows job builds libjpeg-turbo from source
-      with cmake and nasm, and its artifact passes the `VCRUNTIME140`,
-      subsystem and no-`turbojpeg.dll`-import checks and runs
-      `fastcull-cli.exe --version`; the ubuntu job installs nasm and builds
-      from source. Review-verified: the import check's red (no local seat
-      builds a dynamic MSVC binary) and the release job's nasm (no PR run
-      builds release artifacts; the first release after brief 008 is its
-      proof). The user's test of that artifact on the desktop with real
-      folders precedes any release (user decision 2026-09-26). Open: ticked
-      with the run id.
+- [ ] CI green on both runners with the C dependency, libjpeg-turbo compiled
+      optimised on both targets (brief 008 A10): both checks green on the
+      PR; the Windows job builds libjpeg-turbo from source with cmake and
+      nasm, and its artifact passes the `VCRUNTIME140`, subsystem and
+      no-`turbojpeg.dll`-import checks and runs `fastcull-cli.exe
+      --version`; the library is compiled optimised on both targets — on
+      Windows by the CMake-cache check in the verify step, seen red on the
+      runner one commit ahead of the generator's fix (Manager ruling
+      2026-09-26), and on Linux review-verified, the `cmake` crate
+      overriding no configuration's flags there; the ubuntu job installs
+      nasm and builds from source. Review-verified: the import check's red
+      (no local seat builds a dynamic MSVC binary) and the release job's
+      nasm (no PR run builds release artifacts; the first release after
+      brief 008 is its proof). The user's test of that artifact on the
+      desktop with real folders precedes any release (user decision
+      2026-09-26). Open: ticked with the run id. (Changed 2026-09-26,
+      senior-developer review F1: the box asked only for green checks and a
+      running artifact, which brief 008's first run met with the library
+      compiled unoptimised on Windows.)
 - [ ] The licence file carries libjpeg-turbo's notices (brief 008 A15):
       `turbojpeg-sys` listed under the IJG, BSD-3-Clause and zlib licences
       with their notice texts; red on a file regenerated after the

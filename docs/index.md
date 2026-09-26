@@ -34,7 +34,10 @@ The [README](../README.md) has the commands. Two things a plain Rust
 toolchain does not bring: the loupe's JPEG decoder is libjpeg-turbo, a C
 library built from source when you `cargo build`, so you need **cmake** and
 **nasm** installed (on Linux a system libjpeg-turbo 3.0 or newer can be used
-instead, with `TURBOJPEG_SOURCE=pkg-config` set when you build); and the
+instead, with `TURBOJPEG_SOURCE=pkg-config` set when you build; on Windows
+the build asks for **Visual Studio 2022**'s compiler by name, so a machine
+with only a newer Visual Studio stops with an error until you set
+`CMAKE_GENERATOR_x86_64_pc_windows_msvc` to its generator); and the
 Slint GUI needs the desktop's development packages (fontconfig,
 libxkbcommon, wayland, mesa). A machine without nasm fails the build on
 purpose, rather than producing a decoder half as fast.

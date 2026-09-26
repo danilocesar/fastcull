@@ -227,15 +227,15 @@ stop. On a 1080p or similar screen nothing changes — the preview was
 already sharp at that size.
 
 **At 1:1, the frames ahead are full quality.** Stop or tap, and the frames
-ahead of you — fifteen of them on any machine with more than about 10 GB of
-memory, eleven on an 8 GB one — are decoded at full resolution, so a tap
-forward lands on a sharp frame. Hold, and full-resolution frames keep
-coming for as long as they can be ready before you reach them. When they
-can't, the hold steps down once to the screen-size version, marked with the
-pill, and steps back up when the decoders have caught up; if it would have
-to step down again soon after, it stays on the screen-size version until
-you stop rather than flicker between the two. How long a hold at 1:1 stays
-sharp depends on the machine.
+ahead of you — fifteen of them on any machine with more than about 20 GB of
+memory, about ten on a 16 GB one and three on an 8 GB one — are decoded at
+full resolution, so a tap forward lands on a sharp frame. Hold, and
+full-resolution frames keep coming for as long as they can be ready before
+you reach them. When they can't, the hold steps down once to the
+screen-size version, marked with the pill, and steps back up when the
+decoders have caught up; if it would have to step down again soon after, it
+stays on the screen-size version until you stop rather than flicker between
+the two. How long a hold at 1:1 stays sharp depends on the machine.
 
 **Stop, and it sharpens.** At fit on a big screen the frame you land on is
 usually already at screen size — whenever the decoders kept ahead of you —

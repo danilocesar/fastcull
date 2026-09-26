@@ -2,7 +2,7 @@
 
 **Status**: accepted (2026-07-24, user decision); narrowed by ADR 0005
 (2026-09-26): contributors need rustup, cmake and nasm — or a system
-libjpeg-turbo ≥ 3.0 on Linux
+libjpeg-turbo ≥ 3.0 on Linux — and on Windows Visual Studio 2022
 
 ## Context
 
@@ -31,4 +31,6 @@ Rust+Slint, Rust+Tauri/React, C++/Qt6.
   GridView) — flagged as the M2 prototype risk in ui-grid spec.
 - Contributors need only rustup; CI is a 2-OS cargo matrix. (Narrowed by
   ADR 0005, 2026-09-26: cmake and nasm too — or a system libjpeg-turbo
-  ≥ 3.0 on Linux; the CI matrix is unchanged.)
+  ≥ 3.0 on Linux — and on Windows Visual Studio 2022, whose CMake generator
+  the MSVC target names (senior-developer review 2026-09-26, F1); the CI
+  matrix is unchanged.)

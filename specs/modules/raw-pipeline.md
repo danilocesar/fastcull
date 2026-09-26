@@ -152,6 +152,18 @@ rest BACKLOG workers.
   revisited if the user ever culls on a rotated screen). On viewports the mid
   serves there is no idle cook; extending it there is a follow-up if the user
   asks — one background decode per stop (Manager, M2 2026-09-26).
+- **The settled ring after a hold** (Manager ruling 2026-09-26, brief 008
+  Q-I): the ring's settled requests are asked by the app's next focus, and
+  the app refreshes when something lands; when the user stops on a frame whose
+  real target is already in hand nothing lands, so the reserved lane — at the
+  same settle, finding nothing to climb — asks for the settled ring itself,
+  once per settle, and not at all when a settled focus of the app's own has
+  already asked it, for an engine with a fit box; an engine without one
+  keeps the behaviour before brief 008. When the focused frame does need its
+  climb, the lane asks no ring: the climb's landing refreshes the app, whose
+  settled focus asks it — SETTLED, then SETTLED-AND-IDLE (ui-grid.md).
+  Without this a tap forward right after a hold at 1:1 would land soft
+  whenever the hold ended on a frame already sharp.
 - The reserved lane's flights ABANDON at rung boundaries when their index is
   no longer the focus; backlog flights are uninterruptible (a whole ladder in
   one flight — their neighbours are legitimate prefetch). The lane checks only
@@ -223,8 +235,8 @@ output serves the loupe's fit box under the 1.25 rule (brief 008).
   bare JPEG (issue #8, one candidate = the whole file) gets a rung by the same
   rule, and only its full-scale decode is `terminal`. A lossless stream, which
   libjpeg-turbo cannot scale, decodes full-scale with no rung (developer
-  2026-09-26, brief 008 step 1; review-verified), and so does a CMYK or YCCK
-  stream (Manager ruling 2026-09-26, brief 008 R14).
+  2026-09-26, brief 008 step 1), and so does a CMYK or YCCK stream (Manager
+  ruling 2026-09-26, brief 008 R14).
 - **The factor follows the viewport**, never a constant: a resize, a panel
   toggle or a move to another display re-keys the box at the next refresh; a
   cached rung that no longer serves the new box is re-requested at the new
@@ -249,18 +261,26 @@ and doubles the per-frame latency (brief 008's benchmark) — with a floor of 3
 16: the ring holds 18 frames, so more than 18 decoders could never all be
 busy, and sixteen is the core count of the one culling machine whose CPU is
 known, the Ryzen AI Max+ 395; a larger machine only waits a second round of
-decodes for the ring's last frames. The count comes from
+decodes for the ring's last frames. The machine's RAM caps them too, at half
+its total RAM in GiB rounded down — `⌊total ÷ 2 GiB⌋` of the total "Memory"
+reads, so a 16-core machine that reports 31.x GiB, as a 32 GB one does, runs
+15 — though never below the floor of 3: each decoder holds up to two decoded
+full-res frames and the JPEG it reads at once, and the cap stops the whole-app
+worst case ("Memory", below) from growing with the cores where the RAM is
+small (Manager rulings 2026-09-26, brief 008 Q4 and Q-D). The count comes from
 `num_cpus::get_physical` — on Linux `/proc/cpuinfo`'s `cpu cores` summed per
 `physical id`, on Windows `GetLogicalProcessorInformation`'s
 `RelationProcessorCore` entries, and on both the logical count when the
 topology is unreadable — and the rule reads a zero or missing count as 4
 (Manager rulings 2026-09-26). `FASTCULL_DECODERS=N` replaces the count, in the
 mould of `FASTCULL_MAX_READERS`: a testing and diagnosis switch, an
-environment variable so a release build honours it, taken as given above the
-cap and below the floor down to 2 — one backlog worker beside the reserved
-lane, the least that still reads ahead, so 1 reads as 2 — and ignored, with a
-stderr line naming it, when it is not a positive integer (Manager ruling 2026-09-26, brief 008 R5). The persona's "cores − 1, never all cores" is recorded;
-ui-grid.md A5's p90 frame interval is where the jitter it feared would show.
+environment variable so a release build honours it, taken as given above
+either cap and below the floor down to 2 — one backlog worker beside the
+reserved lane, the least that still reads ahead, so 1 reads as 2 — and
+ignored, with a stderr line naming it, when it is not a positive integer
+(Manager ruling 2026-09-26, brief 008 R5). The persona's "cores − 1, never all
+cores" is recorded; ui-grid.md A5's p90 frame interval is where the jitter it
+feared would show.
 
 ### The ring (user decision 2026-09-26)
 
@@ -346,15 +366,22 @@ ui-grid.md A5's p90 frame interval is where the jitter it feared would show.
 ### Above fit: the full-res ring and the switch rule (user decision 2026-09-26; the switch rule is the persona's, adopted by the Manager, M2)
 
 - **Above fit the ring in force is the FULL-RES ring**, clamped at its far
-  end so that its frames fit in the pixel cache: the cursor and the two
-  behind always, then as many of the fifteen ahead as `⌊cache ÷
-  149,299,200⌋` frames in all (the reference A1 frame, 8640 × 5760 × 3
-  bytes) leaves room for — the whole ring on a cache of 18 frames or more
-  (2,687,385,600 B, just over 2.5 GiB: a machine with just over 10 GiB of
-  RAM), 11 ahead at the 2 GiB floor (brief 008, the redesign's G2). A ring
-  the cache cannot hold would be decoded and then evicted. The positions
-  beyond the clamp are outside the ring in force: they ask for nothing,
-  settled and during a hold alike, and the cull drops what they had queued.
+  end so that the pixel cache's figure holds its frames twice over — each
+  frame's decoded pixels in the cache and its texture copy outside it — and
+  the kitchen's fill in flight besides: the cursor and the two behind
+  always, then as many of the fifteen ahead as `⌊(cache − 149,299,200) ÷
+  (2 × 149,299,200)⌋` frames in all (149,299,200 B is the reference A1
+  frame, 8640 × 5760 × 3 bytes) leaves room for, the far end first — the
+  whole ring on a cache of 37 frames or more (5,524,070,400 B, about
+  5.1 GiB: a machine with about 20.6 GiB of RAM), 10 ahead on a 4 GiB
+  cache, 3 at the 2 GiB floor (brief 008, the redesign's G2; the texture
+  copies counted, Manager ruling 2026-09-26, brief 008 Q4; the fill
+  counted, Manager ruling 2026-09-26, brief 008 Q-G). A ring the cache
+  cannot hold would be decoded and then evicted, and one whose textures
+  the RAM cannot hold would take the whole app past it (Memory). The
+  positions beyond the clamp are outside the ring in force: they ask for
+  nothing, settled and during a hold alike, and the cull drops what they
+  had queued.
 - **Settled and tapping**, the whole full-res ring asks for full-res and the
   focused frame for the top rung (the table, The ring), so a tap forward at
   1:1 lands on a sharp frame once the ring has filled.
@@ -380,27 +407,38 @@ ui-grid.md A5's p90 frame interval is where the jitter it feared would show.
      to reach that member — its distance ahead at that moment, in view
      positions counted from 1 (the first member ahead), × the hold's key
      period, the interval between the last two index changes — with the
-     full-res TIME-TO-SCREEN: for the latest full-res frame the engine decoded
-     and the app then adopted, the time from that decode's start to the app's
-     report (`note_adopted`), the moment the frame is ready to draw; a
-     re-adoption of an already-cached frame measures nothing. When the cursor
-     would arrive first, that member and every member beyond it ask for the
-     fit box — one boundary, in view positions, set before any of their
-     full-res decodes starts, so the frames the cursor meets step from
-     full-res to the fit-box rung once and never dip through a mid or a thumb
-     that the switch caused. A full-res entry still queued at or beyond the
-     boundary becomes a fit-box entry, or is dropped when that rung is already
-     in hand; one already in flight lands.
+     full-res TIME-TO-SCREEN: for the latest full-res decode whose fill the
+     app reports complete, the time from that decode's start to the app's
+     report (`note_adopted`), the moment the frame is ready to draw — whether
+     the app's ring then held the texture or it was at once that ring's
+     victim, since either way it was ready to draw; a re-adoption of an
+     already-cached frame measures nothing, nor does a decode whose fill the
+     app culled (`note_dropped`); and a measurement exists only while the
+     engine has a fit box — a decode started without one starts none, and
+     the box going ends every open one unmeasured (Manager ruling
+     2026-09-26, brief 008 Q-K). When the cursor would arrive first, that
+     member and every member beyond it ask for the fit box — one boundary,
+     in view positions, set before any of their full-res decodes starts, so
+     the frames the cursor meets step from full-res to the fit-box rung once
+     and never dip through a mid or a thumb that the switch caused. A
+     full-res entry still queued at or beyond the boundary becomes a fit-box
+     entry, or is dropped when that rung is already in hand; one already in
+     flight lands.
   2. **Step up only from a complete ring with a free decoder.** At a focus,
      before it schedules anything: when every member ahead but the farthest —
      the newest, which a hold keeps renewing — holds its fit-box rung or
-     better, no ring work waits in the queue and a backlog worker is free, the
-     members from the first position beyond the ring's far end onward ask for
-     full-res again — one boundary, a ring's length ahead of the cursor, so
-     the full-res frames come back in one step. The persona's "the decoders
-     are idle" is read as spare capacity: a decode is in flight at nearly
-     every instant of a hold, so a rule that waited for none would never step
-     up.
+     better or has its decode in flight, no ring work waits in the queue and
+     a backlog worker is free, the members from the first position beyond
+     the ring's far end onward ask for full-res again — one boundary, a
+     ring's length ahead of the cursor, so the full-res frames come back in
+     one step. The persona's "the rung ring ahead is complete" is read as
+     nothing of it still waiting to start: during a fast hold the members
+     nearest the far end entered the ring a key period or two before, and a
+     rung decode takes several key periods, so a rule that waited for their
+     rungs to land could never step up on a wide viewport (Manager ruling
+     2026-09-26, brief 008 Q-H). Its "the decoders are idle" is read as
+     spare capacity: a decode is in flight at nearly every instant of a
+     hold, so a rule that waited for none would never step up.
   3. **No pumping.** When a step-down's boundary falls less than one ring
      (`RING_AHEAD` frames) beyond the last step-up's boundary, the hold stays
      on the fit-box rung until it ends — a stop, or keys slower than four a
@@ -408,11 +446,14 @@ ui-grid.md A5's p90 frame interval is where the jitter it feared would show.
 
   A reversal starts the rule afresh. The focused frame's own work outranks
   every ring member's, as everywhere. The rule's binding form — distances
-  counted from 1, the time-to-screen ending at `note_adopted`, "idle" read as
-  spare capacity, the lock counted between boundaries in view positions, the
-  positions beyond the cache's clamp asking for nothing, the focused frame
-  and the members behind asking for the fit box during a hold, re-planned
-  whatever the cache holds — is the senior developer's, agreed by the Manager (brief 008, 2026-09-26).
+  counted from 1, the time-to-screen ending at `note_adopted` whether the
+  ring held the texture or not and never measured for a culled fill or
+  without a box, "complete" read as nothing of the ring waiting to start,
+  "idle" read as spare capacity, the lock counted between boundaries in view
+  positions, the positions beyond the cache's clamp asking for nothing, the
+  focused frame and the members behind asking for the fit box during a hold,
+  re-planned whatever the cache holds — is the senior developer's, agreed by
+  the Manager (brief 008, 2026-09-26; its Q-H and Q-K the same day).
 - **Keeping up is measured when the frame is ready to draw** (brief 008, the
   redesign's G1): the time-to-screen includes the kitchen's 149 MB copy and
   the UI thread's adoption, so a kitchen that cannot fill a full-res frame
@@ -430,12 +471,19 @@ ui-grid.md A5's p90 frame interval is where the jitter it feared would show.
   up. The user's Windows test of the CI build is the only check on it (brief
   008); the lever if it bites is the 1:1 crop upload (issue #60 part 4), never
   a slower hold.
-- Before any full-res frame has been adopted in the session the
+- Before the session's first full-res fill completes at the loupe the
   time-to-screen is unknown, and the members ask for full-res: a hold at
   1:1 entered before that commits the full-res decodes the backlog workers
-  start until the first adoption — about one per worker — before the rule
-  can judge them, and the frames the cursor meets meanwhile show the best
-  rung in hand, cued — the residual, accepted.
+  start until then — one or two per worker, since that fill completes a
+  kitchen job after the first decode lands and the workers start their
+  second decodes at that landing — before the rule can judge them, and the
+  frames the cursor meets meanwhile show the best rung in hand, cued — the
+  residual, accepted. A fill the app culls because the cursor has passed its
+  frame measures nothing, so on a machine whose kitchen, not its decoders,
+  falls behind, the rule learns the delay from the fills that were cooked,
+  later than it would from every fill; and a report for an older fill of an
+  index can end a newer decode's measurement of it — one measurement lost or
+  taken early, never a stale one (Manager ruling 2026-09-26, brief 008 Q-K).
 
 ### Orientation (user requirement 2026-07-25)
 
@@ -540,11 +588,18 @@ before allocation:
   pixel cap; the loupe uses the safe `Decompressor` as published (Manager
   ruling 2026-09-26). The scope, by design ("warnings are errors on the
   decode", brief 008 R2): a stream whose only warning is benign — another
-  body's `JWRN_EXTRANEOUS_DATA`-class warning — is a `Failed` badge in the
-  loupe while its zune-jpeg thumb shows; the A1's streams are warning-free. If
-  a real file ever shows that badge, the narrowing is that the two truncation
-  messages stay `Failed` and a benign warning uses the buffer the library
-  completed — a sentence here first, then the code and its test.
+  body's `JWRN_EXTRANEOUS_DATA`-class warning — fails on the loupe path; the
+  A1's streams are warning-free. Two symptoms follow. A bare JPEG, whose
+  stream is its only rung, shows the `Failed` badge in the loupe, and its
+  zune-jpeg thumb shows only where zune tolerates the same fault — its strict
+  mode refuses bytes between two header markers as libjpeg-turbo does. A RAW
+  whose mid decodes but whose full JPEG carries the warning shows no badge:
+  its full-res fails, and so does its screen rung, a scaled decode of the
+  same stream, so the frame stays on its mid for the session — at 1:1, and
+  at fit on a wide viewport — cued, and its one sign is the stderr line of a
+  rung that fails over a good lower one (below; brief 008, the step-1
+  review, Manager ruling 2026-09-26).
+  (PENDING brief 008, other cameras: ruled 2026-09-26 into step 2 — a benign warning uses the buffer the library completed and prints one stderr line, and the truncation class stays fatal — so this scope, its two symptoms and docs/faq.md's Failed-badge answer are rewritten by the spec pass that precedes step 2's code.)
 - **The scaled decode refuses a numerator outside 1..=8**: 9/8 and above would
   UPSCALE, which no rung may do (developer 2026-09-26, brief 008 step 1).
 - **Residual, accepted — on the zune-jpeg paths only** (the grid thumb, and
@@ -557,10 +612,30 @@ before allocation:
   stream can pass the byte check. Both are bounded blank successes, never a
   giant allocation. (0.5.15's strict mode rejects the plain no-EOI truncation
   but not these, and is the regression "The decoder", above, keeps out.)
+- **Progressive scans: at most 100** (brief 008 R2; Manager ruling
+  2026-09-26): the loupe's libjpeg-turbo decode sets
+  `Decompressor::set_scan_limit(100)`, the bound zune-jpeg 0.4's default
+  gave the whole loupe path before brief 008 and still gives the grid thumb
+  and the loupe's CMYK and YCCK route — each scan of a progressive stream is
+  a pass over every block of the components it covers, so a small crafted
+  stream with thousands of scans would hold a decoder far longer than any
+  real file (the exploit libjpeg-turbo documents for `TJPARAM_SCANLIMIT`,
+  whose default is no limit). A stream over the limit is `Failed` with the
+  library's message. A crafted stream reaches the loupe as a bare JPEG
+  (issue #8) or inside a crafted RAW; the A1's embedded JPEGs are baseline,
+  one scan each.
 
 All rejections flow through the existing `LoupeEvent::Failed` /
 `SessionEvent::Failed`, so the UI shows the Failed badge (ui-grid.md) and
-subsequent jobs are unaffected.
+subsequent jobs are unaffected — except a HIGHER rung's: a rung that fails
+while the frame has a good lower rung, decoded in the same flight or already
+cached, fails nothing. The ladder keeps the lower rung and memoizes it as the
+highest rung it climbs for that file this session, so it never retries — an
+engine-internal memo, never published as `terminal`, so the frame stays cued
+wherever that rung does not serve — and prints one line on stderr, the
+diagnostics channel, naming the file, the rung that failed and the decoder's
+reason, so a fault that shows no badge is still seen (brief 008, the step-1
+review; Manager ruling 2026-09-26).
 
 ### The adaptive read pool (user requirement 2026-07-25)
 
@@ -665,7 +740,10 @@ medium's measured behaviour:
   ruling 2026-09-26; `sysinfo` refused, a large dependency on every seat for
   one number) — not the free figure, and it is read once, at startup: the
   cache never changes during a session. An unreadable, zero or absurd (over
-  16 TiB) total means 2 GiB, said once on stderr. There is no setting and no
+  16 TiB) total is read as 8 GiB, the machine the 2 GiB floor already
+  assumes — the cache's floor, and 4 decoders under the RAM cap (The decode
+  workers) — said once on stderr (Manager ruling 2026-09-26, brief 008 Q-C).
+  There is no setting and no
   override (#39 parked; the persona: "a toggle you can't see in the UI is
   worse than none" — if a setting ever ships it is ONE number, the memory
   FastCull may use).
@@ -674,36 +752,66 @@ medium's measured behaviour:
   from (a quarter of the total, the floor, the cap, or the unreadable
   fallback), the ring (2 behind / 15 ahead, and the full-res ring ahead as
   the cache clamps it), the decoders and where they came from (physical
-  cores, `FASTCULL_DECODERS`, or the fallback), and the whole-app worst-case
-  peak below for A1 frames on a 4K screen, "plus ~0.2 GB per 1,000
-  thumbnails" (brief 008, the redesign's G3).
+  cores, the RAM cap, `FASTCULL_DECODERS`, or the fallback), and the
+  whole-app worst-case peak below for A1 frames on a 4K screen, "plus
+  ~0.2 GB per 1,000 thumbnails" (brief 008, the redesign's G3).
 - **Outside the cache**, bounded by the rings: the app's texture copies — the
-  full-res ring's (up to 18 × 149 MB of A1 frames at 1:1), the screen-rung
+  full-res ring's (up to 18 × 149 MB of A1 frames at 1:1, as many as the
+  cache's clamp leaves in the ring), the screen-rung
   ring's (18 × 21 MB on a 4K viewport) and the mids (`MIDS_CAP` = 64, ~5 MB
-  each); the decoders' transient buffers, up to two decoded full-res frames
-  per decoder (a portrait frame and its rotate scratch); and the thumbs,
-  unbounded (≈ 200 KB each; 5,000 images ≈ 1 GB — acceptable; the SQLite
-  cache lets us evict and reload cheaply if this ever pinches; issue #2 is
-  the residency-window request).
+  each) — and the kitchen's full-res fill in flight, one 149 MB frame at a
+  time (one more for each finished fill the UI thread has not yet taken,
+  which piles up only while that thread is busy); the decoders' transient
+  buffers — per decoder the embedded JPEG it read (`read_jpeg` holds the
+  whole stream for the decode: 9.8 to 12.3 MB for the reference A1 files)
+  and up to two decoded full-res frames (a portrait frame and its rotate
+  scratch); and the thumbs, unbounded (≈ 200 KB each; 5,000
+  images ≈ 1 GB — acceptable; the SQLite cache lets us evict and reload
+  cheaply if this ever pinches; issue #2 is the residency-window request).
 - **The whole-app worst-case peak** — A1 frames, a 4K screen, a long session
-  at 1:1 with the cache full and every decoder rotating a portrait frame,
-  before thumbnails — is the cache + the full-res ring's frames × 149,299,200
-  B + 18 × 20,995,200 B + 64 × 5,235,840 B + the decoders × 2 × 149,299,200
-  B. It follows the RAM and the physical cores; the decoders' buffers are
-  1.1, 2.2 and 4.4 GiB at 4, 8 and 16 cores:
+  at 1:1 with the cache full, every decoder rotating a portrait frame and the
+  kitchen filling a full-res texture, before thumbnails and before what the
+  app holds with no photo open (its code, the interface toolkit, the graphics
+  driver) — is the cache + the full-res ring's frames × 149,299,200 B + 18 ×
+  20,995,200 B + 64 × 5,235,840 B + the decoders × (2 × 149,299,200 B +
+  12,313,510 B) + 149,299,200 B for the kitchen's fill, where 12,313,510 B is
+  the largest embedded full JPEG of the three reference A1 files, the input
+  each decoder holds. It follows the RAM and the physical cores, under the two
+  clamps — the full-res ring's texture copies and the kitchen's fill counted
+  against the cache (Above fit) and the decoders capped at half the RAM in GiB
+  (The decode workers). The decoders' buffers are 1.2, 2.3 and 4.6 GiB at 4, 8
+  and 16 decoders:
 
-  | total RAM | cache | full-res ring at 1:1 | texture copies | peak at 4 / 8 / 16 cores |
-  |---|---|---|---|---|
-  | 8 GiB | 2 GiB (the floor) | 2 behind / 11 ahead | 2.6 GiB | 5.7 / 6.8 / 9.1 GiB (72 / 85 / 113 %) |
-  | 16 GiB | 4 GiB | 2 / 15 | 3.2 GiB | 8.3 / 9.4 / 11.6 GiB (52 / 59 / 73 %) |
-  | 32 GiB | 8 GiB | 2 / 15 | 3.2 GiB | 12.3 / 13.4 / 15.6 GiB (38 / 42 / 49 %) |
-  | 64 GiB | 10 GiB (the cap) | 2 / 15 | 3.2 GiB | 14.3 / 15.4 / 17.6 GiB (22 / 24 / 28 %) |
+  | total RAM | cache | full-res ring at 1:1 | texture copies, the fill included | decoders at 4 / 8 / 16 cores | peak at 4 / 8 / 16 cores |
+  |---|---|---|---|---|---|
+  | 8 GiB | 2 GiB (the floor) | 2 behind / 3 ahead | 1.6 GiB | 4 / 4 / 4 | 4.8 / 4.8 / 4.8 GiB (59.9 / 59.9 / 59.9 %) |
+  | 16 GiB | 4 GiB | 2 / 10 | 2.6 GiB | 4 / 8 / 8 | 7.8 / 8.9 / 8.9 GiB (48.6 / 55.8 / 55.8 %) |
+  | 32 GiB | 8 GiB | 2 / 15 | 3.3 GiB | 4 / 8 / 16 | 12.5 / 13.6 / 15.9 GiB (39.0 / 42.6 / 49.8 %) |
+  | 64 GiB | 10 GiB (the cap) | 2 / 15 | 3.3 GiB | 4 / 8 / 16 | 14.5 / 15.6 / 17.9 GiB (22.6 / 24.4 / 28.0 %) |
 
-  At fit the full-res ring is not asked for (the idle cook's cursor frame
-  aside), so the peak there is lower by most of the full-res copies. On an
-  8 GiB machine the worst case at 1:1 exceeds the RAM with 16 physical cores
-  and comes within 15 % of it with eight; the relief is the runtime shrink
-  below.
+  Every row is within 60 % of the total — the 8 GiB row at 59.9 %, inside the
+  line by less than the formula's own precision, which counts no decoder's
+  working rows and no allocator overhead (Manager ruling 2026-09-26, brief 008
+  Q-G). At fit the full-res ring is not asked for (the idle cook's cursor
+  frame aside), so the peak there is lower by most of the full-res copies. The
+  rows are nominal sizes, and the app reads the total the OS reports, which is
+  lower: a 32 GB machine reports 31 to 32 GiB, where a 16-core machine runs 15
+  decoders, not 16 (The decode workers), and an 8 GB machine a little under 8
+  GiB, so it runs 3 decoders, not the row's 4. Below a reported 8 GiB the
+  cache's 2 GiB floor and the 3 decoders fix the peak at 4.5 GiB whatever the
+  cores (4.0 GiB before brief 008, counted the same way), which is 60 % of a
+  reported 7.51 GiB: an 8 GB machine that reports more stays within 60 %, and
+  one that reports less — its graphics or its kernel keeping a larger share —
+  does not: 60.1 % at a reported 7.5 GiB, 62.6 % at 7.2 GiB, 64.4 % at 7.0
+  GiB, and past the whole RAM from a reported 4.5 GiB down (113 % of 4 GiB,
+  where it was 100 %). Above a reported 7.51 GiB every total is within 60 % at
+  any core count but in a band between the 8 and 12 GB classes that no common
+  RAM size reports, 8.34 to 8.38 GiB, where a fourth frame ahead joins the
+  ring and the peak reaches 60.2 %. The formula does not count what glibc's
+  allocator keeps of freed decode buffers on Linux (Windows returns them;
+  brief 008's decisions log)
+  (PENDING brief 008 Q-J and the Linux allocator term: machines that report under 8 GiB, and whether that term is counted, bounded or released — both ruled, and this bullet and the figures docs/faq.md's memory answer and docs/culling.md's "At 1:1" paragraph take from it amended, before step 3 implements it).
+  The relief is the runtime shrink below.
 - Not in this unit (a later brief): shrinking the cache at runtime when the
   machine runs short — poll the free memory, shrink only, never grow back
   mid-session, and never take the cursor's rungs, the ring's far end first
@@ -718,10 +826,16 @@ medium's measured behaviour:
   `u32::MAX`, the top rung — what a hold actually asks for the focused frame
   is the engine's, Above fit) and `focus_fit(index)` (the fit box);
   `want(range, cell_width)`; `set_view(order)`; `set_fit_box(box)` (the N=1
-  cell in physical pixels, none before the first layout); `texture_windows()`
-  (the leaned windows of the app's two texture rings, ui-grid.md);
-  `note_adopted(index, kind)` (the app's report that a texture entered its
-  ring — the switch rule's time-to-screen); deferred revival is internal.
+  cell in physical pixels; none before the first layout and whenever the app
+  is not at the loupe — review-verified: the app's call is unconditional at
+  every refresh); `texture_windows()` (the leaned windows of the app's two
+  texture rings, ui-grid.md); `note_adopted(index, kind, held)` (the app's
+  report that a fill it made for that index completed at the loupe, with
+  whether its ring kept it — where the switch rule's time-to-screen ends,
+  held or not) and `note_dropped(index)` (the app's report that it culled
+  that index's queued full-res fill, which ends that decode's measurement
+  unmeasured) (Manager ruling 2026-09-26, brief 008 Q-K); deferred revival
+  is internal.
   Events: `Ready` — the image with its `RungKind` (`Mid`, `Screen`, `Full`),
   the `terminal` flag and the `RequestState` (`Transit`, `Settled`) — and
   `Failed`. Constants: `RING_BEHIND = 2`, `RING_AHEAD = 15`, `PREFETCH = 2`
@@ -731,17 +845,18 @@ medium's measured behaviour:
   `DEFAULT_BUDGET_BYTES` (2 GiB, the cache's floor).
 - The pure rules in `loupe.rs`, each table-tested: `serves_box` (the 1.25
   rule for a box — its one home; the app asks it too), `mid_serves_box` (the
-  "wide viewport" predicate), `fits_box`, `rung_factor` (the box rule) and
-  `fit_rung` (mid, screen rung or full for one frame at fit); `scaled_dims`
-  is the decoder's own ceiling division.
+  "wide viewport" predicate), `fits_box`, `rung_factor` (the box rule),
+  `fit_rung` (mid, screen rung or full for one frame at fit) and
+  `fullres_ring_ahead` (the full-res ring's cache clamp, which the startup
+  line prints too); `scaled_dims` is the decoder's own ceiling division.
 - `loupe::decode_oriented(bytes, orientation)` is the perf-budget target
   (full scale, then the soft-rotate); `loupe::decode_scaled_oriented(bytes,
   orientation, numerator)` is its N/8 sibling, numerator 1..=8; `raw/mod.rs`
   holds `MAX_EMBEDDED_JPEG_LEN`, `MAX_DECODED_PIXELS` and
   `GRID_SOURCE_MAX_PIXELS`.
 - `budget.rs`: the pixel cache from total RAM, the decoder count from
-  physical cores and `FASTCULL_DECODERS`, the machine probe, and the startup
-  line, whose `fastcull: loupe cache ` prefix tests read.
+  physical cores, total RAM and `FASTCULL_DECODERS`, the machine probe, and
+  the startup line, whose `fastcull: loupe cache ` prefix tests read.
 - `ExifSummary` (`exif.rs`): make, model, serial, capture time, subsec, the
   Sony sequence number; `sort_key()` normalizes subseconds to three digits.
 - The budget rows of 01-architecture.md bind this module — open+EXIF, the
@@ -822,15 +937,18 @@ Brief 008 (the screen rung, issue #60; every box below is ticked by the
 commit that lands its tests, and stays open until then):
 
 - [ ] **The ring plan** (brief 008 A1): clock-free over the engine's plan —
-      forward → 2 behind / 15 ahead; a reversal re-leans on the very
-      next call; the edges clamp; a folder shorter than the ring → the whole
+      forward → 2 behind / 15 ahead; a reversal re-leans on the very next
+      call; the edges clamp; a folder shorter than the ring → the whole
       folder; on a 3840×2160 box every member asks for the fit box, travelling
-      and settled, both leans; above fit, full-res clamped by the cache
-      (11 ahead on a 2 GiB cache, 15 on 8 GiB), the positions beyond
-      the clamp asking for nothing, settled and during a hold; an engine with
-      no fit box keeps the mid in transit and ±`PREFETCH` settled. Red on the
-      old 2 / 8 transit shape (the first test's depths) and on the old settled
-      ±2 with a box (the second's settled rows) —
+      and settled, both leans; above fit, full-res clamped by the cache with
+      each frame counted twice, pixels and texture copy, and the kitchen's
+      fill once (3 ahead on a 2 GiB cache, 10 on 4 GiB, 15 on 8 GiB — red
+      under the clamp that left out the fill, which gives 4, 11 and 15, and
+      under the one that counted the pixels alone, 11, 15 and 15), the
+      positions beyond the clamp asking for nothing, settled and during a
+      hold; an engine with no fit box keeps the mid in transit and ±`PREFETCH`
+      settled. Red on the old 2 / 8 transit shape (the first test's depths)
+      and on the old settled ±2 with a box (the second's settled rows) —
       `transit_ring_leans_in_the_direction_of_travel` (its depths move from
       `TRANSIT_BEHIND`/`TRANSIT_AHEAD` to `RING_BEHIND`/`RING_AHEAD`, the
       promise kept; its engine has no box, so its settled row stays
@@ -855,28 +973,34 @@ commit that lands its tests, and stays open until then):
       with the rung.
 - [ ] **The rung's kind comes from the decode; the ladder stops on oriented
       sizes** (brief 008): a scaled decode is `screen` and never `terminal`,
-      even when an IFD under-claims its stream; a portrait mid that serves
-      the box stops the ladder; a truncated full at fit keeps the good mid
-      with no Failed badge; a cached rung that no longer serves a grown box
-      is re-requested; a lossless stream decodes full-scale (review-verified:
-      no lossless fixture can be encoded here) —
+      even when an IFD under-claims its stream; a portrait mid that serves the
+      box stops the ladder; a truncated full at fit keeps the good mid with no
+      Failed badge; a cached rung that no longer serves a grown box is
+      re-requested; a lossless stream decodes full-scale through the scaled
+      entry point, both orientation paths —
       `the_rung_kind_comes_from_the_decode_not_the_ifd_claim`,
       `a_portrait_mid_that_serves_the_box_stops_the_ladder`,
       `truncated_full_rung_keeps_the_good_mid_and_no_failed_badge` (gains a
-      run at fit), `a_cached_rung_that_no_longer_serves_the_box_is_re_requested`.
+      run at fit),
+      `a_cached_rung_that_no_longer_serves_the_box_is_re_requested`,
+      `a_lossless_stream_decodes_full_scale_through_the_scaled_entry_point`.
       Open: lands with the rung.
 - [ ] **The pixel cache and the decoders follow the machine** (brief 008 A4):
       clock-free — the cache over 4 / 8 / 16 / 32 / 64 GiB of total RAM → 2,
       2, 4, 8, 10 GiB, and an unreadable, zero or absurd total → 2 GiB; the
-      decoders over 2 / 4 / 16 / 32 physical cores → 3, 4, 16, 16, a zero or
-      missing count → 4; `FASTCULL_DECODERS` wins, above the cap too and 1
-      read as 2, and a value that is not a positive integer is ignored with
-      its stderr line; the startup line names the cache, the ring, the
-      decoders, their sources and the peak, and the app prints it exactly once
-      per run — asserted on the stderr of ui-grid.md A5's fit run; the engine
-      spawns that many workers and reserves one lane —
+      decoders over 2 / 4 / 16 / 32 physical cores on 64 GiB → 3, 4, 16, 16, a
+      zero or missing count → 4; the RAM cap on 16 cores → 3 at 6 GiB, 4 at 8
+      GiB, 8 at 16 GiB, 15 at 31 GiB (what a 32 GB machine reports), 16 at 32
+      GiB, and 4 with the total unreadable, zero or absurd (read as 8 GiB,
+      Memory); `FASTCULL_DECODERS` wins, above both caps too and 1 read as 2,
+      and a value that is not a positive integer is ignored with its stderr
+      line; the startup line names the cache, the ring, the decoders, their
+      sources and the peak, and the app prints it exactly once per run —
+      asserted on the stderr of ui-grid.md A5's fit run; the engine spawns
+      that many workers and reserves one lane —
       `the_pixel_cache_is_a_quarter_of_total_ram_between_2_and_10_gib`,
       `the_decoders_follow_the_physical_cores`,
+      `the_decoders_are_capped_at_half_the_ram_in_gib`,
       `a_decoder_override_wins_and_a_bad_one_is_ignored`,
       `the_startup_line_names_the_cache_the_ring_the_decoders_and_the_peak`,
       `start_with_spawns_the_decoders_and_reserves_the_last`. Open: lands with
@@ -907,6 +1031,11 @@ commit that lands its tests, and stays open until then):
       read on the scaled size — never of a library parameter. Ticked by
       the step-1 commit, which carries these tests; each mutant's red is in
       its message.
+- [ ] **A progressive stream over 100 scans is refused on the loupe path**
+      (brief 008 R2): a valid 101-scan progressive stream is `Failed`
+      through both entry points and a 100-scan one decodes; red with the
+      limit unset — `a_progressive_stream_over_100_scans_fails_on_the_loupe_path`.
+      Open: lands with the limit, in the step-1 fix round.
 - [ ] **CMYK and YCCK open in the loupe** (brief 008 A14): a CMYK and a YCCK
       bare JPEG decode through the loupe path with pixels, at full scale with
       no rung, never a Failed badge; red on the decoder swap without the
@@ -916,6 +1045,15 @@ commit that lands its tests, and stays open until then):
       before any allocation; red with the byte check or the pixel cap moved
       after the route — `cmyk_and_ycck_streams_decode_on_the_loupe_path`.
       Open: lands with the route.
+- [ ] **A rung that fails over a good lower one is named on stderr** (brief
+      008, the step-1 review; Manager ruling 2026-09-26): a higher rung
+      whose decode fails while a lower one is in hand — decoded in the same
+      flight or already cached — leaves the lower rung shown, emits no
+      `Failed` and prints one stderr line naming the file, the rung that
+      failed and the decoder's reason; a ladder that climbs cleanly prints
+      nothing; red with the line removed —
+      `a_rung_that_fails_over_a_good_lower_one_is_named_on_stderr`. Open:
+      the line lands in step 2.
 - [ ] **Perf budgets** (brief 008 A9): the full-res row stays green with
       more headroom, and the three new rows are green on the idle
       development laptop — `budget_fullres_decode_under_350ms`,
@@ -945,14 +1083,19 @@ commit that lands its tests, and stays open until then):
       fit box when its decode would start, its distance counted from 1, a
       full-res entry queued beyond the boundary becoming a fit-box one and one
       in flight landing; the step up waits for every member ahead but the
-      farthest to hold its rung, nothing queued and a backlog worker free, and
-      starts beyond the ring's far end; a step-down less than one ring past
-      the last step-up holds the rung until the hold ends; a reversal starts
-      afresh; during a hold the focused frame and the members behind ask for
-      the fit box — an in-flight full-res kept, a queued one replaced, or
-      dropped when the fit-box rung is in hand — and the settle then asks for
-      the top rung; a deferred full-res target at or behind the cursor revives
-      at the fit box; the positions beyond the cache's clamp ask for nothing —
+      farthest to hold its rung or have it in flight, nothing queued and a
+      backlog worker free, and starts beyond the ring's far end; the
+      time-to-screen runs from a decode's start to the app's report that its
+      fill completed, held by the ring or at once that ring's victim, a frame
+      the cursor has passed included, while a culled fill or the box going
+      ends it unmeasured and a decode published with no box starts no
+      measurement; a step-down less than one ring past the last step-up holds
+      the rung until the hold ends; a reversal starts afresh; during a hold
+      the focused frame and the members behind ask for the fit box — an
+      in-flight full-res kept, a queued one replaced, or dropped when the
+      fit-box rung is in hand — and the settle then asks for the top rung; a
+      deferred full-res target at or behind the cursor revives at the fit box;
+      the positions beyond the cache's clamp ask for nothing —
       `the_switch_rule_steps_down_before_a_frame_it_cannot_land`,
       `the_switch_rule_steps_up_only_from_a_complete_ring_with_a_free_decoder`,
       `a_quick_second_step_down_holds_the_rung_until_the_hold_ends`,
@@ -960,21 +1103,29 @@ commit that lands its tests, and stays open until then):
       whose fit-box rung is cached while its full-res is queued — the early
       return a request the cache serves takes),
       `revival_gates_on_the_ring_in_force` (its hold rows),
-      `the_full_res_ring_is_clamped_by_the_cache` (its hold rows). And a
+      `the_full_res_ring_is_clamped_by_the_cache` (its hold rows),
+      `note_adopted_measures_a_full_res_frame_from_its_decode_start`. And a
       simulated 800-focus hold at 1:1 over the engine's own plan and queue,
       pops and landings interleaved, from a rest whose members hold their
       fit-box rungs from an earlier pass at fit and have their full-res
       queued, starts no full-res decode for the frame the cursor is on or one
-      it has passed (the 2026-08-01 finding, ui-grid.md History) —
+      it has passed (the 2026-08-01 finding, ui-grid.md History), and fails
+      unless it measured a time-to-screen and stepped down at least once, so a
+      simulation that stopped measuring cannot pass —
       `a_hold_above_fit_never_starts_a_full_res_decode_the_cursor_has_reached`.
       The mutants, each red on its row: the focused frame asking for the top
       rung during a hold; the re-plan skipped when the fit-box rung is cached
       (red on the cached row and on the simulation); distances counted from 0;
       the revival at the stored target; a step-up that waits for nothing in
-      flight; one that ignores the free worker; the lock removed (red on
+      flight; one that ignores the free worker; one that counts a member whose
+      rung is in flight as missing (red on the in-flight row); the lock
+      removed (red on
       `a_quick_second_step_down_holds_the_rung_until_the_hold_ends`); the
       positions beyond the clamp asking for the fit box (red on the clamp
-      test's hold rows). Driven, the hold's frames on screen per key stay at
+      test's hold rows); a ring's victim measuring nothing, `note_dropped`
+      doing nothing, and the measurements culled when their frame leaves the
+      ring (red on the passed-frame row, and on the simulation, which then
+      never measures). Driven, the hold's frames on screen per key stay at
       ui-grid.md A6's level in two 1:1 runs of
       `a_held_arrow_at_fit_on_4k_stays_at_the_rung_and_never_slows`: A6's own,
       on the seat's decoders, and one with `FASTCULL_DECODERS=2`, whose one
@@ -984,6 +1135,17 @@ commit that lands its tests, and stays open until then):
       Outcome. What the user sees on the desktop — one step or a flicker — is
       the user's own test of the CI build (brief 008). Open: lands with the
       switch rule.
+- [ ] **The settled ring after a hold** (brief 008, Manager ruling Q-I):
+      clock-free — a stop above fit on a frame whose full-res is in hand, its
+      ring members holding only their fit-box rungs, has the reserved lane
+      queue the settled ring, full-res for every member in the ring's order,
+      and ask nothing on its next wake; a stop on a frame that still needs
+      its climb queues the climb and no member; a settled focus of the app's
+      own leaves the lane nothing to ask; an engine with no fit box asks
+      nothing — `a_settle_with_nothing_to_climb_asks_for_the_settled_ring`.
+      Mutants: the lane's ask removed; the ring asked beside the climb; the
+      once-per-settle guard removed (red on the second wake). Open: lands
+      with the switch rule.
 - [ ] **The RSS ceiling** (brief 008 A12): release, Linux only (symlinks, and
       `VmHWM` from `/proc/self/status`): an engine walk over 5,000 symlinks to
       the three A1 files at the seat's own cache (the cache rule over the
@@ -1012,9 +1174,29 @@ commit that lands its tests, and stays open until then):
   the switch rule; the decoders, three until then, follow the physical cores;
   and the pixel cache, 2 GiB until then, is a quarter of total RAM between
   2 and 10 GiB — so the whole-app worst case, 3.8 GiB on every machine
-  before, follows the RAM and the cores (Memory). The GPU upload of a full-res
-  frame is outside what the switch rule and the suite can see — a recorded
-  residual (Above fit). What each request state asks for every position of the
+  before (4.0 counted as the table now counts it), follows the RAM and the
+  cores (Memory). Corrected the same day, before any code implemented these
+  rules (Manager ruling 2026-09-26, brief 008 Q4): the first form of this
+  change clamped the full-res ring at `⌊cache ÷ 149,299,200⌋` frames,
+  counting the decoded pixels alone, and capped the decoders at 16 only, so
+  its own table put the worst case at 72 / 85 / 113 % of an 8 GiB machine
+  with 4 / 8 / 16 cores and 73 % of a 16 GiB one with 16; the ring now
+  counts each frame's texture copy against the cache and the decoders stop
+  at half the RAM in GiB. The formula also gained two terms the first form
+  left out — the kitchen's full-res fill in flight and each decoder's input
+  JPEG — which put the 8 GiB row at 61.7 % under those two clamps (brief 008
+  Q4, its outcome), so the ring's clamp counts that fill too (brief 008 Q-G),
+  and the table now says what a machine's reported total does below the
+  nominal rows (Memory). The plan's other questions were ruled the same day,
+  each cited where it applies (brief 008 Q-C, Q-D, Q-H, Q-I, Q-K); and the
+  step-1 review added the stderr line of a rung that fails over a good lower
+  one — a RAW whose full JPEG carries a benign warning shows no badge — and
+  the progressive scan limit was restored (Hostile-input bounds): the loupe
+  lost it when it left zune-jpeg, whose default refuses more than 100 scans,
+  where the step-1 review had taken the exposure for one zune-jpeg shared.
+  The GPU upload of a full-res frame is outside what the switch rule and the
+  suite can see — a recorded residual (Above fit). What each request state
+  asks for every position of the
   ring moved here from ui-grid.md, its one home (Contracts). The benchmark
   behind the decision — the development laptop, 2026-09-26 — is in brief 008's
   Context and ADR 0005; the idle medians after the swap are
@@ -1032,7 +1214,14 @@ commit that lands its tests, and stays open until then):
   decodes: the engine's byte-budget LRU …; mid-rung textures count toward it"
   — the LRU counts the engine's decoded rungs, mids among them, and never the
   app's texture copies, which the kitchen makes with `clone_from_slice` and
-  the app's rings bound (Memory).
+  the app's rings bound (Memory); the lossless clause's "review-verified: no
+  lossless fixture can be encoded here" — the `turbojpeg` crate's own
+  compressor encodes one (senior-developer review F2); the benign-warning
+  scope's "while its zune-jpeg thumb shows" — zune's strict mode refuses some
+  of the same faults (measured for this amendment); and the decodes a hold
+  commits before the first measurement, "about one per worker", which is one
+  or two, since the first measurement ends at the first fill's completion
+  (senior-developer plan, brief 008 Q-K).
 - 2026-09-17 — Rewritten (brief 007); the seven M1-era boxes had been
   ticked the same day against the tests that hold them. The old text's
   "decoded with turbojpeg" for the full-res source was wrong — zune-jpeg

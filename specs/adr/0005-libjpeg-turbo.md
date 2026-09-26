@@ -116,6 +116,11 @@ the smallest N/8 factor that serves the loupe's fit box under the existing
   safe crate keeps its handle private and exposes neither, they would buy an
   abort 13–24 ms sooner on a crafted stream and a second copy of our own
   pixel cap, and taking them means a raw-FFI decompressor in core.
+  `TJPARAM_SCANLIMIT` is set, to 100, through the safe crate's
+  `set_scan_limit`: its default is no limit, and 100 is the bound zune-jpeg
+  0.4's default gave the loupe (raw-pipeline.md). (Added 2026-09-26, the
+  step-1 fix round of brief 008: the step-1 code set no limit, on the step-1
+  review's premise that zune-jpeg shared the exposure, which was wrong.)
 
 ## Consequences
 
@@ -124,7 +129,9 @@ the smallest N/8 factor that serves the loupe's fit box under the existing
   the release workflow's `dist-workspace.toml` lists nasm for apt and
   chocolatey, and README's build block and `docs/index.md` name the
   requirement (01-architecture.md, "Native dependencies"). ADR 0002's
-  "contributors need only rustup" becomes "rustup, cmake and nasm".
+  "contributors need only rustup" becomes "rustup, cmake and nasm" — and on
+  Windows Visual Studio 2022, whose generator the MSVC target names (below;
+  senior-developer review 2026-09-26, F1).
 - **The Windows artifact carries the library statically** (the crate links
   `turbojpeg-static` on MSVC): the `crt-static` promise and the "no
   VCRUNTIME140 import" check still apply, and a check that neither exe
@@ -154,8 +161,16 @@ the smallest N/8 factor that serves the loupe's fit box under the existing
 - **The C library follows cargo's opt-level** through the `cmake` crate
   (`Debug` at opt-level 0, `RelWithDebInfo` under the dev profile with the
   #76 line, `Release` in release), so the #76 line — `[profile.dev.package."*"]
-  opt-level = 2` — is what keeps the loupe's debug decode optimised
-  (01-architecture.md, "Build profiles").
+  opt-level = 2` — keeps the loupe's debug decode optimised; on the MSVC
+  target only because a workspace `.cargo/config.toml` names its CMake
+  generator, since the crate, when it picks the Visual Studio generator
+  itself, overrides the C flags of the configuration it builds with every
+  `/O` flag stripped, which leaves MSVC's unoptimised default in every
+  profile, release included (01-architecture.md, "Native
+  dependencies", has the rule and its check). (Corrected 2026-09-26,
+  senior-developer review F1: this said the #76 line alone kept the decode
+  optimised; the first Windows artifact of brief 008 carried the library
+  unoptimised.)
 - **`decode_oriented`'s public contract holds** (bytes and orientation in,
   oriented RGB out; the perf budget measures it), the scaled decode is its
   sibling `decode_scaled_oriented`, and `scaled_dims` is the decoder's own
