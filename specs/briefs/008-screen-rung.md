@@ -279,7 +279,9 @@ Workers and ring depth derive from the machine; nothing is configured.
 - A9. Perf budgets: the full-res row stays green with more headroom; the
   new rows are green; `tests/zoom_walk.rs` (the mandatory zoom-quality
   gate) passes in release against the real A1 files.
-- A10. CI: both checks green; the Windows artifact runs. The user's test
+- A10. CI: both checks green; the Windows artifact runs; libjpeg-turbo
+  is compiled optimised on both targets (the CMake-cache check in the
+  Windows verify step; added 2026-09-26 after the step-1 review). The user's test
   on the desktop with real folders is outside this brief and precedes
   any release.
 - A11. Hard rule 1: the RAW-write tests unchanged and green; QE records
@@ -814,3 +816,33 @@ the cursor's rungs) → a later brief.
   developer's pass after amendment 1), including 00-overview.md's "Other
   cameras: best-effort" line, which the user's answer upgrades. Promoted
   to CLAUDE.md as directive M11.
+- 2026-09-26 (Manager, spec amendment 1, committed 21ab0e3 after two
+  check rounds, the last with no material flaw):
+  - The scan limit, re-ruled on a corrected premise: zune-jpeg 0.4's
+    default refused more than 100 progressive scans, and the swap dropped
+    that bound unnoticed, so R2 ("every existing bound applies on the new
+    path") was not met. Restored: `set_scan_limit(100)` on the loupe
+    decode, with a generated 101-scan test and a canary item, in the
+    step-1 fix round; the earlier "residual for a later brief" ruling is
+    withdrawn.
+  - The other-cameras relaxation needs a design pass, not a sentence: the
+    safe crate reports errors as text only, and libjpeg-turbo's header
+    read also fails on a warning. The Manager's preferred direction for
+    that pass: any libjpeg-turbo failure outside the truncation class
+    (`JWRN_JPEG_EOF`, `JWRN_HIT_MARKER`, and whatever else the pass finds
+    in that class) decodes the file through zune-jpeg, full scale, no
+    rung — the CMYK route of R14 — with one stderr line; no second
+    `unsafe` block. The senior developer may propose otherwise with the
+    reason.
+  - M11 against the July rule for a RAW whose full JPEG is damaged but
+    whose mid is good: the rule stands (the frame stays on its mid, cued;
+    from step 2 a stderr line names it), and M11's wording is corrected
+    to say so. A distinct "full size unavailable" cue is an idea for a
+    later unit, with the persona.
+  - The stderr line's test reads the child process's stderr over a
+    synthetic RAW with a good mid and a truncated full, so the box keeps
+    its promise.
+  - Bookkeeping: CLAUDE.md's Commands block names the Windows generator
+    requirement; A10 gains "compiled optimised on both targets"; step 6
+    adds VS 2022 on the release runner to RELEASING.md and the dist
+    plumbing.
