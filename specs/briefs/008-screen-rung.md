@@ -800,3 +800,17 @@ the cursor's rungs) → a later brief.
   allocator, or recording the term in the accounting, the options are
   measured on the same probe; a new dependency goes to the user with the
   numbers.
+- 2026-09-26 (the user, on other cameras; verbatim): asked whether the
+  user culls files from bodies other than the A1, the user answered "Yes
+  I do. I mean, I might not actually, but the software should be able to
+  handle more files as, at some point, I will want more users with
+  different cameras." Ruled (Manager): the relaxation lands IN THIS UNIT,
+  in step 2 with the stderr line — a benign libjpeg-turbo warning (any
+  warning outside the truncation class, which `scan_is_terminated` and the
+  short-scan test already pin) no longer leaves a frame on its lower rung:
+  the decode's completed buffer is used and one stderr line names the file
+  and the warning; the truncation warnings stay fatal, so a damaged file
+  still shows the Failed badge. The spec moves first (the senior
+  developer's pass after amendment 1), including 00-overview.md's "Other
+  cameras: best-effort" line, which the user's answer upgrades. Promoted
+  to CLAUDE.md as directive M11.
