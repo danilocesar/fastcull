@@ -328,6 +328,17 @@ developer owns re-verifying such claims against reality.
   unticked box always carries its reason — a bare one is the silence the
   gate forbids.
 
+- **M11 — Other cameras are a design constraint, not an afterthought.**
+  (the user, 2026-09-26: "the software should be able to handle more files
+  as, at some point, I will want more users with different cameras") The
+  A1 is the reference body, not the only one. A code path that is general
+  — a decoder, a parser, a ring, a cache — is designed and tested for
+  files from other bodies too: a harmless complaint from a decoder never
+  refuses a frame or leaves it silently soft (use what decoded, log it
+  once), a real defect still shows the Failed badge, and a decision that
+  rests on an A1 property says so where it is recorded. Formats outside
+  the TIFF family stay best-effort until a unit takes them on.
+
 ### Open decisions the Manager tracks (do not re-ask unless relevant)
 
 - **Held-arrow softness on 4K, issue #60** — reopened by the user
