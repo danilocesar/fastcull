@@ -167,15 +167,19 @@ jobs:
       # the `cmake` crate and its SIMD kernels need NASM; `require-simd` makes a
       # seat without it FAIL rather than ship a 1.95x slower decoder. Chocolatey
       # rather than a setup action because it is the mechanism the release
-      # workflow uses (`[dist.dependencies.chocolatey]`), so this job rehearses
-      # it. The package installs to `C:\Program Files\NASM`, which CMake's own
+      # workflow will use (`[dist.dependencies.chocolatey]`, added with the
+      # release plumbing), so this job rehearses it. The package installs to
+      # `C:\Program Files\NASM`, which CMake's own
       # NASM lookup (`CMakeDetermineASM_NASMCompiler.cmake`, `$ENV{ProgramFiles}/NASM`)
       # searches when nasm is not on PATH — no PATH step needed. Under
       # `require-simd` the vendored `simd/CMakeLists.txt` calls
       # `enable_language(ASM_NASM)` unconditionally (line 52), so the build
-      # itself fails without NASM: a green build is the proof, and the
-      # configure log's `The ASM_NASM compiler identification is NASM` line
-      # is the evidence.
+      # itself fails without NASM: a green build is the proof. Cargo shows a
+      # build script's output only when the script fails, so libjpeg-turbo's
+      # configure lines never reach this log on a green run; "Verify Windows
+      # artifact" below prints the `WITH_SIMD = 1` line from each build's
+      # output file instead (senior-developer review 2026-09-26, F3: this
+      # comment named a configure line the log does not contain).
       - name: Install NASM (Windows)
         if: runner.os == 'Windows'
         run: choco install nasm --no-progress -y
@@ -561,9 +565,17 @@ jobs:
       # observed from this step, and serialising tests that already
       # serialise themselves costs it nothing, so uniformity across the
       # four invocations is the whole case for the flag here.
+      # `--nocapture` (brief 008, 2026-09-26): this step never fails its
+      # job, so its numbers are read from the log or not at all, and libtest
+      # prints a passing test's output only with the flag. Every row prints
+      # one `BUDGET-MEDIAN` line before its assertion, so each median lands
+      # here green or red. Without it brief 008's first Windows run showed
+      # three red rows inside a green job and not one number on the green
+      # ones (senior-developer review 2026-09-26, F1; 01-architecture.md,
+      # "Performance budgets").
       - name: Performance budgets (release, advisory)
         continue-on-error: true
-        run: cargo test --release --locked -p fastcull-core --test perf_budgets -- --test-threads=1
+        run: cargo test --release --locked -p fastcull-core --test perf_budgets -- --test-threads=1 --nocapture
 
       # ---------------------------------------------------------------
       # Windows test build. These steps sit last in the job, so the .exe
@@ -648,7 +660,29 @@ jobs:
       # "PE\0\0" + 20-byte COFF header + offset 68. 2 = WINDOWS_GUI,
       # 3 = WINDOWS_CUI. v0.8.0 shipped both as 3 -- that regression is what
       # this assertion pins.
-      - name: Verify Windows artifact (static CRT + subsystems + starts)
+      #
+      # libjpeg-turbo compiled optimised (brief 008 A10; 01-architecture.md,
+      # "Native dependencies"). On the MSVC target the `cmake` crate, when it
+      # picks the Visual Studio generator itself, overwrites the C flags of
+      # the configuration it builds with the `cc` crate's, every /O flag
+      # stripped, and MSVC then compiles the loupe's decoder at its
+      # unoptimised default: brief 008's first artifact shipped that way, its
+      # 3/8 rung decoding slower than the full frame (senior-developer review
+      # 2026-09-26, F1). The workspace `.cargo/config.toml` names the
+      # generator; this check reads what each build actually used, with no
+      # clock: every turbojpeg-sys `CMakeCache.txt` under target/ must carry
+      # /O2 in the C flags of the configuration its CMAKE_BUILD_TYPE names.
+      # That one and not always `_RELEASE`: with debug info the crate builds
+      # RelWithDebInfo and overwrites THAT configuration's flags, while
+      # `_RELEASE` keeps CMake's default /O2, so reading `_RELEASE` would
+      # pass an unoptimised library. The debug suite's, the release suite's
+      # and the artifact's builds are all read, and the artifact's must be
+      # among them, so a moved path fails instead of checking nothing. The
+      # build script's `output` beside each cache must carry libjpeg-turbo's
+      # `WITH_SIMD = 1` configure line (its NASM kernels are in): cargo shows
+      # that file only when a build script fails, so this step is where the
+      # line reaches the log. Every line it judges is printed, pass or fail.
+      - name: Verify Windows artifact (static CRT + subsystems + starts + optimised decoder)
         if: runner.os == 'Windows'
         shell: bash
         run: |
@@ -686,6 +720,64 @@ jobs:
           sys.exit(1 if bad else 0)
           EOF
           ./artifact/fastcull-cli.exe --version
+          python - <<'EOF'
+          import glob, os, sys
+
+          # target/<profile>/build/... and target/<triple>/<profile>/build/...
+          caches = sorted(
+              glob.glob("target/*/build/turbojpeg-sys-*/out/build/CMakeCache.txt")
+              + glob.glob("target/*/*/build/turbojpeg-sys-*/out/build/CMakeCache.txt")
+          )
+          artifact_build = "target/x86_64-pc-windows-msvc/release/build/"
+          bad = False
+          if not any(c.replace("\\", "/").startswith(artifact_build) for c in caches):
+              print(f"::error::no turbojpeg-sys CMakeCache.txt under {artifact_build} -- "
+                    "the optimisation check has nothing to read for the artifact")
+              bad = True
+
+          def cache_entries(path):
+              # CMakeCache.txt lines are `NAME:TYPE=VALUE`; `//` and `#` are comments.
+              entries = {}
+              with open(path, encoding="utf-8", errors="replace") as f:
+                  for line in f:
+                      line = line.rstrip("\r\n")
+                      if line.startswith(("#", "//")) or "=" not in line:
+                          continue
+                      key, value = line.split("=", 1)
+                      entries[key.split(":", 1)[0]] = value
+              return entries
+
+          for cache in caches:
+              entries = cache_entries(cache)
+              build_type = entries.get("CMAKE_BUILD_TYPE", "")
+              flags_var = "CMAKE_C_FLAGS_" + build_type.upper()
+              flags = entries.get(flags_var) if build_type else None
+              print(cache)
+              print(f"  CMAKE_GENERATOR={entries.get('CMAKE_GENERATOR', '(absent)')}")
+              print(f"  CMAKE_BUILD_TYPE={build_type or '(absent)'}")
+              print(f"  {flags_var}={'(absent)' if flags is None else flags}")
+              if flags is None or "/O2" not in flags.split():
+                  print(f"::error::{cache}: {flags_var} does not carry /O2 -- MSVC compiled "
+                        "libjpeg-turbo unoptimised (the cmake crate's MSVC flag override; "
+                        "01-architecture.md, Native dependencies)")
+                  bad = True
+              # .../build/turbojpeg-sys-<hash>/out/build/CMakeCache.txt -> .../turbojpeg-sys-<hash>/output
+              output = os.path.join(os.path.dirname(os.path.dirname(os.path.dirname(cache))), "output")
+              lines = []
+              if os.path.isfile(output):
+                  with open(output, encoding="utf-8", errors="replace") as f:
+                      lines = [line.strip() for line in f]
+              for line in lines:
+                  if "WITH_SIMD" in line or line.startswith(
+                      ("CMAKE_GENERATOR", "HOST_CMAKE_GENERATOR", "TARGET_CMAKE_GENERATOR")
+                  ):
+                      print(f"  {line}")
+              if not any("WITH_SIMD = 1" in line for line in lines):
+                  print(f"::error::{output}: no 'WITH_SIMD = 1' line -- libjpeg-turbo was "
+                        "built without its SIMD kernels")
+                  bad = True
+          sys.exit(1 if bad else 0)
+          EOF
 
       - name: Upload Windows test binaries
         if: runner.os == 'Windows'

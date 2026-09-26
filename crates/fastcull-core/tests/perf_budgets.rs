@@ -6,6 +6,12 @@
 //! advisory release step. Thresholds are the enforced column of the spec
 //! table; they bind on an idle run of the development machine (issue #27),
 //! and were set ~2x looser than the original baselines to absorb variance.
+//!
+//! Every row prints one `BUDGET-MEDIAN` line BEFORE its assertion, and the
+//! CI step runs with `--nocapture`: the step never fails its job, so its
+//! numbers are read from the log or not at all, and a line printed after
+//! the assertion would vanish exactly when the row is red
+//! (01-architecture.md, "Performance budgets"; brief 008).
 
 use std::path::PathBuf;
 use std::time::{Duration, Instant};
@@ -107,6 +113,10 @@ fn budget_open_exif_under_1ms() {
             })
             .collect();
         let med = median(samples);
+        eprintln!(
+            "BUDGET-MEDIAN {:.3} ms (open+EXIF {name})",
+            med.as_secs_f64() * 1000.0
+        );
         assert!(
             med < Duration::from_millis(1),
             "{name}: open+EXIF median {med:?} (budget 1 ms)"
@@ -130,6 +140,10 @@ fn budget_grid_thumb_under_25ms() {
             })
             .collect();
         let med = median(samples);
+        eprintln!(
+            "BUDGET-MEDIAN {:.1} ms (grid thumb {name})",
+            med.as_secs_f64() * 1000.0
+        );
         assert!(
             med < Duration::from_millis(25),
             "{name}: grid thumb median {med:?} (budget 25 ms)"
@@ -403,6 +417,12 @@ fn budget_pipeline_throughput_over_60_per_sec() {
     let elapsed = t.elapsed();
     drop(pipeline);
     let rate = total as f64 / elapsed.as_secs_f64();
+    // One timed run, so the row's number is that run's rate, not a median;
+    // the tag stays `BUDGET-MEDIAN` so one grep finds every row.
+    eprintln!(
+        "BUDGET-MEDIAN {rate:.0} files/s (pipeline throughput: one run of {total} files on \
+         {threads} threads)"
+    );
     assert!(
         rate > 60.0,
         "pipeline throughput {rate:.0} files/sec on {threads} threads (budget > 60)"
