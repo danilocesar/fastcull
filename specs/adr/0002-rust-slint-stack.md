@@ -1,6 +1,8 @@
 # ADR 0002: Rust core + Slint UI
 
-**Status**: accepted (2026-07-24, user decision)
+**Status**: accepted (2026-07-24, user decision); narrowed by ADR 0005
+(2026-09-26): contributors need rustup, cmake and nasm — or a system
+libjpeg-turbo ≥ 3.0 on Linux
 
 ## Context
 
@@ -27,4 +29,6 @@ Rust+Slint, Rust+Tauri/React, C++/Qt6.
 
 - Grid virtualization needs the windowed-model pattern (Slint has no virtualized
   GridView) — flagged as the M2 prototype risk in ui-grid spec.
-- Contributors need only rustup; CI is a 2-OS cargo matrix.
+- Contributors need only rustup; CI is a 2-OS cargo matrix. (Narrowed by
+  ADR 0005, 2026-09-26: cmake and nasm too — or a system libjpeg-turbo
+  ≥ 3.0 on Linux; the CI matrix is unchanged.)

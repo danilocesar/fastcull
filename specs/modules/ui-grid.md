@@ -16,8 +16,9 @@ core decides.
   (Ctrl+scroll is the M2 deferral, reserved in the pointer contract; pinch
   later). At `N = 1` the view is the **loupe**: first stop fit — **the
   WHOLE frame on screen**, the requirement — rendered from the best rung in
-  hand (the mid on displays up to ~2K, the full-res above; raw-pipeline.md's
-  ladder); then the ×1.5 ladder, capped at 1:1. Arrows NAVIGATE at every
+  hand (the mid on displays up to ~2K, the screen rung above, the full-res
+  whenever it is in hand; raw-pipeline.md's ladder); then the ×1.5 ladder,
+  capped at 1:1. Arrows NAVIGATE at every
   zoom, never pan. Zooming out of the loupe returns to the grid centred on
   the current image.
 - **One-column cell bounding** (2026-07-30, user-approved): cells are 3:2
@@ -76,16 +77,30 @@ core decides.
 image to be as good as possible, I need it to move fast, feeling almost
 like a video. But when I release the key, then I want quality to be high."*
 Three request states govern what is ASKED of the decoder, never what is
-DISPLAYED — the renderer always shows the best rung in cache:
+DISPLAYED — the renderer always shows the best rung in cache. The app asks
+for its real target — the fit box at fit, the top rung above fit (the
+render ladder, below) — and the loupe engine turns each state into what the
+focused frame and every frame of its ring ask for, 2 behind and 15 ahead of
+the cursor, leaning the way of travel. That plan is stated once, in
+raw-pipeline.md ("The ring", its request table, and "Above fit"):
 
-| state | trigger | request |
+| state | trigger | what is asked |
 |---|---|---|
-| TRANSIT | frame changes < `TRANSIT_GAP` (250 ms) apart | the mid rung ONLY, over a wide ring leaning the way of travel |
+| TRANSIT | frame changes < `TRANSIT_GAP` (250 ms) apart | never more than the fit box for the frame on screen, and the ring by the engine's plan |
 | SETTLED | the user stops (~250 ms, the reserved lane's `FOCUS_DEBOUNCE`) | the app's real target for the focused frame |
-| SETTLED-AND-IDLE | after that lands | full-res look-ahead on the ±`PREFETCH` neighbours |
+| SETTLED-AND-IDLE | after that lands | the ring around it, at the same quality |
 
-- **Every ring is a VIEW-ORDER ring** (issue #46): transit, settled,
-  look-ahead and the deferred-revival gate are planned in view positions
+- **The held key is never paced** (user decision 2026-09-26, brief 008):
+  advancing only when the next frame's rung is ready was put to the user
+  and refused — *"No. the application needs to move smooth. the softness is
+  acceptable, but I need to maximize the situations where the softness
+  isn't there."* A hold tracks the key frame-for-frame at every viewport and
+  every factor — the cursor never waits for a decode — and the frames the
+  decoders cannot keep ahead of are the best rung in hand, cued (the render
+  ladder). What the GPU renderer does with a full-res frame per key at 1:1
+  is raw-pipeline.md's recorded residual ("Above fit").
+- **Every ring is a VIEW-ORDER ring** (issue #46): the ring, the full-res
+  ring above fit and the deferred-revival gate are planned in view positions
   and mapped to ids at request time (`LoupeEngine::set_view`, re-keyed by
   the app on every view recompute). An id-space ring on a capture-sorted
   multi-body folder warmed frames no arrow could reach while every real
@@ -99,59 +114,57 @@ DISPLAYED — the renderer always shows the best rung in cache:
 - SETTLED-AND-IDLE is not optional: requesting only the focused frame on
   settle would make tap-stepping through a burst at 1:1 pay a full decode
   on every frame, forever.
-- The same rule at every factor, fit included: on displays up to ~2K, fit
-  asks for less than the mid, so `transit_request` is a no-op; on QHD and
-  4K, transit DOES engage at fit and a hold shows mids upscaled ~1.6–2.4×
-  until release — the designed trade applied consistently, not yet
-  eyeballed by the user on a 4K monitor (issue #60 is parked).
 - Direction is latched at the index change, never re-derived per call: the
   app re-focuses the SAME index on every refresh, and per-call derivation
   flipped the ring forward within milliseconds of every backward step.
-- The transit request is a rung the mid actually SERVES: `serves` allows a
-  1.25× upscale, so a 1616 mid covers 2020 px; requesting 2048 sent every
-  transit frame to full-res and measured as no improvement at all.
 - The settle guarantee lives in the engine's reserved lane, not in the app
-  (the app's refresh loop goes quiet exactly when nothing is decoding);
-  the settle the user feels is ~250 ms — `SETTLE_DEBOUNCE` (150 ms) only
-  decays `in_transit`, and both run from the same origin, so they do not
-  add. The "◌ loading" pill is up throughout a hold — a steady pill, not a
-  flicker (784 of 787 rendered frames, one state change).
-- Measured on the 8-core laptop, cold cache, 1:1: a 150-key hold at 40 ms
-  puts 139 of 150 frames on screen (was 12 of 150), key→pixels median 2 ms
-  (was 119 ms), p90 3 ms (was 9.3 s); an 800-key hold makes 2 full-res
-  decodes (was 182); 20 keys at 120 ms show 18 (was 9). Two limits: a short
-  burst barely benefits (the first ~340 ms of a hold from a cold loupe
-  stall either way), and stop-to-sharp is ~40 ms slower at 120 ms repeats —
-  accepted, motion-first. An adaptive settle was measured and rejected: it
-  sharpened 200 ms sooner but a 60 ms floor was fragile to repeat jitter.
+  (the app's refresh loop goes quiet exactly when nothing is decoding): the
+  lane asks for the real target once the user stops, and its idle cook
+  brings the cursor's full-res behind a stop at fit on a wide viewport
+  (raw-pipeline.md). The settle the user feels is ~250 ms —
+  `SETTLE_DEBOUNCE` (150 ms) only decays `in_transit`, and both run from the
+  same origin, so they do not add. The "◌ loading" pill follows the render
+  ladder below: up at least while the rung on screen does not serve the
+  view, and, once lit while travelling, for at least `CUE_MIN_ON`.
 - Known and deferred (none a spec acceptance criterion): a `Y`/`N` chain
-  faster than 4 marks/s is classified as travelling and judged from the mid
-  — DOCUMENTED AS INTENDED (user decision 2026-08-01: at 4/s nothing
-  changes; above ~4.2/s the old code showed BLANK frames where this shows
-  soft ones; the recorded fix if a rating workflow ever bites is an
-  exclusion keyed on the mark keys); a wraparound cursor would lean the ring
-  wrong for one refocus; stop-to-sharp at the ENGINE is 371–408 ms ±20 ms
-  while the APP-level 721–1047 ms is compositor overhead — measure at the
-  right layer before tuning; no hysteresis on `moving` (a stretched gap
-  mid-hold fires a full-res ring); entering a hold commits up to two
-  uninterruptible full-res decodes; transit queues with `focus_origin =
-  true`, so leaving the loupe mid-hold leaves up to 11 stale entries ahead
-  of grid cells; the settle guarantee's `Slot::Wait` is untimed for a
-  core-only consumer.
+  faster than 4 marks/s is classified as travelling and judged at the
+  hold's quality — at fit the settled quality, above fit full-res while the
+  switch rule keeps it (raw-pipeline.md's request table) — DOCUMENTED AS
+  INTENDED (user decision 2026-08-01: at 4/s nothing changes; above ~4.2/s
+  the old code showed BLANK frames where this shows soft ones; the recorded
+  fix if a rating workflow ever bites is an exclusion keyed on the mark
+  keys); a wraparound cursor would lean the ring wrong for one refocus;
+  stop-to-sharp is measured at the ENGINE, the app-level figure being mostly
+  compositor overhead — measure at the right layer before tuning (History,
+  2026-08-01); no hysteresis on `moving`: a stretched gap mid-hold drops to
+  SETTLED, and the next transit focus re-targets or culls what the settle
+  queued, so it costs at most the decodes in flight; entering a hold
+  commits the settled plan's decodes already in flight — above fit up to
+  one full-res decode per decoder, at fit on a wide viewport at most the
+  idle cook; transit queues with `focus_origin = true`, so leaving the loupe
+  mid-hold leaves up to 18 stale entries ahead of grid cells; the settle
+  guarantee's `Slot::Wait` is untimed for a core-only consumer.
 
-### The render ladder (issues #21, #46; core `transit`)
+### The render ladder (issues #21, #46, #60; core `transit`)
 
 Any factor above fit requests the top rung outright (`display_long =
-u32::MAX`). **Never show upscaled pixels UNFLAGGED, and never leave a frame
-at rest unsharp without the cue**: an above-fit view rendered from below the
-top rung shows the top-left "◌ loading" pill, removed atomically when the
-sharp texture swaps in. The ladder: full-res (sharp) → the mid rung (soft)
-→ the cursor's own 320 px THUMB (soft — ~25× mush at 1:1, and right during
-transit, where position and identity continuity is what the eye tracks;
-persona MUST-HAVE) → the residual HOLD. When not even the thumb exists (a
-cold-start edge), the overlay keeps the PREVIOUS image's pixels at the
-carried geometry, pill on — the video-player dropped-frame convention; the
-alternatives were the fit strobe (the bug) or a black frame. That is a
+u32::MAX`); what a hold then asks of the decoder is the engine's
+(raw-pipeline.md, "Above fit"). **Never show upscaled pixels UNFLAGGED, and
+never leave a frame at rest unsharp without the cue** (user-approved
+2026-07-27): an above-fit view rendered from below the top rung shows the
+top-left "◌ loading" pill, removed atomically when the sharp texture swaps
+in — except while travelling, where a lit pill holds for `CUE_MIN_ON`
+(below) — and at fit the pill shows whenever the rung on screen does not
+serve the fit box (below). The ladder above fit: full-res (sharp) → the
+screen rung (soft — the fit-size decode, so any factor above fit upscales
+it; cued, and under a virgin pin rendered at its native size, floored at
+fit, as the mid is) → the mid rung
+(soft) → the cursor's own 320 px THUMB (soft — ~25× mush at 1:1, and right
+during transit, where position and identity continuity is what the eye
+tracks; persona MUST-HAVE) → the residual HOLD. When not even the thumb
+exists (a cold-start edge), the overlay keeps the PREVIOUS image's pixels at
+the carried geometry, pill on — the video-player dropped-frame convention;
+the alternatives were the fit strobe (the bug) or a black frame. That is a
 knowing, bounded breach of "never the previous frame": the mark badge and
 the status bar name the NEW image over the old pixels (addressing is
 correct; only the judged pixels lag). The bound is double: a decode FAILURE
@@ -170,17 +183,65 @@ yet this session) renders the mid at its native resolution, floored at fit;
 an INFINITY-pinned desire (`Z` during transit) renders at the last resolved
 factor. Same behaviour at all factors.
 
+**At fit** (brief 008 R8, Manager M2 2026-09-26): the fit cell shows the
+best rung in hand — full-res, then the screen rung, the mid, the thumb — and
+the pill whenever that rung does not serve the fit box: the mid on a 4K
+viewport, a rung cached for a smaller display, the thumb, or nothing yet.
+Never for a failed cursor (the strip owns the failed badge), for a terminal
+rung (the file's best), or in a synthetic session (`--synthetic`: no files,
+so nothing is ever loading). "Serves" is the ladder's 1.25 tolerance, so at
+fit the rule holds within it — a ≤ 25 % upscale is unflagged everywhere on
+the ladder — while above fit it is strict. The geometry is untouched: the
+pill is an overlay on its own dark pill like the state badge, drawn above
+both loupe forms, never a reserved strip, so the image never reflows.
+
+**The pill never flickers** (brief 008, the pill rule: Manager M2 on the
+persona's redesign check, 2026-09-26): while travelling, the pill, once on,
+stays on for at least `CUE_MIN_ON` (250 ms), and it clears the moment a
+sharp frame is on screen after the key is released — a minimum on-time errs
+toward flagging a sharp frame, never toward hiding a soft one. Refused: "the
+pill never lights for a single frame", which would show a soft frame
+unflagged; the switch rule's clean steps (raw-pipeline.md) are what keep
+single soft frames rare.
+
 The whole block is core (`fastcull_core::transit`, 2026-08-11):
-`render_rung(&RungInputs) -> RenderDecision` — which rungs are in hand,
-whether the cursor's decode failed, whether the overlay is wanted and was
-up, the hold's pair — is TOTAL and swept over all 320 input combinations
-against the pre-move app ladder, so the extraction is pinned as an
-equivalence; `evict_fullres(held, cursor, view)` — the cursor's texture is
-never the victim, an out-of-view entry goes first, a tie goes to the LATER
-slot; `FULLRES_RING = 2·PREFETCH + 1`. The cap duration is passed in as a UI
-tuning value. The app keeps what only the app can do: texture lookup, the
-clock, the extent math, the property writes. The landing frame's full-res
-preempts the transit backlog via the focus/want-culling priority.
+`render_rung(&RungInputs) -> RenderDecision` — which rungs are in hand
+(sharp, screen rung, mid, thumb), whether the screen rung and the mid SERVE
+the fit box (the app asks core's `loupe::serves_box`, so the 1.25 rule
+keeps its one home), whether the cursor's decode failed, where the loupe is
+(`transit::loupe_where`: off, at fit or above fit — an empty view at fit is
+off, there being no cursor to cue), whether the overlay was up, the hold's
+pair — answers Sharp, Rung, Soft{is_thumb}, Hold{start}, Drop{reason} or
+Fit{cue}. It is TOTAL and swept over every input combination (2^8 booleans
+× 3 loupe positions × 5 hold states, 3,840 rows); the equivalence with the
+pre-move app ladder holds on the rows without a screen rung and off the fit,
+and the new rows are sentences of this spec with their decisions written
+out. The pill's minimum on-time is decided in core too. `evict_ring(held,
+cursor, view, window)` evicts from the app's two texture rings: the
+cursor's texture is never the victim; an out-of-view entry (or any entry
+when the cursor itself has left the view) goes first, then any entry
+OUTSIDE the ring's window — `window.before` positions below the cursor to
+`window.after` above it, the engine's ring leaned by the engine's own travel
+latch (`LoupeEngine::texture_windows()`, never re-derived by the app) —
+before any entry inside it, the farthest by view distance first within each
+class, and a tie goes to the LATER slot. Each ring's capacity is its
+window's size, so a ring holds its whole window, and a landing outside the
+window is kept while the ring has room and is the first victim when it has
+none. The screen-rung ring's window is the ring (2 behind / 15 ahead, 21 MB
+a texture on 4K); the full-res ring's is the full-res ring as the pixel
+cache clamps it (149 MB a texture) — the textures are cooked for every
+landing, so a ring narrower than its window, or one that did not lean with
+it, would cook and evict them; the full-res copies are the memory cost of
+the full-res ring at 1:1, and removing them is the lever issue #60 part 6
+keeps for later. With a symmetric window the rule is plain distance
+eviction. The kitchen drops a queued full-res fill for a frame outside the
+full-res window and cooks the rest in the order the cursor meets them —
+`next_fill(queued, cursor, view, window)`, the mirror of the victim rule
+(01-architecture.md, the kitchen). The cap duration and the pill's
+minimum are passed in as UI tuning values. The app keeps what only the app
+can do: texture lookup, the clock, the extent math, the property writes.
+The landing frame's own work preempts the ring's backlog via the
+focus/want-culling priority.
 
 ### The pointer contract (state machine; user request 2026-07-26, issue #11)
 
@@ -300,10 +361,10 @@ the kitchen (01-architecture.md; user decision 2026-08-02): the UI thread
 only wraps a finished `SharedPixelBuffer` into a `slint::Image`; a texture
 becomes visible one pump tick after its pixels are ready at worst, and
 adoption is UNBUDGETED so a stopped fling fills the viewport in one tick.
-Only MID requests are culled to the visible set; thumb jobs are never
-culled (their bytes were moved into them); a landed thumb for a
-scrolled-away cell is adopted, a landed MID for an invisible cell is
-adopted then dropped by the visible-set retain. Ctrl+scroll zoom stays
+Which queued kitchen jobs are culled is the kitchen's staleness rule
+(01-architecture.md); a landed thumb for a scrolled-away cell is adopted, a
+landed MID for an invisible cell is adopted then dropped by the visible-set
+retain. Ctrl+scroll zoom stays
 deferred: Slint's Flickable consumes wheel events and an overlay TouchArea
 would steal the drag and click gestures; `+`/`-` cover it.
 
@@ -809,13 +870,15 @@ renderer's source offsets are `Fixed<u16, 4>`.
   `grid::scroll_after_resort`, `GridLayout::new`; `filter::view`,
   `filter::view_true_sort`, `filter::cursor_after_recompute`; `selection`
   (`batch`, `count_in_view`, `extend_to`, `extend_bursts`, `select_group`);
-  `transit::render_rung`, `transit::evict_fullres`, `FULLRES_RING`.
+  `transit::render_rung`, `transit::loupe_where`, `transit::evict_ring`,
+  `transit::next_fill` (the order the kitchen cooks its queued full-res fills
+  in, 01-architecture.md) and the pill's minimum on-time.
 - Constants: `TRANSIT_GAP` 250 ms, `SETTLE_DEBOUNCE` 150 ms,
-  `FOCUS_DEBOUNCE` 250 ms, `OVERLAY_HOLD_CAP` 250 ms, `PREFETCH` 2,
-  `TRANSIT_BEHIND`/`TRANSIT_AHEAD` 2/8, `MID_RUNG_MAX_LONG` 2048,
-  `UPSCALE_THRESHOLD` 1.25, 60 logical px per wheel notch,
-  `pointer::OPTIMISTIC_MAX`, `CELL_ASPECT` 3:2, the 300 px panel, the 25 %
-  wash, `#4da3ff`.
+  `FOCUS_DEBOUNCE` 250 ms, `OVERLAY_HOLD_CAP` 250 ms, `CUE_MIN_ON` 250 ms,
+  `RING_BEHIND`/`RING_AHEAD` 2/15 and `PREFETCH` 2 (raw-pipeline.md),
+  `MID_RUNG_MAX_LONG` 2048, `UPSCALE_THRESHOLD` 1.25, 60 logical px per
+  wheel notch, `pointer::OPTIMISTIC_MAX`, `CELL_ASPECT` 3:2, the 300 px
+  panel, the 25 % wash, `#4da3ff`.
 - The marks and dump fields this module emits are test-harness.md's.
 - The keyboard-map table above is parsed by
   `the_shortcuts_card_lists_every_binding_in_the_spec`.
@@ -824,7 +887,8 @@ renderer's source offsets are `Fixed<u16, 4>`.
 ## Acceptance criteria
 
 `core:` a `fastcull-core` unit or integration test; `app:` a driven
-`tests/screenshot.rs` test (real dispatched events, dumps and traces).
+`tests/screenshot.rs` test (real dispatched events, dumps and traces);
+`app unit:` a `fastcull-app` unit test.
 
 - [x] `filter.rs`: every filter/sort combination over a synthetic session,
       counts included — the `filter::tests`.
@@ -837,21 +901,27 @@ renderer's source offsets are `Fixed<u16, 4>`.
       scheme-resolution branch (an unreachable session bus, NOT
       `dbus-run-session`, which passes vacuously) and asserts light glyphs
       over the dark bar; removing the pin yields 0 bright pixels and fails.
-- [x] Transit vs settled: a held key is distinguished from taps and decays
-      on release; the request while moving is a rung the mid serves (2048
-      still fails); the ring leans the way of travel and clamps at both
-      edges; a settled frame climbs without duplicating an in-flight job or
-      spinning; the settle poll leaves LRU order alone; through the public
-      api, so disabling transit at the call site fails —
-      `transit_tracks_held_keys_and_decays_on_release`,
-      `transit_request_is_served_by_the_mid_rung`,
+- [ ] Transit vs settled (reopened by brief 008): a held key is distinguished
+      from taps and decays on release; the request while moving at fit is the
+      fit box, served by the cheapest rung — never the full for an A1 frame —
+      and 2048 still fails; the ring leans the way of travel over 2 behind
+      / 15 ahead and clamps at both edges; a settled frame climbs without
+      duplicating an in-flight job or spinning; the settle poll leaves LRU
+      order alone; through the public api, so disabling transit at the call
+      site fails — `transit_tracks_held_keys_and_decays_on_release`,
+      `transit_request_is_the_fit_box_and_never_the_full` (renamed from
+      `transit_request_is_served_by_the_mid_rung`; it keeps the 2020-px row
+      and gains a 3840×2160 box — clock-free because the driven fit hold
+      cannot fail on a request that reaches the full: those frames render
+      sharp, only fewer of them, a decode rate, issue #27),
       `transit_ring_leans_in_the_direction_of_travel`,
       `a_settled_frame_climbs_even_though_transit_only_asked_for_the_mid`,
       `the_settle_guarantee_does_not_disturb_the_lru_order`,
-      `a_held_key_reaches_transit_through_the_public_api`,
-      `a_backward_hold_keeps_leaning_backward_across_refocus` (the app's
-      same-index re-focus storm). Not covered: the measured performance
-      figures themselves.
+      `a_held_key_reaches_transit_through_the_public_api` (unchanged: its
+      engine has no fit box),
+      `a_backward_hold_keeps_leaning_backward_across_refocus` (unchanged: the
+      ring behind is 2). Not covered: the measured performance figures
+      themselves. Open: ticked when the renamed and amended tests land.
 - [x] No fit-drop, no fling, no phantom fold (issue #46). Core: the ring
       maps view positions to ids and back, the direction latch compares
       positions, deferred revival uses the same ring, the public api decodes
@@ -867,24 +937,29 @@ renderer's source offsets are `Fixed<u16, 4>`.
       `transit_to_a_cold_frame_keeps_the_overlay_at_the_carried_center`
       (both profiles since 2026-09-05; its landing dump gated on the sharp
       rung's mark; the thumb-rung render-order pin release-only, since a
-      congested debug kitchen can collapse the order),
+      congested debug kitchen can collapse the order; fixture changed, brief
+      008: a folder longer than the full-res ring, so its target stays cold),
       `loupe_drag_pans_one_to_one_and_a_fling_never_survives_navigation`
       (both profiles; its pointer work gated on `wait:loupe idx 0 factor`),
       `paced_taps_over_an_interleaved_session_land_warm` (its warm-landing
       pin binds in release, a timing pin like the perf budgets; its no-drop
-      assertion in both), `transit_at_zoom_stays_soft` (the soft render and
-      the sharp landing). Every bug-shaped assertion was red on the pre-fix
-      build. The `(hold cap)` drop-and-re-raise fires under the #76 load
-      recipe in debug (14 of 14) and never on CI; a deterministic
+      assertion in both), `transit_at_zoom_stays_soft_never_drops_to_fit`
+      (the soft render and the sharp landing; fixture changed, brief 008:
+      one backlog decoder and a hold longer than its rest's runway, so the
+      frames it meets are soft). Every bug-shaped assertion was red on the
+      pre-fix build. The `(hold cap)` drop-and-re-raise fires under the #76
+      load recipe in debug (14 of 14) and never on CI; a deterministic
       release-profile exercise still wants a decode-wedge knob (deferred;
       the policy itself is unit-covered as `render_rung` rows).
 - [x] A decode-FAILED cursor drops to fit instead of masking the badge —
       `a_decode_failed_cursor_drops_to_fit_instead_of_masking_the_badge`
-      (a helper thread zeroes the file after `thumb bytes idx 11`; the
-      second End-jump — failure known, texture in hand — must not render
+      (a helper thread zeroes the last file after its `thumb bytes` mark;
+      the second End-jump — failure known, texture in hand — must not render
       the rescue; both landing orders are correct product behaviour and
-      neither is asserted; its preconditions `cursor=11`, `zf=inf` and the
-      `(decode failed)` drop are asserted, not reasoned).
+      neither is asserted; its preconditions — the cursor on that file,
+      `zf=inf` and the `(decode failed)` drop — are asserted, not reasoned;
+      fixture changed, brief 008: a folder longer than the full-res ring, so
+      the zeroed file is never decoded before its End).
 - [x] The wheel: one stop per notch through the restructured wiring, the
       notch size pinned (59 px nothing, 60 px one stop), residue carried, a
       full notch down at fit inert —
@@ -1060,6 +1135,135 @@ renderer's source offsets are `Fixed<u16, 4>`.
 - [x] The shutter fires exactly once per run; the 60 s readiness cap is
       margin again in a debug build — test-harness.md and
       01-architecture.md ("Build profiles").
+- [ ] **`render_rung` is extended and total** (brief 008 A3): core — a screen
+      rung serving the box at fit → `Fit{cue: false}`; a screen rung at 1:1 →
+      `Rung`, cued; the mid alone at fit on a box it does not serve →
+      `Fit{cue: true}` (the G6 row); the mid alone on a box it serves →
+      `Fit{cue: false}`; nothing at fit → `Fit{cue: true}`; a failed cursor at
+      fit → `Fit{cue: false}`; a cached rung that no longer serves the box →
+      `Fit{cue: true}`; a terminal rung → `Fit{cue: false}`; off the loupe →
+      `Drop{BelowLadder}`; an empty view at fit → off; the sweep is the whole
+      3,840-row cross product and reaches every decision; over it, at fit the
+      cue is off only with a sharp or terminal rung, a screen rung or mid that
+      serves the box, or a failed cursor — "never upscaled pixels unflagged"
+      at fit, as an invariant; the equivalence with the pre-move ladder holds
+      on the rows without a screen rung and off the fit; never a fit-flash
+      with pixels of the cursor in hand, every drop above fit excused —
+      `at_fit_the_cue_follows_the_serving_rung`,
+      `at_fit_a_cue_off_means_a_serving_rung_or_a_sharp_or_a_failure`,
+      `above_fit_a_screen_rung_renders_cued`,
+      `off_the_loupe_nothing_applies_and_at_fit_only_the_cue_does` (renamed
+      from `at_or_below_fit_nothing_on_the_ladder_applies`, whose promise —
+      nothing applies at or below fit — this spec changes),
+      `render_rung_is_total_and_reaches_every_decision`,
+      `render_rung_reproduces_the_old_app_ladder_where_it_can_speak` (renamed
+      from `render_rung_reproduces_the_old_app_ladder_on_every_input`),
+      `the_fit_cue_needs_a_cursor_in_the_view`. The synthetic-session mask is
+      review-verified: no driven test reads the cue in a synthetic session.
+      Open: lands with the app's fit cue.
+- [ ] **The pill never flickers** (Manager M2, 2026-09-26): core — while
+      travelling a lit pill stays on at least `CUE_MIN_ON`; it clears at once
+      on a sharp frame after the key is released; any soft frame lights it,
+      however brief — `the_cue_pill_keeps_its_minimum_while_travelling`.
+      Open: lands with the app's fit cue.
+- [ ] **The texture rings hold their leaned windows** (brief 008): core — an
+      entry inside the window is never evicted while one outside it is held,
+      both leans; a symmetric window is the old distance rule exactly, which
+      is how the older eviction rows keep their values; the engine hands the
+      app its windows, leaned by its latch —
+      `a_leaning_ring_keeps_its_runway`,
+      `a_backward_lean_keeps_the_runway_behind`,
+      `the_texture_rings_are_the_engines_windows` (renamed from
+      `the_ring_is_the_prefetch_ring`, whose promise — 5, the literal the app
+      used to carry — becomes the engine's windows),
+      `the_victim_rule_holds_over_a_generated_sweep` (leaning windows swept),
+      `the_engine_hands_the_app_its_leaned_windows`. Open: lands with the
+      rings.
+- [ ] **The kitchen drops stale full fills, cooks the rest in the order the
+      cursor meets them, and keeps both wraps** (brief 008, the redesign's G4;
+      the order, Manager ruling 2026-09-26): core — `transit::next_fill` picks the cursor's fill
+      first, then the nearest by view distance, ties toward the window's lean
+      and forward without one, whatever order the fills were queued in —
+      `full_fills_cook_in_the_order_the_cursor_meets_them`; app unit (the
+      kitchen's) — a queued full-res fill for a frame outside the full-res
+      window is culled at the next submission wave, never one inside it; the
+      kitchen pops its Full fills in `next_fill`'s order; a mid wrap and a
+      screen-rung wrap of one index both stay queued —
+      `full_fills_outside_the_window_are_culled`,
+      `the_kitchen_pops_full_fills_in_next_fill_order`,
+      `wrap_jobs_dedupe_per_kind_not_per_index`, and
+      `pick_orders_full_wrap_thumb_mid` and
+      `full_jobs_coexist_per_index_and_dedupe`, which keep
+      Full > Wrap > Thumb > Mid and the per-index dedupe and
+      lose "latest first" among fills, the promise this box replaces. Mutants:
+      the latest-first pop restored, red on the kitchen's pop test;
+      `next_fill` ignoring the lean, red on the core test's tie rows. Open:
+      lands with the app's rung textures.
+- [ ] **A held arrow at fit on a 4K viewport stays at the rung** (brief 008
+      A5): app, release, a 3840×2160 window over real A1 files linked on the
+      RAWs' volume (test-harness.md) — the three fixtures cycled into a folder
+      longer than all of the runs' travel, 480 files as ruled. The script
+      waits for the capture sort before it resizes to 4K, and models the view
+      order from the fixtures' known capture times, pinned by two dumps
+      (Manager ruling Q5), so every wait names the id at a view position. Each
+      hold starts from a FILLED rest — one `wait:loupe adopted idx <the id at
+      view position cursor+k> kind screen` per k in 1..=15, never the
+      fifteenth alone, since the fixtures' JPEGs differ in size. Three gates,
+      read off the marks after the settle: (1) a rung in hand is never
+      displaced — after `loupe adopted idx N kind screen`, no later `loupe fit
+      idx N rung K` below `screen`; sound on the forward-only script because
+      the rung ring never evicts an entry inside its leaned window while one
+      outside it is held — and (1b) its render-monotone form, after `loupe fit
+      idx N rung screen`, no later lower one; (2) at least `RING_AHEAD` (15)
+      screen rungs decoded from a TRANSIT-state request land during the
+      400-key hold at 40 ms (`loupe ready … kind screen state transit`) — 0
+      under a transit capped at the mid, by construction, on every seat; the
+      DECODE is counted, not the adoption, because on a slow seat a late
+      landing falls outside the window and is the texture ring's first victim;
+      (3) after the rest, the first fifteen frames of the next hold render at
+      the rung on their first `loupe fit` mark. How many frames a hold SEES at
+      the rung is a decode-rate figure, never a gate (issue #27). The fit run
+      also asserts exactly one `fastcull: loupe cache ` line on its stderr
+      (raw-pipeline.md A4). A5 binds on any seat that grants 3840×2160 and
+      skips, printing the geometry it got, on one that does not;
+      `FASTCULL_A5_REQUIRE_4K` (test-harness.md) turns the skip into a
+      failure. The numbers for humans — frames at the rung, the p90 frame
+      interval, the transit-state landings, the app's `VmHWM`, `Z` after a
+      stop, the 1:1 hold, and at 1:1 the delay from the hold's first key and
+      from a step-down to the first screen-rung adoption (the kitchen's
+      Full-before-Wrap order, 01-architecture.md) — go per seat in brief 008's
+      Outcome — `a_held_arrow_at_fit_on_4k_stays_at_the_rung_and_never_slows`.
+      Open: lands with the driven test.
+- [ ] **The hold never slows** (brief 008 A6 and the redesign's G1): app,
+      release, on A5's folder and window, at fit (A5's 400-key hold) and at
+      1:1 (a 400-key hold from a filled full-res ring, its own child run) — at
+      least 98 % of the 400 keys render a distinct frame (the 787-of-800
+      class; distinct N over the render marks), so no pacing crept in, at fit
+      or at 1:1. It cannot see the GPU upload: the suite renders in software
+      (raw-pipeline.md, "Above fit", the residual). PROVISIONAL on every seat
+      until the software renderer's render-mark rate at 3840×2160 is measured
+      there: if a seat's count is under 98 % with the p90 interval far
+      above the 40 ms key, that is the renderer, not pacing, and the floor
+      for that seat is re-based here — the floor alone; the run's count, p90
+      and CI run id go to brief 008's Outcome — never by a test-side margin;
+      the pacing mutant — advance only when the next rung is in hand — stays
+      red under any re-based floor, its reading in the Outcome beside the
+      run's — `a_held_arrow_at_fit_on_4k_stays_at_the_rung_and_never_slows`
+      and its 1:1 run. Open: lands with the driven test.
+- [ ] **Time-to-sharp no worse than v0.14.0** (brief 008, the redesign's
+      G5): QE, on the idle development laptop and the 3840×2160 headless
+      screen A5 uses — where the screen rung and the idle cook act — this
+      tree against the v0.14.0 tag, on the frame landed on: from the last
+      key of a hold and from `]` to the first render that serves the view
+      without the cue, at fit and at 1:1, and from `Z` after a stop at fit
+      to the 1:1 sharp render. At 1:1 both builds emit the sharp mark; at
+      fit this tree's `loupe fit … cue off` is read against v0.14.0's
+      full-res `loupe ready` mark, which precedes that build's render, so
+      the reading can only favour the old build. Eleven interleaved runs
+      per build and case; "no worse" is this tree's median at most v0.14.0's
+      median plus the larger of the two builds' interquartile ranges — a
+      wall clock that binds on the idle laptop only (issue #27); the
+      figures go in brief 008's Outcome. Open: QE's round.
 - RETIRED 2026-09-17 (user decision): the per-release manual acceptance
   (a 5,000-file A1 folder at 60 fps; no perceived latency in the
   pick→auto-advance loop) — never recorded as run; the perf budgets, the
@@ -1067,6 +1271,41 @@ renderer's source offsets are `Fixed<u16, 4>`.
 
 ## History
 
+- 2026-09-26 — A held arrow at fit on 4K (brief 008, issue #60): the user saw
+  what the transit section had recorded as not yet eyeballed on a 4K monitor —
+  *"the quality gets bad very quickly, maybe within 2 or 3 frames"* —
+  because transit asked for the mid only and, at fit, the ladder was left: the
+  fit cell showed the mid 2× upscaled with no cue, the one place "never show
+  upscaled pixels UNFLAGGED" was false. The request at fit is now the fit box,
+  served by the screen rung on a wide viewport; one ring of 2 behind /
+  15 ahead replaces ±2 settled and 2 / 8 in transit; above fit the full-res
+  ring and the switch rule; the cue at fit and the pill's minimum on-time; the
+  held key is never paced (the user refused pacing); `render_rung` gains the
+  screen rung, the fit-serving pair and the loupe position (3,840 rows, 320
+  before); `evict_ring` replaces `evict_fullres` and its `FULLRES_RING`
+  (2·`PREFETCH`+1) with the engine's leaned windows — a symmetric distance
+  cannot hold an asymmetric ring (after a forward hold it keeps the frames
+  just passed and evicts the runway's far end as it lands). The kitchen drops
+  full-res fills outside the window and cooks the rest in the order the cursor
+  meets them, where it cooked the latest first (01-architecture.md); a
+  mid-hold exit from the loupe leaves up to 18 stale entries ahead of grid
+  cells, where it left 11. What each request state asks for every frame of the
+  ring moved to raw-pipeline.md, its one home — "Transit and settled" keeps
+  the states, their triggers and the app's own request — and the
+  transit-request bullet's 2048 lesson moved to the 2026-08-01 line below.
+  Three driven tests whose premises the full-res ring at 1:1 broke — a soft
+  hold, a cold `End` target, a target zeroed after its thumb was read —
+  changed fixtures, not assertions (their boxes; brief 008's decisions log has
+  why). Corrected in place: "the 8-core laptop" of the measured bullet is the
+  4-core / 8-thread laptop; that bullet's figures and the steady-pill count
+  (784 of 787 rendered frames, one state change) measured the mid-only transit
+  of 2026-08-01, and the bullet moved from Behaviour to the 2026-08-01 line
+  below, with the stop-to-sharp figures of the known-and-deferred list; the
+  kitchen's culling rule, restated under Virtualization, now points at its one
+  home (01-architecture.md); the #46 box's `transit_at_zoom_stays_soft` is
+  `transit_at_zoom_stays_soft_never_drops_to_fit`. The first cut of the unit —
+  rings derived from a memory budget, 6 / 12 in transit and a 2 / 6 look-ahead
+  above fit — never reached `main` (brief 008's decisions log).
 - 2026-09-17 — Rewritten (brief 007); the harness section moved to
   test-harness.md; the manual acceptance retired (the user). One stale
   sentence — that the dialog answer rows report no rectangle — was dropped
@@ -1099,7 +1338,21 @@ renderer's source offsets are `Fixed<u16, 4>`.
   v0.8.0.
 - 2026-08-01 — Transit vs settled (user requirement; v0.7.0), motion-first:
   the quality rule's earlier contract, "sharpness-on-stop within ~300 ms",
-  gave way to the settle (371–408 ms at the engine), an accepted cost.
+  gave way to the settle (371–408 ms ±20 ms at the engine, against
+  721–1047 ms at the app, the difference compositor overhead), an accepted
+  cost. The first transit request, 2048, was not served by the 1616 mid
+  (1.25 × 1616 = 2020) and sent every transit frame to full-res —
+  measured as no improvement at all until the arithmetic was checked. Measured
+  on the development laptop (4 cores / 8 threads), cold cache, 1:1, the
+  transit asking for the mid only: a 150-key hold at 40 ms put 139 of
+  150 frames on screen (was 12 of 150), key→pixels median 2 ms (was
+  119 ms), p90 3 ms (was 9.3 s); an 800-key hold made 2 full-res
+  decodes (was 182); 20 keys at 120 ms showed 18 (was 9). Two limits: a
+  short burst barely benefited (the first ~340 ms of a hold from a cold
+  loupe stalled either way), and stop-to-sharp was ~40 ms slower at
+  120 ms repeats — accepted, motion-first. An adaptive settle was measured
+  and rejected: it sharpened 200 ms sooner but a 60 ms floor was fragile
+  to repeat jitter. (In Behaviour until brief 008 moved it here.)
 - 2026-07-30/31 — One-column cell bounding; the double-click defect fixed;
   the provisional order while loading and the narrowed untouched-cursor
   rule (issues #25, #4; user decisions).

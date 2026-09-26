@@ -27,6 +27,10 @@ embedded JPEG is full-resolution — nothing of judgment-relevant detail is lost
 
 - 2,000-image folder → thumbnails in ~7 s on the reference machine.
 - Loupe 1:1 costs ~150 ms once; ±2 neighbor prefetch hides it completely.
+  (Narrowed 2026-09-26, ADR 0005 / issue #60: it hides a tap; during a held
+  arrow at fit on a 4K viewport nothing hid a decode ten times the key
+  repeat — the screen rung and the ring of 2 behind / 15 ahead are the
+  answer.)
 - We display what the camera rendered (like Photo Mechanic), not the RAW
   development darktable will produce. Accepted trade-off for a culling tool.
 - rawler 0.7 gap: A1 full-res JpgFromRaw not exposed → in-tree extractor

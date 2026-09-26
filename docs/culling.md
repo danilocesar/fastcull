@@ -203,16 +203,47 @@ over from 9999 mid-event.
 > land `Y` or `N` on a frame other than the one you were looking at,
 > because the first cell kept changing identity underneath you.
 
-## Holding the arrow: fast now, sharp when you stop
+## Holding the arrow: fast, and sharp while the decoders keep up
 
-Hold `→` at 1:1 and the loupe **keeps up with your finger** — frames go by
-as fast as the key repeats, like scrubbing a video. It does that by showing
-a smaller version while you travel, and it reads ahead in the direction
-you're going so the next frames are ready before you reach them.
+Hold `→` and the loupe **keeps up with your finger** — frames go by as fast
+as the key repeats, like scrubbing a video: the app never slows a hold down
+to wait for a decode (the one case where a hold can still stutter, at 1:1,
+is described at the end of this section). What it shows each frame is the
+sharpest version of that frame it has ready, and it reads up to fifteen
+frames ahead in the direction you're going (and keeps two behind) so the
+coming frames are ready before you reach them.
 
-**Stop, and it sharpens.** About a quarter of a second after your last
-keystroke the app fetches full quality for the frame you landed on. You
-don't press anything; just stop.
+**At fit, frames stay sharp for as long as the decoders keep ahead of
+you.** On a big screen the app decodes each coming frame straight to the
+size your screen draws it at — on a 4K screen about three-eighths of the
+camera's width, far cheaper than the whole 50-megapixel frame. On a strong
+desktop that should be a whole burst at full sharpness. On a modest
+four-core laptop, a hold that starts after a moment's pause is sharp for
+the fifteen frames the app read ahead while you paused, and for as long
+after that as the decoders keep up with the key (how long depends on the
+key's repeat rate and the machine); then they fall behind and you see the
+smaller preview, marked with the "◌ loading" pill, until you slow down or
+stop. On a 1080p or similar screen nothing changes — the preview was
+already sharp at that size.
+
+**At 1:1, the frames ahead are full quality.** Stop or tap, and the frames
+ahead of you — fifteen of them on any machine with more than about 10 GB of
+memory, eleven on an 8 GB one — are decoded at full resolution, so a tap
+forward lands on a sharp frame. Hold, and full-resolution frames keep
+coming for as long as they can be ready before you reach them. When they
+can't, the hold steps down once to the screen-size version, marked with the
+pill, and steps back up when the decoders have caught up; if it would have
+to step down again soon after, it stays on the screen-size version until
+you stop rather than flicker between the two. How long a hold at 1:1 stays
+sharp depends on the machine.
+
+**Stop, and it sharpens.** At fit on a big screen the frame you land on is
+usually already at screen size — whenever the decoders kept ahead of you —
+so the stop costs nothing, and `Z` a moment later finds full quality ready
+or nearly so.
+At 1:1, if the frame you stop on isn't sharp yet, the app fetches full
+quality about a quarter of a second after your last keystroke. You don't
+press anything; just stop.
 
 Two things worth knowing:
 
@@ -223,26 +254,40 @@ Two things worth knowing:
   spot** (with the "◌ loading" pill) until the real pixels arrive
   moments later.
 - **Tapping is not holding.** Step frame by frame — a tap, a look, a tap —
-  and every frame goes to full quality immediately, because you're
-  evaluating, not travelling. The app tells the two apart by your speed:
-  faster than about four frames a second is travelling. That includes a
-  `Y`/`N` chain — rattle through rejects faster than four a second and
-  those frames are judged at the travelling quality, deliberately: at that
-  speed the old behaviour didn't show you a softer frame, it showed you
-  **no frame at all**. At four a second and below, every marked frame is
-  full quality, same as ever.
+  and every frame goes to full quality, because you're evaluating, not
+  travelling. The app tells the two apart by your speed: faster than about
+  four frames a second is travelling. That includes a `Y`/`N` chain —
+  rattle through rejects faster than four a second and those frames are
+  judged at the travelling quality: at 1:1 that is full quality while the
+  decoders keep up, and at fit on a big screen it is the screen-size
+  version, the same thing you'd see at rest. (At that speed the app before
+  0.7 didn't show you a softer frame, it showed you **no frame at all**.)
+  At four a second and below, every marked frame is full quality, same as
+  ever.
 
-**Frames you flew past are held at the smaller size**, and they sharpen
-when you come back to them rather than being ready in advance. Step back a
-few frames from where you stopped and they're already done — the app keeps
-working outward from your resting place while you look. Go deep back into a
-long run and you'll see the smaller version for a moment before it catches
-up. That's the trade for keeping up with your finger in the first place.
+**Frames you flew past stay ready** — the ones the app managed to decode.
+The two frames behind you are kept, and so is everything decoded recently,
+for as long as the app's memory allows (see the FAQ), so stepping back to
+compare is usually instant. Go deep back into a long run and you'll see
+the smaller version for a moment before it catches up.
 
-Sharpening after you stop takes around a third of a second for a
-full-resolution A1 frame, even on a modest laptop — most of that is the
-JPEG decode itself, which cannot be split across cores. Travelling stays
-smooth regardless.
+Decoding a full-resolution A1 frame takes about a fifth of a second on a
+modest laptop — most of it the JPEG decode itself, which cannot be split
+across cores — and less on a desktop, and the app never slows a hold down
+to wait for one. One thing it can't see yet: at 1:1 every sharp frame is
+large — about 150 MB for your graphics card to take in — so on a machine
+whose graphics can't take one per key repeat, a hold at 1:1 can stutter
+where the same hold at fit doesn't. If you see that, the project would like
+to hear about it.
+
+> **Changed after 0.14.0**: on a 4K screen a held arrow at fit used to go
+> soft after two or three frames — while you held the key the app only ever
+> decoded the small preview, and at fit it showed it enlarged two times
+> without saying so. Frames are now decoded to screen size while you travel,
+> the read-ahead is fifteen frames instead of eight, the number of decoders
+> follows your machine's cores, the frames ahead are full quality at 1:1,
+> and the "◌ loading" pill shows at fit too whenever what you see is not the
+> real thing.
 
 > **Fixed after 0.8.1**: arrowing onto a frame nothing had decoded yet
 > used to flash the ENTIRE next photo at fit for a split second before

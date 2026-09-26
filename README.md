@@ -90,10 +90,13 @@ gotchas (Windows SmartScreen, Linux runtime libraries).
 Want the bleeding edge instead? Every green CI run attaches a Windows
 build under the [**Actions** tab](https://github.com/danilocesar/fastcull/actions),
 and Linux builds from source with a standard Rust toolchain
-([rustup](https://rustup.rs/)):
+([rustup](https://rustup.rs/)) plus cmake and nasm:
 
 ```sh
-# dev packages needed: fontconfig, libxkbcommon, wayland, and mesa
+# dev packages needed: fontconfig, libxkbcommon, wayland, and mesa,
+# plus cmake and nasm: the loupe's JPEG decoder, libjpeg-turbo, is built
+# from source (on Linux a system libjpeg-turbo >= 3.0 works too:
+# TURBOJPEG_SOURCE=pkg-config cargo build --release)
 cargo build --release
 ./target/release/fastcull-app /path/to/your/photos
 ```

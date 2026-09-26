@@ -46,8 +46,8 @@ ARW variants (compressed / lossless-compressed / uncompressed). Every A1 ARW emb
 | Embedded image | Dimensions | Size | Used for |
 |---|---|---|---|
 | Thumbnail | 160×120 | ~13 KB | never (too small) |
-| Preview | 1616×1080 | ~0.5 MB | grid thumbnails; loupe fit on displays up to ~2K; the transit rung under a held key |
-| Full-res JPEG | 8640×5760 | ~10–12 MB | 1:1 and every factor above fit; loupe fit on wider displays (the 25 % ladder rule, `modules/raw-pipeline.md`) |
+| Preview | 1616×1080 | ~0.5 MB | grid thumbnails; loupe fit on displays up to ~2K, at rest and under a held key |
+| Full-res JPEG | 8640×5760 | ~10–12 MB | 1:1 and every factor above fit; loupe fit on wider displays through the screen rung — this JPEG decoded at N/8 to the fit size (`modules/raw-pipeline.md`) |
 
 Other cameras: best-effort — TIFF-shaped RAWs (NEF/CR2/DNG…) read EXIF via the
 same in-tree walker as ARW; non-TIFF containers (CR3/RAF/X3F) fall back to
@@ -82,21 +82,48 @@ The words the specs use as terms of art, grouped by where they live.
 
 **Rungs and rendering**
 - **Rung** — a size an image is available at: the **thumb** (320 px, the
-  grid's), the **mid** (the camera's 1616×1080 preview), the **full-res**
-  (the embedded 8640×5760 JPEG). The rung ladder cooks the next rung only
-  when the display needs more than 1.25× the one in hand (raw-pipeline.md).
-- **Transit / settled** — what the loupe asks the decoder for while a key is
-  held (frame changes under 250 ms apart: the mid rung only, over a ring
-  leaning the way of travel) and once the user stops (the real target).
-  Never what is displayed: the screen always shows the best rung in hand.
-- **Ring** — the frames around the cursor decoded ahead, in view order:
-  2 on each side at rest, 2 behind and 8 ahead in transit.
+  grid's), the **mid** (the camera's 1616×1080 preview), the **screen
+  rung** (the embedded full JPEG decoded at N/8 to the fit box, on displays
+  wider than ~2K), the **full-res** (the embedded 8640×5760 JPEG). The rung
+  ladder cooks the next rung only when the display needs more than 1.25×
+  the one in hand (raw-pipeline.md).
+- **Fit box** — the loupe's one-column cell in physical pixels: what fit
+  asks the decoder for (raw-pipeline.md).
+- **Transit / settled** — the loupe's request states: while a key is held
+  (frame changes under 250 ms apart) motion comes first and the frame on
+  screen asks for no more than the fit box; once the user stops, it asks
+  for the real target (ui-grid.md; what every frame of the ring asks in
+  each state, raw-pipeline.md). Never what is displayed: the screen always
+  shows the best rung in hand.
+- **Ring** — the frames around the cursor decoded ahead, in view order: 2
+  behind and 15 ahead, leaning the way of travel, at every zoom; above fit
+  its far end is clamped to what the pixel cache holds. The **ring in
+  force** is that ring as the current state shapes it, the one the cull and
+  the revival read (raw-pipeline.md).
+- **Switch rule** — during a hold above fit, when the frames ahead stop
+  asking for full-res and ask for the fit box, and when they step back up;
+  its one measure is the **time-to-screen**, from a full-res decode's start
+  to the app's adoption of its texture (raw-pipeline.md, "Above fit").
+- **Pixel cache** — the loupe engine's RAM cache of decoded rungs, a
+  quarter of total RAM between 2 and 10 GiB; the app's textures are copies
+  outside it (raw-pipeline.md, "Memory").
+- **Reserved lane** — the loupe worker that takes only the focused frame's
+  work, after a quarter-second debounce; it asks for the real target once
+  the user stops. Its **idle cook** decodes the cursor's full-res after a
+  stop at fit on a wide viewport, so `Z` finds it ready or cooking
+  (raw-pipeline.md).
+- **Texture window** — the view positions around the cursor whose textures
+  the app keeps, leaned the way of travel by the engine (ui-grid.md, "The
+  render ladder").
 - **The pill** — the small dark badge in the loupe's top-left: ★ or ✕ for
-  the mark, and "◌ loading" while an above-fit view is rendered from below
-  the rung it asked for.
+  the mark, and "◌ loading" while the view is rendered from a rung that
+  does not serve it — above fit, anything below the top rung; at fit, a
+  rung that does not serve the fit box — and, once lit while travelling,
+  for at least a quarter second (ui-grid.md).
 - **Kitchen** — the app's one texture-preparation thread; every
-  pixels→texture step happens there, never on the UI thread
-  (01-architecture.md).
+  pixels→texture step the app performs happens there, never on the UI
+  thread (01-architecture.md). The GPU renderer's own upload of a finished
+  texture is Slint's, at draw time, on the UI thread.
 
 **The cursor and the selection**
 - **Cursor** — the one cell keyboard actions land on. **Claimed** once the

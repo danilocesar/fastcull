@@ -43,9 +43,10 @@ terminal tool. CI asserts both PE subsystem fields on every Windows build
 | raw | `raw/` | the in-tree TIFF/IFD walker (`tiff.rs`, `endian.rs`), embedded-JPEG discovery and hostile-header bounds (`jpeg.rs`), bare-JPEG EXIF (`jpeg_exif.rs`), the Sony maker-note reader (`sony.rs`), the orientation kernel (`orient.rs`); rawler only as the RAW-decode and non-TIFF EXIF fallback | raw-pipeline |
 | exif | `exif.rs` | `ExifSummary` and the capture-time sort key, read through the walker | raw-pipeline |
 | pipeline | `pipeline.rs` | priority thread pool: visible > prefetch > background | raw-pipeline |
-| loupe | `loupe.rs` | the loupe engine: two backlog workers + one focus-reserved lane, the rung ladder, the full-res byte-budget LRU | raw-pipeline (ladder), ui-grid (transit contract) |
+| loupe | `loupe.rs` | the loupe engine: one decode worker per physical core, one of them the focus-reserved lane; the rung ladder — mid, screen rung, full-res — decoded by libjpeg-turbo (ADR 0005; CMYK and YCCK streams by zune-jpeg); the one ring and the switch rule above fit; the pixel cache (the byte-budget LRU) | raw-pipeline (ladder, ring and what it asks, decoders, memory), ui-grid (the request states) |
+| budget | `budget.rs` | the machine-derived loupe sizes: the pixel cache from total RAM, the decoder count from physical cores and `FASTCULL_DECODERS`, the startup line; the Windows total-RAM probe, core's one `unsafe` block | raw-pipeline |
 | viewassets | `viewassets.rs` | which rung the UI holds per grid cell; adopts engine-cached rungs that emit no event | raw-pipeline |
-| transit | `transit.rs` | loupe render ladder + full-res ring eviction, as pure decision functions | ui-grid |
+| transit | `transit.rs` | loupe render ladder (the cue at fit and the pill's minimum on-time included) + the eviction of the app's two texture rings by the engine's leaned windows, as pure decision functions | ui-grid |
 | zoompan | `zoompan.rs` | the ×1.5 zoom ladder and pan-anchor math | ui-grid |
 | pointer | `pointer.rs` | the pointer state machine: (state, input) → (state, action) | ui-grid |
 | grid | `grid.rs` | grid layout, the windowed model's visible range, the re-sort reveal | ui-grid |
@@ -90,34 +91,67 @@ copy picks
   right at the 16.6 ms frame budget), and a 5k import spent ~0.93 s of UI
   time decoding thumbnails (perf investigation 2026-07-27; issue #30).
 - **Texture-preparation worker** ("the kitchen"; app crate — presentation
-  plumbing, not business logic, so rule 5 keeps it out of core): ONE
-  dedicated thread owning every pixels→texture conversion — thumb JPEG
-  decode, the full-res SharedPixelBuffer fill, native-size wraps of the
-  engine's mid rung, and full→mid downscales. Priority Full > Wrap >
-  Thumb > Mid (the full-res fill is the sharpness-on-stop tail; Wrap
-  feeds the transit hold). Completions NUDGE the event loop
-  (`invoke_from_event_loop` → a window callback), so adoption happens as
-  soon as the UI is idle; the 33 ms pump drain is the fallback, and
-  adoption is UNBUDGETED (rationing O(1) wraps would turn "one tick
-  later" into a visible trickle-in — persona condition).
-  `SharedPixelBuffer` is atomically refcounted and `Send`; `slint::Image`
-  is not, so the final wrap is the one step that stays on the UI thread.
-  Staleness: MID requests are culled to the visible set at each
-  submission wave; Thumb/Wrap/Full requests are deliberately NOT culled —
-  thumb bytes are MOVED into their jobs (completing them preserves the
-  work), and Full/Wrap serve the loupe, whose own focus/want logic
-  already decides what is asked for. One worker BY DESIGN: a second
-  would take a core from the decode pool that gates stop-to-sharp
-  (persona IN-MY-WAY on two).
-- **Pipeline pool**: rayon pool (num_cpus) executing decode jobs from a priority
-  queue. Priorities: (1) visible cells, (2) loupe neighbors — ±2 at rest, and
-  ±2/±8 oriented by travel while the user holds a key (ui-grid.md transit
-  contract), (3) sequential background fill. Reprioritization on scroll/zoom is O(changed cells).
+  plumbing, not business logic, so rule 5 keeps it out of core): ONE dedicated
+  thread owning every pixels→texture conversion — thumb JPEG decode, the
+  full-res SharedPixelBuffer fill, native-size wraps of the engine's mid rung
+  and screen rung, and full→mid downscales. Priority Full > Wrap > Thumb > Mid
+  (the full-res fill is the sharpness-on-stop tail and the full-res ring's
+  textures at 1:1; Wrap feeds the transit hold — the mid's native-size copy
+  (~5 MB) and the screen rung's (21 MB on a 4K viewport) — and dedupes per
+  index AND kind, so a queued mid wrap never swallows the rung's; a screen
+  rung's copy, like a full-res fill, is cooked only while the loupe is up).
+  Among Full fills the cursor's cooks first, then the nearest to it by view
+  distance, ties toward the lean of the full-res texture window (forward
+  when it has none) — the order the loupe engine decodes them in
+  (raw-pipeline.md, "The ring"), so the nearest member, the one a tap
+  reaches first, is never cooked last. The order is core's pure
+  `transit::next_fill`, the mirror of the texture rings' victim rule
+  (ui-grid.md, "The render ladder"), which the kitchen applies at each pop
+  (Manager ruling 2026-09-26, brief 008). Completions NUDGE the event loop (`invoke_from_event_loop` → a
+  window callback), so adoption happens as soon as the UI is idle; the
+  33 ms pump drain is the fallback, and adoption is UNBUDGETED (rationing
+  O(1) wraps would turn "one tick later" into a visible trickle-in — persona
+  condition). `SharedPixelBuffer` is atomically refcounted and `Send`;
+  `slint::Image` is not, so the final wrap is the one step that stays on the
+  UI thread. Staleness: MID requests are culled to the visible set at each
+  submission wave, and a queued FULL fill for a frame outside the full-res
+  texture window (`LoupeEngine::texture_windows`, ui-grid.md) is culled at the
+  next one, so a revisit never waits behind copies of frames already passed
+  (brief 008, the redesign's G4); Thumb and Wrap requests, and Full fills
+  inside the window, are deliberately NOT culled — thumb bytes are MOVED into
+  their jobs (completing them preserves the work), and Full/Wrap serve the
+  loupe, whose own focus/want logic already decides what is asked for. The
+  Full-before-Wrap order stays: a hold that starts before the kitchen has
+  cooked the full-res ring's fills can find them queued ahead of its first
+  rung wrap, each a 149 MB copy (ui-grid.md A5 records the delay); if that
+  ever bites, the lever is a Wrap that outranks ring Fulls while the transit
+  latch is on — a change to this priority contract with its own row in the
+  kitchen's unit test, never a silent reorder (brief 008). One worker BY
+  DESIGN: a second would take a core from the decode pool that gates
+  stop-to-sharp (persona IN-MY-WAY on two).
+- **Pipeline pool**: one thread per logical core (`available_parallelism`,
+  which the app hands `Pipeline::start`) executing the grid-thumb decode jobs
+  from a priority queue. Priorities: (1) visible cells, (2) prefetch, (3)
+  sequential background fill. Reprioritization on scroll/zoom is O(changed
+  cells). The loupe's ring never runs here: it runs on the loupe engine's own
+  workers, below.
+- **Loupe workers**: the loupe engine's threads, one per physical core
+  within the bounds raw-pipeline.md sets ("The decode workers"), one of
+  them focus-reserved. They decode every loupe rung — mid, screen
+  rung, full-res — soft-rotate it and serve the ring. Every pixel step of a
+  rung runs off the UI thread: the workers decode and rotate, the kitchen
+  fills, the UI thread only wraps (brief 008; the user decision of
+  2026-08-02 above).
 - **Sidecar writer**: single dedicated thread, debounced queue — sidecar writes are
   ordered and never lost (flush on session close, panic-safe via Drop).
 - Core ↔ UI communication: core exposes a `SessionEvent` stream (thumb ready,
   metadata loaded, pick changed…); the app crate translates events into Slint model
   updates on the UI thread. No shared mutable state across that boundary.
+
+(Changed 2026-09-26, brief 008: the kitchen popped the LATEST Full fill first
+— the focused frame's, while the loupe's neighbours were ±2, but the farthest
+member's under a full-res ring of fifteen ahead; and this section called the
+pipeline pool a "rayon pool (num_cpus)", which it never was.)
 
 ## Performance budgets (regression-tested)
 
@@ -150,11 +184,30 @@ headroom since the issue-#27 orientation rework (PR #32, recorded in
 rotate (the shipped `loupe::decode_oriented` path); the 130–150 ms baseline
 predates that and timed the decode alone.
 
+Since 2026-09-26 the loupe decodes with libjpeg-turbo (brief 008, ADR
+0005), and three rows join the full-res one, each guarding a change of KIND
+rather than sitting at ~2× its median. The landscape full-res row is the
+SIMD canary: a libjpeg-turbo built without its SIMD kernels decodes that
+frame in ~308 ms into a pre-faulted buffer (the benchmark's
+`JSIMD_FORCENONE=1` probe), so its threshold, 280 ms, sits at 1.67× the
+idle median and under that figure, where 2× would never fire. The two
+screen-rung rows are the rungs a 4K viewport asks for — a landscape frame's
+3/8 at orientation 1 and a portrait frame's 2/8 plus its orientation-8
+rotate — and their threshold is at most 0.9× the idle landscape full-res
+median (0.9 × 168.1 = 151.3 ms, rounded down to 150, `RUNG_ROW_MS`), so a
+"rung" that silently became a full decode plus a resize is red — the EXIF
+row's reasoning, applied to scaling. All three run on the budget fixture,
+`A1_full_lossless_compressed.ARW`; a 3/8 rung with a transpose is the
+5K-portrait shape, a number for humans in the benches, not a gate.
+
 | Operation | 32-thread baseline (retired 2026-07-28) | i7-8665U laptop, idle (2026-08-02) | Threshold (enforced) |
 |---|---|---|---|
 | open+EXIF (in-tree walker, A1) | ~5 µs | ~12 µs | < 1 ms |
 | grid thumb: extract+decode+resize | 7–11 ms | 12–14 ms | < 25 ms |
-| full-res 8640×5760 decode+rotate | 130–150 ms (decode only) | 250–280 ms | < 350 ms |
+| full-res 8640×5760 decode+rotate (portrait, o8) | 130–150 ms (decode only) | 250–280 ms with zune-jpeg; 215.5 ms with libjpeg-turbo (2026-09-26) | < 350 ms |
+| full-res 8640×5760 decode, landscape (o1) — the SIMD canary | — (added 2026-09-26, brief 008) | 168.1 ms (2026-09-26) | < 280 ms |
+| screen rung 3/8 (3240×2160) decode, landscape (o1) — the 4K landscape rung | — (added 2026-09-26, brief 008) | 117.5 ms (2026-09-26) | < 150 ms |
+| screen rung 2/8 (2160×1440) decode+rotate (portrait, o8) — the 4K portrait rung | — (added 2026-09-26, brief 008) | 113.8 ms (2026-09-26) | < 150 ms |
 | pipeline throughput (all cores) | ~1,500 files/s (post-2026-07-27 EXIF fix; was ~300 mmap-capped) | ~265 files/s | > 60 files/s (4-core runner) |
 | video export, 30 A1 frames (327 MB) | — (M9, 2026-08-27) | ~527 ms | < 2 s |
 | folder scan, 1,000-entry dir (placeholders) | — (moved here 2026-08-30, issue #59) | ~2.5 ms | < 50 ms |
@@ -214,14 +267,21 @@ crate; the release profile is untouched. The user's words: "dependencies
 are not required to be compile at debug mode. most of the time that's
 useless."
 
-Why: the hot pixel work is in dependencies — `zune-jpeg` decodes the
-embedded JPEGs, `fast_image_resize` scales them, Slint's software renderer
-and `jpeg-encoder` produce a `--screenshot` frame — and at opt-level 0 a
-debug build decoded the A1's full-res JPEG in 26-40 s on the Windows CI
-runner and 31 s on the development seat, against the screenshot shutter's
-60 s readiness cap; ten Windows CI jobs failed that way (issues #33, #76).
-With the line the same decode lands in about 1.7 s rotated and 0.8 s
-landscape in debug (release: 373 ms).
+Why: the hot pixel work is in dependencies — libjpeg-turbo decodes the
+loupe's rungs and `zune-jpeg` the grid thumbs, `fast_image_resize` scales
+them, Slint's software renderer and `jpeg-encoder` produce a `--screenshot`
+frame — and at opt-level 0 a debug build decoded the A1's full-res JPEG in
+26-40 s on the Windows CI runner and 31 s on the development seat, against
+the screenshot shutter's 60 s readiness cap; ten Windows CI jobs failed that
+way (issues #33, #76). With the line the same decode lands in about 1.7 s
+rotated and 0.8 s landscape in debug (release: 373 ms) — those figures are
+zune-jpeg's, the loupe's decoder until 2026-09-26. libjpeg-turbo is a C
+library, built by the `cmake` crate at the CMake profile cargo's opt-level
+implies (opt-level 0 → `Debug`, 1–3 with debug info → `RelWithDebInfo`,
+without → `Release`; `turbojpeg-sys` sets none of its own), so under this
+line the dev profile builds it `RelWithDebInfo` and without the line it
+would be a `-O0` build: the line is what keeps the loupe's debug decode
+optimised (Native dependencies, below).
 
 What it costs: a cold debug build compiles every dependency optimised once
 — 4-4.7× the stock cold build on the development seat (2 m 17 s → 10 m 43 s
@@ -301,6 +361,92 @@ job numbers and log lines are verbatim in `specs/history/01-architecture.md`):
       `full match: true`, ubuntu 14 m 59 s, windows 35 m 40 s).
 - [x] No sentence still says the prefix is bumped for a profile change
       (004 AC4).
+
+## Native dependencies (ADR 0005, brief 008, 2026-09-26)
+
+FastCull links ONE C library: libjpeg-turbo ≥ 3.0, the loupe's decoder and
+the source of its N/8 screen rung, through the `turbojpeg` crate over
+`turbojpeg-sys` with the `cmake`, `pkg-config` and `require-simd` features
+(ADR 0005 has the decision and the benchmark; `modules/raw-pipeline.md` the
+rung).
+
+- **Every seat that runs `cargo build` needs `cmake` and `nasm`** — the
+  `cmake` crate drives the vendored libjpeg-turbo's own build, NASM
+  assembles its SIMD kernels — or, on Linux, a system libjpeg-turbo 3.0 or
+  newer found through `pkg-config` (`TURBOJPEG_SOURCE=pkg-config`; Fedora
+  44 ships 3.1.3, Ubuntu 24.04's 2.1.x is too old). The default is the
+  vendored sources, built and linked statically on both targets; README's
+  build block and `docs/index.md` name the requirement, and ADR 0002's
+  "contributors need only rustup" is narrowed by it.
+- **Without NASM the build FAILS**: `require-simd` passes
+  `-DREQUIRE_SIMD=ON`, and libjpeg-turbo's `simd/CMakeLists.txt` then
+  raises a CMake `FATAL_ERROR` instead of falling back to a C-only
+  library. Deliberate: a SIMD-less decoder is 1.95× slower at full size
+  and would break every promise of the loupe silently. The runtime half of
+  the guard is the landscape full-res perf row above.
+- **The C library follows cargo's opt-level** through the `cmake` crate
+  (Build profiles, above): the #76 line is what keeps it optimised in
+  debug.
+- **CI** installs `nasm` on both jobs — `apt-get` on ubuntu, `choco install
+  nasm` on Windows, which CMake finds in `C:\Program Files\NASM` without a
+  PATH step — and `cmake` is on both runner images; both jobs build the
+  library from source, its cold cost paid once per cache key like every
+  dependency. The Windows executables carry it statically (the crate links
+  `turbojpeg-static` on MSVC), and "Verify Windows artifact" checks that
+  neither exe imports `turbojpeg.dll` or `jpeg62.dll`, beside the
+  `VCRUNTIME140` and subsystem checks. The release workflow gets `nasm` from
+  `dist-workspace.toml` (`[dist.dependencies.apt]` and
+  `[dist.dependencies.chocolatey]`), keys the workflow reads at release time,
+  so `release.yml` does not change (RELEASING.md), and RELEASING.md names the
+  requirement. No pull-request run builds the release artifacts (the release
+  workflow's PR run is `dist plan` only), so the release job's nasm is
+  review-verified until the first release.
+- **Licences**: libjpeg-turbo is IJG and BSD-3-Clause, with zlib on the SIMD
+  sources — all in `about.toml`'s accepted list, and README already carries
+  the IJG attribution sentence. `cargo about` keys on the crates' SPDX
+  expressions (`Unlicense OR MIT` for both `turbojpeg` crates), not on the
+  C sources a `-sys` crate vendors, so `about.toml` carries a clarification
+  for `turbojpeg-sys` naming the three vendored texts, each checksummed:
+  `LICENSE.md` (BSD-3-Clause), `README.ijg`'s LEGAL ISSUES (IJG) and
+  `simd/nasm/jsimdext.inc`'s notice (zlib). cargo-about 0.9.2 does not fail
+  when a checksum no longer matches: it exits 0 with a warning and lists
+  the crate under MIT with an unrelated notice, so a test reads the
+  generated `THIRD-PARTY-LICENSES.md` and requires the three licences with
+  their texts (Manager ruling 2026-09-26).
+- **The version canary**: the libjpeg-turbo behaviours the loupe depends
+  on are recorded beside the dependency in
+  `crates/fastcull-core/Cargo.toml`, in the manner of the Slint canaries in
+  `crates/fastcull-app/Cargo.toml`, so an upgrade re-reads them —
+  `tj3Decompress8` returns −1 whenever a decode emitted any warning and the
+  safe crate maps it to `Err` (the residual gap's only guard on the loupe
+  path); the header read allocates no image buffer; the reduced-size IDCTs
+  have SIMD only at 4×4 and 2×2, so the 3/8 rung runs a C 3×3 IDCT; a
+  lossless stream cannot be DCT-scaled; CMYK and YCCK are refused for RGB
+  output ("Unsupported color conversion request"), which is why those
+  streams go through zune-jpeg; and the `cmake` crate's opt-level → CMake
+  profile mapping.
+- **No upstream contribution** (hard rule 2): the crates are used as
+  published; a patch, if ever needed, stays in-tree.
+
+Acceptance (brief 008; each box is ticked by the commit or run that
+carries its evidence):
+- [ ] CI green on both runners with the C dependency (brief 008 A10): both
+      checks green on the PR; the Windows job builds libjpeg-turbo from source
+      with cmake and nasm, and its artifact passes the `VCRUNTIME140`,
+      subsystem and no-`turbojpeg.dll`-import checks and runs
+      `fastcull-cli.exe --version`; the ubuntu job installs nasm and builds
+      from source. Review-verified: the import check's red (no local seat
+      builds a dynamic MSVC binary) and the release job's nasm (no PR run
+      builds release artifacts; the first release after brief 008 is its
+      proof). The user's test of that artifact on the desktop with real
+      folders precedes any release (user decision 2026-09-26). Open: ticked
+      with the run id.
+- [ ] The licence file carries libjpeg-turbo's notices (brief 008 A15):
+      `turbojpeg-sys` listed under the IJG, BSD-3-Clause and zlib licences
+      with their notice texts; red on a file regenerated after the
+      clarification fell back —
+      `the_licence_file_carries_libjpeg_turbos_notices`. Open: lands with
+      the test.
 
 ## Shutdown policy (recorded 2026-07-25)
 

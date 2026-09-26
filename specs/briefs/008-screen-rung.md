@@ -7,10 +7,9 @@ came from a stale local `main` 5f67f00 and numbered this brief 007, a
 number `main` had already given to the spec-readability unit (decisions
 log). Requirements R4–R7 and criteria A1, A4, A5 and A12 carry the
 user's redesign of 2026-09-26 (decisions log); the brief describes what
-ships. Scratch:
-`.qe-scratch/pipeline-007/` (the persona's report and the user's answers,
-verbatim) and `.qe-scratch/issue-60-bench/` (the benchmark harness,
-`REPORT.md`, `run.log`, the reviewer's `run-refute-1.log`). A feature and a
+ships. The persona's reports, the user's answers and the benchmark harness
+live in the unit's scratch, which is not versioned; everything the
+decisions rest on is quoted in this brief. A feature and a
 user-visible change, so the persona gate ran (verdicts below).
 
 ## Context
@@ -43,7 +42,7 @@ user's original ask — a bigger cache (24 slots, 8 GiB) — stores nothing
 new: this is a decode-rate problem, not an eviction problem (issue #60
 explains why; the persona and the Manager agree).
 
-**The benchmark (M6, 2026-09-26, `.qe-scratch/issue-60-bench/REPORT.md`).**
+**The benchmark (M6, 2026-09-26).**
 A throwaway harness on the development laptop (i7-8665U, 4 cores /
 8 threads, 32 GB, thermally saturated after the first second of every
 phase), libjpeg-turbo 3.1.0 built from source with SIMD (AVX2 proven on:
@@ -71,8 +70,7 @@ scale hot, ~140 cool; decode time follows the byte count (+26 % bytes →
 +15 % time). The gain is 1.6–1.8× over today's decode, not the ~3× the
 issue estimated, and about half of it is the decoder swap itself; the 1/8
 floor is 68 % of the half-scale time. The reviewers' material notes are
-recorded here and in raw-pipeline.md's benchmark record (REPORT.md does
-not carry them): the rule holds single-threaded (at 3–4 workers a
+recorded here and in ADR 0005: the rule holds single-threaded (at 3–4 workers a
 half-scale decode is 166–184 ms per frame — the throughput table, not a
 different verdict); the 3/8 rung's portrait rotate runs single-threaded
 below `orient.rs`'s 32 MiB parallel threshold (a 21 MB rung), so its
@@ -112,8 +110,8 @@ Workers and ring depth derive from the machine; nothing is configured.
   three. The hold itself never slows down.
 - G2. The frames the decoders cannot keep ahead of are the best rung in
   hand and honestly flagged, at fit as above fit.
-- G3. Decode capacity follows the machine: workers from physical cores,
-  ring depth and cache from available RAM, one struct, no knob.
+- G3. Decode capacity follows the machine: decoders from physical cores,
+  the cache from total RAM, the ring fixed; no knob beyond a test switch.
 - G4. A short hold at 1:1 stays sharp (the user taps, sometimes holds).
 - G5. A stop at fit on a wide viewport is served by the rung, and `Z`
   after it stays as fast as today.
@@ -218,12 +216,14 @@ Workers and ring depth derive from the machine; nothing is configured.
   behind, and that the hold never slows. `docs/faq.md` gains the memory
   entry (how much RAM FastCull takes, why, and that it follows the
   machine). `docs/index.md` gains the build requirement.
-- R13 (numbers recorded). raw-pipeline.md records the benchmark with the
-  date and the machine (decoder swap, rung, floor, throughput knee) and
-  the reviewers' two material notes; 01-architecture.md's perf table
-  gains a screen-rung row and a landscape full-res row (the issue's
-  request; today only the rotated case is measured), thresholds by the
-  table's own rule (~2× the idle median).
+- R13 (numbers recorded). The benchmark is recorded in this Context and
+  in ADR 0005 (the decoder swap, the rung, the Huffman floor, the
+  throughput knee, the reviewers' two material notes); 01-architecture.md's
+  perf table gains a landscape full-res row (the SIMD canary, < 280 ms)
+  and two 4K screen-rung rows whose thresholds are kind guards at 0.9 × the
+  idle landscape full-res median (< 150 ms, measured idle in step 1).
+  (Revised 2026-09-26: was "raw-pipeline.md records the benchmark",
+  which the spec shape forbids, and "~2× the idle median".)
 
 - R14 (CMYK and YCCK on the loupe path; Manager ruling 2026-09-26).
   libjpeg-turbo refuses CMYK and YCCK to RGB ("Unsupported color
@@ -263,8 +263,8 @@ Workers and ring depth derive from the machine; nothing is configured.
   its ring entry has landed, and the first fifteen frames of a hold that
   starts after a rest longer than the ring's fill time are all at the
   rung; the on-screen sharp-frame rate and p90 frame interval are
-  recorded in ui-grid.md's measured table for the laptop — numbers for
-  humans, not a CI gate; the 4K seat is the user's desktop.
+  recorded per seat in this brief's Outcome — numbers for humans, not a
+  gate; A5's gates bind on any seat that grants a 3840×2160 window.
 - A6. Driven: the hold never slows — frames on screen per key stays at
   the current table's level (the 787-of-800 class); no pacing crept in.
 - A7. Old red first: a mutant that keeps transit on the mid fails A5; a
@@ -282,7 +282,7 @@ Workers and ring depth derive from the machine; nothing is configured.
   any release.
 - A11. Hard rule 1: the RAW-write tests unchanged and green; QE records
   the sample RAWs' checksums before and after its runs.
-- A12. Memory: at the laptop's cache size (8 GiB on its 32 GB), a
+- A12. Memory: at the seat's cache size (about 7.8 GiB on the laptop's 31.1 GiB), a
   5k-symlink walk at fit and at 1:1 holds `VmHWM` ≤ the cache + the
   decoders' transient buffers + 200 MB (the issue's RSS ceiling test),
   skipped when available RAM is under the cache + 2 GiB. (Revised
@@ -323,8 +323,9 @@ Workers and ring depth derive from the machine; nothing is configured.
 - Rules of the gate: old-red-first, a mutant for every new guard, the
   senior developer's veto on every test change; the driven suite runs as
   two `--exact` halves from `--list` (directive 7337a0c).
-- Scratch: `.qe-scratch/pipeline-007/`, `CARGO_TARGET_DIR=target-qe-007*`;
-  combined cap 10 GB; `.qe-scratch/issue-60-bench/` stays for the unit.
+- Scratch: the unit's scratch directory and `target-qe-007*` build trees;
+  combined cap 10 GB; the benchmark harness and the build tools stay for
+  the unit.
 
 ## Persona verdicts (2026-09-26, this branch; full report in scratch)
 
@@ -415,8 +416,10 @@ the cursor's rungs) → a later brief.
     Windows runner — and is review-verified there: the platform skip the
     gate rules require in writing, here.
   - A6's ≥ 98 % is provisional on the laptop as on CI until the software
-    renderer's 4K render-mark rate is measured there; a re-base is a spec
-    sentence carrying the run's count and p90, never a test-side margin.
+    renderer's 4K render-mark rate is measured there; a re-base is the
+    floor in ui-grid.md A6, with the run's count, p90 and run id in this
+    brief's Outcome (the spec shape keeps evidence out of the spec), never
+    a test-side margin.
   - R5: `workers` = min(16, max(3, physical cores)), reduced by the
     budget's transient term — the cap because the 19-entry transit ring
     bounds what more decoders could pop and a 32-core seat would otherwise
@@ -449,7 +452,7 @@ the cursor's rungs) → a later brief.
     logs: every latency cell within 3.4 %, the throughput cells within
     6.6 %, the SIMD probe within 1.5 %.
 - 2026-09-26 (Manager, the plan's seven open questions — the plan is
-  `.qe-scratch/pipeline-007/plan.md`, six commits):
+  the plan, six commits):
   - Q1, the Windows memory probe: ONE `#[cfg(windows)]` `unsafe` block in
     `budget.rs` over `windows-sys` (`GlobalMemoryStatusEx`, `dwLength`
     set, zeroed struct), with a SAFETY comment — the spec's own mechanism.
@@ -480,7 +483,7 @@ the cursor's rungs) → a later brief.
   - Q7: the rung's kind rides inside the `Ready` event's `FullImage`
     rather than as a separate field — the event carries it either way.
   - Seat: the development laptop has no system cmake, nasm or Xvfb; all
-    three run from `.qe-scratch/issue-60-tools/bin` (Xvfb verified to
+    three run from the unit's scratch tools directory (Xvfb verified to
     serve a 3840×2160 root screen, 2026-09-26), which the scratch GC must
     not remove during this unit. Installing them as system packages is
     the user's call and blocks nothing.
@@ -666,3 +669,62 @@ the cursor's rungs) → a later brief.
   - For the user's Windows test of the CI build: hold the arrow at 1:1
     through a long burst and report whether it is as smooth as at fit, and
     whether, when it goes soft, it steps down once or flickers.
+- 2026-09-26 (Manager, the spec port): the senior developer ported the
+  agreed change into the five-section shape with the redesign; three
+  check rounds by two readers (brief coverage; the shape rules and
+  contradictions), the last with no material flaw. The machine froze and
+  was rebooted during the second fix round; the log shows an orderly
+  reboot after network errors, no out-of-memory kill, GPU hang or lockup,
+  and the round was resumed from the workflow's journal. Agreed from the
+  senior developer's port: the thumbs stay on zune-jpeg (N7); lossless
+  streams decode full-scale with no rung (a step-1 finding); the requests
+  per position and state have one home, raw-pipeline.md's "The ring"
+  table; during a hold the focused frame and the members behind are
+  re-planned to the fit box whatever the cache holds; an engine with no
+  fit box keeps the behaviour before this unit; `LoupeEngine::start`
+  keeps three decoders; three driven tests keep their promises under
+  fixture changes, no assertion loosened, each recorded at the test and
+  in its commit — `transit_at_zoom_stays_soft_never_drops_to_fit` pins one
+  backlog decoder (`FASTCULL_DECODERS=2`) and holds at 60 ms on a folder
+  longer than the hold, and
+  `transit_to_a_cold_frame_keeps_the_overlay_at_the_carried_center` and
+  `a_decode_failed_cursor_drops_to_fit_instead_of_masking_the_badge` grow
+  their folders to at least `RING_AHEAD` + 2 frames, because their End
+  targets now sit inside a 1:1 rest's full-res ring.
+- 2026-09-26 (Manager, the port's open questions):
+  - The GPU upload (Q1): the switch rule sees the decode, the kitchen copy
+    and the adoption; femtovg's upload at a texture's first draw is a
+    recorded residual no automated test can see (the suite renders in
+    software). Ruled: ship as designed; the user's Windows test of the CI
+    build — a long hold at 1:1 — is the check, and nothing is released
+    before it; if it stutters, the recorded lever is the 1:1 crop upload
+    (#60 part 4). Put to the user in the report, who may choose the
+    alternatives instead: time the GPU draw as a second input, or keep a
+    1:1 hold on the screen-sized frame.
+  - The kitchen's full-fill order (Q2): the cursor's fill first, then the
+    nearest by view distance, ties toward the lean — core's
+    `transit::next_fill`.
+  - The switch rule's binding form (Q3): agreed as written.
+  - Memory on small machines (Q4): the port's own table put the whole-app
+    worst case at 113 % of RAM on an 8 GiB, 16-core machine (72 % at four
+    cores) against 3.8 GiB before this unit — a swap or an out-of-memory
+    kill on a machine the release reaches. NOT accepted as stated. Two
+    one-line clamps, specified by the senior developer before the plan:
+    the full-res ring above fit counts its texture copies against the
+    cache — floor(cache / (2 × 149,299,200)) frames, far end first — and
+    the decoders are capped at half the machine's RAM in GiB, floor 3.
+    Target: the whole-app worst case at most 60 % of total RAM on every
+    row of the table. Neither clamp changes the user's 32 and 64 GB
+    machines.
+  - `FASTCULL_DECODERS` down to 2, with 1 read as 2 (Q5): agreed.
+  - The step-1 carry (Q7): its old-shape spec edits dropped, "brief 007"
+    renamed "brief 008" and `"The rung"` renamed `"The screen rung"` in its
+    code comments, raw-pipeline.md A8 ticked in that commit with its tests
+    (M10).
+  - CLAUDE.md (Q9, Q10): the Commands block names the new build
+    requirement, and the open-decisions entry for #60 records the
+    reopening.
+  - The build seat (Q9) is put to the user: the laptop's cmake and nasm
+    live in the unit's scratch, which the cleanup rule deletes at the
+    unit's end; after that a build there fails on purpose unless the two
+    are installed as system packages.

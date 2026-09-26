@@ -28,6 +28,17 @@ Double-clicking opens just the FastCull window — no console window
 appears alongside it (releases up to 0.8.0 dragged one along, and
 closing it killed the app).
 
+## Building it yourself
+
+The [README](../README.md) has the commands. Two things a plain Rust
+toolchain does not bring: the loupe's JPEG decoder is libjpeg-turbo, a C
+library built from source when you `cargo build`, so you need **cmake** and
+**nasm** installed (on Linux a system libjpeg-turbo 3.0 or newer can be used
+instead, with `TURBOJPEG_SOURCE=pkg-config` set when you build); and the
+Slint GUI needs the desktop's development packages (fontconfig,
+libxkbcommon, wayland, mesa). A machine without nasm fails the build on
+purpose, rather than producing a decoder half as fast.
+
 ## Can I trust it with my photos?
 
 Three facts before you press a single key:

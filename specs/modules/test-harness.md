@@ -34,12 +34,23 @@ explain itself on stderr.
   cook is held`); with tracing, the retarget reports how many queued jobs
   it dropped.
 - `FASTCULL_MAX_READERS=N` — the read pool override (raw-pipeline.md).
+- `FASTCULL_DECODERS=N` — the loupe's decoder-count override
+  (raw-pipeline.md, "The decode workers"). The app prints its loupe sizes
+  once at startup on stderr, the line that starts `fastcull: loupe cache `
+  (raw-pipeline.md, "Memory"), so a run's evidence says what it ran with.
 - `--screenshot <out>` — forces the software renderer (`take_snapshot`
   yields black frames on the GPU renderer), so the suite does not exercise
   the shipping femtovg renderer; snapshots are JPEG q92 whatever the
   extension; a far-panned 1:1 view snapshots BLACK beyond ~4096 px of pan
   (the software renderer's `Fixed<u16, 4>` offsets) — assert on the trace
   there.
+
+One switch is read by the tests alone, never by the app:
+`FASTCULL_A5_REQUIRE_4K=1` makes ui-grid.md A5's 4K fit hold refuse to skip
+— a seat that does not grant the 3840×2160 window, a missing display or a
+debug build is then a failure — and is set on the Linux CI release step and
+on every local measurement or mutant run of A5, where the seat is meant to
+host that window (Manager ruling 2026-09-26).
 
 ### The drive script
 
@@ -135,18 +146,36 @@ sidecars — scripts target throwaway copies of test data only.
 
 ### The marks
 
-- **Loupe rungs**: `loupe ready idx N long L` (the DECODE arrived — L its
-  long edge, at or below 2048 a mid rung, above it the full-res); `loupe
-  soft idx N factor …` / `loupe thumb idx N factor …` (a transit rung is on
-  screen); `loupe idx N factor F extent WxH …` (the SHARP render: the
-  full-res texture is on screen and the soft flag is cleared). `wait:loupe
-  idx N factor` is the full-res-on-screen gate — every other `loupe …`
-  line carries its own word between `loupe` and `idx`; keep the trailing
-  ` factor` so `idx 1` cannot match `idx 10`; the sharp line re-fires on
-  every pan of the same frame, so it answers "has this frame gone sharp
-  yet", never "again". Also `loupe hold …` and `loupe overlay dropped …
-  (hold cap)` / `(decode failed)` — the excuse-less `(no rung in hand)`
-  form is outlawed (ui-grid.md).
+- **Loupe rungs**: `loupe ready idx N long L kind K state S` (the DECODE
+  arrived — L its long edge; K `mid`, `screen` or `full`, because a screen
+  rung's long edge exceeds 2048 and the size no longer tells the rungs
+  apart; S `transit` or `settled`, the request state the decode carried,
+  raw-pipeline.md "The ring"; the `loupe ready idx N long L` prefix is
+  unchanged, so older waits still match); `loupe soft idx N factor …` /
+  `loupe thumb idx N factor …` / `loupe rung idx N factor …` (a sub-top rung
+  is on screen above fit: the mid, the thumb, the screen rung); `loupe idx N
+  factor F extent WxH … cue C` (the SHARP render: the full-res texture is on
+  screen, defined by the texture alone; C is the pill — `off`, except while
+  `CUE_MIN_ON` holds a lit pill over a sharp frame during travel, and the
+  mark re-fires when C changes, ui-grid.md "The render ladder"); `loupe fit
+  idx N rung K cue C` (at
+  fit: K the rung the fit cell shows — `none`, `thumb`, `mid`, `screen`,
+  `full` — and C `on` or `off`, the pill; emitted on every change of the
+  triple, the instrument of the fit-hold measurements: frames on screen are
+  distinct N, rung quality is K); `loupe adopted idx N kind K` (the UI thread
+  adopted a kitchen wrap or fill into its texture ring and the texture is
+  still HELD after that ring's eviction — once per ring it is held in; a
+  texture that is itself the victim emits nothing; `loupe ready` is the
+  pump's mark for the DECODE, and the texture arrives a kitchen job later).
+  `wait:loupe idx N factor` is the full-res-on-screen gate — every other
+  `loupe …` line carries its own word between `loupe` and `idx` (`ready`,
+  `adopted`, `soft`, `thumb`, `rung`, `fit`, `hold`, `overlay dropped`);
+  keep the trailing ` factor` so `idx 1` cannot match `idx 10`, and for the
+  others a trailing space (`idx 1 `); the sharp line re-fires on every pan of
+  the same frame, so it answers "has this frame gone sharp yet", never
+  "again". Also `loupe hold …` and `loupe overlay dropped … (hold cap)` /
+  `(decode failed)` — the excuse-less `(no rung in hand)` form is outlawed
+  (ui-grid.md).
 - **Thumbs**: `thumb bytes idx N` (the pipeline read the embedded JPEG, at
   scan time) and `thumb landed idx N` (the kitchen decoded it into a
   texture — only for cells near the view, and nothing evicts it within a
@@ -248,14 +277,19 @@ line, the last surviving into the report), `copyerror=`; the clip block —
 `cliperror=`, `clipreport=`, `clipconfirm=`, `clipprogress=` (the export's
 running line, the twin of `copyprogress=`), `cliphint=`, `exported=`,
 `curexported=`; and `vpy=`, the grid Flickable's offset in Slint's sign (0
-at the top, negative going down). New fields are APPENDED; `dump_field`
-finds `name=` by prefix.
+at the top, negative going down); and `rung=`, the rung the cursor is
+rendered from at that instant (`none`, `thumb`, `mid`, `screen`, `full`), at
+fit and above it — the dump's last field, after `focusowner=`, read with
+`soft=`, which at fit reports the cue pill (brief 008: without it a dump
+tells soft from sharp but not the screen rung from the mid). New fields are
+APPENDED; `dump_field` finds `name=` by prefix.
 
 ### The shutter
 
 `--screenshot` arms a readiness predicate per launch mode: at a grid zoom
-the 1.5 s floor; `--start-loupe` the mid-or-better texture; `--start-11`
-the full-res adopted for the 1:1 frame — a decode-FAILED final cursor above
+the 1.5 s floor; `--start-loupe` the mid-or-better texture (a screen rung
+included); `--start-11` the full-res adopted for the 1:1 frame — a
+decode-FAILED final cursor above
 fit trips the cap and exits 1, so a script that visits a failed image at
 1:1 must END on a decodable cursor. A 60 s readiness cap runs from
 `shutter::arm` and is not paused while a drive step is pending. The shutter
@@ -304,11 +338,19 @@ shot 2.
   delta. `keysfocus` counts are seat-sensitive context, never a verdict.
 - The menu-click strands are Linux-only (`menu_clicks_are_calibrated()` is
   `!cfg!(windows)`): no dispatched pointer event reaches an OS menu bar.
-- The suite drives nine geometries — 640x300, 900x800, 1000x700, 1024x768,
-  1200x800, 1440x700, 1440x900, 1500x800, 1600x800 — plus the 1440x900 the
-  app opens at, inside the Linux runner's pinned `1920x1200x24` xvfb
-  screen; a test that drives past that raises the screen in the same
-  commit.
+- The suite drives ten geometries — 640x300, 900x800, 1000x700, 1024x768,
+  1200x800, 1440x700, 1440x900, 1500x800, 1600x800 and the 3840x2160 of the
+  4K fit hold (ui-grid.md A5) — plus the 1440x900 the app opens at, inside
+  the Linux runner's pinned `3840x2160x24` xvfb screen, raised from
+  `1920x1200x24` by the commit that lands A5; a test that drives past that
+  raises the screen in the same commit.
+- A fixture folder too large to copy — ui-grid.md A5's hundreds of RAWs —
+  is LINKED (symlinks on unix, hard links on Windows; a copy would write
+  tens of GB) and lives on the RAWs' volume, under the target directory
+  with a drop guard (`perf_budgets.rs`'s `target_dir()` pattern), never
+  under the temp dir: on the Windows runner the temp dir is on C: and the
+  checkout on D:, and a hard link cannot cross volumes (Manager ruling
+  2026-09-26).
 - CI facts: a pull request's runs share one concurrency group per ref with
   `cancel-in-progress` (a run that vanishes without a verdict is a cancel,
   not a hang); every other event gets its own group; the job cap is 90
@@ -358,6 +400,12 @@ shot 2.
 
 ## History
 
+- 2026-09-26 — The loupe marks name the rung's kind and the request state;
+  `loupe rung`, `loupe fit`, `loupe adopted`; the sharp mark's `cue`, since
+  a lit pill may outlast a sharp swap while travelling; the dump's `rung=`;
+  `FASTCULL_DECODERS`, the startup line and the test-side
+  `FASTCULL_A5_REQUIRE_4K`; the 3840x2160 geometry and its xvfb screen;
+  linked fixtures on the RAWs' volume (brief 008).
 - 2026-09-17 — Moved out of ui-grid.md and reshaped (brief 007). The
   section as moved, with every measurement, is
   `specs/history/test-harness.md`.
