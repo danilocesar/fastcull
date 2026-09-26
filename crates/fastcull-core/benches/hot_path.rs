@@ -47,6 +47,9 @@ fn bench_hot_path(c: &mut Criterion) {
     };
     let mut group = c.benchmark_group("fullres");
     group.sample_size(10);
+    // The bare zune-jpeg decode stays as the historical control: the loupe
+    // decoded with it until 2026-09-26 (brief 008, ADR 0005), and the grid
+    // thumbs still do. The shipped loupe path is `decode_oriented` below.
     group.bench_function("decode_8640x5760", |b| {
         b.iter(|| {
             let mut d = zune_jpeg::JpegDecoder::new(&fullres_bytes);
@@ -74,6 +77,22 @@ fn bench_hot_path(c: &mut Criterion) {
     });
     group.bench_function("decode_oriented_o8", |b| {
         b.iter(|| fastcull_core::loupe::decode_oriented(&fullres_bytes, 8).unwrap())
+    });
+    // The screen rung (brief 008): the two shapes a 4K viewport asks for —
+    // a landscape frame's 3/8 (no transpose) and a portrait frame's 2/8
+    // plus its single-threaded rotate — are the perf table's gated rows;
+    // 3/8 + o8 is the 5K-portrait shape, a number for humans only
+    // (01-architecture.md), and the measurement a 5K seat would read at
+    // `orient.rs`'s 32 MiB parallel threshold and at 16 MiB
+    // (raw-pipeline.md, Orientation).
+    group.bench_function("decode_scaled_3_8_o1", |b| {
+        b.iter(|| fastcull_core::loupe::decode_scaled_oriented(&fullres_bytes, 1, 3).unwrap())
+    });
+    group.bench_function("decode_scaled_2_8_o8", |b| {
+        b.iter(|| fastcull_core::loupe::decode_scaled_oriented(&fullres_bytes, 8, 2).unwrap())
+    });
+    group.bench_function("decode_scaled_3_8_o8", |b| {
+        b.iter(|| fastcull_core::loupe::decode_scaled_oriented(&fullres_bytes, 8, 3).unwrap())
     });
     group.finish();
 }

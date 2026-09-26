@@ -51,3 +51,43 @@ accepted = [
     "Unlicense",
     "Zlib",
 ]
+
+# turbojpeg-sys vendors libjpeg-turbo 3.1.0, the loupe's decoder (ADR 0005,
+# brief 008): IJG + Modified BSD, with zlib on the SIMD sources.
+# cargo-about reads the crate's own SPDX (Unlicense OR MIT) and would ship
+# the binaries without the C library's notices, so this clarification names
+# the vendored files that carry each licence's text: the BSD text with
+# libjpeg-turbo's copyright (and the roll-up of how the three apply) in
+# LICENSE.md, the IJG terms in README.ijg's LEGAL ISSUES section (LICENSE.md
+# only points there), and the zlib notice of the SIMD extension in
+# jsimdext.inc (which every SIMD source refers to). Each text is
+# checksummed. THE CANARY IS A WARNING, NOT A FAILURE (read in cargo-about
+# 0.9.2's `gather_clarified` and measured, 2026-09-26): when a version bump
+# changes one of these texts, `cargo about generate` still exits 0, logs
+# "failed to validate all files specified in clarification for crate
+# turbojpeg-sys", and falls back to scanning the crate — which listed it
+# under MIT with a JavaScript file's notice from libjpeg-turbo's docs and
+# none of the three licences above. After every regeneration, check that
+# turbojpeg-sys is still listed under the IJG, BSD 3-Clause and zlib
+# licences.
+[turbojpeg-sys.clarify]
+license = "(Unlicense OR MIT) AND IJG AND BSD-3-Clause AND Zlib"
+
+[[turbojpeg-sys.clarify.files]]
+path = "libjpeg-turbo/LICENSE.md"
+license = "BSD-3-Clause"
+checksum = "96f5b328adbb78eeaaec6980d73fd558cb1e4d62560ed615646bc3cf5e532430"
+
+[[turbojpeg-sys.clarify.files]]
+path = "libjpeg-turbo/README.ijg"
+license = "IJG"
+start = "LEGAL ISSUES\n============"
+end = "assumed by the product vendor."
+checksum = "3a72a4e3fd0f2a7539b28ae589cf9f52826931b4340b2db6a06f2533f3e19a65"
+
+[[turbojpeg-sys.clarify.files]]
+path = "libjpeg-turbo/simd/nasm/jsimdext.inc"
+license = "Zlib"
+start = "; Copyright 2009 Pierre Ossman"
+end = "; 3. This notice may not be removed or altered from any source distribution."
+checksum = "54d108e0bbd05f95dc468aa555aa5a7edf5d3acbcb92b193ecd309fa9284f94d"

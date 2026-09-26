@@ -7,9 +7,11 @@
 //! evaluated the orientation `match` inside a loop over every pixel, copied
 //! three bytes at a time, and transposed row-major into column-major so
 //! nearly every write missed cache: 236 ms measured for orientation 8 on the
-//! 8-core development laptop — comparable to the ~250 ms JPEG decode it
-//! follows. Only portrait frames pay it (landscape returns at the guard),
-//! which is why it went unnoticed and why perf_budgets forces orientation 8.
+//! 4-core / 8-thread development laptop ("8-core" here until 2026-09-26,
+//! which counted threads) — comparable to the ~250 ms JPEG decode it
+//! followed then. Only portrait frames pay it (landscape returns at the
+//! guard), which is why it went unnoticed and why perf_budgets forces
+//! orientation 8.
 //!
 //! What this implementation does, each choice pinned by measurement
 //! (research probe 2026-08-02, medians of 3 on real 8640x5760 pixels):

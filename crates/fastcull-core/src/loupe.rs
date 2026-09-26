@@ -955,54 +955,125 @@ fn decode_jpeg_rung(
 /// instead of a re-implementation of it (the old test replicated
 /// `decode()` + rotate and therefore could not see pipeline-level wins or
 /// regressions in this path).
+///
+/// The decoder is libjpeg-turbo through the safe `turbojpeg` crate (ADR
+/// 0005, brief 008; zune-jpeg until 2026-09-26). Reading the header
+/// parses markers and allocates no image buffer, so the two guards below
+/// run before anything is sized from the stream's claims (issue #31,
+/// raw-pipeline.md "Hostile-input bounds"), in this order: the header's
+/// FULL dimensions against `MAX_DECODED_PIXELS`, then `scan_is_terminated`
+/// on the bytes — both before any buffer is sized or any scan byte
+/// decoded. A stream that passes both and still runs short (a valid EOI
+/// over too little entropy data) makes libjpeg-turbo warn, and
+/// `tj3Decompress8` returns -1 on any warning, which the crate turns into
+/// `Err`: a `Failed` badge, never a blank success. See
+/// [`decode_scaled_oriented`] for the same decode at an N/8 scale; a
+/// lossless stream ignores the scale and decodes full-size.
 pub fn decode_oriented(bytes: &[u8], orientation: u16) -> Result<(Vec<u8>, u32, u32), String> {
-    // Per-side limits are lifted (the default is 16384, which would reject
-    // legitimate stitched panoramas served as bare JPEGs); SOF sides are u16
-    // so the real bound is the PIXEL-COUNT cap below (issue #31), checked
-    // before anything is allocated from the header's claim.
-    let options = zune_jpeg::zune_core::options::DecoderOptions::default()
-        .jpeg_set_out_colorspace(zune_jpeg::zune_core::colorspace::ColorSpace::RGB)
-        .set_max_width(usize::MAX)
-        .set_max_height(usize::MAX);
-    let mut decoder = zune_jpeg::JpegDecoder::new_with_options(bytes, options);
-    // The A1 full-res JPEG is baseline with ZERO restart markers (verified
-    // by parsing them — probe 2026-08-02), so the Huffman decode is
-    // strictly serial: one core for ~220 ms while the rest idle. Two
-    // things reclaim that dead time on a 50 MP frame (measured, medians):
-    //
-    // - `decode_into` a pre-faulted buffer instead of `decode()`:
-    //   247-252 ms → 215-227 ms. `decode()` allocates internally and
-    //   pays ~40 ms of first-touch page faults inside the decode.
-    // - The transpose's 149 MB output buffer is allocated AND pre-faulted
-    //   on a spare thread WHILE the decode runs, so the rotate that
-    //   follows starts with hot pages ([`crate::raw::Scratch`]).
-    //
-    // Neither changes peak memory: the same two buffers exist either way;
-    // only WHEN the page faults are paid moves — off the critical path.
-    decoder
-        .decode_headers()
-        .map_err(|e| format!("decode: {e}"))?;
-    let (w, h) = decoder.dimensions().ok_or("no dimensions")?;
+    decode_with(bytes, orientation, 8).map(|(rgb, w, h, _)| (rgb, w, h))
+}
+
+/// [`decode_oriented`] at a DCT scale of `numerator`/8: the screen rung
+/// (raw-pipeline.md, "The screen rung"). libjpeg-turbo scales inside the
+/// inverse DCT, so a 3/8 decode of the A1's full never builds the
+/// 8640x5760 frame at all. `numerator` is 1..=8, 8 being full scale; any
+/// other value is refused, because 9/8 and up would UPSCALE, which no rung
+/// may do. The guards and their order are `decode_oriented`'s, applied to
+/// the header's FULL dimensions before any factor is set. A lossless JPEG,
+/// which libjpeg-turbo cannot scale, decodes full-size whatever
+/// `numerator` asks (the Cargo.toml canary, item 4).
+pub fn decode_scaled_oriented(
+    bytes: &[u8],
+    orientation: u16,
+    numerator: u8,
+) -> Result<(Vec<u8>, u32, u32), String> {
+    decode_with(bytes, orientation, numerator).map(|(rgb, w, h, _)| (rgb, w, h))
+}
+
+/// The size a `numerator`/8 decode of a `width` x `height` JPEG comes out
+/// at: TurboJPEG's `TJSCALED`, a ceiling division, in u64 so the result is
+/// the decoder's own arithmetic (8640x5760 at 3/8 is 3240x2160; odd sizes
+/// round up). Before orientation: a transposing orientation swaps the two.
+pub fn scaled_dims(width: u32, height: u32, numerator: u8) -> (u32, u32) {
+    let scale = |d: u32| {
+        let scaled = (u64::from(d) * u64::from(numerator)).div_ceil(8);
+        u32::try_from(scaled).unwrap_or(u32::MAX)
+    };
+    (scale(width), scale(height))
+}
+
+/// The one decode behind [`decode_oriented`] and [`decode_scaled_oriented`].
+/// The fourth field is the numerator the decoder RAN — 8 for a lossless
+/// stream whatever was asked — so the ladder can tell a scaled rung from
+/// the full by what the decoder did, never by comparing a size with an
+/// IFD's claim (raw-pipeline.md, "The screen rung": the app never infers
+/// top-rung-ness from a size).
+fn decode_with(
+    bytes: &[u8],
+    orientation: u16,
+    numerator: u8,
+) -> Result<(Vec<u8>, u32, u32, u8), String> {
+    if !(1..=8).contains(&numerator) {
+        return Err(format!("scaling numerator {numerator} out of 1..=8"));
+    }
+    // One decompressor per call: its setup is small next to a decode, and
+    // the loupe's workers then share no decoder state. A per-thread handle
+    // would have to be measured to earn its place (brief 008).
+    let mut dec = turbojpeg::Decompressor::new().map_err(|e| format!("decode: {e}"))?;
+    let header = dec.read_header(bytes).map_err(|e| format!("decode: {e}"))?;
     // Issue #31: the header's dimension claim sizes the decode buffer, the
-    // prefault pass, and the transpose Scratch below — all BEFORE zune sees
-    // one byte of scan data, and a truncated scan decodes as "success"
-    // (zero-filled). Reject implausible claims and unterminated streams
-    // here, while nothing has been allocated from them.
-    if !crate::raw::plausible_decoded_dims(w, h) {
+    // prefault pass and the transpose Scratch below, and in a crafted file
+    // every claim is the attacker's. Reject an implausible claim — on the
+    // FULL dimensions, before any factor — and an unterminated stream here,
+    // while nothing has been allocated from them. The byte check runs
+    // second so that a hostile stream that is ALSO cut short is named for
+    // its size ("implausible"), and it runs at all, although the decoder
+    // would fail a cut-off scan by itself, because it spares the 80-115 ms
+    // grey decode of the commonest field corruption (a cut-off copy) and
+    // names the cause ("truncated"), which the decoder's message does not.
+    if !crate::raw::plausible_decoded_dims(header.width, header.height) {
         return Err(format!(
-            "implausible JPEG dimensions {w}x{h} (over {} pixels)",
+            "implausible JPEG dimensions {}x{} (over {} pixels)",
+            header.width,
+            header.height,
             crate::raw::MAX_DECODED_PIXELS
         ));
     }
     if !crate::raw::scan_is_terminated(bytes) {
         return Err("truncated JPEG stream (scan reaches no end-of-image marker)".into());
     }
-    let n = w
-        .checked_mul(h)
+    let numerator = if header.is_lossless { 8 } else { numerator };
+    // `ScalingFactor::new` reduces by the gcd, so 8/8 is the crate's `ONE`
+    // and a lossless stream never meets `CannotScaleLossless`.
+    dec.set_scaling_factor(turbojpeg::ScalingFactor::new(usize::from(numerator), 8))
+        .map_err(|e| format!("decode: {e}"))?;
+    let full_w = u32::try_from(header.width).map_err(|_| "width overflow")?;
+    let full_h = u32::try_from(header.height).map_err(|_| "height overflow")?;
+    let (w, h) = scaled_dims(full_w, full_h, numerator);
+    let n = (w as usize)
+        .checked_mul(h as usize)
         .and_then(|px| px.checked_mul(3))
         .ok_or("dimension overflow")?;
-    let w = u32::try_from(w).map_err(|_| "width overflow")?;
-    let h = u32::try_from(h).map_err(|_| "height overflow")?;
+    // The A1 full-res JPEG is baseline with ZERO restart markers (verified
+    // by parsing them — probe 2026-08-02), so the Huffman decode is
+    // strictly serial: one core for ~170 ms (~220 ms under zune-jpeg)
+    // while the rest idle. Two things reclaim that dead time on a 50 MP
+    // frame (raw-pipeline.md, Orientation):
+    //
+    // - The decode fills a pre-faulted buffer we own: `decompress` writes
+    //   into `rgb`, whose first-touch page faults `prefault_parallel` pays
+    //   from several threads first (the benchmark's row 12 against row 4
+    //   puts this alloc + prefault at ~14 ms at full size, ~4 ms at a rung;
+    //   under zune-jpeg, `decode_into` a pre-faulted buffer saved ~30 ms
+    //   against `decode()`'s internal allocation).
+    // - The transpose's output buffer is allocated AND pre-faulted on a
+    //   spare thread WHILE the decode runs, so the rotate that follows
+    //   starts with hot pages ([`crate::raw::Scratch`]).
+    //
+    // Neither changes peak memory: the same two buffers exist either way;
+    // only WHEN the page faults are paid moves — off the critical path.
+    // Pitch is 3w with no row padding: the buffer is byte for byte the
+    // packed RGB the kitchen's `SharedPixelBuffer` fill takes.
     let needs_transpose = matches!(orientation, 5..=8);
     let (rgb, scratch) = std::thread::scope(|scope| {
         let scratch = needs_transpose.then(|| {
@@ -1012,20 +1083,24 @@ pub fn decode_oriented(bytes: &[u8], orientation: u16) -> Result<(Vec<u8>, u32, 
         });
         let mut rgb = vec![0u8; n];
         crate::raw::orient::prefault_parallel(&mut rgb);
-        let decoded = decoder
-            .decode_into(&mut rgb)
+        let decoded = dec
+            .decompress(
+                bytes,
+                turbojpeg::Image {
+                    pixels: &mut rgb[..],
+                    width: w as usize,
+                    pitch: w as usize * 3,
+                    height: h as usize,
+                    format: turbojpeg::PixelFormat::RGB,
+                },
+            )
             .map_err(|e| format!("decode: {e}"));
         let scratch = scratch.map(|j| j.join().expect("prefault thread"));
         decoded.map(|()| (rgb, scratch))
     })?;
     // Soft-rotate to display orientation (spec: every rung).
-    Ok(crate::raw::apply_orientation_with(
-        rgb,
-        w,
-        h,
-        orientation,
-        scratch,
-    ))
+    let (rgb, w, h) = crate::raw::apply_orientation_with(rgb, w, h, orientation, scratch);
+    Ok((rgb, w, h, numerator))
 }
 
 fn evict_to_budget(state: &mut LoupeState, budget: usize) {
@@ -1649,6 +1724,13 @@ mod tests {
     /// the issue's 653-byte repro shape) committed 5.29 GB on the old
     /// code and "decoded" successfully. It must be rejected before any
     /// allocation. THIS TEST FAILS ON PRE-FIX CODE (it returns Ok there).
+    ///
+    /// Since brief 008 (2026-09-26) the loupe also decodes SCALED (the
+    /// screen rung), and the cap applies to the header's FULL dimensions
+    /// there too, before any factor is chosen (raw-pipeline.md A8): at 3/8
+    /// the claim is 11250x11250, 127 MP, UNDER the cap, so a check on the
+    /// scaled size would pass it and size a ~380 MB buffer from a sub-KB
+    /// stream.
     #[test]
     fn decode_oriented_rejects_implausible_header_dimensions() {
         let mut jpeg = crate::raw::jpeg_hostile::encoded(64, 64);
@@ -1657,12 +1739,16 @@ mod tests {
         assert!(hostile.len() < 1024, "the attack fits in under a KB");
         for orientation in [1u16, 6] {
             // 6 = transpose: the Scratch prefault thread must not run either.
-            let err = decode_oriented(&hostile, orientation)
+            let full = decode_oriented(&hostile, orientation)
                 .expect_err("a 900 MP header claim must never allocate");
-            assert!(
-                err.contains("implausible"),
-                "the reason must name the cause: {err}"
-            );
+            let scaled = decode_scaled_oriented(&hostile, orientation, 3)
+                .expect_err("a 900 MP header claim must never allocate, scaled or not");
+            for err in [full, scaled] {
+                assert!(
+                    err.contains("implausible"),
+                    "the reason must name the cause: {err}"
+                );
+            }
         }
         // The same claim with an intact EOI is still implausible: the cap,
         // not the truncation check, is what bounds the allocation.
@@ -1671,19 +1757,73 @@ mod tests {
         assert!(decode_oriented(&with_eoi, 1)
             .expect_err("hostile dims with a valid EOI")
             .contains("implausible"));
+        assert!(decode_scaled_oriented(&with_eoi, 1, 3)
+            .expect_err("hostile dims with a valid EOI, scaled")
+            .contains("implausible"));
     }
 
     /// Issue #31, half two: zune-jpeg 0.4 zero-fills a truncated scan and
     /// reports SUCCESS (its overread counter stops growing once it starts
     /// zero-filling, so even strict mode cannot see it) — the loupe showed
-    /// a blank frame instead of the Failed badge. THIS TEST FAILS ON
-    /// PRE-FIX CODE (it returns Ok there).
+    /// a blank frame instead of the Failed badge. THIS TEST FAILED ON THE
+    /// PRE-#31 CODE (it returned Ok there).
+    ///
+    /// Since brief 008 the loupe decodes with libjpeg-turbo, which fails
+    /// such a stream by itself ("Premature end of JPEG file"), so what
+    /// this test pins now is OUR byte check (`scan_is_terminated`), which
+    /// runs first, spares the grey decode and names the cause: remove it
+    /// and the reason no longer says "truncated" — red on both entry
+    /// points (raw-pipeline.md, "Truncation on the loupe path").
     #[test]
     fn decode_oriented_rejects_a_truncated_scan() {
         let intact = crate::raw::jpeg_hostile::encoded(64, 64);
         let truncated = crate::raw::jpeg_hostile::truncate_scan(&intact, 16);
         let err = decode_oriented(&truncated, 1).expect_err("truncated scan must fail");
         assert!(err.contains("truncated"), "reason names the cause: {err}");
+        let err = decode_scaled_oriented(&truncated, 1, 3)
+            .expect_err("truncated scan must fail at 3/8 too");
+        assert!(err.contains("truncated"), "reason names the cause: {err}");
+    }
+
+    /// THIS IS THE RESIDUAL GAP OF ISSUE #31, CLOSED ON THE LOUPE PATH BY
+    /// THE LIBRARY'S RETURN CONTRACT. When this fails with an `Ok`, the
+    /// `turbojpeg` crate or libjpeg-turbo changed that contract — re-read
+    /// canary 1 beside the dependency in `Cargo.toml`; do not quiet it.
+    ///
+    /// The stream: plausible dimensions, a scan cut 16 bytes in, and a
+    /// valid EOI appended. It PASSES the byte check (asserted below: that
+    /// is the point), and zune-jpeg decoded it as a mostly-blank success.
+    /// libjpeg-turbo's Huffman decoder warns `JWRN_HIT_MARKER` and feeds
+    /// zero bits, and `tj3Decompress8` returns -1 because a warning was
+    /// emitted, so the decode is an `Err` over a grey-bottomed buffer —
+    /// through the full decode and the scaled one, both orientations
+    /// (raw-pipeline.md A8, "Truncation on the loupe path").
+    #[test]
+    fn a_short_scan_with_a_valid_eoi_fails_on_the_loupe_path() {
+        let intact = crate::raw::jpeg_hostile::encoded(64, 64);
+        let mut short = crate::raw::jpeg_hostile::truncate_scan(&intact, 16);
+        short.extend_from_slice(&[0xFF, 0xD9]);
+        assert!(
+            crate::raw::scan_is_terminated(&short),
+            "the byte check must PASS this stream, or the test proves nothing about the decoder"
+        );
+        let outcomes = [
+            ("full, o1", decode_oriented(&short, 1)),
+            ("3/8, o1", decode_scaled_oriented(&short, 1, 3)),
+            ("3/8, o6", decode_scaled_oriented(&short, 6, 3)),
+        ];
+        for (shape, outcome) in outcomes {
+            match outcome {
+                Ok((_, w, h)) => panic!(
+                    "{shape}: a short scan decoded as a {w}x{h} success — a blank frame \
+                     where the Failed badge belongs"
+                ),
+                Err(err) => assert!(
+                    err.contains("premature end of data segment"),
+                    "{shape}: the decoder's own reason must reach the badge: {err}"
+                ),
+            }
+        }
     }
 
     /// Issue #31 gate finding: the commonest field corruption is a
@@ -1764,6 +1904,52 @@ mod tests {
         assert_eq!(rgb.len(), 64 * 48 * 3);
         let (_, w, h) = decode_oriented(&jpeg, 6).expect("transpose path decodes");
         assert_eq!((w, h), (48, 64), "orientation 6 swaps the sides");
+        // The scaled entry point (the screen rung, brief 008): 4/8 halves
+        // each side, and the rotate still applies to what was decoded.
+        let (rgb, w, h) = decode_scaled_oriented(&jpeg, 1, 4).expect("a 4/8 decode");
+        assert_eq!((w, h), (32, 24));
+        assert_eq!(rgb.len(), 32 * 24 * 3);
+        let (_, w, h) = decode_scaled_oriented(&jpeg, 6, 4).expect("a 4/8 transpose decode");
+        assert_eq!((w, h), (24, 32), "orientation 6 swaps the scaled sides");
+    }
+
+    /// A rung is never larger than the full JPEG: libjpeg-turbo would
+    /// happily decode 9/8 up to 2/1 (upscaling inside the IDCT), so the
+    /// numerator's range is ours to guard. Delete the guard and 9 decodes
+    /// a 72x54 image from this 64x48 stream.
+    #[test]
+    fn decode_scaled_oriented_refuses_a_numerator_outside_1_to_8() {
+        let jpeg = crate::raw::jpeg_hostile::encoded(64, 48);
+        for numerator in [9u8, 16, 0] {
+            match decode_scaled_oriented(&jpeg, 1, numerator) {
+                // Not `expect_err`: its message would print the whole buffer.
+                Ok((_, w, h)) => panic!(
+                    "numerator {numerator}: decoded a {w}x{h} image from a 64x48 stream — \
+                     no rung may come from outside 1/8..=8/8"
+                ),
+                Err(err) => assert!(
+                    err.contains("out of 1..=8"),
+                    "numerator {numerator}: the reason names the range: {err}"
+                ),
+            }
+        }
+    }
+
+    /// `scaled_dims` is TurboJPEG's `TJSCALED` (a ceiling division): the
+    /// A1's full at 3/8 is the 4K fit, at 2/8 the QHD one, and odd sizes
+    /// round UP, exactly as the decoder sizes its output.
+    #[test]
+    fn scaled_dims_is_the_decoders_ceiling_division() {
+        assert_eq!(scaled_dims(8640, 5760, 3), (3240, 2160));
+        assert_eq!(scaled_dims(8640, 5760, 2), (2160, 1440));
+        assert_eq!(scaled_dims(8640, 5760, 4), (4320, 2880));
+        assert_eq!(scaled_dims(8640, 5760, 8), (8640, 5760));
+        assert_eq!(scaled_dims(2000, 1500, 3), (750, 563), "562.5 rounds up");
+        assert_eq!(
+            scaled_dims(1, 1, 1),
+            (1, 1),
+            "1/8 of one pixel is one pixel"
+        );
     }
 
     #[test]

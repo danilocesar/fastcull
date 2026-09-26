@@ -18,10 +18,13 @@ fastcull-core = { path = "crates/fastcull-core" }
 # Dependencies compile optimised even in debug (user decision 2026-09-05,
 # issue #76; closes #33): "dependencies are not required to be compile at
 # debug mode. most of the time that's useless." The app's hot pixel work
-# lives in dependencies — zune-jpeg decodes the embedded JPEGs, the Slint
-# software renderer and jpeg-encoder make a --screenshot frame — and at
-# opt-level 0 a debug build took 26-40 s (Windows CI) / 31 s (the 8-core
-# laptop) to decode the A1's 8640x5760 JPEG against the screenshot
+# lives in dependencies — libjpeg-turbo decodes the loupe's embedded JPEGs
+# and zune-jpeg the grid thumbs (since brief 008, 2026-09-26; zune-jpeg
+# decoded both before, and the figures below are its), the Slint software
+# renderer and jpeg-encoder make a --screenshot frame — and at opt-level 0
+# a debug build took 26-40 s (Windows CI) / 31 s (the 4-core / 8-thread
+# laptop; "the 8-core laptop" here until 2026-09-26, which counted
+# threads) to decode the A1's 8640x5760 JPEG against the screenshot
 # shutter's 60 s cap: ten Windows CI jobs failed that way in 2026-07/08.
 # Measured with this line, same seat: decode_oriented 31,020 -> 1,720 ms
 # (senior developer, 2026-09-05); window_resize_keeps_the_photo under the

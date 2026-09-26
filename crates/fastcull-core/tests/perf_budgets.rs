@@ -175,6 +175,125 @@ fn budget_fullres_decode_under_350ms() {
     );
 }
 
+/// The budget fixture's full-res embedded JPEG (`A1_full_lossless_compressed.ARW`,
+/// 9,751,756 bytes, baseline 4:2:2, zero restart markers) — the bytes every
+/// decode row below times, read once outside the timed region.
+fn budget_fullres_bytes() -> Vec<u8> {
+    let path = testdata(A1_FILES[1]);
+    let mut file = std::fs::File::open(&path).unwrap();
+    let previews = fastcull_core::raw::find_embedded_jpegs(&mut file).unwrap();
+    let fullres = previews.fullres().unwrap().clone();
+    fastcull_core::raw::read_jpeg(&mut file, &fullres).unwrap()
+}
+
+/// Five fresh runs of `decode` — a shipped loupe entry point, fresh buffers
+/// every time as in the app — each asserted to come out `want` (oriented:
+/// a row that timed the wrong shape would be measuring something else),
+/// and their median.
+fn median_decode(
+    want: (u32, u32),
+    decode: impl Fn() -> Result<(Vec<u8>, u32, u32), String>,
+) -> Duration {
+    let samples: Vec<Duration> = (0..5)
+        .map(|_| {
+            let t = Instant::now();
+            let decoded = decode().unwrap();
+            let elapsed = t.elapsed();
+            assert_eq!((decoded.1, decoded.2), want, "the row must time this shape");
+            std::hint::black_box(decoded);
+            elapsed
+        })
+        .collect();
+    median(samples)
+}
+
+/// Budget: the full-res decode, LANDSCAPE (no rotate) < 280 ms — THE SIMD
+/// CANARY (brief 008, ADR 0005; 01-architecture.md perf table). A
+/// libjpeg-turbo built without its SIMD kernels decodes this frame at
+/// ~308 ms into a pre-faulted buffer on a cool start (the benchmark's
+/// `JSIMD_FORCENONE=1` probe, 157.5 ms with AVX2 in the same run), so the
+/// threshold sits at 1.5x the saturated 186 ms median rather than the
+/// table's usual 2x: a 2x threshold would pass the SIMD-less decoder.
+/// `require-simd` stops a SIMD-less BUILD; this row is the runtime half.
+#[test]
+fn budget_fullres_landscape_decode_under_280ms() {
+    let Some(_serial) = measure_serially() else {
+        return;
+    };
+    let bytes = budget_fullres_bytes();
+    let med = median_decode((8640, 5760), || {
+        fastcull_core::loupe::decode_oriented(&bytes, 1)
+    });
+    eprintln!(
+        "BUDGET-MEDIAN {:.1} ms (full-res landscape o1)",
+        med.as_secs_f64() * 1000.0
+    );
+    assert!(
+        med < Duration::from_millis(280),
+        "full-res landscape decode median {med:?} (budget 280 ms — the SIMD canary)"
+    );
+}
+
+/// The two screen-rung rows' threshold, in ms: AT MOST 0.9x the IDLE
+/// landscape full-res median (01-architecture.md, the rung rows' rule), so
+/// that a "rung" that silently became a full decode plus a resize — a
+/// change of KIND — is red, as the EXIF row catches a whole-file read.
+/// Set by brief 008 step 1 (2026-09-26) from its measurement: the idle
+/// landscape full-res median was 168.1 ms (release, the development
+/// laptop, three runs at least two minutes apart, medians 168.1 / 168.2 /
+/// 167.8 ms), 0.9x of it is 151.3, rounded DOWN to a multiple of 5 ms:
+/// 150. It replaced the spec's provisional 155 (0.9x the ~172 ms
+/// cool-start estimate). The rungs measured 117.5 ms (3/8) and 113.8 ms
+/// (2/8 + rotate) in the same runs.
+const RUNG_ROW_MS: u64 = 150;
+
+/// Budget: the 4K LANDSCAPE screen rung — the A1's full at 3/8, 3240x2160,
+/// orientation 1 (no transpose; the 3x3 reduced IDCT, which has no SIMD
+/// path) — under the kind guard, `RUNG_ROW_MS` (brief 008, A9).
+#[test]
+fn budget_screen_rung_3_8_landscape_under_the_kind_guard() {
+    let Some(_serial) = measure_serially() else {
+        return;
+    };
+    let bytes = budget_fullres_bytes();
+    let med = median_decode((3240, 2160), || {
+        fastcull_core::loupe::decode_scaled_oriented(&bytes, 1, 3)
+    });
+    eprintln!(
+        "BUDGET-MEDIAN {:.1} ms (screen rung 3/8 landscape o1)",
+        med.as_secs_f64() * 1000.0
+    );
+    assert!(
+        med < Duration::from_millis(RUNG_ROW_MS),
+        "3/8 screen-rung decode median {med:?} (budget {RUNG_ROW_MS} ms, at most 0.9x the \
+         landscape full-res median: over it, the rung is no longer a rung)"
+    );
+}
+
+/// Budget: the 4K PORTRAIT screen rung — the A1's full at 2/8 (2160x1440
+/// decoded) with orientation 8 forced as the full-res row does, rotated to
+/// 1440x2160 single-threaded below `orient.rs`'s 32 MiB parallel
+/// threshold — under the kind guard, `RUNG_ROW_MS` (brief 008, A9).
+#[test]
+fn budget_screen_rung_2_8_portrait_under_the_kind_guard() {
+    let Some(_serial) = measure_serially() else {
+        return;
+    };
+    let bytes = budget_fullres_bytes();
+    let med = median_decode((1440, 2160), || {
+        fastcull_core::loupe::decode_scaled_oriented(&bytes, 8, 2)
+    });
+    eprintln!(
+        "BUDGET-MEDIAN {:.1} ms (screen rung 2/8 portrait o8)",
+        med.as_secs_f64() * 1000.0
+    );
+    assert!(
+        med < Duration::from_millis(RUNG_ROW_MS),
+        "2/8 portrait screen-rung decode+rotate median {med:?} (budget {RUNG_ROW_MS} ms, at \
+         most 0.9x the landscape full-res median: over it, the rung is no longer a rung)"
+    );
+}
+
 /// Budget: scanning a 1,000-entry folder < 50 ms (catalog-cache.md).
 ///
 /// Moved here from `catalog::tests::thousand_entry_scan_is_fast`, which

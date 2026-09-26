@@ -891,7 +891,7 @@ commit that lands its tests, and stays open until then):
       `a_backward_hold_keeps_leaning_backward_across_refocus`, unchanged
       (the ring behind is 2, as before). Each mutant in a scratch worktree,
       its red named in the commit. Open: lands with the ring.
-- [ ] **Hostile inputs on the new path** (brief 008 A8): the existing tests
+- [x] **Hostile inputs on the new path** (brief 008 A8): the existing tests
       pass on libjpeg-turbo; the 30000×30000 SOF is refused before any
       allocation through the scaled decode too, on both orientation paths;
       the cut-before-EOI stream is `Failed` through both entry points with a
@@ -904,9 +904,9 @@ commit that lands its tests, and stays open until then):
       `decode_scaled_oriented_refuses_a_numerator_outside_1_to_8`,
       `scaled_dims_is_the_decoders_ceiling_division`; the mutants are of our
       code — the byte check deleted, the decoder's `Err` swallowed, the cap
-      read on the scaled size — never of a library parameter. Open: lands
-      with the decoder; the carried step-1 commit, whose tests these are,
-      ticks it.
+      read on the scaled size — never of a library parameter. Ticked by
+      the step-1 commit, which carries these tests; each mutant's red is in
+      its message.
 - [ ] **CMYK and YCCK open in the loupe** (brief 008 A14): a CMYK and a YCCK
       bare JPEG decode through the loupe path with pixels, at full scale with
       no rung, never a Failed badge; red on the decoder swap without the

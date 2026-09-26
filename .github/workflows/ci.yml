@@ -163,9 +163,31 @@ jobs:
         with:
           components: clippy, rustfmt
 
+      # libjpeg-turbo (the loupe's decoder, ADR 0005) is built from source by
+      # the `cmake` crate and its SIMD kernels need NASM; `require-simd` makes a
+      # seat without it FAIL rather than ship a 1.95x slower decoder. Chocolatey
+      # rather than a setup action because it is the mechanism the release
+      # workflow uses (`[dist.dependencies.chocolatey]`), so this job rehearses
+      # it. The package installs to `C:\Program Files\NASM`, which CMake's own
+      # NASM lookup (`CMakeDetermineASM_NASMCompiler.cmake`, `$ENV{ProgramFiles}/NASM`)
+      # searches when nasm is not on PATH — no PATH step needed. Under
+      # `require-simd` the vendored `simd/CMakeLists.txt` calls
+      # `enable_language(ASM_NASM)` unconditionally (line 52), so the build
+      # itself fails without NASM: a green build is the proof, and the
+      # configure log's `The ASM_NASM compiler identification is NASM` line
+      # is the evidence.
+      - name: Install NASM (Windows)
+        if: runner.os == 'Windows'
+        run: choco install nasm --no-progress -y
+
+      # nasm assembles libjpeg-turbo's SIMD kernels; without it `require-simd`
+      # fails the build (ADR 0005). Ubuntu 24.04's nasm 2.16.01 is well above
+      # libjpeg-turbo's minimum; cmake is on the runner image already, and
+      # the image's libjpeg-turbo (2.1.x) is too old for the pkg-config path,
+      # so the library is built from source here as on every other seat.
       - name: Install Linux GUI build dependencies (slint/winit)
         if: runner.os == 'Linux'
-        run: sudo apt-get update && sudo apt-get install -y libfontconfig1-dev libxkbcommon-dev libxkbcommon-x11-0 xvfb
+        run: sudo apt-get update && sudo apt-get install -y libfontconfig1-dev libxkbcommon-dev libxkbcommon-x11-0 xvfb nasm
 
       # `save-if` main-only. Measured 2026-09-04 (`gh api
       # .../actions/cache/usage` and `.../actions/caches`): 8 entries,
@@ -409,9 +431,11 @@ jobs:
       # scratch paths are unique per process and thread, and the two
       # contention-sensitive ones keep their concurrency INSIDE one test
       # -- there is no cross-test race for the flag to mask. Cost, twice
-      # measured on an 8-core laptop: the screenshot binary does not move
-      # (892.5 -> 892.8 s, and 872.0 -> 870.6 s in the second round), and
-      # the rest of the workspace loses between 12 s and 24 s. The two
+      # measured on a 4-core / 8-thread laptop ("an 8-core laptop" here
+      # until 2026-09-26, which counted threads): the screenshot binary
+      # does not move (892.5 -> 892.8 s, and 872.0 -> 870.6 s in the
+      # second round), and the rest of the workspace loses between 12 s
+      # and 24 s. The two
       # rounds disagree on WHICH binary pays -- loupe.rs +14 s in one and
       # +0.8 s in the other -- so only the total is quotable, and even it
       # is noise-dominated at this size. The
@@ -632,6 +656,11 @@ jobs:
           for exe in artifact/fastcull-app.exe artifact/fastcull-cli.exe; do
             if grep -aq 'VCRUNTIME140' "$exe"; then
               echo "::error::$exe imports VCRUNTIME140 -- the static CRT flag did not take effect"
+              exit 1
+            fi
+            # A dynamic decoder is imported by DLL name, and a static one cannot carry the name (A10).
+            if grep -aqiE 'turbojpeg\.dll|jpeg62\.dll' "$exe"; then
+              echo "::error::$exe imports libjpeg-turbo dynamically -- the loupe's decoder must be linked statically (ADR 0005)"
               exit 1
             fi
           done

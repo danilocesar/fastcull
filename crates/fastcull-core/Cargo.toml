@@ -28,7 +28,50 @@ unicode-normalization = "0.1"
 # copy IS the working copy before a card format), and free-space checks.
 blake3 = "1"
 fs2 = "0.4"
+# The grid-thumb decoder (`pipeline::make_grid_thumb`; the app's thumb cook
+# declares its own). The loupe left it for libjpeg-turbo below and the
+# thumbs stay on it (raw-pipeline.md, "The decoder", N7).
 zune-jpeg = "0.4"
+# libjpeg-turbo, the loupe's decoder and the source of its N/8 screen rung
+# (ADR 0005, brief 008, 2026-09-26). All three features spelled out so a
+# default change upstream is visible here: `cmake` builds the vendored
+# 3.1.0 from source, `pkg-config` lets TURBOJPEG_SOURCE=pkg-config link a
+# system >= 3.0 on Linux (README), `require-simd` makes a seat without
+# NASM FAIL the build instead of shipping a 1.95x slower decoder.
+# VERSION-BUMP CANARY (re-read before raising this bound; every line was
+# read in the vendored sources or measured, 2026-09-26):
+#   1. `tj3Decompress8` returns -1 whenever ANY warning was emitted during
+#      the decode, flag or no flag (`src/turbojpeg-mp.c`, the `bailout:`
+#      label: `if (this->jerr.warning) retval = -1`), and the safe crate
+#      maps every non-zero return to `Err` (`turbojpeg-1.5.1/src/
+#      decompress.rs`, `decompress`). This is the ONLY guard for the
+#      residual-gap stream (plausible dims, valid EOI, too little entropy
+#      data): the memory source inserts a fake EOI and warns
+#      `JWRN_JPEG_EOF` ("Premature end of JPEG file", `jdatasrc.c`), the
+#      Huffman decoder warns `JWRN_HIT_MARKER` ("Corrupt JPEG data:
+#      premature end of data segment", `jdhuff.c`) and feeds zero bits.
+#      `a_short_scan_with_a_valid_eoi_fails_on_the_loupe_path` pins it.
+#   2. `tj3DecompressHeader` parses markers and allocates NO image buffer,
+#      so `MAX_DECODED_PIXELS` is checked on its answer before anything is
+#      sized from a hostile claim. `TJPARAM_MAXPIXELS` and
+#      `TJPARAM_STOPONWARNING` are NOT set: the safe crate keeps its
+#      handle private (`mod handle` is not pub) and taking them means the
+#      core crate's first `unsafe` block, for an abort 13-24 ms earlier.
+#   3. The reduced-size IDCTs have SIMD only at 4x4 and 2x2
+#      (`simd/x86_64/jsimd.c`, `jsimd_can_idct_4x4`/`_2x2`): the 3/8 rung
+#      runs a C 3x3 IDCT and still measured 4 % faster than 1/2.
+#   4. A LOSSLESS stream cannot be DCT-scaled: `Decompressor::decompress`
+#      returns `Error::CannotScaleLossless` when the header says
+#      `is_lossless` and the factor is not 1/1 (`decompress.rs`,
+#      `check_output_size`), so `decode_scaled_oriented` decodes such a
+#      stream at full scale and the ladder sees a Full, never a Screen.
+#   5. The `cmake` crate (0.1.58, `src/lib.rs` `get_profile`) builds the C
+#      library at the CMake profile cargo's opt-level implies: opt-level 0
+#      -> Debug, 1-3 with debug info -> RelWithDebInfo, without -> Release.
+#      The workspace's `[profile.dev.package."*"] opt-level = 2` (#76) is
+#      what keeps the debug decode optimised; remove it and the debug
+#      decoder is -O0.
+turbojpeg = { version = "1.5.1", default-features = false, features = ["cmake", "pkg-config", "require-simd"] }
 
 [dev-dependencies]
 criterion = "0.5"
