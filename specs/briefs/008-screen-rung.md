@@ -165,7 +165,8 @@ Workers and ring depth derive from the machine; nothing is configured.
   ahead, sized down by a budget derived from free memory.)
 - R5 (decoders; revised 2026-09-26). Loupe decode workers = the
   machine's physical cores, not its threads, floor 3 (two backlog workers
-  and the focus-reserved lane, which stays), cap 16.
+  and the focus-reserved lane, which stays), cap 16, and at most half the
+  total RAM in GiB (Manager ruling Q4).
   `FASTCULL_DECODERS=N` replaces the count for testing, in the mould of
   `FASTCULL_MAX_READERS` — an override, allowed above the cap. (Was:
   capped by a derived budget's transient term; no override.)
@@ -254,7 +255,8 @@ Workers and ring depth derive from the machine; nothing is configured.
   mid-only at fit on a wide viewport → Soft with cue (the G6 row).
 - A4. Clock-free: the cache rule over 4 / 8 / 16 / 32 / 64 GB of total
   RAM (2, 2, 4, 8, 10 GiB), an unreadable, zero or absurd total → 2 GiB;
-  the decoder rule over 2 / 4 / 16 / 32 physical cores (3, 4, 16, 16),
+  the decoder rule over 2 / 4 / 16 / 32 physical cores (3, 4, 16, 16 on
+  32 GiB and more; the RAM cap gives 4 on 8 GiB and 8 on 16 GiB),
   an unreadable count → 4, `FASTCULL_DECODERS` wins and a value that is
   not a positive integer is ignored with a stderr line. (Revised
   2026-09-26: was the `MemoryBudget` derivation table.)
@@ -728,3 +730,73 @@ the cursor's rungs) → a later brief.
     live in the unit's scratch, which the cleanup rule deletes at the
     unit's end; after that a build there fails on purpose unless the two
     are installed as system packages.
+- 2026-09-26 (the user installed the build tools): at the user's request
+  ("Can you install it for me?") the Manager installed `cmake` 4.3.0,
+  `nasm` 3.02 and `xorg-x11-server-Xvfb` as system packages on the
+  development laptop. A plain `cargo build` works there without the
+  unit's scratch tools, which the cleanup rule may now delete at the
+  unit's end.
+- 2026-09-26 (Manager, Q4's outcome, from the plan's checks): the
+  whole-app formula now counts the kitchen's full-res fill in flight and
+  each decoder's input JPEG; with the two Q4 clamps every row from 16 GiB
+  up is within 60 %, the nominal 8 GiB row reads 61.7 %, and a real 8 GB
+  machine (which reports less than 8 GiB and runs 3 decoders) stays
+  within 60 % only from a reported 7.74 GiB. Rulings below complete it.
+  Q-D: the decoder cap uses the floor of half the reported RAM, so a
+  16-core machine reporting 31.x GiB runs 15 decoders; the claim "no
+  change on the user's machines" is narrowed to that.
+- 2026-09-26 (Manager, M10): every earlier ruling in this log that names
+  the memory budget, `FASTCULL_MEMORY_MB`, `fastcull-cli budget`, the
+  6 / 12 transit ring or the 2 / 6 look-ahead is superseded by the
+  redesign; where it and the module specs disagree, the specs hold. The
+  list: the A5 pin `FASTCULL_MEMORY_MB=16384`; A5's twelve adoptions and
+  frames (now fifteen); "A5 skips on the Windows runner" (A5 binds on any
+  seat that grants the geometry); R5's "reduced by the budget's transient
+  term"; `fastcull-cli budget`; the 9-frame full-res texture ring (the
+  texture window is the full-res ring); Q6's two test amendments and Q9's
+  reach bound (moot: `RING_BEHIND` is 2); Q8's 6 / 12 figures (its rule
+  stands at 2 / 15); Q11's six waits (one wait per full-res member
+  ahead).
+- 2026-09-26 (Manager, the plan v2 questions; recommendations accepted
+  unless stated): Q-G (i), the full-res ring clamp counts the kitchen's
+  fill, ⌊(cache − F) ÷ 2F⌋ frames; Q-C, an unreadable, zero or absurd
+  total reads as 8 GiB for the RAM cap too; Q-H (b), rule 2 steps up when
+  the members ahead are held or in flight, nothing waits, and a backlog
+  worker is free; Q-I (A), the reserved lane asks for the settled ring
+  once per settle; Q-K (a), a time-to-screen stamp ends only on facts the
+  app reports (`note_adopted`, `note_dropped`), no position-based cull;
+  Q-L (a), the step-down delay is measured on the kitchen leg it can see;
+  Q-A (a), at the loupe the mids inside the rung window are kept; Q-B,
+  `CUE_MIN_ON` counts from the last soft frame. HELD: Q-J (machines that
+  report under 8 GiB) waits on the allocator measurement below, since
+  both move the same numbers.
+- 2026-09-26 (Manager, the step-1 review, CHANGES_REQUESTED): the blocker
+  F1 — on Windows the `cmake` crate picks the Visual Studio generator and
+  strips every `/O` flag, so libjpeg-turbo's C code ships at `/Od`; the
+  PR run's advisory Windows perf step was red on three rows (the 3/8 rung
+  slower than the full decode) inside a green job. Ruled: the fix names
+  the generator for the MSVC target in a workspace `.cargo/config.toml`
+  (`CMAKE_GENERATOR_x86_64_pc_windows_msvc = "Visual Studio 17 2022"`,
+  the reviewer's option A — a seat without VS 2022 fails loudly, revisited
+  when the runner images move); a CMake-cache guard in "Verify Windows
+  artifact" (`/O2` in `CMAKE_C_FLAGS_RELEASE`, `WITH_SIMD = 1` in the
+  build output) is pushed ONE COMMIT AHEAD of the fix, so the gate sees
+  it red on the real Windows runner (the reviewer's option A for the
+  guard, ~70 min of CI); both perf steps gain `--nocapture` so their
+  medians reach the log; the false sentences about the C decoder being
+  optimised in every build are corrected in place and A10 gains "compiled
+  optimised", through M1. F2 (a lossless test), F3 (the NASM comment),
+  F4 (a scratch row citation) are fixed in the same round. R14's CMYK
+  route lands at the start of step 2. The progressive scan limit is
+  recorded as a residual in the hostile-input bounds, for a later brief.
+  Practice for this unit, and a directive candidate: the Manager reads
+  the Windows perf medians of every PR run.
+- 2026-09-26 (Manager, the Linux allocator, M6): the plan's feasibility
+  check measured that glibc keeps freed 21 MB rung, 12 MB JPEG and 5 MB
+  mid buffers in its arenas once its mmap threshold has risen, so after a
+  fit session switches to 1:1 the laptop's peak read 12.2 GiB against the
+  planned 9.1 (Windows returns this memory). Before choosing among a
+  one-line `mallopt` threshold in the app, a trim after eviction, another
+  allocator, or recording the term in the accounting, the options are
+  measured on the same probe; a new dependency goes to the user with the
+  numbers.
