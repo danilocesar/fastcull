@@ -37,7 +37,11 @@ cargo fmt --all
 testdata/fetch.sh               # sample RAWs (needed by integration tests)
 ```
 
-Rust lives in `~/.cargo/bin` (rustup, no system packages).
+Rust lives in `~/.cargo/bin` (rustup, no system packages). Since brief 008
+the loupe's JPEG decoder is libjpeg-turbo, built from source by `cargo
+build`: every build seat needs `cmake` and `nasm` (a seat without nasm
+fails the build on purpose — ADR 0005), or on Linux a system
+libjpeg-turbo ≥ 3.0 with `TURBOJPEG_SOURCE=pkg-config`.
 
 ## Hard rules
 
@@ -326,14 +330,17 @@ developer owns re-verifying such claims against reality.
 
 ### Open decisions the Manager tracks (do not re-ask unless relevant)
 
-- **Held-arrow softness on 4K, issue #60** (parked by the user 2026-08-29:
-  "let's discuss this in the future"). A bigger full-res cache was analysed
-  and rejected — it is a decode-rate problem; the refined proposal (a
-  screen-sized rung via half-scale decode, paced advance, one
-  `MemoryBudget`) and six questions for the user are in the ticket. Not to
-  be implemented without the user reopening it; the agreed first step is a
-  throwaway benchmark of turbojpeg half-scale decode against zune-jpeg
-  (baseline 305 ms) on the laptop.
+- **Held-arrow softness on 4K, issue #60** — reopened by the user
+  2026-09-26 ("Work on problem issue #60") and in progress as brief 008:
+  the libjpeg-turbo decoder (ADR 0005), the screen-sized rung, one fixed
+  ring of 2 behind / 15 ahead (full-res above fit, kept up during a hold
+  while frames reach the screen in time), a pixel cache of the smaller of
+  10 GiB and a quarter of RAM, decoders from physical cores. Decided by
+  the user 2026-09-26: no pacing of the held key; no GPU decoding; no
+  release until the user has tested the CI Windows build on the desktop
+  with real folders. Still open from the ticket: the 1:1 crop upload
+  (part 4) and removing the 149 MB texture copy (part 6), and a later
+  brief for runtime memory shrink and the thumbnail cap.
 - **Export frames as video (M9, v0.11.0):** still open is a FastCull-made
   `.mov` on the user's phone (only an ffmpeg-muxed file of the same shape
   was tested), InShot honouring rotation on a portrait burst, other bodies'
