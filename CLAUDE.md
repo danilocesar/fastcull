@@ -41,7 +41,10 @@ Rust lives in `~/.cargo/bin` (rustup, no system packages). Since brief 008
 the loupe's JPEG decoder is libjpeg-turbo, built from source by `cargo
 build`: every build seat needs `cmake` and `nasm` (a seat without nasm
 fails the build on purpose — ADR 0005), or on Linux a system
-libjpeg-turbo ≥ 3.0 with `TURBOJPEG_SOURCE=pkg-config`.
+libjpeg-turbo ≥ 3.0 with `TURBOJPEG_SOURCE=pkg-config`. On Windows the
+workspace `.cargo/config.toml` names the Visual Studio 2022 generator (the
+`cmake` crate otherwise strips `/O2`); a seat without VS 2022 sets
+`CMAKE_GENERATOR_x86_64_pc_windows_msvc` itself.
 
 ## Hard rules
 
@@ -335,8 +338,10 @@ developer owns re-verifying such claims against reality.
   — a decoder, a parser, a ring, a cache — is designed and tested for
   files from other bodies too: a harmless complaint from a decoder never
   refuses a frame or leaves it silently soft (use what decoded, log it
-  once), a real defect still shows the Failed badge, and a decision that
-  rests on an A1 property says so where it is recorded. Formats outside
+  once); a frame with nothing decodable shows the Failed badge, and a
+  frame whose better rung is damaged stays on the good one with the log
+  naming it; a decision that rests on an A1 property says so where it is
+  recorded. Formats outside
   the TIFF family stay best-effort until a unit takes them on.
 
 ### Open decisions the Manager tracks (do not re-ask unless relevant)
