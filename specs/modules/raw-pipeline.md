@@ -210,7 +210,14 @@ output serves the loupe's fit box under the 1.25 rule (brief 008).
   top-rung-ness from a size (a 3240 px rung exceeds `MID_RUNG_MAX_LONG`, and
   a size test would adopt it as 1:1 and read the zoom ceiling from it). The
   kind is what the decoder RAN — a scale below 8/8 is `screen` — never a
-  comparison with an IFD's size claim, which a file can under-state.
+  comparison with an IFD's size claim, which a file can under-state. What
+  the ladder memoizes as a file's best — when it tops out below the request,
+  or keeps a lower rung over a failed higher one (All rejections, below) —
+  is likewise the long edge it DECODED, never a rung's claim, which a file
+  can over-state too: a memo the decoded frame never reaches left it short
+  of its own best for good, and the settle guarantee re-decoded the file at
+  every settle while the cursor rested on it (brief 008, the step-2 review;
+  Manager ruling 2026-09-27; M11).
 - **The fit box** is the loupe's N=1 cell in physical pixels, which the app
   supplies on every refresh at the loupe (`set_fit_box`), the way it
   supplies the view order. A request at fit asks for the box (`focus_fit`),
@@ -1216,7 +1223,12 @@ commit that lands its tests, and stays open until then):
       `a_lossless_stream_decodes_full_scale_through_the_scaled_entry_point`.
       Ticked by the step-2b commit, which carries the rung and the last of
       these tests; each mutant's red is in its message (the lossless one's
-      in the step-1 fix round's, 53a4248).
+      in the step-1 fix round's, 53a4248). And the memo is the decoded size:
+      a full whose IFD over-states it is memoized at what it decoded, so a
+      settle on it asks nothing more, at 1:1 and at fit —
+      `the_ladder_memoizes_the_decoded_size_not_the_ifd_claim` (added
+      2026-09-27, brief 008 step 3, the step-2 review; its old-memo red is
+      in that commit's message).
 - [ ] **The pixel cache and the decoders follow the machine** (brief 008 A4):
       clock-free — the cache over 4 / 8 / 16 / 32 / 64 GiB of total RAM → 2,
       2, 4, 8, 10 GiB, and an unreadable, zero or absurd total → 2 GiB; the
@@ -1515,6 +1527,15 @@ commit that lands its tests, and stays open until then):
 
 ## History
 
+- 2026-09-27 — The ladder's memo is the size it decoded (brief 008 step 3;
+  the step-2 review, Manager ruling 2026-09-27): an IFD that over-states its
+  full JPEG made the ladder memoize the claim as the file's best, which the
+  decoded frame never reaches, so the settle guarantee re-decoded the file at
+  every settle while the cursor rested on it — at 1:1 before brief 008 as
+  well, and at a wide fit box since (The screen rung). The same file showed
+  the reserved lane a second decode in one flight — the screen rung, then the
+  full — with no focus check between them, which the lane now makes, as the
+  loupe ladder's "checks only BETWEEN rungs" already said.
 - 2026-09-27 — The Linux allocator (brief 008, Manager rulings 2026-09-27):
   the app sets glibc's mmap threshold to 4 MiB first in `main`, the startup
   line says so, and the whole-app worst case counts no allocator term

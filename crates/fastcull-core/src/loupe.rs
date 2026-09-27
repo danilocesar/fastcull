@@ -1241,6 +1241,9 @@ fn worker(shared: &Shared, focus_reserved: bool) {
 ///   to the plain decode (an IFD that over-claims its stream);
 /// - it is a `Screen` rung no larger: nothing published; falls through.
 ///
+/// A fall-through is a rung boundary like any other: the reserved lane
+/// checks its focus again before the plain decode.
+///
 /// After EVERY publish the stop test reads the decoded, ORIENTED image,
 /// never the IFD's stored, unrotated size: a portrait mid on a QHD box
 /// serves oriented and fails unrotated.
@@ -1275,19 +1278,19 @@ fn decode_ladder(
         .last()
         .map(|r| r.width.max(r.height))
         .unwrap_or_default();
+    // What is in hand, as the long edge actually DECODED — never a rung's
+    // IFD claim, which a file can over-state: the memo below is set from
+    // this, and a claim the stream never reaches left the cached image short
+    // of its own memo for good, so the settle guarantee re-decoded the file
+    // at every settle while the cursor rested on it (raw-pipeline.md, "The
+    // screen rung"; the step-2 review, Manager ruling 2026-09-27, M11).
     let mut achieved = current_long;
     for rung in &rungs {
         let rung_long = rung.width.max(rung.height);
         if rung_long <= achieved {
             continue; // already have this rung or better
         }
-        if reserved_lane && lock(shared).focused != Some(index) {
-            // The focus moved: free the lane at the rung boundary (see
-            // the fn doc — the reserved worker serves the focus, only
-            // ever the focus). Logged so the next stall-shaped CI
-            // failure is diagnosable in one read (validator finding:
-            // silent abandons force timing inference).
-            eprintln!("fastcull: loupe lane abandoned idx {index} at {achieved} (focus moved)");
+        if lane_abandons(shared, index, reserved_lane, achieved) {
             return Ok(());
         }
         // The file's largest embedded JPEG is the full; a bare JPEG's one
@@ -1298,10 +1301,12 @@ fn decode_ladder(
             RungKind::Mid
         };
         // THE SCREEN RUNG: at fit, the full's N/8 decode first.
+        let mut screen_decoded = false;
         if let (RungKind::Full, Target::Fit(fit_box)) = (candidate, target) {
             if let Some(n) = rung_factor(rung.width, rung.height, orientation, fit_box) {
                 let (sw, sh) = scaled_dims(rung.width, rung.height, n);
                 if sw.max(sh) > achieved {
+                    screen_decoded = true;
                     match decode_jpeg_rung(&mut file, rung, orientation, n, candidate) {
                         Err(reason) => {
                             return keep_lower_rung(
@@ -1314,9 +1319,10 @@ fn decode_ladder(
                         }
                         Ok((image, note)) if image.kind == RungKind::Full => {
                             let serves = served_by(&image, target, None);
+                            let long = image.width.max(image.height);
                             report_complaint(shared, index, rung, image.kind, note);
                             publish(shared, index, image, rung_long >= top_long, req);
-                            achieved = rung_long;
+                            achieved = long;
                             if serves {
                                 return Ok(());
                             }
@@ -1338,12 +1344,29 @@ fn decode_ladder(
                 }
             }
         }
+        // A screen rung that did not serve — an IFD that over-claims its
+        // stream — falls through to the plain decode of the same full: a
+        // second decode in one flight, so the reserved lane checks its focus
+        // again here, as between any two rungs (raw-pipeline.md, "The loupe
+        // ladder": "The lane checks only BETWEEN rungs, so a focus change
+        // during a rung's decode waits out that rung — one decode"; the
+        // step-2 review's F3).
+        if screen_decoded {
+            #[cfg(test)]
+            if let Some(hook) = AFTER_SCREEN_DECODE.with(std::cell::Cell::get) {
+                hook(shared);
+            }
+            if lane_abandons(shared, index, reserved_lane, achieved) {
+                return Ok(());
+            }
+        }
         match decode_jpeg_rung(&mut file, rung, orientation, 8, candidate) {
             Ok((image, note)) => {
                 let serves = served_by(&image, target, None);
+                let long = image.width.max(image.height);
                 report_complaint(shared, index, rung, image.kind, note);
                 publish(shared, index, image, rung_long >= top_long, req);
-                achieved = rung_long;
+                achieved = long;
                 if serves {
                     return Ok(());
                 }
@@ -1352,13 +1375,43 @@ fn decode_ladder(
         }
     }
     // Ladder topped out below the display target: memoize the terminal rung
-    // so this file is never re-parsed for an unreachable target.
+    // — the long edge DECODED, see `achieved` — so this file is never
+    // re-parsed for an unreachable target.
     if achieved > 0 {
         note_best(shared, index, achieved);
         Ok(())
     } else {
         Err(crate::raw::NO_DECODABLE_PREVIEW.into())
     }
+}
+
+/// The reserved lane exists ONLY to serve the focused frame: at every rung
+/// boundary its flight re-checks that its index is still THE focus, and
+/// abandons when it is not — no `note_best`, since the ladder did not top
+/// out; the backlog workers own the frame from then on, and `focus()`
+/// re-requests it on return. Logged, so the next stall-shaped CI failure is
+/// diagnosable in one read (validator finding: silent abandons force timing
+/// inference). A backlog flight never abandons: its in-flight neighbours are
+/// legitimate prefetch.
+fn lane_abandons(shared: &Shared, index: usize, reserved_lane: bool, achieved: u32) -> bool {
+    if reserved_lane && lock(shared).focused != Some(index) {
+        eprintln!("fastcull: loupe lane abandoned idx {index} at {achieved} (focus moved)");
+        return true;
+    }
+    false
+}
+
+#[cfg(test)]
+thread_local! {
+    /// Test-only, compiled out of a real build (as `fileops.rs`'s probe
+    /// counter is): run by `decode_ladder` on its OWN thread right after a
+    /// screen rung that did not serve, before the lane's second focus check
+    /// — the one instant a unit test cannot otherwise reach, where a focus
+    /// change must stop the reserved lane before the plain decode of the
+    /// same full (the step-2 review's F3). A focus change from another
+    /// thread would race the check it has to precede.
+    static AFTER_SCREEN_DECODE: std::cell::Cell<Option<fn(&Shared)>> =
+        const { std::cell::Cell::new(None) };
 }
 
 /// A rung failed. A broken HIGHER rung must not fail an image that already
@@ -3243,6 +3296,176 @@ mod tests {
         std::fs::remove_dir_all(&dir).ok();
     }
 
+    /// A RAW whose second IFD CLAIMS a 4000x3000 full over an intact
+    /// 2000x1500 stream, behind an intact 640x400 mid: `find_embedded_jpegs`
+    /// trusts an IFD's size over the SOF, so the ladder plans for a full it
+    /// can never decode (M11: another body's writer, or a damaged IFD).
+    fn raw_over_claiming_its_full() -> Vec<u8> {
+        let mid = crate::raw::jpeg_hostile::encoded(640, 400);
+        let full = crate::raw::jpeg_hostile::encoded(2000, 1500);
+        let mut b = crate::raw::tiff_testutil::TiffBuilder::new(true);
+        let mid_off = b.add_blob(&mid);
+        let full_off = b.add_blob(&full);
+        let second = b.add_ifd(
+            &[
+                (0x0100, 3, 1, 4000),
+                (0x0101, 3, 1, 3000),
+                (0x0201, 4, 1, full_off),
+                (0x0202, 4, 1, full.len() as u32),
+            ],
+            0,
+        );
+        let ifd0 = b.add_ifd(
+            &[(0x0201, 4, 1, mid_off), (0x0202, 4, 1, mid.len() as u32)],
+            second,
+        );
+        b.set_ifd0(ifd0);
+        b.bytes
+    }
+
+    /// Every image a ladder flight published, in order, as (width, height,
+    /// kind); a `Failed` event fails the test.
+    fn published(rx: &std::sync::mpsc::Receiver<LoupeEvent>) -> Vec<(u32, u32, RungKind)> {
+        let mut out = Vec::new();
+        while let Ok(event) = rx.try_recv() {
+            match event {
+                LoupeEvent::Ready { image, .. } => {
+                    out.push((image.width, image.height, image.kind));
+                }
+                LoupeEvent::Failed { reason, .. } => panic!("an unexpected Failed: {reason}"),
+            }
+        }
+        out
+    }
+
+    /// The ladder memoizes the long edge it DECODED as the file's best, never
+    /// an IFD's claim (raw-pipeline.md, "The screen rung"; the step-2 review;
+    /// Manager ruling 2026-09-27; M11). An IFD that over-claims its full —
+    /// 4000x3000 over a 2000x1500 stream — made the ladder memoize 4000,
+    /// which the cached 2000x1500 frame can never reach: `cached_serves`
+    /// stayed false, and the reserved lane's settle guarantee queued the same
+    /// decode again at every settle for as long as the cursor rested on the
+    /// frame (the review measured 3 re-decodes over 3 settle passes at 1:1,
+    /// 4 at a 4K fit box). Red on the old memo: `best_long` reads 4000, and
+    /// the lane returns a job where it must wait.
+    #[test]
+    fn the_ladder_memoizes_the_decoded_size_not_the_ifd_claim() {
+        use RungKind::{Full, Mid, Screen};
+        let dir = crate::testutil::scratch_dir("over-claim-memo");
+        let path = dir.join("over_claimed.arw");
+        std::fs::write(&path, raw_over_claiming_its_full()).unwrap();
+        let claim = {
+            let mut file = std::fs::File::open(&path).unwrap();
+            find_embedded_jpegs(&mut file)
+                .unwrap()
+                .fullres()
+                .map(|f| (f.width, f.height))
+        };
+        assert_eq!(
+            claim,
+            Some((4000, 3000)),
+            "the premise: the IFD's claim sizes the full"
+        );
+        let uhd = FitBox {
+            width: 3840,
+            height: 2160,
+        };
+        // At the 4K box the claim asks 5/8, which the real stream decodes to
+        // 1250x938: short of the box, so the ladder goes on to the full.
+        assert_eq!(rung_factor(4000, 3000, 1, uhd), Some(5));
+        let now = std::time::Instant::now();
+        for (target, rungs) in [
+            (
+                Target::Long(u32::MAX),
+                vec![(640, 400, Mid), (2000, 1500, Full)],
+            ),
+            (
+                Target::Fit(uhd),
+                vec![(640, 400, Mid), (1250, 938, Screen), (2000, 1500, Full)],
+            ),
+        ] {
+            let (shared, rx) = shared_over(vec![path.clone()]);
+            assert_eq!(
+                decode_ladder(&shared, 0, target, 0, false, RequestState::Settled),
+                Ok(())
+            );
+            assert_eq!(published(&rx), rungs, "{target:?}: what the stream holds");
+            let mut state = lock(&shared);
+            assert_eq!(
+                state.best_long.get(&0).copied(),
+                Some(2000),
+                "{target:?}: the memo is the decoded 2000, not the IFD's 4000"
+            );
+            // The cursor at rest on this frame, settled and past the debounce.
+            state.focused = Some(0);
+            state.focused_at = Some(now - FOCUS_DEBOUNCE * 2);
+            state.last_index_change = Some(now - SETTLE_DEBOUNCE * 2);
+            state.desired = target;
+            assert_eq!(
+                next_job(&mut state, true, now),
+                Slot::Wait,
+                "{target:?}: a file whose ladder topped out is not decoded again at every settle"
+            );
+        }
+        std::fs::remove_dir_all(&dir).ok();
+    }
+
+    /// The step-2 review's F3 (raw-pipeline.md, "The loupe ladder": the lane
+    /// "checks only BETWEEN rungs, so a focus change during a rung's decode
+    /// waits out that rung — one decode"). A screen rung that does not serve
+    /// — the over-claimed full's 5/8 decode comes out 1250x938 for a
+    /// 3840x2160 box — falls through to the plain decode of the same full, a
+    /// SECOND decode in one flight, so the reserved lane checks its focus
+    /// between the two. The focus moves at the one instant only a test hook
+    /// reaches, right after the screen decode (`AFTER_SCREEN_DECODE`). Red
+    /// with that check removed: the lane decodes the full of a frame the user
+    /// has left.
+    #[test]
+    fn the_reserved_lane_abandons_between_the_screen_rung_and_the_full() {
+        use RungKind::{Full, Mid, Screen};
+        /// Clears the hook whatever happens, so no later test on this
+        /// thread inherits it.
+        struct ClearHook;
+        impl Drop for ClearHook {
+            fn drop(&mut self) {
+                AFTER_SCREEN_DECODE.with(|hook| hook.set(None));
+            }
+        }
+        let _clear = ClearHook;
+        let dir = crate::testutil::scratch_dir("lane-f3");
+        let path = dir.join("over_claimed.arw");
+        std::fs::write(&path, raw_over_claiming_its_full()).unwrap();
+        let uhd = Target::Fit(FitBox {
+            width: 3840,
+            height: 2160,
+        });
+        let move_focus: fn(&Shared) = |shared| lock(shared).focused = Some(1);
+        let keep_focus: fn(&Shared) = |_| {};
+        let mid_and_rung = vec![(640, 400, Mid), (1250, 938, Screen)];
+        let every_rung = vec![(640, 400, Mid), (1250, 938, Screen), (2000, 1500, Full)];
+        for (row, reserved, hook, rungs) in [
+            ("the lane, focus moved", true, move_focus, mid_and_rung),
+            ("the lane, focus kept", true, keep_focus, every_rung.clone()),
+            (
+                "a backlog flight, focus moved",
+                false,
+                move_focus,
+                every_rung,
+            ),
+        ] {
+            AFTER_SCREEN_DECODE.with(|slot| slot.set(Some(hook)));
+            let (shared, rx) = shared_over(vec![path.clone()]);
+            lock(&shared).focused = Some(0);
+            assert_eq!(
+                decode_ladder(&shared, 0, uhd, 0, reserved, RequestState::Settled),
+                Ok(()),
+                "{row}"
+            );
+            assert_eq!(published(&rx), rungs, "{row}");
+        }
+        std::fs::remove_dir_all(&dir).ok();
+    }
+
     /// Brief 008: the ladder's stop test reads the decoded, ORIENTED image,
     /// never the IFD's stored, unrotated size. A 640x400 mid in a portrait
     /// file (orientation 8) is 400x640 on screen, and serves a 1000x700 box:
@@ -3464,12 +3687,17 @@ mod tests {
     /// fails with the library's "Unsupported color conversion request" --
     /// the step-1 code's red.
     ///
-    /// The route keeps both hostile-input bounds because it runs after
-    /// them: a cut CMYK scan is refused as "truncated" (zune-jpeg alone
-    /// zero-fills it into a success), and a CMYK header claiming
-    /// 30000x30000 as "implausible" before any buffer exists (zune-jpeg
-    /// alone would size ~2.7 GB from it). Move either guard after the route
-    /// and its row is red.
+    /// The route keeps both hostile-input bounds: a cut CMYK scan is
+    /// refused as "truncated" (zune-jpeg alone zero-fills it into a
+    /// success), and a CMYK header claiming 30000x30000 as "implausible"
+    /// before any buffer exists (zune-jpeg alone would size ~2.7 GB from
+    /// it). It keeps them twice over — the call site checks both on
+    /// libjpeg-turbo's header, and the route again on zune-jpeg's, since it
+    /// is also the second opinion, where no libjpeg-turbo header exists — so
+    /// a guard removed from ONE place leaves these rows green, and removed
+    /// from both places turns its row red (raw-pipeline.md A14, corrected in
+    /// step 2c; the step-2 review's F2: this comment still said "move either
+    /// guard after the route and its row is red", true of step 2a only).
     #[test]
     fn cmyk_and_ycck_streams_decode_on_the_loupe_path() {
         use jpeg_encoder::ColorType;
@@ -4049,9 +4277,11 @@ mod tests {
     /// The child half of the two stderr tests: runs only in the child process
     /// they start from this same test binary, and returns at once in any
     /// other run (the `tests/xmp_crash.rs` pattern, no `#[ignore]`). It
-    /// climbs each scenario's files through `decode_ladder` at the top rung,
-    /// as a 1:1 view asks, so whatever it prints on stderr is what the app
-    /// would.
+    /// climbs each scenario's files through `decode_ladder` at the targets
+    /// the scenario names — the top rung, as a 1:1 view asks, and the fit
+    /// box, where the SCREEN rung is decoded (the "-fit" scenarios; the
+    /// step-2 review's F1: the screen rung's branches print through their own
+    /// call sites) — so whatever it prints on stderr is what the app would.
     #[test]
     fn stderr_child() {
         let Some(spec) = std::env::var_os(STDERR_CHILD_VAR) else {
@@ -4060,22 +4290,36 @@ mod tests {
         let spec = spec.to_string_lossy().into_owned();
         let (scenario, dir) = spec.split_once('|').expect("<scenario>|<directory>");
         let dir = PathBuf::from(dir);
-        let (files, climbs): (&[&str], usize) = match scenario {
-            "damaged" => (&["mid_ok_full_cut.arw", "mid_ok_full_ok.arw"], 1),
-            "complaint" => (&["full_jfif2.arw", "gap.jpg", "pad.jpg", "intact.jpg"], 2),
+        let top = Target::Long(u32::MAX);
+        let fit = |width, height| Target::Fit(FitBox { width, height });
+        // (file, the targets it is climbed at, in order)
+        let plan: Vec<(&str, Vec<Target>)> = match scenario {
+            "damaged" => vec![
+                ("mid_ok_full_cut.arw", vec![top]),
+                ("mid_ok_full_ok.arw", vec![top]),
+            ],
+            "damaged-fit" => vec![
+                ("mid_ok_full_cut.arw", vec![fit(1000, 700)]),
+                ("mid_ok_full_ok.arw", vec![fit(1000, 700)]),
+            ],
+            "complaint" => ["full_jfif2.arw", "gap.jpg", "pad.jpg", "intact.jpg"]
+                .into_iter()
+                .map(|f| (f, vec![top, top]))
+                .collect(),
+            "complaint-fit" => vec![
+                ("full_jfif2.arw", vec![fit(1000, 700), fit(1000, 700)]),
+                ("pad.jpg", vec![fit(300, 200), fit(300, 200), top]),
+                ("both.arw", vec![top, top]),
+            ],
             other => panic!("unknown scenario {other}"),
         };
-        let (shared, _events) = shared_over(files.iter().map(|f| dir.join(f)).collect());
-        for _ in 0..climbs {
-            for index in 0..files.len() {
-                let _ = decode_ladder(
-                    &shared,
-                    index,
-                    Target::Long(u32::MAX),
-                    0,
-                    false,
-                    RequestState::Settled,
-                );
+        let (shared, _events) = shared_over(plan.iter().map(|(f, _)| dir.join(f)).collect());
+        for (index, (_, targets)) in plan.iter().enumerate() {
+            for target in targets {
+                // Nothing in hand on any climb, as before: every climb
+                // decodes again, so the once-memo is what keeps it to one
+                // line.
+                let _ = decode_ladder(&shared, index, *target, 0, false, RequestState::Settled);
             }
         }
         if scenario == "complaint" {
@@ -4116,9 +4360,13 @@ mod tests {
     /// IFD `full` (`truncated_full_rung_keeps_the_good_mid_and_no_failed_badge`'s
     /// layout).
     fn raw_with_full(full: &[u8]) -> Vec<u8> {
-        let mid = crate::raw::jpeg_hostile::encoded(640, 400);
+        raw_with(&crate::raw::jpeg_hostile::encoded(640, 400), full)
+    }
+
+    /// A TIFF container with IFD0 the given `mid` and the second IFD `full`.
+    fn raw_with(mid: &[u8], full: &[u8]) -> Vec<u8> {
         let mut b = crate::raw::tiff_testutil::TiffBuilder::new(true);
-        let mid_off = b.add_blob(&mid);
+        let mid_off = b.add_blob(mid);
         let full_off = b.add_blob(full);
         let second = b.add_ifd(
             &[(0x0201, 4, 1, full_off), (0x0202, 4, 1, full.len() as u32)],
@@ -4138,9 +4386,11 @@ mod tests {
     /// names the file, the rung that failed and the decoder's reason, or a
     /// fault that shows no badge would go unseen. Read from a child
     /// process's stderr over a RAW whose full is cut before EOI and a control
-    /// whose full is intact. (One climb each: in the app the memo stops the
-    /// second, which `truncated_full_rung_keeps_the_good_mid_and_no_failed_badge`
-    /// pins.)
+    /// whose full is intact, climbed at the top rung and, in a second child,
+    /// at a fit box whose screen rung is the one that fails (the step-2
+    /// review's F1: that failure reaches the line through its own call site).
+    /// (One climb each: in the app the memo stops the second, which
+    /// `truncated_full_rung_keeps_the_good_mid_and_no_failed_badge` pins.)
     #[test]
     fn a_rung_that_fails_over_a_good_lower_one_is_named_on_stderr() {
         let dir = crate::testutil::scratch_dir("stderr-damaged");
@@ -4171,6 +4421,29 @@ mod tests {
             lines.iter().all(|l| !l.contains("mid_ok_full_ok.arw")),
             "a clean climb prints nothing:\n{stderr}"
         );
+        // At FIT on a 1000x700 box the mid does not serve and the 3/8 SCREEN
+        // rung is what fails over it: its failure reaches the line through
+        // the screen branch's own arm of `decode_ladder`, not the plain
+        // decode's.
+        let stderr = stderr_of_child("damaged-fit", &dir);
+        let named: Vec<&str> = stderr
+            .lines()
+            .filter(|l| l.starts_with("fastcull: loupe ") && l.contains("mid_ok_full_cut.arw"))
+            .collect();
+        assert_eq!(
+            named.len(),
+            1,
+            "one line for the damaged screen rung:\n{stderr}"
+        );
+        assert!(
+            named[0].contains("the screen rung") && named[0].contains("truncated"),
+            "it names the screen rung and the reason: {}",
+            named[0]
+        );
+        assert!(
+            stderr.lines().all(|l| !l.contains("mid_ok_full_ok.arw")),
+            "a clean climb at fit prints nothing:\n{stderr}"
+        );
         std::fs::remove_dir_all(&dir).ok();
     }
 
@@ -4182,7 +4455,10 @@ mod tests {
     /// its DQT (a gap skipped) and one with 64 junk bytes before EOI (the
     /// image kept), each climbed TWICE, print one line each; an intact JPEG
     /// prints nothing; and the grid thumb's decode of the gapped and the
-    /// padded JPEG in the same child adds no line.
+    /// padded JPEG in the same child adds no line. A second child climbs at
+    /// fit, where the screen rung's two branches print through their own
+    /// call sites (the step-2 review's F1), and pins the memo's key: one
+    /// line per embedded JPEG of a file, not per file.
     #[test]
     fn a_harmless_complaint_is_named_on_stderr_once() {
         use crate::raw::jpeg_hostile::{before_eoi, encoded, find, insert, mandelbrot_baseline};
@@ -4223,6 +4499,40 @@ mod tests {
             stderr.lines().all(|l| !l.contains("intact.jpg")),
             "an intact file prints nothing:\n{stderr}"
         );
+        // At FIT: the screen rung kept past a complaint (pad.jpg at 2/8,
+        // `decode_ladder`'s outcome (c)) and the second opinion's full asked
+        // for a screen rung (full_jfif2.arw on a 1000x700 box, outcome (b))
+        // print their line from the screen branch — once across the fit and
+        // the 1:1 climbs of one JPEG. A RAW whose mid AND full both complain
+        // prints one line for EACH embedded JPEG: the memo is keyed by the
+        // JPEG's offset in the file, not by the file.
+        let mut mid2 = encoded(640, 400);
+        let at = find(&mid2, b"JFIF\0").expect("the mid's JFIF APP0");
+        mid2[at + 5] = 2;
+        std::fs::write(dir.join("both.arw"), raw_with(&mid2, &jfif2)).unwrap();
+        let stderr = stderr_of_child("complaint-fit", &dir);
+        for (file, words) in [
+            ("full_jfif2.arw", ["the full rung", "JFIF"]),
+            ("pad.jpg", ["the screen rung", "extraneous"]),
+        ] {
+            let named: Vec<&str> = stderr.lines().filter(|l| l.contains(file)).collect();
+            assert_eq!(
+                named.len(),
+                1,
+                "exactly one line for {file} over its climbs at fit (and 1:1):\n{stderr}"
+            );
+            for word in words {
+                assert!(
+                    named[0].contains(word),
+                    "{file}: \"{word}\" in {}",
+                    named[0]
+                );
+            }
+        }
+        let both: Vec<&str> = stderr.lines().filter(|l| l.contains("both.arw")).collect();
+        assert_eq!(both.len(), 2, "one line per embedded JPEG:\n{stderr}");
+        assert!(both.iter().any(|l| l.contains("the mid rung")), "{both:?}");
+        assert!(both.iter().any(|l| l.contains("the full rung")), "{both:?}");
         std::fs::remove_dir_all(&dir).ok();
     }
 
