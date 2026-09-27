@@ -1428,9 +1428,12 @@ commit that lands its tests, and stays open until then):
       time-to-screen runs from a decode's start to the app's report that its
       fill completed, held by the ring or at once that ring's victim, a frame
       the cursor has passed included, while a culled fill or the box going
-      ends it unmeasured and a decode published with no box starts no
-      measurement; a step-down less than one ring past the last step-up holds
-      the rung until the hold ends; a reversal starts afresh; during a hold
+      ends it unmeasured and a decode started or published with no box, or
+      one the box's going interrupted, starts no measurement; the key period
+      is the interval between the last two index changes; a step-down less
+      than one ring past the last step-up holds the rung until the hold ends,
+      across a settled window between two keys of the hold; a reversal
+      starts afresh; during a hold
       the focused frame and the members behind ask for the fit box — an
       in-flight full-res kept, a queued one replaced, or dropped when the
       fit-box rung is in hand — and the settle then asks for the top rung; a
@@ -1439,6 +1442,8 @@ commit that lands its tests, and stays open until then):
       `the_switch_rule_steps_down_before_a_frame_it_cannot_land`,
       `the_switch_rule_steps_up_only_from_a_complete_ring_with_a_free_decoder`,
       `a_quick_second_step_down_holds_the_rung_until_the_hold_ends`,
+      `a_reversal_starts_the_switch_rule_afresh`,
+      `the_key_period_is_the_interval_between_index_changes`,
       `a_hold_above_fit_asks_the_fit_box_for_the_focused_frame` (with a row
       whose fit-box rung is cached while its full-res is queued — the early
       return a request the cache serves takes),
@@ -1454,18 +1459,26 @@ commit that lands its tests, and stays open until then):
       simulation that stopped measuring cannot pass —
       `a_hold_above_fit_never_starts_a_full_res_decode_the_cursor_has_reached`.
       The mutants, each red on its row: the focused frame asking for the top
-      rung during a hold; the re-plan skipped when the fit-box rung is cached
-      (red on the cached row and on the simulation); distances counted from 0;
+      rung during a hold (red on the simulation too); the re-plan skipped when
+      the fit-box rung is cached (red on the cached row; corrected 2026-09-27,
+      brief 008 step 4: this read "and on the simulation", which cannot see
+      it — every key of a steady hold queues fresher ring work behind the
+      stale entry, and the cull drops it before a worker reaches it; the
+      step-4b commit's message has the reading); distances counted from 0;
       the revival at the stored target; a step-up that waits for nothing in
       flight; one that ignores the free worker; one that counts a member whose
       rung is in flight as missing (red on the in-flight row); the lock
       removed (red on
-      `a_quick_second_step_down_holds_the_rung_until_the_hold_ends`); the
-      positions beyond the clamp asking for the fit box (red on the clamp
-      test's hold rows); a ring's victim measuring nothing, `note_dropped`
-      doing nothing, and the measurements culled when their frame leaves the
-      ring (red on the passed-frame row, and on the simulation, which then
-      never measures). Driven, the hold's frames on screen per key stay at
+      `a_quick_second_step_down_holds_the_rung_until_the_hold_ends`), and the
+      state reset in a settled window (red on its band row); the reversal's
+      reset removed; the key period never written, or read off the debounce
+      clock; the positions beyond the clamp asking for the fit box (red on the
+      clamp test's hold rows); a ring's victim measuring nothing,
+      `note_dropped` doing nothing, a stamp read against the box at the
+      publish alone (red on the started-without-a-box row), and the
+      measurements culled when their frame leaves the ring (red on the
+      passed-frame row, and on the simulation, which then never measures).
+      Driven, the hold's frames on screen per key stay at
       ui-grid.md A6's level in two 1:1 runs of
       `a_held_arrow_at_fit_on_4k_stays_at_the_rung_and_never_slows`: A6's own,
       on the seat's decoders, and one with `FASTCULL_DECODERS=2`, whose one
@@ -1473,9 +1486,11 @@ commit that lands its tests, and stays open until then):
       (01-architecture.md's perf table); how many times each hold switches
       between full-res and the rung is a number for humans in brief 008's
       Outcome. What the user sees on the desktop — one step or a flicker — is
-      the user's own test of the CI build (brief 008). Open: lands with the
-      switch rule.
-- [ ] **The settled ring after a hold** (brief 008, Manager ruling Q-I):
+      the user's own test of the CI build (brief 008). Open: its driven half,
+      the two 1:1 runs, lands with ui-grid.md A5's driven test; every
+      clock-free row and the simulation landed with the switch rule (brief
+      008's step-4b commit, each mutant's red in its message).
+- [x] **The settled ring after a hold** (brief 008, Manager ruling Q-I):
       clock-free — a stop above fit on a frame whose full-res is in hand, its
       ring members holding only their fit-box rungs, has the reserved lane
       queue the settled ring, full-res for every member in the ring's order,
@@ -1484,8 +1499,9 @@ commit that lands its tests, and stays open until then):
       own leaves the lane nothing to ask; an engine with no fit box asks
       nothing — `a_settle_with_nothing_to_climb_asks_for_the_settled_ring`.
       Mutants: the lane's ask removed; the ring asked beside the climb; the
-      once-per-settle guard removed (red on the second wake). Open: lands
-      with the switch rule.
+      once-per-settle guard removed (red on the second wake). Ticked by brief
+      008's step-4b commit, which carries the lane's ask and the test; each
+      mutant's red is in its message.
 - [x] **The RSS ceiling** (brief 008 A12): release, Linux with glibc only
       (symlinks, `VmHWM` from `/proc/self/status`, and glibc's tunables): the
       walk runs in a child of the test's own binary under the app's
