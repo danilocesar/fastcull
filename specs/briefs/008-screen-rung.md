@@ -176,7 +176,7 @@ Workers and ring depth derive from the machine; nothing is configured.
   `/proc/meminfo` `MemTotal` on Linux and `GlobalMemoryStatusEx` on
   Windows (the one `unsafe` block ruled Q1); an unreadable figure means
   2 GiB. The app prints the cache size, the ring and the decoder count
-  once on stderr at startup. Screen rungs count toward the cache like
+  — and, on Linux, the mmap threshold it set — once on stderr at startup. Screen rungs count toward the cache like
   mids do. The app's texture copies stay bounded by the rings, and the
   spec states the whole-app peak per RAM class. Withdrawn: the
   `MemoryBudget` derivation from free memory and its eleven-row table,
@@ -290,7 +290,8 @@ Workers and ring depth derive from the machine; nothing is configured.
   5k-symlink walk at fit and at 1:1 holds `VmHWM` ≤ the cache + the
   decoders' transient buffers + 200 MB (the issue's RSS ceiling test),
   skipped when available RAM is under the cache + 2 GiB. (Revised
-  2026-09-26.)
+  2026-09-26; revised 2026-09-27: the walk runs under the app's mmap
+  threshold via `GLIBC_TUNABLES`, its fit phase at 2560×1440.)
 - A13. The hold above fit (R7): engine-level and clock-free where it can
   be — with decoders that keep up, every frame of a hold lands full-res;
   with decoders that fall behind, the requests fall to the fit-box rung
@@ -987,3 +988,25 @@ the cursor's rungs) → a later brief.
   floor) stands. Spec amendment 2 carries the allocator rule, A12's
   changes, Q-J's provenance and the M10 corrections F5, F6 and F9; step 3
   waits for it.
+- 2026-09-27 (Manager, step 2 APPROVED in its first review round): 2a
+  d2d5941 (CMYK and YCCK through zune-jpeg; F7, F8, F11), 2b c73297e (the
+  screen rung and its kinds, in core; the app inert), 2c 9211580 (the
+  other-cameras relaxation); CI run 36303917663 green on both runners,
+  the Windows guard green on all four caches, every Windows perf row
+  green (3/8 rung 144.7 ms, 2/8 135.9, landscape full 185.4, portrait
+  full 232.0). Spec amendment 2 (f7ac661) committed after one check
+  round with minors only, hand-merged at the A10 / A15 boundary. Rulings
+  on the review and the amendment: the review's F1 (tests for the stderr
+  lines on the screen-rung path), F2 (a stale comment) and F3 (the
+  reserved lane's abandon check before the plain decode) ride with step
+  3's first commit; the pre-existing re-decode loop on an IFD that
+  over-claims its JPEG's size is fixed in step 3 — the ladder memoizes the
+  decoded long edge, with its spec sentence in the same commit (M11); a
+  damaged mid over an intact full showing Failed is recorded in the spec
+  as a known gap for a later unit (unchanged from main); the header-gap
+  list's growth is recorded as a residual; Q-M — step 3 measures the
+  thumb and throughput perf rows with and without the Linux threshold,
+  and inside +2 ms / −10 % the rows keep timing glibc's default; no ADR
+  for the one `mallopt` call (issue #40's precedent); A12 stays off CI as
+  before. 2a and 2b need no separate driven re-run (their app code is
+  unchanged from 9211580 and 0a178cc).
