@@ -1010,3 +1010,50 @@ the cursor's rungs) → a later brief.
   for the one `mallopt` call (issue #40's precedent); A12 stays off CI as
   before. 2a and 2b need no separate driven re-run (their app code is
   unchanged from 9211580 and 0a178cc).
+- 2026-09-27 (Manager, steps 3 and 4 APPROVED): step 3 (ca473f5, eb9de78,
+  9df84ab) in one review round — CI run 36315775611 green on both
+  runners; the laptop's real startup line: "loupe cache 7.8 GiB (a quarter
+  of 31.1 GiB total RAM), ring 2 behind / 15 ahead, full-res 15 ahead at
+  1:1, 4 decoders (physical cores, 3 to 16), worst case 12.2 GiB for A1
+  frames on a 4K screen plus ~0.2 GB per 1,000 thumbnails; glibc mmap
+  threshold 4 MiB"; A12 under the threshold read VmHWM 8,575 MiB against
+  its 9,287 MiB ceiling; the IFD over-claim loop fixed with its old red.
+  Q-M measured inside the ruled bounds (+0.5 to +0.9 ms per thumb;
+  throughput −5.5 % in the developer's rounds, −7.5 to −9.6 % in the
+  reviewer's) — the perf rows keep timing glibc's default; the lever, if a
+  many-core seat ever minds, is a reused per-worker thumb buffer. Both CI
+  runners derive the floor configuration (2 physical cores → 3 decoders,
+  a 4 GiB cache, full-res 10 ahead), so A5, A6 and A13 on CI measure the
+  floor. Step 4 (ecad74a, fd73755, 75d0fdf; fix round 7064694, 9123d9b)
+  after one CHANGES_REQUESTED round; its F5 landed in step 5a (c8445f3).
+  The video-export perf row read 840–2110 ms on this PR's ubuntu runners
+  with no change to its code (a runner-disk row, advisory on CI, ~23 % of
+  budget on the idle laptop): watched; a second red on this PR opens an M3
+  bookkeeping issue. The #[cfg(test)] AFTER_SCREEN_DECODE hook stays (the
+  only race-free red for its guard; fileops.rs's PROBES is the precedent).
+- 2026-09-27 (Manager, step 5's block): CI run 36350758741 on 33e5e8d is
+  red on Windows debug only — `transit_to_a_cold_frame_keeps_the_overlay_at_
+  the_carried_center` read the thumb's aspect because its midgap dump runs
+  80 ms after End on the clock, and step 5's Q-A mid window makes the End
+  refresh free about 14 mids at once, a per-pixel drop loop that debug
+  compiles at opt-level 0 (52–62 ms on the laptop, 166–189 ms on the
+  Windows runner; about 3 ms in release, where the ubuntu pass is green).
+  Rulings: (1) the fix is the test's, not the product's — the dump is
+  gated on the End refresh's own mark instead of a clock (the project's
+  rule that driven tests wait on events, not timers), proposed by the
+  senior developer as a test change under its integrity review, the
+  test's promise unchanged; freeing textures off the UI thread is not
+  done, since release frees them in about 3 ms; (2) the soft-transit test
+  (`transit_at_zoom_stays_soft_never_drops_to_fit`) is found vacuous — its
+  first assertion is met by the cold start's soft line before any key —
+  and is made to prove its claim, scoped after the first key with a
+  fixture or profile under which the premise holds, as a test change under
+  the integrity review; (3) the three enlarged fixtures get the drop guard
+  (cold-frame, failgate, soft-transit: ~2 GB per Windows pass otherwise);
+  (4) step 6 carries the kitchen's fill-cost measurement under the 4 MiB
+  threshold; (5) the step-5 review confirms, or has the fix round close,
+  step 3's reviewer's gap — `Z` to 1:1 and back to fit leaving the
+  full-res ring queued at fit for the next hold to pop; (6) step 5's five
+  plan deviations are the review's to judge. Also promoted (directive
+  9131a37): every local driven run under Xvfb with WAYLAND_DISPLAY cleared
+  — the agents' test windows had been opening on the user's live desktop.
