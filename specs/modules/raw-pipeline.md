@@ -628,6 +628,12 @@ before allocation:
   tell it from a cut scan. The rule rests on intact camera files ending with
   EOI, which no body on record breaks (brief 008, other cameras, 2026-09-26;
   M11).
+- **Residual, accepted — the header-gap list grows with its input**: the
+  header-gap pre-pass keeps one range per gap it finds, with no cap on
+  their number, so a crafted stream made of tiny gaps costs transient
+  memory and time in proportion to its size, bounded by
+  `MAX_EMBEDDED_JPEG_LEN` — the same order as the accepted 500 MP decode
+  buffer (brief 008, the step-2 review; Manager ruling 2026-09-27).
 - **Progressive scans: at most 100** (brief 008 R2; Manager ruling
   2026-09-26): the loupe's libjpeg-turbo decode sets
   `Decompressor::set_scan_limit(100)`, the bound zune-jpeg 0.4's default
@@ -653,6 +659,13 @@ wherever that rung does not serve — and prints one line on stderr, the
 diagnostics channel, naming the file, the rung that failed and the decoder's
 reason, so a fault that shows no badge is still seen (brief 008, the step-1
 review; Manager ruling 2026-09-26).
+
+**Known gap — a damaged mid over an intact full**: when a RAW's mid preview
+fails to decode, the ladder returns `Failed` without trying the full JPEG,
+at fit and at 1:1, and the grid thumb fails too — so a frame whose full
+JPEG is intact shows the Failed badge, against M11's rule that the badge is
+for a frame with nothing decodable. Unchanged from before brief 008; left
+for a later unit (brief 008, the step-2 review; Manager ruling 2026-09-27).
 
 ### The decoder's complaints (other cameras; the user 2026-09-26, M11)
 
@@ -908,7 +921,12 @@ medium's measured behaviour:
   the cache clamps it), the decoders and where they came from (physical
   cores, the RAM cap, `FASTCULL_DECODERS`, or the fallback), and the
   whole-app worst-case peak below for A1 frames on a 4K screen, "plus
-  ~0.2 GB per 1,000 thumbnails" (brief 008, the redesign's G3).
+  ~0.2 GB per 1,000 thumbnails" (brief 008, the redesign's G3); and, on
+  Linux with glibc, the mmap threshold the app set, `mmap threshold 4 MiB`
+  — printed only when `mallopt` accepted it, so on such a seat a line
+  without it says the call did not take — and no such clause on any other
+  platform (The Linux allocator, below; Manager ruling 2026-09-27, brief
+  008).
 - **Outside the cache**, bounded by the rings: the app's texture copies — the
   full-res ring's (up to 18 × 149 MB of A1 frames at 1:1, as many as the
   cache's clamp leaves in the ring), the screen-rung
@@ -972,11 +990,44 @@ medium's measured behaviour:
   where it was 100 %). Above a reported 7.51 GiB every total is within 60 % at
   any core count but in a band between the 8 and 12 GB classes that no common
   RAM size reports, 8.34 to 8.38 GiB, where a fourth frame ahead joins the
-  ring and the peak reaches 60.2 %. The formula does not count what glibc's
-  allocator keeps of freed decode buffers on Linux (Windows returns them;
-  brief 008's decisions log)
-  (PENDING brief 008 Q-J and the Linux allocator term: machines that report under 8 GiB, and whether that term is counted, bounded or released — both ruled, and this bullet and the figures docs/faq.md's memory answer and docs/culling.md's "At 1:1" paragraph take from it amended, before step 3 implements it).
-  The relief is the runtime shrink below.
+  ring and the peak reaches 60.2 %. The band below a reported 8 GiB is
+  accepted as it stands: no culling seat on record reports under 8 GiB, a
+  4 GiB machine already needed all of its RAM before brief 008, the user's
+  2 GiB floor stays (brief 008 R6), and the relief is the runtime shrink
+  below (Manager ruling 2026-09-27, brief 008 Q-J). The formula counts no
+  allocator term: on Linux the app keeps glibc from holding freed large
+  buffers, and on Windows the heap returns them (The Linux allocator,
+  next).
+- **The Linux allocator** (Manager ruling 2026-09-27, brief 008): on Linux
+  with glibc the app's `main` first sets glibc's mmap threshold to 4 MiB —
+  `mallopt(M_MMAP_THRESHOLD, …)` over the `libc` crate, the app's one
+  `unsafe` call on Linux, with the value from `budget::MMAP_THRESHOLD`, its
+  one home — so a buffer of 4 MiB or more never makes glibc's arenas grow:
+  glibc maps it on its own and returns it to the system when it is freed,
+  unless a free chunk already in an arena fits it — one that only smaller
+  freed buffers, coalesced, can make, since no larger buffer lives there. That
+  covers an A1's decoded full-res frame, screen rung and mid, the JPEG a
+  decoder reads, and each texture copy, which Slint allocates through the
+  same allocator. Left at its default, glibc raises its threshold each time
+  it frees a mapped buffer above it, up to 32 MiB, then grows its arenas for
+  the buffers under it, keeps them there once freed and returns to the
+  system only the top of a heap: a cache filled at fit and refilled at 1:1
+  held both at once, on the build before brief 008 as well (brief 008's
+  decisions log). 4 MiB is the power of two under the smallest
+  rung an A1 caches, its 5,235,840 B mid — an A1 property (M11); a lower
+  one would map the app's smaller allocations for nothing. Each buffer
+  mapped on its own is faulted in afresh when it is first written:
+  within noise on the loupe's decode rate, as the ruling measured it (brief
+  008's decisions log), and paid as well, on the thread that writes them,
+  by the kitchen's texture copies and by each grid thumb's decode buffer —
+  5 MB for an A1 preview — whose cost goes in brief 008's Outcome.
+  Residuals, accepted: a fit rung under 4 MiB — a mid
+  or screen rung under about 1.4 megapixels, which serves the fit box only
+  in a small window or from another body's small preview, and which no A1
+  viewport produces — stays in the arenas once freed, so a long session at
+  fit over such frames followed by 1:1 can hold up to its cache's worth
+  twice; and on Windows the heap's return of blocks this large when they
+  are freed is its documented behaviour, not measured in this project.
 - Not in this unit (a later brief): shrinking the cache at runtime when the
   machine runs short — poll the free memory, shrink only, never grow back
   mid-session, and never take the cursor's rungs, the ring's far end first
@@ -1028,7 +1079,11 @@ medium's measured behaviour:
   `GRID_SOURCE_MAX_PIXELS`.
 - `budget.rs`: the pixel cache from total RAM, the decoder count from
   physical cores, total RAM and `FASTCULL_DECODERS`, the machine probe, and
-  the startup line, whose `fastcull: loupe cache ` prefix tests read.
+  the startup line, whose `fastcull: loupe cache ` prefix tests read; and
+  `MMAP_THRESHOLD`, the one value of the app's Linux `mallopt`, of the RSS
+  ceiling test's `GLIBC_TUNABLES` and of the startup line's `mmap
+  threshold` clause, which the app's startup test reads (The Linux
+  allocator).
 - `ExifSummary` (`exif.rs`): make, model, serial, capture time, subsec, the
   Sony sequence number; `sort_key()` normalizes subseconds to three digits.
 - The budget rows of 01-architecture.md bind this module — open+EXIF, the
@@ -1407,24 +1462,73 @@ commit that lands its tests, and stays open until then):
       Mutants: the lane's ask removed; the ring asked beside the climb; the
       once-per-settle guard removed (red on the second wake). Open: lands
       with the switch rule.
-- [ ] **The RSS ceiling** (brief 008 A12): release, Linux only (symlinks, and
-      `VmHWM` from `/proc/self/status`): an engine walk over 5,000 symlinks to
-      the three A1 files at the seat's own cache (the cache rule over the
-      seat's total RAM), holding and stopping at fit on a 3840×2160 box (the
-      3/8 rung) and at 1:1 — each phase decoding at least 1.5 × the cache's
-      worth of distinct frames at its rung before its reading, so the cache
-      has filled and evicted — keeps `VmHWM` ≤ the cache + the decoders × 2 ×
-      149,299,200 B + 200 MB (the engine alone, no textures), read during the
-      walk as well as at its end; skipped, with the reason printed, when
-      available RAM is under the cache + 2 GiB —
-      `the_engine_walk_holds_the_rss_ceiling`. Open: lands with the cache
-      rule.
+- [ ] **The RSS ceiling** (brief 008 A12): release, Linux with glibc only
+      (symlinks, `VmHWM` from `/proc/self/status`, and glibc's tunables): the
+      walk runs in a child of the test's own binary under the app's
+      allocator threshold, `GLIBC_TUNABLES=glibc.malloc.mmap_threshold=4194304`
+      built from `budget::MMAP_THRESHOLD` — core cannot run the app's
+      `main`, and the tunable sets what `mallopt` sets (The Linux allocator;
+      Manager ruling 2026-09-27) — and the parent fails unless the child
+      reports its reading, so a child that ran no walk is red: an engine walk
+      over 5,000 symlinks to the three A1 files at the seat's own cache (the
+      cache rule over the seat's total RAM), holding and stopping at fit on a
+      2560×1440 box (the 2/8 rung, 2160×1440 — the shape that tells a 4 MiB
+      threshold from a 16 MiB one, which keeps its 9 MB buffers) and at 1:1 —
+      each phase decoding at least 1.5 × the cache's worth of distinct
+      frames at its rung before its reading, so the cache has filled and
+      evicted — keeps `VmHWM` ≤ the cache + the decoders × 2 × 149,299,200 B +
+      200 MB (the engine alone, no textures), read during the walk as well
+      as at its end; skipped, with the reason printed, when available RAM is
+      under the cache + 2 GiB; red with the child's `GLIBC_TUNABLES` dropped
+      (glibc's default threshold), with `MMAP_THRESHOLD` at 16 MiB, and with
+      the child's test name misspelt —
+      `the_engine_walk_holds_the_rss_ceiling`. Its residual: the ceiling
+      leaves each decoder's input JPEG to the 200 MB allowance and the walk
+      is all landscape (the three files carry orientation 1), so a portrait
+      session at 1:1, which it does not make, passes the ceiling as written
+      by arithmetic from about 13 decoders — the whole-app formula (Memory)
+      counts that input. (Changed 2026-09-27, the Linux allocator: the walk
+      ran in the test's own process under glibc's default threshold, where
+      a fit phase followed by 1:1 passes this ceiling on every viewport shape
+      measured, the build before brief 008 included, and at fit on a
+      3840×2160 box, where 4 MiB and 16 MiB read alike — brief 008's
+      decisions log.) Open: lands with the cache rule.
+- [ ] **The app sets glibc's mmap threshold and says so** (brief 008, the
+      Linux allocator; Manager ruling 2026-09-27): clock-free,
+      `MMAP_THRESHOLD` is 4 MiB, and the startup line carries `mmap threshold
+      4 MiB` when the app reports the threshold it set and no `mmap
+      threshold` clause when it reports none —
+      `the_startup_line_names_the_mmap_threshold_only_when_set`; driven, both
+      runners, every profile the suite runs in, a launch with no folder:
+      exactly one `fastcull: loupe cache ` line on the child's stderr, which
+      on Linux with glibc names the threshold built from
+      `budget::MMAP_THRESHOLD` and on every other platform names none —
+      `the_startup_line_reports_the_mmap_threshold`. Red with the `mallopt`
+      call removed from `main` (the driven test, on Linux) and with the
+      clause printed whatever the app reports (the clock-free test, and the
+      driven one on Windows). Review-verified: that the call is the first
+      statement of `main` on that platform (nothing observable tells first
+      from early). Open: lands with the startup line.
 - [ ] **Hard rule 1** (brief 008 A11): the RAW-write tests are unchanged and
       green; QE records `sha256sum testdata/raws/*.ARW` before and after its
       runs, and the listings match. Open: QE's rounds.
 
 ## History
 
+- 2026-09-27 — The Linux allocator (brief 008, Manager rulings 2026-09-27):
+  the app sets glibc's mmap threshold to 4 MiB first in `main`, the startup
+  line says so, and the whole-app worst case counts no allocator term
+  (Memory). Replaced: "The formula does not count what glibc's allocator
+  keeps of freed decode buffers on Linux (Windows returns them)" and the
+  pending marker that held the term and the band below a reported 8 GiB
+  open. Measured before the ruling (brief 008's decisions log): glibc's
+  default kept freed rungs, mids and JPEG inputs in its arenas, so a fit
+  session followed by 1:1 held both caches' worth at once, on every viewport
+  shape and on the build before brief 008 as well; the whole-app formula,
+  which never counted that, was short by up to the cache on Linux. The
+  band below a reported 8 GiB is accepted as the table states it (Q-J).
+  The RSS ceiling test now runs its walk under the app's threshold and at
+  fit on the 2/8 rung, where a 16 MiB threshold would fail it.
 - 2026-09-26 — Other cameras (brief 008; the user's answer that other bodies'
   files must be handled, CLAUDE.md M11): the loupe no longer refuses a stream
   for a harmless complaint (The decoder's complaints). Header gaps are

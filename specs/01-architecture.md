@@ -34,6 +34,26 @@ coupling. `fastcull-cli` deliberately stays console-subsystem: it is a
 terminal tool. CI asserts both PE subsystem fields on every Windows build
 (ci.yml "Verify Windows artifact": app = 2/GUI, cli = 3/console).
 
+**The Linux allocator (brief 008, Manager ruling 2026-09-27)**: on Linux
+with glibc, `main()` first calls `mallopt(M_MMAP_THRESHOLD, 4 MiB)` through
+the `libc` crate — a dependency of the app on that target alone — so glibc
+maps large buffers on their own and returns them when they are freed,
+instead of growing its arenas for them and keeping them; the rule, what it
+covers and its residuals are
+`modules/raw-pipeline.md`'s ("Memory", The Linux allocator). It is the app
+crate's one `unsafe` call on Linux, as `AttachConsole` above is its one on
+Windows, and it lives in the app because it configures the process from the
+process's own `main`, which core does not own: core keeps the value
+(`budget::MMAP_THRESHOLD`), and core's one `unsafe` block stays the Windows
+total-RAM probe (`budget.rs`). The dependency behaviours it rests on —
+glibc's dynamic threshold, which an explicit one switches off, and Slint's
+pixel-buffer copies going through Rust's global allocator (i-slint-core
+1.17.1, `sharedvector.rs` 61-62 and 348-360, reached from
+`SharedPixelBuffer::clone_from_slice`) — are recorded in the canaries of
+`crates/fastcull-app/Cargo.toml`, so an upgrade re-reads them. No
+`#[global_allocator]` is set: one would take those copies and the
+decoders' buffers out of glibc's hands, and this rule with them.
+
 ## Core modules (every file in `fastcull-core/src`, and the spec in `modules/` that owns it)
 
 | Module | File | Responsibility | Spec |
@@ -44,7 +64,7 @@ terminal tool. CI asserts both PE subsystem fields on every Windows build
 | exif | `exif.rs` | `ExifSummary` and the capture-time sort key, read through the walker | raw-pipeline |
 | pipeline | `pipeline.rs` | priority thread pool: visible > prefetch > background | raw-pipeline |
 | loupe | `loupe.rs` | the loupe engine: one decode worker per physical core, one of them the focus-reserved lane; the rung ladder — mid, screen rung, full-res — decoded by libjpeg-turbo (ADR 0005; CMYK and YCCK streams by zune-jpeg); the one ring and the switch rule above fit; the pixel cache (the byte-budget LRU) | raw-pipeline (ladder, ring and what it asks, decoders, memory), ui-grid (the request states) |
-| budget | `budget.rs` | the machine-derived loupe sizes: the pixel cache from total RAM, the decoder count from physical cores, total RAM and `FASTCULL_DECODERS`, the startup line; the Windows total-RAM probe, core's one `unsafe` block | raw-pipeline |
+| budget | `budget.rs` | the machine-derived loupe sizes: the pixel cache from total RAM, the decoder count from physical cores, total RAM and `FASTCULL_DECODERS`, the startup line; `MMAP_THRESHOLD`, the value the app's Linux allocator call sets (Crates, above); the Windows total-RAM probe, core's one `unsafe` block | raw-pipeline |
 | viewassets | `viewassets.rs` | which rung the UI holds per grid cell; adopts engine-cached rungs that emit no event | raw-pipeline |
 | transit | `transit.rs` | loupe render ladder (the cue at fit and the pill's minimum on-time included) + the eviction of the app's two texture rings by the engine's leaned windows, as pure decision functions | ui-grid |
 | zoompan | `zoompan.rs` | the ×1.5 zoom ladder and pan-anchor math | ui-grid |
@@ -319,7 +339,13 @@ manifests and the lockfile — never the virtual root manifest. So a
 `[profile]` change alone never moved the key, and the #76 line cost five
 cold CI runs across two days before anyone counted `Compiling` lines; a
 hand-bumped prefix (brief 003) fixed it for a day and was retired the same
-day, because a forgotten bump is silent.
+day, because a forgotten bump is silent. The lockfile, the members'
+manifests and `.cargo/config.toml` are hashed into the full key only, after
+the environment hash; the restore key stops before them, so a change to any
+of them restores the newest entry under the unchanged restore key (`full
+match: false`), and only a main run saves under the new key
+(senior-developer review 2026-09-27, F6: run 36294797235's restore key
+equals 36285260233's while its full key moved).
 
 The rule (brief 004): a `shell: bash` step before rust-cache parses the root
 `Cargo.toml` with Python's `tomllib`, serialises its `[profile]` table as
@@ -563,13 +589,25 @@ carries its evidence):
       release job's nasm and Ninja build (no PR run builds release
       artifacts; the first release after brief 008 is its proof). The
       user's test of that artifact on the desktop with real folders
-      precedes any release (user decision 2026-09-26). Open: ticked with
-      the run id. (Changed 2026-09-26, senior-developer review F1: the box
+      precedes any release (user decision 2026-09-26). Met so far by run
+      36294797235 (82f69ff): both checks green, the CMake-cache check green
+      on every `turbojpeg-sys` cache, each naming `CMAKE_GENERATOR=Ninja`,
+      after it was red on the same runner at d4cc7b7 and 53a4248, and the
+      3/8 rung's Windows median below the landscape full-res median (brief
+      008's decisions log). Open: the release plumbing — `dist-workspace.toml`'s
+      nasm for apt and chocolatey, and RELEASING.md naming nasm and, on
+      Windows, ninja (brief 008 step 6) — which step 6's review then
+      verifies as above; ticked with the id of the first CI run after it.
+      (Changed 2026-09-26, senior-developer review F1: the box
       asked only for green checks and a running artifact, which brief 008's
       first run met with the library compiled unoptimised on Windows.
       Changed again the same day, the generator re-ruling of brief 008: the
       generator is Ninja, and the perf-log reading is the proof that ruling
-      names.)
+      names. Corrected 2026-09-27, senior-developer review F5: the open
+      reason read "ticked with the run id", which no longer said what was
+      missing once run 36294797235 had met the Windows half, and invited a
+      tick while the release plumbing the box calls review-verified was not
+      yet in the tree.)
 - [x] The licence file carries libjpeg-turbo's notices (brief 008 A15):
       `turbojpeg-sys` listed under the IJG, BSD-3-Clause and zlib licences
       with their notice texts; red on a file regenerated after the

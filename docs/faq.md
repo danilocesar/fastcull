@@ -76,7 +76,10 @@ it reads fewer frames ahead at full quality (three on an 8 GB machine,
 about ten on a 16 GB one, fifteen above that). On an 8 GB machine the
 worst case is about 60 % of the memory, and more the less of it your
 system reports as usable (a processor with built-in graphics can keep a
-gigabyte or more for itself). At fit it uses a good deal less, and
+gigabyte or more for itself). On a machine with less than 8 GB a long
+session at 1:1 can need more memory than the machine has — the worst case
+stays near 5 GB however small the machine — so there, close other
+programs or stay at fit. At fit it uses a good deal less, and
 thumbnails add about 200 MB per thousand photos. (This is memory, not
 the cache folder on disk described above.) FastCull decides it once,
 when it starts, from your machine's total memory and processor cores,

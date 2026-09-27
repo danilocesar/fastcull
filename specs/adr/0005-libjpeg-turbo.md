@@ -154,9 +154,13 @@ the smallest N/8 factor that serves the loupe's fit box under the existing
   `turbojpeg-static` on MSVC): the `crt-static` promise and the "no
   VCRUNTIME140 import" check still apply, and a check that neither exe
   imports `turbojpeg.dll` joins them. The benchmark did not measure the
-  Windows build; the unit's first CI run is the proof, and the user tests
-  that artifact on the desktop with real folders before any release (user
-  decision 2026-09-26).
+  Windows build; the proof is the CI run whose CMake-cache check is green
+  with the 3/8 rung below the landscape full-res median in its perf log
+  (brief 008's decisions log), and the user tests that run's artifact, or a
+  later one, on the desktop with real folders before any release (user
+  decision 2026-09-26). (Corrected 2026-09-27, senior-developer review F9:
+  this named the unit's first CI run, whose Windows decoder was
+  unoptimised.)
 - **A build without nasm fails, never a silent SIMD-less binary**:
   `require-simd` is the guard, and the landscape full-res row of the perf
   table is the runtime canary, its threshold set under what a SIMD-less
