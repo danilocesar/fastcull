@@ -966,9 +966,10 @@ fn decode_jpeg_rung(
 /// decoded. A stream that passes both and still runs short (a valid EOI
 /// over too little entropy data) makes libjpeg-turbo warn, and
 /// `tj3Decompress8` returns -1 on any warning, which the crate turns into
-/// `Err`: a `Failed` badge, never a blank success. See
-/// [`decode_scaled_oriented`] for the same decode at an N/8 scale; a
-/// lossless stream ignores the scale and decodes full-size.
+/// `Err`: a `Failed` badge, never a blank success. A progressive stream of
+/// more than 100 scans fails the same way (the scan limit, set on every
+/// decompressor). See [`decode_scaled_oriented`] for the same decode at an
+/// N/8 scale; a lossless stream ignores the scale and decodes full-size.
 pub fn decode_oriented(bytes: &[u8], orientation: u16) -> Result<(Vec<u8>, u32, u32), String> {
     decode_with(bytes, orientation, 8).map(|(rgb, w, h, _)| (rgb, w, h))
 }
@@ -1020,6 +1021,17 @@ fn decode_with(
     // the loupe's workers then share no decoder state. A per-thread handle
     // would have to be measured to earn its place (brief 008).
     let mut dec = turbojpeg::Decompressor::new().map_err(|e| format!("decode: {e}"))?;
+    // At most 100 progressive scans (raw-pipeline.md, "Progressive scans: at
+    // most 100"; brief 008 R2): a scan is a pass over every block of the
+    // components it covers, so a small crafted stream with thousands of scans
+    // would hold a decoder far longer than any real photo. libjpeg-turbo's
+    // default is no limit; 100 is the bound zune-jpeg 0.4's default gave the
+    // loupe until brief 008, which the decoder swap dropped unnoticed (the
+    // Cargo.toml canary, item 6). Over it the decode fails with the
+    // library's own message. Set before anything else, so no decode on this
+    // handle runs without it.
+    dec.set_scan_limit(100)
+        .map_err(|e| format!("decode: {e}"))?;
     let header = dec.read_header(bytes).map_err(|e| format!("decode: {e}"))?;
     // Issue #31: the header's dimension claim sizes the decode buffer, the
     // prefault pass and the transpose Scratch below, and in a crafted file
@@ -1062,10 +1074,10 @@ fn decode_with(
     //
     // - The decode fills a pre-faulted buffer we own: `decompress` writes
     //   into `rgb`, whose first-touch page faults `prefault_parallel` pays
-    //   from several threads first (the benchmark's row 12 against row 4
-    //   puts this alloc + prefault at ~14 ms at full size, ~4 ms at a rung;
-    //   under zune-jpeg, `decode_into` a pre-faulted buffer saved ~30 ms
-    //   against `decode()`'s internal allocation).
+    //   from several threads first (brief 008's benchmark: alloc + prefault
+    //   ~14 ms at full size, ~4 ms at a rung; under zune-jpeg, `decode_into`
+    //   a pre-faulted buffer saved ~30 ms against `decode()`'s internal
+    //   allocation).
     // - The transpose's output buffer is allocated AND pre-faulted on a
     //   spare thread WHILE the decode runs, so the rotate that follows
     //   starts with hot pages ([`crate::raw::Scratch`]).
@@ -1950,6 +1962,76 @@ mod tests {
             (1, 1),
             "1/8 of one pixel is one pixel"
         );
+    }
+
+    /// libjpeg-turbo cannot DCT-scale a LOSSLESS stream (the Cargo.toml
+    /// canary, item 4), so `decode_with` runs such a stream at full scale
+    /// whatever the rung asked and reports 8 as the numerator it RAN — the
+    /// ladder then sees a full, never a screen rung (raw-pipeline.md, "The
+    /// screen rung"). Delete the lossless branch and the 3/8 decode is
+    /// `Err("... lossless JPEG image cannot be scaled ...")`: a Failed badge
+    /// on a lossless bare JPEG. The crate's own compressor encodes the
+    /// fixture (senior-developer review 2026-09-26, F2: the step-1 record
+    /// said no lossless fixture could be encoded here).
+    #[test]
+    fn a_lossless_stream_decodes_full_scale_through_the_scaled_entry_point() {
+        let img = turbojpeg::Image::mandelbrot(64, 48, turbojpeg::PixelFormat::RGB);
+        let mut c = turbojpeg::Compressor::new().unwrap();
+        c.set_lossless(true).unwrap();
+        let j = c.compress_to_vec(img.as_deref()).unwrap();
+        assert!(turbojpeg::read_header(&j).unwrap().is_lossless);
+        for (o, want) in [(1u16, (64, 48)), (6, (48, 64))] {
+            let (_, w, h, ran) = decode_with(&j, o, 3).expect("lossless at 3/8");
+            assert_eq!(
+                ((w, h), ran),
+                (want, 8),
+                "a lossless stream runs full scale"
+            );
+        }
+    }
+
+    /// Brief 008 R2, the bound the decoder swap dropped unnoticed: zune-jpeg
+    /// 0.4's default refused a progressive stream of more than 100 scans,
+    /// and libjpeg-turbo's scan limit defaults to none. A scan is a pass
+    /// over every block of the components it covers, so a small crafted
+    /// stream with thousands of them would hold a loupe decoder far longer
+    /// than any real photo (raw-pipeline.md, "Progressive scans: at most
+    /// 100"). Remove `set_scan_limit(100)` from `decode_with` and the
+    /// 101-scan stream decodes, at both entry points: this test is red. The
+    /// 100-scan stream decoding shows the limit is not lower, and that the
+    /// generated progression is valid (a warning would fail it too).
+    #[test]
+    fn a_progressive_stream_over_100_scans_fails_on_the_loupe_path() {
+        let sos_markers = |j: &[u8]| j.windows(2).filter(|w| w == &[0xFF, 0xDA]).count();
+        let at_limit = crate::raw::jpeg_hostile::progressive(100);
+        let over = crate::raw::jpeg_hostile::progressive(101);
+        assert_eq!(
+            (sos_markers(&at_limit), sos_markers(&over)),
+            (100, 101),
+            "the fixtures carry the scans they claim"
+        );
+        let (_, w, h) = decode_oriented(&at_limit, 1).expect("100 scans decode: the limit is 100");
+        assert_eq!((w, h), (8, 8));
+        let (_, w, h) =
+            decode_scaled_oriented(&at_limit, 1, 3).expect("100 scans decode at 3/8 as well");
+        assert_eq!((w, h), (3, 3));
+        let outcomes = [
+            ("full", decode_oriented(&over, 1)),
+            ("3/8", decode_scaled_oriented(&over, 1, 3)),
+        ];
+        for (entry, outcome) in outcomes {
+            match outcome {
+                // Not `expect_err`: its message would print the whole buffer.
+                Ok((_, w, h)) => panic!(
+                    "{entry}: a 101-scan progressive stream decoded as a {w}x{h} success — \
+                     the loupe's scan limit is gone"
+                ),
+                Err(err) => assert!(
+                    err.contains("more than 100 scans"),
+                    "{entry}: the library's reason must reach the badge: {err}"
+                ),
+            }
+        }
     }
 
     #[test]

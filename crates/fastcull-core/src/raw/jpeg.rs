@@ -251,6 +251,67 @@ pub(crate) mod hostile {
         jpeg[..(scan + keep).min(jpeg.len().saturating_sub(2))].to_vec()
     }
 
+    /// A VALID 8x8 grey progressive JPEG (SOF2) of exactly `scans` scans,
+    /// 64..=127 — the scan-limit shape (brief 008 R2; raw-pipeline.md,
+    /// "Progressive scans: at most 100"). One block, every coefficient zero,
+    /// and one-code Huffman tables whose single code, the bit `0`, is the
+    /// DC's "no difference" and the AC's end-of-band. A DC scan plus one
+    /// scan per AC coefficient make 64; each scan past that splits one more
+    /// AC coefficient into a first pass at Al = 1 and a refinement at
+    /// Ah = 1 / Al = 0 — a legal progression, so libjpeg-turbo decodes it
+    /// without a warning (a bogus one would warn, and a warning fails the
+    /// loupe's decode for a reason that is not the limit). Each scan's data
+    /// is one byte, the code bit padded with ones, so no 0xFF ever appears
+    /// outside a marker and the SOS markers can be counted byte-wise.
+    pub(crate) fn progressive(scans: usize) -> Vec<u8> {
+        assert!(
+            (64..=127).contains(&scans),
+            "this shape carries 64..=127 scans, not {scans}"
+        );
+        fn segment(out: &mut Vec<u8>, marker: u8, payload: &[u8]) {
+            let len = u16::try_from(payload.len() + 2).expect("a tiny segment");
+            out.extend_from_slice(&[0xFF, marker]);
+            out.extend_from_slice(&len.to_be_bytes());
+            out.extend_from_slice(payload);
+        }
+        fn scan(out: &mut Vec<u8>, coefficient: u8, ah: u8, al: u8) {
+            // One component (id 1, Huffman tables 0 / 0), the spectral band
+            // `coefficient..=coefficient`, successive approximation ah / al.
+            segment(
+                out,
+                0xDA,
+                &[1, 1, 0x00, coefficient, coefficient, (ah << 4) | al],
+            );
+            out.push(0x7F);
+        }
+        let mut out = vec![0xFF, 0xD8];
+        let mut dqt = vec![0x00]; // 8-bit quantisation table 0, all ones
+        dqt.extend_from_slice(&[1; 64]);
+        segment(&mut out, 0xDB, &dqt);
+        // SOF2: 8-bit samples, 8x8, one component (id 1, 1x1, table 0).
+        segment(&mut out, 0xC2, &[8, 0, 8, 0, 8, 1, 1, 0x11, 0]);
+        // Sixteen code-length counts (one code of length 1), then its symbol,
+        // 0: for the DC table 0 (class 0x00) and the AC table 0 (0x10).
+        for class_and_id in [0x00, 0x10] {
+            let mut dht = vec![class_and_id, 1];
+            dht.extend_from_slice(&[0; 15]);
+            dht.push(0);
+            segment(&mut out, 0xC4, &dht);
+        }
+        scan(&mut out, 0, 0, 0); // the DC, in one pass
+        let refined = scans - 64;
+        for coefficient in 1..=63u8 {
+            if usize::from(coefficient) <= refined {
+                scan(&mut out, coefficient, 0, 1);
+                scan(&mut out, coefficient, 1, 0);
+            } else {
+                scan(&mut out, coefficient, 0, 0);
+            }
+        }
+        out.extend_from_slice(&[0xFF, 0xD9]);
+        out
+    }
+
     /// Offset of the first SOF segment's payload (its length bytes).
     fn sof_payload_offset(data: &[u8]) -> Option<usize> {
         let mut pos = 2;

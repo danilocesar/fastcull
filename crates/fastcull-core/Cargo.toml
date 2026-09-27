@@ -31,6 +31,14 @@ fs2 = "0.4"
 # The grid-thumb decoder (`pipeline::make_grid_thumb`; the app's thumb cook
 # declares its own). The loupe left it for libjpeg-turbo below and the
 # thumbs stay on it (raw-pipeline.md, "The decoder", N7).
+# VERSION-BUMP CANARY (read in the sources 2026-09-26): zune-core 0.4.12's
+# `DecoderOptions::default()` sets `max_scans: 100` (`src/options/
+# decoder.rs`) and zune-jpeg 0.4.21 fails a progressive stream past it
+# ("Too many scans", `src/mcu_prog.rs`). The grid thumb builds its options
+# from `default()`, so that default is its only progressive-scan bound, and
+# the loupe copies the number into libjpeg-turbo (canary 6 below). A bump
+# that changes the default changes the bound silently (raw-pipeline.md,
+# "Progressive scans: at most 100").
 zune-jpeg = "0.4"
 # libjpeg-turbo, the loupe's decoder and the source of its N/8 screen rung
 # (ADR 0005, brief 008, 2026-09-26). All three features spelled out so a
@@ -71,6 +79,15 @@ zune-jpeg = "0.4"
 #      The workspace's `[profile.dev.package."*"] opt-level = 2` (#76) is
 #      what keeps the debug decode optimised; remove it and the debug
 #      decoder is -O0.
+#   6. `TJPARAM_SCANLIMIT` defaults to 0, no limit (`src/turbojpeg.h`:
+#      "[default: `0` (no limit)]"; `tj3Init` zeroes the instance), and
+#      `tj3Decompress8` installs its progress monitor, which fails a decode
+#      past the limit with "Progressive JPEG image has more than N scans"
+#      (`src/turbojpeg.c`), only when a limit is set (`src/turbojpeg-mp.c`,
+#      `if (this->scanLimit)`). The loupe sets 100 through the safe crate's
+#      `Decompressor::set_scan_limit`: zune-jpeg 0.4's own default (see
+#      zune-jpeg above), the bound the loupe had before the swap.
+#      `a_progressive_stream_over_100_scans_fails_on_the_loupe_path` pins it.
 turbojpeg = { version = "1.5.1", default-features = false, features = ["cmake", "pkg-config", "require-simd"] }
 
 [dev-dependencies]

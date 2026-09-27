@@ -1031,11 +1031,12 @@ commit that lands its tests, and stays open until then):
       read on the scaled size — never of a library parameter. Ticked by
       the step-1 commit, which carries these tests; each mutant's red is in
       its message.
-- [ ] **A progressive stream over 100 scans is refused on the loupe path**
+- [x] **A progressive stream over 100 scans is refused on the loupe path**
       (brief 008 R2): a valid 101-scan progressive stream is `Failed`
       through both entry points and a 100-scan one decodes; red with the
       limit unset — `a_progressive_stream_over_100_scans_fails_on_the_loupe_path`.
-      Open: lands with the limit, in the step-1 fix round.
+      Ticked by the step-1 fix round's commit, which carries the limit and
+      the test; the limit-unset red is in its message.
 - [ ] **CMYK and YCCK open in the loupe** (brief 008 A14): a CMYK and a YCCK
       bare JPEG decode through the loupe path with pixels, at full scale with
       no rung, never a Failed badge; red on the decoder swap without the
