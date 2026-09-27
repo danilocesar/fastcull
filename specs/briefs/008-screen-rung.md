@@ -845,7 +845,9 @@ the cursor's rungs) → a later brief.
   - Bookkeeping: CLAUDE.md's Commands block names the Windows generator
     requirement; A10 gains "compiled optimised on both targets"; step 6
     adds VS 2022 on the release runner to RELEASING.md and the dist
-    plumbing.
+    plumbing. (Superseded the same day by the generator re-ruling below:
+    step 6's RELEASING.md names ninja, preinstalled on `windows-2022`; no
+    Visual Studio version is named and dist gets no ninja dependency.)
 - 2026-09-26 (senior developer, the other-cameras spec pass: the
   measurements behind raw-pipeline.md "The decoder's complaints", for the
   Manager's ruling on where the pass departs from the preferred direction.
@@ -931,3 +933,57 @@ the cursor's rungs) → a later brief.
   Commands block change with it. The guard reading every turbojpeg-sys
   cache, debug builds included, is confirmed; so are the three new
   BUDGET-MEDIAN prints.
+- 2026-09-27 (Manager, step 1 APPROVED): the senior developer's re-review
+  of e1b488a + d4cc7b7 + 53a4248 + 82f69ff approved it with minors F5–F11.
+  The Windows-optimisation evidence is CI run 36294797235 (82f69ff): the
+  guard green on all four turbojpeg-sys caches, each naming
+  `CMAKE_GENERATOR=Ninja`, the release flags `/O2 /Ob2 /DNDEBUG` and
+  `WITH_SIMD = 1`, after being red on the same runner at d4cc7b7 and
+  53a4248 (runs 36280732156 and 36285260233, every cache "-nologo -MD
+  -Brepro -W0" under Visual Studio 18 2026); the Windows perf medians
+  before → after: full-res portrait 339.9 → 226.6 ms, landscape 289.2 →
+  185.4, the 2/8 rung 239.2 → 131.5, the 3/8 rung 302.8 → 147.8 (under
+  the 150 ms threshold with 2.2 ms to spare on the shared runner — a
+  watched row: a later red is diagnosed, never re-based); the reviewer's
+  disassembly of `jpeg_idct_3x3` in the artifact went from 403
+  instructions, 182 stack operands and 5 multiplications by zero to 186 /
+  17 / 0. `fastcull-windows-x64` from run 36294797235 or later is the
+  first artifact with the decoder compiled optimised; every earlier PR
+  #93 artifact is not to be judged for speed. A10 stays open for step 6's
+  release plumbing. F7 (a cargo-install residual clause), F8 (a comment's
+  source), F11 (two unlabelled BUDGET-MEDIAN lines) ride with step 2's
+  first commit; F5, F6 and F9 are M10 corrections carried by spec
+  amendment 2; F10 is done above.
+- 2026-09-27 (Manager, the Linux allocator, on the measurement): glibc's
+  default keeps freed buffers under its risen mmap threshold (at most
+  32 MiB) in its arenas; on the probe linking the real core, a fit
+  session followed by 1:1 peaked at 12.2 GiB (4K landscape), 15.9 (QHD's
+  2/8 rung), 14.4 (portrait on 4K) and 12.0 (the mid on ≤ 2K) against
+  A12's 9.07 GiB ceiling at the laptop's cache — and the build before
+  this unit leaked too (3.29 GiB against 3.02 with the old 2 GiB cache).
+  Measured options: `mallopt(M_MMAP_THRESHOLD, 4 MiB)` at start held
+  every shape within the ceiling (8.40–8.96 GiB) at a decode-rate cost
+  within noise; 16 MiB failed three of four shapes; `malloc_trim` after
+  eviction worked but needs `unsafe` in core and cost 5.7 % at fit;
+  mimalloc (v2 and v3) stayed over the ceiling; anonymous-mapped buffers
+  worked but change the pixel buffer type through core. RULED: one
+  `mallopt(M_MMAP_THRESHOLD, 4 << 20)` as the first line of the app's
+  `main` under `cfg(all(target_os = "linux", target_env = "gnu"))`, with
+  `libc` as a Linux target dependency of fastcull-app (already in the
+  lock) — the app's one Linux `unsafe` call; core's rule is unchanged. A12
+  runs under the same threshold through `GLIBC_TUNABLES`
+  (`glibc.malloc.mmap_threshold=4194304`, measured identical), its value
+  one constant, its mutant the variable dropped (red at 12.2 GiB); the
+  startup line reports the threshold `mallopt` accepted and a driven test
+  asserts that line; A12's fit phase walks a 2560×1440 box (2/8), the
+  shape that tells 16 MiB from 4 MiB. Recorded residuals: fit rungs under
+  4 MiB (no A1 viewport makes one); a portrait 1:1 session at about 13
+  decoders or more exceeds A12's ceiling as written by arithmetic; the
+  Windows heap's return of large blocks is documented, not measured
+  here; the app itself was not driven (no rung on HEAD yet).
+- 2026-09-27 (Manager, Q-J, on the premise that the threshold ships):
+  option (a) — the band below a reported 8 GiB is accepted and recorded,
+  docs/faq.md gains its sentence, and the user's rule R6 (the 2 GiB
+  floor) stands. Spec amendment 2 carries the allocator rule, A12's
+  changes, Q-J's provenance and the M10 corrections F5, F6 and F9; step 3
+  waits for it.
