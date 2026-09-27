@@ -1422,9 +1422,12 @@ commit that lands its tests, and stays open until then):
       cannot land before the cursor steps it and every member beyond it to the
       fit box when its decode would start, its distance counted from 1, a
       full-res entry queued beyond the boundary becoming a fit-box one and one
-      in flight landing; the step up waits for every member ahead but the
-      farthest to hold its rung or have it in flight, nothing queued and a
-      backlog worker free, and starts beyond the ring's far end; the
+      in flight landing, and the boundary holding at every later focus and
+      pop — a member beyond it asks for the fit box whatever its own timing
+      says; the step up waits for every member ahead but the farthest to hold
+      its rung or have it in flight, nothing queued and a backlog worker free,
+      starts beyond the ring's far end, and never comes to a hold that never
+      stepped down; the
       time-to-screen runs from a decode's start to the app's report that its
       fill completed, held by the ring or at once that ring's victim, a frame
       the cursor has passed included, while a culled fill or the box going
@@ -1432,8 +1435,10 @@ commit that lands its tests, and stays open until then):
       one the box's going interrupted, starts no measurement; the key period
       is the interval between the last two index changes; a step-down less
       than one ring past the last step-up holds the rung until the hold ends,
-      across a settled window between two keys of the hold; a reversal
-      starts afresh; during a hold
+      across a settled window between two keys of the hold — 14 positions
+      past the step-up's boundary locks, 15 does not; a reversal starts
+      afresh, and a stop ends the step-down: the settled ring after a
+      stepped-down hold decodes full-res; during a hold
       the focused frame and the members behind ask for the fit box — an
       in-flight full-res kept, a queued one replaced, or dropped when the
       fit-box rung is in hand — and the settle then asks for the top rung; a
@@ -1442,7 +1447,9 @@ commit that lands its tests, and stays open until then):
       `the_switch_rule_steps_down_before_a_frame_it_cannot_land`,
       `the_switch_rule_steps_up_only_from_a_complete_ring_with_a_free_decoder`,
       `a_quick_second_step_down_holds_the_rung_until_the_hold_ends`,
+      `the_lock_is_counted_from_the_first_position_beyond_the_far_end`,
       `a_reversal_starts_the_switch_rule_afresh`,
+      `a_stop_ends_the_step_down`,
       `the_key_period_is_the_interval_between_index_changes`,
       `a_hold_above_fit_asks_the_fit_box_for_the_focused_frame` (with a row
       whose fit-box rung is cached while its full-res is queued — the early
@@ -1478,7 +1485,18 @@ commit that lands its tests, and stays open until then):
       `note_dropped` doing nothing, a stamp read against the box at the
       publish alone (red on the started-without-a-box row), and the
       measurements culled when their frame leaves the ring (red on the
-      passed-frame row, and on the simulation, which then never measures).
+      passed-frame row, and on the simulation, which then never measures);
+      the hold row of the plan ignoring the step-down's boundary (red on the
+      step-up test's row whose member 110 has no rung), a member beyond the
+      boundary judged by its own timing (red on the step-down test's row for
+      108), a step-up for a hold that never stepped down (red on the step-up
+      test's last row), rule 1 applied after the hold has stopped (red on
+      `a_stop_ends_the_step_down`), and the lock counted one position short
+      or one long (red on its edge test). (The boundary at every focus and
+      pop, the step-up only after a step-down, the lock's edge and the stop,
+      with their rows and mutants, added 2026-09-27, brief 008 step-4 review
+      F1 and F3: the step-4b tests stayed green with each of those clauses
+      removed.)
       Driven, the hold's frames on screen per key stay at
       ui-grid.md A6's level in two 1:1 runs of
       `a_held_arrow_at_fit_on_4k_stays_at_the_rung_and_never_slows`: A6's own,
@@ -1490,7 +1508,8 @@ commit that lands its tests, and stays open until then):
       the user's own test of the CI build (brief 008). Open: its driven half,
       the two 1:1 runs, lands with ui-grid.md A5's driven test; every
       clock-free row and the simulation landed with the switch rule (brief
-      008's step-4b commit, each mutant's red in its message).
+      008's step-4b commit, each mutant's red in its message) and its review's
+      fix round (the added rows' reds in that round's commit messages).
 - [x] **The settled ring after a hold** (brief 008, Manager ruling Q-I):
       clock-free — a stop above fit on a frame whose full-res is in hand, its
       ring members holding only their fit-box rungs, has the reserved lane

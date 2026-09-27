@@ -3693,8 +3693,11 @@ mod tests {
     /// it become fit-box ones or are dropped where that rung is in hand, and
     /// a decode already in flight lands. When the frame can land first, and
     /// while the time-to-screen or the key period is unknown, the member
-    /// decodes full-res and nothing is converted. Red when distances count
-    /// from 0 (the 60 ms row then steps down: 1 × 40 < 60).
+    /// decodes full-res and nothing is converted. A boundary in force holds at
+    /// every later pop: a member beyond it decodes the fit box whatever its
+    /// own timing says. Red when distances count from 0 (the 60 ms row then
+    /// steps down: 1 × 40 < 60), and when a member beyond the boundary is
+    /// judged by its own timing (108 then decodes full-res).
     #[test]
     fn the_switch_rule_steps_down_before_a_frame_it_cannot_land() {
         use std::time::Duration;
@@ -3788,6 +3791,34 @@ mod tests {
             "no key period yet"
         );
         assert_eq!(state.switch, SwitchState::default());
+
+        // ONE BOUNDARY: once set, it holds at every later pop. A full-res
+        // entry for 108 — 8 ahead, 320 ms of travel against a 100 ms
+        // time-to-screen, so on its own timing it would land in time — lies
+        // beyond the boundary at 102: it decodes the fit box, and the boundary
+        // does not move. Judged per pop instead, the members beyond a boundary
+        // would ask full-res again whenever their own timing allowed — sharp
+        // and soft by turns, the pumping rule 1's single step exists to stop.
+        let mut state = holding_at(100, now);
+        state.switch.down = Some(102);
+        state.key_period = Some(Duration::from_millis(40));
+        state.time_to_screen = Some(Duration::from_millis(100));
+        state.queue.push(Entry {
+            index: 108,
+            target: top,
+            focus_origin: true,
+            state: Transit,
+        });
+        assert_eq!(
+            next_job(&mut state, false, 0, 1000, now),
+            Slot::Job(108, fit, Transit),
+            "108 is beyond the boundary at 102: the fit box"
+        );
+        assert_eq!(
+            state.switch.down,
+            Some(102),
+            "the boundary stays where it was"
+        );
     }
 
     /// Brief 008 A13, rule 2 (raw-pipeline.md, "Above fit": "Step up only
@@ -3801,11 +3832,15 @@ mod tests {
     /// as nothing of the ring still waiting to start (Manager ruling Q-H), so
     /// a member whose rung decode is in flight counts; a stale entry for the
     /// position that just fell three behind is not ring work. No step-up
-    /// with a member's rung missing and nothing in flight for it, with ring
-    /// work queued, or with every backlog worker busy. Red when the step-up
-    /// waits for nothing in flight anywhere, when it ignores the free worker,
-    /// when every queued entry counts as ring work, and when an in-flight
-    /// member counts as missing (the literal clause Q-H replaced).
+    /// with a member's rung missing and nothing in flight for it — and that
+    /// focus, still stepped down, asks the fit box of the member beyond the
+    /// boundary — with ring work queued, with every backlog worker busy, or
+    /// for a hold that never stepped down. Red when the step-up waits for
+    /// nothing in flight anywhere, when it ignores the free worker, when every
+    /// queued entry counts as ring work, when an in-flight member counts as
+    /// missing (the literal clause Q-H replaced), when the plan's hold row
+    /// ignores the step-down boundary (110 then asks full-res), and when a
+    /// hold that never stepped down steps up.
     #[test]
     fn the_switch_rule_steps_up_only_from_a_complete_ring_with_a_free_decoder() {
         use std::time::Duration;
@@ -3903,6 +3938,15 @@ mod tests {
             stepped_down,
             "110 has no rung and no decode in flight"
         );
+        // Rule 1's one boundary, at a FOCUS: the hold is still stepped down at
+        // 102, so this focus asks the fit box of 110 too, not only the pop
+        // that set the boundary — or every focus of the hold would ask
+        // full-res again of the members beyond it.
+        assert_eq!(
+            queued(&state, 110),
+            Some((fit, Transit)),
+            "stepped down at 102: 110, beyond the boundary, asks for the fit box"
+        );
 
         let mut state = hold_at_104();
         state.queue.push(Entry {
@@ -3923,6 +3967,23 @@ mod tests {
             key_to_105(&mut state),
             stepped_down,
             "every backlog worker is busy"
+        );
+
+        // Only a hold that stepped DOWN steps up: one whose decoders have kept
+        // up has no boundary to lift, whatever its ring and its workers say.
+        // Stepping it "up" would move the full-res boundary a ring ahead, and
+        // the member entering at the far end, 120, would ask the fit box.
+        let mut state = hold_at_104();
+        state.switch = SwitchState::default();
+        assert_eq!(
+            key_to_105(&mut state),
+            SwitchState::default(),
+            "no step-down, so no step-up"
+        );
+        assert_eq!(
+            queued(&state, 120),
+            Some((top, Transit)),
+            "120, entering at the far end, asks for full-res"
         );
     }
 
@@ -4034,6 +4095,51 @@ mod tests {
         );
     }
 
+    /// Brief 008 A13, rule 3 at its edge (raw-pipeline.md, "Above fit": "When
+    /// a step-down's boundary falls less than one ring (`RING_AHEAD` frames)
+    /// beyond the last step-up's boundary"). The step-up's boundary is the
+    /// first position beyond the ring's far end, while `SwitchState::up`
+    /// stores the far end itself (a backward ring that reaches the folder's
+    /// first frame has no position beyond it), so the lock's comparison is
+    /// one off the spec's words by construction — the place an off-by-one
+    /// would hide. After a step-up whose far end is 120 (full-res again from
+    /// 121): a step-down at 135, 14 past 121, locks; one at 136, a whole ring
+    /// (15) past it, does not. Red with the lock counted strictly less than a
+    /// ring from the far end (135 then does not lock) and with it counted one
+    /// further (136 then locks).
+    #[test]
+    fn the_lock_is_counted_from_the_first_position_beyond_the_far_end() {
+        use std::time::Duration;
+        let t = std::time::Instant::now();
+        // The cursor on `cursor`, a full-res entry for `member`, 15 ahead,
+        // popped: 15 × 40 ms of travel against a 10 s time-to-screen steps
+        // the hold down at `member`.
+        for (cursor, member, locks) in [(120, 135, true), (121, 136, false)] {
+            let mut state = holding_at(cursor, t);
+            state.switch.up = Some(120);
+            state.key_period = Some(Duration::from_millis(40));
+            state.time_to_screen = Some(Duration::from_secs(10));
+            state.queue.push(Entry {
+                index: member,
+                target: Target::Long(u32::MAX),
+                focus_origin: true,
+                state: RequestState::Transit,
+            });
+            assert_eq!(
+                next_job(&mut state, false, 0, 1000, t),
+                Slot::Job(member, Target::Fit(UHD), RequestState::Transit),
+                "the premise: {member} steps the hold down"
+            );
+            assert_eq!(state.switch.down, Some(member));
+            assert_eq!(
+                state.switch.locked,
+                locks,
+                "a step-down at {member}, {} past the step-up's boundary 121",
+                member - 121
+            );
+        }
+    }
+
     /// Brief 008 A13 (raw-pipeline.md, "Above fit": "A reversal starts the
     /// rule afresh"): a stepped-down, locked hold that reverses has its
     /// switch state reset at that index change — the ring now leans the
@@ -4067,6 +4173,52 @@ mod tests {
         let mut state = at_110();
         note_focus(&mut state, 111, Target::Long(u32::MAX), key);
         assert_eq!(state.switch, locked, "the lock holds within a hold");
+    }
+
+    /// Brief 008 A13 (raw-pipeline.md, "Above fit": rule 1 decides during a
+    /// hold; "Settled and tapping, the whole full-res ring asks for
+    /// full-res"). A hold that stepped down at 103 has stopped on 100, which
+    /// is sharp. Nothing resets its switch state until the next index change,
+    /// and its 40 ms key period against a 700 ms time-to-screen would step
+    /// down every member on their timing — but the user is no longer
+    /// travelling. The reserved lane asks for the settled ring (Manager ruling
+    /// Q-I), and the backlog workers' pops of it decode full-res, nearest
+    /// first, the boundary untouched: so a tap forward after the hold lands
+    /// on a sharp frame (the persona's MUST-HAVE 3a). Red with rule 1's
+    /// "during a hold" clause removed: the first pop, 101, steps the ring down
+    /// at 101 and the members whose rung is in hand are dropped.
+    #[test]
+    fn a_stop_ends_the_step_down() {
+        use std::time::Duration;
+        let now = std::time::Instant::now();
+        let top = Target::Long(u32::MAX);
+        let mut state = holding_at(100, now - Duration::from_millis(300));
+        state.switch = SwitchState {
+            down: Some(103),
+            up: None,
+            locked: false,
+        };
+        state.key_period = Some(Duration::from_millis(40));
+        state.time_to_screen = Some(Duration::from_millis(700));
+        state.cache.insert(100, (full_frame(), 0));
+        state.best_long.insert(100, 8640);
+        for i in (98..=99).chain(101..=115) {
+            state.cache.insert(i, (screen_rung(), 0));
+        }
+        assert_eq!(next_job(&mut state, true, 7, 1000, now), Slot::Wait);
+        assert!(
+            std::mem::take(&mut state.wake_backlog),
+            "the premise: the lane asked for the settled ring"
+        );
+        let switch = state.switch;
+        for expected in [101, 99, 102, 98, 103] {
+            assert_eq!(
+                next_job(&mut state, false, 7, 1000, now),
+                Slot::Job(expected, top, RequestState::Settled),
+                "{expected}: the stop's settled ring decodes at full-res"
+            );
+        }
+        assert_eq!(state.switch, switch, "a pop at rest moves no boundary");
     }
 
     /// Brief 008 A13 (raw-pipeline.md, "Above fit", rule 1): the key period
