@@ -495,9 +495,22 @@ on the answer. The Manager relays them verbatim; the user is the customer.
   character never matches its own text) and the check is `ps -eo pid,args`
   filtered the same way.
 - **The driven suite no longer fits one foreground call.** (senior
-  developer, unit 006, 2026-09-12) The screenshot suite is 87 tests and
-  about 600 s in debug on this seat — over the 600000 ms cap, so a single
+  developer, unit 006, 2026-09-12) The screenshot suite is 88 tests and
+  about 600 s in debug on this seat (316 s + 280 s in two halves,
+  re-measured 2026-09-27; 87 tests until brief 008) — over the 600000 ms cap, so a single
   `cargo test --test screenshot` call is cut off mid-suite. Run it as two
   `--exact` halves split from `cargo test -p fastcull-app --test
   screenshot -- --list`, each its own foreground call (measured: 318 s +
   288 s), never a background run and never a shorter list than the whole.
+- **Local driven runs use a virtual screen, never the user's desktop.**
+  (Manager, 2026-09-27, from a senior-developer measurement in brief 008
+  step 4) A role's shell on the laptop inherits the user's live Wayland
+  session (`WAYLAND_DISPLAY=wayland-0`, `DISPLAY=:0`), so a driven test
+  child opens on the user's screen and takes the user's pointer and focus —
+  measured: one false red in 44 on the live desktop, 88 of 88 under Xvfb.
+  Every local run of the driven suite (`--test screenshot`) and every
+  driven measurement runs under Xvfb as CI does, with the Wayland variable
+  cleared so the app cannot pick the live compositor: `env -u
+  WAYLAND_DISPLAY xvfb-run -a --server-args="-screen 0 1920x1200x24" cargo
+  test …` (a 4K measurement uses `3840x2160x24`). Xvfb is a system package
+  on the laptop since 2026-09-26.
