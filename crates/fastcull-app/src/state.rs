@@ -19,9 +19,10 @@
 //! | [`CopyState`] | the Copy Picks dialog: plan, destination, running worker, what was copied |
 //! | [`ClipState`] | the Export Frames as Video dialog: plan, destination, running writer |
 //!
-//! The two survivors are not state at all: `cells` is the model the window
-//! is bound to, and `kitchen` is a worker thread. Both outlive every
-//! session; both say so at their declaration.
+//! The three survivors are not session state: `cells` is the model the
+//! window is bound to, `kitchen` is a worker thread, and `loupe_sizes` is a
+//! fact about the machine. All three outlive every session; each says so at
+//! its declaration.
 //!
 //! # The reset rule
 //!
@@ -65,10 +66,6 @@ use crate::CellData;
 
 /// Rows kept alive around the viewport in the windowed model.
 pub(crate) const MARGIN_ROWS: usize = 1;
-
-/// Belt-and-braces cap on mid textures (~5 MB each) beyond the prune-to-
-/// visible-window bound (recorded decision: 4K + 6 columns worst case).
-pub(crate) const MIDS_CAP: usize = 64;
 
 /// Longest the residual HOLD (issue #46) may keep the PREVIOUS image's
 /// pixels on screen when not even the cursor's own thumb exists: one
@@ -872,19 +869,30 @@ pub(crate) struct AppState {
     /// via the generation fence) rather than replacing it, because
     /// restarting a thread per folder would be pure cost.
     pub(crate) kitchen: kitchen::Kitchen,
+    /// SURVIVOR: the machine's loupe sizes — the pixel cache and the decoder
+    /// count core derived from its total RAM and physical cores at startup
+    /// (raw-pipeline.md, "Memory": read once, at startup; the cache never
+    /// changes during a session). A fact about the machine, not the folder:
+    /// every session's loupe engine starts with them.
+    pub(crate) loupe_sizes: fastcull_core::budget::LoupeSizes,
 }
 
 impl AppState {
     /// The state a freshly launched app starts in: no session, the grid at
-    /// its default zoom, no textures. The two things it cannot default are
-    /// passed in — the cell model the window is already bound to, and the
-    /// texture kitchen, whose completion nudge needs a handle on the window.
+    /// its default zoom, no textures. The three things it cannot default are
+    /// passed in — the cell model the window is already bound to, the
+    /// texture kitchen, whose completion nudge needs a handle on the window,
+    /// and the machine's loupe sizes, which `main` derived and printed.
     ///
     /// Launch flags (`--start-loupe`, `--start-11`) are applied by the
     /// caller through `enter_loupe`, not through more constructor
     /// arguments: they are a request to enter a view, and the app already
     /// has a word for that.
-    pub(crate) fn new(cells: Rc<VecModel<CellData>>, kitchen: kitchen::Kitchen) -> Self {
+    pub(crate) fn new(
+        cells: Rc<VecModel<CellData>>,
+        kitchen: kitchen::Kitchen,
+        loupe_sizes: fastcull_core::budget::LoupeSizes,
+    ) -> Self {
         Self {
             session: SessionState::default(),
             grid: GridViewState::default(),
@@ -896,6 +904,7 @@ impl AppState {
             clip: ClipState::default(),
             cells,
             kitchen,
+            loupe_sizes,
         }
     }
 
@@ -933,7 +942,8 @@ impl AppState {
         // generation so queued work is dropped and late completions are
         // orphaned, without paying to restart a thread per folder.
         self.kitchen.retarget();
-        // SURVIVOR: `cells` — the model the window is bound to.
+        // SURVIVOR: `cells` — the model the window is bound to — and
+        // `loupe_sizes`, the machine's.
         //
         // The per-image vectors are parallel by contract; assert it where
         // the count is actually known.

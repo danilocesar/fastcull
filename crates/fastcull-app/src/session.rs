@@ -150,8 +150,14 @@ fn load_folder(state: &Rc<RefCell<AppState>>, folder: &std::path::Path) -> Resul
         cache_path,
         std::thread::available_parallelism().map_or(4, |n| n.get()),
     );
-    let (loupe, loupe_rx) =
-        fastcull_core::loupe::LoupeEngine::start(paths, fastcull_core::loupe::DEFAULT_BUDGET_BYTES);
+    // The machine's sizes (raw-pipeline.md, "Memory" and "The decode
+    // workers"), derived once at startup; the cache's bytes fit a usize on
+    // every target the app ships for.
+    let (loupe, loupe_rx) = fastcull_core::loupe::LoupeEngine::start_with(
+        paths,
+        usize::try_from(st.loupe_sizes.cache_bytes).unwrap_or(usize::MAX),
+        st.loupe_sizes.decoders,
+    );
     st.session.pipeline = Some(pipeline);
     st.loupe_view.engine = Some(loupe);
     st.session.pipeline_rx = Some(rx);

@@ -30,6 +30,7 @@ use std::cell::RefCell;
 use std::ops::Range;
 use std::rc::Rc;
 
+use fastcull_core::budget::MIDS_CAP;
 use fastcull_core::grid::{self, GridLayout};
 use fastcull_core::loupe::is_top_rung;
 use fastcull_core::transit::{DropReason, RenderDecision};
@@ -38,7 +39,7 @@ use slint::{ComponentHandle, Model};
 use crate::iptc_bridge::refresh_iptc_panel;
 use crate::loupe_ctrl::{clamped_factor, route_warm, WarmCtx, WarmJob};
 use crate::nav::current_geometry;
-use crate::state::{AppState, MARGIN_ROWS, MIDS_CAP, OVERLAY_HOLD_CAP};
+use crate::state::{AppState, MARGIN_ROWS, OVERLAY_HOLD_CAP};
 use crate::trace::{trace_mark, trace_slow, trace_start};
 use crate::{CellData, MainWindow};
 

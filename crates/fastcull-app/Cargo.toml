@@ -60,6 +60,16 @@ fastcull-core.workspace = true
 #      would notice a new way to photograph twice.
 # Re-read the owner-invariant section of specs/modules/ui-grid.md before
 # raising this bound.
+# FOURTH CANARY (brief 008, the Linux allocator; same 1.17.1): the
+# kitchen's texture copies are Rust global-allocator allocations —
+# `SharedPixelBuffer::clone_from_slice` (i-slint-core `graphics/image.rs`
+# 136-148) builds its data with `SharedVector::from(&[T])`
+# (`sharedvector.rs` 348-360), which allocates once through
+# `alloc_with_capacity` (61-62), `::alloc::alloc::alloc` — glibc's malloc on
+# Linux. That is why the copies fall under the app's mmap threshold
+# (raw-pipeline.md, "Memory", The Linux allocator, and the glibc canary
+# below): a Slint that allocates pixel buffers another way takes them out
+# of it, and the whole-app formula's "counts no allocator term" is re-read.
 slint = { version = "1", default-features = false, features = [
     "std",
     "backend-winit",
@@ -85,6 +95,34 @@ toml = "0.8"
 # enabled.
 [target.'cfg(windows)'.dependencies]
 windows-sys = { version = "0.61", features = ["Win32_System_Console"] }
+
+# `mallopt(M_MMAP_THRESHOLD, 4 MiB)` first in `main` on Linux with glibc
+# (raw-pipeline.md, "Memory", The Linux allocator; Manager ruling
+# 2026-09-27, brief 008): the app's one `unsafe` call on Linux. The SAME cfg
+# as the call, because libc 0.2.189 defines `mallopt` and `M_MMAP_THRESHOLD`
+# for linux-gnu only (`src/unix/linux_like/linux/gnu/mod.rs` 884 and 1060),
+# so the dependency and its one use cannot disagree. Already in Cargo.lock
+# (0.2.189) through other crates; this adds no package.
+# GLIBC CANARY (glibc 2.43 on the development seat, 2.39 on the ubuntu-24.04
+# runner; read in the 2.43 sources, 2026-09-27): glibc keeps freed chunks
+# under its mmap threshold in its arenas, and raises that threshold at each
+# free of a larger mapped chunk, up to 32 MiB (`malloc.c`, the
+# `!mp_.no_dyn_threshold` test in `_int_free_chunk`'s mmapped branch,
+# 4403-4411; the cap `DEFAULT_MMAP_THRESHOLD_MAX`, 901) — so a cache filled at
+# fit and refilled at 1:1 held both (brief 008's decisions log). An explicit
+# M_MMAP_THRESHOLD sets `no_dyn_threshold` and fixes it
+# (`do_set_mmap_threshold`, 5030-5037), and `mallopt` returns 1 when it
+# accepts. The threshold is tested only in `sysmalloc` (2350-2352), which
+# `_int_malloc` reaches only when no bin chunk and not the top chunk fits
+# (`use_top`, 4310-4352): a large request can still be served from a free
+# chunk already in an arena, so what the fixed threshold guarantees is that
+# no large buffer GROWS an arena. The `glibc.malloc.mmap_threshold` tunable
+# reaches the same `do_set_mmap_threshold` (`arena.c` 222-231 and 285),
+# which is why the RSS ceiling test's child under `GLIBC_TUNABLES` stands
+# for this call. If any of that changes, raw-pipeline.md "Memory" and its
+# RSS ceiling box are re-read.
+[target.'cfg(all(target_os = "linux", target_env = "gnu"))'.dependencies]
+libc = "0.2"
 
 [dev-dependencies]
 zune-jpeg = "0.4"

@@ -178,6 +178,27 @@ zune-jpeg = "0.4"
 #      without a warning (`src/jdarith.c` 136-140), the bounded blank
 #      success raw-pipeline.md records for arithmetic-coded streams.
 turbojpeg = { version = "1.5.1", default-features = false, features = ["cmake", "pkg-config", "require-simd"] }
+# The loupe's decoder count follows the PHYSICAL cores (`budget.rs`;
+# raw-pipeline.md, "The decode workers"): `num_cpus::get_physical` reads
+# Linux's `/proc/cpuinfo`, summing `cpu cores` per `physical id`, and
+# Windows' `GetLogicalProcessorInformation`, counting its
+# `RelationProcessorCore` entries, and falls back to the logical count when
+# the topology is unreadable, so it never answers 0 (num_cpus 1.17.0,
+# `src/linux.rs` `get_num_physical_cpus`, `src/lib.rs`
+# `get_num_physical_cpus_windows`; read 2026-09-27). std offers only the
+# logical count (`available_parallelism`), which counts hyperthreads — on
+# this serial, Huffman-bound decode a hyperthread doubles the per-frame
+# latency for 5-9 % more throughput (brief 008's benchmark).
+num_cpus = "1"
+
+# Total RAM on Windows, for the pixel cache (`budget.rs`): core's ONE
+# `unsafe` block, `GlobalMemoryStatusEx` (Manager ruling 2026-09-26, brief
+# 008 Q1). windows-sys 0.61.2 is already in the lock through the app; this
+# adds a feature, not a crate. `MEMORYSTATUSEX` derives `Default` there
+# (`src/Windows/Win32/System/SystemInformation/mod.rs`), which the probe's
+# zeroed struct relies on.
+[target.'cfg(windows)'.dependencies]
+windows-sys = { version = "0.61", features = ["Win32_System_SystemInformation"] }
 
 [dev-dependencies]
 criterion = "0.5"

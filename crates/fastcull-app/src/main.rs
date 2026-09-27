@@ -91,7 +91,35 @@ fn attach_parent_console() {
     }
 }
 
+/// Linux with glibc (raw-pipeline.md, "Memory", The Linux allocator; Manager
+/// ruling 2026-09-27, brief 008): fix glibc's mmap threshold at
+/// `budget::MMAP_THRESHOLD`, so no buffer of 4 MiB or more grows its arenas
+/// — each is mapped on its own unless a free chunk already fits it (glibc
+/// tests the threshold only in `sysmalloc`) and returned to the system when
+/// freed — where glibc's default raised its threshold to the first large
+/// buffer it freed and kept freed decode buffers and texture copies in its
+/// arenas: a cache filled at fit and refilled at 1:1 held both at once.
+/// Returns the threshold `mallopt` ACCEPTED (it returns 1), which the
+/// startup line prints; `None` if it refused, so the line says the call did
+/// not take.
+#[cfg(all(target_os = "linux", target_env = "gnu"))]
+fn set_mmap_threshold() -> Option<u64> {
+    let value = fastcull_core::budget::MMAP_THRESHOLD;
+    let arg = libc::c_int::try_from(value).ok()?;
+    // SAFETY: mallopt takes two integers and no pointers, takes glibc's
+    // arena lock itself, and is called here before any thread is spawned.
+    let accepted = unsafe { libc::mallopt(libc::M_MMAP_THRESHOLD, arg) } == 1;
+    accepted.then_some(value)
+}
+
 fn main() {
+    // FIRST, before any allocation worth the name: every buffer from here on
+    // is placed under the fixed threshold (review-verified that it is the
+    // first statement — nothing observable tells first from early).
+    #[cfg(all(target_os = "linux", target_env = "gnu"))]
+    let mmap_threshold = set_mmap_threshold();
+    #[cfg(not(all(target_os = "linux", target_env = "gnu")))]
+    let mmap_threshold: Option<u64> = None;
     // Must run before ANY output so the first trace/usage line already has a
     // console to land on.
     #[cfg(windows)]
@@ -154,6 +182,15 @@ fn main() {
         }
     };
 
+    // The machine's loupe sizes, derived once (raw-pipeline.md, "Memory": read
+    // once, at startup), and THE startup line, printed once on stderr before
+    // the window exists, so every launch mode says what it runs with — the
+    // cache, the ring, the decoders, the worst case, and on Linux with glibc
+    // the mmap threshold set above.
+    let mut loupe_sizes = fastcull_core::budget::LoupeSizes::from_machine();
+    loupe_sizes.mmap_threshold = mmap_threshold;
+    eprintln!("{loupe_sizes}");
+
     let window = MainWindow::new().expect("creating window");
     // About-dialog version (issue #23): X.Y.Z on a release-tag build,
     // X.Y.Z-devel-YYYYMMDD-<hash> otherwise (suffix composed by build.rs — a bug
@@ -194,7 +231,7 @@ fn main() {
             .ok();
         }
     }));
-    let mut app = AppState::new(cells, kitchen);
+    let mut app = AppState::new(cells, kitchen, loupe_sizes);
     // --start-loupe / --start-11: open directly at the loupe step, at fit
     // or pinned to 1:1. Everything else about the fresh state is the
     // sub-structs' own defaults.

@@ -6,6 +6,7 @@
 use std::cell::RefCell;
 use std::rc::Rc;
 
+use fastcull_core::budget::MIDS_CAP;
 use fastcull_core::loupe::is_top_rung;
 use fastcull_core::pipeline::SessionEvent;
 use slint::ComponentHandle;
@@ -15,7 +16,7 @@ use crate::kitchen;
 use crate::loupe_ctrl::{insert_fullres, route_warm, WarmCtx, WarmJob};
 use crate::nav::recompute_view_keep_cursor;
 use crate::presenter::refresh;
-use crate::state::{AppState, MIDS_CAP};
+use crate::state::AppState;
 use crate::trace::{trace_mark, trace_mark_with};
 use crate::MainWindow;
 

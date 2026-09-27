@@ -13,7 +13,7 @@ This file is generated — do not edit it by hand. Regenerate with:
 
 ## Licences in use
 
-- Apache License 2.0 (349 crate(s))
+- Apache License 2.0 (350 crate(s))
 - MIT License (111 crate(s))
 - Unicode License v3 (26 crate(s))
 - BSD 3-Clause "New" or "Revised" License (12 crate(s))
@@ -4417,6 +4417,7 @@ Used by:
 - [num-rational 0.4.2](https://github.com/rust-num/num-rational)
 - [num-traits 0.2.19](https://github.com/rust-num/num-traits)
 - [num 0.4.3](https://github.com/rust-num/num)
+- [num_cpus 1.17.0](https://github.com/seanmonstar/num_cpus)
 - [object 0.37.3](https://github.com/gimli-rs/object)
 - [once_cell 1.21.4](https://github.com/matklad/once_cell)
 - [ordered-stream 0.2.0](https://github.com/danieldg/ordered-stream)

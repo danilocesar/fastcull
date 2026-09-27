@@ -1250,8 +1250,11 @@ commit that lands its tests, and stays open until then):
       `the_decoders_are_capped_at_half_the_ram_in_gib`,
       `a_decoder_override_wins_and_a_bad_one_is_ignored`,
       `the_startup_line_names_the_cache_the_ring_the_decoders_and_the_peak`,
-      `start_with_spawns_the_decoders_and_reserves_the_last`. Open: lands with
-      the rules.
+      `start_with_spawns_the_decoders_and_reserves_the_last`. Open: its
+      exactly-once clause, read on the stderr of ui-grid.md A5's fit run,
+      lands with that driven test; every other clause's test landed with the
+      rules (the step-3b and step-3c commits, each mutant's red in its
+      message).
 - [ ] **Old red first, the three mutants** (brief 008 A7): a transit capped
       at the mid is red clock-free — `transit_request_is_the_fit_box_and_never_the_full`
       handed a 3840×2160 box resolves to the mid class under it — and
@@ -1481,7 +1484,7 @@ commit that lands its tests, and stays open until then):
       Mutants: the lane's ask removed; the ring asked beside the climb; the
       once-per-settle guard removed (red on the second wake). Open: lands
       with the switch rule.
-- [ ] **The RSS ceiling** (brief 008 A12): release, Linux with glibc only
+- [x] **The RSS ceiling** (brief 008 A12): release, Linux with glibc only
       (symlinks, `VmHWM` from `/proc/self/status`, and glibc's tunables): the
       walk runs in a child of the test's own binary under the app's
       allocator threshold, `GLIBC_TUNABLES=glibc.malloc.mmap_threshold=4194304`
@@ -1511,8 +1514,10 @@ commit that lands its tests, and stays open until then):
       a fit phase followed by 1:1 passes this ceiling on every viewport shape
       measured, the build before brief 008 included, and at fit on a
       3840×2160 box, where 4 MiB and 16 MiB read alike — brief 008's
-      decisions log.) Open: lands with the cache rule.
-- [ ] **The app sets glibc's mmap threshold and says so** (brief 008, the
+      decisions log.) Ticked by the step-3c commit, which carries the cache
+      rule, the walk and its reading on the development laptop; each
+      mutant's red is in its message.
+- [x] **The app sets glibc's mmap threshold and says so** (brief 008, the
       Linux allocator; Manager ruling 2026-09-27): clock-free,
       `MMAP_THRESHOLD` is 4 MiB, and the startup line carries `mmap threshold
       4 MiB` when the app reports the threshold it set and no `mmap
@@ -1527,7 +1532,8 @@ commit that lands its tests, and stays open until then):
       clause printed whatever the app reports (the clock-free test, and the
       driven one on Windows). Review-verified: that the call is the first
       statement of `main` on that platform (nothing observable tells first
-      from early). Open: lands with the startup line.
+      from early). Ticked by the step-3c commit, which carries the call, the
+      line and both tests; each mutant's red is in its message.
 - [ ] **Hard rule 1** (brief 008 A11): the RAW-write tests are unchanged and
       green; QE records `sha256sum testdata/raws/*.ARW` before and after its
       runs, and the listings match. Open: QE's rounds.

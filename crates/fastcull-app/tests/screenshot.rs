@@ -1382,6 +1382,57 @@ fn no_args_launch_opens_empty_window() {
     );
 }
 
+/// Brief 008, the Linux allocator (raw-pipeline.md, "The app sets glibc's
+/// mmap threshold and says so"; Manager ruling 2026-09-27): the app prints
+/// its startup line exactly once, and on Linux with glibc that line names
+/// the mmap threshold `main` set — `mmap threshold 4 MiB`, built from
+/// `budget::MMAP_THRESHOLD` — which it prints only when `mallopt` accepted
+/// it; on every other platform the line names none. A launch with no folder
+/// is the cheapest child, and the line comes before the window, so every
+/// launch mode prints it. `if cfg!`, not `#[cfg]`: both arms compile on
+/// both runners and neither platform loses the test. Red with the call
+/// removed from `main` (Linux); the clause printed whatever the app reports
+/// is red here on Windows and in core's unit test everywhere. That the call
+/// is `main`'s FIRST statement is review-verified: nothing observable tells
+/// first from early.
+#[test]
+fn the_startup_line_reports_the_mmap_threshold() {
+    if !has_display() {
+        eprintln!("screenshot smoke skipped: no display server");
+        return;
+    }
+    let _s = serial();
+    let out = out_dir().join("startup-line.jpg");
+    let stderr = shoot_env_stderr(&[], &[], &out);
+    let lines: Vec<&str> = stderr
+        .lines()
+        .filter(|l| l.starts_with("fastcull: loupe cache "))
+        .collect();
+    assert_eq!(
+        lines.len(),
+        1,
+        "exactly one startup line:\n{}",
+        lines.join("\n")
+    );
+    let token = format!(
+        "mmap threshold {} MiB",
+        fastcull_core::budget::MMAP_THRESHOLD >> 20
+    );
+    if cfg!(all(target_os = "linux", target_env = "gnu")) {
+        assert!(
+            lines[0].contains(&token),
+            "startup line lacks `{token}`: {}",
+            lines[0]
+        );
+    } else {
+        assert!(
+            !lines[0].contains("mmap threshold"),
+            "a platform whose app sets no threshold names one: {}",
+            lines[0]
+        );
+    }
+}
+
 /// Issue #16: closing the IPTC panel at 1:1 must NOT swap the displayed
 /// photo. Drive to image 5 (idx 4) at 1:1, toggle the panel open and
 /// closed: the follow-scroll claim must never fire and the last overlay

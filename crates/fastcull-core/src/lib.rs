@@ -11,6 +11,7 @@
 //! else: **a RAW file is never opened for writing** — all state goes to XMP
 //! sidecars.
 
+pub mod budget;
 pub mod burst;
 pub mod cache;
 pub mod catalog;
