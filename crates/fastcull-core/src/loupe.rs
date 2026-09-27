@@ -3152,8 +3152,9 @@ mod tests {
     /// lane's next job is the cursor's full-res, so `Z` after a stop finds it
     /// cooked or cooking. None while moving, in flight, without a box, on a
     /// box the reference mid serves (a 3/8 rung left over from a 4K box, on a
-    /// 1080p one), or once the file's best is in hand; with only a mid the
-    /// settle guarantee climbs first, and a queued entry is taken as it is.
+    /// 1080p one), for a request at a box other than the engine's current one,
+    /// or once the file's best is in hand; with only a mid the settle
+    /// guarantee climbs first, and a queued entry is taken as it is.
     #[test]
     fn the_reserved_lane_cooks_the_cursors_full_at_fit_on_a_wide_viewport() {
         use RequestState::{Settled, Transit};
@@ -3211,6 +3212,17 @@ mod tests {
             next_job(&mut state, true, now),
             Slot::Wait,
             "a viewport the reference mid serves never cooks, whatever rung is cached"
+        );
+        // A stale request: the engine's box is 4K, but the app last asked for
+        // a 1080p box (a resize before the next focus, or a box that arrived
+        // after a box-less `focus_fit`). The rung serves that request, so the
+        // settle guarantee has nothing to climb; the cook is for the CURRENT
+        // box only (the step-3 review's F2: the `desired` clause had no red).
+        let mut state = at_rest(Some(uhd), Target::Fit(hd), &rung);
+        assert_eq!(
+            next_job(&mut state, true, now),
+            Slot::Wait,
+            "a request at a box the engine no longer has cooks nothing"
         );
         let mut state = at_rest(Some(uhd), Target::Fit(uhd), &rung);
         state.best_long.insert(4, 3240);
@@ -4302,16 +4314,15 @@ mod tests {
         std::fs::remove_dir_all(&dir).ok();
     }
 
-    /// A RAW whose second IFD CLAIMS a 4000x3000 full over an intact
+    /// A RAW whose second IFD CLAIMS a 4000x3000 full over `full`, an intact
     /// 2000x1500 stream, behind an intact 640x400 mid: `find_embedded_jpegs`
     /// trusts an IFD's size over the SOF, so the ladder plans for a full it
     /// can never decode (M11: another body's writer, or a damaged IFD).
-    fn raw_over_claiming_its_full() -> Vec<u8> {
+    fn raw_over_claiming_its_full(full: &[u8]) -> Vec<u8> {
         let mid = crate::raw::jpeg_hostile::encoded(640, 400);
-        let full = crate::raw::jpeg_hostile::encoded(2000, 1500);
         let mut b = crate::raw::tiff_testutil::TiffBuilder::new(true);
         let mid_off = b.add_blob(&mid);
-        let full_off = b.add_blob(&full);
+        let full_off = b.add_blob(full);
         let second = b.add_ifd(
             &[
                 (0x0100, 3, 1, 4000),
@@ -4354,53 +4365,90 @@ mod tests {
     /// frame (the review measured 3 re-decodes over 3 settle passes at 1:1,
     /// 4 at a 4K fit box). Red on the old memo: `best_long` reads 4000, and
     /// the lane returns a job where it must wait.
+    ///
+    /// The memo is set in two places, and each has its row. The plain decode
+    /// of the full (the baseline stream, at 1:1 and at fit). And, at fit, the
+    /// screen branch's arm for a decode the decoder ran at FULL scale whatever
+    /// it was asked — a CMYK, YCCK, lossless or second-opinion stream — which
+    /// here is the same over-claiming IFD over a CMYK full: its 5/8 attempt
+    /// comes out 2000x1500 and IS the full, so the plain decode never runs
+    /// (the step-3 review's F1: with only the baseline rows, that arm's memo
+    /// could revert to the claim with the suite green).
     #[test]
     fn the_ladder_memoizes_the_decoded_size_not_the_ifd_claim() {
         use RungKind::{Full, Mid, Screen};
         let dir = crate::testutil::scratch_dir("over-claim-memo");
-        let path = dir.join("over_claimed.arw");
-        std::fs::write(&path, raw_over_claiming_its_full()).unwrap();
-        let claim = {
-            let mut file = std::fs::File::open(&path).unwrap();
-            find_embedded_jpegs(&mut file)
+        let baseline = dir.join("over_claimed.arw");
+        std::fs::write(
+            &baseline,
+            raw_over_claiming_its_full(&crate::raw::jpeg_hostile::encoded(2000, 1500)),
+        )
+        .unwrap();
+        let cmyk = dir.join("over_claimed_cmyk.arw");
+        std::fs::write(
+            &cmyk,
+            raw_over_claiming_its_full(&crate::raw::jpeg_hostile::encoded_as(
+                2000,
+                1500,
+                jpeg_encoder::ColorType::Cmyk,
+            )),
+        )
+        .unwrap();
+        for path in [&baseline, &cmyk] {
+            let mut file = std::fs::File::open(path).unwrap();
+            let claim = find_embedded_jpegs(&mut file)
                 .unwrap()
                 .fullres()
-                .map(|f| (f.width, f.height))
-        };
-        assert_eq!(
-            claim,
-            Some((4000, 3000)),
-            "the premise: the IFD's claim sizes the full"
-        );
+                .map(|f| (f.width, f.height));
+            assert_eq!(
+                claim,
+                Some((4000, 3000)),
+                "the premise: the IFD's claim sizes the full of {}",
+                path.display()
+            );
+        }
         let uhd = FitBox {
             width: 3840,
             height: 2160,
         };
-        // At the 4K box the claim asks 5/8, which the real stream decodes to
-        // 1250x938: short of the box, so the ladder goes on to the full.
+        // At the 4K box the claim asks 5/8, which the real baseline stream
+        // decodes to 1250x938: short of the box, so the ladder goes on to the
+        // full. The CMYK stream's 5/8 attempt decodes at full scale instead.
         assert_eq!(rung_factor(4000, 3000, 1, uhd), Some(5));
         let now = std::time::Instant::now();
-        for (target, rungs) in [
+        for (path, target, rungs) in [
             (
+                &baseline,
                 Target::Long(u32::MAX),
                 vec![(640, 400, Mid), (2000, 1500, Full)],
             ),
             (
+                &baseline,
                 Target::Fit(uhd),
                 vec![(640, 400, Mid), (1250, 938, Screen), (2000, 1500, Full)],
             ),
+            (
+                &cmyk,
+                Target::Fit(uhd),
+                vec![(640, 400, Mid), (2000, 1500, Full)],
+            ),
         ] {
+            let row = format!(
+                "{} at {target:?}",
+                path.file_name().unwrap_or_default().to_string_lossy()
+            );
             let (shared, rx) = shared_over(vec![path.clone()]);
             assert_eq!(
                 decode_ladder(&shared, 0, target, 0, false, RequestState::Settled),
-                Ok(())
+                Ok(()),
+                "{row}"
             );
-            assert_eq!(published(&rx), rungs, "{target:?}: what the stream holds");
+            assert_eq!(published(&rx), rungs, "{row}: what the stream holds");
             let mut state = lock(&shared);
             assert_eq!(
                 state.best_long.get(&0).copied(),
                 Some(2000),
-                "{target:?}: the memo is the decoded 2000, not the IFD's 4000"
+                "{row}: the memo is the decoded 2000, not the IFD's 4000"
             );
             // The cursor at rest on this frame, settled and past the debounce.
             state.focused = Some(0);
@@ -4410,7 +4458,7 @@ mod tests {
             assert_eq!(
                 next_job(&mut state, true, now),
                 Slot::Wait,
-                "{target:?}: a file whose ladder topped out is not decoded again at every settle"
+                "{row}: a file whose ladder topped out is not decoded again at every settle"
             );
         }
         std::fs::remove_dir_all(&dir).ok();
@@ -4440,7 +4488,11 @@ mod tests {
         let _clear = ClearHook;
         let dir = crate::testutil::scratch_dir("lane-f3");
         let path = dir.join("over_claimed.arw");
-        std::fs::write(&path, raw_over_claiming_its_full()).unwrap();
+        std::fs::write(
+            &path,
+            raw_over_claiming_its_full(&crate::raw::jpeg_hostile::encoded(2000, 1500)),
+        )
+        .unwrap();
         let uhd = Target::Fit(FitBox {
             width: 3840,
             height: 2160,

@@ -1402,12 +1402,14 @@ commit that lands its tests, and stays open until then):
 - [x] **The idle cook** (brief 008): settled at fit on a 4K box with the
       cursor's screen rung in hand, the reserved lane's next job is the
       cursor's full-res; none on a box the reference mid serves (a 3/8 rung
-      cached on a 1920×1080 box included), none while moving, none in
-      flight, none without a box, none once the file's best is cached —
+      cached on a 1920×1080 box included), none for a request at a box the
+      engine no longer has, none while moving, none in flight, none without
+      a box, none once the file's best is cached —
       `the_reserved_lane_cooks_the_cursors_full_at_fit_on_a_wide_viewport`.
       Ticked by the step-3b commit, which carries the cook and the test; its
       mutants' reds are in its message (the memo clause's is a hang, read as
-      `timeout`'s exit 124, as ruled).
+      `timeout`'s exit 124, as ruled), and the stale-box row's in brief
+      008's step-4a commit (added 2026-09-27, the step-3 review's F2).
 - [x] **The request state travels with the decode** (brief 008): a transit
       focus replaces a queued entry's state; a merge changes it only when
       the target grows; a revived entry keeps the deferred state —
