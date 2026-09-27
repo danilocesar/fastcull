@@ -4572,11 +4572,25 @@ mod tests {
     ///   focus from the app.
     /// - Each backlog flight counts its worker busy while it decodes (rule 2's
     ///   "a backlog worker is free") and gives it back when it ends.
+    /// - The reserved lane's own flight is never counted as a backlog
+    ///   worker's (raw-pipeline.md, "The decode workers": the decoders are
+    ///   the backlog workers AND the lane). The second phase takes frame 5's
+    ///   full away, so the lane's settle guarantee climbs it, and reads the
+    ///   count while that flight runs and after it ends: both must be 0.
     ///
     /// Red with the loop's wake removed (no member decodes before the 30 s
     /// deadline: the backlog workers sleep until an event that never comes),
     /// with the busy count's decrement removed (16 after 16 flights, and rule
-    /// 2 never steps up again) and with its increment removed (never busy).
+    /// 2 never steps up again), with its increment removed (never busy), and
+    /// with the increment's `!focus_reserved` guard removed while the
+    /// decrement keeps its own — every lane flight then adds a busy worker
+    /// that is never given back, so after as many lane flights as there are
+    /// backlog workers rule 2 finds no free worker for the rest of the session
+    /// (`(1, 1)` against `(0, 0)` on the second phase). With both guards
+    /// removed the lane is counted for exactly its own flight, which the
+    /// second phase's sampled reading also sees (`(0, 1)`). With only the
+    /// decrement's guard removed the count reads one low while a backlog
+    /// flight overlaps a lane flight and never drifts: benign, and green here.
     /// The 200 ms sleep only orders the backlog workers' first wait before the
     /// lane asks: on a correct build it cannot make the test fail, and under an
     /// extreme stall it could only let the missing wake read green. The busy
@@ -4658,6 +4672,41 @@ mod tests {
             std::thread::sleep(Duration::from_millis(10));
         }
         let busy = lock(&shared).backlog_busy;
+        // The reserved lane's own flight is not a backlog worker's: 5 loses
+        // its full, so the lane's settle guarantee climbs it, and rule 2's
+        // count must not move — a lane flight counted and never given back
+        // would leave rule 2 with no free worker after as many stops as there
+        // are backlog workers.
+        {
+            let mut state = lock(&shared);
+            if let Some((img, _)) = state.cache.remove(&5) {
+                state.cached_bytes -= img.rgb.len();
+            }
+            state.best_long.remove(&5);
+        }
+        shared.wakeup.notify_all();
+        let mut lane_busy_seen = 0;
+        let mut lane_landed = false;
+        let deadline = Instant::now() + Duration::from_secs(30);
+        while !lane_landed {
+            lane_busy_seen = lane_busy_seen.max(lock(&shared).backlog_busy);
+            let left = deadline.saturating_duration_since(Instant::now());
+            match rx.recv_timeout(left.min(Duration::from_millis(1))) {
+                Err(std::sync::mpsc::RecvTimeoutError::Timeout) if !left.is_zero() => continue,
+                Ok(LoupeEvent::Ready {
+                    index: 5, image, ..
+                }) if image.kind == RungKind::Full => {
+                    lane_landed = true;
+                }
+                Ok(_) => {}
+                Err(_) => break,
+            }
+        }
+        let settle = Instant::now() + Duration::from_secs(30);
+        while !lock(&shared).in_flight.is_empty() && Instant::now() < settle {
+            std::thread::sleep(Duration::from_millis(10));
+        }
+        let lane_busy = lock(&shared).backlog_busy;
         // Stop the workers as `LoupeEngine`'s drop does: taking the lock
         // between the flag and the wake-up means no worker is between its
         // check of the flag and its wait, where the wake-up would be lost.
@@ -4676,6 +4725,12 @@ mod tests {
         assert!(
             busy_seen > 0,
             "a backlog flight counts its worker busy while it decodes"
+        );
+        assert!(lane_landed, "the premise: the lane climbed 5 to full-res");
+        assert_eq!(
+            (lane_busy, lane_busy_seen),
+            (0, 0),
+            "the reserved lane's flight never counts as a backlog worker's"
         );
     }
 

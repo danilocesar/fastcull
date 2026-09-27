@@ -1427,7 +1427,8 @@ commit that lands its tests, and stays open until then):
       says; the step up waits for every member ahead but the farthest to hold
       its rung or have it in flight, nothing queued and a backlog worker free
       — the worker loop counting a backlog worker busy for exactly its flight,
-      on the engine's real threads — starts beyond the ring's far end, and
+      and never counting the reserved lane's flight, on the engine's real
+      threads — starts beyond the ring's far end, and
       never comes to a hold that never stepped down; the
       time-to-screen runs from a decode's start to the app's report that its
       fill completed, held by the ring or at once that ring's victim, a frame
@@ -1502,7 +1503,11 @@ commit that lands its tests, and stays open until then):
       removed.) And the worker loop's busy count losing its increment or its
       decrement (red on
       `the_lane_wakes_the_backlog_and_every_flight_frees_its_worker`; added
-      2026-09-27, brief 008 step-4 review F2).
+      2026-09-27, brief 008 step-4 review F2); and the reserved lane's flights
+      counted as a backlog worker's, the increment's guard removed while the
+      decrement keeps its own (red on that test's second phase; added
+      2026-09-27, brief 008 step-4 review F5: the test proved the count for
+      backlog flights only).
       Driven, the hold's frames on screen per key stay at
       ui-grid.md A6's level in two 1:1 runs of
       `a_held_arrow_at_fit_on_4k_stays_at_the_rung_and_never_slows`: A6's own,
