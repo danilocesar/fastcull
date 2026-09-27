@@ -336,6 +336,11 @@ struct LoupeState {
     /// Indexes that failed to decode: never re-queued (a corrupt file must
     /// not be re-attempted on every focus — validator finding).
     failed: std::collections::HashSet<usize>,
+    /// The embedded JPEGs — (index, offset in the file) — whose complaint
+    /// line has been printed: at most once per session each, however often
+    /// the ladder decodes them (raw-pipeline.md, "One line on stderr,
+    /// once").
+    noted: std::collections::HashSet<(usize, u64)>,
     /// The image the user is looking at: never evicted, even over-budget —
     /// evicting it after decode would strand the loupe forever (found by
     /// the tight-budget integration test).
@@ -1298,9 +1303,18 @@ fn decode_ladder(
                 let (sw, sh) = scaled_dims(rung.width, rung.height, n);
                 if sw.max(sh) > achieved {
                     match decode_jpeg_rung(&mut file, rung, orientation, n, candidate) {
-                        Err(reason) => return keep_lower_rung(shared, index, achieved, reason),
-                        Ok(image) if image.kind == RungKind::Full => {
+                        Err(reason) => {
+                            return keep_lower_rung(
+                                shared,
+                                index,
+                                achieved,
+                                RungKind::Screen,
+                                reason,
+                            )
+                        }
+                        Ok((image, note)) if image.kind == RungKind::Full => {
                             let serves = served_by(&image, target, None);
+                            report_complaint(shared, index, rung, image.kind, note);
                             publish(shared, index, image, rung_long >= top_long, req);
                             achieved = rung_long;
                             if serves {
@@ -1308,10 +1322,11 @@ fn decode_ladder(
                             }
                             continue;
                         }
-                        Ok(image) => {
+                        Ok((image, note)) => {
                             let long = image.width.max(image.height);
                             if long > achieved {
                                 let serves = served_by(&image, target, None);
+                                report_complaint(shared, index, rung, image.kind, note);
                                 publish(shared, index, image, false, req);
                                 achieved = long;
                                 if serves {
@@ -1324,15 +1339,16 @@ fn decode_ladder(
             }
         }
         match decode_jpeg_rung(&mut file, rung, orientation, 8, candidate) {
-            Ok(image) => {
+            Ok((image, note)) => {
                 let serves = served_by(&image, target, None);
+                report_complaint(shared, index, rung, image.kind, note);
                 publish(shared, index, image, rung_long >= top_long, req);
                 achieved = rung_long;
                 if serves {
                     return Ok(());
                 }
             }
-            Err(reason) => return keep_lower_rung(shared, index, achieved, reason),
+            Err(reason) => return keep_lower_rung(shared, index, achieved, candidate, reason),
         }
     }
     // Ladder topped out below the display target: memoize the terminal rung
@@ -1349,18 +1365,53 @@ fn decode_ladder(
 /// has a good lower rung (validator MAJOR: valid mid + truncated full-res
 /// would badge Failed AND show an image): the flight ends `Ok`, so the
 /// worker emits no Failed, and what was achieved is memoized so the ladder
-/// quiesces. With nothing lower in hand the rung's failure is the image's.
+/// quiesces — and one line on stderr names the file, the rung that failed
+/// and the decoder's reason, so a fault that shows no badge is still seen
+/// (raw-pipeline.md, "All rejections"; brief 008, the step-1 review). The
+/// memo stops the climb, so the line prints once. With nothing lower in
+/// hand the rung's failure is the image's: the Failed badge says it.
 fn keep_lower_rung(
     shared: &Shared,
     index: usize,
     achieved: u32,
+    attempted: RungKind,
     reason: String,
 ) -> Result<(), String> {
     if achieved > 0 {
         note_best(shared, index, achieved);
+        eprintln!(
+            "fastcull: loupe {}: the {attempted} rung failed ({reason}); the lower rung stays",
+            shared.paths[index].display()
+        );
         return Ok(());
     }
     Err(reason)
+}
+
+/// A rung decoded past a complaint (`note`: a header gap skipped,
+/// libjpeg-turbo's image kept, the second opinion taken) prints one line on
+/// stderr naming the file, the rung and what the loupe did — at most once
+/// per session for each of a file's embedded JPEGs, whichever rungs of it
+/// decode how often (raw-pipeline.md, "One line on stderr, once"). The
+/// memo is checked and set under the state lock; the line prints after the
+/// lock is released.
+fn report_complaint(
+    shared: &Shared,
+    index: usize,
+    rung: &crate::raw::EmbeddedJpeg,
+    kind: RungKind,
+    note: Option<String>,
+) {
+    let Some(note) = note else {
+        return;
+    };
+    let first = lock(shared).noted.insert((index, rung.offset));
+    if first {
+        eprintln!(
+            "fastcull: loupe {}: the {kind} rung decoded past a complaint -- {note}",
+            shared.paths[index].display()
+        );
+    }
 }
 
 fn note_best(shared: &Shared, index: usize, long: u32) {
@@ -1399,23 +1450,29 @@ fn publish(
 /// Read one embedded JPEG and decode it at `numerator`/8. The image's kind
 /// is the scale the decoder RAN — below 8 a screen rung, at 8 the
 /// `candidate` the caller named (the mid, or the full) — never a
-/// comparison of the decoded size with the IFD's claim.
+/// comparison of the decoded size with the IFD's claim. Beside the image,
+/// what the decode went past, if anything (`Decoded::note`).
 fn decode_jpeg_rung(
     file: &mut std::fs::File,
     rung: &crate::raw::EmbeddedJpeg,
     orientation: u16,
     numerator: u8,
     candidate: RungKind,
-) -> Result<FullImage, String> {
+) -> Result<(FullImage, Option<String>), String> {
     let bytes = read_jpeg(file, rung).map_err(|e| format!("read: {e}"))?;
-    let (rgb, width, height, ran) = decode_with(&bytes, orientation, numerator)?;
-    let kind = if ran < 8 { RungKind::Screen } else { candidate };
-    Ok(FullImage {
-        rgb: Arc::new(rgb),
-        width,
-        height,
+    let decoded = decode_with(&bytes, orientation, numerator)?;
+    let kind = if decoded.ran < 8 {
+        RungKind::Screen
+    } else {
+        candidate
+    };
+    let image = FullImage {
+        rgb: Arc::new(decoded.rgb),
+        width: decoded.width,
+        height: decoded.height,
         kind,
-    })
+    };
+    Ok((image, decoded.note))
 }
 
 /// Decode a JPEG stream and apply its EXIF orientation — THE full-res hot
@@ -1434,14 +1491,16 @@ fn decode_jpeg_rung(
 /// decoded. A stream that passes both and still runs short (a valid EOI
 /// over too little entropy data) makes libjpeg-turbo warn, and
 /// `tj3Decompress8` returns -1 on any warning, which the crate turns into
-/// `Err`: a `Failed` badge, never a blank success. A progressive stream of
-/// more than 100 scans fails the same way (the scan limit, set on every
-/// decompressor). See [`decode_scaled_oriented`] for the same decode at an
-/// N/8 scale; a lossless stream ignores the scale and decodes full-size, and
-/// so does a CMYK or YCCK stream, which libjpeg-turbo will not convert to
-/// RGB and zune-jpeg decodes instead (brief 008 R14).
+/// `Err`: that message is in the damage class, so a `Failed` badge, never a
+/// blank success. A progressive stream of more than 100 scans fails the
+/// same way (the scan limit, set on every decompressor). A HARMLESS
+/// complaint does not fail the decode (raw-pipeline.md, "The decoder's
+/// complaints"): see `decode_with`. See [`decode_scaled_oriented`] for the
+/// same decode at an N/8 scale; a lossless stream ignores the scale and
+/// decodes full-size, and so does a CMYK or YCCK stream, which libjpeg-turbo
+/// will not convert to RGB and zune-jpeg decodes instead (brief 008 R14).
 pub fn decode_oriented(bytes: &[u8], orientation: u16) -> Result<(Vec<u8>, u32, u32), String> {
-    decode_with(bytes, orientation, 8).map(|(rgb, w, h, _)| (rgb, w, h))
+    decode_with(bytes, orientation, 8).map(|d| (d.rgb, d.width, d.height))
 }
 
 /// [`decode_oriented`] at a DCT scale of `numerator`/8: the screen rung
@@ -1453,13 +1512,14 @@ pub fn decode_oriented(bytes: &[u8], orientation: u16) -> Result<(Vec<u8>, u32, 
 /// the header's FULL dimensions before any factor is set. A lossless JPEG,
 /// which libjpeg-turbo cannot scale, decodes full-size whatever
 /// `numerator` asks (the Cargo.toml canary, item 4), and so does a CMYK or
-/// YCCK stream, which zune-jpeg decodes (the canary, item 8).
+/// YCCK stream, which zune-jpeg decodes (the canary, item 8), and a stream
+/// zune-jpeg's second opinion decodes.
 pub fn decode_scaled_oriented(
     bytes: &[u8],
     orientation: u16,
     numerator: u8,
 ) -> Result<(Vec<u8>, u32, u32), String> {
-    decode_with(bytes, orientation, numerator).map(|(rgb, w, h, _)| (rgb, w, h))
+    decode_with(bytes, orientation, numerator).map(|d| (d.rgb, d.width, d.height))
 }
 
 /// The size a `numerator`/8 decode of a `width` x `height` JPEG comes out
@@ -1474,20 +1534,110 @@ pub fn scaled_dims(width: u32, height: u32, numerator: u8) -> (u32, u32) {
     (scale(width), scale(height))
 }
 
+/// How the loupe reads one of libjpeg-turbo's complaints (raw-pipeline.md,
+/// "The decoder's complaints"). The safe crate gives the loupe the complaint
+/// as TEXT only — the first message of the decode, which libjpeg reports
+/// and a fatal error replaces (the Cargo.toml canary, item 9) — so the
+/// class is read off the vendored message texts (`jerror.h`).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum Complaint {
+    /// A message only a damaged stream raises: refused, and no second
+    /// decoder asked.
+    Damage,
+    /// A message a writer's quirk can raise, after which libjpeg-turbo's
+    /// buffer is complete: its image is used, at the rung asked for.
+    Kept,
+    /// Everything else: zune-jpeg's second opinion, at full scale.
+    SecondOpinion,
+}
+
+/// Sort one libjpeg-turbo message into its [`Complaint`] class, by `contains`
+/// on the vendored texts — never on the "Corrupt JPEG data" prefix, which
+/// three classes share (a marker hit mid-scan is damage, leftover bytes are
+/// kept, a bad ICC chunk takes the second opinion). The damage class: the
+/// data ran out (`JWRN_JPEG_EOF`, `JWRN_HIT_MARKER`), a code no table holds
+/// (`JWRN_HUFF_BAD_CODE`, `JWRN_ARITH_BAD_CODE`), a restart marker out of
+/// sequence (`JWRN_MUST_RESYNC`), and the scan limit's own message. The kept
+/// class: the two scan-parameter warnings (`JWRN_NOT_SEQUENTIAL`,
+/// `JWRN_BOGUS_PROGRESSION`) and bytes left over after a scan
+/// (`JWRN_EXTRANEOUS_DATA`).
+pub(crate) fn complaint_class(message: &str) -> Complaint {
+    const DAMAGE: [&str; 6] = [
+        "Premature end of JPEG file",
+        "premature end of data segment",
+        "bad Huffman code",
+        "bad arithmetic code",
+        "instead of RST",
+        "Progressive JPEG image has more than",
+    ];
+    const KEPT: [&str; 3] = [
+        "Invalid SOS parameters for sequential JPEG",
+        "Inconsistent progression sequence",
+        "extraneous bytes before marker",
+    ];
+    if DAMAGE.iter().any(|text| message.contains(text)) {
+        Complaint::Damage
+    } else if KEPT.iter().any(|text| message.contains(text)) {
+        Complaint::Kept
+    } else {
+        Complaint::SecondOpinion
+    }
+}
+
+/// One loupe decode: the oriented RGB, its size, the numerator the decoder
+/// RAN — 8 for a lossless, CMYK or YCCK stream and for zune-jpeg's second
+/// opinion, whatever was asked — and what the loupe decoded past, if
+/// anything: a header gap skipped, libjpeg-turbo's image kept past a
+/// complaint, the second opinion taken. The ladder prints the note once per
+/// file; the public entry points drop it.
+struct Decoded {
+    rgb: Vec<u8>,
+    width: u32,
+    height: u32,
+    ran: u8,
+    note: Option<String>,
+}
+
+/// libjpeg-turbo's message without the safe crate's "TurboJPEG error: "
+/// prefix, for a note or a combined reason a person reads.
+fn bare(message: &str) -> &str {
+    message.strip_prefix("TurboJPEG error: ").unwrap_or(message)
+}
+
+/// Two notes, either optional, joined with "; ".
+fn join_notes(first: Option<String>, second: Option<String>) -> Option<String> {
+    match (first, second) {
+        (Some(a), Some(b)) => Some(format!("{a}; {b}")),
+        (a, b) => a.or(b),
+    }
+}
+
 /// The one decode behind [`decode_oriented`] and [`decode_scaled_oriented`].
-/// The fourth field is the numerator the decoder RAN — 8 for a lossless
-/// stream, and for a CMYK or YCCK one, whatever was asked — so the ladder
-/// can tell a scaled rung from the full by what the decoder did, never by
-/// comparing a size with an IFD's claim (raw-pipeline.md, "The screen
-/// rung": the app never infers top-rung-ness from a size).
-fn decode_with(
-    bytes: &[u8],
-    orientation: u16,
-    numerator: u8,
-) -> Result<(Vec<u8>, u32, u32, u8), String> {
+/// It reports the numerator the decoder RAN, so the ladder can tell a scaled
+/// rung from the full by what the decoder did, never by comparing a size
+/// with an IFD's claim (raw-pipeline.md, "The screen rung": the app never
+/// infers top-rung-ness from a size).
+///
+/// The order is the spec's (raw-pipeline.md, "Hostile-input bounds" and
+/// "The decoder's complaints") and each step depends on the ones before it:
+/// the numerator's range; the header-gap pre-pass, so libjpeg-turbo reads
+/// the header with no warning and zune-jpeg's strict mode never meets a gap;
+/// the header read — whose complaint is refused when it is damage and
+/// otherwise handed to the second opinion, since a header read that warned
+/// leaves no header to decode from; the pixel cap on the header's FULL
+/// dimensions; the byte check; the CMYK/YCCK route; the scale; the buffers;
+/// the decode — whose complaint is refused, kept or handed on by its class.
+fn decode_with(bytes: &[u8], orientation: u16, numerator: u8) -> Result<Decoded, String> {
     if !(1..=8).contains(&numerator) {
         return Err(format!("scaling numerator {numerator} out of 1..=8"));
     }
+    // THE PRE-PASS (raw-pipeline.md, "Header gaps are skipped before any
+    // decode"): bytes between two header segments that are not a marker are
+    // dropped before either decoder sees the stream. `Cow::Borrowed` when
+    // there are none, so an A1 stream is never copied.
+    let (bytes, gap) = crate::raw::without_header_gaps(bytes);
+    let bytes: &[u8] = &bytes;
+    let gap_note = (gap > 0).then(|| format!("skipped {gap} bytes between header segments"));
     // One decompressor per call: its setup is small next to a decode, and
     // the loupe's workers then share no decoder state. A per-thread handle
     // would have to be measured to earn its place (brief 008).
@@ -1503,7 +1653,23 @@ fn decode_with(
     // handle runs without it.
     dec.set_scan_limit(100)
         .map_err(|e| format!("decode: {e}"))?;
-    let header = dec.read_header(bytes).map_err(|e| format!("decode: {e}"))?;
+    let header = match dec.read_header(bytes) {
+        Ok(header) => header,
+        Err(e) => {
+            // libjpeg-turbo's header read fails on ANY warning and then
+            // gives no header (the canary, item 11): refuse damage; for
+            // anything else — a JFIF revision it does not know, an ICC chunk
+            // out of sequence, an unknown Adobe transform — ask zune-jpeg,
+            // whose route checks the pixel cap and the byte check itself,
+            // there being no libjpeg-turbo header to check them on.
+            let message = e.to_string();
+            if complaint_class(&message) == Complaint::Damage {
+                return Err(format!("decode: {message}"));
+            }
+            drop(dec);
+            return second_opinion(bytes, orientation, &message, gap_note);
+        }
+    };
     // Issue #31: the header's dimension claim sizes the decode buffer, the
     // prefault pass and the transpose Scratch below, and in a crafted file
     // every claim is the attacker's. Reject an implausible claim — on the
@@ -1531,18 +1697,22 @@ fn decode_with(
     // -- a print-ready bare JPEG, issue #8 -- decodes through zune-jpeg as
     // every loupe stream did before the swap, at FULL scale whatever
     // `numerator` asked: no screen rung, and 8 reported as the numerator
-    // run, so the ladder sees a full. The route sits after the two guards
-    // above on purpose: it has none of its own, so it inherits them, and
-    // both read this same stream -- the pixel cap its SOF, the byte check
-    // its bytes. Moved before them, a hostile CMYK header would size
-    // zune-jpeg's buffers and a cut CMYK scan would zero-fill into a
-    // "success" (`cmyk_and_ycck_streams_decode_on_the_loupe_path` pins both).
+    // run, so the ladder sees a full. The two guards above have run on this
+    // stream's own SOF and bytes; the route checks both again on zune-jpeg's
+    // header, as it must when it is the second opinion.
     if matches!(
         header.colorspace,
         turbojpeg::Colorspace::CMYK | turbojpeg::Colorspace::YCCK
     ) {
-        let (rgb, w, h) = decode_through_zune(bytes, orientation)?;
-        return Ok((rgb, w, h, 8));
+        let (rgb, width, height) = decode_through_zune(bytes, orientation)
+            .map_err(|zune| format!("decode: zune-jpeg: {zune}"))?;
+        return Ok(Decoded {
+            rgb,
+            width,
+            height,
+            ran: 8,
+            note: gap_note,
+        });
     }
     let numerator = if header.is_lossless { 8 } else { numerator };
     // `ScalingFactor::new` reduces by the gcd, so 8/8 is the crate's `ONE`
@@ -1576,8 +1746,11 @@ fn decode_with(
     // only WHEN the page faults are paid moves — off the critical path.
     // Pitch is 3w with no row padding: the buffer is byte for byte the
     // packed RGB the kitchen's `SharedPixelBuffer` fill takes.
+    //
+    // The buffer and the scratch come back WITH the decode's outcome, not
+    // only on success: a kept complaint uses them as decoded.
     let needs_transpose = matches!(orientation, 5..=8);
-    let (rgb, scratch) = std::thread::scope(|scope| {
+    let (rgb, scratch, decoded) = std::thread::scope(|scope| {
         let scratch = needs_transpose.then(|| {
             // Output dims are swapped, but the byte count is what matters
             // and it is identical; build it while the decode runs.
@@ -1585,48 +1758,123 @@ fn decode_with(
         });
         let mut rgb = vec![0u8; n];
         crate::raw::orient::prefault_parallel(&mut rgb);
-        let decoded = dec
-            .decompress(
-                bytes,
-                turbojpeg::Image {
-                    pixels: &mut rgb[..],
-                    width: w as usize,
-                    pitch: w as usize * 3,
-                    height: h as usize,
-                    format: turbojpeg::PixelFormat::RGB,
-                },
-            )
-            .map_err(|e| format!("decode: {e}"));
+        let decoded = dec.decompress(
+            bytes,
+            turbojpeg::Image {
+                pixels: &mut rgb[..],
+                width: w as usize,
+                pitch: w as usize * 3,
+                height: h as usize,
+                format: turbojpeg::PixelFormat::RGB,
+            },
+        );
         let scratch = scratch.map(|j| j.join().expect("prefault thread"));
-        decoded.map(|()| (rgb, scratch))
-    })?;
+        (rgb, scratch, decoded)
+    });
+    let note = match decoded {
+        Ok(()) => None,
+        Err(e) => {
+            let message = e.to_string();
+            match complaint_class(&message) {
+                Complaint::Damage => return Err(format!("decode: {message}")),
+                // `tj3Decompress8` writes every scanline before it returns
+                // -1 for a warning, and a fatal error after one would have
+                // replaced its text (the canary, item 10): the buffer is
+                // complete, so it is used as decoded, at the rung asked for.
+                Complaint::Kept => Some(format!(
+                    "kept libjpeg-turbo's image past: {}",
+                    bare(&message)
+                )),
+                Complaint::SecondOpinion => {
+                    // Freed BEFORE zune-jpeg allocates (raw-pipeline.md, "The
+                    // decoder's complaints"): libjpeg-turbo's buffer and the
+                    // transpose scratch go first, so a decoder never holds
+                    // more than its two full-size frames.
+                    drop(rgb);
+                    drop(scratch);
+                    drop(dec);
+                    return second_opinion(bytes, orientation, &message, gap_note);
+                }
+            }
+        }
+    };
     // Soft-rotate to display orientation (spec: every rung).
-    let (rgb, w, h) = crate::raw::apply_orientation_with(rgb, w, h, orientation, scratch);
-    Ok((rgb, w, h, numerator))
+    let (rgb, width, height) = crate::raw::apply_orientation_with(rgb, w, h, orientation, scratch);
+    Ok(Decoded {
+        rgb,
+        width,
+        height,
+        ran: numerator,
+        note: join_notes(gap_note, note),
+    })
 }
 
-/// The zune-jpeg route (brief 008 R14; raw-pipeline.md, "The decoder"):
-/// the loupe's decode as it shipped before libjpeg-turbo (the pre-swap
-/// `decode_oriented`, e1b488a^), for the streams libjpeg-turbo cannot
-/// give as RGB -- CMYK and YCCK. zune-jpeg 0.4 converts both. It decodes
-/// at FULL size only (zune-jpeg has no DCT scaling), into a pre-faulted
-/// buffer with the transpose scratch built while it runs, then rotates --
-/// the same discipline as the libjpeg-turbo path above.
+/// zune-jpeg's second opinion on a stream libjpeg-turbo refused over a
+/// complaint outside the damage and kept classes (raw-pipeline.md, "The
+/// decoder's complaints"): the zune-jpeg route at full scale, its note
+/// naming libjpeg-turbo's complaint; when zune-jpeg refuses too, the rung has
+/// failed with both decoders' reasons.
+fn second_opinion(
+    bytes: &[u8],
+    orientation: u16,
+    libjpeg_message: &str,
+    gap_note: Option<String>,
+) -> Result<Decoded, String> {
+    let libjpeg = bare(libjpeg_message);
+    match decode_through_zune(bytes, orientation) {
+        Ok((rgb, width, height)) => Ok(Decoded {
+            rgb,
+            width,
+            height,
+            ran: 8,
+            note: join_notes(
+                gap_note,
+                Some(format!("libjpeg-turbo: {libjpeg}; decoded by zune-jpeg")),
+            ),
+        }),
+        Err(zune) => Err(format!(
+            "decode: libjpeg-turbo: {libjpeg}; zune-jpeg: {zune}"
+        )),
+    }
+}
+
+/// The zune-jpeg route (brief 008 R14; raw-pipeline.md, "The decoder" and
+/// "The decoder's complaints"): the loupe's decode as it shipped before
+/// libjpeg-turbo (the pre-swap `decode_oriented`, e1b488a^, verbatim), for
+/// the streams libjpeg-turbo cannot give as RGB — CMYK and YCCK, which
+/// zune-jpeg 0.4 converts — and as the second opinion. It decodes at FULL
+/// size only (zune-jpeg has no DCT scaling), in strict mode with RGB out and
+/// the per-side limits lifted (the default 16384 would reject a
+/// panorama-wide bare JPEG), into a pre-faulted buffer with the transpose
+/// scratch built while it runs, then rotates.
 ///
-/// It checks neither the pixel cap nor the byte check itself: its only
-/// caller, `decode_with`, has run both on this stream before it gets here.
-/// The per-side limits are lifted as before (the default 16384 would
-/// reject a panorama-wide bare JPEG), which is why that order matters.
+/// It checks the pixel cap on ZUNE-JPEG'S header and then the byte check
+/// itself, before any buffer is sized — load-bearing for the second opinion,
+/// which may come after a libjpeg-turbo header read that failed and left no
+/// header to check; for CMYK and YCCK the caller has checked both already.
+/// Its errors are zune-jpeg's messages, or the guards' own, bare: the
+/// caller says which decoder spoke.
 fn decode_through_zune(bytes: &[u8], orientation: u16) -> Result<(Vec<u8>, u32, u32), String> {
     let options = zune_jpeg::zune_core::options::DecoderOptions::default()
         .jpeg_set_out_colorspace(zune_jpeg::zune_core::colorspace::ColorSpace::RGB)
         .set_max_width(usize::MAX)
         .set_max_height(usize::MAX);
     let mut decoder = zune_jpeg::JpegDecoder::new_with_options(bytes, options);
-    decoder
-        .decode_headers()
-        .map_err(|e| format!("decode: {e}"))?;
+    decoder.decode_headers().map_err(|e| e.to_string())?;
     let (w, h) = decoder.dimensions().ok_or("no dimensions")?;
+    // Issue #31, on zune-jpeg's own reading of the header: nothing is
+    // allocated from a claim before these two pass (raw-pipeline.md,
+    // "Hostile-input bounds"). zune-jpeg zero-fills a cut scan and calls it
+    // a success, so the byte check is its only guard against one.
+    if !crate::raw::plausible_decoded_dims(w, h) {
+        return Err(format!(
+            "implausible JPEG dimensions {w}x{h} (over {} pixels)",
+            crate::raw::MAX_DECODED_PIXELS
+        ));
+    }
+    if !crate::raw::scan_is_terminated(bytes) {
+        return Err("truncated JPEG stream (scan reaches no end-of-image marker)".into());
+    }
     let n = w
         .checked_mul(h)
         .and_then(|px| px.checked_mul(3))
@@ -1642,9 +1890,7 @@ fn decode_through_zune(bytes: &[u8], orientation: u16) -> Result<(Vec<u8>, u32, 
         });
         let mut rgb = vec![0u8; n];
         crate::raw::orient::prefault_parallel(&mut rgb);
-        let decoded = decoder
-            .decode_into(&mut rgb)
-            .map_err(|e| format!("decode: {e}"));
+        let decoded = decoder.decode_into(&mut rgb).map_err(|e| e.to_string());
         let scratch = scratch.map(|j| j.join().expect("prefault thread"));
         decoded.map(|()| (rgb, scratch))
     })?;
@@ -3138,7 +3384,8 @@ mod tests {
         let j = c.compress_to_vec(img.as_deref()).unwrap();
         assert!(turbojpeg::read_header(&j).unwrap().is_lossless);
         for (o, want) in [(1u16, (64, 48)), (6, (48, 64))] {
-            let (_, w, h, ran) = decode_with(&j, o, 3).expect("lossless at 3/8");
+            let d = decode_with(&j, o, 3).expect("lossless at 3/8");
+            let (w, h, ran) = (d.width, d.height, d.ran);
             assert_eq!(
                 ((w, h), ran),
                 (want, 8),
@@ -3261,7 +3508,7 @@ mod tests {
                     }
                 }
                 let ran = decode_with(&jpeg, orientation, 3)
-                    .map(|(_, _, _, ran)| ran)
+                    .map(|d| d.ran)
                     .unwrap_or_else(|err| panic!("{colorspace:?} at 3/8: {err}"));
                 assert_eq!(
                     ran, 8,
@@ -3374,6 +3621,607 @@ mod tests {
         assert!(
             rx.try_recv().is_err(),
             "one decode of the full, one event, no Failed"
+        );
+        std::fs::remove_dir_all(&dir).ok();
+    }
+
+    /// Brief 008, other cameras (raw-pipeline.md, "The decoder's
+    /// complaints"): every warning text of the vendored message table, the
+    /// scan limit's message and an unknown text, each with and without the
+    /// safe crate's "TurboJPEG error: " prefix, sorted into the three
+    /// classes. The leftover-bytes and bad-ICC texts share the damage texts'
+    /// "Corrupt JPEG data" prefix: a class read off the prefix would refuse
+    /// them.
+    #[test]
+    fn libjpeg_turbo_messages_sort_into_three_classes() {
+        use Complaint::{Damage, Kept, SecondOpinion};
+        let table = [
+            ("Premature end of JPEG file", Damage),
+            ("Corrupt JPEG data: premature end of data segment", Damage),
+            ("Corrupt JPEG data: bad Huffman code", Damage),
+            ("Corrupt JPEG data: bad arithmetic code", Damage),
+            (
+                "Corrupt JPEG data: found marker 0xd5 instead of RST1",
+                Damage,
+            ),
+            (
+                "Corrupt JPEG data: found marker 0xd9 instead of RST3",
+                Damage,
+            ),
+            ("Progressive JPEG image has more than 100 scans", Damage),
+            ("Invalid SOS parameters for sequential JPEG", Kept),
+            (
+                "Inconsistent progression sequence for component 0 coefficient 1",
+                Kept,
+            ),
+            (
+                "Corrupt JPEG data: 59 extraneous bytes before marker 0xd9",
+                Kept,
+            ),
+            (
+                "Corrupt JPEG data: 3 extraneous bytes before marker 0xd0",
+                Kept,
+            ),
+            (
+                "Corrupt JPEG data: 3 extraneous bytes before marker 0xda",
+                Kept,
+            ),
+            ("Warning: unknown JFIF revision number 2.01", SecondOpinion),
+            ("Corrupt JPEG data: bad ICC marker", SecondOpinion),
+            ("Unknown Adobe color transform code 5", SecondOpinion),
+            ("Application transferred too many scanlines", SecondOpinion),
+            ("Bogus Huffman table definition", SecondOpinion),
+            ("Unsupported color conversion request", SecondOpinion),
+            (
+                "Invalid JPEG file structure: two SOI markers",
+                SecondOpinion,
+            ),
+            ("something unheard of", SecondOpinion),
+        ];
+        for (text, class) in table {
+            assert_eq!(complaint_class(text), class, "{text:?}");
+            let prefixed = format!("TurboJPEG error: {text}");
+            assert_eq!(complaint_class(&prefixed), class, "{prefixed:?}");
+        }
+    }
+
+    /// One harmless row's outcome through `decode_with` at `numerator`, and
+    /// through both public entry points: `Ok` from all three, and the
+    /// `Decoded` to read.
+    fn decoded_past(stream: &[u8], numerator: u8, row: &str) -> Decoded {
+        if let Err(err) = decode_oriented(stream, 1) {
+            panic!("{row}: decode_oriented refused a harmless stream: {err}");
+        }
+        if let Err(err) = decode_scaled_oriented(stream, 1, numerator) {
+            panic!("{row}: decode_scaled_oriented refused a harmless stream: {err}");
+        }
+        decode_with(stream, 1, numerator)
+            .unwrap_or_else(|err| panic!("{row}: decode_with refused a harmless stream: {err}"))
+    }
+
+    /// Brief 008, other cameras (raw-pipeline.md, "The decoder's
+    /// complaints"; CLAUDE.md M11): a harmless complaint never refuses a
+    /// frame. Each row is a stream some writer produces, which libjpeg-turbo
+    /// complains about (or not), decoded through `decode_with` and both
+    /// public entry points; every row at 3/8 unless it says otherwise, and
+    /// "byte-identical" means equal to the intact base's decode at the same
+    /// scale. Before the relaxation rows (a)-(e) and (g)-(i) were refused;
+    /// (f) and (j) pin what it must not touch.
+    #[test]
+    fn harmless_complaints_decode_on_the_loupe_path() {
+        use crate::raw::jpeg_hostile::{
+            before_eoi, find, find_nth, insert, mandelbrot_baseline, mandelbrot_progressive,
+            mandelbrot_restart, progressive_six_scans,
+        };
+        let base = mandelbrot_baseline();
+        let base_3 = decode_with(&base, 1, 3).expect("the base decodes").rgb;
+        let same_pixels = |d: &Decoded, reference: &[u8], row: &str| {
+            assert_eq!(
+                (d.width, d.height, d.ran),
+                (384, 288, 3),
+                "{row}: decoded at the rung asked for"
+            );
+            assert!(
+                d.rgb == reference,
+                "{row}: the image must be byte-identical to the intact stream's"
+            );
+        };
+        let note = |d: &Decoded| d.note.clone().unwrap_or_default();
+
+        // (a) Three non-FF bytes before the first DQT: the pre-pass drops
+        // them, and libjpeg-turbo decodes at the rung.
+        let dqt = find(&base, &[0xFF, 0xDB]).expect("a DQT");
+        let d = decoded_past(&insert(&base, dqt, &[0x01, 0x02, 0x03]), 3, "(a)");
+        same_pixels(&d, &base_3, "(a)");
+        assert!(
+            note(&d).contains("3 bytes"),
+            "(a) names the gap: {:?}",
+            d.note
+        );
+
+        // (b) The SOS's Se byte 0 (`JWRN_NOT_SEQUENTIAL`: "there are some
+        // baseline files out there with all zeroes in these bytes").
+        let sos = find(&base, &[0xFF, 0xDA]).expect("an SOS");
+        let sos_len = usize::from(u16::from_be_bytes([base[sos + 2], base[sos + 3]]));
+        let se = sos + 2 + sos_len - 2; // Ss, Se, Ah/Al close the header
+        assert_eq!(base[se], 63, "the premise: Se is 63 in a baseline scan");
+        let mut not_sequential = base.clone();
+        not_sequential[se] = 0;
+        let d = decoded_past(&not_sequential, 3, "(b)");
+        same_pixels(&d, &base_3, "(b)");
+        assert!(
+            note(&d).contains("Invalid SOS parameters"),
+            "(b): {:?}",
+            d.note
+        );
+
+        // (c) A progressive stream whose first AC band's refinement comes
+        // before its first scan (`JWRN_BOGUS_PROGRESSION`); its twin in
+        // order has nothing to say.
+        let d = decoded_past(&progressive_six_scans(true), 3, "(c)");
+        assert_eq!((d.width, d.height), (3, 3), "(c) at 3/8");
+        assert!(
+            note(&d).contains("Inconsistent progression"),
+            "(c): {:?}",
+            d.note
+        );
+        let d = decoded_past(&progressive_six_scans(false), 3, "(c) twin");
+        assert_eq!(d.note, None, "(c) the twin in order is clean");
+
+        // (d) A JFIF APP0 of major version 2: libjpeg-turbo's header read
+        // fails, zune-jpeg's second opinion decodes it — full scale.
+        let jfif = find(&base, b"JFIF\0").expect("the base's JFIF APP0");
+        let mut jfif2 = base.clone();
+        jfif2[jfif + 5] = 2;
+        let d = decoded_past(&jfif2, 3, "(d)");
+        assert_eq!(
+            (d.width, d.height, d.ran),
+            (1024, 768, 8),
+            "(d) the second opinion runs full scale"
+        );
+        assert!(
+            note(&d).contains("JFIF") && note(&d).contains("zune-jpeg"),
+            "(d): {:?}",
+            d.note
+        );
+
+        // (e) An ICC_PROFILE chunk numbered 0, after SOI: a header complaint
+        // (TurboJPEG saves APP2), so as (d).
+        let mut icc = b"\xFF\xE2\x00\x14ICC_PROFILE\x00\x00\x01".to_vec();
+        icc.extend_from_slice(&[0; 4]);
+        let d = decoded_past(&insert(&base, 2, &icc), 3, "(e)");
+        assert_eq!((d.width, d.height, d.ran), (1024, 768, 8), "(e)");
+        assert!(note(&d).contains("bad ICC marker"), "(e): {:?}", d.note);
+
+        // (f) One byte, and three, of junk before EOI: the Huffman decoder's
+        // bit buffer read them ahead and drops them at the scan's end
+        // uncounted (the canary, item 12) — no message at all.
+        for junk in [1usize, 3] {
+            let row = format!("(f) {junk} junk bytes before EOI");
+            let d = decoded_past(&before_eoi(&base, &vec![0x11; junk]), 3, &row);
+            same_pixels(&d, &base_3, &row);
+            assert_eq!(d.note, None, "{row}: nothing to say");
+        }
+
+        // (g) 64 junk bytes before EOI: `JWRN_EXTRANEOUS_DATA` from the
+        // decode — a writer's padding — and libjpeg-turbo's image is kept.
+        let d = decoded_past(&before_eoi(&base, &[0x11; 64]), 3, "(g)");
+        same_pixels(&d, &base_3, "(g)");
+        assert!(note(&d).contains("extraneous bytes"), "(g): {:?}", d.note);
+
+        // (h) Three bytes before the restart base's first RST0.
+        let restart = mandelbrot_restart();
+        let restart_3 = decode_with(&restart, 1, 3)
+            .expect("the restart base decodes")
+            .rgb;
+        let rst0 = find(&restart, &[0xFF, 0xD0]).expect("an RST0");
+        let d = decoded_past(&insert(&restart, rst0, &[0x01, 0x02, 0x03]), 3, "(h)");
+        same_pixels(&d, &restart_3, "(h)");
+        assert!(note(&d).contains("extraneous bytes"), "(h): {:?}", d.note);
+
+        // (i) Three bytes between a progressive stream's DHT and its next
+        // SOS — a later scan's header, past the pre-pass, which stops at the
+        // first SOS.
+        let progressive = mandelbrot_progressive();
+        let progressive_3 = decode_with(&progressive, 1, 3)
+            .expect("the progressive base decodes")
+            .rgb;
+        let sos2 = find_nth(&progressive, &[0xFF, 0xDA], 1).expect("a second SOS");
+        let dht_before = (0..sos2).any(|at| {
+            progressive[at..].starts_with(&[0xFF, 0xC4])
+                && at
+                    + 2
+                    + usize::from(u16::from_be_bytes([
+                        progressive[at + 2],
+                        progressive[at + 3],
+                    ]))
+                    == sos2
+        });
+        assert!(
+            dht_before,
+            "(i) the premise: a DHT ends where the second SOS begins"
+        );
+        let d = decoded_past(&insert(&progressive, sos2, &[0x01, 0x02, 0x03]), 3, "(i)");
+        same_pixels(&d, &progressive_3, "(i)");
+        assert!(note(&d).contains("extraneous bytes"), "(i): {:?}", d.note);
+
+        // (j) An Adobe APP14 of transform 5 on the three-component base, its
+        // JFIF APP0 kept: libjpeg-turbo takes JFIF's colours and says
+        // nothing.
+        let adobe5 = insert(
+            &base,
+            2,
+            b"\xFF\xEE\x00\x0EAdobe\x00\x64\x00\x00\x00\x00\x05",
+        );
+        let d = decoded_past(&adobe5, 3, "(j)");
+        same_pixels(&d, &base_3, "(j)");
+        assert_eq!(d.note, None, "(j) nothing to say");
+    }
+
+    /// Brief 008, other cameras: the damage class — the messages only a
+    /// damaged stream raises — is refused with libjpeg-turbo's own message
+    /// and NO second opinion, through both entry points. For (a), (d1) and
+    /// (d2) zune-jpeg alone would call the stream a success (the premise
+    /// asserted below), so a second opinion taken there would show; (b),
+    /// (c) and (f) are told apart by the text alone, zune-jpeg refusing
+    /// them in words of its own. (d2) decodes intact in both decoders and is
+    /// refused all the same: the class is the message's, not the pixels'.
+    #[test]
+    fn the_damage_class_is_refused_without_a_second_opinion() {
+        use crate::raw::jpeg_hostile::{
+            encoded, find, find_nth, insert, mandelbrot_progressive, mandelbrot_restart,
+            progressive, truncate_scan,
+        };
+        let refused = |stream: &[u8], text: &str, row: &str| {
+            for (entry, outcome) in [
+                ("full", decode_oriented(stream, 1)),
+                ("3/8", decode_scaled_oriented(stream, 1, 3)),
+            ] {
+                match outcome {
+                    Ok((_, w, h)) => {
+                        panic!("{row} {entry}: a damaged stream decoded as a {w}x{h} success")
+                    }
+                    Err(err) => {
+                        assert!(
+                            err.contains(text),
+                            "{row} {entry}: libjpeg-turbo's own \"{text}\" must be the reason: {err}"
+                        );
+                        assert!(
+                            !err.contains("zune"),
+                            "{row} {entry}: no second opinion for damage: {err}"
+                        );
+                    }
+                }
+            }
+        };
+        let zune_alone_decodes = |stream: &[u8], row: &str| {
+            if let Err(err) = decode_through_zune(stream, 1) {
+                panic!("{row}: the premise is that zune-jpeg alone decodes this stream: {err}");
+            }
+        };
+
+        // (a) The A8 short scan: cut 16 bytes in, a valid EOI appended.
+        let mut short = truncate_scan(&encoded(64, 64), 16);
+        short.extend_from_slice(&[0xFF, 0xD9]);
+        zune_alone_decodes(&short, "(a)");
+        refused(&short, "premature end of data segment", "(a)");
+
+        // (b) `JWRN_JPEG_EOF` past the byte check: a DQT redefining table 3,
+        // two adjacent entries 0xFF 0xD9, before the progressive base's
+        // third SOS; the stream cut 200 bytes after its sixth SOS header.
+        let base = mandelbrot_progressive();
+        let sos3 = find_nth(&base, &[0xFF, 0xDA], 2).expect("a third SOS");
+        let mut dqt = vec![0xFF, 0xDB, 0x00, 0x43, 0x03];
+        let mut table = [1u8; 64];
+        table[10] = 0xFF;
+        table[11] = 0xD9;
+        dqt.extend_from_slice(&table);
+        let with_dqt = insert(&base, sos3, &dqt);
+        let sos6 = find_nth(&with_dqt, &[0xFF, 0xDA], 5).expect("a sixth SOS");
+        let sos6_end =
+            sos6 + 2 + usize::from(u16::from_be_bytes([with_dqt[sos6 + 2], with_dqt[sos6 + 3]]));
+        let cut = with_dqt[..sos6_end + 200].to_vec();
+        assert!(
+            crate::raw::scan_is_terminated(&cut),
+            "(b) the premise: the table's FF D9 passes the byte check"
+        );
+        refused(&cut, "Premature end of JPEG file", "(b)");
+
+        // (c) An all-ones run — 16 FF 00 pairs — 40 bytes into the first scan
+        // of the progressive base: no Huffman code is all ones.
+        let first_sos = find(&base, &[0xFF, 0xDA]).expect("an SOS");
+        let first_scan = first_sos
+            + 2
+            + usize::from(u16::from_be_bytes([
+                base[first_sos + 2],
+                base[first_sos + 3],
+            ]));
+        let all_ones = insert(&base, first_scan + 40, &[0xFF, 0x00].repeat(16));
+        refused(&all_ones, "bad Huffman code", "(c)");
+
+        // (d1) The restart base's second RST renumbered one ahead (RST1 ->
+        // RST2): libjpeg-turbo zero-fills an interval. (d2) Four ahead
+        // (RST1 -> RST5): every block decodes intact, and the stream is
+        // refused all the same.
+        let restart = mandelbrot_restart();
+        let rst1 = find(&restart, &[0xFF, 0xD1]).expect("an RST1");
+        for (to, row) in [(0xD2u8, "(d1)"), (0xD5, "(d2)")] {
+            let mut renumbered = restart.clone();
+            renumbered[rst1 + 1] = to;
+            zune_alone_decodes(&renumbered, row);
+            refused(&renumbered, "instead of RST", row);
+        }
+
+        // (f) The 101-scan progressive stream: the scan limit is
+        // libjpeg-turbo's refusal, never zune-jpeg's "Too many scans".
+        let over = progressive(101);
+        refused(&over, "more than 100 scans", "(f)");
+        for outcome in [
+            decode_oriented(&over, 1),
+            decode_scaled_oriented(&over, 1, 3),
+        ] {
+            if let Err(err) = outcome {
+                assert!(!err.contains("Too many scans"), "(f): {err}");
+            }
+        }
+    }
+
+    /// Brief 008, other cameras: the second opinion keeps the bounds. After
+    /// a header read that failed there is no libjpeg-turbo header to check,
+    /// so the zune-jpeg route checks the pixel cap and the byte check on its
+    /// own reading of the stream, and keeps zune-jpeg's own scan limit; when
+    /// zune-jpeg refuses too, both decoders' reasons are named.
+    #[test]
+    fn the_second_opinion_keeps_the_bounds() {
+        use crate::raw::jpeg_hostile::{
+            find, insert, mandelbrot_baseline, patch_sof_dims, progressive, truncate_scan,
+        };
+        let refused = |stream: &[u8], texts: &[&str], row: &str| {
+            for (entry, outcome) in [
+                ("full", decode_oriented(stream, 1)),
+                ("3/8", decode_scaled_oriented(stream, 1, 3)),
+            ] {
+                match outcome {
+                    Ok((_, w, h)) => panic!("{row} {entry}: decoded a {w}x{h} success"),
+                    Err(err) => {
+                        for text in texts {
+                            assert!(err.contains(text), "{row} {entry}: \"{text}\" in {err}");
+                        }
+                    }
+                }
+            }
+        };
+        let base = mandelbrot_baseline();
+        let jfif = find(&base, b"JFIF\0").expect("the base's JFIF APP0");
+        let mut jfif2 = base.clone();
+        jfif2[jfif + 5] = 2;
+
+        // (a) Claiming 30000x30000 behind the JFIF complaint: the route's own
+        // pixel cap, before any buffer.
+        let mut hostile = jfif2.clone();
+        patch_sof_dims(&mut hostile, 30000, 30000);
+        refused(&hostile, &["implausible"], "(a)");
+
+        // (b) Cut before EOI behind the JFIF complaint: the route's own byte
+        // check (zune-jpeg would zero-fill the rest into a success).
+        refused(&truncate_scan(&jfif2, 64), &["truncated"], "(b)");
+
+        // (c) 101 scans behind a JFIF APP0 of revision 2: libjpeg-turbo
+        // refuses the JFIF revision before any scan, so the limit that fires
+        // is zune-jpeg's own.
+        let jfif2_app0 = b"\xFF\xE0\x00\x10JFIF\x00\x02\x01\x00\x00\x01\x00\x01\x00\x00";
+        refused(
+            &insert(&progressive(101), 2, jfif2_app0),
+            &["Too many scans", "JFIF"],
+            "(c)",
+        );
+
+        // (d) Both refuse: the base without its JFIF APP0, an Adobe APP14 of
+        // transform 5 after SOI.
+        let app0_len = usize::from(u16::from_be_bytes([base[jfif - 2], base[jfif - 1]]));
+        let app0 = jfif - 4;
+        assert_eq!(
+            &base[app0..app0 + 2],
+            &[0xFF, 0xE0],
+            "the premise: the APP0"
+        );
+        let mut no_jfif = base[..app0].to_vec();
+        no_jfif.extend_from_slice(&base[app0 + 2 + app0_len..]);
+        let adobe5 = insert(
+            &no_jfif,
+            2,
+            b"\xFF\xEE\x00\x0EAdobe\x00\x64\x00\x00\x00\x00\x05",
+        );
+        refused(
+            &adobe5,
+            &[
+                "Unknown Adobe color transform code 5",
+                "Unknown Adobe colorspace 5",
+            ],
+            "(d)",
+        );
+    }
+
+    /// The environment variable that turns [`stderr_child`] on, holding
+    /// "<scenario>|<directory>".
+    const STDERR_CHILD_VAR: &str = "FASTCULL_LOUPE_STDERR_CHILD";
+
+    /// The child half of the two stderr tests: runs only in the child process
+    /// they start from this same test binary, and returns at once in any
+    /// other run (the `tests/xmp_crash.rs` pattern, no `#[ignore]`). It
+    /// climbs each scenario's files through `decode_ladder` at the top rung,
+    /// as a 1:1 view asks, so whatever it prints on stderr is what the app
+    /// would.
+    #[test]
+    fn stderr_child() {
+        let Some(spec) = std::env::var_os(STDERR_CHILD_VAR) else {
+            return; // not the child: nothing to do
+        };
+        let spec = spec.to_string_lossy().into_owned();
+        let (scenario, dir) = spec.split_once('|').expect("<scenario>|<directory>");
+        let dir = PathBuf::from(dir);
+        let (files, climbs): (&[&str], usize) = match scenario {
+            "damaged" => (&["mid_ok_full_cut.arw", "mid_ok_full_ok.arw"], 1),
+            "complaint" => (&["full_jfif2.arw", "gap.jpg", "pad.jpg", "intact.jpg"], 2),
+            other => panic!("unknown scenario {other}"),
+        };
+        let (shared, _events) = shared_over(files.iter().map(|f| dir.join(f)).collect());
+        for _ in 0..climbs {
+            for index in 0..files.len() {
+                let _ = decode_ladder(
+                    &shared,
+                    index,
+                    Target::Long(u32::MAX),
+                    0,
+                    false,
+                    RequestState::Settled,
+                );
+            }
+        }
+        if scenario == "complaint" {
+            // The grid thumb decodes the gapped and the padded JPEG too, and
+            // must print nothing: the complaint line is the loupe's.
+            for file in ["gap.jpg", "pad.jpg"] {
+                let spec = crate::pipeline::JobSpec {
+                    path: dir.join(file),
+                    size: 0,
+                    mtime: None,
+                };
+                crate::pipeline::make_grid_thumb(&spec)
+                    .unwrap_or_else(|err| panic!("the grid thumb of {file}: {err}"));
+            }
+        }
+    }
+
+    /// Run [`stderr_child`] in a child process of this test binary over
+    /// `dir` and return what it printed on stderr.
+    fn stderr_of_child(scenario: &str, dir: &std::path::Path) -> String {
+        let exe = std::env::current_exe().expect("the test binary");
+        let out = std::process::Command::new(exe)
+            .args([
+                "loupe::tests::stderr_child",
+                "--exact",
+                "--nocapture",
+                "--test-threads=1",
+            ])
+            .env(STDERR_CHILD_VAR, format!("{scenario}|{}", dir.display()))
+            .output()
+            .expect("the child runs");
+        let stderr = String::from_utf8_lossy(&out.stderr).into_owned();
+        assert!(out.status.success(), "the child failed:\n{stderr}");
+        stderr
+    }
+
+    /// A TIFF container, as a RAW is: IFD0 an intact 640x400 mid, the second
+    /// IFD `full` (`truncated_full_rung_keeps_the_good_mid_and_no_failed_badge`'s
+    /// layout).
+    fn raw_with_full(full: &[u8]) -> Vec<u8> {
+        let mid = crate::raw::jpeg_hostile::encoded(640, 400);
+        let mut b = crate::raw::tiff_testutil::TiffBuilder::new(true);
+        let mid_off = b.add_blob(&mid);
+        let full_off = b.add_blob(full);
+        let second = b.add_ifd(
+            &[(0x0201, 4, 1, full_off), (0x0202, 4, 1, full.len() as u32)],
+            0,
+        );
+        let ifd0 = b.add_ifd(
+            &[(0x0201, 4, 1, mid_off), (0x0202, 4, 1, mid.len() as u32)],
+            second,
+        );
+        b.set_ifd0(ifd0);
+        b.bytes
+    }
+
+    /// raw-pipeline.md, "All rejections" (brief 008, the step-1 review): a
+    /// higher rung that fails while a good lower one is in hand fails
+    /// nothing — no Failed badge, the lower rung shown — so ONE stderr line
+    /// names the file, the rung that failed and the decoder's reason, or a
+    /// fault that shows no badge would go unseen. Read from a child
+    /// process's stderr over a RAW whose full is cut before EOI and a control
+    /// whose full is intact. (One climb each: in the app the memo stops the
+    /// second, which `truncated_full_rung_keeps_the_good_mid_and_no_failed_badge`
+    /// pins.)
+    #[test]
+    fn a_rung_that_fails_over_a_good_lower_one_is_named_on_stderr() {
+        let dir = crate::testutil::scratch_dir("stderr-damaged");
+        let full = crate::raw::jpeg_hostile::encoded(2000, 1500);
+        std::fs::write(
+            dir.join("mid_ok_full_cut.arw"),
+            raw_with_full(&crate::raw::jpeg_hostile::truncate_scan(&full, 64)),
+        )
+        .unwrap();
+        std::fs::write(dir.join("mid_ok_full_ok.arw"), raw_with_full(&full)).unwrap();
+
+        let stderr = stderr_of_child("damaged", &dir);
+        let lines: Vec<&str> = stderr
+            .lines()
+            .filter(|l| l.starts_with("fastcull: loupe "))
+            .collect();
+        let named: Vec<&&str> = lines
+            .iter()
+            .filter(|l| l.contains("mid_ok_full_cut.arw"))
+            .collect();
+        assert_eq!(named.len(), 1, "one line for the damaged rung:\n{stderr}");
+        assert!(
+            named[0].contains("the full rung") && named[0].contains("truncated"),
+            "it names the rung and the reason: {}",
+            named[0]
+        );
+        assert!(
+            lines.iter().all(|l| !l.contains("mid_ok_full_ok.arw")),
+            "a clean climb prints nothing:\n{stderr}"
+        );
+        std::fs::remove_dir_all(&dir).ok();
+    }
+
+    /// raw-pipeline.md, "One line on stderr, once" (brief 008, other
+    /// cameras; M11): a rung decoded past a complaint prints one line naming
+    /// the file, the rung and what the loupe did — at most once per session
+    /// for each embedded JPEG. In one child: a RAW whose full says JFIF
+    /// revision 2 (the second opinion), a bare JPEG with three bytes before
+    /// its DQT (a gap skipped) and one with 64 junk bytes before EOI (the
+    /// image kept), each climbed TWICE, print one line each; an intact JPEG
+    /// prints nothing; and the grid thumb's decode of the gapped and the
+    /// padded JPEG in the same child adds no line.
+    #[test]
+    fn a_harmless_complaint_is_named_on_stderr_once() {
+        use crate::raw::jpeg_hostile::{before_eoi, encoded, find, insert, mandelbrot_baseline};
+        let dir = crate::testutil::scratch_dir("stderr-complaint");
+        // `jpeg_encoder` writes a JFIF APP0 (measured); its major version to 2.
+        let mut jfif2 = encoded(2000, 1500);
+        let jfif = find(&jfif2, b"JFIF\0").expect("jpeg_encoder's JFIF APP0");
+        jfif2[jfif + 5] = 2;
+        std::fs::write(dir.join("full_jfif2.arw"), raw_with_full(&jfif2)).unwrap();
+        let base = mandelbrot_baseline();
+        let dqt = find(&base, &[0xFF, 0xDB]).expect("a DQT");
+        std::fs::write(dir.join("gap.jpg"), insert(&base, dqt, &[0x01, 0x02, 0x03])).unwrap();
+        std::fs::write(dir.join("pad.jpg"), before_eoi(&base, &[0x11; 64])).unwrap();
+        std::fs::write(dir.join("intact.jpg"), &base).unwrap();
+
+        let stderr = stderr_of_child("complaint", &dir);
+        for (file, words) in [
+            ("full_jfif2.arw", ["the full rung", "JFIF"]),
+            ("gap.jpg", ["the full rung", "3 bytes"]),
+            ("pad.jpg", ["the full rung", "extraneous"]),
+        ] {
+            let named: Vec<&str> = stderr.lines().filter(|l| l.contains(file)).collect();
+            assert_eq!(
+                named.len(),
+                1,
+                "exactly one line for {file} over two climbs and a grid thumb:\n{stderr}"
+            );
+            assert!(named[0].starts_with("fastcull: loupe "), "{}", named[0]);
+            for word in words {
+                assert!(
+                    named[0].contains(word),
+                    "{file}: \"{word}\" in {}",
+                    named[0]
+                );
+            }
+        }
+        assert!(
+            stderr.lines().all(|l| !l.contains("intact.jpg")),
+            "an intact file prints nothing:\n{stderr}"
         );
         std::fs::remove_dir_all(&dir).ok();
     }

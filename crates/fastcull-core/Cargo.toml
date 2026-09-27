@@ -31,17 +31,29 @@ fs2 = "0.4"
 # The grid-thumb decoder (`pipeline::make_grid_thumb`; the app's thumb cook
 # declares its own). The loupe left it for libjpeg-turbo below and the
 # thumbs stay on it (raw-pipeline.md, "The decoder", N7), except for one
-# loupe route: a CMYK or YCCK stream, which libjpeg-turbo will not convert
-# to RGB, still decodes through it (`loupe::decode_through_zune`, brief 008
-# R14; canary 8 below).
+# loupe route, `loupe::decode_through_zune`: a CMYK or YCCK stream, which
+# libjpeg-turbo will not convert to RGB (brief 008 R14; canary 8 below), and
+# zune-jpeg's second opinion on a stream libjpeg-turbo refuses over a
+# complaint outside the damage and kept classes (raw-pipeline.md, "The
+# decoder's complaints"; canaries 9-13 below).
 # VERSION-BUMP CANARY (read in the sources 2026-09-26): zune-core 0.4.12's
 # `DecoderOptions::default()` sets `max_scans: 100` (`src/options/
-# decoder.rs`) and zune-jpeg 0.4.21 fails a progressive stream past it
-# ("Too many scans", `src/mcu_prog.rs`). The grid thumb builds its options
-# from `default()`, so that default is its only progressive-scan bound, and
-# the loupe copies the number into libjpeg-turbo (canary 6 below). A bump
-# that changes the default changes the bound silently (raw-pipeline.md,
-# "Progressive scans: at most 100").
+# decoder.rs` 651) and zune-jpeg 0.4.21 fails a progressive stream past it
+# ("Too many scans", `src/mcu_prog.rs` 148-151). The grid thumb and the
+# loupe's zune-jpeg route build their options from `default()`, so that
+# default is their only progressive-scan bound, and the loupe copies the
+# number into libjpeg-turbo (canary 6 below). A bump that changes the
+# default changes the bound silently (raw-pipeline.md, "Progressive scans:
+# at most 100"). Also read there and pinned by the other-cameras tests:
+# `default()` is STRICT (`decoder_strict_mode`, `src/options/decoder.rs`
+# 646-653), and strict zune-jpeg 0.4.21 refuses two or more bytes between
+# header segments ("[strict-mode]: Extra bytes between headers",
+# `src/decoder.rs` 404-412) -- why the loupe and the grid thumb drop header
+# gaps before it decodes (`raw::without_header_gaps`); it refuses an Adobe
+# transform outside 0-2 in either mode ("Unknown Adobe colorspace",
+# `src/headers.rs` 466-476, no strict check); and it resets at any restart
+# marker whatever its number (`src/mcu.rs` 468-471, 503-510), so it decodes
+# a renumbered RST that libjpeg-turbo refuses as damage.
 zune-jpeg = "0.4"
 # libjpeg-turbo, the loupe's decoder and the source of its N/8 screen rung
 # (ADR 0005, brief 008, 2026-09-26). All three features spelled out so a
@@ -133,6 +145,38 @@ zune-jpeg = "0.4"
 #      such a stream and reports TJCS_CMYK / TJCS_YCCK. So `decode_with`
 #      routes those streams to zune-jpeg 0.4, which converts both (brief
 #      008 R14): `cmyk_and_ycck_streams_decode_on_the_loupe_path` pins it.
+#   9. The safe crate reports a complaint as TEXT only,
+#      `Error::TurboJpegError(String)` (`turbojpeg-1.5.1/src/common.rs`),
+#      the message `tj3GetErrorStr` returns: libjpeg's FIRST warning of the
+#      datastream (`src/jerror.c` `emit_message` outputs one only while
+#      `num_warnings == 0`, which `reset_error_mgr` zeroes for each
+#      datastream from `src/jdinput.c` `reset_input_controller`), replaced
+#      by a fatal error's text (`src/turbojpeg.c` `my_error_exit` ->
+#      `output_message`). The loupe sorts complaints into the damage, kept
+#      and second-opinion classes by those texts, as `src/jerror.h` words
+#      them (raw-pipeline.md, "The decoder's complaints"):
+#      `libjpeg_turbo_messages_sort_into_three_classes` pins the table, and
+#      the harmless and damage tests decode a real stream of each class, so
+#      a version that rewords one turns its row red.
+#  10. `tj3Decompress8` reads every scanline and runs
+#      `jpeg_finish_decompress` BEFORE its `bailout:` turns a warning into
+#      -1 (`src/turbojpeg-mp.c` 280-285), so the buffer behind a kept
+#      warning is complete, and the loupe uses it as decoded.
+#  11. `tj3DecompressHeader` returns -1 when the header read warned
+#      (`src/turbojpeg.c`, its `bailout:`), `Decompressor::decompress` reads
+#      the header first (`check_output_size`), and a decompressor saves
+#      APP2 markers by default (`saveMarkers = 2` in `tj3Init`), so a bad
+#      ICC chunk is a header complaint: no header is left to decode from,
+#      and the loupe asks zune-jpeg's second opinion.
+#  12. At a scan's end the Huffman decoder drops, uncounted, the bytes its
+#      bit buffer read ahead -- `start_pass_huff_decoder` resets
+#      `bits_left` (`src/jdhuff.c` 125-126) -- while `process_restart`
+#      adds them to `discarded_bytes` (517-520): a few junk bytes before EOI
+#      raise no message (1-7 on the tests' 1024x768 fixture), and every
+#      byte before a restart marker is counted.
+#  13. The arithmetic decoder supplies zeros at a marker in the data
+#      without a warning (`src/jdarith.c` 136-140), the bounded blank
+#      success raw-pipeline.md records for arithmetic-coded streams.
 turbojpeg = { version = "1.5.1", default-features = false, features = ["cmake", "pkg-config", "require-simd"] }
 
 [dev-dependencies]

@@ -734,19 +734,27 @@ fn make_grid_thumb_gated(
         (previews, bytes)
     };
 
+    // Header gaps (raw-pipeline.md, "Header gaps are skipped before any
+    // decode"): bytes between two header segments that are not a marker are
+    // dropped before zune-jpeg sees the stream — its strict mode, which this
+    // path keeps, refuses two or more of them ("Extra bytes between
+    // headers"). Nothing is printed here: the complaint line is the loupe's.
+    // A stream without a gap is borrowed, not copied.
+    let (jpeg_bytes, _gap) = crate::raw::without_header_gaps(&jpeg_bytes);
+    let jpeg_bytes: &[u8] = &jpeg_bytes;
     // Issue #31: zune-jpeg 0.4 zero-fills a truncated scan and reports
     // success — a cut-off preview must become Failed (spec acceptance
     // criterion), not a mostly-blank thumb. Dimension claims on this path
     // are already bounded by zune's default 16384-per-side limit (268 MP,
     // stricter than raw::MAX_DECODED_PIXELS), so only stream completeness
     // needs checking here.
-    if !crate::raw::scan_is_terminated(&jpeg_bytes) {
+    if !crate::raw::scan_is_terminated(jpeg_bytes) {
         return Err("truncated JPEG preview (scan reaches no end-of-image marker)".into());
     }
     // Force RGB output so grayscale/CMYK previews also become valid thumbs.
     let options = zune_jpeg::zune_core::options::DecoderOptions::default()
         .jpeg_set_out_colorspace(zune_jpeg::zune_core::colorspace::ColorSpace::RGB);
-    let mut decoder = zune_jpeg::JpegDecoder::new_with_options(&jpeg_bytes, options);
+    let mut decoder = zune_jpeg::JpegDecoder::new_with_options(jpeg_bytes, options);
     let pixels = decoder.decode().map_err(|e| format!("decode: {e}"))?;
     let (src_w, src_h) = decoder
         .dimensions()
@@ -849,6 +857,32 @@ mod tests {
             mtime: None,
         };
         make_grid_thumb(&spec).expect("intact stream still thumbs");
+        std::fs::remove_dir_all(&dir).ok();
+    }
+
+    /// Brief 008, other cameras (raw-pipeline.md, "Header gaps are skipped
+    /// before any decode"): the grid thumb decodes a bare JPEG with three
+    /// bytes between two header segments — the marker walker finds its SOF
+    /// and its scan, and the pre-pass hands zune-jpeg the stream without the
+    /// gap, which its strict mode refuses ("Extra bytes between headers").
+    /// Before the relaxation the sniff found no SOF there and the file
+    /// failed to open.
+    #[test]
+    fn a_grid_thumb_decodes_past_a_header_gap() {
+        use crate::raw::jpeg_hostile::{find, insert, mandelbrot_baseline};
+        let dir = crate::testutil::scratch_dir("thumb-gap");
+        let base = mandelbrot_baseline();
+        let dqt = find(&base, &[0xFF, 0xDB]).expect("a DQT");
+        let path = dir.join("gap.jpg");
+        std::fs::write(&path, insert(&base, dqt, &[0x01, 0x02, 0x03])).unwrap();
+        let spec = JobSpec {
+            path,
+            size: 0,
+            mtime: None,
+        };
+        let (_, w, h) = make_grid_thumb(&spec)
+            .unwrap_or_else(|err| panic!("a header gap must not fail the thumb: {err}"));
+        assert_eq!((w, h), (320, 240), "the 1024x768 frame's 320 px thumb");
         std::fs::remove_dir_all(&dir).ok();
     }
 

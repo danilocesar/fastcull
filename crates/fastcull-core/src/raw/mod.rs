@@ -15,7 +15,7 @@ mod endian;
 mod jpeg;
 #[cfg(test)]
 pub(crate) use jpeg::hostile as jpeg_hostile;
-pub(crate) use jpeg::scan_is_terminated;
+pub(crate) use jpeg::{scan_is_terminated, without_header_gaps};
 #[cfg(test)]
 pub(crate) use tiff::tests as tiff_testutil;
 pub mod jpeg_exif;

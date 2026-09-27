@@ -1220,11 +1220,18 @@ commit that lands its tests, and stays open until then):
       zune-jpeg route. The route keeps the bounds (brief 008 R2): a CMYK
       stream cut before EOI is `Failed` with a reason that says "truncated",
       and a CMYK header claiming 30000×30000 is refused as "implausible"
-      before any allocation; red with the byte check or the pixel cap moved
-      after the route — `cmyk_and_ycck_streams_decode_on_the_loupe_path`.
-      Ticked by the step-2a commit, which carries the route and the test;
-      each mutant's red is in its message.
-- [ ] **A rung that fails over a good lower one is named on stderr** (brief
+      before any allocation; red with the byte check or the pixel cap
+      removed from both places the route meets it, the call site and the
+      route's own copy on zune-jpeg's header —
+      `cmyk_and_ycck_streams_decode_on_the_loupe_path`. Ticked by the
+      step-2a commit, which carries the route and the test; each mutant's
+      red is in its message and in step 2c's. (Corrected 2026-09-27, brief
+      008 step 2c: this read "red with the byte check or the pixel cap moved
+      after the route", true of step 2a's route, which had no copy of
+      either; since step 2c gave the route its own for the second opinion,
+      the call site's copy moved alone leaves the rows green, the route
+      refusing the stream itself.)
+- [x] **A rung that fails over a good lower one is named on stderr** (brief
       008, the step-1 review; Manager rulings 2026-09-26): a higher rung
       whose decode fails while a lower one is in hand — decoded in the same
       flight or already cached — leaves the lower rung shown, emits no
@@ -1236,9 +1243,10 @@ commit that lands its tests, and stays open until then):
       control RAW whose full is intact (Manager ruling 2026-09-26, brief 008
       spec amendment 1: "so the box keeps its promise"); red with the line
       removed —
-      `a_rung_that_fails_over_a_good_lower_one_is_named_on_stderr`. Open:
-      the line lands in step 2.
-- [ ] **A harmless complaint never refuses a frame; damage still does**
+      `a_rung_that_fails_over_a_good_lower_one_is_named_on_stderr`. Ticked
+      by the step-2c commit, which carries the line and the test; the
+      removed line's red is in its message.
+- [x] **A harmless complaint never refuses a frame; damage still does**
       (brief 008, other cameras; the user 2026-09-26, M11): through both
       entry points. Decoded at the rung asked for, pixel-identical to the
       same stream without the fault: three bytes between two header segments
@@ -1289,8 +1297,10 @@ commit that lands its tests, and stays open until then):
       `the_second_opinion_keeps_the_bounds`,
       `libjpeg_turbo_messages_sort_into_three_classes`,
       `a_header_gap_is_skipped_by_every_marker_walker`,
-      `a_grid_thumb_decodes_past_a_header_gap`. Open: lands in step 2.
-- [ ] **A rung decoded past a complaint is named on stderr, once** (brief
+      `a_grid_thumb_decodes_past_a_header_gap`. Ticked by the step-2c
+      commit, which carries the relaxation and these tests; the old red and
+      each mutant's red are in its message.
+- [x] **A rung decoded past a complaint is named on stderr, once** (brief
       008, other cameras; M11): one line naming the file, the rung, the
       complaint and what the loupe did — a gap skipped, the image kept, the
       second opinion taken — at most once per session for each of a file's
@@ -1301,7 +1311,9 @@ commit that lands its tests, and stays open until then):
       file prints nothing, and neither does the grid thumb's decode of the
       gapped JPEG in the same child; red with the line removed, with it
       printed on every decode, and with the thumb printing —
-      `a_harmless_complaint_is_named_on_stderr_once`. Open: lands in step 2.
+      `a_harmless_complaint_is_named_on_stderr_once`. Ticked by the step-2c
+      commit, which carries the line and the test; each mutant's red is in
+      its message.
 - [ ] **Perf budgets** (brief 008 A9): the full-res row stays green with
       more headroom, and the three new rows are green on the idle
       development laptop — `budget_fullres_decode_under_350ms`,
