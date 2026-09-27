@@ -4514,6 +4514,171 @@ mod tests {
         assert_eq!(state.queue, ring_in_push_order);
     }
 
+    /// Brief 008, Manager ruling Q-I (raw-pipeline.md, "The settled ring after
+    /// a hold": the lane asks "once per settle"): the guard that keeps the lane
+    /// from asking twice is cleared at every index change, so each settle
+    /// asks its own ring — never once per session. After the lane has asked
+    /// 100's ring, 101 and 102 turn sharp; a new hold's first key lands on 101
+    /// (a settled focus, which asks 101's ring itself) and a held key on 102;
+    /// the stop on 102, sharp already, lands nothing, so the lane asks 102's
+    /// ring. Red with `note_focus`'s clearing of the guard removed: 101's
+    /// settled focus set it, the key onto 102 leaves it set, and 102's ring is
+    /// never asked — a tap forward after that hold would land soft.
+    #[test]
+    fn each_settle_after_a_hold_asks_its_own_ring() {
+        use std::time::Duration;
+        let now = std::time::Instant::now();
+        let ms = |n: u64| now + Duration::from_millis(n);
+        let top = FocusRequest::Long(u32::MAX);
+        let mut state = holding_at(100, now - Duration::from_millis(300));
+        state.cache.insert(100, (full_frame(), 0));
+        state.best_long.insert(100, 8640);
+        for i in (98..=99).chain(101..=115) {
+            state.cache.insert(i, (screen_rung(), 0));
+        }
+        assert_eq!(next_job(&mut state, true, 7, 1000, now), Slot::Wait);
+        assert!(
+            std::mem::take(&mut state.wake_backlog),
+            "the premise: the lane asked 100's ring"
+        );
+        for i in [101, 102] {
+            state.cache.insert(i, (full_frame(), 0));
+            state.best_long.insert(i, 8640);
+        }
+        focus_on(&mut state, 101, top, 1000, 8, ms(40));
+        focus_on(&mut state, 102, top, 1000, 9, ms(80));
+        assert!(
+            in_transit(&state, ms(80)),
+            "the premise: a held key onto 102"
+        );
+        assert_eq!(next_job(&mut state, true, 9, 1000, ms(380)), Slot::Wait);
+        assert!(
+            state.wake_backlog,
+            "the settle on 102 asks 102's ring: {:?}",
+            state.queue.iter().map(|e| e.index).collect::<Vec<_>>()
+        );
+    }
+
+    /// Brief 008, Manager ruling Q-I and rule 2's free worker (raw-pipeline.md,
+    /// "The settled ring after a hold"; "Above fit", rule 2), on the engine's
+    /// real `worker` threads over twenty synthetic RAWs: the two duties the
+    /// worker loop carries for the switch rule, which no clock-free row can
+    /// see.
+    /// - A hold above fit has stopped on frame 5, already sharp, its ring
+    ///   holding only screen rungs: nothing lands, so the reserved lane asks
+    ///   for the settled ring — under the state lock, so it cannot wake anyone
+    ///   itself — and the worker loop wakes the backlog workers, which wait
+    ///   with no timeout. Every member then decodes full-res with no further
+    ///   focus from the app.
+    /// - Each backlog flight counts its worker busy while it decodes (rule 2's
+    ///   "a backlog worker is free") and gives it back when it ends.
+    ///
+    /// Red with the loop's wake removed (no member decodes before the 30 s
+    /// deadline: the backlog workers sleep until an event that never comes),
+    /// with the busy count's decrement removed (16 after 16 flights, and rule
+    /// 2 never steps up again) and with its increment removed (never busy).
+    /// The 200 ms sleep only orders the backlog workers' first wait before the
+    /// lane asks: on a correct build it cannot make the test fail, and under an
+    /// extreme stall it could only let the missing wake read green. The busy
+    /// count is read under the state lock every millisecond while sixteen
+    /// decodes run on two workers, so a correct build reads it busy unless
+    /// this thread is kept off the CPU for all sixteen.
+    #[test]
+    fn the_lane_wakes_the_backlog_and_every_flight_frees_its_worker() {
+        use std::time::{Duration, Instant};
+        let dir = crate::testutil::scratch_dir("lane-wakes-backlog");
+        let full = crate::raw::jpeg_hostile::encoded(2000, 1500);
+        let paths: Vec<PathBuf> = (0..20)
+            .map(|i| {
+                let path = dir.join(format!("f{i:02}.arw"));
+                std::fs::write(&path, raw_with_full(&full)).unwrap();
+                path
+            })
+            .collect();
+        let (shared, rx) = shared_over(paths);
+        let shared = Arc::new(shared);
+        let image = |width, height, kind| FullImage {
+            rgb: Arc::new(vec![0; 3]),
+            width,
+            height,
+            kind,
+        };
+        {
+            let mut state = lock(&shared);
+            *state = holding_at(5, Instant::now() - Duration::from_millis(300));
+            state.fit_box = Some(FitBox {
+                width: 800,
+                height: 600,
+            });
+            state.backlog_workers = 2;
+            // 5 is sharp: its full in hand, memoized as the file's best.
+            state
+                .cache
+                .insert(5, (image(2000, 1500, RungKind::Full), 0));
+            state.best_long.insert(5, 2000);
+            // The members hold the screen rungs the hold asked for.
+            for i in (3..=4).chain(6..=19) {
+                state
+                    .cache
+                    .insert(i, (image(800, 600, RungKind::Screen), 0));
+            }
+            state.cached_bytes = state.cache.values().map(|(i, _)| i.rgb.len()).sum();
+        }
+        let mut threads = Vec::new();
+        for _ in 0..2 {
+            let shared = Arc::clone(&shared);
+            threads.push(std::thread::spawn(move || worker(&shared, false)));
+        }
+        // The backlog workers find nothing and wait, untimed, before the lane
+        // starts: only the lane's wake can bring them to the ring it asks.
+        std::thread::sleep(Duration::from_millis(200));
+        let lane = Arc::clone(&shared);
+        threads.push(std::thread::spawn(move || worker(&lane, true)));
+
+        let members: std::collections::BTreeSet<usize> = (3..=4).chain(6..=19).collect();
+        let mut landed = std::collections::BTreeSet::new();
+        let mut busy_seen = 0;
+        let deadline = Instant::now() + Duration::from_secs(30);
+        while landed != members {
+            busy_seen = busy_seen.max(lock(&shared).backlog_busy);
+            let left = deadline.saturating_duration_since(Instant::now());
+            match rx.recv_timeout(left.min(Duration::from_millis(1))) {
+                Err(std::sync::mpsc::RecvTimeoutError::Timeout) if !left.is_zero() => continue,
+                Ok(LoupeEvent::Ready { index, image, .. }) if image.kind == RungKind::Full => {
+                    landed.insert(index);
+                }
+                Ok(_) => {}
+                Err(_) => break,
+            }
+        }
+        // A flight frees its worker and its in-flight slot under one lock, so
+        // once nothing is in flight every flight has ended.
+        let settle = Instant::now() + Duration::from_secs(30);
+        while !lock(&shared).in_flight.is_empty() && Instant::now() < settle {
+            std::thread::sleep(Duration::from_millis(10));
+        }
+        let busy = lock(&shared).backlog_busy;
+        // Stop the workers as `LoupeEngine`'s drop does: taking the lock
+        // between the flag and the wake-up means no worker is between its
+        // check of the flag and its wait, where the wake-up would be lost.
+        shared.shutdown.store(true, Ordering::SeqCst);
+        drop(lock(&shared));
+        shared.wakeup.notify_all();
+        for thread in threads {
+            thread.join().unwrap();
+        }
+        std::fs::remove_dir_all(&dir).ok();
+        assert_eq!(
+            landed, members,
+            "the lane's settled ring reached the backlog workers: every member decoded full-res"
+        );
+        assert_eq!(busy, 0, "every backlog flight gave its worker back");
+        assert!(
+            busy_seen > 0,
+            "a backlog flight counts its worker busy while it decodes"
+        );
+    }
+
     /// Brief 008 A13 (raw-pipeline.md, "Above fit"): a simulated 800-key hold
     /// at 1:1 never starts a full-res decode for the frame the cursor is on
     /// or one it has passed (the 2026-08-01 finding, ui-grid.md History:

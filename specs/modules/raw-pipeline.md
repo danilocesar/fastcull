@@ -1425,9 +1425,10 @@ commit that lands its tests, and stays open until then):
       in flight landing, and the boundary holding at every later focus and
       pop — a member beyond it asks for the fit box whatever its own timing
       says; the step up waits for every member ahead but the farthest to hold
-      its rung or have it in flight, nothing queued and a backlog worker free,
-      starts beyond the ring's far end, and never comes to a hold that never
-      stepped down; the
+      its rung or have it in flight, nothing queued and a backlog worker free
+      — the worker loop counting a backlog worker busy for exactly its flight,
+      on the engine's real threads — starts beyond the ring's far end, and
+      never comes to a hold that never stepped down; the
       time-to-screen runs from a decode's start to the app's report that its
       fill completed, held by the ring or at once that ring's victim, a frame
       the cursor has passed included, while a culled fill or the box going
@@ -1456,7 +1457,9 @@ commit that lands its tests, and stays open until then):
       return a request the cache serves takes),
       `revival_gates_on_the_ring_in_force` (its hold rows),
       `the_full_res_ring_is_clamped_by_the_cache` (its hold rows),
-      `note_adopted_measures_a_full_res_frame_from_its_decode_start`. And a
+      `note_adopted_measures_a_full_res_frame_from_its_decode_start`,
+      `the_lane_wakes_the_backlog_and_every_flight_frees_its_worker` (its
+      busy count). And a
       simulated 800-focus hold at 1:1 over the engine's own plan and queue,
       pops and landings interleaved, from a rest whose members hold their
       fit-box rungs from an earlier pass at fit and have their full-res
@@ -1496,7 +1499,10 @@ commit that lands its tests, and stays open until then):
       pop, the step-up only after a step-down, the lock's edge and the stop,
       with their rows and mutants, added 2026-09-27, brief 008 step-4 review
       F1 and F3: the step-4b tests stayed green with each of those clauses
-      removed.)
+      removed.) And the worker loop's busy count losing its increment or its
+      decrement (red on
+      `the_lane_wakes_the_backlog_and_every_flight_frees_its_worker`; added
+      2026-09-27, brief 008 step-4 review F2).
       Driven, the hold's frames on screen per key stay at
       ui-grid.md A6's level in two 1:1 runs of
       `a_held_arrow_at_fit_on_4k_stays_at_the_rung_and_never_slows`: A6's own,
@@ -1517,11 +1523,23 @@ commit that lands its tests, and stays open until then):
       and ask nothing on its next wake; a stop on a frame that still needs
       its climb queues the climb and no member; a settled focus of the app's
       own leaves the lane nothing to ask; an engine with no fit box asks
-      nothing — `a_settle_with_nothing_to_climb_asks_for_the_settled_ring`.
+      nothing; and the guard is per settle, never per session: the stop of a
+      later hold, on a frame already sharp, has the lane ask that frame's
+      ring — `a_settle_with_nothing_to_climb_asks_for_the_settled_ring`,
+      `each_settle_after_a_hold_asks_its_own_ring`. At engine level, on the
+      engine's real worker threads, the ring the lane asks is decoded with no
+      further focus: the worker loop wakes the backlog workers, which wait
+      with no timeout, and every member lands full-res —
+      `the_lane_wakes_the_backlog_and_every_flight_frees_its_worker`.
       Mutants: the lane's ask removed; the ring asked beside the climb; the
-      once-per-settle guard removed (red on the second wake). Ticked by brief
-      008's step-4b commit, which carries the lane's ask and the test; each
-      mutant's red is in its message.
+      once-per-settle guard removed (red on the second wake); the guard never
+      cleared at an index change (red on the later hold's stop); the worker
+      loop's wake removed (red on the engine-level test: no member decodes).
+      Ticked by brief 008's step-4b commit, which carries the lane's ask and
+      the first test; each mutant's red is in its message, and the two later
+      tests' in the step-4 fix round's (added 2026-09-27, brief 008 step-4
+      review F2: the step-4b tests stayed green with the wake or the guard's
+      clearing removed).
 - [x] **The RSS ceiling** (brief 008 A12): release, Linux with glibc only
       (symlinks, `VmHWM` from `/proc/self/status`, and glibc's tunables): the
       walk runs in a child of the test's own binary under the app's
