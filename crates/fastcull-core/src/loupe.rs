@@ -9,12 +9,15 @@
 //! rung is published as its own Ready event so the UI swaps quality in place
 //! without blocking.
 //!
-//! `focus(index, display_long)` schedules the focused image at top priority
-//! and prefetches ±PREFETCH neighbors — in VIEW order, the order arrows
-//! actually travel (`set_view`; issue #46): an id-space ring on a
-//! capture-sorted multi-body folder warmed frames no arrow could reach
-//! while every real neighbor stayed cold. A byte-budget LRU (default
-//! 2 GiB) evicts the least recently focused images, never the focused one.
+//! `focus(index, display_long)` and `focus_fit(index)` schedule the focused
+//! image at top priority and its RING — `RING_BEHIND` behind and
+//! `RING_AHEAD` ahead, leaning the way of travel (raw-pipeline.md, "The
+//! ring") — in VIEW order, the order arrows actually travel (`set_view`;
+//! issue #46): an id-space ring on a capture-sorted multi-body folder warmed
+//! frames no arrow could reach while every real neighbor stayed cold. A
+//! byte-budget LRU (2 GiB unless the caller sizes it from the machine,
+//! `budget.rs`) evicts the least recently focused images, never the focused
+//! one.
 
 use std::cmp::Ordering as CmpOrdering;
 use std::collections::HashMap;
@@ -25,9 +28,26 @@ use std::sync::{Arc, Condvar, Mutex};
 
 use crate::raw::{find_embedded_jpegs, read_jpeg};
 
-/// Neighbors prefetched on each side of the focused image.
+/// The settled ring on each side of the focused image for an engine with no
+/// fit box (raw-pipeline.md, "An engine with no fit box") — the behaviour
+/// before brief 008, which the older core tests pin — and the app's full-res
+/// texture window while it supplies no box.
 pub const PREFETCH: usize = 2;
-/// Default decoded-pixels budget (bytes of RGB kept in the LRU).
+/// THE ring (raw-pipeline.md, "The ring"; the user, 2026-09-26: "What if we
+/// do 2 behind and 15 in front? I feel we are overly complicating things."):
+/// frames behind and ahead of the cursor in VIEW order, leaning the way of
+/// travel, at every factor, travelling and settled alike — fixed, never
+/// derived from the machine. The folder's ends clamp it; above fit the
+/// pixel cache may shorten its far end (`fullres_ring_ahead`).
+pub const RING_BEHIND: usize = 2;
+/// See [`RING_BEHIND`].
+pub const RING_AHEAD: usize = 15;
+/// The reference A1 frame, 8640 × 5760 × 3 bytes of RGB: what one full-res
+/// frame costs in the pixel cache, and again as the app's texture copy.
+pub const REF_FRAME_BYTES: u64 = 149_299_200;
+/// Default decoded-pixels budget (bytes of RGB kept in the LRU): the pixel
+/// cache's floor (raw-pipeline.md, "Memory"), which `LoupeEngine::start`
+/// and the older core tests run with.
 pub const DEFAULT_BUDGET_BYTES: usize = 2 * 1024 * 1024 * 1024;
 /// Asset ladder rule (user decision): a loaded asset serves any display up
 /// to 25% larger than itself; beyond that the next rung is cooked.
@@ -309,6 +329,81 @@ pub fn fit_rung(
     }
 }
 
+/// How far ahead the full-res ring reaches above fit (raw-pipeline.md,
+/// "Above fit"): clamped at its far end so that the pixel cache's figure
+/// holds its frames twice over — each frame's decoded pixels in the cache
+/// and its texture copy outside it — and the kitchen's fill in flight
+/// besides: ⌊(cache − `REF_FRAME_BYTES`) ÷ (2 × `REF_FRAME_BYTES`)⌋ frames in
+/// all, the cursor and the `RING_BEHIND` always, the rest ahead up to
+/// `RING_AHEAD` (Manager rulings 2026-09-26, brief 008 Q4 and Q-G): 3 ahead
+/// at the 2 GiB floor, 10 on a 4 GiB cache, the whole 15 from 5,524,070,400 B.
+/// A ring the cache cannot hold would be decoded and then evicted, and one
+/// whose textures the RAM cannot hold would take the whole app past it. The
+/// startup line prints it (`budget.rs`).
+pub fn fullres_ring_ahead(cache_bytes: u64) -> usize {
+    let frames = cache_bytes.saturating_sub(REF_FRAME_BYTES) / (2 * REF_FRAME_BYTES);
+    let frames = usize::try_from(frames).unwrap_or(usize::MAX);
+    RING_AHEAD.min(frames.saturating_sub(1 + RING_BEHIND))
+}
+
+/// A ring's extent in VIEW positions around the cursor, already leaned the
+/// way of travel: `before` positions below the cursor and `after` above it.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct RingWindow {
+    pub before: usize,
+    pub after: usize,
+}
+
+impl RingWindow {
+    /// `behind` frames behind the cursor and `ahead` in front of it, for
+    /// travel forward (`before` = behind) or backward (`before` = ahead) —
+    /// THE lean, in one place, so the engine's ring and the app's texture
+    /// rings cannot lean differently.
+    pub fn leaning(behind: usize, ahead: usize, forward: bool) -> Self {
+        if forward {
+            RingWindow {
+                before: behind,
+                after: ahead,
+            }
+        } else {
+            RingWindow {
+                before: ahead,
+                after: behind,
+            }
+        }
+    }
+
+    /// `depth` positions on both sides: plain distance.
+    pub const fn symmetric(depth: usize) -> Self {
+        RingWindow {
+            before: depth,
+            after: depth,
+        }
+    }
+
+    /// How many frames the window holds, the cursor's included.
+    pub fn capacity(&self) -> usize {
+        self.before + self.after + 1
+    }
+
+    /// Is view position `pos` inside the window around the cursor at view
+    /// position `cursor_pos`?
+    pub fn contains(&self, cursor_pos: usize, pos: usize) -> bool {
+        pos.saturating_add(self.before) >= cursor_pos
+            && pos <= cursor_pos.saturating_add(self.after)
+    }
+}
+
+/// The windows of the app's two texture rings (ui-grid.md, "The render
+/// ladder": `transit::evict_ring`), leaned by the engine's own travel latch,
+/// which the app never re-derives: `rung` for the screen-rung ring, `full`
+/// for the full-res ring.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct TextureWindows {
+    pub rung: RingWindow,
+    pub full: RingWindow,
+}
+
 #[derive(Default)]
 struct LoupeState {
     /// Pending requests, most urgent last (workers pop from the back); one
@@ -380,6 +475,11 @@ struct LoupeState {
     /// whose consumer never calls it — which then keeps the behaviour
     /// before brief 008 (raw-pipeline.md, "An engine with no fit box").
     fit_box: Option<FitBox>,
+    /// How far ahead the full-res ring reaches above fit, as the pixel cache
+    /// clamps it (`fullres_ring_ahead` of the engine's budget, set by
+    /// `start_with` — its one home); `None`, the unit tests' default, is the
+    /// whole ring, `RING_AHEAD`.
+    fullres_clamp: Option<usize>,
     /// The app's VIEW order: `view_ids[pos]` = image id, `view_pos[id]` =
     /// position (usize::MAX = filtered out). The prefetch ring and the
     /// travel-direction latch walk THIS order, because arrows move over
@@ -435,18 +535,20 @@ fn apply_view(state: &mut LoupeState, order: &[usize], count: usize) {
     }
 }
 
-/// Ring members as image ids for view positions `lo..=hi` around the
-/// focused position `fpos`: farthest first (workers pop from the back, so
-/// the nearest neighbor is popped soonest), the focused position excluded
-/// (its id is pushed last by the caller). Positions that map to no id
-/// (stale view) are skipped rather than guessed.
-fn ring_ids(state: &LoupeState, fpos: usize, lo: usize, hi: usize) -> Vec<usize> {
-    let mut ring: Vec<(usize, usize)> = (lo..=hi)
-        .filter(|p| *p != fpos)
-        .filter_map(|p| state.id_at(p).map(|id| (p, id)))
-        .collect();
-    ring.sort_by_key(|(p, _)| std::cmp::Reverse(p.abs_diff(fpos)));
-    ring.into_iter().map(|(_, id)| id).collect()
+/// The ring's VIEW positions `lo..=hi` around the focused position `fpos`,
+/// the focused one excluded (the caller pushes it last), in PUSH order:
+/// farthest first — workers pop from the back, so the nearest is popped
+/// soonest — and at equal distance the one in the travel direction LATER,
+/// popped first (raw-pipeline.md, "Order in the queue"). Before brief 008 a
+/// stable sort put the higher position later whatever the direction: right
+/// on a forward hold, wrong on every backward one.
+fn ring_order(fpos: usize, lo: usize, hi: usize, forward: bool) -> Vec<usize> {
+    let mut ring: Vec<usize> = (lo..=hi).filter(|p| *p != fpos).collect();
+    ring.sort_by_key(|&p| {
+        let toward_travel = if forward { p > fpos } else { p < fpos };
+        (std::cmp::Reverse(p.abs_diff(fpos)), toward_travel)
+    });
+    ring
 }
 
 struct Shared {
@@ -466,42 +568,87 @@ pub struct LoupeEngine {
 }
 
 impl LoupeEngine {
+    /// The engine with three decoders whatever the machine — the form the
+    /// older core tests run on every seat (raw-pipeline.md, Contracts); the
+    /// app starts it with the machine's own count, [`start_with`](Self::start_with).
     pub fn start(paths: Vec<PathBuf>, budget: usize) -> (Self, Receiver<LoupeEvent>) {
+        Self::start_with(paths, budget, 3)
+    }
+
+    /// The engine with `decoders` workers (at least 2) and a pixel cache of
+    /// `cache_bytes` (at least 200 MiB, room for one A1 frame): the app's
+    /// form, both figures derived from the machine by `budget.rs`
+    /// (raw-pipeline.md, "The decode workers" and "Memory").
+    ///
+    /// The LAST worker is the focus-reserved lane and the rest are backlog
+    /// workers (see next_job/FOCUS_DEBOUNCE/note_focus): the reserved thread
+    /// only commits to a focus whose pending work has HELD for the debounce,
+    /// so neither transient transit focuses nor a climb freshly escalated on
+    /// a resting frame capture it — the lane is free at the first settle
+    /// after sub-debounce transits, and that frame's ladder starts within
+    /// ~debounce even when every backlog worker is mid-flight on a
+    /// multi-second decode. At least two, so one backlog worker still reads
+    /// ahead beside the lane (`FASTCULL_DECODERS=1` reads as 2). Each thread
+    /// is named — `fastcull-loupe-N`, the lane `fastcull-loupe-reserved` —
+    /// and the name and the lane's role read the same `reserved` flag.
+    pub fn start_with(
+        paths: Vec<PathBuf>,
+        cache_bytes: usize,
+        decoders: usize,
+    ) -> (Self, Receiver<LoupeEvent>) {
         let (tx, rx) = std::sync::mpsc::channel();
+        let budget = cache_bytes.max(200 * 1024 * 1024); // room for at least one A1
+        let state = LoupeState {
+            // The full-res ring's clamp follows the LRU's real size.
+            fullres_clamp: Some(fullres_ring_ahead(
+                u64::try_from(budget).unwrap_or(u64::MAX),
+            )),
+            ..Default::default()
+        };
         let shared = Arc::new(Shared {
-            state: Mutex::new(LoupeState::default()),
+            state: Mutex::new(state),
             wakeup: Condvar::new(),
             paths,
             events: tx,
             shutdown: AtomicBool::new(false),
             stamp: AtomicU64::new(0),
-            budget: budget.max(200 * 1024 * 1024), // room for at least one A1
+            budget,
         });
-        // Two backlog workers plus ONE focus-reserved worker (see
-        // next_job/FOCUS_DEBOUNCE/note_focus): the reserved thread only
-        // commits to a focus whose pending work has HELD for the
-        // debounce, so neither transient transit focuses nor a climb
-        // freshly escalated on a resting frame capture it — the lane is
-        // free at the first settle after sub-debounce transits, and
-        // that frame's ladder starts within ~debounce even when both
-        // backlog workers are mid-flight on multi-second decodes.
-        // Worst-case transient memory grows by one concurrent decode
-        // (~150 MB for an A1 full-res) — bounded and short-lived.
-        let workers = (0..3)
+        let decoders = decoders.max(2);
+        let workers = (0..decoders)
             .map(|n| {
+                let reserved = n + 1 == decoders;
+                let name = if reserved {
+                    "fastcull-loupe-reserved".to_owned()
+                } else {
+                    format!("fastcull-loupe-{n}")
+                };
                 let shared = Arc::clone(&shared);
-                std::thread::spawn(move || worker(&shared, n == 2))
+                std::thread::Builder::new()
+                    .name(name)
+                    .spawn(move || worker(&shared, reserved))
+                    .expect("spawn a loupe worker")
             })
             .collect();
         (Self { shared, workers }, rx)
     }
 
+    /// The leaned windows of the app's two texture rings (ui-grid.md, "The
+    /// render ladder"): the screen-rung ring's is the ring, `RING_BEHIND` /
+    /// `RING_AHEAD`; the full-res ring's is the full-res ring as the pixel
+    /// cache clamps it, and, with no fit box, the settled ±`PREFETCH` ring —
+    /// both leaned by the engine's own travel latch, read under the state
+    /// lock, never re-derived by the app.
+    pub fn texture_windows(&self) -> TextureWindows {
+        windows_of(&lock(&self.shared))
+    }
+
     /// The user is looking at `index` on a display whose longest edge is
-    /// `display_long` physical pixels: ensure it and its ±PREFETCH neighbors
-    /// — in VIEW order (see `set_view`) — have an asset sufficient for that
-    /// display (ladder rule) or are queued. Returns the best cached image
-    /// immediately (which may be a lower rung — a better one arrives as an
-    /// event once cooked).
+    /// `display_long` physical pixels: ensure it and its ring — in VIEW
+    /// order (see `set_view`) — have what the ring plan asks of each
+    /// (raw-pipeline.md, "The ring") or are queued. Returns the best cached
+    /// image immediately (which may be a lower rung — a better one arrives as
+    /// an event once cooked).
     pub fn focus(&self, index: usize, display_long: u32) -> Option<FullImage> {
         self.focus_request(index, FocusRequest::Long(display_long))
     }
@@ -624,10 +771,11 @@ enum FocusRequest {
 
 /// The one body behind [`LoupeEngine::focus`] and
 /// [`LoupeEngine::focus_fit`], pure over the state and an explicit clock so
-/// the unit tests drive it without workers: note the focus, decide
-/// TRANSIT vs SETTLED, plan the ring, schedule it — farthest first, the
-/// focused index last (the back of the queue, popped first) — and return
-/// the cached image of `index`, whatever rung it is.
+/// the unit tests drive it without workers: note the focus, decide TRANSIT
+/// vs SETTLED, plan the ring (`plan_ring`), schedule it — farthest first,
+/// the focused index last (the back of the queue, popped first) — re-plan a
+/// hold's queued full-res entries, cull the queue to the ring in force, and
+/// return the cached image of `index`, whatever rung it is.
 fn focus_on(
     state: &mut LoupeState,
     index: usize,
@@ -643,46 +791,230 @@ fn focus_on(
             .map_or(Target::Long(MID_RUNG_TARGET), Target::Fit),
     };
     note_focus(state, index, desired, now);
-    let transit = in_transit(state, now);
-    let req = if transit {
+    let req = if in_transit(state, now) {
         RequestState::Transit
     } else {
         RequestState::Settled
     };
-    // TRANSIT vs SETTLED (user requirement 2026-08-01). Moving: ask only for
-    // what a moving frame needs (`transit_request`), across a wide ring
-    // leaning the way we travel, so the workers keep up with a held key.
-    // Stopped: ask for what the app actually wants, over the tight ring,
-    // which is the pre-existing behaviour and is what keeps tap-stepping
-    // through a burst sharp.
-    //
     // The ring is planned in VIEW-POSITION space and mapped back to image
     // ids at request time (issue #46): arrows travel the view. A focused id
-    // with no view position (filtered out mid-flight) gets no neighbors —
-    // its neighbors are unknowable, and guessing in id space is the bug
-    // this replaced.
-    let (request, wanted) = match state.pos_of(index) {
-        Some(fpos) => {
-            let (request, lo, hi) = focus_plan(
-                transit,
-                state.travel_forward,
-                fpos,
-                desired,
-                state.fit_box,
-                state.ring_len(count),
-            );
-            (request, ring_ids(state, fpos, lo, hi))
-        }
-        None => (plan_request(transit, desired, state.fit_box), Vec::new()),
+    // with no view position (filtered out mid-flight) gets no ring and culls
+    // nothing — its neighbours are unknowable, and guessing in id space is
+    // the bug #46 replaced — and asks what the plan asks of a focused frame.
+    let Some(fpos) = state.pos_of(index) else {
+        let alone = plan_ring(&plan_inputs(state, 0, 1, now)).focused;
+        schedule(state, index, alone, stamp, Origin::Focus, req);
+        return state.cache.get(&index).map(|(img, _)| img.clone());
     };
-    // Farthest neighbors first, focused index last (back of the queue =
-    // popped first by workers).
-    let mut wanted: Vec<usize> = wanted.into_iter().filter(|i| *i < count).collect();
-    wanted.push(index);
-    for i in wanted {
-        schedule(state, i, request, stamp, Origin::Focus, req);
+    let inputs = plan_inputs(state, fpos, state.ring_len(count), now);
+    let plan = plan_ring(&inputs);
+    // Farthest members first, the focused index last (the back of the
+    // queue, popped first by a backlog worker): a ring member never
+    // outranks the focused frame's own pending work.
+    for &(pos, target) in &plan.members {
+        if let Some(id) = state.id_at(pos).filter(|id| *id < count) {
+            schedule(state, id, target, stamp, Origin::Focus, req);
+        }
     }
+    schedule(state, index, plan.focused, stamp, Origin::Focus, req);
+    // THE HOLD RE-PLAN (raw-pipeline.md, "Above fit"): during a hold above
+    // fit the focused frame and the members behind ask for the fit box,
+    // whatever the cache holds. `schedule` leaves a request the cache
+    // already serves untouched — so a full-res entry queued by the settled
+    // ring before the hold would still be popped, a full-res decode for a
+    // frame the cursor is on or has passed (the 2026-08-01 finding). Every
+    // index the plan asks the transit target of has such an entry replaced
+    // by it, or dropped when that rung is in hand. The target comes from
+    // the plan, never a literal box, so the transit mutation moves it too.
+    if inputs.transit && inputs.fit_box.is_some() && matches!(inputs.desired, Target::Long(_)) {
+        let t = transit_request(inputs.desired, inputs.fit_box);
+        let asked_t: Vec<usize> = plan
+            .members
+            .iter()
+            .filter(|(_, target)| *target == t)
+            .filter_map(|(pos, _)| state.id_at(*pos))
+            .chain((plan.focused == t).then_some(index))
+            .collect();
+        for id in asked_t {
+            replan_queued(state, id, t);
+        }
+    }
+    // THE CULL (raw-pipeline.md, "Culling"): queued — never in-flight —
+    // focus-origin entries outside the ring in force are dropped, so a
+    // reversal culls what leaned the wrong way and a stretched gap mid-hold
+    // costs at most the decodes in flight. Grid wants keep their own cull.
+    let (lo, hi) = (plan.lo, plan.hi);
+    let mut queue = std::mem::take(&mut state.queue);
+    queue.retain(|e| {
+        !e.focus_origin
+            || e.index == index
+            || state.pos_of(e.index).is_some_and(|p| lo <= p && p <= hi)
+    });
+    state.queue = queue;
     state.cache.get(&index).map(|(img, _)| img.clone())
+}
+
+/// The hold's re-plan for one index the plan asks `t` (the transit target)
+/// of: a QUEUED entry whose target is a `Long` above `t` becomes `t` in the
+/// transit state, or is dropped when the cache already serves `t` — the
+/// early return `schedule` takes for a served request would have left it.
+fn replan_queued(state: &mut LoupeState, index: usize, t: Target) {
+    let Some(pos) = state.queue.iter().position(|e| e.index == index) else {
+        return;
+    };
+    let entry = state.queue[pos];
+    if !matches!(entry.target, Target::Long(_)) || entry.target <= t {
+        return;
+    }
+    if cached_serves(state, index, t) {
+        state.queue.remove(pos);
+    } else {
+        state.queue[pos].target = t;
+        state.queue[pos].state = RequestState::Transit;
+    }
+}
+
+/// Everything the ring's plan reads. `plan_inputs` is the ONE place the
+/// engine's state becomes these, so the schedule, the cull and the revival
+/// gate cannot drift from the plan or from each other.
+#[derive(Debug, Clone, Copy)]
+struct PlanInputs {
+    /// A held key: TRANSIT (`in_transit`).
+    transit: bool,
+    /// The travel latch (`note_focus`), never re-derived per call.
+    forward: bool,
+    /// The focused frame's view position.
+    fpos: usize,
+    /// How many view positions there are.
+    len: usize,
+    /// What the app asked for: the fit box at fit, a long edge above it.
+    desired: Target,
+    fit_box: Option<FitBox>,
+    /// How far ahead the full-res ring reaches (`fullres_ring_ahead`).
+    fullres_ahead: usize,
+}
+
+/// The ring in force around the focused frame and what each of its
+/// positions asks for.
+#[derive(Debug, Clone, PartialEq, Eq)]
+struct RingPlan {
+    /// The ring in force, view positions, inclusive, clamped to the view.
+    lo: usize,
+    hi: usize,
+    /// What the focused frame asks for.
+    focused: Target,
+    /// Every position in `lo..=hi` but the focused one, with what it asks
+    /// for, in push order (`ring_order`).
+    members: Vec<(usize, Target)>,
+}
+
+/// The engine's state as the plan's inputs, for the focused frame at view
+/// position `fpos` of `len`.
+fn plan_inputs(state: &LoupeState, fpos: usize, len: usize, now: std::time::Instant) -> PlanInputs {
+    PlanInputs {
+        transit: in_transit(state, now),
+        forward: state.travel_forward,
+        fpos,
+        len,
+        desired: state.desired,
+        fit_box: state.fit_box,
+        fullres_ahead: state.fullres_clamp.unwrap_or(RING_AHEAD),
+    }
+}
+
+/// THE ring plan — raw-pipeline.md's request table ("The ring" and "Above
+/// fit"), transcribed, with `T` the transit request (`transit_request`,
+/// through which EVERY transit cell goes):
+///
+/// | inputs | window | focused | behind | ahead |
+/// |---|---|---|---|---|
+/// | no box, transit | leaning(2, 15) | T | T | T |
+/// | no box, settled | ±PREFETCH | desired | desired | desired |
+/// | box, at fit (desired `Fit`), settled | leaning(2, 15) | desired | desired | desired |
+/// | box, at fit, transit | leaning(2, 15) | T | T | T |
+/// | box, above fit (desired `Long`), settled | leaning(2, full-res ahead) | desired | desired | desired |
+/// | box, above fit, transit (a hold) | leaning(2, full-res ahead) | T | T | desired |
+///
+/// The positions beyond the full-res clamp are outside the ring in force
+/// above fit: they ask for nothing. The folder's ends clamp every window.
+fn plan_ring(i: &PlanInputs) -> RingPlan {
+    let t = transit_request(i.desired, i.fit_box);
+    let above_fit = i.fit_box.is_some() && matches!(i.desired, Target::Long(_));
+    let window = match i.fit_box {
+        None if !i.transit => RingWindow::symmetric(PREFETCH),
+        None => RingWindow::leaning(RING_BEHIND, RING_AHEAD, i.forward),
+        Some(_) if above_fit => RingWindow::leaning(RING_BEHIND, i.fullres_ahead, i.forward),
+        Some(_) => RingWindow::leaning(RING_BEHIND, RING_AHEAD, i.forward),
+    };
+    let lo = i.fpos.saturating_sub(window.before);
+    let hi = i
+        .fpos
+        .saturating_add(window.after)
+        .min(i.len.saturating_sub(1));
+    let focused = if i.transit { t } else { i.desired };
+    let hold = i.transit && above_fit;
+    let members = ring_order(i.fpos, lo, hi, i.forward)
+        .into_iter()
+        .map(|pos| {
+            let ahead = if i.forward {
+                pos > i.fpos
+            } else {
+                pos < i.fpos
+            };
+            let target = if !i.transit || (hold && ahead) {
+                i.desired
+            } else {
+                t
+            };
+            (pos, target)
+        })
+        .collect();
+    RingPlan {
+        lo,
+        hi,
+        focused,
+        members,
+    }
+}
+
+/// What view position `pos` asks for now, by the ring plan around the
+/// focused frame: `None` when there is no focused frame in the view or
+/// `pos` lies outside the ring in force — the revival gate.
+fn position_asks(
+    state: &LoupeState,
+    pos: usize,
+    count: usize,
+    now: std::time::Instant,
+) -> Option<Target> {
+    let fpos = state.focused.and_then(|f| state.pos_of(f))?;
+    let plan = plan_ring(&plan_inputs(state, fpos, state.ring_len(count), now));
+    if pos == fpos {
+        return Some(plan.focused);
+    }
+    plan.members
+        .iter()
+        .find(|(p, _)| *p == pos)
+        .map(|(_, target)| *target)
+}
+
+/// The windows of the app's two texture rings, the body of
+/// [`LoupeEngine::texture_windows`] (pure, so a test can model the app's
+/// rings from the very function the app is handed).
+fn windows_of(state: &LoupeState) -> TextureWindows {
+    let forward = state.travel_forward;
+    let full = if state.fit_box.is_some() {
+        RingWindow::leaning(
+            RING_BEHIND,
+            state.fullres_clamp.unwrap_or(RING_AHEAD),
+            forward,
+        )
+    } else {
+        RingWindow::symmetric(PREFETCH)
+    };
+    TextureWindows {
+        rung: RingWindow::leaning(RING_BEHIND, RING_AHEAD, forward),
+        full,
+    }
 }
 
 /// Ladder rule: does this asset serve a display of `display_long` pixels?
@@ -737,35 +1069,42 @@ fn cached_serves(state: &LoupeState, index: usize, target: Target) -> bool {
 }
 
 /// Land-time revival of a deferred upgrade (an in-flight index whose wanted
-/// rung grew mid-decode). Revived ONLY while the index is still inside the
-/// focused prefetch ring: a stale upgrade — the cursor moved on while the
-/// flight decoded — re-queued at top priority captured BOTH workers for
-/// multi-second full-res decodes and starved the current frame's ladder
-/// (Windows CI 2026-07-27: three screenshot tests hit the 60 s shutter cap
-/// exactly this way). Dropping a stale upgrade loses nothing: focus()
-/// re-requests it the moment the user returns. The focused index re-queues
-/// at the back (popped next); a ring neighbor goes to the front so it can
-/// never outrank the focused frame's own pending work. The revived entry
-/// carries `req`, the request state stored beside the deferred target —
-/// never the mode at revival (raw-pipeline.md, "The request state travels
-/// with the decode").
+/// rung grew mid-decode). Revived ONLY while the index is inside the RING IN
+/// FORCE (raw-pipeline.md, "Revival"), the very ring the focus scheduled —
+/// a gate still at ±`PREFETCH` would drop most of a 15-ahead ring's
+/// upgrades (the trap raw-pipeline.md recorded) — and at no more than what
+/// its position there asks for now, so during a hold above fit a frame the
+/// cursor has reached or passed revives at the fit box, never at full-res.
+/// A stale upgrade — the cursor moved on while the flight decoded —
+/// re-queued at top priority once captured BOTH workers for multi-second
+/// full-res decodes and starved the current frame's ladder (Windows CI
+/// 2026-07-27: three screenshot tests hit the 60 s shutter cap exactly this
+/// way). Dropping a stale upgrade loses nothing: focus() re-requests it the
+/// moment the user returns. The focused index re-queues at the back (popped
+/// next); a ring neighbor goes to the front so it can never outrank the
+/// focused frame's own pending work. The revived entry carries `req`, the
+/// request state stored beside the deferred target — never the mode at
+/// revival (raw-pipeline.md, "The request state travels with the decode").
 fn revive_deferred(
     state: &mut LoupeState,
     index: usize,
     target: Target,
     req: RequestState,
     stamp: u64,
+    count: usize,
+    now: std::time::Instant,
 ) -> bool {
     // Ring membership in VIEW positions (issue #46), like the ring itself:
     // an id 2 away can be a view-order stranger, and a view neighbor can
     // be any id at all. No position (filtered out) = not in the ring.
-    let in_ring = state
-        .focused
-        .is_some_and(|f| match (state.pos_of(index), state.pos_of(f)) {
-            (Some(a), Some(b)) => a.abs_diff(b) <= PREFETCH,
-            _ => false,
-        });
-    if !in_ring || state.failed.contains(&index) || sufficient_cached(state, index, target, stamp) {
+    let Some(asks) = state
+        .pos_of(index)
+        .and_then(|pos| position_asks(state, pos, count, now))
+    else {
+        return false;
+    };
+    let target = target.min(asks);
+    if state.failed.contains(&index) || sufficient_cached(state, index, target, stamp) {
         return false;
     }
     state.queue.retain(|e| e.index != index);
@@ -959,86 +1298,6 @@ const TRANSIT_GAP: std::time::Duration = std::time::Duration::from_millis(250);
 /// add. The real floor is 250 ms, not ~500 ms.
 const SETTLE_DEBOUNCE: std::time::Duration = std::time::Duration::from_millis(150);
 
-/// Transit prefetch is DIRECTIONAL: reading ten frames behind while the
-/// user flies forward is waste, so the ring leans the way they travel and
-/// flips when they reverse. Wide is affordable only because transit asks
-/// for no more than the fit box — at most a screen rung, ~5 MB for a mid and
-/// ~21 MB for a 4K rung, each far less than ONE 149 MB full-res frame.
-const TRANSIT_AHEAD: usize = 8;
-const TRANSIT_BEHIND: usize = 2;
-
-/// Is the user MOVING between frames (held key, `[`/`]`, a Y/N
-/// auto-advance chain) rather than looking at one?
-///
-/// While true the engine asks for no more than the fit box, however far
-/// above fit the view is — the mid on an engine with no box (user
-/// requirement 2026-08-01: "while I'm holding a key I don't need the image
-/// to be as good as possible, I need it to move fast; when I release the
-/// key, then I want quality to be high").
-///
-/// This governs what is REQUESTED, never what is DISPLAYED. The renderer
-/// always shows the best rung in cache, so flying back over frames whose
-/// full-res is still resident shows them sharp — a rule that rendered the
-/// mid with a sharp texture in hand would be worse than the bug it fixes
-/// (persona).
-/// What `focus` should ask for, and over which ring: the TRANSIT vs
-/// SETTLED decision (user requirement 2026-08-01), pure so it can be
-/// tested without workers.
-///
-/// Moving: `transit_request` — the fit box, or the mid with no box — over a
-/// wide ring leaning the way we travel, so the workers keep up with a held
-/// key, and the lean is what puts frames in cache BEFORE the finger reaches
-/// them. Stopped: what the app actually wants over the tight ring, which is
-/// the pre-existing behaviour and is what keeps tap-stepping through a
-/// burst sharp.
-///
-/// Returns `(request, lo, hi)` with `lo..=hi` already clamped to `count`.
-///
-/// Since issue #46 the coordinates are VIEW POSITIONS, not image ids —
-/// the caller (`focus_on`) maps positions back to ids via `ring_ids` at
-/// request time. The policy in here is unchanged.
-fn focus_plan(
-    transit: bool,
-    forward: bool,
-    index: usize,
-    desired: Target,
-    fit_box: Option<FitBox>,
-    count: usize,
-) -> (Target, usize, usize) {
-    if transit {
-        // A reversal must re-lean immediately: arrowing back through a
-        // burst you just flew over is the commonest correction there is,
-        // and a ring still leaning forward would prefetch behind you.
-        let (back, ahead) = if forward {
-            (TRANSIT_BEHIND, TRANSIT_AHEAD)
-        } else {
-            (TRANSIT_AHEAD, TRANSIT_BEHIND)
-        };
-        (
-            plan_request(transit, desired, fit_box),
-            index.saturating_sub(back),
-            (index + ahead).min(count - 1),
-        )
-    } else {
-        (
-            desired,
-            index.saturating_sub(PREFETCH),
-            (index + PREFETCH).min(count - 1),
-        )
-    }
-}
-
-/// What to ask the decoder for: `transit_request` while moving, the app's
-/// real target when stopped. Split from `focus_plan` so a focus with no
-/// view position (no ring) still requests the right rung.
-fn plan_request(transit: bool, desired: Target, fit_box: Option<FitBox>) -> Target {
-    if transit {
-        transit_request(desired, fit_box)
-    } else {
-        desired
-    }
-}
-
 /// What a moving frame asks the decoder for: the fit box when the engine
 /// has one — at fit and above it alike (raw-pipeline.md, "The ring": during
 /// a hold the focused frame asks for the fit box, never full-res) — and,
@@ -1060,6 +1319,21 @@ fn transit_request(desired: Target, fit_box: Option<FitBox>) -> Target {
     }
 }
 
+/// Is the user MOVING between frames (held key, `[`/`]`, a Y/N
+/// auto-advance chain) rather than looking at one?
+///
+/// While true the focused frame asks for no more than the fit box, however
+/// far above fit the view is — the mid on an engine with no box (user
+/// requirement 2026-08-01: "while I'm holding a key I don't need the image
+/// to be as good as possible, I need it to move fast; when I release the
+/// key, then I want quality to be high") — and the ring asks by the
+/// request table (`plan_ring`).
+///
+/// This governs what is REQUESTED, never what is DISPLAYED. The renderer
+/// always shows the best rung in cache, so flying back over frames whose
+/// full-res is still resident shows them sharp — a rule that rendered the
+/// mid with a sharp texture in hand would be worse than the bug it fixes
+/// (persona).
 fn in_transit(state: &LoupeState, now: std::time::Instant) -> bool {
     state.moving
         && state
@@ -1120,6 +1394,20 @@ fn next_job(state: &mut LoupeState, focus_reserved: bool, now: std::time::Instan
                             state: RequestState::Settled,
                         });
                         state.queue.len() - 1
+                    } else if settled && idle_cook_due(state, f) {
+                        // THE IDLE COOK (raw-pipeline.md, "The idle cook";
+                        // brief 008 R9): the cursor's full-res behind a stop
+                        // at fit on a wide viewport, queued and popped in this
+                        // same call, so `Z` after the stop finds it cooked or
+                        // cooking. It never re-arms the escalation clock and
+                        // never passes through `revive_deferred`.
+                        state.queue.push(Entry {
+                            index: f,
+                            target: Target::Long(u32::MAX),
+                            focus_origin: true,
+                            state: RequestState::Settled,
+                        });
+                        state.queue.len() - 1
                     } else {
                         return Slot::Wait;
                     }
@@ -1138,6 +1426,37 @@ fn next_job(state: &mut LoupeState, focus_reserved: bool, now: std::time::Instan
         state.in_flight.push(entry.index);
         return Slot::Job(entry.index, entry.target, entry.state);
     }
+}
+
+/// Is the idle cook due for the focused frame `f` (raw-pipeline.md, "The
+/// idle cook")? Each clause, and what it keeps out:
+/// - a fit box and the app's request IS that box — at fit, on the CURRENT
+///   box: a stale box after leaving the loupe cooks nothing;
+/// - the reference mid does not serve the box (`mid_serves_box`) — the
+///   VIEWPORT is wide: 3/8 rungs left in the LRU by a shrink to a 1080p box
+///   would otherwise cook for ever there;
+/// - the cursor's cached image is a SCREEN rung — with only a mid, the
+///   settle guarantee climbs first;
+/// - the file's best is not already in hand, written as the served check
+///   itself (`served_by` at the top rung, with the memo), so the lane cannot
+///   manufacture a job the post-pop check then discards: that re-pushes it
+///   on the next loop turn, for ever, under the state lock;
+/// - nothing in flight, failed or queued for it.
+fn idle_cook_due(state: &LoupeState, f: usize) -> bool {
+    state
+        .fit_box
+        .is_some_and(|b| !mid_serves_box(b) && state.desired == Target::Fit(b))
+        && state.cache.get(&f).is_some_and(|(img, _)| {
+            img.kind == RungKind::Screen
+                && !served_by(
+                    img,
+                    Target::Long(u32::MAX),
+                    state.best_long.get(&f).copied(),
+                )
+        })
+        && !state.in_flight.contains(&f)
+        && !state.failed.contains(&f)
+        && !state.queue.iter().any(|e| e.index == f)
 }
 
 fn worker(shared: &Shared, focus_reserved: bool) {
@@ -1195,7 +1514,9 @@ fn worker(shared: &Shared, focus_reserved: bool) {
         }
         if let Some((target, req)) = state.deferred.remove(&index) {
             let stamp = shared.stamp.load(Ordering::Relaxed);
-            if revive_deferred(&mut state, index, target, req, stamp) {
+            let count = shared.paths.len();
+            let now = std::time::Instant::now();
+            if revive_deferred(&mut state, index, target, req, stamp, count, now) {
                 shared.wakeup.notify_all();
             }
         }
@@ -2008,7 +2329,8 @@ mod tests {
         )
     }
 
-    /// `revive_deferred` at a `Long` target in the settled state, likewise.
+    /// `revive_deferred` at a `Long` target in the settled state, likewise,
+    /// over a folder of 1000 (the view's own length when one is set).
     fn revive_long(state: &mut LoupeState, index: usize, long: u32, stamp: u64) -> bool {
         revive_deferred(
             state,
@@ -2016,7 +2338,46 @@ mod tests {
             Target::Long(long),
             RequestState::Settled,
             stamp,
+            1000,
+            std::time::Instant::now(),
         )
+    }
+
+    /// The ring's members as image ids in push order — `ring_order`, mapped
+    /// through the view as `focus_on` maps them.
+    fn ring_ids(
+        state: &LoupeState,
+        fpos: usize,
+        lo: usize,
+        hi: usize,
+        forward: bool,
+    ) -> Vec<usize> {
+        ring_order(fpos, lo, hi, forward)
+            .into_iter()
+            .filter_map(|p| state.id_at(p))
+            .collect()
+    }
+
+    /// The ring plan for the given inputs, over a folder of `len`, for the
+    /// table rows below.
+    fn plan(
+        transit: bool,
+        forward: bool,
+        fpos: usize,
+        len: usize,
+        desired: Target,
+        fit_box: Option<FitBox>,
+        fullres_ahead: usize,
+    ) -> RingPlan {
+        plan_ring(&PlanInputs {
+            transit,
+            forward,
+            fpos,
+            len,
+            desired,
+            fit_box,
+            fullres_ahead,
+        })
     }
 
     /// The two scheduling polarities, pinned: focus work goes to the BACK
@@ -2279,8 +2640,13 @@ mod tests {
         );
     }
 
-    /// The transit ring leans the way the user is travelling, and a
-    /// reversal re-leans it on the very next frame.
+    /// Brief 008 A1 (raw-pipeline.md, "The ring"): the transit ring leans the
+    /// way the user is travelling, 2 behind and 15 ahead, and a reversal
+    /// re-leans it on the very next frame. Its depths moved from the old
+    /// `TRANSIT_BEHIND` / `TRANSIT_AHEAD`, 2 / 8, to `RING_BEHIND` /
+    /// `RING_AHEAD`, the promise kept — red on the old shape by construction.
+    /// This engine has no fit box, so settled it keeps ±`PREFETCH` and the
+    /// app's real target, and in transit it asks for the mid.
     ///
     /// Untested, a symmetric ring survives every other assertion here: it
     /// still requests the mid, still keeps up on the frame you are ON. What
@@ -2288,45 +2654,677 @@ mod tests {
     /// BEFORE the finger gets to them.
     #[test]
     fn transit_ring_leans_in_the_direction_of_travel() {
-        let count = 1000;
+        let top = Target::Long(u32::MAX);
+        let span = |p: &RingPlan| (p.lo, p.hi);
         // Moving forward: far more ahead than behind.
-        let (_, lo, hi) = focus_plan(true, true, 500, Target::Long(u32::MAX), None, count);
+        let forward = plan(true, true, 500, 1000, top, None, RING_AHEAD);
         assert_eq!(
-            (hi - 500, 500 - lo),
-            (TRANSIT_AHEAD, TRANSIT_BEHIND),
-            "a forward ring must lean forward"
+            span(&forward),
+            (498, 515),
+            "a forward ring leans forward, 2 behind / 15 ahead"
         );
-        assert!(
-            hi - 500 > 500 - lo,
-            "a symmetric transit ring prefetches frames the user is moving \
-             AWAY from: ahead {} vs behind {}",
-            hi - 500,
-            500 - lo
-        );
+        assert_eq!(forward.members.len(), 17, "every position but the focused");
         // Reversed on the very next frame: the lean flips with it.
-        let (_, lo, hi) = focus_plan(true, false, 499, Target::Long(u32::MAX), None, count);
         assert_eq!(
-            (499 - lo, hi - 499),
-            (TRANSIT_AHEAD, TRANSIT_BEHIND),
+            span(&plan(true, false, 500, 1000, top, None, RING_AHEAD)),
+            (485, 502),
             "arrowing back must re-lean backward immediately"
         );
         // Settled: the tight symmetric ring, and the app's REAL target.
-        let (req, lo, hi) = focus_plan(false, true, 500, Target::Long(8640), None, count);
-        assert_eq!((500 - lo, hi - 500), (PREFETCH, PREFETCH));
+        let desired = Target::Long(8640);
+        let settled = plan(false, true, 500, 1000, desired, None, RING_AHEAD);
+        assert_eq!(span(&settled), (498, 502));
         assert_eq!(
-            req,
-            Target::Long(8640),
+            settled.focused, desired,
             "a settled frame must ask for full quality"
         );
+        assert!(settled.members.iter().all(|(_, t)| *t == desired));
+        let moving = plan(true, true, 500, 1000, desired, None, RING_AHEAD);
         assert!(
-            focus_plan(true, true, 500, Target::Long(8640), None, count).0 < req,
+            moving.focused < settled.focused,
             "transit must ask for LESS than settled, or it is not transit"
         );
+        assert!(
+            moving
+                .members
+                .iter()
+                .all(|(_, t)| *t == Target::Long(MID_RUNG_TARGET)),
+            "with no box, transit asks the mid of the whole ring: {:?}",
+            moving.members
+        );
         // Edges clamp rather than wrap or panic.
-        let (_, lo, hi) = focus_plan(true, true, 0, Target::Long(u32::MAX), None, 3);
-        assert_eq!((lo, hi), (0, 2), "ring clamps at the start of the folder");
-        let (_, lo, hi) = focus_plan(true, true, 2, Target::Long(u32::MAX), None, 3);
-        assert_eq!((lo, hi), (0, 2), "ring clamps at the end of the folder");
+        assert_eq!(
+            span(&plan(true, true, 0, 1000, top, None, RING_AHEAD)),
+            (0, 15),
+            "the ring clamps at the start of the folder"
+        );
+        assert_eq!(
+            span(&plan(true, true, 999, 1000, top, None, RING_AHEAD)),
+            (997, 999),
+            "the ring clamps at the end of the folder"
+        );
+        // A folder shorter than the ring is the whole folder.
+        assert_eq!(
+            span(&plan(true, true, 2, 10, top, None, RING_AHEAD)),
+            (0, 9)
+        );
+        assert_eq!(
+            span(&plan(true, true, 3, 10, top, None, RING_AHEAD)),
+            (1, 9),
+            "position 0 is three behind"
+        );
+    }
+
+    /// Brief 008 A1 (raw-pipeline.md, "The ring", its request table): at fit
+    /// the whole ring — 2 behind / 15 ahead, leaned — and the focused frame
+    /// ask for the fit box, travelling and settled alike, so a stop at fit
+    /// asks nothing the hold had not already asked; on a box the mid serves
+    /// the shape is the same (the ladder, not the plan, picks the mid there).
+    /// Red when an engine with a box keeps the old settled ±2 (the settled
+    /// rows), and when a transit is capped at the mid whatever the box — the
+    /// one mutation of `transit_request`, A7's first — on the transit rows.
+    #[test]
+    fn the_ring_at_fit_asks_the_fit_box_travelling_and_settled() {
+        for fit_box in [
+            FitBox {
+                width: 3840,
+                height: 2160,
+            },
+            FitBox {
+                width: 1920,
+                height: 1080,
+            },
+        ] {
+            let fit = Target::Fit(fit_box);
+            for transit in [true, false] {
+                for (forward, span) in [(true, (498, 515)), (false, (485, 502))] {
+                    let row = format!(
+                        "{}x{} box, transit {transit}, forward {forward}",
+                        fit_box.width, fit_box.height
+                    );
+                    let p = plan(transit, forward, 500, 1000, fit, Some(fit_box), RING_AHEAD);
+                    assert_eq!((p.lo, p.hi), span, "{row}");
+                    assert_eq!(p.focused, fit, "{row}: the focused frame");
+                    assert_eq!(p.members.len(), 17, "{row}");
+                    assert!(
+                        p.members.iter().all(|(_, t)| *t == fit),
+                        "{row}: every member asks the fit box: {:?}",
+                        p.members
+                    );
+                }
+            }
+        }
+    }
+
+    /// Brief 008 A1 (raw-pipeline.md, "Above fit"): above fit the ring in
+    /// force is the FULL-RES ring, clamped at its far end so the pixel
+    /// cache's figure holds each frame twice — its pixels and its texture
+    /// copy — and the kitchen's fill besides: 3 ahead at the 2 GiB floor, 10
+    /// on 4 GiB, 15 from 5,524,070,400 B (Manager rulings 2026-09-26, brief
+    /// 008 Q4 and Q-G). Settled, every member asks full-res; during a hold the
+    /// focused frame and the two behind ask the fit box and the members
+    /// ahead full-res; and the positions beyond the clamp ask for nothing.
+    /// Red under the clamp that counted the pixels alone (11, 15, 15) and
+    /// under the one that left out the fill (4, 11, 15), and when the
+    /// positions beyond the clamp ask the fit box.
+    #[test]
+    fn the_full_res_ring_is_clamped_by_the_cache() {
+        const GIB: u64 = 1 << 30;
+        for (cache, ahead) in [
+            (2 * GIB, 3),
+            (4 * GIB, 10),
+            (5_524_070_399, 14),
+            (5_524_070_400, 15),
+            (8 * GIB, 15),
+            (10 * GIB, 15),
+            (200 << 20, 0),
+        ] {
+            assert_eq!(fullres_ring_ahead(cache), ahead, "a {cache} B cache");
+        }
+        let uhd = FitBox {
+            width: 3840,
+            height: 2160,
+        };
+        let top = Target::Long(u32::MAX);
+        for ahead in [3usize, 10, 15] {
+            let ring: Vec<usize> = (498..=500 + ahead).filter(|p| *p != 500).collect();
+            let settled = plan(false, true, 500, 1000, top, Some(uhd), ahead);
+            assert_eq!(
+                (settled.lo, settled.hi),
+                (498, 500 + ahead),
+                "settled, {ahead} ahead"
+            );
+            assert_eq!(settled.focused, top, "settled: the top rung");
+            assert!(
+                settled.members.iter().all(|(_, t)| *t == top),
+                "settled, {ahead} ahead: every member full-res: {:?}",
+                settled.members
+            );
+            let hold = plan(true, true, 500, 1000, top, Some(uhd), ahead);
+            assert_eq!(
+                hold.focused,
+                Target::Fit(uhd),
+                "a hold: the focused frame asks the fit box"
+            );
+            let mut asked: Vec<usize> = hold.members.iter().map(|(p, _)| *p).collect();
+            asked.sort_unstable();
+            assert_eq!(
+                asked, ring,
+                "a hold, {ahead} ahead: the positions beyond the clamp ask for nothing"
+            );
+            for (pos, target) in &hold.members {
+                let want = if *pos < 500 { Target::Fit(uhd) } else { top };
+                assert_eq!(*target, want, "a hold, {ahead} ahead: position {pos}");
+            }
+        }
+    }
+
+    /// raw-pipeline.md, "Order in the queue": farthest first, and at equal
+    /// distance the member in the travel direction is pushed later, so it is
+    /// popped first — both ways. Before brief 008 a stable sort pushed the
+    /// higher position later whatever the direction, right forward and wrong
+    /// on every backward hold (red then on the backward rows).
+    #[test]
+    fn ring_ties_break_toward_the_travel_direction() {
+        let state = LoupeState::default(); // no view: identity
+        let at = |ids: &[usize], id: usize| {
+            ids.iter()
+                .position(|i| *i == id)
+                .unwrap_or_else(|| panic!("{id} is not in {ids:?}"))
+        };
+        let backward = ring_ids(&state, 10, 4, 16, false);
+        let forward = ring_ids(&state, 10, 4, 16, true);
+        for d in 1..=6 {
+            assert!(
+                at(&backward, 10 - d) > at(&backward, 10 + d),
+                "backward, distance {d}: {} must be popped before {}: {backward:?}",
+                10 - d,
+                10 + d
+            );
+            assert!(
+                at(&forward, 10 + d) > at(&forward, 10 - d),
+                "forward, distance {d}: {} must be popped before {}: {forward:?}",
+                10 + d,
+                10 - d
+            );
+        }
+        assert_eq!(
+            (backward.first(), backward.last()),
+            (Some(&16), Some(&9)),
+            "farthest first, the nearest in the travel direction last"
+        );
+    }
+
+    /// raw-pipeline.md, "Culling": a focus drops the QUEUED focus-origin
+    /// entries whose view position lies outside the ring in force, and leaves
+    /// grid entries and in-flight decodes alone — so a reversal culls what
+    /// leaned the wrong way. The clamped row: above fit, the ring in force is
+    /// the full-res ring as the cache clamps it, so a `Z` from fit drops the
+    /// fit-box entries beyond its far end — red when the engine ignores its
+    /// own clamp.
+    #[test]
+    fn a_focus_culls_queued_entries_outside_the_ring_in_force() {
+        use std::time::Duration;
+        let t0 = std::time::Instant::now();
+        let held = t0 + Duration::from_millis(40);
+        let count = 1000;
+        let queued = |state: &LoupeState, i: usize| {
+            state.queue.iter().find(|e| e.index == i).map(|e| e.target)
+        };
+        let planted = |index, target, focus_origin| Entry {
+            index,
+            target,
+            focus_origin,
+            state: RequestState::Settled,
+        };
+        // A settled focus at 99 (the first focus is never transit): its ±2.
+        let mut state = LoupeState::default();
+        focus_on(&mut state, 99, FocusRequest::Long(8640), count, 1, t0);
+        for i in 97..=101 {
+            assert_eq!(queued(&state, i), Some(Target::Long(8640)), "settled {i}");
+        }
+        state
+            .queue
+            .insert(0, planted(117, Target::Long(8640), true));
+        state.queue.insert(0, planted(96, Target::Long(8640), true));
+        state
+            .queue
+            .insert(0, planted(140, Target::Long(1616), false));
+        state.in_flight.push(120);
+        // The key is held: 100 is 40 ms later, a transit ring 98..=115.
+        focus_on(&mut state, 100, FocusRequest::Long(8640), count, 2, held);
+        assert!(in_transit(&state, held), "the premise: a held key");
+        for gone in [117, 96, 97] {
+            assert_eq!(
+                queued(&state, gone),
+                None,
+                "{gone} lies outside the ring in force, 98..=115: {:?}",
+                state.queue
+            );
+        }
+        for i in 98..=115 {
+            assert_eq!(
+                queued(&state, i),
+                Some(Target::Long(MID_RUNG_TARGET)),
+                "transit member {i}"
+            );
+        }
+        assert_eq!(
+            queued(&state, 140),
+            Some(Target::Long(1616)),
+            "a grid want keeps its own cull"
+        );
+        assert!(state.in_flight.contains(&120), "an in-flight decode lands");
+        assert_eq!(queued(&state, 120), None, "and nothing is queued for it");
+
+        // Clamped: a fit box and a clamp of 4 ahead. Settled at fit the ring
+        // is 98..=115 at the box; `Z` (the same index, above fit, still
+        // settled) makes the full-res ring 98..=104 the ring in force.
+        let uhd = FitBox {
+            width: 3840,
+            height: 2160,
+        };
+        let mut state = LoupeState {
+            fit_box: Some(uhd),
+            fullres_clamp: Some(4),
+            ..Default::default()
+        };
+        focus_on(&mut state, 100, FocusRequest::Fit, count, 1, t0);
+        for i in 98..=115 {
+            assert_eq!(queued(&state, i), Some(Target::Fit(uhd)), "at fit {i}");
+        }
+        focus_on(
+            &mut state,
+            100,
+            FocusRequest::Long(u32::MAX),
+            count,
+            2,
+            held,
+        );
+        assert!(!in_transit(&state, held), "the premise: no index change");
+        for i in 98..=104 {
+            assert_eq!(
+                queued(&state, i),
+                Some(Target::Long(u32::MAX)),
+                "the full-res ring {i}"
+            );
+        }
+        for i in 105..=115 {
+            assert_eq!(
+                queued(&state, i),
+                None,
+                "{i} lies beyond the full-res ring's far end, 104"
+            );
+        }
+    }
+
+    /// Brief 008 A7 (raw-pipeline.md, "Revival"): a deferred upgrade revives
+    /// only inside the RING IN FORCE — the ring the focus scheduled, 15 ahead
+    /// at fit — and at no more than what its position asks for now, so during
+    /// a hold above fit a frame the cursor is on or has passed revives at the
+    /// fit box. Red with the gate left at ±`PREFETCH` (the trap
+    /// raw-pipeline.md recorded: +7 dropped), with the revival at the stored
+    /// target (the hold rows read full-res), and when the engine ignores its
+    /// own clamp (105 revived).
+    #[test]
+    fn revival_gates_on_the_ring_in_force() {
+        let now = std::time::Instant::now();
+        let uhd = FitBox {
+            width: 3840,
+            height: 2160,
+        };
+        let fit = Target::Fit(uhd);
+        let top = Target::Long(u32::MAX);
+        let ring_state = |fit_box, desired, transit: bool, clamp| {
+            let mut state = stable_focus_state(100);
+            state.fit_box = fit_box;
+            state.desired = desired;
+            state.fullres_clamp = clamp;
+            state.travel_forward = true;
+            state.moving = transit;
+            state.last_index_change = Some(if transit {
+                now
+            } else {
+                now - SETTLE_DEBOUNCE * 2
+            });
+            state
+        };
+        // What the queue holds for `index` after its revival, if revived.
+        let revived = |state: &mut LoupeState, index, target, req| {
+            revive_deferred(state, index, target, req, 1, 1000, now)
+                .then(|| state.queue.iter().find(|e| e.index == index))
+                .flatten()
+                .map(|e| e.target)
+        };
+        for transit in [true, false] {
+            for (index, want) in [
+                (107, Some(fit)),
+                (115, Some(fit)),
+                (116, None),
+                (98, Some(fit)),
+                (97, None),
+            ] {
+                let mut state = ring_state(Some(uhd), fit, transit, None);
+                assert_eq!(
+                    revived(&mut state, index, fit, RequestState::Transit),
+                    want,
+                    "at fit, transit {transit}: {index}"
+                );
+            }
+        }
+        let long = Target::Long(8640);
+        for (index, want) in [(102, Some(long)), (103, None)] {
+            let mut state = ring_state(None, long, false, None);
+            assert_eq!(
+                revived(&mut state, index, long, RequestState::Settled),
+                want,
+                "no box, settled: {index}"
+            );
+        }
+        for (index, want) in [(100, Some(fit)), (99, Some(fit)), (101, Some(top))] {
+            let mut state = ring_state(Some(uhd), top, true, None);
+            assert_eq!(
+                revived(&mut state, index, top, RequestState::Transit),
+                want,
+                "a hold above fit: {index}"
+            );
+        }
+        for transit in [false, true] {
+            for (index, want) in [(104, Some(top)), (105, None)] {
+                let mut state = ring_state(Some(uhd), top, transit, Some(4));
+                assert_eq!(
+                    revived(&mut state, index, top, RequestState::Settled),
+                    want,
+                    "above fit with a clamp of 4, transit {transit}: {index}"
+                );
+            }
+        }
+    }
+
+    /// Brief 008 A13, its step-3 rows (raw-pipeline.md, "Above fit"): during
+    /// a hold the focused frame and the members behind ask for the fit box,
+    /// and at every focus of the hold the engine re-plans them WHATEVER the
+    /// cache holds — a queued full-res entry for them is replaced by the
+    /// fit-box request, or dropped when that rung is already in hand (the
+    /// early return `schedule` takes for a served request would have left it,
+    /// to be popped: a full-res decode for the frame the cursor is on). An
+    /// in-flight decode lands; the settle afterwards asks for the top rung.
+    #[test]
+    fn a_hold_above_fit_asks_the_fit_box_for_the_focused_frame() {
+        use RequestState::{Settled, Transit};
+        let t0 = std::time::Instant::now();
+        let hold = t0 + std::time::Duration::from_millis(40);
+        let count = 1000;
+        let uhd = FitBox {
+            width: 3840,
+            height: 2160,
+        };
+        let fit = Target::Fit(uhd);
+        let top = Target::Long(u32::MAX);
+        let queued = |state: &LoupeState, i: usize| {
+            state
+                .queue
+                .iter()
+                .find(|e| e.index == i)
+                .map(|e| (e.target, e.state))
+        };
+        let settled_at_100 = || {
+            let mut state = LoupeState {
+                fit_box: Some(uhd),
+                ..Default::default()
+            };
+            focus_on(&mut state, 100, FocusRequest::Long(u32::MAX), count, 1, t0);
+            state
+        };
+        let mut state = settled_at_100();
+        for i in 98..=115 {
+            assert_eq!(queued(&state, i), Some((top, Settled)), "settled {i}");
+        }
+        focus_on(
+            &mut state,
+            101,
+            FocusRequest::Long(u32::MAX),
+            count,
+            2,
+            hold,
+        );
+        assert!(in_transit(&state, hold), "the premise: a hold");
+        for i in [99, 100, 101] {
+            assert_eq!(
+                queued(&state, i),
+                Some((fit, Transit)),
+                "{i}: the focused frame and the members behind ask the fit box"
+            );
+        }
+        for i in 102..=116 {
+            assert_eq!(queued(&state, i), Some((top, Transit)), "{i}: ahead");
+        }
+
+        // 101's fit-box rung is in hand while its full-res is still queued.
+        let mut state = settled_at_100();
+        let rung = FullImage {
+            rgb: Arc::new(vec![0; 3]),
+            width: 3240,
+            height: 2160,
+            kind: RungKind::Screen,
+        };
+        state.cache.insert(101, (rung, 0));
+        focus_on(
+            &mut state,
+            101,
+            FocusRequest::Long(u32::MAX),
+            count,
+            2,
+            hold,
+        );
+        assert_eq!(
+            queued(&state, 101),
+            None,
+            "the queued full-res for the frame the cursor is on is dropped: \
+             its fit-box rung is in hand"
+        );
+        // Once the user stops, the reserved lane asks for the top rung.
+        let later = hold + FOCUS_DEBOUNCE * 2;
+        assert_eq!(
+            next_job(&mut state, true, later),
+            Slot::Job(101, top, Settled),
+            "the settle climbs the frame the hold left at its fit-box rung"
+        );
+
+        // 101 in flight at full-res: it lands; nothing is queued for it.
+        let mut state = settled_at_100();
+        state.queue.retain(|e| e.index != 101);
+        state.in_flight.push(101);
+        focus_on(
+            &mut state,
+            101,
+            FocusRequest::Long(u32::MAX),
+            count,
+            2,
+            hold,
+        );
+        assert!(state.in_flight.contains(&101), "an in-flight decode lands");
+        assert_eq!(queued(&state, 101), None, "and nothing is queued for it");
+    }
+
+    /// Brief 008 R9 (raw-pipeline.md, "The idle cook"): settled at fit on a
+    /// WIDE viewport with the cursor's screen rung in hand, the reserved
+    /// lane's next job is the cursor's full-res, so `Z` after a stop finds it
+    /// cooked or cooking. None while moving, in flight, without a box, on a
+    /// box the reference mid serves (a 3/8 rung left over from a 4K box, on a
+    /// 1080p one), or once the file's best is in hand; with only a mid the
+    /// settle guarantee climbs first, and a queued entry is taken as it is.
+    #[test]
+    fn the_reserved_lane_cooks_the_cursors_full_at_fit_on_a_wide_viewport() {
+        use RequestState::{Settled, Transit};
+        let now = std::time::Instant::now();
+        let uhd = FitBox {
+            width: 3840,
+            height: 2160,
+        };
+        let hd = FitBox {
+            width: 1920,
+            height: 1080,
+        };
+        let top = Target::Long(u32::MAX);
+        let image = |width, height, kind| FullImage {
+            rgb: Arc::new(vec![0; 3]),
+            width,
+            height,
+            kind,
+        };
+        let rung = image(3240, 2160, RungKind::Screen);
+        let at_rest = |fit_box: Option<FitBox>, desired, cached: &FullImage| {
+            let mut state = stable_focus_state(4);
+            state.fit_box = fit_box;
+            state.desired = desired;
+            state.last_index_change = Some(now - SETTLE_DEBOUNCE * 2);
+            state.cache.insert(4, (cached.clone(), 0));
+            state
+        };
+        let mut state = at_rest(Some(uhd), Target::Fit(uhd), &rung);
+        assert_eq!(
+            next_job(&mut state, true, now),
+            Slot::Job(4, top, Settled),
+            "the cursor's full-res behind a stop at fit on 4K"
+        );
+        let mut state = at_rest(Some(uhd), Target::Fit(uhd), &rung);
+        state.last_index_change = Some(now);
+        assert_eq!(next_job(&mut state, true, now), Slot::Wait, "moving");
+        let mut state = at_rest(Some(uhd), Target::Fit(uhd), &rung);
+        state.in_flight.push(4);
+        assert_eq!(next_job(&mut state, true, now), Slot::Wait, "in flight");
+        let mut state = at_rest(None, Target::Fit(uhd), &rung);
+        assert_eq!(next_job(&mut state, true, now), Slot::Wait, "no box");
+        let mut state = at_rest(
+            Some(uhd),
+            Target::Fit(uhd),
+            &image(1616, 1080, RungKind::Mid),
+        );
+        assert_eq!(
+            next_job(&mut state, true, now),
+            Slot::Job(4, Target::Fit(uhd), Settled),
+            "only a mid: the settle guarantee climbs to the box first"
+        );
+        let mut state = at_rest(Some(hd), Target::Fit(hd), &rung);
+        assert_eq!(
+            next_job(&mut state, true, now),
+            Slot::Wait,
+            "a viewport the reference mid serves never cooks, whatever rung is cached"
+        );
+        let mut state = at_rest(Some(uhd), Target::Fit(uhd), &rung);
+        state.best_long.insert(4, 3240);
+        assert_eq!(
+            next_job(&mut state, true, now),
+            Slot::Wait,
+            "the file's best is in hand"
+        );
+        let mut state = at_rest(Some(uhd), Target::Fit(uhd), &rung);
+        state.queue.push(Entry {
+            index: 4,
+            target: Target::Long(8640),
+            focus_origin: true,
+            state: Transit,
+        });
+        assert_eq!(
+            next_job(&mut state, true, now),
+            Slot::Job(4, Target::Long(8640), Transit),
+            "a queued entry is taken as it is, no cook"
+        );
+    }
+
+    /// Brief 008 A4 (raw-pipeline.md, "The decode workers"): the engine
+    /// spawns as many workers as it is given, at least two, the LAST of them
+    /// the focus-reserved lane — named so, from the same flag that makes it
+    /// the lane; `start` keeps three whatever the machine. Red with a fixed
+    /// three, and with the lane's flag read off a fixed index.
+    #[test]
+    fn start_with_spawns_the_decoders_and_reserves_the_last() {
+        let names = |engine: &LoupeEngine| -> Vec<String> {
+            engine
+                .workers
+                .iter()
+                .map(|w| w.thread().name().unwrap_or_default().to_owned())
+                .collect()
+        };
+        let (engine, _events) = LoupeEngine::start_with(Vec::new(), 1, 5);
+        assert_eq!(
+            names(&engine),
+            [
+                "fastcull-loupe-0",
+                "fastcull-loupe-1",
+                "fastcull-loupe-2",
+                "fastcull-loupe-3",
+                "fastcull-loupe-reserved"
+            ]
+        );
+        drop(engine);
+        let (engine, _events) = LoupeEngine::start(Vec::new(), 1);
+        assert_eq!(
+            names(&engine),
+            [
+                "fastcull-loupe-0",
+                "fastcull-loupe-1",
+                "fastcull-loupe-reserved"
+            ]
+        );
+        drop(engine);
+        let (engine, _events) = LoupeEngine::start_with(Vec::new(), 1, 1);
+        assert_eq!(
+            names(&engine),
+            ["fastcull-loupe-0", "fastcull-loupe-reserved"],
+            "at least one backlog worker beside the lane"
+        );
+    }
+
+    /// Brief 008 (ui-grid.md, "The render ladder"; raw-pipeline.md, "The
+    /// ring"): the engine hands the app the windows of its two texture rings,
+    /// leaned by the engine's own latch — the screen-rung ring's is the ring,
+    /// the full-res ring's the full-res ring as the cache clamps it, and with
+    /// no fit box the settled ±2 ring. Red when the latch is ignored (the
+    /// backward row) and when the clamp is (the 2 GiB row).
+    #[test]
+    fn the_engine_hands_the_app_its_leaned_windows() {
+        let uhd = FitBox {
+            width: 3840,
+            height: 2160,
+        };
+        let window = |before, after| RingWindow { before, after };
+        let (engine, _events) = LoupeEngine::start_with(Vec::new(), 8 << 30, 3);
+        engine.set_fit_box(Some(uhd));
+        lock(&engine.shared).travel_forward = true;
+        assert_eq!(
+            engine.texture_windows(),
+            TextureWindows {
+                rung: window(2, 15),
+                full: window(2, 15),
+            },
+            "forward"
+        );
+        lock(&engine.shared).travel_forward = false;
+        assert_eq!(
+            engine.texture_windows(),
+            TextureWindows {
+                rung: window(15, 2),
+                full: window(15, 2),
+            },
+            "backward"
+        );
+        drop(engine);
+        let (engine, _events) = LoupeEngine::start_with(Vec::new(), 2 << 30, 3);
+        engine.set_fit_box(Some(uhd));
+        lock(&engine.shared).travel_forward = true;
+        assert_eq!(
+            engine.texture_windows().full,
+            window(2, 3),
+            "a 2 GiB cache's full-res ring: 3 ahead"
+        );
+        engine.set_fit_box(None);
+        assert_eq!(
+            engine.texture_windows().full,
+            RingWindow::symmetric(PREFETCH),
+            "no box: the settled ±2 ring, the app's texture ring before brief 008"
+        );
     }
 
     /// What a moving frame asks for: the fit box when the engine has one,
@@ -2598,8 +3596,9 @@ mod tests {
         // The revival: the engine is settled (no held key), the deferred
         // state is transit — the entry keeps transit.
         let mut state = stable_focus_state(4);
-        assert!(!in_transit(&state, std::time::Instant::now()));
-        assert!(revive_deferred(&mut state, 5, fit, Transit, 1));
+        let now = std::time::Instant::now();
+        assert!(!in_transit(&state, now));
+        assert!(revive_deferred(&mut state, 5, fit, Transit, 1, 1000, now));
         assert_eq!(
             state.queue.first(),
             Some(&Entry {
@@ -2707,15 +3706,16 @@ mod tests {
         // 9's id-space neighbors (7, 8), which are view strangers.
         let fpos = state.pos_of(9).expect("id 9 is in the view");
         assert_eq!(fpos, 3);
-        let (_, lo, hi) = focus_plan(
+        let settled = plan(
             false,
             true,
             fpos,
+            state.ring_len(10),
             Target::Long(u32::MAX),
             None,
-            state.ring_len(10),
+            RING_AHEAD,
         );
-        let ids = ring_ids(&state, fpos, lo, hi);
+        let ids = ring_ids(&state, fpos, settled.lo, settled.hi, true);
         let mut sorted = ids.clone();
         sorted.sort_unstable();
         assert_eq!(
@@ -2738,7 +3738,7 @@ mod tests {
         // No view installed: identity — the pre-#46 id-space behavior,
         // which keeps core-only consumers and the older tests exact.
         let state = LoupeState::default();
-        let mut ids = ring_ids(&state, 9, 7, 11);
+        let mut ids = ring_ids(&state, 9, 7, 11, true);
         ids.sort_unstable();
         assert_eq!(ids, vec![7, 8, 10, 11], "no view = identity order");
     }
@@ -2807,6 +3807,12 @@ mod tests {
             // exactly one debounce would leave held marginally short.
             focused_at: Some(std::time::Instant::now() - FOCUS_DEBOUNCE * 2),
             focused_target: Target::Long(u32::MAX),
+            // What the focus asked for, as `note_focus` sets it at every
+            // focus before any decode can land (brief 008 step 3: a fixture
+            // completion, no promise changed — the revival now asks the ring
+            // plan what the position wants, which is `desired`, and the
+            // default `Long(0)` is a state the real engine never reaches).
+            desired: Target::Long(u32::MAX),
             ..Default::default()
         }
     }

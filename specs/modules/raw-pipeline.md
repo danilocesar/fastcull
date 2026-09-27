@@ -1172,7 +1172,7 @@ medium's measured behaviour:
 Brief 008 (the screen rung, issue #60; every box below is ticked by the
 commit that lands its tests, and stays open until then):
 
-- [ ] **The ring plan** (brief 008 A1): clock-free over the engine's plan —
+- [x] **The ring plan** (brief 008 A1): clock-free over the engine's plan —
       forward → 2 behind / 15 ahead; a reversal re-leans on the very next
       call; the edges clamp; a folder shorter than the ring → the whole
       folder; on a 3840×2160 box every member asks for the fit box, travelling
@@ -1189,14 +1189,17 @@ commit that lands its tests, and stays open until then):
       `TRANSIT_BEHIND`/`TRANSIT_AHEAD` to `RING_BEHIND`/`RING_AHEAD`, the
       promise kept; its engine has no box, so its settled row stays
       ±`PREFETCH`), `the_ring_at_fit_asks_the_fit_box_travelling_and_settled`,
-      `the_full_res_ring_is_clamped_by_the_cache`. Open: lands with the ring.
-- [ ] **The queue order and the cull** (brief 008): at equal distance the
+      `the_full_res_ring_is_clamped_by_the_cache`. Ticked by the step-3b
+      commit, which carries the ring and these tests; each mutant's red is in
+      its message.
+- [x] **The queue order and the cull** (brief 008): at equal distance the
       member in the travel direction is popped first, both ways; a focus
       drops the queued focus-origin entries outside the ring in force and
       leaves grid entries and in-flight decodes alone —
       `ring_ties_break_toward_the_travel_direction`,
-      `a_focus_culls_queued_entries_outside_the_ring_in_force`. Open: lands
-      with the ring.
+      `a_focus_culls_queued_entries_outside_the_ring_in_force`. Ticked by
+      the step-3b commit, which carries the ring and these tests; each
+      mutant's red is in its message.
 - [x] **The rung factor follows the viewport and the frame** (brief 008
       A2): clock-free, the box rule over (fit box, frame, mid, orientation)
       — 3840×2160 → 3/8 landscape, 2/8 portrait; 2560×1440 → 2/8 landscape,
@@ -1258,7 +1261,9 @@ commit that lands its tests, and stays open until then):
       above fit); a travel direction derived per call is red on
       `a_backward_hold_keeps_leaning_backward_across_refocus`, unchanged
       (the ring behind is 2, as before). Each mutant in a scratch worktree,
-      its red named in the commit. Open: lands with the ring.
+      its red named in the commit. Open: the driven half, ui-grid.md A5's gate
+      2, lands with the driven test; the clock-free reds of all three mutants
+      are in the step-3b commit's message.
 - [x] **Hostile inputs on the new path** (brief 008 A8): the existing tests
       pass on libjpeg-turbo; the 30000×30000 SOF is refused before any
       allocation through the scaled decode too, on both orientation paths;
@@ -1391,13 +1396,15 @@ commit that lands its tests, and stays open until then):
       `tests/zoom_walk.rs`, the mandatory zoom-quality gate above,
       passes in release against the real A1 files on the final tree. Open:
       ticked on the final tree's release run.
-- [ ] **The idle cook** (brief 008): settled at fit on a 4K box with the
+- [x] **The idle cook** (brief 008): settled at fit on a 4K box with the
       cursor's screen rung in hand, the reserved lane's next job is the
       cursor's full-res; none on a box the reference mid serves (a 3/8 rung
       cached on a 1920×1080 box included), none while moving, none in
       flight, none without a box, none once the file's best is cached —
       `the_reserved_lane_cooks_the_cursors_full_at_fit_on_a_wide_viewport`.
-      Open: lands with the rings.
+      Ticked by the step-3b commit, which carries the cook and the test; its
+      mutants' reds are in its message (the memo clause's is a hang, read as
+      `timeout`'s exit 124, as ruled).
 - [x] **The request state travels with the decode** (brief 008): a transit
       focus replaces a queued entry's state; a merge changes it only when
       the target grows; a revived entry keeps the deferred state —

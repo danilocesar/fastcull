@@ -7,14 +7,14 @@
 //! rescue / hold / fit) is decided by `fastcull_core::transit::render_rung`
 //! and walked by the refresh pass in `presenter.rs` — this module supplies
 //! the geometry and the textures it chooses among. The ring's victim choice
-//! is core's too (`transit::evict_fullres`); `insert_fullres` below just
-//! carries it out.
+//! is core's too (`transit::evict_ring`, over the engine's leaned window);
+//! `insert_fullres` below just carries it out.
 
 use std::cell::RefCell;
 use std::rc::Rc;
 
 use fastcull_core::grid::{self, GridLayout};
-use fastcull_core::loupe::is_top_rung;
+use fastcull_core::loupe::{is_top_rung, RingWindow};
 use slint::ComponentHandle;
 
 use crate::presenter::refresh;
@@ -476,30 +476,37 @@ fn apply_pointer_action(
 // left to read back.
 
 /// Keep a full-res texture, giving up slots until the ring is back within
-/// [`FULLRES_RING`].
+/// its window, and say whether `index` is still held afterwards (the ring's
+/// own victim is not; callers use the answer from brief 008 step 5).
 ///
-/// The victim CHOICE — protect the cursor's own texture, farthest by view
-/// distance first, out-of-view entries ahead of everything, ties to the
-/// later slot — lives in `fastcull_core::transit::evict_fullres` and is
-/// table-tested there (A3). Here: re-inserting the texture (a re-announced
-/// index moves to the end of the ring, as it always did) and removing the
-/// slots core names. `evict_fullres` returns None once the ring fits, so
-/// even the capacity test is not re-derived at this end — the literal `5`
-/// that used to sit in this loop is gone, and the ring is now `2·PREFETCH+1`
-/// by construction rather than by comment.
-pub(crate) fn insert_fullres(st: &mut AppState, index: usize, texture: slint::Image) {
+/// The victim CHOICE — protect the cursor's own texture, out-of-view
+/// entries first, then entries outside the window, farthest by view
+/// distance within each, ties to the later slot — lives in
+/// `fastcull_core::transit::evict_ring` and is table-tested there. The
+/// WINDOW is the engine's (`LoupeEngine::texture_windows`), leaned by its
+/// own travel latch, never re-derived here; with no engine (a session swap
+/// in flight) the symmetric ±`PREFETCH` ring. Here: re-inserting the
+/// texture (a re-announced index moves to the end of the ring, as it always
+/// did) and removing the slots core names; `evict_ring` returns None once
+/// the ring fits, so not even the capacity is re-derived at this end.
+pub(crate) fn insert_fullres(st: &mut AppState, index: usize, texture: slint::Image) -> bool {
     st.textures.fullres.retain(|(i, _)| *i != index);
     st.textures.fullres.push((index, texture));
+    let window = st.loupe_view.engine.as_ref().map_or(
+        RingWindow::symmetric(fastcull_core::loupe::PREFETCH),
+        |engine| engine.texture_windows().full,
+    );
     let cursor = st.grid.cursor;
     loop {
         let held: Vec<usize> = st.textures.fullres.iter().map(|(i, _)| *i).collect();
-        match fastcull_core::transit::evict_fullres(&held, cursor, &st.grid.view) {
+        match fastcull_core::transit::evict_ring(&held, cursor, &st.grid.view, window) {
             Some(victim) => {
                 st.textures.fullres.remove(victim);
             }
             None => break,
         }
     }
+    st.textures.fullres.iter().any(|(i, _)| *i == index)
 }
 
 #[cfg(test)]

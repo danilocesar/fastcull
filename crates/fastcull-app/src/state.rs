@@ -397,9 +397,11 @@ pub(crate) struct TextureStore {
     /// which rung each held texture is, and what must be adopted from the
     /// engine cache when no event will fire.
     pub(crate) va: fastcull_core::viewassets::ViewAssets,
-    /// UI-side textures for the focused image ± neighbors: sized to the
-    /// prefetch ring (5) and cursor-protected on eviction (see
-    /// insert_fullres); the core LRU holds the pixel data for rebuilds.
+    /// UI-side textures for the focused image and its neighbours: held
+    /// within the engine's full-res texture window
+    /// (`LoupeEngine::texture_windows`, leaned by its travel latch) and
+    /// cursor-protected on eviction (see insert_fullres); the core LRU
+    /// holds the pixel data for rebuilds.
     pub(crate) fullres: Vec<(usize, slint::Image)>,
     /// Images whose best rung is mid-class-or-smaller but TERMINAL (the
     /// file's native size — bare JPEGs, issue #8): their small texture

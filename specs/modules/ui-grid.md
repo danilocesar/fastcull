@@ -909,7 +909,7 @@ renderer's source offsets are `Fixed<u16, 4>`.
       scheme-resolution branch (an unreachable session bus, NOT
       `dbus-run-session`, which passes vacuously) and asserts light glyphs
       over the dark bar; removing the pin yields 0 bright pixels and fails.
-- [ ] Transit vs settled (reopened by brief 008): a held key is distinguished
+- [x] Transit vs settled (reopened by brief 008): a held key is distinguished
       from taps and decays on release; the request while moving at fit is the
       fit box, served by the cheapest rung — never the full for an A1 frame —
       and 2048 still fails; the ring leans the way of travel over 2 behind
@@ -929,7 +929,9 @@ renderer's source offsets are `Fixed<u16, 4>`.
       engine has no fit box),
       `a_backward_hold_keeps_leaning_backward_across_refocus` (unchanged: the
       ring behind is 2). Not covered: the measured performance figures
-      themselves. Open: ticked when the renamed and amended tests land.
+      themselves. Ticked by brief 008's step-3b commit, which lands the last
+      of the amended tests (the 2 / 15 ring); step 2b renamed the transit
+      request's.
 - [x] No fit-drop, no fling, no phantom fold (issue #46). Core: the ring
       maps view positions to ids and back, the direction latch compares
       positions, deferred revival uses the same ring, the public api decodes
@@ -1178,7 +1180,7 @@ renderer's source offsets are `Fixed<u16, 4>`.
       after the key is released; any soft frame lights it, however brief —
       `the_cue_pill_keeps_its_minimum_while_travelling`. Open: lands with
       the app's fit cue.
-- [ ] **The texture rings hold their leaned windows** (brief 008): core — an
+- [x] **The texture rings hold their leaned windows** (brief 008): core — an
       entry inside the window is never evicted while one outside it is held,
       both leans; a symmetric window is the old distance rule exactly, which
       is how the older eviction rows keep their values; the engine hands the
@@ -1189,8 +1191,9 @@ renderer's source offsets are `Fixed<u16, 4>`.
       `the_ring_is_the_prefetch_ring`, whose promise — 5, the literal the app
       used to carry — becomes the engine's windows),
       `the_victim_rule_holds_over_a_generated_sweep` (leaning windows swept),
-      `the_engine_hands_the_app_its_leaned_windows`. Open: lands with the
-      rings.
+      `the_engine_hands_the_app_its_leaned_windows`. Ticked by brief 008's
+      step-3b commit, which carries the windows and these tests; each
+      mutant's red is in its message.
 - [ ] **The kitchen drops stale full fills, cooks the rest in the order the
       cursor meets them, and keeps both wraps** (brief 008, the redesign's G4;
       the order, Manager ruling 2026-09-26): core — `transit::next_fill` picks the cursor's fill

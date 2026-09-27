@@ -9,12 +9,14 @@
 //! (the strip owns the failed badge), and a cap (`OVERLAY_HOLD_CAP` in the
 //! app, `hold_cap` here) ends a wedged decode's hold.
 //!
-//! This module owns that ladder as [`render_rung`], and the full-res ring's
-//! victim choice as [`evict_fullres`]. It speaks in rungs, holds and
+//! This module owns that ladder as [`render_rung`], the texture rings'
+//! victim choice as [`evict_ring`], and the order the kitchen cooks its
+//! queued full-res fills in as [`next_fill`]. It speaks in rungs, holds and
 //! decisions only — never textures, properties or Slint (01-architecture.md:
 //! if a piece of code can live in `fastcull-core`, it must). The app gathers
-//! the plain-data inputs (texture lookups, the clock read, the zoom factor),
-//! calls in, and does the property writes its answer names.
+//! the plain-data inputs (texture lookups, the clock read, the zoom factor,
+//! the engine's windows), calls in, and does the property writes its answer
+//! names.
 //!
 //! **Why it lives here** (ui-grid.md's own recorded deferral, gate
 //! 2026-08-09): every #46-class bug so far lived exactly in untestable
@@ -23,16 +25,7 @@
 
 use std::time::Duration;
 
-use crate::loupe::PREFETCH;
-
-/// Full-res textures the UI keeps at once: the cursor plus the engine's
-/// prefetch ring on both sides.
-///
-/// This was the bare literal `5` in the app, with `2·PREFETCH+1` written
-/// only in a comment beside it — so a change to [`PREFETCH`] moved the
-/// engine's ring and left the texture ring behind. Derived now, and pinned
-/// by `the_ring_is_the_prefetch_ring`.
-pub const FULLRES_RING: usize = 2 * PREFETCH + 1;
+use crate::loupe::RingWindow;
 
 /// What the overlay should do this refresh.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -178,29 +171,45 @@ pub fn render_rung(i: &RungInputs) -> RenderDecision {
     }
 }
 
-/// Which slot of the full-res texture ring to give up, or `None` while the
-/// ring is within [`FULLRES_RING`].
+/// Which slot of a texture ring to give up, or `None` while the ring holds
+/// no more than its `window`'s capacity (ui-grid.md, "The render ladder").
 ///
 /// `held` is the image ids in slot order (most recently inserted last),
-/// `view` the current view order. Eviction is by VIEW distance from the
-/// cursor, not insertion age (issue #46): age is view-order-blind — the
-/// provisional-order startup window legitimately decodes filename-order
-/// neighbors, and once the capture sort lands those are strangers occupying
-/// slots; age eviction then discarded exactly the view neighbor the next
-/// tap needed while keeping a frame seven positions away (observed as an
-/// 81 ms thumb blink on a warm frame).
+/// `view` the current view order, and `window` the ring's window around the
+/// cursor, LEANED by the engine's travel latch
+/// (`LoupeEngine::texture_windows`, never re-derived here or in the app).
+/// Eviction is by VIEW distance from the cursor, not insertion age (issue
+/// #46): age is view-order-blind — the provisional-order startup window
+/// legitimately decodes filename-order neighbors, and once the capture sort
+/// lands those are strangers occupying slots; age eviction then discarded
+/// exactly the view neighbor the next tap needed while keeping a frame seven
+/// positions away (observed as an 81 ms thumb blink on a warm frame).
 ///
-/// Three rules the caller must not re-derive:
+/// Four rules the caller must not re-derive:
 /// * the CURSOR's own texture is never the victim (it is what the user is
 ///   looking at; a prefetch evicting it was seen as back-arrow quality
 ///   degradation);
 /// * an entry no longer in the view (or any entry when the cursor itself
 ///   is not in the view) is at maximum distance and goes first;
+/// * then any entry OUTSIDE the window goes before any entry inside it, the
+///   farthest first within each class — a symmetric distance cannot hold an
+///   asymmetric ring: after a forward hold it kept the frames just passed
+///   and evicted the runway's far end as it landed (brief 008). With a
+///   symmetric window the rule is plain distance eviction;
 /// * on a TIE the LATER slot goes — the freshly inserted texture loses to
 ///   an equally distant older one, which is what keeps a back-and-forth
 ///   walk from thrashing the neighbor it just came from.
-pub fn evict_fullres(held: &[usize], cursor: usize, view: &[usize]) -> Option<usize> {
-    if held.len() <= FULLRES_RING {
+///
+/// The capacity is the window's size, so a ring holds its whole window, and
+/// a landing outside the window is kept while the ring has room and is the
+/// first victim when it has none.
+pub fn evict_ring(
+    held: &[usize],
+    cursor: usize,
+    view: &[usize],
+    window: RingWindow,
+) -> Option<usize> {
+    if held.len() <= window.capacity() {
         return None;
     }
     let pos_of = |id: usize| view.iter().position(|v| *v == id);
@@ -210,8 +219,9 @@ pub fn evict_fullres(held: &[usize], cursor: usize, view: &[usize]) -> Option<us
             .enumerate()
             .filter(|(_, id)| **id != cursor)
             .max_by_key(|(_, id)| match (cursor_pos, pos_of(**id)) {
-                (Some(c), Some(p)) => p.abs_diff(c),
-                _ => usize::MAX, // not in the view (or no view): first out
+                (Some(c), Some(p)) => (!window.contains(c, p), p.abs_diff(c)),
+                // Not in the view (or no view): first out.
+                _ => (true, usize::MAX),
             })
             .map(|(slot, _)| slot)
             // Only reachable if every slot holds the cursor, which the
@@ -220,11 +230,58 @@ pub fn evict_fullres(held: &[usize], cursor: usize, view: &[usize]) -> Option<us
     )
 }
 
+/// Which of the kitchen's queued full-res fills to cook next — the slot in
+/// `queued` (image ids in queue order) — or `None` when nothing is queued
+/// (01-architecture.md, the kitchen; ui-grid.md, "The render ladder"): the
+/// mirror of [`evict_ring`]'s victim rule. The cursor's fill first; then
+/// fills inside `window` (the full-res texture window, leaned by the
+/// engine's latch) by view distance from the cursor, at equal distance the
+/// one toward the window's lean first (`after > before` leans forward, and a
+/// symmetric window reads forward); then fills outside the window, by
+/// distance; fills for images out of the view (or all of them when the
+/// cursor has left it) last; first queued first among equals. So the member
+/// a tap reaches first is never cooked last, which the kitchen's old
+/// latest-first pop did to the nearest member of a ring fifteen deep.
+pub fn next_fill(
+    queued: &[usize],
+    cursor: usize,
+    view: &[usize],
+    window: RingWindow,
+) -> Option<usize> {
+    let pos_of = |id: usize| view.iter().position(|v| *v == id);
+    let cursor_pos = pos_of(cursor);
+    let forward = window.after >= window.before;
+    queued
+        .iter()
+        .enumerate()
+        // `min_by_key` returns the FIRST minimum: first queued among equals.
+        .min_by_key(|(_, id)| {
+            if **id == cursor {
+                return (0, 0, false);
+            }
+            match (cursor_pos, pos_of(**id)) {
+                (Some(c), Some(p)) => {
+                    let class = if window.contains(c, p) { 1 } else { 2 };
+                    let against_lean = if forward { p < c } else { p > c };
+                    (class, p.abs_diff(c), against_lean)
+                }
+                _ => (3, 0, false),
+            }
+        })
+        .map(|(slot, _)| slot)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::loupe::PREFETCH;
 
     const CAP: Duration = Duration::from_millis(250);
+
+    /// The symmetric ±`PREFETCH` window — the app's full-res texture ring
+    /// before brief 008, under which every eviction row below was written and
+    /// keeps its value: with a symmetric window the rule is plain distance.
+    const SYMMETRIC: RingWindow = RingWindow::symmetric(PREFETCH);
 
     /// The inputs, with everything absent and the overlay wanted: rows
     /// name only what they are about.
@@ -761,21 +818,56 @@ mod tests {
     }
 
     // ---------------------------------------------------------------
-    // The full-res ring.
+    // The texture rings.
     // ---------------------------------------------------------------
 
+    /// The texture rings take their windows from the engine (renamed from
+    /// `the_ring_is_the_prefetch_ring`, whose promise — 5, the literal the
+    /// app used to carry — became the engine's windows, brief 008): one lean
+    /// for the engine's ring and both texture rings, `RingWindow::leaning`,
+    /// and the symmetric ±`PREFETCH` window the app's full-res ring had.
     #[test]
-    fn the_ring_is_the_prefetch_ring() {
-        assert_eq!(FULLRES_RING, 2 * PREFETCH + 1);
-        assert_eq!(FULLRES_RING, 5, "the literal the app used to carry");
+    fn the_texture_rings_are_the_engines_windows() {
+        let forward = RingWindow::leaning(2, 15, true);
+        assert_eq!(
+            forward,
+            RingWindow {
+                before: 2,
+                after: 15
+            }
+        );
+        assert_eq!(
+            forward.capacity(),
+            18,
+            "the ring: 2 behind, 15 ahead, the cursor"
+        );
+        assert_eq!(
+            RingWindow::leaning(2, 15, false),
+            RingWindow {
+                before: 15,
+                after: 2
+            },
+            "a backward lean swaps the sides"
+        );
+        assert_eq!(
+            SYMMETRIC.capacity(),
+            5,
+            "the full-res ring before brief 008"
+        );
+        assert!(forward.contains(400, 398) && forward.contains(400, 415));
+        assert!(!forward.contains(400, 397) && !forward.contains(400, 416));
+        assert!(
+            forward.contains(1, 0),
+            "clamped at the start, never negative"
+        );
     }
 
     #[test]
     fn a_ring_within_capacity_evicts_nothing() {
         let view: Vec<usize> = (0..20).collect();
-        for n in 0..=FULLRES_RING {
+        for n in 0..=SYMMETRIC.capacity() {
             let held: Vec<usize> = (0..n).collect();
-            assert_eq!(evict_fullres(&held, 0, &view), None, "held {n}");
+            assert_eq!(evict_ring(&held, 0, &view, SYMMETRIC), None, "held {n}");
         }
     }
 
@@ -784,7 +876,7 @@ mod tests {
         let view: Vec<usize> = (0..20).collect();
         // Cursor at 10; the farthest held id is 3 (distance 7), in slot 1.
         let held = [9, 3, 10, 11, 12, 8];
-        assert_eq!(evict_fullres(&held, 10, &view), Some(1));
+        assert_eq!(evict_ring(&held, 10, &view, SYMMETRIC), Some(1));
     }
 
     #[test]
@@ -793,7 +885,7 @@ mod tests {
         // entry by distance — and must still survive.
         let view: Vec<usize> = (0..20).collect();
         let held = [10, 9, 8, 7, 6, 5];
-        assert_eq!(evict_fullres(&held, 10, &view), Some(5)); // id 5, not id 10
+        assert_eq!(evict_ring(&held, 10, &view, SYMMETRIC), Some(5)); // id 5, not id 10
     }
 
     #[test]
@@ -806,7 +898,7 @@ mod tests {
         let held = [9, 19, 11, 12, 13, 3];
         // Cursor id 9 sits at view position 8. Distances: 19→1, 11→5,
         // 12→3, 13→1, 3→2. The farthest is id 11 in slot 2.
-        assert_eq!(evict_fullres(&held, 9, &view), Some(2));
+        assert_eq!(evict_ring(&held, 9, &view, SYMMETRIC), Some(2));
     }
 
     #[test]
@@ -815,7 +907,7 @@ mod tests {
         // arrow, so it outranks even the farthest live entry.
         let view = vec![0, 1, 2, 3, 5, 6, 7, 8, 9, 10];
         let held = [0, 4, 9, 10, 8, 7];
-        assert_eq!(evict_fullres(&held, 7, &view), Some(1));
+        assert_eq!(evict_ring(&held, 7, &view, SYMMETRIC), Some(1));
     }
 
     #[test]
@@ -824,10 +916,10 @@ mod tests {
         // non-cursor slot.
         let view = vec![0, 1, 2, 3, 4, 5];
         let held = [0, 1, 2, 3, 4, 99];
-        assert_eq!(evict_fullres(&held, 42, &view), Some(5));
+        assert_eq!(evict_ring(&held, 42, &view, SYMMETRIC), Some(5));
         // ...and with the cursor among them it is still spared.
         let held = [0, 1, 2, 3, 4, 42];
-        assert_eq!(evict_fullres(&held, 42, &view), Some(4));
+        assert_eq!(evict_ring(&held, 42, &view, SYMMETRIC), Some(4));
     }
 
     #[test]
@@ -838,11 +930,11 @@ mod tests {
         let view: Vec<usize> = (0..20).collect();
         let held = [10, 9, 11, 8, 12, 13];
         // Distances: 9→1, 11→1, 8→2, 12→2, 13→3. Farthest is 13 (slot 5).
-        assert_eq!(evict_fullres(&held, 10, &view), Some(5));
+        assert_eq!(evict_ring(&held, 10, &view, SYMMETRIC), Some(5));
         // Remove it and the 8/12 tie decides: slot 4 (id 12), the later.
         let held = [10, 9, 11, 8, 12, 7];
         // 7 is 3 away, so it goes first...
-        assert_eq!(evict_fullres(&held, 10, &view), Some(5));
+        assert_eq!(evict_ring(&held, 10, &view, SYMMETRIC), Some(5));
         // SYNTHETIC ring, deliberately: id 11 appears twice, which
         // `insert_fullres`'s retain-then-push dedupe forbids in the app.
         // The duplicate is NOT the only way to tie at max distance — a
@@ -853,7 +945,7 @@ mod tests {
         // app-reachable (equidistant neighbors on any view).
         let held = [10, 9, 11, 8, 12, 11];
         // ...with the maximum shared by 8 (slot 3) and 12 (slot 4).
-        assert_eq!(evict_fullres(&held, 10, &view), Some(4));
+        assert_eq!(evict_ring(&held, 10, &view, SYMMETRIC), Some(4));
     }
 
     #[test]
@@ -868,7 +960,7 @@ mod tests {
         // View positions: 20@0, 30@1, 9@2, cursor 10@3, 11@4, 21@5, 31@6.
         // Distances: 9→1, 11→1, 30→2, 20→3, 31→3. Farthest is the 20/31
         // tie, and the LATER slot (5, id 31) loses.
-        assert_eq!(evict_fullres(&held, 10, &view), Some(5));
+        assert_eq!(evict_ring(&held, 10, &view, SYMMETRIC), Some(5));
     }
 
     #[test]
@@ -876,7 +968,7 @@ mod tests {
         // No view at all (a session being swapped): every entry is at
         // maximum distance, so the tie rule alone decides.
         let held = [1, 2, 3, 4, 5, 6];
-        assert_eq!(evict_fullres(&held, 3, &[]), Some(5));
+        assert_eq!(evict_ring(&held, 3, &[], SYMMETRIC), Some(5));
     }
 
     #[test]
@@ -887,37 +979,94 @@ mod tests {
         let view: Vec<usize> = (0..20).collect();
         let mut held = vec![10, 3, 11, 17, 9, 12, 8];
         let mut evicted = Vec::new();
-        while let Some(victim) = evict_fullres(&held, 10, &view) {
+        while let Some(victim) = evict_ring(&held, 10, &view, SYMMETRIC) {
             evicted.push(held.remove(victim));
         }
         assert_eq!(evicted, vec![17, 3]);
         assert_eq!(held, vec![10, 11, 9, 12, 8]);
-        assert_eq!(held.len(), FULLRES_RING);
+        assert_eq!(held.len(), SYMMETRIC.capacity());
     }
 
-    /// The rule stated in WORDS rather than in `max_by_key`: farthest by
-    /// view distance wins, out-of-view is maximal, the cursor is spared,
-    /// and a tie goes to the LATER slot.
+    /// The app's loop over one ring (`insert_fullres`): re-inserting an id
+    /// moves it to the end, then slots are given up until `evict_ring` says
+    /// the ring fits.
+    fn insert_all(
+        ids: impl IntoIterator<Item = usize>,
+        cursor: usize,
+        window: RingWindow,
+    ) -> Vec<usize> {
+        let view: Vec<usize> = (0..1000).collect();
+        let mut held: Vec<usize> = Vec::new();
+        for id in ids {
+            held.retain(|h| *h != id);
+            held.push(id);
+            while let Some(victim) = evict_ring(&held, cursor, &view, window) {
+                held.remove(victim);
+            }
+        }
+        held.sort_unstable();
+        held
+    }
+
+    /// Brief 008 (ui-grid.md, "The render ladder"): a ring leaning forward
+    /// holds its whole runway. With the cursor at 400 and the window 2
+    /// behind / 15 ahead, ids 391..=415 land in order and the ring ends
+    /// 398..=415, every frame of the runway 401..=415 held — an entry inside
+    /// the window is never evicted while one outside it is held. With plain
+    /// distance it kept the frames just passed and evicted the runway's far
+    /// end as each landed (391..=408).
+    #[test]
+    fn a_leaning_ring_keeps_its_runway() {
+        let held = insert_all(391..=415, 400, RingWindow::leaning(2, 15, true));
+        assert_eq!(held, (398..=415).collect::<Vec<_>>());
+    }
+
+    /// The mirror: leaning backward, ids 409 down to 385 land and the ring
+    /// ends 385..=402, the runway behind the cursor held.
+    #[test]
+    fn a_backward_lean_keeps_the_runway_behind() {
+        let held = insert_all((385..=409).rev(), 400, RingWindow::leaning(2, 15, false));
+        assert_eq!(held, (385..=402).collect::<Vec<_>>());
+    }
+
+    /// The rule stated in WORDS rather than in `max_by_key`: out-of-view is
+    /// maximal, an entry outside the window goes before any entry inside it,
+    /// farthest by view distance first within each class, the cursor is
+    /// spared, and a tie goes to the LATER slot.
     ///
     /// Written as an explicit scan on purpose. The app's version leaned on
     /// `max_by_key` returning the LAST maximum — documented std behavior,
     /// but nothing in the app ever said the tie rule mattered. Re-deriving
     /// it by hand here is what makes the sweep below a check rather than a
-    /// mirror.
-    fn farthest_by_hand(held: &[usize], cursor: usize, view: &[usize]) -> Option<usize> {
-        if held.len() <= FULLRES_RING {
+    /// mirror. The outside-first class is its own pass over the entries,
+    /// not a key.
+    fn farthest_by_hand(
+        held: &[usize],
+        cursor: usize,
+        view: &[usize],
+        window: RingWindow,
+    ) -> Option<usize> {
+        if held.len() <= window.capacity() {
             return None;
         }
         let pos_of = |id: usize| view.iter().position(|v| *v == id);
+        let distance_of = |id: usize| match (pos_of(cursor), pos_of(id)) {
+            (Some(c), Some(p)) => Some(p.abs_diff(c)),
+            _ => None,
+        };
+        let outside = |id: usize| match (pos_of(cursor), pos_of(id)) {
+            (Some(c), Some(p)) => p + window.before < c || p > c + window.after,
+            _ => true,
+        };
+        // The class the victim comes from: outside the window, if any entry
+        // other than the cursor is.
+        let any_outside = held.iter().any(|id| *id != cursor && outside(*id));
         let mut best: Option<(usize, usize)> = None; // (distance, slot)
         for (slot, id) in held.iter().enumerate() {
-            if *id == cursor {
+            if *id == cursor || outside(*id) != any_outside {
                 continue;
             }
-            let distance = match (pos_of(cursor), pos_of(*id)) {
-                (Some(c), Some(p)) => p.abs_diff(c),
-                _ => usize::MAX,
-            };
+            let distance = distance_of(*id).unwrap_or(usize::MAX);
             // `>=`, not `>`: an equal distance later in the ring replaces
             // the earlier one — the tie goes to the fresher slot.
             if best.is_none_or(|(d, _)| distance >= d) {
@@ -932,7 +1081,8 @@ mod tests {
         // Deterministic LCG (Numerical Recipes): no dependency, same rows
         // every run. 2,000 rings over views that shrink under a filter,
         // cursors that fall out of the view, ties by construction (the id
-        // pool is small), and lengths on both sides of the ring capacity.
+        // pool is small), windows that lean either way or none (each side
+        // 0..=4), and lengths on both sides of the ring capacity.
         let mut seed: u64 = 0x5DEE_CE66;
         let mut next = move |n: usize| {
             seed = seed.wrapping_mul(1_664_525).wrapping_add(1_013_904_223);
@@ -940,8 +1090,16 @@ mod tests {
         };
         let mut evicted_something = 0;
         let mut cursor_out_of_view = 0;
+        let mut leaning = 0;
         for _ in 0..2_000 {
             let view: Vec<usize> = (0..12).filter(|_| next(4) > 0).collect();
+            let window = RingWindow {
+                before: next(5),
+                after: next(5),
+            };
+            if window.before != window.after {
+                leaning += 1;
+            }
             let mut held: Vec<usize> = Vec::new();
             let want = 1 + next(9);
             while held.len() < want {
@@ -954,19 +1112,19 @@ mod tests {
             if !view.contains(&cursor) {
                 cursor_out_of_view += 1;
             }
-            let victim = evict_fullres(&held, cursor, &view);
+            let victim = evict_ring(&held, cursor, &view, window);
             assert_eq!(
                 victim,
-                farthest_by_hand(&held, cursor, &view),
-                "held {held:?} cursor {cursor} view {view:?}"
+                farthest_by_hand(&held, cursor, &view, window),
+                "held {held:?} cursor {cursor} view {view:?} window {window:?}"
             );
             if let Some(slot) = victim {
                 evicted_something += 1;
-                assert!(held.len() > FULLRES_RING, "evicted inside capacity");
+                assert!(held.len() > window.capacity(), "evicted inside capacity");
                 assert_ne!(held[slot], cursor, "the cursor was evicted");
             }
         }
-        // Non-vacuity: the sweep really exercised both interesting shapes.
+        // Non-vacuity: the sweep really exercised the interesting shapes.
         assert!(
             evicted_something > 200,
             "only {evicted_something} evictions"
@@ -975,5 +1133,52 @@ mod tests {
             cursor_out_of_view > 100,
             "only {cursor_out_of_view} stray cursors"
         );
+        assert!(leaning > 1000, "only {leaning} leaning windows");
+    }
+
+    /// Brief 008, the redesign's G4 (ui-grid.md, "The render ladder";
+    /// 01-architecture.md, the kitchen): the kitchen cooks its queued
+    /// full-res fills in the order the cursor meets them — the cursor's
+    /// first, then by view distance inside the window, at equal distance
+    /// toward the window's lean (a symmetric window reads forward), then the
+    /// fills outside the window — whatever order they were queued in. Red
+    /// when the lean is ignored (the backward row).
+    #[test]
+    fn full_fills_cook_in_the_order_the_cursor_meets_them() {
+        let view: Vec<usize> = (0..40).collect();
+        let pops = |window: RingWindow| {
+            let mut queued = vec![7, 3, 5, 12, 4, 6, 30];
+            let mut order = Vec::new();
+            while let Some(slot) = next_fill(&queued, 5, &view, window) {
+                order.push(queued.remove(slot));
+            }
+            order
+        };
+        assert_eq!(
+            pops(RingWindow::leaning(2, 15, true)),
+            [5, 6, 4, 7, 3, 12, 30],
+            "leaning forward"
+        );
+        assert_eq!(
+            pops(RingWindow::leaning(2, 15, false)),
+            [5, 4, 6, 3, 7, 12, 30],
+            "leaning backward: 12 is outside the window, 30 farther outside"
+        );
+        assert_eq!(
+            pops(RingWindow::symmetric(2)),
+            [5, 6, 4, 7, 3, 12, 30],
+            "a symmetric window reads forward on ties"
+        );
+        // Out of the view last, first queued first among equals.
+        let queued = [99, 98, 6];
+        assert_eq!(
+            next_fill(&queued, 5, &view, RingWindow::symmetric(2)),
+            Some(2)
+        );
+        assert_eq!(
+            next_fill(&[99, 98], 5, &view, RingWindow::symmetric(2)),
+            Some(0)
+        );
+        assert_eq!(next_fill(&[], 5, &view, RingWindow::symmetric(2)), None);
     }
 }

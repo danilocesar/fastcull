@@ -211,7 +211,8 @@ fn terminal_flag_marks_a_files_best_rung() {
 }
 
 /// A 24-slot folder made of the three real A1 files, so ring arithmetic
-/// has room to be wrong in (`TRANSIT_AHEAD` is 8; `PREFETCH` is 2).
+/// has room to be wrong in (`RING_AHEAD` is 15, `RING_BEHIND` 2; the settled
+/// ring of an engine with no fit box, `PREFETCH`, is 2).
 fn a1_cycled(n: usize) -> Vec<PathBuf> {
     let base = a1_paths();
     (0..n).map(|i| base[i % base.len()].clone()).collect()
@@ -315,8 +316,9 @@ fn a_backward_hold_keeps_leaning_backward_across_refocus() {
         seen.iter().any(|&i| i <= 6),
         "a backward hold never reached behind the cursor: saw {seen:?}"
     );
-    // 11 + TRANSIT_BEHIND is 13; anything at 14+ can only come from a ring
-    // that flipped forward, which is the bug.
+    // 11 + RING_BEHIND is 13 (the ring behind is 2, as TRANSIT_BEHIND was
+    // before brief 008, so this bound is exactly what it was); anything at
+    // 14+ can only come from a ring that flipped forward, which is the bug.
     assert!(
         !seen.iter().any(|&i| i >= 14),
         "the ring leaned FORWARD during a backward hold — the app's \
