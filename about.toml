@@ -67,9 +67,11 @@ accepted = [
 # "failed to validate all files specified in clarification for crate
 # turbojpeg-sys", and falls back to scanning the crate — which listed it
 # under MIT with a JavaScript file's notice from libjpeg-turbo's docs and
-# none of the three licences above. After every regeneration, check that
-# turbojpeg-sys is still listed under the IJG, BSD 3-Clause and zlib
-# licences.
+# none of the three licences above. So a test checks the generated file on
+# every `cargo test`: `the_licence_file_carries_libjpeg_turbos_notices`
+# (crates/fastcull-core/tests/third_party_licences.rs, brief 008 R15) fails
+# unless turbojpeg-sys is listed under the IJG, BSD 3-Clause and zlib
+# licences with their texts.
 [turbojpeg-sys.clarify]
 license = "(Unlicense OR MIT) AND IJG AND BSD-3-Clause AND Zlib"
 

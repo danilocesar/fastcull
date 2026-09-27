@@ -1135,7 +1135,7 @@ commit that lands its tests, and stays open until then):
       `ring_ties_break_toward_the_travel_direction`,
       `a_focus_culls_queued_entries_outside_the_ring_in_force`. Open: lands
       with the ring.
-- [ ] **The rung factor follows the viewport and the frame** (brief 008
+- [x] **The rung factor follows the viewport and the frame** (brief 008
       A2): clock-free, the box rule over (fit box, frame, mid, orientation)
       — 3840×2160 → 3/8 landscape, 2/8 portrait; 2560×1440 → 2/8 landscape,
       the mid portrait; 1920×1080 → the mid; 5120×2880 → 4/8 landscape, 3/8
@@ -1143,9 +1143,10 @@ commit that lands its tests, and stays open until then):
       already within the box × 1.25 → no rung; a bare JPEG → the same rule;
       the mid's ORIENTED size decides whether it serves —
       `rung_factor_follows_the_viewport_and_the_frame`, with `serves_box`,
-      `fits_box` and `rung_factor` asserted on the same rows. Open: lands
-      with the rung.
-- [ ] **The rung's kind comes from the decode; the ladder stops on oriented
+      `fits_box` and `rung_factor` asserted on the same rows. Ticked by the
+      step-2b commit, which carries the rule and the test; each mutant's red
+      is in its message.
+- [x] **The rung's kind comes from the decode; the ladder stops on oriented
       sizes** (brief 008): a scaled decode is `screen` and never `terminal`,
       even when an IFD under-claims its stream; a portrait mid that serves the
       box stops the ladder; a truncated full at fit keeps the good mid with no
@@ -1158,7 +1159,9 @@ commit that lands its tests, and stays open until then):
       run at fit),
       `a_cached_rung_that_no_longer_serves_the_box_is_re_requested`,
       `a_lossless_stream_decodes_full_scale_through_the_scaled_entry_point`.
-      Open: lands with the rung.
+      Ticked by the step-2b commit, which carries the rung and the last of
+      these tests; each mutant's red is in its message (the lossless one's
+      in the step-1 fix round's, 53a4248).
 - [ ] **The pixel cache and the decoders follow the machine** (brief 008 A4):
       clock-free — the cache over 4 / 8 / 16 / 32 / 64 GiB of total RAM → 2,
       2, 4, 8, 10 GiB, and an unreadable, zero or absurd total → 2 GiB; the
@@ -1316,11 +1319,12 @@ commit that lands its tests, and stays open until then):
       flight, none without a box, none once the file's best is cached —
       `the_reserved_lane_cooks_the_cursors_full_at_fit_on_a_wide_viewport`.
       Open: lands with the rings.
-- [ ] **The request state travels with the decode** (brief 008): a transit
+- [x] **The request state travels with the decode** (brief 008): a transit
       focus replaces a queued entry's state; a merge changes it only when
       the target grows; a revived entry keeps the deferred state —
-      `the_request_state_travels_with_the_decode`. Open: lands with the
-      rung.
+      `the_request_state_travels_with_the_decode`. Ticked by the step-2b
+      commit, which carries the state and the test; each mutant's red is in
+      its message.
 - [ ] **The hold above fit** (brief 008 A13): engine-level and clock-free, the
       time-to-screen, the key period and the workers' state handed in —
       decoders that keep up leave every member ahead full-res; a member that

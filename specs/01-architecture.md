@@ -570,12 +570,13 @@ carries its evidence):
       Changed again the same day, the generator re-ruling of brief 008: the
       generator is Ninja, and the perf-log reading is the proof that ruling
       names.)
-- [ ] The licence file carries libjpeg-turbo's notices (brief 008 A15):
+- [x] The licence file carries libjpeg-turbo's notices (brief 008 A15):
       `turbojpeg-sys` listed under the IJG, BSD-3-Clause and zlib licences
       with their notice texts; red on a file regenerated after the
       clarification fell back —
-      `the_licence_file_carries_libjpeg_turbos_notices`. Open: lands with
-      the test.
+      `the_licence_file_carries_libjpeg_turbos_notices`. Ticked by the
+      step-2b commit, which carries the test; the fallback's red is in its
+      message.
 
 ## Shutdown policy (recorded 2026-07-25)
 

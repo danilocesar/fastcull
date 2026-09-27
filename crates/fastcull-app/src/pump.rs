@@ -288,9 +288,17 @@ pub(crate) fn start(window: &MainWindow, state: &Rc<RefCell<AppState>>) -> slint
                                 index,
                                 image,
                                 terminal,
+                                state,
                             } => {
                                 let long = image.width.max(image.height);
-                                trace_mark(&format!("loupe ready idx {index} long {long}"));
+                                // The kind and the request state are appended
+                                // AFTER the old prefix, so every wait written
+                                // against `loupe ready idx N long L` still
+                                // matches (test-harness.md, the loupe marks).
+                                trace_mark(&format!(
+                                    "loupe ready idx {index} long {long} kind {} state {state}",
+                                    image.kind
+                                ));
                                 let job = route_warm(
                                     long,
                                     terminal,

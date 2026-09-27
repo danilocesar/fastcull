@@ -2,10 +2,12 @@
 //! 1-column view and 1:1 zoom (`specs/modules/raw-pipeline.md` FullRes asset).
 //!
 //! Asset ladder (user decision, raw-pipeline.md): each image climbs
-//! mid-preview (1616×1080, ~5 ms) → full-res (8640×5760, ~140 ms), and a
-//! rung is only cooked when the display exceeds the current asset by more
-//! than `UPSCALE_THRESHOLD` (1.25×). Every rung is published as its own
-//! Ready event so the UI swaps quality in place without blocking.
+//! mid-preview (1616×1080, ~5 ms) → the screen rung (the full JPEG decoded
+//! at N/8 to the loupe's fit box, at fit on a wide viewport; brief 008) →
+//! full-res (8640×5760, ~140 ms), and a rung is only cooked when the display
+//! exceeds the current asset by more than `UPSCALE_THRESHOLD` (1.25×). Every
+//! rung is published as its own Ready event so the UI swaps quality in place
+//! without blocking.
 //!
 //! `focus(index, display_long)` schedules the focused image at top priority
 //! and prefetches ±PREFETCH neighbors — in VIEW order, the order arrows
@@ -14,6 +16,7 @@
 //! while every real neighbor stayed cold. A byte-budget LRU (default
 //! 2 GiB) evicts the least recently focused images, never the focused one.
 
+use std::cmp::Ordering as CmpOrdering;
 use std::collections::HashMap;
 use std::path::PathBuf;
 use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
@@ -50,12 +53,70 @@ pub fn is_top_rung(long_edge: u32, terminal: bool) -> bool {
     long_edge > MID_RUNG_MAX_LONG || terminal
 }
 
+/// The loupe's N=1 cell in PHYSICAL pixels, both sides > 0: what "at fit"
+/// asks the ladder to fill (raw-pipeline.md, "The screen rung": "The fit
+/// box is the loupe's N=1 cell in physical pixels, which the app supplies
+/// on every refresh at the loupe").
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+pub struct FitBox {
+    pub width: u32,
+    pub height: u32,
+}
+
+/// Which decode a loupe image is: the rung the decoder RAN, never a size
+/// (raw-pipeline.md: "The kind is what the decoder RAN — a scale below 8/8
+/// is `screen` — never a comparison with an IFD's size claim, which a file
+/// can under-state"). A screen rung is never the top rung however large, so
+/// the app routes by this before any size test.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+pub enum RungKind {
+    /// The mid preview (the 1616-class embedded JPEG).
+    Mid,
+    /// The full JPEG decoded at N/8, N < 8.
+    Screen,
+    /// The full JPEG at full scale — a bare JPEG's one rung included.
+    Full,
+}
+
+impl std::fmt::Display for RungKind {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.write_str(match self {
+            RungKind::Mid => "mid",
+            RungKind::Screen => "screen",
+            RungKind::Full => "full",
+        })
+    }
+}
+
+/// The request state a decode carried (ui-grid.md, "Transit and settled";
+/// raw-pipeline.md, "The request state travels with the decode"): an
+/// instrument carried out of core on the `Ready` event, not behaviour.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub enum RequestState {
+    /// Asked while the user was moving (a held key, a Y/N chain).
+    Transit,
+    /// Asked at rest — and by grid wants, which have no travel.
+    #[default]
+    Settled,
+}
+
+impl std::fmt::Display for RequestState {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.write_str(match self {
+            RequestState::Transit => "transit",
+            RequestState::Settled => "settled",
+        })
+    }
+}
+
 /// A decoded full-resolution image, shared with the UI without copying.
 #[derive(Debug, Clone)]
 pub struct FullImage {
     pub rgb: Arc<Vec<u8>>,
     pub width: u32,
     pub height: u32,
+    /// The rung this decode is (see [`RungKind`]).
+    pub kind: RungKind,
 }
 
 #[derive(Debug, Clone)]
@@ -66,8 +127,13 @@ pub enum LoupeEvent {
         /// True when this is the file's BEST possible rung (its native
         /// resolution): single-rung sources (bare JPEGs, issue #8) have a
         /// terminal rung at or below mid-class size, and the app needs
-        /// the signal to learn the zoom ceiling from it.
+        /// the signal to learn the zoom ceiling from it. A screen rung is
+        /// never terminal.
         terminal: bool,
+        /// The request state the decode carried when it was queued (an
+        /// instrument for ui-grid.md A5: under a transit capped at the mid
+        /// no screen rung ever lands `transit`).
+        state: RequestState,
     },
     Failed {
         index: usize,
@@ -75,14 +141,181 @@ pub enum LoupeEvent {
     },
 }
 
+/// The reference landscape A1 mid, 1616×1080: the yardstick of the "wide
+/// viewport" predicate, [`mid_serves_box`] (raw-pipeline.md, "The idle
+/// cook": "Wide is one predicate, decided per VIEWPORT").
+pub const REFERENCE_MID: (u32, u32) = (1616, 1080);
+
+/// What a request asks the ladder for: a display long edge (`Long`, the
+/// app's real target — `u32::MAX` above fit, the top rung) or the fit box
+/// (`Fit`, the cheapest rung that serves the loupe's N=1 cell).
+///
+/// Ordered — `schedule` merges a deferred target with `max`, and
+/// `note_focus` re-arms the debounce on an escalation — by the long edge
+/// first, then `Long` above `Fit` at an equal long edge, then the box, so
+/// that `cmp` says `Equal` exactly when the two are `==`. NOT a derived
+/// `Ord`: comparing boxes by their long edge alone would call
+/// `Fit(3840×2160)` equal to `Fit(3840×1600)` while `==` calls them
+/// different, and a merge would then keep whichever came first.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum Target {
+    Long(u32),
+    Fit(FitBox),
+}
+
+impl Target {
+    /// The sort key; see the type's doc.
+    fn key(self) -> (u32, u8, u32, u32) {
+        match self {
+            Target::Long(l) => (l, 1, 0, 0),
+            Target::Fit(b) => (b.width.max(b.height), 0, b.width, b.height),
+        }
+    }
+
+    /// The long edge the target asks for (a box's longer side).
+    fn long(self) -> u32 {
+        self.key().0
+    }
+}
+
+impl Ord for Target {
+    fn cmp(&self, other: &Self) -> CmpOrdering {
+        self.key().cmp(&other.key())
+    }
+}
+
+impl PartialOrd for Target {
+    fn partial_cmp(&self, other: &Self) -> Option<CmpOrdering> {
+        Some(self.cmp(other))
+    }
+}
+
+impl Default for Target {
+    /// Nothing asked yet: the `desired_long: 0` of the engine before brief
+    /// 008.
+    fn default() -> Self {
+        Target::Long(0)
+    }
+}
+
+/// One queued request. `focus_origin` survives the grid-want cull; `state`
+/// is the request state of the focus that last scheduled or re-targeted it
+/// (raw-pipeline.md, "The request state travels with the decode").
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) struct Entry {
+    pub index: usize,
+    pub target: Target,
+    pub focus_origin: bool,
+    pub state: RequestState,
+}
+
+/// Width × height with the two swapped for an EXIF orientation of 5..=8
+/// (the transposing ones): what the screen draws.
+fn oriented(width: u32, height: u32, orientation: u16) -> (u32, u32) {
+    if matches!(orientation, 5..=8) {
+        (height, width)
+    } else {
+        (width, height)
+    }
+}
+
+/// The 1.25 rule for a box — its ONE home; the app asks it too (ui-grid.md,
+/// the quality rule). An image of `width`×`height` (ORIENTED, as the screen
+/// draws it) serves the fit box when the screen shows it upscaled by at
+/// most `UPSCALE_THRESHOLD`: min(bw/w, bh/h) ≤ 5/4, i.e. 4·bw ≤ 5·w or
+/// 4·bh ≤ 5·h — exact integer arithmetic in u64, no float. A zero side never
+/// serves.
+pub fn serves_box(width: u32, height: u32, fit_box: FitBox) -> bool {
+    if width == 0 || height == 0 {
+        return false;
+    }
+    let (w, h) = (u64::from(width), u64::from(height));
+    let (bw, bh) = (u64::from(fit_box.width), u64::from(fit_box.height));
+    4 * bw <= 5 * w || 4 * bh <= 5 * h
+}
+
+/// The "wide viewport" predicate, decided per VIEWPORT (raw-pipeline.md, the
+/// idle cook): true when the reference landscape A1 mid, 1616×1080, serves
+/// the fit box — a viewport up to ~2K, where nothing on the decode path
+/// changes; false on a wide one (QHD, 4K, 5K).
+pub fn mid_serves_box(fit_box: FitBox) -> bool {
+    serves_box(REFERENCE_MID.0, REFERENCE_MID.1, fit_box)
+}
+
+/// The frame already FITS the box × 1.25, so no rung is worth decoding and
+/// the full is the target (raw-pipeline.md, "The factor rule": "A frame
+/// whose full JPEG already fits within the box × 1.25 gets no rung"):
+/// 4·w ≤ 5·bw and 4·h ≤ 5·bh. NOT `serves_box` of the full, which is true of
+/// every frame LARGER than the box — the trap the first branch fell into.
+pub fn fits_box(width: u32, height: u32, fit_box: FitBox) -> bool {
+    let (w, h) = (u64::from(width), u64::from(height));
+    let (bw, bh) = (u64::from(fit_box.width), u64::from(fit_box.height));
+    4 * w <= 5 * bw && 4 * h <= 5 * bh
+}
+
+/// The box rule (raw-pipeline.md, "The factor rule"): the smallest N in
+/// 1..=7 whose N/8 decode of the full JPEG, ORIENTED, serves the fit box —
+/// "the smallest N that serves", never "the nearest" — or `None` when the
+/// oriented full already fits the box × 1.25, or when no N below 8 serves
+/// (N = 8 is the full). `full_width`×`full_height` are the stored, unrotated
+/// sizes; orientation 5..=8 swaps them, and swaps the scaled sizes alike.
+pub fn rung_factor(
+    full_width: u32,
+    full_height: u32,
+    orientation: u16,
+    fit_box: FitBox,
+) -> Option<u8> {
+    let (w, h) = oriented(full_width, full_height, orientation);
+    if fits_box(w, h, fit_box) {
+        return None;
+    }
+    (1..=7u8).find(|&n| {
+        let (sw, sh) = scaled_dims(full_width, full_height, n);
+        let (sw, sh) = oriented(sw, sh, orientation);
+        serves_box(sw, sh, fit_box)
+    })
+}
+
+/// What one frame at fit is served by (raw-pipeline.md, "The fit box": "the
+/// ladder serves it with the cheapest rung: the mid when its ORIENTED size
+/// serves the box, else the screen rung, else the full").
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum FitRungChoice {
+    Mid,
+    /// The screen rung at this N/8.
+    Screen(u8),
+    Full,
+}
+
+/// The ladder's composition at fit for one frame: the mid when its ORIENTED
+/// size serves the box (`mid` is the stored, unrotated size, `None` for a
+/// bare JPEG), else [`rung_factor`]'s rung, else the full.
+pub fn fit_rung(
+    full_width: u32,
+    full_height: u32,
+    mid: Option<(u32, u32)>,
+    orientation: u16,
+    fit_box: FitBox,
+) -> FitRungChoice {
+    if let Some((mw, mh)) = mid {
+        let (ow, oh) = oriented(mw, mh, orientation);
+        if serves_box(ow, oh, fit_box) {
+            return FitRungChoice::Mid;
+        }
+    }
+    match rung_factor(full_width, full_height, orientation, fit_box) {
+        Some(n) => FitRungChoice::Screen(n),
+        None => FitRungChoice::Full,
+    }
+}
+
 #[derive(Default)]
 struct LoupeState {
-    /// Pending (index, display-long-edge), most urgent last (workers pop
-    /// from the back); one entry per index — the LATEST target wins (it
-    /// reflects current intent; an escalation dropped while in flight
-    /// self-heals via the Ready→refresh loop).
-    /// Third field: true = focused/prefetch origin (survives want-culling).
-    queue: Vec<(usize, u32, bool)>,
+    /// Pending requests, most urgent last (workers pop from the back); one
+    /// entry per index — the LATEST target wins (it reflects current
+    /// intent; an escalation dropped while in flight self-heals via the
+    /// Ready→refresh loop). `focus_origin` entries survive want-culling.
+    queue: Vec<Entry>,
     /// Best rung a file can ever provide (long edge), learned when its
     /// ladder tops out: an asset at this size is sufficient for ANY display
     /// — without this memo, 1:1 (u32::MAX target) re-parsed files forever
@@ -92,7 +325,11 @@ struct LoupeState {
     /// Upgrade targets requested while the index was in flight at a smaller
     /// target: re-queued when the flight lands (QE defect — the upgrade was
     /// silently dropped, 1:1 never arrived without the app's refresh loop).
-    deferred: HashMap<usize, u32>,
+    /// The request state rides beside the target, so a revival keeps the
+    /// state of the focus whose target was deferred, never the mode at
+    /// revival (raw-pipeline.md, "The request state travels with the
+    /// decode").
+    deferred: HashMap<usize, (Target, RequestState)>,
     /// LRU cache: index -> (image, last-focus stamp).
     cache: HashMap<usize, (FullImage, u64)>,
     cached_bytes: usize,
@@ -109,9 +346,9 @@ struct LoupeState {
     /// (FOCUS_DEBOUNCE: neither a transient transit focus nor a big
     /// climb freshly queued for a resting frame may capture the lane).
     focused_at: Option<std::time::Instant>,
-    /// The display target of the last focus() call for `focused` —
-    /// escalation detection for the debounce clock.
-    focused_target: u32,
+    /// The target of the last focus for `focused` — escalation detection
+    /// for the debounce clock, by the `Target` order.
+    focused_target: Target,
     /// When the focused INDEX last changed. Unlike `focused_at`, a target
     /// escalation does not reset it — this is the TRANSIT clock.
     last_index_change: Option<std::time::Instant>,
@@ -132,7 +369,12 @@ struct LoupeState {
     /// What the APP asked for, before transit capping. Transit downgrades
     /// the REQUEST, so the settle must remember the real intent or a frame
     /// would stay soft forever once the user stops.
-    desired_long: u32,
+    desired: Target,
+    /// The loupe's fit box, as the app last supplied it (`set_fit_box`);
+    /// `None` before the first layout, off the loupe, and in every engine
+    /// whose consumer never calls it — which then keeps the behaviour
+    /// before brief 008 (raw-pipeline.md, "An engine with no fit box").
+    fit_box: Option<FitBox>,
     /// The app's VIEW order: `view_ids[pos]` = image id, `view_pos[id]` =
     /// position (usize::MAX = filtered out). The prefetch ring and the
     /// travel-direction latch walk THIS order, because arrows move over
@@ -256,6 +498,21 @@ impl LoupeEngine {
     /// immediately (which may be a lower rung — a better one arrives as an
     /// event once cooked).
     pub fn focus(&self, index: usize, display_long: u32) -> Option<FullImage> {
+        self.focus_request(index, FocusRequest::Long(display_long))
+    }
+
+    /// [`focus`](Self::focus) at FIT: the request is the loupe's fit box
+    /// (`set_fit_box`), served by the cheapest rung that serves it — the
+    /// mid on viewports up to ~2K, the screen rung on wider ones
+    /// (raw-pipeline.md, "The fit box"). With no box — before the app's
+    /// first layout — the request is the mid, `MID_RUNG_TARGET`.
+    pub fn focus_fit(&self, index: usize) -> Option<FullImage> {
+        self.focus_request(index, FocusRequest::Fit)
+    }
+
+    /// The lock, the stamp, the clock read and the wake-up around the one
+    /// pure body both focus forms share, [`focus_on`].
+    fn focus_request(&self, index: usize, desired: FocusRequest) -> Option<FullImage> {
         let count = self.shared.paths.len();
         if count == 0 || index >= count {
             return None;
@@ -263,44 +520,21 @@ impl LoupeEngine {
         let stamp = self.shared.stamp.fetch_add(1, Ordering::Relaxed) + 1;
         let now = std::time::Instant::now();
         let mut state = lock(&self.shared);
-        note_focus(&mut state, index, display_long, now);
-        let transit = in_transit(&state, now);
-        // TRANSIT vs SETTLED (user requirement 2026-08-01). Moving: ask only
-        // for the mid rung, across a wide ring leaning the way we travel —
-        // ~5 MB and ~5 ms each, so the workers keep up with a held key.
-        // Stopped: ask for what the app actually wants, over the tight ring,
-        // which is the pre-existing behaviour and is what keeps tap-stepping
-        // through a burst sharp.
-        //
-        // The ring is planned in VIEW-POSITION space and mapped back to
-        // image ids at request time (issue #46): arrows travel the view. A
-        // focused id with no view position (filtered out mid-flight) gets
-        // no neighbors — its neighbors are unknowable, and guessing in id
-        // space is the bug this replaced.
-        let (request, wanted) = match state.pos_of(index) {
-            Some(fpos) => {
-                let (request, lo, hi) = focus_plan(
-                    transit,
-                    state.travel_forward,
-                    fpos,
-                    display_long,
-                    state.ring_len(count),
-                );
-                (request, ring_ids(&state, fpos, lo, hi))
-            }
-            None => (plan_request(transit, display_long), Vec::new()),
-        };
-        // Farthest neighbors first, focused index last (back of the queue
-        // = popped first by workers).
-        let mut wanted: Vec<usize> = wanted.into_iter().filter(|i| *i < count).collect();
-        wanted.push(index);
-        for i in wanted {
-            schedule(&mut state, i, request, stamp, Origin::Focus);
-        }
-        let hit = state.cache.get(&index).map(|(img, _)| img.clone());
+        let hit = focus_on(&mut state, index, desired, count, stamp, now);
         drop(state);
         self.shared.wakeup.notify_all();
         hit
+    }
+
+    /// Supply the loupe's fit box — its N=1 cell in physical pixels — or
+    /// `None` when there is none (before the first layout, off the loupe).
+    /// The app calls this on every refresh at the loupe, the way it
+    /// supplies the view order; a box with a zero side is stored as `None`.
+    /// An engine whose consumer never calls it keeps the behaviour before
+    /// brief 008 (raw-pipeline.md, "An engine with no fit box").
+    pub fn set_fit_box(&self, fit_box: Option<FitBox>) {
+        let fit_box = fit_box.filter(|b| b.width > 0 && b.height > 0);
+        lock(&self.shared).fit_box = fit_box;
     }
 
     /// Cached image without scheduling anything (e.g. re-render).
@@ -334,13 +568,20 @@ impl LoupeEngine {
         // This call defines the CURRENT visible set: cull all stale grid
         // wants so scrolled-past cells never starve on-screen ones
         // (validator finding — the backlog ran before visible work).
-        state.queue.retain(|(_, _, focus_origin)| *focus_origin);
+        state.queue.retain(|e| e.focus_origin);
         let mut queued_any = false;
         for i in indexes {
             if i >= count {
                 continue;
             }
-            queued_any |= schedule(&mut state, i, display_long, stamp, Origin::Grid);
+            queued_any |= schedule(
+                &mut state,
+                i,
+                Target::Long(display_long),
+                stamp,
+                Origin::Grid,
+                RequestState::Settled,
+            );
         }
         drop(state);
         if queued_any {
@@ -367,20 +608,107 @@ fn lock(shared: &Shared) -> std::sync::MutexGuard<'_, LoupeState> {
         .unwrap_or_else(std::sync::PoisonError::into_inner)
 }
 
+/// What a focus asks for before the engine resolves it: the app's display
+/// target, or the fit box — resolved against the engine's own box under the
+/// same lock that holds it, so a focus never pairs a box with a stale one.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum FocusRequest {
+    Long(u32),
+    Fit,
+}
+
+/// The one body behind [`LoupeEngine::focus`] and
+/// [`LoupeEngine::focus_fit`], pure over the state and an explicit clock so
+/// the unit tests drive it without workers: note the focus, decide
+/// TRANSIT vs SETTLED, plan the ring, schedule it — farthest first, the
+/// focused index last (the back of the queue, popped first) — and return
+/// the cached image of `index`, whatever rung it is.
+fn focus_on(
+    state: &mut LoupeState,
+    index: usize,
+    desired: FocusRequest,
+    count: usize,
+    stamp: u64,
+    now: std::time::Instant,
+) -> Option<FullImage> {
+    let desired = match desired {
+        FocusRequest::Long(l) => Target::Long(l),
+        FocusRequest::Fit => state
+            .fit_box
+            .map_or(Target::Long(MID_RUNG_TARGET), Target::Fit),
+    };
+    note_focus(state, index, desired, now);
+    let transit = in_transit(state, now);
+    let req = if transit {
+        RequestState::Transit
+    } else {
+        RequestState::Settled
+    };
+    // TRANSIT vs SETTLED (user requirement 2026-08-01). Moving: ask only for
+    // what a moving frame needs (`transit_request`), across a wide ring
+    // leaning the way we travel, so the workers keep up with a held key.
+    // Stopped: ask for what the app actually wants, over the tight ring,
+    // which is the pre-existing behaviour and is what keeps tap-stepping
+    // through a burst sharp.
+    //
+    // The ring is planned in VIEW-POSITION space and mapped back to image
+    // ids at request time (issue #46): arrows travel the view. A focused id
+    // with no view position (filtered out mid-flight) gets no neighbors —
+    // its neighbors are unknowable, and guessing in id space is the bug
+    // this replaced.
+    let (request, wanted) = match state.pos_of(index) {
+        Some(fpos) => {
+            let (request, lo, hi) = focus_plan(
+                transit,
+                state.travel_forward,
+                fpos,
+                desired,
+                state.fit_box,
+                state.ring_len(count),
+            );
+            (request, ring_ids(state, fpos, lo, hi))
+        }
+        None => (plan_request(transit, desired, state.fit_box), Vec::new()),
+    };
+    // Farthest neighbors first, focused index last (back of the queue =
+    // popped first by workers).
+    let mut wanted: Vec<usize> = wanted.into_iter().filter(|i| *i < count).collect();
+    wanted.push(index);
+    for i in wanted {
+        schedule(state, i, request, stamp, Origin::Focus, req);
+    }
+    state.cache.get(&index).map(|(img, _)| img.clone())
+}
+
 /// Ladder rule: does this asset serve a display of `display_long` pixels?
 fn serves(img: &FullImage, display_long: u32) -> bool {
     let asset_long = img.width.max(img.height) as f32;
     asset_long * UPSCALE_THRESHOLD >= display_long as f32
 }
 
+/// Does this decoded image satisfy `target`? A `Long` target by the long
+/// edge (`serves`), a `Fit` target by the image's own, already ORIENTED size
+/// against the box (`serves_box`) — never the IFD's stored, unrotated
+/// claim — or, either way, when it already is the best rung this file can
+/// provide (`best`, the terminal-rung memo). The one check behind
+/// `sufficient_cached`, `cached_serves`, `next_job`'s post-pop check and the
+/// ladder's stop test.
+fn served_by(img: &FullImage, target: Target, best: Option<u32>) -> bool {
+    let reached = match target {
+        Target::Long(l) => serves(img, l),
+        Target::Fit(b) => serves_box(img.width, img.height, b),
+    };
+    reached || best.is_some_and(|b| img.width.max(img.height) >= b)
+}
+
 /// Cached-and-sufficient check (refreshing the LRU stamp): an asset counts
-/// as sufficient when it serves the display OR it already is the best rung
+/// as sufficient when it serves the target OR it already is the best rung
 /// this file can provide (terminal-rung memo).
-fn sufficient_cached(state: &mut LoupeState, index: usize, display_long: u32, stamp: u64) -> bool {
+fn sufficient_cached(state: &mut LoupeState, index: usize, target: Target, stamp: u64) -> bool {
     let best = state.best_long.get(&index).copied();
     if let Some((img, s)) = state.cache.get_mut(&index) {
         *s = stamp;
-        serves(img, display_long) || best.is_some_and(|b| img.width.max(img.height) >= b)
+        served_by(img, target, best)
     } else {
         false
     }
@@ -395,11 +723,12 @@ fn sufficient_cached(state: &mut LoupeState, index: usize, display_long: u32, st
 /// settled on as the OLDEST in the cache, making it the first eviction
 /// victim the moment they arrow away — exactly backwards for arrowing back
 /// to compare two frames of a burst.
-fn cached_serves(state: &LoupeState, index: usize, display_long: u32) -> bool {
+fn cached_serves(state: &LoupeState, index: usize, target: Target) -> bool {
     let best = state.best_long.get(&index).copied();
-    state.cache.get(&index).is_some_and(|(img, _)| {
-        serves(img, display_long) || best.is_some_and(|b| img.width.max(img.height) >= b)
-    })
+    state
+        .cache
+        .get(&index)
+        .is_some_and(|(img, _)| served_by(img, target, best))
 }
 
 /// Land-time revival of a deferred upgrade (an in-flight index whose wanted
@@ -411,8 +740,17 @@ fn cached_serves(state: &LoupeState, index: usize, display_long: u32) -> bool {
 /// exactly this way). Dropping a stale upgrade loses nothing: focus()
 /// re-requests it the moment the user returns. The focused index re-queues
 /// at the back (popped next); a ring neighbor goes to the front so it can
-/// never outrank the focused frame's own pending work.
-fn revive_deferred(state: &mut LoupeState, index: usize, target: u32, stamp: u64) -> bool {
+/// never outrank the focused frame's own pending work. The revived entry
+/// carries `req`, the request state stored beside the deferred target —
+/// never the mode at revival (raw-pipeline.md, "The request state travels
+/// with the decode").
+fn revive_deferred(
+    state: &mut LoupeState,
+    index: usize,
+    target: Target,
+    req: RequestState,
+    stamp: u64,
+) -> bool {
     // Ring membership in VIEW positions (issue #46), like the ring itself:
     // an id 2 away can be a view-order stranger, and a view neighbor can
     // be any id at all. No position (filtered out) = not in the ring.
@@ -425,11 +763,17 @@ fn revive_deferred(state: &mut LoupeState, index: usize, target: u32, stamp: u64
     if !in_ring || state.failed.contains(&index) || sufficient_cached(state, index, target, stamp) {
         return false;
     }
-    state.queue.retain(|(q, _, _)| *q != index);
+    state.queue.retain(|e| e.index != index);
+    let entry = Entry {
+        index,
+        target,
+        focus_origin: true,
+        state: req,
+    };
     if state.focused == Some(index) {
-        state.queue.push((index, target, true));
+        state.queue.push(entry);
     } else {
-        state.queue.insert(0, (index, target, true));
+        state.queue.insert(0, entry);
     }
     true
 }
@@ -461,26 +805,52 @@ enum Origin {
 ///
 /// Returns true only when an entry was actually queued — `want` wakes
 /// workers on that, `focus` wakes them unconditionally.
-fn schedule(state: &mut LoupeState, index: usize, target: u32, stamp: u64, origin: Origin) -> bool {
+fn schedule(
+    state: &mut LoupeState,
+    index: usize,
+    target: Target,
+    stamp: u64,
+    origin: Origin,
+    req: RequestState,
+) -> bool {
     if sufficient_cached(state, index, target, stamp) || state.failed.contains(&index) {
         return false;
     }
     if state.in_flight.contains(&index) {
-        let e = state.deferred.entry(index).or_insert(0);
-        *e = (*e).max(target);
+        // The request state changes only when the target GROWS: an equal
+        // or smaller request later in a hold must not relabel the decode a
+        // bigger one deferred (raw-pipeline.md, "The request state travels
+        // with the decode").
+        let e = state.deferred.entry(index).or_insert((target, req));
+        if target > e.0 {
+            *e = (target, req);
+        }
         return false;
     }
     match origin {
         Origin::Focus => {
-            state.queue.retain(|(q, _, _)| *q != index);
-            state.queue.push((index, target, true));
+            state.queue.retain(|e| e.index != index);
+            state.queue.push(Entry {
+                index,
+                target,
+                focus_origin: true,
+                state: req,
+            });
         }
         Origin::Grid => {
-            if state.queue.iter().any(|(q, _, _)| *q == index) {
+            if state.queue.iter().any(|e| e.index == index) {
                 return false; // already scheduled by focus/prefetch
             }
             // Front of the vec = popped last: focused work stays first.
-            state.queue.insert(0, (index, target, false));
+            state.queue.insert(
+                0,
+                Entry {
+                    index,
+                    target,
+                    focus_origin: false,
+                    state: req,
+                },
+            );
         }
     }
     true
@@ -498,10 +868,10 @@ fn schedule(state: &mut LoupeState, index: usize, target: u32, stamp: u64, origi
 /// work must survive the debounce regardless of how long the focus has
 /// rested. A same-or-smaller target (render-cadence re-focus, zoom out)
 /// never resets.
-fn note_focus(state: &mut LoupeState, index: usize, display_long: u32, now: std::time::Instant) {
+fn note_focus(state: &mut LoupeState, index: usize, desired: Target, now: std::time::Instant) {
     // The app's real intent, before any transit capping, so the settle
     // knows what to climb to.
-    state.desired_long = display_long;
+    state.desired = desired;
     if state.focused != Some(index) {
         // A change hard on the heels of the previous one is a held key.
         state.moving = state
@@ -524,18 +894,21 @@ fn note_focus(state: &mut LoupeState, index: usize, display_long: u32, now: std:
     if state.focused != Some(index) {
         state.focused = Some(index);
         state.focused_at = Some(now);
-        state.focused_target = display_long;
-    } else if display_long > state.focused_target {
+        state.focused_target = desired;
+    } else if desired > state.focused_target {
+        // By the `Target` order: fit box → the top rung re-arms (a Z at
+        // fit); back down never does.
         state.focused_at = Some(now);
-        state.focused_target = display_long;
+        state.focused_target = desired;
     }
 }
 
 /// What a worker should do next.
 #[derive(Debug, PartialEq)]
 enum Slot {
-    /// Decode this (index, display_long).
-    Job(usize, u32),
+    /// Decode this index to this target, carrying the request state it was
+    /// queued with.
+    Job(usize, Target, RequestState),
     /// Nothing for this worker: wait for a queue notification.
     Wait,
     /// The reserved worker's debounce hasn't elapsed: wait at most this
@@ -584,18 +957,19 @@ const SETTLE_DEBOUNCE: std::time::Duration = std::time::Duration::from_millis(15
 /// Transit prefetch is DIRECTIONAL: reading ten frames behind while the
 /// user flies forward is waste, so the ring leans the way they travel and
 /// flips when they reverse. Wide is affordable only because transit asks
-/// for the ~5 MB mid rung — the whole ring costs less than ONE 149 MB
-/// full-res frame.
+/// for no more than the fit box — at most a screen rung, ~5 MB for a mid and
+/// ~21 MB for a 4K rung, each far less than ONE 149 MB full-res frame.
 const TRANSIT_AHEAD: usize = 8;
 const TRANSIT_BEHIND: usize = 2;
 
 /// Is the user MOVING between frames (held key, `[`/`]`, a Y/N
 /// auto-advance chain) rather than looking at one?
 ///
-/// While true the engine asks only for the mid rung, however far above fit
-/// the view is (user requirement 2026-08-01: "while I'm holding a key I
-/// don't need the image to be as good as possible, I need it to move fast;
-/// when I release the key, then I want quality to be high").
+/// While true the engine asks for no more than the fit box, however far
+/// above fit the view is — the mid on an engine with no box (user
+/// requirement 2026-08-01: "while I'm holding a key I don't need the image
+/// to be as good as possible, I need it to move fast; when I release the
+/// key, then I want quality to be high").
 ///
 /// This governs what is REQUESTED, never what is DISPLAYED. The renderer
 /// always shows the best rung in cache, so flying back over frames whose
@@ -606,25 +980,26 @@ const TRANSIT_BEHIND: usize = 2;
 /// SETTLED decision (user requirement 2026-08-01), pure so it can be
 /// tested without workers.
 ///
-/// Moving: the mid rung only, over a wide ring leaning the way we travel
-/// — ~5 MB and ~5 ms each, so the workers keep up with a held key, and
-/// the lean is what puts frames in cache BEFORE the finger reaches them.
-/// Stopped: what the app actually wants over the tight ring, which is the
-/// pre-existing behaviour and is what keeps tap-stepping through a burst
-/// sharp.
+/// Moving: `transit_request` — the fit box, or the mid with no box — over a
+/// wide ring leaning the way we travel, so the workers keep up with a held
+/// key, and the lean is what puts frames in cache BEFORE the finger reaches
+/// them. Stopped: what the app actually wants over the tight ring, which is
+/// the pre-existing behaviour and is what keeps tap-stepping through a
+/// burst sharp.
 ///
 /// Returns `(request, lo, hi)` with `lo..=hi` already clamped to `count`.
 ///
 /// Since issue #46 the coordinates are VIEW POSITIONS, not image ids —
-/// the caller (`focus`) maps positions back to ids via `ring_ids` at
+/// the caller (`focus_on`) maps positions back to ids via `ring_ids` at
 /// request time. The policy in here is unchanged.
 fn focus_plan(
     transit: bool,
     forward: bool,
     index: usize,
-    display_long: u32,
+    desired: Target,
+    fit_box: Option<FitBox>,
     count: usize,
-) -> (u32, usize, usize) {
+) -> (Target, usize, usize) {
     if transit {
         // A reversal must re-lean immediately: arrowing back through a
         // burst you just flew over is the commonest correction there is,
@@ -635,40 +1010,49 @@ fn focus_plan(
             (TRANSIT_AHEAD, TRANSIT_BEHIND)
         };
         (
-            plan_request(transit, display_long),
+            plan_request(transit, desired, fit_box),
             index.saturating_sub(back),
             (index + ahead).min(count - 1),
         )
     } else {
         (
-            display_long,
+            desired,
             index.saturating_sub(PREFETCH),
             (index + PREFETCH).min(count - 1),
         )
     }
 }
 
-/// What to ask the decoder for: the mid while moving, the app's real
-/// target when stopped. Split from `focus_plan` so a focus with no view
-/// position (no ring) still requests the right rung.
-fn plan_request(transit: bool, display_long: u32) -> u32 {
+/// What to ask the decoder for: `transit_request` while moving, the app's
+/// real target when stopped. Split from `focus_plan` so a focus with no
+/// view position (no ring) still requests the right rung.
+fn plan_request(transit: bool, desired: Target, fit_box: Option<FitBox>) -> Target {
     if transit {
-        transit_request(display_long)
+        transit_request(desired, fit_box)
     } else {
-        display_long
+        desired
     }
 }
 
-/// What a moving frame asks the decoder for.
+/// What a moving frame asks the decoder for: the fit box when the engine
+/// has one — at fit and above it alike (raw-pipeline.md, "The ring": during
+/// a hold the focused frame asks for the fit box, never full-res) — and,
+/// with no box, the mid (raw-pipeline.md, "An engine with no fit box").
+/// EVERY transit request the engine makes comes from this one function, so
+/// one change to it moves them all.
 ///
-/// `MID_RUNG_TARGET`, not `MID_RUNG_MAX_LONG`: the latter (2048) is the
-/// ceiling of what COUNTS as mid class, but `serves` allows only a 1.25x
-/// upscale, so a 1616 mid covers 2020 px — 28 short of 2048. Asking for
-/// 2048 quietly sent every transit frame up to full-res anyway, and the
-/// whole change measured as no improvement at all until the arithmetic was
-/// checked. `transit_request_is_served_by_the_mid_rung` pins both halves.
-fn transit_request(display_long: u32) -> u32 {
-    display_long.min(MID_RUNG_TARGET)
+/// With no box: `MID_RUNG_TARGET`, not `MID_RUNG_MAX_LONG`: the latter
+/// (2048) is the ceiling of what COUNTS as mid class, but `serves` allows
+/// only a 1.25x upscale, so a 1616 mid covers 2020 px — 28 short of 2048.
+/// Asking for 2048 quietly sent every transit frame up to full-res anyway,
+/// and the whole change measured as no improvement at all until the
+/// arithmetic was checked. `transit_request_is_the_fit_box_and_never_the_full`
+/// pins both halves, and the box.
+fn transit_request(desired: Target, fit_box: Option<FitBox>) -> Target {
+    match fit_box {
+        Some(b) => Target::Fit(b),
+        None => Target::Long(desired.long().min(MID_RUNG_TARGET)),
+    }
 }
 
 fn in_transit(state: &LoupeState, now: std::time::Instant) -> bool {
@@ -702,12 +1086,13 @@ fn next_job(state: &mut LoupeState, focus_reserved: bool, now: std::time::Instan
             if held < FOCUS_DEBOUNCE {
                 return Slot::WaitFor(FOCUS_DEBOUNCE - held);
             }
-            match state.queue.iter().rposition(|(q, _, _)| *q == f) {
+            match state.queue.iter().rposition(|e| e.index == f) {
                 Some(pos) => pos,
                 None => {
-                    // SETTLE GUARANTEE. Transit deliberately asked only for
-                    // the mid, so once the user stops, SOMETHING has to ask
-                    // for the real target — and it cannot be the app, whose
+                    // SETTLE GUARANTEE. Transit deliberately asked for no
+                    // more than the fit box (the mid, with no box), so once
+                    // the user stops, SOMETHING has to ask for the real
+                    // target — and it cannot be the app, whose
                     // refresh loop goes quiet exactly when nothing is
                     // decoding. This lane already wakes on a timer, so it is
                     // the one place that can promise it: settled, focused
@@ -716,14 +1101,19 @@ fn next_job(state: &mut LoupeState, focus_reserved: bool, now: std::time::Instan
                     let settled = state
                         .last_index_change
                         .is_some_and(|t| now.saturating_duration_since(t) >= SETTLE_DEBOUNCE);
-                    let want = state.desired_long;
+                    let want = state.desired;
                     if settled
-                        && want > 0
+                        && want.long() > 0
                         && !state.failed.contains(&f)
                         && !state.in_flight.contains(&f)
                         && !cached_serves(state, f, want)
                     {
-                        state.queue.push((f, want, true));
+                        state.queue.push(Entry {
+                            index: f,
+                            target: want,
+                            focus_origin: true,
+                            state: RequestState::Settled,
+                        });
                         state.queue.len() - 1
                     } else {
                         return Slot::Wait;
@@ -736,28 +1126,25 @@ fn next_job(state: &mut LoupeState, focus_reserved: bool, now: std::time::Instan
                 None => return Slot::Wait,
             }
         };
-        let (index, display_long, _) = state.queue.remove(pos);
-        if let Some((img, _)) = state.cache.get(&index) {
-            let best = state.best_long.get(&index).copied();
-            if serves(img, display_long) || best.is_some_and(|b| img.width.max(img.height) >= b) {
-                continue; // upgraded or topped out meanwhile
-            }
+        let entry = state.queue.remove(pos);
+        if cached_serves(state, entry.index, entry.target) {
+            continue; // upgraded or topped out meanwhile
         }
-        state.in_flight.push(index);
-        return Slot::Job(index, display_long);
+        state.in_flight.push(entry.index);
+        return Slot::Job(entry.index, entry.target, entry.state);
     }
 }
 
 fn worker(shared: &Shared, focus_reserved: bool) {
     loop {
-        let (index, display_long) = {
+        let (index, target, req) = {
             let mut state = lock(shared);
             loop {
                 if shared.shutdown.load(Ordering::SeqCst) {
                     return;
                 }
                 match next_job(&mut state, focus_reserved, std::time::Instant::now()) {
-                    Slot::Job(index, display_long) => break (index, display_long),
+                    Slot::Job(index, target, req) => break (index, target, req),
                     Slot::Wait => {
                         state = shared
                             .wakeup
@@ -788,7 +1175,7 @@ fn worker(shared: &Shared, focus_reserved: bool) {
                 .unwrap_or(0)
         };
         let outcome = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
-            decode_ladder(shared, index, display_long, current_long, focus_reserved)
+            decode_ladder(shared, index, target, current_long, focus_reserved, req)
         }))
         .unwrap_or_else(|_| Err("internal error (panic) decoding image".into()));
 
@@ -801,9 +1188,9 @@ fn worker(shared: &Shared, focus_reserved: bool) {
         if failure.is_some() {
             state.failed.insert(index);
         }
-        if let Some(target) = state.deferred.remove(&index) {
+        if let Some((target, req)) = state.deferred.remove(&index) {
             let stamp = shared.stamp.load(Ordering::Relaxed);
-            if revive_deferred(&mut state, index, target, stamp) {
+            if revive_deferred(&mut state, index, target, req, stamp) {
                 shared.wakeup.notify_all();
             }
         }
@@ -817,8 +1204,9 @@ fn worker(shared: &Shared, focus_reserved: bool) {
     }
 }
 
-/// Decode rungs for `index` until one serves `display_long`, publishing each
-/// improvement over `current_long` to the cache + event channel.
+/// Decode rungs for `index` until one serves `target`, publishing each
+/// improvement over `current_long` to the cache + event channel, every
+/// `Ready` carrying `req`, the request state the decode was queued with.
 /// `reserved_lane`: this flight runs on the focus-reserved worker, which
 /// exists ONLY to serve the focused frame — at every rung boundary it
 /// re-checks that its index is still THE focus and abandons otherwise
@@ -831,18 +1219,40 @@ fn worker(shared: &Shared, focus_reserved: bool) {
 /// lane spent a ~30 s debug climb on it, and the settled frame 4
 /// missed the shutter's 60 s cap. Backlog workers never abandon:
 /// their in-flight neighbors are legitimate prefetch.
+///
+/// At fit (`target` is `Fit(box)`) the full JPEG is first decoded at the
+/// screen rung's scale, `rung_factor`'s N/8 (raw-pipeline.md, "The screen
+/// rung"), and what follows is read off the KIND of the image that decode
+/// returned — the scale the decoder ran — never off the IFD's size claim,
+/// which `find_embedded_jpegs` trusts over the SOF:
+/// - it failed: as any failed rung — a good lower rung stays, memoized,
+///   with no Failed; nothing does, and the image fails. No second attempt
+///   at full scale: the same bytes would fail the same way;
+/// - it is a `Full` (the decoder ran 8/8 — a lossless, CMYK or YCCK stream):
+///   it IS the full rung, published as the plain decode would publish it,
+///   which then does not run (it would decode the same JPEG twice);
+/// - it is a `Screen` rung larger than what is in hand: published, never
+///   terminal; the ladder stops if it serves, and otherwise falls through
+///   to the plain decode (an IFD that over-claims its stream);
+/// - it is a `Screen` rung no larger: nothing published; falls through.
+///
+/// After EVERY publish the stop test reads the decoded, ORIENTED image,
+/// never the IFD's stored, unrotated size: a portrait mid on a QHD box
+/// serves oriented and fails unrotated.
 fn decode_ladder(
     shared: &Shared,
     index: usize,
-    display_long: u32,
+    target: Target,
     current_long: u32,
     reserved_lane: bool,
+    req: RequestState,
 ) -> Result<(), String> {
     let path = &shared.paths[index];
     let mut file = std::fs::File::open(path).map_err(|e| format!("open: {e}"))?;
     let previews = find_embedded_jpegs(&mut file).map_err(|e| format!("parse: {e}"))?;
 
     let orientation = previews.orientation;
+    let full = previews.fullres().cloned();
     let mut rungs: Vec<crate::raw::EmbeddedJpeg> = Vec::new();
     if let Some(mid) = previews.grid_source() {
         rungs.push(mid.clone());
@@ -875,25 +1285,54 @@ fn decode_ladder(
             eprintln!("fastcull: loupe lane abandoned idx {index} at {achieved} (focus moved)");
             return Ok(());
         }
-        match decode_jpeg_rung(&mut file, rung, orientation) {
+        // The file's largest embedded JPEG is the full; a bare JPEG's one
+        // candidate is both its grid source and its full.
+        let candidate = if full.as_ref() == Some(rung) {
+            RungKind::Full
+        } else {
+            RungKind::Mid
+        };
+        // THE SCREEN RUNG: at fit, the full's N/8 decode first.
+        if let (RungKind::Full, Target::Fit(fit_box)) = (candidate, target) {
+            if let Some(n) = rung_factor(rung.width, rung.height, orientation, fit_box) {
+                let (sw, sh) = scaled_dims(rung.width, rung.height, n);
+                if sw.max(sh) > achieved {
+                    match decode_jpeg_rung(&mut file, rung, orientation, n, candidate) {
+                        Err(reason) => return keep_lower_rung(shared, index, achieved, reason),
+                        Ok(image) if image.kind == RungKind::Full => {
+                            let serves = served_by(&image, target, None);
+                            publish(shared, index, image, rung_long >= top_long, req);
+                            achieved = rung_long;
+                            if serves {
+                                return Ok(());
+                            }
+                            continue;
+                        }
+                        Ok(image) => {
+                            let long = image.width.max(image.height);
+                            if long > achieved {
+                                let serves = served_by(&image, target, None);
+                                publish(shared, index, image, false, req);
+                                achieved = long;
+                                if serves {
+                                    return Ok(());
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+        }
+        match decode_jpeg_rung(&mut file, rung, orientation, 8, candidate) {
             Ok(image) => {
-                publish(shared, index, image, rung_long >= top_long);
+                let serves = served_by(&image, target, None);
+                publish(shared, index, image, rung_long >= top_long, req);
                 achieved = rung_long;
-                if serves_dims(rung.width, rung.height, display_long) {
+                if serves {
                     return Ok(());
                 }
             }
-            Err(reason) => {
-                // A broken HIGHER rung must not fail an image that already
-                // has a good lower rung (validator MAJOR: valid mid +
-                // truncated full-res would badge Failed AND show an image).
-                // Memoize what we achieved so the ladder quiesces.
-                if achieved > 0 {
-                    note_best(shared, index, achieved);
-                    return Ok(());
-                }
-                return Err(reason);
-            }
+            Err(reason) => return keep_lower_rung(shared, index, achieved, reason),
         }
     }
     // Ladder topped out below the display target: memoize the terminal rung
@@ -906,17 +1345,37 @@ fn decode_ladder(
     }
 }
 
+/// A rung failed. A broken HIGHER rung must not fail an image that already
+/// has a good lower rung (validator MAJOR: valid mid + truncated full-res
+/// would badge Failed AND show an image): the flight ends `Ok`, so the
+/// worker emits no Failed, and what was achieved is memoized so the ladder
+/// quiesces. With nothing lower in hand the rung's failure is the image's.
+fn keep_lower_rung(
+    shared: &Shared,
+    index: usize,
+    achieved: u32,
+    reason: String,
+) -> Result<(), String> {
+    if achieved > 0 {
+        note_best(shared, index, achieved);
+        return Ok(());
+    }
+    Err(reason)
+}
+
 fn note_best(shared: &Shared, index: usize, long: u32) {
     let mut state = lock(shared);
     let entry = state.best_long.entry(index).or_insert(0);
     *entry = (*entry).max(long);
 }
 
-fn serves_dims(w: u32, h: u32, display_long: u32) -> bool {
-    w.max(h) as f32 * UPSCALE_THRESHOLD >= display_long as f32
-}
-
-fn publish(shared: &Shared, index: usize, image: FullImage, terminal: bool) {
+fn publish(
+    shared: &Shared,
+    index: usize,
+    image: FullImage,
+    terminal: bool,
+    state_at_request: RequestState,
+) {
     let mut state = lock(shared);
     let stamp = shared.stamp.load(Ordering::Relaxed);
     if let Some((old, _)) = state.cache.remove(&index) {
@@ -932,21 +1391,30 @@ fn publish(shared: &Shared, index: usize, image: FullImage, terminal: bool) {
             index,
             image,
             terminal,
+            state: state_at_request,
         })
         .ok();
 }
 
+/// Read one embedded JPEG and decode it at `numerator`/8. The image's kind
+/// is the scale the decoder RAN — below 8 a screen rung, at 8 the
+/// `candidate` the caller named (the mid, or the full) — never a
+/// comparison of the decoded size with the IFD's claim.
 fn decode_jpeg_rung(
     file: &mut std::fs::File,
     rung: &crate::raw::EmbeddedJpeg,
     orientation: u16,
+    numerator: u8,
+    candidate: RungKind,
 ) -> Result<FullImage, String> {
     let bytes = read_jpeg(file, rung).map_err(|e| format!("read: {e}"))?;
-    let (rgb, w, h) = decode_oriented(&bytes, orientation)?;
+    let (rgb, width, height, ran) = decode_with(&bytes, orientation, numerator)?;
+    let kind = if ran < 8 { RungKind::Screen } else { candidate };
     Ok(FullImage {
         rgb: Arc::new(rgb),
-        width: w,
-        height: h,
+        width,
+        height,
+        kind,
     })
 }
 
@@ -1211,6 +1679,47 @@ fn evict_to_budget(state: &mut LoupeState, budget: usize) {
 mod tests {
     use super::*;
 
+    /// A queued entry with a `Long` target and the settled state: what the
+    /// tests written before brief 008 spelled `(index, long, focus_origin)`.
+    fn long_entry(index: usize, long: u32, focus_origin: bool) -> Entry {
+        Entry {
+            index,
+            target: Target::Long(long),
+            focus_origin,
+            state: RequestState::Settled,
+        }
+    }
+
+    /// `schedule` at a `Long` target in the settled state: the call the
+    /// tests written before brief 008 made with a bare long edge.
+    fn schedule_long(
+        state: &mut LoupeState,
+        index: usize,
+        long: u32,
+        stamp: u64,
+        origin: Origin,
+    ) -> bool {
+        schedule(
+            state,
+            index,
+            Target::Long(long),
+            stamp,
+            origin,
+            RequestState::Settled,
+        )
+    }
+
+    /// `revive_deferred` at a `Long` target in the settled state, likewise.
+    fn revive_long(state: &mut LoupeState, index: usize, long: u32, stamp: u64) -> bool {
+        revive_deferred(
+            state,
+            index,
+            Target::Long(long),
+            RequestState::Settled,
+            stamp,
+        )
+    }
+
     /// The two scheduling polarities, pinned: focus work goes to the BACK
     /// (popped first) and replaces a pending entry for the same index;
     /// grid work goes to the FRONT and yields to whatever focus queued.
@@ -1221,30 +1730,42 @@ mod tests {
         let mut st = LoupeState::default();
         // Grid want first, then focus: focus must end up behind it in the
         // vec (= popped first) and carry the focus-origin flag.
-        assert!(schedule(&mut st, 7, 1616, 1, Origin::Grid));
-        assert!(schedule(&mut st, 3, 8640, 2, Origin::Focus));
-        assert_eq!(st.queue, vec![(7, 1616, false), (3, 8640, true)]);
+        assert!(schedule_long(&mut st, 7, 1616, 1, Origin::Grid));
+        assert!(schedule_long(&mut st, 3, 8640, 2, Origin::Focus));
+        assert_eq!(
+            st.queue,
+            vec![long_entry(7, 1616, false), long_entry(3, 8640, true)]
+        );
 
         // A grid want for an already-queued index yields (no duplicate,
         // no downgrade of the focus entry's target).
-        assert!(!schedule(&mut st, 3, 1616, 3, Origin::Grid));
-        assert_eq!(st.queue, vec![(7, 1616, false), (3, 8640, true)]);
+        assert!(!schedule_long(&mut st, 3, 1616, 3, Origin::Grid));
+        assert_eq!(
+            st.queue,
+            vec![long_entry(7, 1616, false), long_entry(3, 8640, true)]
+        );
 
         // A focus request for an already-queued index REPLACES it.
-        assert!(schedule(&mut st, 7, 8640, 4, Origin::Focus));
-        assert_eq!(st.queue, vec![(3, 8640, true), (7, 8640, true)]);
+        assert!(schedule_long(&mut st, 7, 8640, 4, Origin::Focus));
+        assert_eq!(
+            st.queue,
+            vec![long_entry(3, 8640, true), long_entry(7, 8640, true)]
+        );
 
         // In flight: nothing is queued, the target is deferred, and the
         // merge keeps the LARGEST target regardless of arrival order.
         st.in_flight.push(5);
-        assert!(!schedule(&mut st, 5, 8640, 5, Origin::Focus));
-        assert!(!schedule(&mut st, 5, 1616, 6, Origin::Grid));
-        assert_eq!(st.deferred.get(&5), Some(&8640));
+        assert!(!schedule_long(&mut st, 5, 8640, 5, Origin::Focus));
+        assert!(!schedule_long(&mut st, 5, 1616, 6, Origin::Grid));
+        assert_eq!(
+            st.deferred.get(&5),
+            Some(&(Target::Long(8640), RequestState::Settled))
+        );
         assert_eq!(st.queue.len(), 2, "an in-flight index is never queued");
 
         // Failed indexes are never scheduled again.
         st.failed.insert(9);
-        assert!(!schedule(&mut st, 9, 1616, 7, Origin::Focus));
+        assert!(!schedule_long(&mut st, 9, 1616, 7, Origin::Focus));
         assert_eq!(st.queue.len(), 2);
     }
 
@@ -1273,14 +1794,14 @@ mod tests {
 
         // First ever focus is NOT transit: there is no previous change to
         // be close to. A folder must not open in scrub mode.
-        note_focus(&mut st, 0, u32::MAX, t0);
+        note_focus(&mut st, 0, Target::Long(u32::MAX), t0);
         assert!(!in_transit(&st, t0), "the first focus is never transit");
 
         // Held key: changes one repeat interval apart.
         let mut t = t0;
         for i in 1..=5 {
             t += Duration::from_millis(120);
-            note_focus(&mut st, i, u32::MAX, t);
+            note_focus(&mut st, i, Target::Long(u32::MAX), t);
             assert!(in_transit(&st, t), "a held key at 120 ms must be transit");
         }
         // ...and it decays once the key is released.
@@ -1313,10 +1834,10 @@ mod tests {
         // tap asks for the sharp rung immediately.
         let mut st = LoupeState::default();
         let mut t = t0;
-        note_focus(&mut st, 0, u32::MAX, t);
+        note_focus(&mut st, 0, Target::Long(u32::MAX), t);
         for i in 1..=4 {
             t += Duration::from_millis(400);
-            note_focus(&mut st, i, u32::MAX, t);
+            note_focus(&mut st, i, Target::Long(u32::MAX), t);
             assert!(!in_transit(&st, t), "a 400 ms tap must not be transit");
         }
     }
@@ -1335,7 +1856,7 @@ mod tests {
         let now = std::time::Instant::now();
         // Transit left index 4 at the mid, and nothing queued for it.
         let mut state = stable_focus_state(4);
-        state.desired_long = 8640;
+        state.desired = Target::Long(8640);
         state.last_index_change = Some(now - SETTLE_DEBOUNCE);
         state.cache.insert(
             4,
@@ -1344,6 +1865,7 @@ mod tests {
                     rgb: std::sync::Arc::new(vec![0u8; 3]),
                     width: MID_RUNG_TARGET,
                     height: 1080,
+                    kind: RungKind::Mid,
                 },
                 0,
             ),
@@ -1351,7 +1873,7 @@ mod tests {
         assert!(state.queue.is_empty(), "transit queued nothing sharp");
         assert_eq!(
             next_job(&mut state, true, now),
-            Slot::Job(4, 8640),
+            Slot::Job(4, Target::Long(8640), RequestState::Settled),
             "a settled frame short of the app's target must climb"
         );
 
@@ -1359,7 +1881,7 @@ mod tests {
         // frame of a held arrow starts a full-res decode and transit is
         // pointless.
         let mut state = stable_focus_state(4);
-        state.desired_long = 8640;
+        state.desired = Target::Long(8640);
         state.last_index_change = Some(now);
         state.cache.insert(
             4,
@@ -1368,6 +1890,7 @@ mod tests {
                     rgb: std::sync::Arc::new(vec![0u8; 3]),
                     width: MID_RUNG_TARGET,
                     height: 1080,
+                    kind: RungKind::Mid,
                 },
                 0,
             ),
@@ -1383,7 +1906,7 @@ mod tests {
         // anyway burns a second worker on a duplicate and ~149 MB of
         // transient for an A1 (QE finding, 2026-08-01).
         let mut state = stable_focus_state(4);
-        state.desired_long = 8640;
+        state.desired = Target::Long(8640);
         state.last_index_change = Some(now - SETTLE_DEBOUNCE);
         state.in_flight.push(4);
         assert_eq!(
@@ -1399,7 +1922,7 @@ mod tests {
 
         // Already sharp: the lane must not re-queue it forever (a spin).
         let mut state = stable_focus_state(4);
-        state.desired_long = 8640;
+        state.desired = Target::Long(8640);
         state.last_index_change = Some(now - SETTLE_DEBOUNCE);
         state.cache.insert(
             4,
@@ -1408,6 +1931,7 @@ mod tests {
                     rgb: std::sync::Arc::new(vec![0u8; 3]),
                     width: 8640,
                     height: 5760,
+                    kind: RungKind::Full,
                 },
                 0,
             ),
@@ -1432,7 +1956,7 @@ mod tests {
     fn the_settle_guarantee_does_not_disturb_the_lru_order() {
         let now = std::time::Instant::now();
         let mut state = stable_focus_state(4);
-        state.desired_long = 8640;
+        state.desired = Target::Long(8640);
         state.last_index_change = Some(now - SETTLE_DEBOUNCE);
         state.cache.insert(
             4,
@@ -1441,6 +1965,7 @@ mod tests {
                     rgb: std::sync::Arc::new(vec![0u8; 3]),
                     width: 8640,
                     height: 5760,
+                    kind: RungKind::Full,
                 },
                 77,
             ),
@@ -1466,7 +1991,7 @@ mod tests {
     fn transit_ring_leans_in_the_direction_of_travel() {
         let count = 1000;
         // Moving forward: far more ahead than behind.
-        let (_, lo, hi) = focus_plan(true, true, 500, u32::MAX, count);
+        let (_, lo, hi) = focus_plan(true, true, 500, Target::Long(u32::MAX), None, count);
         assert_eq!(
             (hi - 500, 500 - lo),
             (TRANSIT_AHEAD, TRANSIT_BEHIND),
@@ -1480,53 +2005,390 @@ mod tests {
             500 - lo
         );
         // Reversed on the very next frame: the lean flips with it.
-        let (_, lo, hi) = focus_plan(true, false, 499, u32::MAX, count);
+        let (_, lo, hi) = focus_plan(true, false, 499, Target::Long(u32::MAX), None, count);
         assert_eq!(
             (499 - lo, hi - 499),
             (TRANSIT_AHEAD, TRANSIT_BEHIND),
             "arrowing back must re-lean backward immediately"
         );
         // Settled: the tight symmetric ring, and the app's REAL target.
-        let (req, lo, hi) = focus_plan(false, true, 500, 8640, count);
+        let (req, lo, hi) = focus_plan(false, true, 500, Target::Long(8640), None, count);
         assert_eq!((500 - lo, hi - 500), (PREFETCH, PREFETCH));
-        assert_eq!(req, 8640, "a settled frame must ask for full quality");
+        assert_eq!(
+            req,
+            Target::Long(8640),
+            "a settled frame must ask for full quality"
+        );
         assert!(
-            focus_plan(true, true, 500, 8640, count).0 < req,
+            focus_plan(true, true, 500, Target::Long(8640), None, count).0 < req,
             "transit must ask for LESS than settled, or it is not transit"
         );
         // Edges clamp rather than wrap or panic.
-        let (_, lo, hi) = focus_plan(true, true, 0, u32::MAX, 3);
+        let (_, lo, hi) = focus_plan(true, true, 0, Target::Long(u32::MAX), None, 3);
         assert_eq!((lo, hi), (0, 2), "ring clamps at the start of the folder");
-        let (_, lo, hi) = focus_plan(true, true, 2, u32::MAX, 3);
+        let (_, lo, hi) = focus_plan(true, true, 2, Target::Long(u32::MAX), None, 3);
         assert_eq!((lo, hi), (0, 2), "ring clamps at the end of the folder");
     }
 
-    /// The transit request must be a rung the MID actually serves.
+    /// What a moving frame asks for: the fit box when the engine has one,
+    /// and the mid when it has none — never the full (brief 008; renamed
+    /// from `transit_request_is_served_by_the_mid_rung`, whose promise, the
+    /// mid for a box-less engine, it keeps in its first two rows).
     ///
-    /// This is the bug the first implementation shipped with: it asked for
+    /// Box-less, the request must be a rung the MID actually serves. This is
+    /// the bug the first implementation shipped with: it asked for
     /// `MID_RUNG_MAX_LONG` (2048), but `serves` allows only a 1.25x upscale,
     /// so a 1616 mid covers 2020 px — 28 short. Every transit frame quietly
     /// climbed to full-res anyway, and the change measured as no improvement
     /// at all until the arithmetic was checked.
+    ///
+    /// With a 3840x2160 box the request is that box, which the ladder serves
+    /// with the 3/8 screen rung of an A1 frame, never the full. A transit
+    /// capped at the mid whatever the box (A7's first mutant: the box
+    /// ignored) is red here, clock-free: a held arrow on 4K would go back to
+    /// the 2x-upscaled mid the brief exists to replace (issue #60).
     #[test]
-    fn transit_request_is_served_by_the_mid_rung() {
+    fn transit_request_is_the_fit_box_and_never_the_full() {
         let mid = FullImage {
             rgb: std::sync::Arc::new(vec![0u8; 3]),
             width: 1616,
             height: 1080,
+            kind: RungKind::Mid,
         };
         // What focus() asks for while moving, at 1:1 on a full A1 frame.
-        let request = transit_request(8640);
+        let request = transit_request(Target::Long(8640), None);
         assert!(
-            serves(&mid, request),
+            serves(&mid, request.long()),
             "the mid rung must satisfy the transit request, or transit still \
-             climbs to full-res: mid 1616 covers {} px, asked for {request}",
+             climbs to full-res: mid 1616 covers {} px, asked for {request:?}",
             (1616.0 * UPSCALE_THRESHOLD) as u32
         );
         // The old value is exactly the trap: keep it documented as failing.
         assert!(
             !serves(&mid, MID_RUNG_MAX_LONG),
             "MID_RUNG_MAX_LONG is NOT served by a 1616 mid — that was the bug"
+        );
+        // With the loupe's fit box on a 4K viewport, at fit and above it.
+        let uhd = FitBox {
+            width: 3840,
+            height: 2160,
+        };
+        for desired in [Target::Long(u32::MAX), Target::Fit(uhd)] {
+            assert_eq!(
+                transit_request(desired, Some(uhd)),
+                Target::Fit(uhd),
+                "a moving frame on a 4K box asks for the box (desired {desired:?}), \
+                 not the mid a 4K screen shows upscaled 2x"
+            );
+        }
+        assert_eq!(
+            fit_rung(8640, 5760, Some((1616, 1080)), 1, uhd),
+            FitRungChoice::Screen(3),
+            "the 4K box is served by the A1's 3/8 rung, never its full"
+        );
+    }
+
+    /// Brief 008 A2 (raw-pipeline.md, "The factor rule"): the rung for a
+    /// frame at fit is the BOX rule over (fit box, frame, mid, orientation) —
+    /// the mid when its ORIENTED size serves the box, else the smallest N/8
+    /// of the full whose ORIENTED output serves it, else the full. Every row
+    /// carries its arithmetic: "serves" is 4·box ≤ 5·image on either side,
+    /// "fits" is 4·image ≤ 5·box on both. The A1 is 8640x5760 with a
+    /// 1616x1080 mid; N/8 of it is 1080x720, 2160x1440, 3240x2160,
+    /// 4320x2880 for N = 1..=4.
+    ///
+    /// What the rows pin: a long-edge rule, blind to the box's short side,
+    /// asks too much of every portrait frame and of a letterboxed box (the
+    /// o6, o8, 5K-o8 and 3000x1700 rows); a mid read unrotated serves the
+    /// wrong portrait boxes (the QHD-o8, 2100x1400 and 1400x2100 rows); and
+    /// "no rung" read as "the full serves the box" — true of any frame
+    /// larger than the box — sends every Screen row to the full.
+    #[test]
+    fn rung_factor_follows_the_viewport_and_the_frame() {
+        use FitRungChoice::{Full, Mid, Screen};
+        let bx = |width, height| FitBox { width, height };
+        const A1: (u32, u32) = (8640, 5760);
+        const A1_MID: Option<(u32, u32)> = Some((1616, 1080));
+        // (box, full, mid, orientation, fit_rung, rung_factor), each row's
+        // arithmetic above it.
+        let rows = [
+            // 4K, landscape: the mid (15360 > 8080, 8640 > 5400); 2/8
+            // 2160x1440 (15360 > 10800, 8640 > 7200); 3/8 3240x2160 serves
+            // (15360 <= 16200).
+            (bx(3840, 2160), A1, A1_MID, 1, Screen(3), Some(3)),
+            // 4K, portrait o6: the mid 1080x1616 (15360 > 5400, 8640 >
+            // 8080); 1/8 720x1080 (8640 > 5400); 2/8 1440x2160 serves
+            // (8640 <= 10800).
+            (bx(3840, 2160), A1, A1_MID, 6, Screen(2), Some(2)),
+            // 4K, portrait o8: as o6.
+            (bx(3840, 2160), A1, A1_MID, 8, Screen(2), Some(2)),
+            // QHD, landscape: the mid (10240 > 8080, 5760 > 5400); 1/8
+            // 1080x720 (10240 > 5400, 5760 > 3600); 2/8 2160x1440 serves
+            // (10240 <= 10800).
+            (bx(2560, 1440), A1, A1_MID, 1, Screen(2), Some(2)),
+            // QHD, portrait: the mid 1080x1616 oriented serves (5760 <=
+            // 8080); without it, 2/8 1440x2160 (5760 <= 10800).
+            (bx(2560, 1440), A1, A1_MID, 8, Mid, Some(2)),
+            // 1080p, landscape: the mid serves (7680 <= 8080).
+            (bx(1920, 1080), A1, A1_MID, 1, Mid, Some(2)),
+            // 1080p, portrait: the mid 1080x1616 serves (4320 <= 8080);
+            // without it, 1/8 720x1080 (4320 <= 5400).
+            (bx(1920, 1080), A1, A1_MID, 8, Mid, Some(1)),
+            // 5K, landscape: 3/8 3240x2160 (20480 > 16200, 11520 > 10800);
+            // 4/8 4320x2880 serves (20480 <= 21600).
+            (bx(5120, 2880), A1, A1_MID, 1, Screen(4), Some(4)),
+            // 5K, portrait: 2/8 1440x2160 (20480 > 7200, 11520 > 10800);
+            // 3/8 2160x3240 serves (11520 <= 16200).
+            (bx(5120, 2880), A1, A1_MID, 8, Screen(3), Some(3)),
+            // 4K, a 3000x2000 frame: its 1616x1077 mid does not serve
+            // (15360 > 8080, 8640 > 5385), and the full fits the box x 1.25
+            // (12000 <= 19200, 8000 <= 10800): no rung.
+            (
+                bx(3840, 2160),
+                (3000, 2000),
+                Some((1616, 1077)),
+                1,
+                Full,
+                None,
+            ),
+            // 4K, a bare A1 (no mid): the same rule, 3/8.
+            (bx(3840, 2160), A1, None, 1, Screen(3), Some(3)),
+            // 4K, a bare 380x260: it fits the box (1520 <= 19200, 1040 <=
+            // 10800): no rung.
+            (bx(3840, 2160), (380, 260), None, 1, Full, None),
+            // A box between factors: 2/8 (12000 > 10800, 8000 > 7200) does
+            // not serve, so the next one up, 3/8 (12000 <= 16200) — never
+            // the nearest.
+            (bx(3000, 2000), A1, A1_MID, 1, Screen(3), Some(3)),
+            // A letterboxed box: 2/8 serves by the SHORT side (6800 <= 7200)
+            // though its long side does not (12000 > 10800).
+            (bx(3000, 1700), A1, A1_MID, 1, Screen(2), Some(2)),
+            // The mid ORIENTED, 1080x1616, serves (5600 <= 8080); unrotated
+            // it would not (8400 > 8080, 5600 > 5400).
+            (bx(2100, 1400), A1, A1_MID, 8, Mid, Some(2)),
+            // The oriented mid 1080x1616 does not serve (5600 > 5400, 8400 >
+            // 8080) — unrotated it would (5600 <= 8080); 2/8, oriented
+            // 1440x2160, does (5600 <= 7200).
+            (bx(1400, 2100), A1, A1_MID, 8, Screen(2), Some(2)),
+            // The 4K window's real cell: 2/8 (15360 > 10800, 8400 > 7200);
+            // 3/8 serves (15360 <= 16200).
+            (bx(3840, 2100), A1, A1_MID, 1, Screen(3), Some(3)),
+            // The default window's real cell: the mid serves (5760 <= 8080);
+            // without it, 1/8 1080x720 (3360 <= 3600).
+            (bx(1440, 840), A1, A1_MID, 1, Mid, Some(1)),
+        ];
+        for (row, (fit_box, (fw, fh), mid, orientation, want, factor)) in
+            rows.into_iter().enumerate()
+        {
+            let why = format!("row {row}: {fw}x{fh} o{orientation} on {fit_box:?}");
+            assert_eq!(
+                fit_rung(fw, fh, mid, orientation, fit_box),
+                want,
+                "fit_rung, {why}"
+            );
+            assert_eq!(
+                rung_factor(fw, fh, orientation, fit_box),
+                factor,
+                "rung_factor, {why}"
+            );
+            let oriented_scaled = |n: u8| {
+                let (w, h) = scaled_dims(fw, fh, n);
+                if matches!(orientation, 5..=8) {
+                    (h, w)
+                } else {
+                    (w, h)
+                }
+            };
+            match factor {
+                // The factor serves, and it is the SMALLEST that does.
+                Some(n) => {
+                    let (w, h) = oriented_scaled(n);
+                    assert!(serves_box(w, h, fit_box), "{n}/8 serves: {why}");
+                    for smaller in 1..n {
+                        let (w, h) = oriented_scaled(smaller);
+                        assert!(!serves_box(w, h, fit_box), "{smaller}/8 does not: {why}");
+                    }
+                }
+                // No rung: the oriented full fits the box x 1.25.
+                None => {
+                    let (w, h) = oriented_scaled(8);
+                    assert!(fits_box(w, h, fit_box), "the full fits: {why}");
+                }
+            }
+        }
+        // The primitives on the same boxes.
+        assert!(
+            !serves_box(1616, 1080, bx(2560, 1440)),
+            "the landscape mid on QHD"
+        );
+        assert!(
+            serves_box(1080, 1616, bx(2560, 1440)),
+            "the portrait mid on QHD"
+        );
+        assert!(fits_box(3000, 2000, bx(3840, 2160)));
+        assert!(!fits_box(8640, 5760, bx(3840, 2160)));
+        assert!(
+            !serves_box(0, 1080, bx(1, 1)),
+            "an image with a zero side never serves"
+        );
+        // The "wide viewport" predicate: the reference mid serves 1080p and a
+        // portrait-turned QHD-class screen, not QHD or 4K.
+        assert!(mid_serves_box(bx(1920, 1080)));
+        assert!(mid_serves_box(bx(1440, 2260)));
+        assert!(!mid_serves_box(bx(2560, 1440)));
+        assert!(!mid_serves_box(bx(3840, 2160)));
+    }
+
+    /// The request state rides with the request (raw-pipeline.md, "The
+    /// request state travels with the decode"): a focus that re-schedules a
+    /// queued index replaces its state with its target; an in-flight index's
+    /// deferred target merges with `max`, and its state changes only when
+    /// the target GROWS; a revived entry keeps the state stored beside the
+    /// deferred target, never the mode at revival. And the `Target` order
+    /// those merges run on says `Equal` exactly when the two are `==`.
+    #[test]
+    fn the_request_state_travels_with_the_decode() {
+        use RequestState::{Settled, Transit};
+        let uhd = FitBox {
+            width: 3840,
+            height: 2160,
+        };
+        let fit = Target::Fit(uhd);
+        let mut st = LoupeState::default();
+        assert!(schedule(&mut st, 5, fit, 1, Origin::Focus, Settled));
+        assert!(schedule(&mut st, 5, fit, 2, Origin::Focus, Transit));
+        assert_eq!(
+            st.queue,
+            vec![Entry {
+                index: 5,
+                target: fit,
+                focus_origin: true,
+                state: Transit,
+            }],
+            "a transit focus replaces the queued settled entry, state and all"
+        );
+
+        st.in_flight.push(7);
+        assert!(!schedule(&mut st, 7, fit, 3, Origin::Focus, Settled));
+        assert!(!schedule(&mut st, 7, fit, 4, Origin::Focus, Transit));
+        assert_eq!(
+            st.deferred.get(&7),
+            Some(&(fit, Settled)),
+            "an equal target keeps the state it was deferred with"
+        );
+        assert!(!schedule(
+            &mut st,
+            7,
+            Target::Long(u32::MAX),
+            5,
+            Origin::Focus,
+            Transit
+        ));
+        assert_eq!(
+            st.deferred.get(&7),
+            Some(&(Target::Long(u32::MAX), Transit)),
+            "a grown target brings its state"
+        );
+        assert!(!schedule(&mut st, 7, fit, 6, Origin::Focus, Settled));
+        assert_eq!(
+            st.deferred.get(&7),
+            Some(&(Target::Long(u32::MAX), Transit)),
+            "a smaller one changes neither"
+        );
+
+        // The revival: the engine is settled (no held key), the deferred
+        // state is transit — the entry keeps transit.
+        let mut state = stable_focus_state(4);
+        assert!(!in_transit(&state, std::time::Instant::now()));
+        assert!(revive_deferred(&mut state, 5, fit, Transit, 1));
+        assert_eq!(
+            state.queue.first(),
+            Some(&Entry {
+                index: 5,
+                target: fit,
+                focus_origin: true,
+                state: Transit,
+            }),
+            "a revived entry keeps the deferred state, not the mode at revival"
+        );
+
+        // The order.
+        let letterbox = Target::Fit(FitBox {
+            width: 3840,
+            height: 1600,
+        });
+        assert!(
+            fit > letterbox,
+            "the taller box of the same width is the bigger ask"
+        );
+        assert_ne!(fit, letterbox);
+        assert_ne!(
+            fit.cmp(&letterbox),
+            CmpOrdering::Equal,
+            "two different boxes of one long edge must not compare Equal"
+        );
+        assert!(
+            Target::Long(3840) > fit,
+            "Long above Fit at an equal long edge"
+        );
+        assert!(Target::Long(2000) < fit);
+        assert!(Target::Long(u32::MAX) > fit, "the top rung above any box");
+    }
+
+    /// Brief 008 R3: the factor follows the viewport, so a cached rung that
+    /// no longer serves the box is re-requested at the new one, and shown
+    /// meanwhile (the app cues it): a 2160x1440 rung, cut for a QHD box,
+    /// under a 3840x2160 box is upscaled min(3840/2160, 2160/1440) = 1.5x.
+    /// Under a 1920x1080 box the same rung is a downscale and serves.
+    #[test]
+    fn a_cached_rung_that_no_longer_serves_the_box_is_re_requested() {
+        let rung = FullImage {
+            rgb: Arc::new(vec![0; 3]),
+            width: 2160,
+            height: 1440,
+            kind: RungKind::Screen,
+        };
+        let now = std::time::Instant::now();
+
+        let uhd = FitBox {
+            width: 3840,
+            height: 2160,
+        };
+        let mut state = LoupeState {
+            fit_box: Some(uhd),
+            ..Default::default()
+        };
+        state.cache.insert(5, (rung.clone(), 0));
+        let hit = focus_on(&mut state, 5, FocusRequest::Fit, 10, 1, now);
+        assert_eq!(
+            hit.map(|i| (i.width, i.height, i.kind)),
+            Some((2160, 1440, RungKind::Screen)),
+            "the cached rung is what the loupe shows meanwhile"
+        );
+        assert_eq!(
+            state.queue.iter().find(|e| e.index == 5),
+            Some(&Entry {
+                index: 5,
+                target: Target::Fit(uhd),
+                focus_origin: true,
+                state: RequestState::Settled,
+            }),
+            "a 1.5x-upscaled rung must be re-requested at the 4K box"
+        );
+
+        let mut state = LoupeState {
+            fit_box: Some(FitBox {
+                width: 1920,
+                height: 1080,
+            }),
+            ..Default::default()
+        };
+        state.cache.insert(5, (rung, 0));
+        focus_on(&mut state, 5, FocusRequest::Fit, 10, 1, now);
+        assert!(
+            state.queue.iter().all(|e| e.index != 5),
+            "a rung that serves the box by downscaling is enough: {:?}",
+            state.queue
         );
     }
 
@@ -1546,7 +2408,14 @@ mod tests {
         // 9's id-space neighbors (7, 8), which are view strangers.
         let fpos = state.pos_of(9).expect("id 9 is in the view");
         assert_eq!(fpos, 3);
-        let (_, lo, hi) = focus_plan(false, true, fpos, u32::MAX, state.ring_len(10));
+        let (_, lo, hi) = focus_plan(
+            false,
+            true,
+            fpos,
+            Target::Long(u32::MAX),
+            None,
+            state.ring_len(10),
+        );
         let ids = ring_ids(&state, fpos, lo, hi);
         let mut sorted = ids.clone();
         sorted.sort_unstable();
@@ -1586,15 +2455,25 @@ mod tests {
         let mut st = LoupeState::default();
         apply_view(&mut st, &view, 10);
         // Forward in the VIEW: id 9 (pos 3) -> id 1 (pos 4).
-        note_focus(&mut st, 9, u32::MAX, t0);
-        note_focus(&mut st, 1, u32::MAX, t0 + Duration::from_millis(120));
+        note_focus(&mut st, 9, Target::Long(u32::MAX), t0);
+        note_focus(
+            &mut st,
+            1,
+            Target::Long(u32::MAX),
+            t0 + Duration::from_millis(120),
+        );
         assert!(
             st.travel_forward,
             "pos 3 -> pos 4 is forward travel although the id fell 9 -> 1"
         );
         // Backward in the view despite a rising id: id 1 (pos 4) -> id 6
         // (pos 2).
-        note_focus(&mut st, 6, u32::MAX, t0 + Duration::from_millis(240));
+        note_focus(
+            &mut st,
+            6,
+            Target::Long(u32::MAX),
+            t0 + Duration::from_millis(240),
+        );
         assert!(
             !st.travel_forward,
             "pos 4 -> pos 2 is backward although the id rose 1 -> 6"
@@ -1610,12 +2489,12 @@ mod tests {
         let mut state = stable_focus_state(9); // view position 3
         apply_view(&mut state, &view, 10);
         assert!(
-            revive_deferred(&mut state, 1, u32::MAX, 1),
+            revive_long(&mut state, 1, u32::MAX, 1),
             "id 1 is the focused frame's direct VIEW neighbor (pos 4)"
         );
         state.queue.clear();
         assert!(
-            !revive_deferred(&mut state, 8, u32::MAX, 1),
+            !revive_long(&mut state, 8, u32::MAX, 1),
             "id 8 neighbors 9 in id space but sits at view pos 9 — a \
              stranger the ring must not revive"
         );
@@ -1628,7 +2507,7 @@ mod tests {
             // 2x: the caller's `now` predates this call by nanoseconds —
             // exactly one debounce would leave held marginally short.
             focused_at: Some(std::time::Instant::now() - FOCUS_DEBOUNCE * 2),
-            focused_target: u32::MAX,
+            focused_target: Target::Long(u32::MAX),
             ..Default::default()
         }
     }
@@ -1642,55 +2521,56 @@ mod tests {
     fn stale_deferred_upgrade_is_dropped_not_revived() {
         let mut state = stable_focus_state(4);
         assert!(
-            !revive_deferred(&mut state, 0, u32::MAX, 1),
+            !revive_long(&mut state, 0, u32::MAX, 1),
             "index 0 is outside the ring of focus 4"
         );
         assert!(state.queue.is_empty(), "nothing may be re-queued");
         // Exact ring boundary: distance PREFETCH is IN, one past is OUT.
-        assert!(revive_deferred(&mut state, 4 - PREFETCH, u32::MAX, 1));
-        assert!(!revive_deferred(&mut state, 4 - PREFETCH - 1, u32::MAX, 1));
+        assert!(revive_long(&mut state, 4 - PREFETCH, u32::MAX, 1));
+        assert!(!revive_long(&mut state, 4 - PREFETCH - 1, u32::MAX, 1));
         // No focus at all (loupe never opened): equally dropped.
         state.focused = None;
-        assert!(!revive_deferred(&mut state, 0, u32::MAX, 2));
+        assert!(!revive_long(&mut state, 0, u32::MAX, 2));
     }
 
     #[test]
     fn focused_deferred_upgrade_revives_at_top_priority() {
         let mut state = stable_focus_state(4);
-        state.queue.push((6, 1000, true));
-        assert!(revive_deferred(&mut state, 4, u32::MAX, 1));
+        state.queue.push(long_entry(6, 1000, true));
+        assert!(revive_long(&mut state, 4, u32::MAX, 1));
         // Workers pop from the back: the focused frame goes next.
-        assert_eq!(state.queue.last(), Some(&(4, u32::MAX, true)));
+        assert_eq!(state.queue.last(), Some(&long_entry(4, u32::MAX, true)));
     }
 
     #[test]
     fn ring_neighbor_deferred_upgrade_never_outranks_the_focused_frame() {
         let mut state = stable_focus_state(4);
-        state.queue.push((4, u32::MAX, true)); // the cursor's own pending work
-        assert!(revive_deferred(&mut state, 5, u32::MAX, 1));
+        state.queue.push(long_entry(4, u32::MAX, true)); // the cursor's own pending work
+        assert!(revive_long(&mut state, 5, u32::MAX, 1));
         assert_eq!(
             state.queue.last(),
-            Some(&(4, u32::MAX, true)),
+            Some(&long_entry(4, u32::MAX, true)),
             "the focused frame stays first in line"
         );
-        assert_eq!(state.queue.first(), Some(&(5, u32::MAX, true)));
+        assert_eq!(state.queue.first(), Some(&long_entry(5, u32::MAX, true)));
     }
 
     #[test]
     fn failed_or_sufficient_deferred_upgrades_stay_dead() {
         let mut state = stable_focus_state(4);
         state.failed.insert(4);
-        assert!(!revive_deferred(&mut state, 4, u32::MAX, 1));
+        assert!(!revive_long(&mut state, 4, u32::MAX, 1));
         // A cached asset that already tops out (best_long known) is enough.
         let mut state = stable_focus_state(4);
         let img = FullImage {
             rgb: Arc::new(vec![0; 3]),
             width: 100,
             height: 100,
+            kind: RungKind::Full,
         };
         state.cache.insert(4, (img, 0));
         state.best_long.insert(4, 100);
-        assert!(!revive_deferred(&mut state, 4, u32::MAX, 1));
+        assert!(!revive_long(&mut state, 4, u32::MAX, 1));
     }
 
     /// QE defect (the settled-then-left capture, ~20% in the CI shape):
@@ -1702,9 +2582,9 @@ mod tests {
     fn target_escalation_rearms_the_debounce() {
         let now = std::time::Instant::now();
         let mut state = stable_focus_state(0);
-        state.focused_target = 1900; // resting at a fit-sized target
-        note_focus(&mut state, 0, u32::MAX, now); // the pin escalates
-        state.queue.push((0, u32::MAX, true));
+        state.focused_target = Target::Long(1900); // resting at a fit-sized target
+        note_focus(&mut state, 0, Target::Long(u32::MAX), now); // the pin escalates
+        state.queue.push(long_entry(0, u32::MAX, true));
         match next_job(&mut state, true, now) {
             Slot::WaitFor(_) => {}
             other => panic!("escalated climb taken without debounce: {other:?}"),
@@ -1714,18 +2594,21 @@ mod tests {
         note_focus(
             &mut state,
             0,
-            u32::MAX,
+            Target::Long(u32::MAX),
             now + std::time::Duration::from_millis(100),
         );
         assert_eq!(
             next_job(&mut state, true, now + FOCUS_DEBOUNCE),
-            Slot::Job(0, u32::MAX)
+            Slot::Job(0, Target::Long(u32::MAX), RequestState::Settled)
         );
         // A smaller target (zoom out) never re-arms either.
         let mut state = stable_focus_state(3);
-        note_focus(&mut state, 3, 1000, now);
-        state.queue.push((3, 1000, true));
-        assert_eq!(next_job(&mut state, true, now), Slot::Job(3, 1000));
+        note_focus(&mut state, 3, Target::Long(1000), now);
+        state.queue.push(long_entry(3, 1000, true));
+        assert_eq!(
+            next_job(&mut state, true, now),
+            Slot::Job(3, Target::Long(1000), RequestState::Settled)
+        );
     }
 
     /// The second starvation shape (Windows CI 2026-07-27): every
@@ -1736,10 +2619,13 @@ mod tests {
     fn reserved_worker_takes_only_the_stable_focused_job() {
         let now = std::time::Instant::now();
         let mut state = stable_focus_state(4);
-        state.queue.push((2, u32::MAX, true));
-        state.queue.push((4, u32::MAX, true));
-        state.queue.push((5, u32::MAX, true)); // more urgent than 4's entry
-        assert_eq!(next_job(&mut state, true, now), Slot::Job(4, u32::MAX));
+        state.queue.push(long_entry(2, u32::MAX, true));
+        state.queue.push(long_entry(4, u32::MAX, true));
+        state.queue.push(long_entry(5, u32::MAX, true)); // more urgent than 4's entry
+        assert_eq!(
+            next_job(&mut state, true, now),
+            Slot::Job(4, Target::Long(u32::MAX), RequestState::Settled)
+        );
         assert!(state.in_flight.contains(&4));
         // The focused entry is gone: the reserved worker now waits even
         // though backlog remains.
@@ -1750,7 +2636,10 @@ mod tests {
             "backlog untouched by the reserved worker"
         );
         // A normal worker still pops from the back.
-        assert_eq!(next_job(&mut state, false, now), Slot::Job(5, u32::MAX));
+        assert_eq!(
+            next_job(&mut state, false, now),
+            Slot::Job(5, Target::Long(u32::MAX), RequestState::Settled)
+        );
     }
 
     /// The capture-bait case that FAILED validation on the debounce-less
@@ -1761,7 +2650,7 @@ mod tests {
         let now = std::time::Instant::now();
         let mut state = stable_focus_state(2);
         state.focused_at = Some(now); // focus just changed (transit touch)
-        state.queue.push((2, u32::MAX, true));
+        state.queue.push(long_entry(2, u32::MAX, true));
         match next_job(&mut state, true, now) {
             Slot::WaitFor(d) => assert!(d <= FOCUS_DEBOUNCE, "timed wait bounded"),
             other => panic!("fresh focus must not be taken: {other:?}"),
@@ -1770,7 +2659,7 @@ mod tests {
         // Once the focus has held, the reserved worker commits.
         assert_eq!(
             next_job(&mut state, true, now + FOCUS_DEBOUNCE),
-            Slot::Job(2, u32::MAX)
+            Slot::Job(2, Target::Long(u32::MAX), RequestState::Settled)
         );
     }
 
@@ -1778,7 +2667,7 @@ mod tests {
     fn reserved_worker_waits_without_a_focus() {
         let now = std::time::Instant::now();
         let mut state = LoupeState::default();
-        state.queue.push((0, u32::MAX, true));
+        state.queue.push(long_entry(0, u32::MAX, true));
         assert_eq!(next_job(&mut state, true, now), Slot::Wait);
         assert_eq!(state.queue.len(), 1);
     }
@@ -1791,10 +2680,11 @@ mod tests {
             rgb: Arc::new(vec![0; 3]),
             width: 100,
             height: 100,
+            kind: RungKind::Full,
         };
         state.cache.insert(0, (img, 0));
         state.best_long.insert(0, 100); // topped out
-        state.queue.push((0, u32::MAX, true));
+        state.queue.push(long_entry(0, u32::MAX, true));
         assert_eq!(
             next_job(&mut state, false, now),
             Slot::Wait,
@@ -1947,7 +2837,7 @@ mod tests {
         let shared = Shared {
             state: Mutex::new(LoupeState::default()),
             wakeup: Condvar::new(),
-            paths: vec![path],
+            paths: vec![path.clone()],
             events: tx,
             shutdown: AtomicBool::new(false),
             stamp: AtomicU64::new(0),
@@ -1955,7 +2845,14 @@ mod tests {
         };
         // Ask for far more than the mid can serve, so the ladder MUST try
         // the truncated full rung.
-        let outcome = decode_ladder(&shared, 0, 8640, 0, false);
+        let outcome = decode_ladder(
+            &shared,
+            0,
+            Target::Long(8640),
+            0,
+            false,
+            RequestState::Settled,
+        );
         assert_eq!(
             outcome,
             Ok(()),
@@ -1976,6 +2873,191 @@ mod tests {
             lock(&shared).best_long.get(&0).copied(),
             Some(640),
             "the ladder memoizes the achieved rung so it quiesces"
+        );
+
+        // The same file at FIT (brief 008): the mid does not serve a
+        // 1000x700 box (min(1000/640, 700/400) = 1.5625), so the ladder
+        // tries the full's screen rung, 3/8 -- and the SCALED decode of the
+        // cut full is refused by the byte check. It must end exactly as the
+        // plain decode's failure does: the good mid stays, no Failed, the
+        // mid memoized; never the scaled failure passed on as the image's.
+        let fit_box = FitBox {
+            width: 1000,
+            height: 700,
+        };
+        assert_eq!(
+            rung_factor(2000, 1500, 1, fit_box),
+            Some(3),
+            "the premise: the ladder tries the 3/8 rung here"
+        );
+        let (shared, rx) = shared_over(vec![path]);
+        let outcome = decode_ladder(
+            &shared,
+            0,
+            Target::Fit(fit_box),
+            0,
+            false,
+            RequestState::Settled,
+        );
+        assert_eq!(
+            outcome,
+            Ok(()),
+            "a good mid must survive a truncated full's screen rung too"
+        );
+        match rx.try_recv() {
+            Ok(LoupeEvent::Ready { image, .. }) => {
+                assert_eq!(
+                    (image.width, image.height, image.kind),
+                    (640, 400, RungKind::Mid),
+                    "the mid is shown"
+                );
+            }
+            other => panic!("expected the mid rung's Ready event, got {other:?}"),
+        }
+        assert!(
+            rx.try_recv().is_err(),
+            "no second event at fit either: no Failed, no phantom rung"
+        );
+        assert_eq!(
+            lock(&shared).best_long.get(&0).copied(),
+            Some(640),
+            "the ladder memoizes the mid at fit too"
+        );
+        std::fs::remove_dir_all(&dir).ok();
+    }
+
+    /// Brief 008 (raw-pipeline.md, "The screen rung"): a rung's kind is the
+    /// scale the decoder RAN, never a comparison with the IFD's size claim,
+    /// which `find_embedded_jpegs` trusts over the SOF. Here the one IFD
+    /// under-claims its intact 2000x1500 stream as 500x375; the box rule on
+    /// the claim picks 3/8 for a 200x150 box, and the 3/8 decode comes out
+    /// 750x563 — LARGER than the claim. It is still a screen rung: never
+    /// terminal, never memoized as the file's best. Read the kind off the
+    /// claim ("decoded at least as long as declared: the full") and the
+    /// rung ships as a terminal full, the zoom ceiling read from it.
+    #[test]
+    fn the_rung_kind_comes_from_the_decode_not_the_ifd_claim() {
+        let full = crate::raw::jpeg_hostile::encoded(2000, 1500);
+        let mut b = crate::raw::tiff_testutil::TiffBuilder::new(true);
+        let off = b.add_blob(&full);
+        let ifd0 = b.add_ifd(
+            &[
+                (0x0100, 3, 1, 500),
+                (0x0101, 3, 1, 375),
+                (0x0201, 4, 1, off),
+                (0x0202, 4, 1, full.len() as u32),
+            ],
+            0,
+        );
+        b.set_ifd0(ifd0);
+        let dir = crate::testutil::scratch_dir("kind-claim");
+        let path = dir.join("under_claimed.arw");
+        std::fs::write(&path, &b.bytes).unwrap();
+        let fit_box = FitBox {
+            width: 200,
+            height: 150,
+        };
+        assert_eq!(
+            rung_factor(500, 375, 1, fit_box),
+            Some(3),
+            "the premise: the claim asks for the 3/8 rung"
+        );
+
+        let (shared, rx) = shared_over(vec![path]);
+        assert_eq!(
+            decode_ladder(
+                &shared,
+                0,
+                Target::Fit(fit_box),
+                0,
+                false,
+                RequestState::Settled
+            ),
+            Ok(())
+        );
+        match rx.try_recv() {
+            Ok(LoupeEvent::Ready {
+                image, terminal, ..
+            }) => {
+                assert_eq!(
+                    (image.width, image.height, image.kind),
+                    (750, 563, RungKind::Screen),
+                    "a 3/8 decode is a screen rung whatever the IFD claimed"
+                );
+                assert!(!terminal, "a screen rung is never the file's best");
+            }
+            other => panic!("expected the screen rung's Ready event, got {other:?}"),
+        }
+        assert!(rx.try_recv().is_err(), "it serves the box: one rung");
+        assert_eq!(
+            lock(&shared).best_long.get(&0),
+            None,
+            "a screen rung is never memoized as the file's best"
+        );
+        std::fs::remove_dir_all(&dir).ok();
+    }
+
+    /// Brief 008: the ladder's stop test reads the decoded, ORIENTED image,
+    /// never the IFD's stored, unrotated size. A 640x400 mid in a portrait
+    /// file (orientation 8) is 400x640 on screen, and serves a 1000x700 box:
+    /// min(1000/400, 700/640) = 1.09. Read unrotated it is min(1000/640,
+    /// 700/400) = 1.5625, which does not, and the ladder climbs on to decode
+    /// the full's screen rung for nothing.
+    #[test]
+    fn a_portrait_mid_that_serves_the_box_stops_the_ladder() {
+        let mid = crate::raw::jpeg_hostile::encoded(640, 400);
+        let full = crate::raw::jpeg_hostile::encoded(2000, 1500);
+        let mut b = crate::raw::tiff_testutil::TiffBuilder::new(true);
+        let mid_off = b.add_blob(&mid);
+        let full_off = b.add_blob(&full);
+        let second = b.add_ifd(
+            &[(0x0201, 4, 1, full_off), (0x0202, 4, 1, full.len() as u32)],
+            0,
+        );
+        // IFD0 carries the orientation, as an A1's does (the TIFF walker
+        // keeps the first one it meets).
+        let ifd0 = b.add_ifd(
+            &[
+                (0x0112, 3, 1, 8),
+                (0x0201, 4, 1, mid_off),
+                (0x0202, 4, 1, mid.len() as u32),
+            ],
+            second,
+        );
+        b.set_ifd0(ifd0);
+        let dir = crate::testutil::scratch_dir("portrait-mid");
+        let path = dir.join("portrait.arw");
+        std::fs::write(&path, &b.bytes).unwrap();
+
+        let (shared, rx) = shared_over(vec![path]);
+        let fit_box = FitBox {
+            width: 1000,
+            height: 700,
+        };
+        assert_eq!(
+            decode_ladder(
+                &shared,
+                0,
+                Target::Fit(fit_box),
+                0,
+                false,
+                RequestState::Settled
+            ),
+            Ok(())
+        );
+        match rx.try_recv() {
+            Ok(LoupeEvent::Ready { image, .. }) => {
+                assert_eq!(
+                    (image.width, image.height, image.kind),
+                    (400, 640, RungKind::Mid),
+                    "the mid, rotated to portrait"
+                );
+            }
+            other => panic!("expected the mid's Ready event, got {other:?}"),
+        }
+        assert!(
+            rx.try_recv().is_err(),
+            "the oriented mid serves the box: nothing more is decoded"
         );
         std::fs::remove_dir_all(&dir).ok();
     }
@@ -2229,7 +3311,14 @@ mod tests {
         .unwrap();
         let (shared, rx) = shared_over(vec![path]);
         assert_eq!(
-            decode_ladder(&shared, 0, u32::MAX, 0, false),
+            decode_ladder(
+                &shared,
+                0,
+                Target::Long(u32::MAX),
+                0,
+                false,
+                RequestState::Settled
+            ),
             Ok(()),
             "a CMYK bare JPEG must not fail its only rung"
         );
@@ -2243,6 +3332,49 @@ mod tests {
             other => panic!("expected the CMYK rung's Ready event, got {other:?}"),
         }
         assert!(rx.try_recv().is_err(), "one rung, one event, no Failed");
+
+        // At fit on a box its 2/8 would serve (brief 008): the rung attempt
+        // runs the route at full scale, so what comes back is the full, and
+        // the ladder publishes it once, terminal -- the plain decode of the
+        // same JPEG does not run a second time.
+        let fit_box = FitBox {
+            width: 500,
+            height: 400,
+        };
+        assert_eq!(
+            rung_factor(2000, 1500, 1, fit_box),
+            Some(2),
+            "the premise: the ladder tries a screen rung here"
+        );
+        let (shared, rx) = shared_over(vec![dir.join("print.jpg")]);
+        assert_eq!(
+            decode_ladder(
+                &shared,
+                0,
+                Target::Fit(fit_box),
+                0,
+                false,
+                RequestState::Settled
+            ),
+            Ok(())
+        );
+        match rx.try_recv() {
+            Ok(LoupeEvent::Ready {
+                image, terminal, ..
+            }) => {
+                assert_eq!(
+                    (image.width, image.height, image.kind),
+                    (2000, 1500, RungKind::Full),
+                    "the route ran 8/8: the full, never a screen rung"
+                );
+                assert!(terminal, "a bare JPEG's full is its best");
+            }
+            other => panic!("expected the CMYK full's Ready event, got {other:?}"),
+        }
+        assert!(
+            rx.try_recv().is_err(),
+            "one decode of the full, one event, no Failed"
+        );
         std::fs::remove_dir_all(&dir).ok();
     }
 
@@ -2254,6 +3386,7 @@ mod tests {
                 rgb: Arc::new(vec![0; 100]),
                 width: 10,
                 height: 10,
+                kind: RungKind::Full,
             };
             state.cached_bytes += 100;
             state.cache.insert(i, (img, i as u64));

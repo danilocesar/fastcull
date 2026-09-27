@@ -487,6 +487,7 @@ mod tests {
             ),
             width: w,
             height: h,
+            kind: fastcull_core::loupe::RungKind::Full,
         }
     }
 
