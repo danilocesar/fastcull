@@ -13,7 +13,7 @@
 //! | [`SessionState`] | the open folder: its images, what the user has said about them, the engines producing data for them |
 //! | [`GridViewState`] | what the grid shows and where the cursor and selection are inside it |
 //! | [`LoupeViewState`] | the loupe overlay: its engine, the desired factor and pan, what it last drew |
-//! | [`TextureStore`] | every UI-side texture (thumbs, mids, full-res) — a cache, re-derivable from the engines |
+//! | [`TextureStore`] | every UI-side texture (thumbs, mids, screen rungs, full-res) — a cache, re-derivable from the engines |
 //! | [`BurstIndex`] | burst grouping outputs, indexed by image id |
 //! | [`IptcPanelState`] | the IPTC dock: its visibility, its model cache, the revert slot |
 //! | [`CopyState`] | the Copy Picks dialog: plan, destination, running worker, what was copied |
@@ -79,6 +79,14 @@ pub(crate) const MARGIN_ROWS: usize = 1;
 /// `hold_cap` (A3). That split is deliberate — an elapsed time and a cap
 /// passed IN are what make the bound a table row rather than a stopwatch.
 pub(crate) const OVERLAY_HOLD_CAP: std::time::Duration = std::time::Duration::from_millis(250);
+
+/// The cue pill's minimum on-time while travelling (ui-grid.md, "The pill
+/// never flickers"; the pill rule, Manager M2 2026-09-26): once lit during a
+/// hold, the "◌ loading" pill stays on until this long has passed since the
+/// last soft frame, so soft and sharp frames alternating in a hold keep it
+/// lit instead of blinking. A UI tuning value like `OVERLAY_HOLD_CAP` beside
+/// it, passed IN to `fastcull_core::transit::cue_pill`, which owns the rule.
+pub(crate) const CUE_MIN_ON: std::time::Duration = std::time::Duration::from_millis(250);
 
 /// Selection wash hue: the SAME accent blue as the cursor outline, so the two
 /// indicators stay one visual family — filled means selected, bright border
@@ -404,6 +412,14 @@ pub(crate) struct TextureStore {
     /// file's native size — bare JPEGs, issue #8): their small texture
     /// counts as the top rung for the zoom ceiling.
     pub(crate) terminal_native: HashSet<usize>,
+    /// The SCREEN-RUNG ring (brief 008): the cursor's neighbours' rungs —
+    /// the embedded full JPEG decoded at N/8 to the fit box, 21 MB a texture
+    /// on a 4K viewport — held within the engine's rung window
+    /// (`LoupeEngine::texture_windows().rung`, 2 behind / 15 ahead, leaned
+    /// by its travel latch) and cursor-protected on eviction (see
+    /// `insert_rung`). Never the zoom ceiling: a screen rung is never the top
+    /// rung however large (`max_factor` reads `fullres` only).
+    pub(crate) rungs: Vec<(usize, slint::Image)>,
 }
 
 /// The grid surface: which images are on screen, in what order, where the
@@ -576,12 +592,36 @@ pub(crate) struct LoupeViewState {
     /// presenter reduces it to `transit::HoldState` (is it this cursor,
     /// how long has it run) and `transit::render_rung` decides.
     pub(crate) overlay_hold: Option<(usize, std::time::Instant)>,
-    /// `(cursor, was_thumb)` of the last SOFT render — trace dedup for
-    /// the soft branch. Keyed on the rung, not just the cursor, so the
-    /// thumb→mid upgrade of one image still traces (it is a visual
-    /// change, and `transit_at_zoom_stays_soft_never_drops_to_fit`
-    /// asserts the soft render is observable).
-    pub(crate) last_soft_rung: Option<(usize, bool)>,
+    /// `(cursor, rung)` of the last sub-top render above fit — the screen
+    /// rung, the mid or the thumb — trace dedup for those branches. Keyed on
+    /// the rung, not just the cursor, so the thumb→mid→rung upgrades of one
+    /// image still trace (each is a visual change, and
+    /// `transit_at_zoom_stays_soft_never_drops_to_fit` asserts the soft
+    /// render is observable).
+    pub(crate) last_soft_rung: Option<(usize, fastcull_core::transit::FitRung)>,
+    /// The cue value the SHARP mark last carried, while the sharp render is
+    /// what is on screen (`None` after any other render): the mark re-fires
+    /// when its `cue` changes (test-harness.md). Not `get_loupe_soft()`,
+    /// which stays true while the pill's minimum holds and would re-trace
+    /// every refresh.
+    pub(crate) last_sharp_cue: Option<bool>,
+    /// `(cursor, rung shown, pill)` of the last `loupe fit` mark — trace
+    /// dedup, the mark being emitted on every change of the triple
+    /// (test-harness.md). Reset off the loupe like `last_badge`.
+    pub(crate) last_fit_render: Option<(usize, fastcull_core::transit::FitRung, bool)>,
+    /// The rung the cursor is rendered from this instant — the dump's
+    /// `rung=`: at fit the texture the fit cell draws, above fit the
+    /// decision's rung; `None` off the loupe and while nothing of the
+    /// cursor is shown.
+    pub(crate) shown_rung: fastcull_core::transit::FitRung,
+    /// The last soft frame on screen, which the pill's minimum counts from
+    /// — kept for `fastcull_core::transit::cue_pill`, which decides it and
+    /// hands it back each render. `None` off the loupe.
+    pub(crate) last_soft_at: Option<std::time::Instant>,
+    /// When the pump must re-evaluate a pill held lit over a sharp frame
+    /// although nothing may land (`CuePill::recheck_in` from the last
+    /// render); `None` whenever no pill is held, and off the loupe.
+    pub(crate) pill_recheck_at: Option<std::time::Instant>,
     /// The last FINITE factor the sharp overlay rendered at: during a
     /// transit whose desired factor is the INFINITY pin (Z), the soft
     /// view carries this value — visual continuity is the whole point
@@ -609,6 +649,11 @@ impl Default for LoupeViewState {
             last_pan_write: None,
             overlay_hold: None,
             last_soft_rung: None,
+            last_sharp_cue: None,
+            last_fit_render: None,
+            shown_rung: fastcull_core::transit::FitRung::None,
+            last_soft_at: None,
+            pill_recheck_at: None,
             last_resolved_factor: None,
             last_badge: None,
             last_overlay_cursor: None,
@@ -848,7 +893,8 @@ pub(crate) struct AppState {
     pub(crate) grid: GridViewState,
     /// The loupe overlay: its engine, its desire, and what it last drew.
     pub(crate) loupe_view: LoupeViewState,
-    /// Every UI-side texture (thumbs, mids, full-res) and its bookkeeping.
+    /// Every UI-side texture (thumbs, mids, screen rungs, full-res) and its
+    /// bookkeeping.
     pub(crate) textures: TextureStore,
     /// Burst grouping outputs (M7), indexed by image id.
     pub(crate) bursts: BurstIndex,

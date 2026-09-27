@@ -107,7 +107,9 @@ pub(crate) fn arm(
                     // `st.textures.failed`), a terminal small file's whole-file rung
                     // is adopted into the fullres slot (issue #8), and an
                     // empty view has no cursor — all keep the old
-                    // behaviour or they would hang into the 60 s cap.
+                    // behaviour or they would hang into the 60 s cap. A
+                    // screen rung is mid-or-better too: on a wide viewport it
+                    // is the texture fit settles on (brief 008).
                     let at_loupe = st.at_loupe();
                     let fit = !at_loupe
                         || st.session.synthetic
@@ -118,6 +120,7 @@ pub(crate) fn arm(
                             .fullres
                             .iter()
                             .any(|(i, _)| *i == st.grid.cursor)
+                        || st.textures.rungs.iter().any(|(i, _)| *i == st.grid.cursor)
                         || st.textures.mids.contains_key(&st.grid.cursor);
                     (one2one, fit)
                 };

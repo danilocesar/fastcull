@@ -785,9 +785,10 @@ export component MainWindow inherits Window {
     // relayout/load/DPI timing windows — the scrollbar is the ONLY
     // legitimate trigger (cursor contract), so it says so explicitly.
     in-out property <bool> sb-activity;
-    // True while the zoom overlay renders from a rung BELOW the file's
-    // best (issue #21: soft transit at the carried factor). Drives the
-    // cue pill — "you are never SILENTLY looking at soft pixels".
+    // The cue pill — "you are never SILENTLY looking at soft pixels"
+    // (issue #21): above fit a sub-top rung is rendered; at fit the shown
+    // rung does not serve the fit box; held by the pill's minimum while
+    // travelling (brief 008). Rust decides it (core's `transit::cue_pill`).
     in property <bool> loupe-soft;
     // Loupe state badge (issue #20): the cursor's mark in the loupe.
     // 0 = unmarked (badge hidden), 1 = picked, 2 = rejected — same
@@ -1609,35 +1610,6 @@ export component MainWindow inherits Window {
                     }
                 }
             }
-            // Loading cue pill (issue #21): VIEWPORT-FIXED — never
-            // positioned in panned content space (validator MAJOR on
-            // the Flickable-era overlay: a content-space pill sat
-            // thousands of px off-screen at zoom; the panning Image is
-            // its sibling for the same reason).
-            // Permanent element, visibility-toggled (the issue #6/#20
-            // rule); pointer-inert (no TouchArea). Sits BELOW the #20
-            // state badge slot (top-left, 14px, belongs to the mark —
-            // muscle memory from the grid badge corner), stacked so
-            // the two never overlap and never entangle their
-            // visibility contracts.
-            Rectangle {
-                visible: root.loupe-soft;
-                x: 14px;
-                y: 44px;
-                width: t-cue.preferred-width + 16px;
-                height: 22px;
-                border-radius: 6px;
-                background: #202028cc;
-                t-cue := Text {
-                    text: "◌ loading";
-                    color: #b8b8c0;
-                    font-size: 11px;
-                    horizontal-alignment: center;
-                    vertical-alignment: center;
-                    width: 100%;
-                    height: 100%;
-                }
-            }
         }
 
         // Loupe state badge (issue #20, persona MUST-HAVE): the cursor's
@@ -1666,6 +1638,40 @@ export component MainWindow inherits Window {
                 text: root.loupe-mark == 1 ? "★" : "✕";
                 color: root.loupe-mark == 1 ? #ffd24d : #ff5a5a;
                 font-size: 14px;
+                horizontal-alignment: center;
+                vertical-alignment: center;
+                width: 100%;
+                height: 100%;
+            }
+        }
+
+        // Loading cue pill (issue #21; at fit too since brief 008 R8):
+        // VIEWPORT-FIXED — never positioned in panned content space
+        // (validator MAJOR on the Flickable-era overlay: a content-space
+        // pill sat thousands of px off-screen at zoom; the panning Image is
+        // not its parent for the same reason). Out of the zoom overlay and
+        // beside the state badge, so it shows over BOTH loupe forms: above
+        // fit where the overlay is up, and at fit, where the fit cell's
+        // rung may not serve the box (ui-grid.md, "At fit"). Permanent
+        // element, visibility-toggled (the issue #6/#20 rule); pointer-inert
+        // (no TouchArea). Sits BELOW the #20 state badge slot (top-left,
+        // 14px, belongs to the mark — muscle memory from the grid badge
+        // corner), stacked so the two never overlap and never entangle
+        // their visibility contracts, and at fit below the filter bar as
+        // the badge is. Declared after the badge: draws above both loupe
+        // forms.
+        Rectangle {
+            visible: root.loupe-soft && (root.one2one || root.at-fit);
+            x: 14px;
+            y: root.one2one ? 44px : root.bar-h + 44px;
+            width: t-cue.preferred-width + 16px;
+            height: 22px;
+            border-radius: 6px;
+            background: #202028cc;
+            t-cue := Text {
+                text: "◌ loading";
+                color: #b8b8c0;
+                font-size: 11px;
                 horizontal-alignment: center;
                 vertical-alignment: center;
                 width: 100%;

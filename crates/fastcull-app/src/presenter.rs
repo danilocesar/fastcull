@@ -14,9 +14,11 @@
 //!    cursor, so a scroll can move it (cursor contract); then the warm
 //!    decode request for what it now looks at.
 //! 5. [`climb_mid_rung`] — cells that outgrew the 320 px thumb.
-//! 6. [`render_loupe_rung`] — sharp / soft / thumb rescue / bounded hold /
-//!    honest drop, plus the state badge. The ui-grid.md ladder, DECIDED by
-//!    `fastcull_core::transit::render_rung` and only rendered here.
+//! 6. [`render_loupe_rung`] — sharp / screen rung / soft / thumb rescue /
+//!    bounded hold / honest drop above fit, the fit view and its cue at fit,
+//!    the pill, plus the state badge. The ui-grid.md ladder, DECIDED by
+//!    `fastcull_core::transit` (`render_rung`, `cue_pill`) and only rendered
+//!    here.
 //! 7. [`fill_grid_cells`] — the windowed cell model, mutated in place.
 //! 8. [`write_status_and_chrome`] — filter bar, empty state, IPTC panel,
 //!    scroll hint, status line.
@@ -32,14 +34,15 @@ use std::rc::Rc;
 
 use fastcull_core::budget::MIDS_CAP;
 use fastcull_core::grid::{self, GridLayout};
-use fastcull_core::loupe::is_top_rung;
-use fastcull_core::transit::{DropReason, RenderDecision};
+use fastcull_core::loupe::{is_top_rung, serves_box, FitBox};
+use fastcull_core::transit::{self, DropReason, FitRung, LoupeWhere, RenderDecision};
 use slint::{ComponentHandle, Model};
 
 use crate::iptc_bridge::refresh_iptc_panel;
-use crate::loupe_ctrl::{clamped_factor, route_warm, WarmCtx, WarmJob};
+use crate::kitchen::FillOrder;
+use crate::loupe_ctrl::{clamped_factor, route_warm, Held, WarmCtx, WarmJob};
 use crate::nav::current_geometry;
-use crate::state::{AppState, MARGIN_ROWS, OVERLAY_HOLD_CAP};
+use crate::state::{AppState, CUE_MIN_ON, MARGIN_ROWS, OVERLAY_HOLD_CAP};
 use crate::trace::{trace_mark, trace_slow, trace_start};
 use crate::{CellData, MainWindow};
 
@@ -91,6 +94,11 @@ struct Pass {
     can_anchor: bool,
     /// Issue #25's one-shot edge: the last metadata job just landed.
     load_settled: bool,
+    /// The loupe's fit box — its N=1 cell in PHYSICAL pixels
+    /// (raw-pipeline.md, "The fit box") — which the engine is handed on
+    /// every refresh and the fit cue judges against. None off the loupe and
+    /// before the first layout.
+    fit_box: Option<FitBox>,
 }
 
 /// PHASE 1 — what drifted since the last refresh: geometry (relayout),
@@ -163,6 +171,18 @@ fn detect_drift(win: &MainWindow, st: &mut AppState, geom: (GridLayout, f32, f32
     if can_anchor {
         st.grid.last_metadata_complete = st.metadata_complete();
     }
+    // At one column the cell IS the fit view (`GridLayout::new` bounds it by
+    // the viewport), so its size in physical pixels is what fit asks the
+    // decoder for — the box follows the viewport, a resize or a move to
+    // another display re-keys it at the next refresh (raw-pipeline.md, "The
+    // factor follows the viewport"). A pre-layout pass has no height yet.
+    let fit_box = (st.at_loupe() && viewport_h > 0.0).then(|| {
+        let sf = win.window().scale_factor();
+        FitBox {
+            width: (layout.cell_width * sf) as u32,
+            height: (layout.cell_height * sf) as u32,
+        }
+    });
     Pass {
         layout,
         viewport_h,
@@ -174,6 +194,7 @@ fn detect_drift(win: &MainWindow, st: &mut AppState, geom: (GridLayout, f32, f32
         view_mutated,
         can_anchor,
         load_settled,
+        fit_box,
     }
 }
 
@@ -382,6 +403,70 @@ fn fullres_for(st: &AppState, index: usize) -> Option<slint::Image> {
         .map(|(_, img)| img.clone())
 }
 
+/// The UI-side screen-rung texture held for `index`, if any (brief 008).
+fn rung_for(st: &AppState, index: usize) -> Option<slint::Image> {
+    st.textures
+        .rungs
+        .iter()
+        .find(|(i, _)| *i == index)
+        .map(|(_, img)| img.clone())
+}
+
+/// The four textures the app holds for one image, gathered the way the
+/// render ladder judges them — one gathering for the loupe's render
+/// decision and for the fit cell, so the two cannot see different textures.
+struct Rungs {
+    /// The full-res slot's texture when it is a TOP rung (`is_top_rung`,
+    /// terminality included): what renders sharp.
+    full: Option<slint::Image>,
+    /// The screen-rung ring's texture.
+    rung: Option<slint::Image>,
+    /// The mid rung — or a warm sub-top texture the engine re-announced
+    /// into the full-res slot (the pruned-and-revisited path: validator M3,
+    /// held-left beyond the mids window used to re-strobe fit with the
+    /// pixels literally in hand).
+    mid: Option<slint::Image>,
+    /// The image's own 320 px grid thumb (issue #46's bottom rung).
+    thumb: Option<slint::Image>,
+}
+
+fn rungs_of(st: &AppState, index: usize) -> Rungs {
+    Rungs {
+        full: fullres_for(st, index).filter(|img| {
+            is_top_rung(
+                img.size().width.max(img.size().height),
+                st.textures.terminal_native.contains(&index),
+            )
+        }),
+        rung: rung_for(st, index),
+        mid: st
+            .textures
+            .mids
+            .get(&index)
+            .cloned()
+            .or_else(|| fullres_for(st, index)),
+        thumb: st.textures.images.get(&index).cloned(),
+    }
+}
+
+/// The loupe's fit cell for `index`: the texture it DRAWS and the rung its
+/// mark NAMES, by core's one order (`transit::fit_cell`, full > screen >
+/// mid > thumb) — the app has no order of its own, so the `loupe fit` mark
+/// and the dump's `rung=` name the drawn texture by construction.
+fn loupe_cell(st: &AppState, index: usize) -> (FitRung, Option<slint::Image>) {
+    let r = rungs_of(st, index);
+    transit::fit_cell(r.full, r.rung, r.mid, r.thumb)
+}
+
+/// A pill value as its marks spell it (test-harness.md).
+fn on_off(on: bool) -> &'static str {
+    if on {
+        "on"
+    } else {
+        "off"
+    }
+}
+
 /// PHASE 4 — the cursor claim at the loupe, and the warm-decode request
 /// for what it is now looking at. At one column the visible image IS the
 /// cursor (cursor contract), so a scroll that carries the cursor's cell off
@@ -396,6 +481,19 @@ fn claim_cursor_at_loupe(
     st: &mut AppState,
     pass: &Pass,
 ) {
+    // The fit box, on EVERY refresh and FIRST — before and outside the
+    // at-loupe branch below — so leaving the loupe really stores None: the
+    // reserved lane's idle cook reads the CURRENT box, and the box going
+    // ends the engine's open time-to-screen measurements (raw-pipeline.md,
+    // Contracts, `set_fit_box`: "none … whenever the app is not at the
+    // loupe"). Review-verified, not driven: the only observable of a stale
+    // box is a background full-res decode in the grid, provoked by leaving
+    // the loupe inside the 250 ms debounce after arriving on a wide
+    // viewport — a timing-dependent negative no test can hold reliably
+    // (brief 008's plan, fix round 3).
+    if let Some(loupe) = &st.loupe_view.engine {
+        loupe.set_fit_box(pass.fit_box);
+    }
     let layout = &pass.layout;
     let (viewport_h, scroll_y, view_len) = (pass.viewport_h, pass.scroll_y, pass.view_len);
     let (at_loupe, relayout, view_mutated) = (pass.at_loupe, pass.relayout, pass.view_mutated);
@@ -477,37 +575,58 @@ fn claim_cursor_at_loupe(
             // path for textures evicted UI-side (validator finding — going
             // backwards previously degraded to the thumb forever).
             let focus_index = st.grid.cursor;
-            // Ladder target: fit view needs the viewport in physical pixels;
-            // any factor above fit demands the top rung (quality rule as
-            // revised by #21: the top rung is still ALWAYS requested;
-            // until it lands the view renders soft-flagged, never
-            // unflagged).
-            let display_long = if st.loupe_view.zoom_factor > 1.0 {
-                u32::MAX
+            // The app's real target (ui-grid.md, "Transit and settled"): at
+            // fit the fit box — the box handed over above, served by the
+            // cheapest rung that serves it, the mid up to ~2K and the screen
+            // rung on a wider viewport — and above fit the top rung (the
+            // quality rule as revised by #21: the top rung is still ALWAYS
+            // requested; until it lands the view renders soft-flagged, never
+            // unflagged). What a hold then asks is the engine's.
+            let hit = if st.loupe_view.zoom_factor > 1.0 {
+                loupe.focus(focus_index, u32::MAX)
             } else {
-                (win.get_grid_width() * win.window().scale_factor()) as u32
+                loupe.focus_fit(focus_index)
             };
-            let hit = loupe.focus(focus_index, display_long);
-            let missing = !st.textures.fullres.iter().any(|(i, _)| *i == focus_index);
-            if let (Some(image), true) = (hit, missing) {
+            if let Some(image) = hit {
                 // Kitchen fills the buffer off-thread; the pending guards
                 // absorb the refresh loop re-asking every frame while it
-                // cooks. The routing rule itself (and why this context
-                // differs from the pump's) lives in `route_warm`.
-                let long = image.width.max(image.height);
+                // cooks, and `held` keeps a texture the rings already have
+                // from being copied again. The routing rule itself (and why
+                // this context differs from the pump's) lives in `route_warm`.
+                let held = Held {
+                    full: st.textures.fullres.iter().any(|(i, _)| *i == focus_index),
+                    rung: st.textures.rungs.iter().any(|(i, _)| *i == focus_index),
+                    mid: st.textures.mids.contains_key(&focus_index),
+                };
                 match route_warm(
-                    long,
+                    image.kind,
+                    image.width.max(image.height),
                     st.textures.terminal_native.contains(&focus_index),
                     at_loupe,
-                    st.textures.mids.contains_key(&focus_index),
+                    held,
                     WarmCtx::FocusHit,
                 ) {
                     Some(WarmJob::Full) => st.kitchen.submit_full(focus_index, image),
-                    Some(WarmJob::Wrap { terminal }) => {
-                        st.kitchen.submit_wrap(focus_index, image, terminal)
+                    Some(WarmJob::Wrap { terminal, kind }) => {
+                        st.kitchen.submit_wrap(focus_index, image, terminal, kind)
                     }
                     None => {}
                 }
+            }
+            // The kitchen's fill order, after the focus so the window leans
+            // the way this very index change latched it (01-architecture.md,
+            // the kitchen): the cursor's fill first, then the nearest. The
+            // queued fills it culls — frames the full-res window has left —
+            // never happen, so each ends its decode's time-to-screen
+            // measurement unmeasured (Manager ruling Q-K). The view is
+            // snapshotted per refresh: one copy of the id list, never per pop.
+            let order = FillOrder {
+                cursor: focus_index,
+                view: st.grid.view.iter().copied().collect(),
+                window: loupe.texture_windows().full,
+            };
+            for index in st.kitchen.set_fill_order(order) {
+                loupe.note_dropped(index);
             }
         }
     }
@@ -542,8 +661,29 @@ fn climb_mid_rung(win: &MainWindow, st: &mut AppState, pass: &Pass, ids: &[usize
             }
         }
     }
-    st.textures.mids.retain(|i, _| ids.contains(i));
-    st.textures.va.prune(ids);
+    // What the mids map keeps: the visible set, and at the loupe the frames
+    // inside the rung ring's texture window too (ui-grid.md,
+    // "Virtualization"; Manager ruling 2026-09-26, brief 008 Q-A). On a
+    // viewport the mid serves it is the frame's fit-box rung, which a hold
+    // at fit must find in hand as it finds the screen rung on a wide one:
+    // pruned to the visible set — at one column the cursor −2 ..= +3 — a
+    // ring member's mid that landed while it was farther ahead was dropped,
+    // nothing re-announces it, and the fit cell showed the thumb, cued,
+    // until a re-wrap landed. At most 18 more ~5 MB textures, inside
+    // `MIDS_CAP`. The window is the engine's, leaned by its latch, never
+    // re-derived here. The bookkeeping in `va` keeps the same set.
+    let mut keep = ids.to_vec();
+    if at_loupe {
+        if let (Some(loupe), Some(cursor_pos)) = (&st.loupe_view.engine, st.cursor_pos()) {
+            let window = loupe.texture_windows().rung;
+            let last = st.grid.view.len().saturating_sub(1);
+            let lo = cursor_pos.saturating_sub(window.before);
+            let hi = cursor_pos.saturating_add(window.after).min(last);
+            keep.extend(st.grid.view[lo..=hi].iter().copied());
+        }
+    }
+    st.textures.mids.retain(|i, _| keep.contains(i));
+    st.textures.va.prune(&keep);
     want_mid
 }
 
@@ -556,6 +696,8 @@ fn climb_mid_rung(win: &MainWindow, st: &mut AppState, pass: &Pass, ids: &[usize
 /// `one2one && overlay`; it is now exactly "the reason is one of the two
 /// traced ones", which is the same set by construction: `render_rung` emits
 /// `DecodeFailed`/`HoldCap` only when the overlay was up and still wanted.
+/// The pill is not written here: the render phase writes it once, after
+/// every arm, from `transit::cue_pill`.
 fn honest_drop(win: &MainWindow, st: &mut AppState, cursor: usize, reason: DropReason) {
     let excuse = match reason {
         DropReason::DecodeFailed => Some("decode failed"),
@@ -568,23 +710,26 @@ fn honest_drop(win: &MainWindow, st: &mut AppState, cursor: usize, reason: DropR
         trace_mark(&format!("loupe overlay dropped idx {cursor} ({excuse})"));
     }
     win.set_one2one(false);
-    win.set_loupe_soft(false);
     st.loupe_view.last_pan_write = None;
     st.loupe_view.last_overlay_cursor = None;
     st.loupe_view.overlay_hold = None;
     st.loupe_view.last_soft_rung = None;
+    st.loupe_view.last_sharp_cue = None;
 }
 
-/// PHASE 6 — which rung the loupe overlay shows, and the render of it:
-/// sharp (the top rung) / soft (the cursor's mid) / thumb rescue / a
-/// bounded residual hold / the honest drop to fit — plus the state badge.
+/// PHASE 6 — what the loupe shows and the render of it: above fit sharp
+/// (the top rung) / the screen rung / soft (the cursor's mid) / thumb rescue
+/// / a bounded residual hold / the honest drop to fit; at fit the fit view,
+/// cued when its rung does not serve the fit box; the "◌ loading" pill over
+/// either; plus the state badge.
 ///
-/// The ladder and its rules are ui-grid.md's, and since A3 the DECISION is
-/// `fastcull_core::transit::render_rung` — table-tested there over every
-/// input combination. What is left here is what only the app can do: look
-/// the textures up, read the clock, do the extent math, and write the
-/// properties each decision names. Returns the cursor's mark, which the
-/// status line spells out.
+/// The ladder and its rules are ui-grid.md's, and the DECISIONS are core's —
+/// `fastcull_core::transit::render_rung` (table-tested over every input
+/// combination) and `transit::cue_pill` (the pill and its minimum on-time).
+/// What is left here is what only the app can do: look the textures up,
+/// read the clock, do the extent math, and write the properties each
+/// decision names. Returns the cursor's mark, which the status line spells
+/// out.
 fn render_loupe_rung(win: &MainWindow, st: &mut AppState, pass: &Pass) -> i32 {
     let (at_loupe, view_len) = (pass.at_loupe, pass.view_len);
     let cursor = st.grid.cursor;
@@ -592,61 +737,93 @@ fn render_loupe_rung(win: &MainWindow, st: &mut AppState, pass: &Pass) -> i32 {
     // fit-extent × factor in logical pixels so the capped factor means
     // device pixels on HiDPI.
     let factor = clamped_factor(win, st);
-    let overlay = factor > 1.0 && at_loupe;
-    // The three rungs of the CURSOR's own image, looked up but not yet
+    let loupe = transit::loupe_where(at_loupe, factor, view_len);
+    // The four rungs of the CURSOR's own image, looked up but not yet
     // judged. Which one (if any) renders is `render_rung`'s call.
-    let sharp = fullres_for(st, cursor).filter(|img| {
-        is_top_rung(
-            img.size().width.max(img.size().height),
-            st.textures.terminal_native.contains(&cursor),
-        )
-    });
-    // The mid rung — or a warm sub-top texture the engine re-announced
-    // into the fullres slot (the pruned-and-revisited path: validator M3,
-    // held-left beyond the mids window used to re-strobe fit with the
-    // pixels literally in hand).
-    let mid = st
-        .textures
-        .mids
-        .get(&cursor)
-        .cloned()
-        .or_else(|| fullres_for(st, cursor));
-    // The cursor's own 320 px grid thumb (issue #46's bottom rung).
-    let thumb = st.textures.images.get(&cursor).cloned();
+    let rungs = rungs_of(st, cursor);
+    // Whether a texture serves the CURRENT fit box — core's 1.25 rule, its
+    // one home (`loupe::serves_box`); nothing serves without a box.
+    let serves_fit = |img: &Option<slint::Image>| match (img, pass.fit_box) {
+        (Some(img), Some(fit_box)) => serves_box(img.size().width, img.size().height, fit_box),
+        _ => false,
+    };
+    let cursor_failed = st.textures.failed.contains(&cursor);
     // One clock read for the whole decision: the same `now` measures the
-    // hold and stamps a new one, as it always did.
+    // hold and stamps a new one, as it always did, and times the pill.
     let now = std::time::Instant::now();
-    let decision = fastcull_core::transit::render_rung(&fastcull_core::transit::RungInputs {
-        has_sharp: sharp.is_some(),
-        has_mid: mid.is_some(),
-        has_thumb: thumb.is_some(),
-        cursor_failed: st.textures.failed.contains(&cursor),
-        overlay_wanted: overlay,
+    let decision = transit::render_rung(&transit::RungInputs {
+        has_sharp: rungs.full.is_some(),
+        has_rung: rungs.rung.is_some(),
+        has_mid: rungs.mid.is_some(),
+        has_thumb: rungs.thumb.is_some(),
+        rung_serves_fit: serves_fit(&rungs.rung),
+        mid_serves_fit: serves_fit(&rungs.mid),
+        cursor_failed,
+        loupe,
         // The overlay's own visibility property IS the "were previous
         // pixels on screen" memory the hold arm consults.
         overlay_was_up: win.get_one2one(),
-        hold: st.loupe_view.overlay_hold.map(|(held_for, since)| {
-            fastcull_core::transit::HoldState {
+        hold: st
+            .loupe_view
+            .overlay_hold
+            .map(|(held_for, since)| transit::HoldState {
                 same_cursor: held_for == cursor,
                 elapsed: now.duration_since(since),
-            }
-        }),
+            }),
         hold_cap: OVERLAY_HOLD_CAP,
     });
+    // THE PILL, decided before any arm renders, since the sharp and fit
+    // marks carry it. Whether the frame on screen is soft: not for the
+    // sharp render or a drop; yes for the screen rung, the mid, the thumb
+    // and the hold above fit (the values this pass wrote before brief 008);
+    // at fit the decision's cue, masked in a synthetic session — no files,
+    // so nothing is ever loading (Manager ruling 2026-09-26, brief 008 Q12).
+    let soft = match decision {
+        RenderDecision::Sharp | RenderDecision::Drop { .. } => false,
+        RenderDecision::Rung | RenderDecision::Soft { .. } | RenderDecision::Hold { .. } => true,
+        RenderDecision::Fit { cue } => cue && !st.session.synthetic,
+    };
+    if loupe == LoupeWhere::Off {
+        // Off the loupe there is no pill to hold and no fit view to mark:
+        // the clock the minimum counts from and the fit mark's dedup are
+        // forgotten, like the badge's below, so the loupe comes back fresh.
+        st.loupe_view.last_soft_at = None;
+        st.loupe_view.last_fit_render = None;
+    }
+    let travel_left = st
+        .loupe_view
+        .engine
+        .as_ref()
+        .and_then(|engine| engine.travel_left());
+    let pill = transit::cue_pill(
+        soft,
+        cursor_failed,
+        travel_left,
+        st.loupe_view.last_soft_at,
+        now,
+        CUE_MIN_ON,
+    );
+    st.loupe_view.last_soft_at = pill.last_soft;
+    // The pump's 33 ms tick re-evaluates a held pill at this instant, when
+    // nothing may land to do it (pump.rs).
+    st.loupe_view.pill_recheck_at = pill.recheck_in.map(|delay| now + delay);
     // The texture each decision names. `render_rung` decided FROM these
-    // being present, so Sharp and Soft always find theirs; the match below
-    // still covers the pairing for totality.
+    // being present, so Sharp, Rung and Soft always find theirs; the match
+    // below still covers the pairing for totality.
     let chosen = match decision {
-        RenderDecision::Sharp => sharp,
-        RenderDecision::Soft { is_thumb: false } => mid,
-        RenderDecision::Soft { is_thumb: true } => thumb,
-        RenderDecision::Hold { .. } | RenderDecision::Drop { .. } => None,
+        RenderDecision::Sharp => rungs.full,
+        RenderDecision::Rung => rungs.rung,
+        RenderDecision::Soft { is_thumb: false } => rungs.mid,
+        RenderDecision::Soft { is_thumb: true } => rungs.thumb,
+        RenderDecision::Hold { .. } | RenderDecision::Drop { .. } | RenderDecision::Fit { .. } => {
+            None
+        }
     };
     // The soft view needs a FINITE factor: an INFINITY pin (Z) resolves
     // against native dims we don't have yet — carry the last resolved
     // magnification (visual continuity across the transit). A VIRGIN
-    // pin (nothing ever resolved this session) renders the mid at its
-    // own native size: the most zoom the data truthfully supports right
+    // pin (nothing ever resolved this session) renders the sub-top rung at
+    // its own native size: the most zoom the data truthfully supports right
     // now, flagged soft; the sharp landing then resolves the real 1:1
     // (QE D2: the old None-guard left FIT showing for 11 debug-seconds
     // with a usable mid in hand).
@@ -671,17 +848,24 @@ fn render_loupe_rung(win: &MainWindow, st: &mut AppState, pass: &Pass) -> i32 {
             win.set_loupe_image(img);
             win.set_loupe_vx(ox);
             win.set_loupe_vy(oy);
-            // Trace on any offset, visibility or CURSOR change (QE: silent
-            // same-size persistence made cross-image forensics blind).
+            // Trace on any offset, visibility, CURSOR or CUE change (QE:
+            // silent same-size persistence made cross-image forensics
+            // blind). The cue is keyed on the value this mark last carried,
+            // `None` after any other render — which also re-fires the mark
+            // on a soft→sharp swap of the same frame — never on
+            // `get_loupe_soft()`, which the pill's minimum can hold true over
+            // a sharp frame, re-tracing every refresh.
             if st.loupe_view.last_pan_write != Some((ox, oy))
                 || !win.get_one2one()
-                || win.get_loupe_soft()
+                || st.loupe_view.last_sharp_cue != Some(pill.on)
                 || st.loupe_view.last_overlay_cursor != Some(cursor)
             {
                 trace_mark(&format!(
                     "loupe idx {cursor} factor {factor:.3} extent {ew:.0}x{eh:.0} \
-                     center {:.3},{:.3} off {ox:.0},{oy:.0}",
-                    st.loupe_view.pan_center.0, st.loupe_view.pan_center.1
+                     center {:.3},{:.3} off {ox:.0},{oy:.0} cue {}",
+                    st.loupe_view.pan_center.0,
+                    st.loupe_view.pan_center.1,
+                    on_off(pill.on)
                 ));
             }
             st.loupe_view.last_resolved_factor = Some(factor);
@@ -689,21 +873,27 @@ fn render_loupe_rung(win: &MainWindow, st: &mut AppState, pass: &Pass) -> i32 {
             st.loupe_view.last_overlay_cursor = Some(cursor);
             st.loupe_view.overlay_hold = None;
             st.loupe_view.last_soft_rung = None;
-            win.set_loupe_soft(false);
+            st.loupe_view.last_sharp_cue = Some(pill.on);
+            st.loupe_view.shown_rung = FitRung::Full;
             win.set_one2one(true);
         }
-        (RenderDecision::Soft { is_thumb }, Some(img)) => {
-            // SOFT transit render: the mid rung — or, below it, the grid
-            // thumb (issue #46) — upscaled to the carried factor. Same
-            // extent math for both — only the aspect matters at a given
-            // factor (dims x fit_scale = the fit extent regardless of
+        (RenderDecision::Rung | RenderDecision::Soft { .. }, Some(img)) => {
+            // SOFT render at the carried factor: the screen rung, the mid
+            // rung — or, below it, the grid thumb (issue #46) — upscaled.
+            // Same extent math for all three — only the aspect matters at a
+            // given factor (dims x fit_scale = the fit extent regardless of
             // rung resolution).
+            let (rung, word) = match decision {
+                RenderDecision::Rung => (FitRung::Screen, "rung"),
+                RenderDecision::Soft { is_thumb: true } => (FitRung::Thumb, "thumb"),
+                _ => (FitRung::Mid, "soft"),
+            };
             let size = img.size();
             let sf = win.window().scale_factor();
             let (mw, mh) = (size.width as f32 / sf, size.height as f32 / sf);
             let (vw, vh) = (win.get_grid_width(), win.get_loupe_area_h());
             let s = fastcull_core::zoompan::fit_scale(vw, vh, mw, mh);
-            // Virgin pin: the mid at its native resolution (factor 1/s),
+            // Virgin pin: the rung at its native resolution (factor 1/s),
             // floored at fit.
             let f = soft_factor.unwrap_or_else(|| (1.0 / s.max(1e-6)).max(1.0));
             let (ew, eh) = (mw * s * f, mh * s * f);
@@ -714,17 +904,17 @@ fn render_loupe_rung(win: &MainWindow, st: &mut AppState, pass: &Pass) -> i32 {
             win.set_loupe_image(img);
             win.set_loupe_vx(ox);
             win.set_loupe_vy(oy);
-            if st.loupe_view.last_soft_rung != Some((cursor, is_thumb)) {
+            if st.loupe_view.last_soft_rung != Some((cursor, rung)) {
                 trace_mark(&format!(
-                    "loupe {} idx {cursor} factor {f:.3} extent {ew:.0}x{eh:.0}",
-                    if is_thumb { "thumb" } else { "soft" }
+                    "loupe {word} idx {cursor} factor {f:.3} extent {ew:.0}x{eh:.0}"
                 ));
             }
-            st.loupe_view.last_soft_rung = Some((cursor, is_thumb));
+            st.loupe_view.last_soft_rung = Some((cursor, rung));
             st.loupe_view.last_pan_write = Some((ox, oy));
             st.loupe_view.last_overlay_cursor = Some(cursor);
             st.loupe_view.overlay_hold = None;
-            win.set_loupe_soft(true);
+            st.loupe_view.last_sharp_cue = None;
+            st.loupe_view.shown_rung = rung;
             win.set_one2one(true);
         }
         (RenderDecision::Hold { start }, _) => {
@@ -745,16 +935,44 @@ fn render_loupe_rung(win: &MainWindow, st: &mut AppState, pass: &Pass) -> i32 {
             // all stay on the PREVIOUS image — the pixels still belong
             // to it, and the first rung of the new image lands in the
             // branches above.
-            win.set_loupe_soft(true);
+            st.loupe_view.last_sharp_cue = None;
+            st.loupe_view.shown_rung = FitRung::None;
         }
-        (RenderDecision::Drop { reason }, _) => honest_drop(win, st, cursor, reason),
+        (RenderDecision::Drop { reason }, _) => {
+            honest_drop(win, st, cursor, reason);
+            st.loupe_view.shown_rung = FitRung::None;
+        }
+        (RenderDecision::Fit { .. }, _) => {
+            // At fit (brief 008 R8): the overlay is down — its bookkeeping
+            // cleared as a drop below the ladder clears it, nothing to
+            // excuse — and the fit cell shows the best rung in hand, the
+            // pill flagging it when it does not serve the fit box. The mark
+            // names the rung the cell DRAWS (`loupe_cell`, core's one
+            // order) and the pill, on every change of the three (the fit
+            // hold's instrument, test-harness.md).
+            honest_drop(win, st, cursor, DropReason::BelowLadder);
+            let (shown, _) = loupe_cell(st, cursor);
+            if st.loupe_view.last_fit_render != Some((cursor, shown, pill.on)) {
+                trace_mark(&format!(
+                    "loupe fit idx {cursor} rung {shown} cue {}",
+                    on_off(pill.on)
+                ));
+                st.loupe_view.last_fit_render = Some((cursor, shown, pill.on));
+            }
+            st.loupe_view.shown_rung = shown;
+        }
         // Unreachable: `render_rung` named a rung from these very Options
         // being Some. The honest floor is the right answer anyway — it is
         // what the old ladder's catch-all did with no pixels in hand.
-        (RenderDecision::Sharp | RenderDecision::Soft { .. }, None) => {
-            honest_drop(win, st, cursor, DropReason::NothingToHold)
+        (RenderDecision::Sharp | RenderDecision::Rung | RenderDecision::Soft { .. }, None) => {
+            honest_drop(win, st, cursor, DropReason::NothingToHold);
+            st.loupe_view.shown_rung = FitRung::None;
         }
     }
+    // The pill, written once for every arm: above fit and at fit alike, the
+    // one value `cue_pill` decided (main.slint shows it over either loupe
+    // form).
+    win.set_loupe_soft(pill.on);
     // Fit pointer surface (issue #11): active at 1 column with no zoom
     // overlay up — the wheel zooms there (browsing is keyboard-only).
     win.set_at_fit(at_loupe && !win.get_one2one() && view_len > 0);
@@ -792,7 +1010,9 @@ fn render_loupe_rung(win: &MainWindow, st: &mut AppState, pass: &Pass) -> i32 {
 
 /// PHASE 7 — the cell model: the windowed rows the grid binds to, mutated
 /// in place (spec: reuse the model, don't recreate it). Per cell the
-/// quality ladder is full-res > mid > 320 px thumb > placeholder.
+/// quality ladder is, at the loupe, full-res > screen rung > mid > 320 px
+/// thumb > placeholder (core's `transit::fit_cell`), and in the grid mid >
+/// thumb > placeholder.
 fn fill_grid_cells(
     win: &MainWindow,
     st: &AppState,
@@ -808,30 +1028,27 @@ fn fill_grid_cells(
     for pos in range.clone() {
         let index = st.grid.view[pos];
         let (x, y) = layout.position(pos);
-        let full = if at_loupe {
-            fullres_for(st, index)
+        // At the loupe every cell is a fit cell: the texture core's one order
+        // names (`loupe_cell`: full-res > screen rung > mid > thumb), the same
+        // one the `loupe fit` mark reads, so the mark and the pixels cannot
+        // disagree. Elsewhere the grid's ladder: the mid rung for cells that
+        // outgrew the thumb, else the 320 px thumb, else the placeholder.
+        let image = if at_loupe {
+            loupe_cell(st, index).1
         } else {
-            None
+            want_mid
+                .then(|| st.textures.mids.get(&index))
+                .flatten()
+                .or_else(|| st.textures.images.get(&index))
+                .cloned()
         };
-        // Quality ladder per cell: loupe full-res > mid rung (large cells
-        // or loupe fallback) > 320px thumb > placeholder.
-        let image = full
-            .as_ref()
-            .or_else(|| {
-                if want_mid || at_loupe {
-                    st.textures.mids.get(&index)
-                } else {
-                    None
-                }
-            })
-            .or(st.textures.images.get(&index));
         let cell = CellData {
             x,
             y,
             w: layout.cell_width,
             h: layout.cell_height,
-            image: image.cloned().unwrap_or_default(),
             has_image: image.is_some(),
+            image: image.unwrap_or_default(),
             failed: st.textures.failed.contains(&index),
             label: st
                 .session

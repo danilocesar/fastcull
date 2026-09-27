@@ -1057,8 +1057,11 @@ medium's measured behaviour:
   whether its ring kept it — where the switch rule's time-to-screen ends,
   held or not) and `note_dropped(index)` (the app's report that it culled
   that index's queued full-res fill, which ends that decode's measurement
-  unmeasured) (Manager ruling 2026-09-26, brief 008 Q-K); deferred revival
-  is internal.
+  unmeasured) (Manager ruling 2026-09-26, brief 008 Q-K); `travel_left()`
+  (how long the request state stays transit without another index change,
+  for the app's pill — `Some` is "travelling", and its value the instant a
+  pill held lit by its minimum must clear; brief 008); deferred revival is
+  internal.
   Events: `Ready` — the image with its `RungKind` (`Mid`, `Screen`, `Full`),
   the `terminal` flag and the `RequestState` (`Transit`, `Settled`) — and
   `Failed`. Constants: `RING_BEHIND = 2`, `RING_AHEAD = 15`, `PREFETCH = 2`

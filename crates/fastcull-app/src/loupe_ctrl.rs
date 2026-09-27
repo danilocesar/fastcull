@@ -1,20 +1,22 @@
 //! Loupe and pointer control: every pointer gesture (grid cells and the
 //! loupe surfaces) folded through the core pointer machine, the loupe's
 //! geometry helpers (aspect, the 1:1 ceiling, the rendered factor), the
-//! warm-decode routing rule, and the full-res texture ring.
+//! warm-decode routing rule, and the two texture rings — full-res and screen
+//! rung (brief 008).
 //!
-//! Not here: WHICH rung the loupe ends up showing (sharp / soft mid / thumb
-//! rescue / hold / fit) is decided by `fastcull_core::transit::render_rung`
-//! and walked by the refresh pass in `presenter.rs` — this module supplies
-//! the geometry and the textures it chooses among. The ring's victim choice
-//! is core's too (`transit::evict_ring`, over the engine's leaned window);
-//! `insert_fullres` below just carries it out.
+//! Not here: WHICH rung the loupe ends up showing (sharp / screen rung /
+//! soft mid / thumb rescue / hold / fit, and the cue at fit) is decided by
+//! `fastcull_core::transit::render_rung` and walked by the refresh pass in
+//! `presenter.rs` — this module supplies the geometry and the textures it
+//! chooses among. The rings' victim choice is core's too
+//! (`transit::evict_ring`, over the engine's leaned windows);
+//! `insert_fullres` and `insert_rung` below just carry it out.
 
 use std::cell::RefCell;
 use std::rc::Rc;
 
 use fastcull_core::grid::{self, GridLayout};
-use fastcull_core::loupe::{is_top_rung, RingWindow};
+use fastcull_core::loupe::{is_top_rung, RingWindow, RungKind};
 use slint::ComponentHandle;
 
 use crate::presenter::refresh;
@@ -198,6 +200,13 @@ fn aspect_for(st: &AppState, index: usize) -> Option<f32> {
         .iter()
         .find(|(i, _)| *i == index)
         .map(|(_, img)| img.size())
+        .or_else(|| {
+            st.textures
+                .rungs
+                .iter()
+                .find(|(i, _)| *i == index)
+                .map(|(_, img)| img.size())
+        })
         .or_else(|| st.textures.mids.get(&index).map(|img| img.size()))
         .or_else(|| st.textures.images.get(&index).map(|img| img.size()))?;
     (size.height > 0).then(|| size.width as f32 / size.height as f32)
@@ -209,9 +218,10 @@ fn aspect_for(st: &AppState, index: usize) -> Option<f32> {
 pub(crate) enum WarmJob {
     /// Top-priority full-res fill: the sharp 1:1 source.
     Full,
-    /// Native-size copy (never downscaled) into the mid rung. `terminal`
-    /// also teaches the app the file's zoom ceiling (issue #8).
-    Wrap { terminal: bool },
+    /// Native-size copy (never downscaled) into the ring its `kind` names:
+    /// the screen-rung ring for a screen rung, the mid rung otherwise.
+    /// `terminal` also teaches the app the file's zoom ceiling (issue #8).
+    Wrap { terminal: bool, kind: RungKind },
 }
 
 /// Where the warm image came from. The two sites route DIFFERENTLY and
@@ -227,52 +237,79 @@ pub(crate) enum WarmCtx {
     FocusHit,
 }
 
+/// Which textures the app already holds for the index being routed — the
+/// FocusHit rebuild copies only what is missing. Ignored by `Announced`: a
+/// freshly announced decode supersedes whatever is held.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+pub(crate) struct Held {
+    /// The full-res slot holds a texture for it.
+    pub full: bool,
+    /// The screen-rung ring holds one.
+    pub rung: bool,
+    /// The mids map holds one.
+    pub mid: bool,
+}
+
 /// The warm-hit routing rule, both contexts, one function.
 ///
-/// `mid_held` = a mid-rung texture for this index is already in `st.textures.mids`;
-/// `at_loupe` = the loupe is on screen right now.
+/// A SCREEN RUNG is routed by its kind before any size test, in both
+/// contexts: it is never the top rung however large (raw-pipeline.md, the
+/// screen rung — a 3240 px rung exceeds `MID_RUNG_MAX_LONG`, and a size test
+/// would fill it as the 1:1 texture and read the zoom ceiling from it), so
+/// it always goes to the rung ring, and only where the loupe can show it.
+/// Every other kind keeps the size rule it always had: kind-routing a mid
+/// larger than 2048 px would drop it (the first branch's feasibility check).
+///
+/// `at_loupe` = the loupe is on screen right now; `held` = what the app
+/// already holds for this index (FocusHit only).
 pub(crate) fn route_warm(
+    kind: RungKind,
     long: u32,
     terminal: bool,
     at_loupe: bool,
-    mid_held: bool,
+    held: Held,
     ctx: WarmCtx,
 ) -> Option<WarmJob> {
-    match ctx {
-        WarmCtx::Announced => {
+    let rung = WarmJob::Wrap {
+        terminal: false,
+        kind: RungKind::Screen,
+    };
+    match (ctx, kind) {
+        // Its 21 MB copy is only worth cooking where it can be shown.
+        (WarmCtx::Announced, RungKind::Screen) => at_loupe.then_some(rung),
+        (WarmCtx::Announced, _) => {
             // SIZE alone decides here, deliberately: a terminal image at
             // or below mid class goes through Wrap, which is native size
             // and never downscaled, so its pixels ARE the zoom ceiling
             // (issue #8) — routing it to Full instead would resize the
-            // one rung the file can never re-cook. `mid_held` is ignored:
-            // a freshly announced decode supersedes whatever is held.
+            // one rung the file can never re-cook.
             if is_top_rung(long, false) {
                 // A Full is a large fill on the kitchen worker: only
                 // worth cooking where it can be shown.
                 at_loupe.then_some(WarmJob::Full)
             } else {
-                Some(WarmJob::Wrap { terminal })
+                Some(WarmJob::Wrap { terminal, kind })
             }
         }
-        WarmCtx::FocusHit => {
+        // The cursor's own rebuild: only what the ring does not hold.
+        // `at_loupe` does not gate FocusHit — this path only runs inside the
+        // at-loupe branch of refresh.
+        (WarmCtx::FocusHit, RungKind::Screen) => (!held.rung).then_some(rung),
+        (WarmCtx::FocusHit, _) => {
             // Route by RUNG (validator finding, 2026-08-02): only a real
             // top rung earns the Full lane — the old code parked warm
             // MIDS in the fullres slot too, which burned the top-priority
             // lane on a texture the sharp filter can never accept. Here
             // terminality DOES promote: the caller is the cursor's own
             // rebuild, and a terminal texture is that cursor's top rung.
-            // `at_loupe` does not gate it either — this path only runs
-            // inside the at-loupe branch of refresh.
             if is_top_rung(long, terminal) {
-                Some(WarmJob::Full)
-            } else if !mid_held {
+                (!held.full).then_some(WarmJob::Full)
+            } else {
                 // A warm sub-top hit (the pruned-and-revisited path: the
                 // engine re-announces a cached mid beyond the retained
                 // window) goes through Wrap into st.textures.mids — where the
                 // soft-transit renderer looks FIRST.
-                Some(WarmJob::Wrap { terminal })
-            } else {
-                None
+                (!held.mid).then_some(WarmJob::Wrap { terminal, kind })
             }
         }
     }
@@ -476,8 +513,9 @@ fn apply_pointer_action(
 // left to read back.
 
 /// Keep a full-res texture, giving up slots until the ring is back within
-/// its window, and say whether `index` is still held afterwards (the ring's
-/// own victim is not; callers use the answer from brief 008 step 5).
+/// its window, and say whether `index` is still held afterwards — the
+/// ring's own victim is not, and the caller reports either answer to the
+/// engine (`LoupeEngine::note_adopted`) and marks only a texture still held.
 ///
 /// The victim CHOICE — protect the cursor's own texture, out-of-view
 /// entries first, then entries outside the window, farthest by view
@@ -490,23 +528,64 @@ fn apply_pointer_action(
 /// did) and removing the slots core names; `evict_ring` returns None once
 /// the ring fits, so not even the capacity is re-derived at this end.
 pub(crate) fn insert_fullres(st: &mut AppState, index: usize, texture: slint::Image) -> bool {
-    st.textures.fullres.retain(|(i, _)| *i != index);
-    st.textures.fullres.push((index, texture));
     let window = st.loupe_view.engine.as_ref().map_or(
         RingWindow::symmetric(fastcull_core::loupe::PREFETCH),
         |engine| engine.texture_windows().full,
     );
-    let cursor = st.grid.cursor;
+    insert_into_ring(
+        &mut st.textures.fullres,
+        index,
+        texture,
+        st.grid.cursor,
+        &st.grid.view,
+        window,
+    )
+}
+
+/// [`insert_fullres`] for the SCREEN-RUNG ring (brief 008): the same loop
+/// over `st.textures.rungs`, with the engine's rung window — the ring, 2
+/// behind / 15 ahead, leaned by its latch (ui-grid.md, "The render
+/// ladder"). No engine means no rung ever landed (a synthetic session, or a
+/// swap whose old completions the kitchen's generation fence drops), so the
+/// symmetric fallback only keeps the function total.
+pub(crate) fn insert_rung(st: &mut AppState, index: usize, texture: slint::Image) -> bool {
+    let window = st.loupe_view.engine.as_ref().map_or(
+        RingWindow::symmetric(fastcull_core::loupe::PREFETCH),
+        |engine| engine.texture_windows().rung,
+    );
+    insert_into_ring(
+        &mut st.textures.rungs,
+        index,
+        texture,
+        st.grid.cursor,
+        &st.grid.view,
+        window,
+    )
+}
+
+/// The one loop both rings run: insert (a re-announced index moves to the
+/// end), give up the slots `evict_ring` names until the ring fits its
+/// window, and say whether `index` survived.
+fn insert_into_ring(
+    ring: &mut Vec<(usize, slint::Image)>,
+    index: usize,
+    texture: slint::Image,
+    cursor: usize,
+    view: &[usize],
+    window: RingWindow,
+) -> bool {
+    ring.retain(|(i, _)| *i != index);
+    ring.push((index, texture));
     loop {
-        let held: Vec<usize> = st.textures.fullres.iter().map(|(i, _)| *i).collect();
-        match fastcull_core::transit::evict_ring(&held, cursor, &st.grid.view, window) {
+        let held: Vec<usize> = ring.iter().map(|(i, _)| *i).collect();
+        match fastcull_core::transit::evict_ring(&held, cursor, view, window) {
             Some(victim) => {
-                st.textures.fullres.remove(victim);
+                ring.remove(victim);
             }
             None => break,
         }
     }
-    st.textures.fullres.iter().any(|(i, _)| *i == index)
+    ring.iter().any(|(i, _)| *i == index)
 }
 
 #[cfg(test)]
@@ -516,48 +595,217 @@ mod tests {
     /// The two warm-hit contexts DIFFER, on purpose, in exactly two ways.
     /// Pinning both so the next change to one of them is a visible edit to
     /// this table rather than a silent divergence (which is how the
-    /// 2026-08-02 bug happened).
+    /// 2026-08-02 bug happened). Brief 008 adds the screen rung, routed by
+    /// its kind in both contexts, and the rows that pin it; the rows before
+    /// it keep their values.
     #[test]
     fn warm_routing_differs_by_context_only_where_intended() {
         const BIG: u32 = fastcull_core::loupe::MID_RUNG_MAX_LONG + 1;
         const SMALL: u32 = 640;
+        let none_held = Held::default();
+        let mid_held = Held {
+            mid: true,
+            ..Held::default()
+        };
 
         // 1. A terminal SMALL image: the announcement Wraps it (native
         // size is its ceiling, issue #8); the cursor's own rebuild treats
         // it as the top rung and Fulls it.
         assert_eq!(
-            route_warm(SMALL, true, true, false, WarmCtx::Announced),
-            Some(WarmJob::Wrap { terminal: true })
+            route_warm(
+                RungKind::Mid,
+                SMALL,
+                true,
+                true,
+                none_held,
+                WarmCtx::Announced
+            ),
+            Some(WarmJob::Wrap {
+                terminal: true,
+                kind: RungKind::Mid
+            })
         );
         assert_eq!(
-            route_warm(SMALL, true, true, false, WarmCtx::FocusHit),
+            route_warm(
+                RungKind::Mid,
+                SMALL,
+                true,
+                true,
+                none_held,
+                WarmCtx::FocusHit
+            ),
             Some(WarmJob::Full)
+        );
+        // ...and a bare JPEG's one rung, the full-scale decode (kind Full),
+        // at 640 px: the same Wrap, its kind carried.
+        assert_eq!(
+            route_warm(
+                RungKind::Full,
+                SMALL,
+                true,
+                true,
+                none_held,
+                WarmCtx::Announced
+            ),
+            Some(WarmJob::Wrap {
+                terminal: true,
+                kind: RungKind::Full
+            })
         );
 
         // 2. A held mid: the announcement still Wraps (a fresh decode
         // supersedes what is held); the rebuild leaves it alone.
         assert_eq!(
-            route_warm(SMALL, false, true, true, WarmCtx::Announced),
-            Some(WarmJob::Wrap { terminal: false })
+            route_warm(
+                RungKind::Mid,
+                SMALL,
+                false,
+                true,
+                mid_held,
+                WarmCtx::Announced
+            ),
+            Some(WarmJob::Wrap {
+                terminal: false,
+                kind: RungKind::Mid
+            })
         );
         assert_eq!(
-            route_warm(SMALL, false, true, true, WarmCtx::FocusHit),
+            route_warm(
+                RungKind::Mid,
+                SMALL,
+                false,
+                true,
+                mid_held,
+                WarmCtx::FocusHit
+            ),
             None
         );
 
         // Away from the loupe, an announced top rung is not cooked at all,
         // while a sub-top one still fills the mid rung for the grid.
         assert_eq!(
-            route_warm(BIG, false, false, false, WarmCtx::Announced),
+            route_warm(
+                RungKind::Full,
+                BIG,
+                false,
+                false,
+                none_held,
+                WarmCtx::Announced
+            ),
             None
         );
         assert_eq!(
-            route_warm(SMALL, false, false, false, WarmCtx::Announced),
-            Some(WarmJob::Wrap { terminal: false })
+            route_warm(
+                RungKind::Mid,
+                SMALL,
+                false,
+                false,
+                none_held,
+                WarmCtx::Announced
+            ),
+            Some(WarmJob::Wrap {
+                terminal: false,
+                kind: RungKind::Mid
+            })
         );
         assert_eq!(
-            route_warm(BIG, false, true, false, WarmCtx::Announced),
+            route_warm(
+                RungKind::Full,
+                BIG,
+                false,
+                true,
+                none_held,
+                WarmCtx::Announced
+            ),
             Some(WarmJob::Full)
+        );
+        // The rebuild re-fills a top rung only when the full-res slot lost it
+        // — a held one would be copied again, 149 MB, at every refresh.
+        assert_eq!(
+            route_warm(
+                RungKind::Full,
+                BIG,
+                false,
+                true,
+                none_held,
+                WarmCtx::FocusHit
+            ),
+            Some(WarmJob::Full)
+        );
+        assert_eq!(
+            route_warm(
+                RungKind::Full,
+                BIG,
+                false,
+                true,
+                Held {
+                    full: true,
+                    ..Held::default()
+                },
+                WarmCtx::FocusHit
+            ),
+            None
+        );
+
+        // 3. The SCREEN RUNG (brief 008), 3240 px long on a 4K viewport —
+        // over `MID_RUNG_MAX_LONG`, so a size test would fill it as the 1:1
+        // texture: routed by its kind to the rung ring instead, in both
+        // contexts, never terminal.
+        const RUNG: u32 = 3240;
+        let rung = Some(WarmJob::Wrap {
+            terminal: false,
+            kind: RungKind::Screen,
+        });
+        assert_eq!(
+            route_warm(
+                RungKind::Screen,
+                RUNG,
+                false,
+                true,
+                none_held,
+                WarmCtx::Announced
+            ),
+            rung,
+            "an announced screen rung at the loupe goes to the rung ring"
+        );
+        assert_eq!(
+            route_warm(
+                RungKind::Screen,
+                RUNG,
+                false,
+                false,
+                none_held,
+                WarmCtx::Announced
+            ),
+            None,
+            "away from the loupe a screen rung is not cooked"
+        );
+        assert_eq!(
+            route_warm(
+                RungKind::Screen,
+                RUNG,
+                false,
+                true,
+                none_held,
+                WarmCtx::FocusHit
+            ),
+            rung,
+            "the cursor's rebuild re-wraps a rung the ring lost"
+        );
+        assert_eq!(
+            route_warm(
+                RungKind::Screen,
+                RUNG,
+                false,
+                true,
+                Held {
+                    rung: true,
+                    ..Held::default()
+                },
+                WarmCtx::FocusHit
+            ),
+            None,
+            "a rung the ring holds is not copied again"
         );
     }
 }

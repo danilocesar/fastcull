@@ -7,13 +7,13 @@ use std::cell::RefCell;
 use std::rc::Rc;
 
 use fastcull_core::budget::MIDS_CAP;
-use fastcull_core::loupe::is_top_rung;
+use fastcull_core::loupe::{is_top_rung, RungKind};
 use fastcull_core::pipeline::SessionEvent;
 use slint::ComponentHandle;
 
 use crate::copy_bridge::recompute_bursts;
 use crate::kitchen;
-use crate::loupe_ctrl::{insert_fullres, route_warm, WarmCtx, WarmJob};
+use crate::loupe_ctrl::{insert_fullres, insert_rung, route_warm, Held, WarmCtx, WarmJob};
 use crate::nav::recompute_view_keep_cursor;
 use crate::presenter::refresh;
 use crate::state::AppState;
@@ -277,6 +277,20 @@ pub(crate) fn start(window: &MainWindow, state: &Rc<RefCell<AppState>>) -> slint
                         st.clip.notice = None;
                         dirty = true;
                     }
+                    // The same for a cue pill held lit over a sharp frame by
+                    // its minimum (ui-grid.md, "The pill never flickers"): it
+                    // must clear when the minimum or the travel ends, and at
+                    // rest nothing may land to refresh it, so the tick that
+                    // notices asks for the repaint that re-evaluates it
+                    // (brief 008; `transit::cue_pill` says when).
+                    if st
+                        .loupe_view
+                        .pill_recheck_at
+                        .is_some_and(|at| std::time::Instant::now() >= at)
+                    {
+                        st.loupe_view.pill_recheck_at = None;
+                        dirty = true;
+                    }
                     let loupe_events: Vec<_> = st
                         .loupe_view
                         .rx
@@ -301,25 +315,28 @@ pub(crate) fn start(window: &MainWindow, state: &Rc<RefCell<AppState>>) -> slint
                                     image.kind
                                 ));
                                 let job = route_warm(
+                                    image.kind,
                                     long,
                                     terminal,
                                     at_loupe,
                                     // Ignored by Announced (see route_warm):
                                     // a freshly announced decode supersedes
                                     // whatever is held, so don't pay for the
-                                    // lookup on this per-event path.
-                                    false,
+                                    // lookups on this per-event path.
+                                    Held::default(),
                                     WarmCtx::Announced,
                                 );
-                                if let Some(WarmJob::Wrap { terminal: true }) = job {
+                                if let Some(WarmJob::Wrap { terminal: true, .. }) = job {
                                     // Metadata now; the texture follows
                                     // when the kitchen serves it.
                                     st.textures.terminal_native.insert(index);
                                 }
                                 match job {
-                                    // Mid rung: kitchen copies it off-thread.
-                                    Some(WarmJob::Wrap { terminal }) => {
-                                        st.kitchen.submit_wrap(index, image.clone(), terminal)
+                                    // Mid rung or screen rung: the kitchen
+                                    // copies it off-thread, into the ring
+                                    // its kind names.
+                                    Some(WarmJob::Wrap { terminal, kind }) => {
+                                        st.kitchen.submit_wrap(index, image.clone(), terminal, kind)
                                     }
                                     // Full rung: the fill runs on the kitchen
                                     // worker; the core LRU keeps the pixels.
@@ -370,6 +387,23 @@ pub(crate) fn start(window: &MainWindow, state: &Rc<RefCell<AppState>>) -> slint
 /// persona condition: the wrap is O(1), so rationing adoption would turn
 /// "one tick later" into a visible trickle-in. Returns whether anything
 /// was adopted (callers refresh on true).
+///
+/// Every fill that COMPLETES at the loupe — a full-res fill, a wrap of any
+/// kind — is reported to the engine (`LoupeEngine::note_adopted`) with
+/// whether its ring kept it, RIGHT AFTER the insert and BEFORE the `held`
+/// branch: a ring's own victim was ready to draw all the same, and skipping
+/// it would censor the slowest landings, the ones the switch rule's
+/// time-to-screen exists to see (raw-pipeline.md, "Above fit", rule 1;
+/// Manager ruling Q-K). What a report means is the engine's; the app carries
+/// no flag. The `loupe adopted idx N kind K` mark follows, once per ring the
+/// texture is still held in — a victim emits nothing (test-harness.md).
+///
+/// ORDER: both callers refresh right after this returns true, in the same
+/// UI turn, so each mark is followed by the refresh that re-renders the
+/// cell with the adopted texture. The 4K fit hold's gate 1 (ui-grid.md A5 —
+/// after `loupe adopted idx N kind screen`, no later `loupe fit idx N` below
+/// the rung) rests on it: a deferred refresh would let a fit mark of the
+/// OLD texture land after the adoption's mark.
 fn drain_kitchen(win: &MainWindow, state: &Rc<RefCell<AppState>>) -> bool {
     let mut st = state.borrow_mut();
     let at_loupe = st.at_loupe();
@@ -400,29 +434,60 @@ fn drain_kitchen(win: &MainWindow, state: &Rc<RefCell<AppState>>) -> bool {
                 // cooked); the core LRU keeps the pixels either way.
                 if at_loupe {
                     let texture = slint::Image::from_rgb8(buf);
-                    insert_fullres(&mut st, index, texture);
+                    let held = insert_fullres(&mut st, index, texture);
+                    report_adoption(&st, index, RungKind::Full, held);
+                    if held {
+                        adopted_mark(index, RungKind::Full);
+                    }
+                }
+            }
+            kitchen::Done::Wrap {
+                index,
+                buf,
+                kind: RungKind::Screen,
+                // Never set: a screen rung is never the file's best
+                // (`route_warm` wraps it with `terminal: false`).
+                terminal: _,
+            } => {
+                // Never the top rung either: its ring is the rung ring, and
+                // only while the loupe is up, like a full-res fill
+                // (01-architecture.md, the kitchen).
+                if at_loupe {
+                    let texture = slint::Image::from_rgb8(buf);
+                    let held = insert_rung(&mut st, index, texture);
+                    report_adoption(&st, index, RungKind::Screen, held);
+                    if held {
+                        adopted_mark(index, RungKind::Screen);
+                    }
                 }
             }
             kitchen::Done::Wrap {
                 index,
                 buf,
                 terminal,
+                kind,
             } => {
                 let long = buf.width().max(buf.height());
                 let texture = slint::Image::from_rgb8(buf);
-                if terminal {
+                let held_full = terminal && {
                     // The file's best rung IS this texture (issue #8).
-                    insert_fullres(&mut st, index, texture.clone());
-                }
+                    insert_fullres(&mut st, index, texture.clone())
+                };
                 // Size-only, like route_warm's Announced arm: this asks
                 // "may this artifact enter the mid cache", which is about
                 // the pixels, not about the file's ladder being topped
                 // out — hence the explicit `false` for terminal.
-                if !is_top_rung(long, false)
-                    && (st.textures.mids.len() < MIDS_CAP || st.textures.mids.contains_key(&index))
-                {
+                let held_mid = !is_top_rung(long, false)
+                    && (st.textures.mids.len() < MIDS_CAP || st.textures.mids.contains_key(&index));
+                if held_mid {
                     st.textures.mids.insert(index, texture);
                     st.textures.va.note_held(index, long);
+                }
+                if at_loupe {
+                    report_adoption(&st, index, kind, held_full || held_mid);
+                    for _ in [held_full, held_mid].into_iter().filter(|held| *held) {
+                        adopted_mark(index, kind);
+                    }
                 }
             }
             kitchen::Done::Mid {
@@ -440,6 +505,22 @@ fn drain_kitchen(win: &MainWindow, state: &Rc<RefCell<AppState>>) -> bool {
     drop(st);
     let _ = win;
     true
+}
+
+/// The app's report that a fill for `index` completed at the loupe, with
+/// whether its ring kept it (`LoupeEngine::note_adopted`; see
+/// [`drain_kitchen`] for why it precedes the `held` branch).
+fn report_adoption(st: &AppState, index: usize, kind: RungKind, held: bool) {
+    if let Some(engine) = &st.loupe_view.engine {
+        engine.note_adopted(index, kind, held);
+    }
+}
+
+/// `loupe adopted idx N kind K` (test-harness.md): the UI thread adopted a
+/// kitchen fill or wrap into a texture ring and still holds it after that
+/// ring's eviction. Built only when a trace or a script is listening.
+fn adopted_mark(index: usize, kind: RungKind) {
+    trace_mark_with(|| format!("loupe adopted idx {index} kind {kind}"));
 }
 
 /// The video export's report lines (video-export.md, "Dialog").

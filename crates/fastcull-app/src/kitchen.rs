@@ -20,18 +20,29 @@
 //!
 //! Priority (pop order): Full > Wrap > Thumb > Mid. The full-res buffer
 //! fill is the sharpness-on-stop contract's tail (~300 ms budget,
-//! ui-grid.md), so it never queues behind a page of thumbnails; Wrap (the
-//! engine's own mid-rung textures) feeds the transit hold, so it beats
-//! thumbs; thumbs beat Mid downscales because a placeholder is worse than
-//! a soft cell. Staleness: Full requests dedupe per index and are popped
-//! LATEST-FIRST, so the focused frame cooks soonest without cancelling a
-//! ring neighbour's queued fill (replace-latest starved one of two frames
-//! whose events shared a pump drain); Mid requests are culled to the
-//! visible set on every
-//! submission wave; Thumb and Wrap jobs are never culled — their sources
-//! were MOVED or cheaply cloned on submit, and a landed texture for a
-//! scrolled-away cell is still adopted (paid-for work stays paid for,
-//! the pruned-and-revisited rule).
+//! ui-grid.md) and the full-res ring's textures at 1:1, so it never queues
+//! behind a page of thumbnails; Wrap (the engine's own mid-rung and
+//! screen-rung textures, copied at native size) feeds the transit hold, so it
+//! beats thumbs; thumbs beat Mid downscales because a placeholder is worse
+//! than a soft cell (01-architecture.md, the kitchen). Among Full fills the
+//! order is core's `transit::next_fill` over the fill order the app sets at
+//! every refresh at the loupe ([`FillOrder`]): the cursor's fill first, then
+//! the nearest by view distance, ties toward the lean — the order the
+//! engine decodes them in, so the member a tap reaches first is never cooked
+//! last (brief 008; the kitchen popped the LATEST fill first while the ring
+//! was ±2, which under a ring fifteen deep cooks the farthest member first).
+//!
+//! Staleness: Full requests dedupe per index and never cancel one another
+//! (replace-latest starved one of two frames whose events shared a pump
+//! drain); a queued Full for a frame outside the full-res texture window is
+//! culled when the app sets the next fill order, so a revisit never waits
+//! behind copies of frames already passed (brief 008, the redesign's G4);
+//! Mid requests are culled to the visible set on every submission wave;
+//! Thumb and Wrap jobs are never culled — their sources were MOVED or
+//! cheaply cloned on submit, and a landed texture for a scrolled-away cell
+//! is still adopted (paid-for work stays paid for, the pruned-and-revisited
+//! rule). Wraps dedupe per index AND kind, so a queued mid wrap never
+//! swallows the screen rung's.
 //!
 //! Sessions: `retarget()` bumps a generation and empties the queue; late
 //! `Done`s from the previous session carry the old generation and are
@@ -41,7 +52,7 @@
 use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::sync::{Arc, Condvar, Mutex};
 
-use fastcull_core::loupe::FullImage;
+use fastcull_core::loupe::{FullImage, RingWindow, RungKind};
 
 /// Work for the kitchen. Each variant carries everything the conversion
 /// needs, so the worker never touches app state.
@@ -54,14 +65,18 @@ pub enum Job {
     /// Downscale full-res to the mid rung and fill its buffer.
     Mid { index: usize, image: FullImage },
     /// Copy a decoded image at its NATIVE size (no downscale): the loupe
-    /// engine's own mid-rung events, and terminal small files whose native
-    /// size IS the top rung (issue #8 — downscaling those would lower the
-    /// zoom ceiling). Deduped per index, never replaced: a transit hold
-    /// produces one of these per ring member and every one matters.
+    /// engine's own mid-rung and screen-rung events, and terminal small
+    /// files whose native size IS the top rung (issue #8 — downscaling those
+    /// would lower the zoom ceiling). `kind` is the rung the engine decoded,
+    /// which decides the texture ring it lands in. Deduped per index AND
+    /// kind, never replaced: a transit hold produces one of these per ring
+    /// member and every one matters, and a mid wrap queued for a frame must
+    /// not swallow its screen rung's.
     Wrap {
         index: usize,
         image: FullImage,
         terminal: bool,
+        kind: RungKind,
     },
 }
 
@@ -86,18 +101,20 @@ pub enum Done {
         index: usize,
         buf: slint::SharedPixelBuffer<slint::Rgb8Pixel>,
         terminal: bool,
+        kind: RungKind,
     },
 }
 
 /// Which kind of work an index has pending — queue AND in-flight, because
 /// submitters drop their source bytes/handles on submit and must not
-/// resubmit while the worker is mid-cook.
+/// resubmit while the worker is mid-cook. A wrap is pending per rung kind:
+/// the mid's and the screen rung's copies of one frame are two jobs.
 #[derive(PartialEq, Clone, Copy)]
 enum Kind {
     Thumb,
     Full,
     Mid,
-    Wrap,
+    Wrap(RungKind),
 }
 
 fn kind_of(job: &Job) -> (Kind, usize) {
@@ -105,7 +122,37 @@ fn kind_of(job: &Job) -> (Kind, usize) {
         Job::Thumb { index, .. } => (Kind::Thumb, *index),
         Job::Full { index, .. } => (Kind::Full, *index),
         Job::Mid { index, .. } => (Kind::Mid, *index),
-        Job::Wrap { index, .. } => (Kind::Wrap, *index),
+        Job::Wrap { index, kind, .. } => (Kind::Wrap(*kind), *index),
+    }
+}
+
+/// The order the kitchen cooks its queued full-res fills in, as the app
+/// knows it at a refresh at the loupe: the cursor, the view order and the
+/// full-res texture window (`LoupeEngine::texture_windows().full`, leaned by
+/// the engine's travel latch). A snapshot, so the worker reads it without
+/// touching app state; the view is shared, never copied per pop.
+pub struct FillOrder {
+    pub cursor: usize,
+    pub view: Arc<[usize]>,
+    pub window: RingWindow,
+}
+
+impl FillOrder {
+    /// Is a full-res fill for `index` outside the window — a frame the
+    /// cursor has left, whose copy no revisit should wait behind? Never the
+    /// cursor's own; a frame out of the view is outside (no arrow reaches
+    /// it); with the cursor itself out of the view there is no window to
+    /// judge by, and nothing is culled — the next refresh brings one.
+    fn outside(&self, index: usize) -> bool {
+        if index == self.cursor {
+            return false;
+        }
+        let pos_of = |id: usize| self.view.iter().position(|v| *v == id);
+        match (pos_of(self.cursor), pos_of(index)) {
+            (Some(cursor), Some(pos)) => !self.window.contains(cursor, pos),
+            (Some(_), None) => true,
+            (None, _) => false,
+        }
     }
 }
 
@@ -114,6 +161,12 @@ struct Shared {
     /// What the worker is cooking right now (generation, kind, index).
     in_flight: Mutex<Option<(u64, Kind, usize)>>,
     done: Mutex<Vec<(u64, Done)>>,
+    /// The latest fill order the app set ([`Kitchen::set_fill_order`]).
+    /// A LEAF lock: taken alone, or nested INSIDE the queue lock (the
+    /// worker reads it at every pop), and never held while any other lock
+    /// is taken — so it cannot invert against the worker's queue-then-leaf
+    /// order. `None` before the first order and after a session swap.
+    fill_order: Mutex<Option<Arc<FillOrder>>>,
     wake: Condvar,
     shutdown: AtomicBool,
     generation: AtomicU64,
@@ -134,6 +187,7 @@ impl Kitchen {
             queue: Mutex::new(Vec::new()),
             in_flight: Mutex::new(None),
             done: Mutex::new(Vec::new()),
+            fill_order: Mutex::new(None),
             wake: Condvar::new(),
             shutdown: AtomicBool::new(false),
             generation: AtomicU64::new(0),
@@ -169,9 +223,10 @@ impl Kitchen {
         self.shared.wake.notify_all();
     }
 
-    /// Queue a native-size copy (engine mid rung / terminal small file).
-    pub fn submit_wrap(&self, index: usize, image: FullImage, terminal: bool) {
-        if self.pending(Kind::Wrap, index) {
+    /// Queue a native-size copy (the engine's mid and screen rungs, and
+    /// terminal small files), deduped per index and `kind`.
+    pub fn submit_wrap(&self, index: usize, image: FullImage, terminal: bool, kind: RungKind) {
+        if self.pending(Kind::Wrap(kind), index) {
             return;
         }
         let generation = self.shared.generation.load(Ordering::SeqCst);
@@ -181,6 +236,7 @@ impl Kitchen {
                 index,
                 image,
                 terminal,
+                kind,
             },
         ));
         self.shared.wake.notify_all();
@@ -193,9 +249,9 @@ impl Kitchen {
     /// cancelled the first, and the warm-hit recovery could ping-pong the
     /// same way under an alternating cursor, leaving one frame's texture
     /// starved forever (flaky 60 s shutter refusals in the screenshot
-    /// suite). The latest-first pop order already gets the focused frame
-    /// cooked soonest; a superseded fill costs one wasted 149 MB copy that
-    /// still lands usefully in the texture cache.
+    /// suite). The fill order gets the cursor's frame cooked first
+    /// ([`pick`]); a fill for a frame the cursor has left is culled by the
+    /// next [`set_fill_order`](Self::set_fill_order).
     pub fn submit_full(&self, index: usize, image: FullImage) {
         if self.pending(Kind::Full, index) {
             return;
@@ -225,11 +281,46 @@ impl Kitchen {
         });
     }
 
+    /// Set the order queued full-res fills are cooked in, and CULL the
+    /// queued fills for frames outside its window (never the cursor's) —
+    /// 01-architecture.md's staleness rule for the kitchen: a queued Full
+    /// fill for a frame outside the full-res texture window is culled at the
+    /// next submission wave, which is the app's next refresh at the loupe.
+    /// Returns the culled indexes in queue order: each fill that never
+    /// happens ends its decode's time-to-screen measurement unmeasured, which
+    /// the caller reports to the engine (`LoupeEngine::note_dropped`; Manager
+    /// ruling Q-K) — `#[must_use]` so a caller that drops the list is a
+    /// `-D warnings` error rather than a silently censored switch rule.
+    ///
+    /// LOCK ORDER: the order is stored under its leaf lock alone, which is
+    /// released, and only THEN is the queue lock taken to cull — the two are
+    /// never held together in that order, so this cannot invert against the
+    /// worker, which reads the leaf inside its queue-lock section.
+    #[must_use]
+    pub fn set_fill_order(&self, order: FillOrder) -> Vec<usize> {
+        let order = Arc::new(order);
+        *lock(&self.shared.fill_order) = Some(Arc::clone(&order));
+        let generation = self.shared.generation.load(Ordering::SeqCst);
+        let mut culled = Vec::new();
+        lock(&self.shared.queue).retain(|(g, job)| match job {
+            Job::Full { index, .. } if *g == generation && order.outside(*index) => {
+                culled.push(*index);
+                false
+            }
+            _ => true,
+        });
+        self.shared.wake.notify_all();
+        culled
+    }
+
     /// New session: bump the generation, drop every queued job and every
     /// undrained completion. Late `Done`s from the worker's current flight
-    /// carry the old generation and die at drain.
+    /// carry the old generation and die at drain. The fill order goes too:
+    /// it names the dead session's cursor and view.
     pub fn retarget(&self) {
         self.shared.generation.fetch_add(1, Ordering::SeqCst);
+        // The leaf lock alone (see `Shared::fill_order`).
+        *lock(&self.shared.fill_order) = None;
         let dropped_queued = {
             let mut q = lock(&self.shared.queue);
             let n = q.len();
@@ -276,13 +367,30 @@ fn lock<T>(m: &Mutex<T>) -> std::sync::MutexGuard<'_, T> {
     m.lock().unwrap_or_else(std::sync::PoisonError::into_inner)
 }
 
-/// Which queued job to cook next: Full (latest first — the focused
-/// frame's sharp swap) > Wrap (transit mid swaps) > Thumb (oldest first —
-/// visibility order) > Mid. Pure so the priority contract is unit-tested.
-fn pick(q: &[(u64, Job)]) -> Option<usize> {
-    q.iter()
-        .rposition(|(_, j)| matches!(j, Job::Full { .. }))
-        .or_else(|| q.iter().position(|(_, j)| matches!(j, Job::Wrap { .. })))
+/// Which queued job to cook next: Full, in `order`'s order — core's
+/// `transit::next_fill`, the cursor's fill first, then by view distance,
+/// ties toward the lean — or first queued first before the app has set an
+/// order; then Wrap (transit swaps, first queued first, both kinds) > Thumb
+/// (oldest first — visibility order) > Mid. Pure so the priority contract is
+/// unit-tested.
+fn pick(q: &[(u64, Job)], order: Option<&FillOrder>) -> Option<usize> {
+    let fulls: Vec<(usize, usize)> = q
+        .iter()
+        .enumerate()
+        .filter_map(|(slot, (_, j))| match j {
+            Job::Full { index, .. } => Some((slot, *index)),
+            _ => None,
+        })
+        .collect();
+    let full = match order {
+        Some(order) => {
+            let queued: Vec<usize> = fulls.iter().map(|(_, index)| *index).collect();
+            fastcull_core::transit::next_fill(&queued, order.cursor, &order.view, order.window)
+                .map(|k| fulls[k].0)
+        }
+        None => fulls.first().map(|(slot, _)| *slot),
+    };
+    full.or_else(|| q.iter().position(|(_, j)| matches!(j, Job::Wrap { .. })))
         .or_else(|| q.iter().position(|(_, j)| matches!(j, Job::Thumb { .. })))
         .or_else(|| q.iter().position(|(_, j)| matches!(j, Job::Mid { .. })))
 }
@@ -295,10 +403,14 @@ fn worker(shared: &Shared) {
                 if shared.shutdown.load(Ordering::SeqCst) {
                     return;
                 }
-                // Priority pop: Full (the sharpness-on-stop tail, latest
-                // wins) > Wrap (the transit hold's mid swaps) > Thumb
-                // (oldest first — visibility order) > Mid.
-                if let Some(pos) = pick(&q) {
+                // Priority pop: Full (the sharpness-on-stop tail and the
+                // full-res ring, in the fill order) > Wrap (the transit
+                // hold's mid and screen-rung swaps) > Thumb (oldest first —
+                // visibility order) > Mid. The fill order is read HERE,
+                // inside the queue-lock section — the queue lock, then the
+                // leaf, released at once — the one nesting the leaf allows.
+                let order = lock(&shared.fill_order).clone();
+                if let Some(pos) = pick(&q, order.as_deref()) {
                     let picked = q.remove(pos);
                     // in_flight is written while the queue lock is still
                     // held, so `pending()` can never observe the gap
@@ -323,7 +435,7 @@ fn worker(shared: &Shared) {
                                 Kind::Thumb => "thumb",
                                 Kind::Full => "full",
                                 Kind::Mid => "mid",
-                                Kind::Wrap => "wrap",
+                                Kind::Wrap(_) => "wrap",
                             }
                         );
                     }
@@ -407,6 +519,7 @@ fn cook(job: Job) -> Option<Done> {
             index,
             image,
             terminal,
+            kind,
         } => {
             let buf = slint::SharedPixelBuffer::<slint::Rgb8Pixel>::clone_from_slice(
                 &image.rgb,
@@ -417,6 +530,7 @@ fn cook(job: Job) -> Option<Done> {
                 index,
                 buf,
                 terminal,
+                kind,
             })
         }
     }
@@ -499,6 +613,7 @@ mod tests {
             queue: Mutex::new(Vec::new()),
             in_flight: Mutex::new(None),
             done: Mutex::new(Vec::new()),
+            fill_order: Mutex::new(None),
             wake: Condvar::new(),
             shutdown: AtomicBool::new(false),
             generation: AtomicU64::new(0),
@@ -511,9 +626,22 @@ mod tests {
         (k, shared)
     }
 
-    /// The priority contract: Full (latest) > Wrap > Thumb (oldest) > Mid.
-    /// This ordering is what keeps the sharpness-on-stop tail ahead of a
-    /// page of thumbnails — pure function so it cannot rot untested.
+    /// A fill order over an identity view of 40 frames, leaning forward over
+    /// the ring's 2 behind / 15 ahead, around `cursor`.
+    fn order_at(cursor: usize) -> FillOrder {
+        FillOrder {
+            cursor,
+            view: (0..40).collect(),
+            window: RingWindow::leaning(2, 15, true),
+        }
+    }
+
+    /// The priority contract: Full (in the fill order) > Wrap > Thumb
+    /// (oldest) > Mid. This ordering is what keeps the sharpness-on-stop
+    /// tail ahead of a page of thumbnails — pure function so it cannot rot
+    /// untested. Amended by brief 008, which replaced "latest first" among
+    /// the fills with the fill order (ui-grid.md, the kitchen box): the pair
+    /// is read with an order whose cursor is 4.
     #[test]
     fn pick_orders_full_wrap_thumb_mid() {
         let mut q: Vec<(u64, Job)> = vec![
@@ -551,6 +679,7 @@ mod tests {
                     index: 5,
                     image: img(1, 1, 0),
                     terminal: false,
+                    kind: RungKind::Mid,
                 },
             ),
             (
@@ -561,27 +690,29 @@ mod tests {
                 },
             ),
         ];
-        // Full first, LATEST first (idx 6 before idx 4).
-        let p = pick(&q).unwrap();
-        assert!(matches!(q[p].1, Job::Full { index: 6, .. }));
-        q.remove(p);
-        let p = pick(&q).unwrap();
+        // Full first, in the fill order: the cursor's (idx 4) before its
+        // neighbour's (idx 6).
+        let order = order_at(4);
+        let p = pick(&q, Some(&order)).unwrap();
         assert!(matches!(q[p].1, Job::Full { index: 4, .. }));
         q.remove(p);
+        let p = pick(&q, Some(&order)).unwrap();
+        assert!(matches!(q[p].1, Job::Full { index: 6, .. }));
+        q.remove(p);
         // Then Wrap, then thumbs OLDEST first, then Mid.
-        let p = pick(&q).unwrap();
+        let p = pick(&q, Some(&order)).unwrap();
         assert!(matches!(q[p].1, Job::Wrap { index: 5, .. }));
         q.remove(p);
-        let p = pick(&q).unwrap();
+        let p = pick(&q, Some(&order)).unwrap();
         assert!(matches!(q[p].1, Job::Thumb { index: 2, .. }));
         q.remove(p);
-        let p = pick(&q).unwrap();
+        let p = pick(&q, Some(&order)).unwrap();
         assert!(matches!(q[p].1, Job::Thumb { index: 3, .. }));
         q.remove(p);
-        let p = pick(&q).unwrap();
+        let p = pick(&q, Some(&order)).unwrap();
         assert!(matches!(q[p].1, Job::Mid { index: 1, .. }));
         q.remove(p);
-        assert!(pick(&q).is_none());
+        assert!(pick(&q, Some(&order)).is_none());
     }
 
     /// End-to-end through a live worker: a Wrap job produces a buffer with
@@ -590,7 +721,7 @@ mod tests {
     fn wrap_cooks_byte_identical() {
         let k = Kitchen::start(Box::new(|| {}));
         let source = img(3, 2, 7);
-        k.submit_wrap(9, source.clone(), false);
+        k.submit_wrap(9, source.clone(), false, RungKind::Mid);
         let deadline = std::time::Instant::now() + std::time::Duration::from_secs(5);
         loop {
             let done = k.drain();
@@ -649,7 +780,7 @@ mod tests {
             std::thread::sleep(std::time::Duration::from_millis(10));
         }
         // And the new session works: fresh submissions still cook.
-        k.submit_wrap(0, img(2, 2, 1), false);
+        k.submit_wrap(0, img(2, 2, 1), false, RungKind::Mid);
         let deadline = std::time::Instant::now() + std::time::Duration::from_secs(5);
         loop {
             if !k.drain().is_empty() {
@@ -703,10 +834,11 @@ mod tests {
         // Same index again: deduped, not duplicated.
         k.submit_full(1, img(1, 1, 1));
         assert_eq!(lock(&shared.queue).len(), 2);
-        // Latest-first pop still favours the newest Full.
+        // The cursor's fill pops first (amended by brief 008: this read
+        // "latest-first pop still favours the newest Full").
         let q = lock(&shared.queue);
-        let p = pick(&q).unwrap();
-        assert!(matches!(q[p].1, Job::Full { index: 1, .. }));
+        let p = pick(&q, Some(&order_at(0))).unwrap();
+        assert!(matches!(q[p].1, Job::Full { index: 0, .. }));
     }
 
     /// cull_mids drops only invisible MID jobs — Full/Wrap/Thumb are never
@@ -719,7 +851,7 @@ mod tests {
         k.submit_mid(1, img(1, 1, 0));
         k.submit_mid(2, img(1, 1, 0));
         k.submit_thumb(3, vec![1, 2, 3]);
-        k.submit_wrap(4, img(1, 1, 0), false);
+        k.submit_wrap(4, img(1, 1, 0), false, RungKind::Mid);
         k.cull_mids(&[2]);
         let q = lock(&shared.queue);
         assert_eq!(q.len(), 3, "mid 1 culled; mid 2, thumb 3, wrap 4 stay");
@@ -736,5 +868,110 @@ mod tests {
         // Dedupe: resubmitting a queued index is a no-op.
         k.submit_mid(2, img(1, 1, 0));
         assert_eq!(lock(&shared.queue).len(), 3);
+    }
+
+    /// The kitchen drops stale full fills and keeps both wraps (ui-grid.md,
+    /// the kitchen box): a mid wrap and a screen-rung wrap of one index both
+    /// stay queued — a queued mid wrap must not swallow the rung's, which on
+    /// a wide viewport is the texture the fit cell needs — while a second
+    /// wrap of the same kind is deduped. Red when a wrap is keyed by its
+    /// index alone.
+    #[test]
+    fn wrap_jobs_dedupe_per_kind_not_per_index() {
+        let (k, shared) = paused();
+        k.submit_wrap(5, img(1, 1, 0), false, RungKind::Mid);
+        k.submit_wrap(5, img(1, 1, 0), false, RungKind::Screen);
+        let kinds = |q: &[(u64, Job)]| -> Vec<RungKind> {
+            q.iter()
+                .filter_map(|(_, j)| match j {
+                    Job::Wrap { index: 5, kind, .. } => Some(*kind),
+                    _ => None,
+                })
+                .collect()
+        };
+        assert_eq!(
+            kinds(&lock(&shared.queue)),
+            [RungKind::Mid, RungKind::Screen],
+            "the screen rung's wrap was swallowed by the mid's"
+        );
+        k.submit_wrap(5, img(1, 1, 0), false, RungKind::Mid);
+        assert_eq!(
+            kinds(&lock(&shared.queue)),
+            [RungKind::Mid, RungKind::Screen],
+            "a second mid wrap of the same index is deduped"
+        );
+    }
+
+    /// A queued full-res fill for a frame outside the full-res window is
+    /// culled when the app sets the next fill order, never one inside it
+    /// (01-architecture.md, the kitchen; brief 008, the redesign's G4), and
+    /// the culled indexes come back in queue order, for the engine's
+    /// `note_dropped` (Manager ruling Q-K). Cursor 5, leaning forward over
+    /// 2 behind / 15 ahead: the window is 3..=20, so both edges are pinned —
+    /// 2 and 21 go, 3 and 20 stay, and the cursor's own stays. Red with no
+    /// cull (the queue and the list), and with the cull done but an empty
+    /// list returned (the list).
+    #[test]
+    fn full_fills_outside_the_window_are_culled() {
+        let (k, shared) = paused();
+        for index in [2, 3, 5, 20, 21] {
+            k.submit_full(index, img(1, 1, 0));
+        }
+        let culled = k.set_fill_order(order_at(5));
+        let left: Vec<usize> = lock(&shared.queue)
+            .iter()
+            .filter_map(|(_, j)| match j {
+                Job::Full { index, .. } => Some(*index),
+                _ => None,
+            })
+            .collect();
+        assert_eq!(left, [3, 5, 20], "the fills inside the window are kept");
+        assert_eq!(culled, [2, 21], "the culled fills, reported in queue order");
+    }
+
+    /// The kitchen pops its full fills in core's `transit::next_fill` order
+    /// over the order the app set (ui-grid.md, the kitchen box): queued 7, 3,
+    /// 5, 6 with the cursor on 5 and the lean forward — the cursor's first,
+    /// then 6, then 7 before 3 (equal distance, the travel direction first),
+    /// whatever order they were queued in. Read as the worker reads it,
+    /// through the kitchen's own stored order. Red with the latest-first pop
+    /// restored.
+    #[test]
+    fn the_kitchen_pops_full_fills_in_next_fill_order() {
+        let (k, shared) = paused();
+        for index in [7, 3, 5, 6] {
+            k.submit_full(index, img(1, 1, 0));
+        }
+        assert!(
+            k.set_fill_order(order_at(5)).is_empty(),
+            "the premise: every fill is inside the window"
+        );
+        let order = lock(&shared.fill_order).clone();
+        let mut q = std::mem::take(&mut *lock(&shared.queue));
+        let mut popped = Vec::new();
+        while let Some(slot) = pick(&q, order.as_deref()) {
+            if let (_, Job::Full { index, .. }) = q.remove(slot) {
+                popped.push(index);
+            }
+        }
+        assert_eq!(popped, [5, 6, 7, 3]);
+    }
+
+    /// A session swap forgets the fill order: it names the dead session's
+    /// cursor and view, and the new session's first fills must not be cooked
+    /// by it. Red with `retarget`'s reset removed.
+    #[test]
+    fn retarget_forgets_the_fill_order() {
+        let (k, shared) = paused();
+        let _ = k.set_fill_order(order_at(5));
+        assert!(
+            lock(&shared.fill_order).is_some(),
+            "the premise: an order was set"
+        );
+        k.retarget();
+        assert!(
+            lock(&shared.fill_order).is_none(),
+            "a swap kept the dead session's fill order"
+        );
     }
 }

@@ -880,7 +880,9 @@ renderer's source offsets are `Fixed<u16, 4>`.
   (`batch`, `count_in_view`, `extend_to`, `extend_bursts`, `select_group`);
   `transit::render_rung`, `transit::loupe_where`, `transit::evict_ring`,
   `transit::next_fill` (the order the kitchen cooks its queued full-res fills
-  in, 01-architecture.md) and the pill's minimum on-time.
+  in, 01-architecture.md), `transit::fit_cell` (the fit cell's one order, for
+  the texture it draws and the rung its mark names) and `transit::cue_pill`
+  (the pill with its minimum on-time).
 - Constants: `TRANSIT_GAP` 250 ms, `SETTLE_DEBOUNCE` 150 ms,
   `FOCUS_DEBOUNCE` 250 ms, `OVERLAY_HOLD_CAP` 250 ms, `CUE_MIN_ON` 250 ms,
   `RING_BEHIND`/`RING_AHEAD` 2/15 and `PREFETCH` 2 (raw-pipeline.md),
@@ -1145,7 +1147,7 @@ renderer's source offsets are `Fixed<u16, 4>`.
 - [x] The shutter fires exactly once per run; the 60 s readiness cap is
       margin again in a debug build — test-harness.md and
       01-architecture.md ("Build profiles").
-- [ ] **`render_rung` is extended and total** (brief 008 A3): core — a screen
+- [x] **`render_rung` is extended and total** (brief 008 A3): core — a screen
       rung serving the box at fit → `Fit{cue: false}`; a screen rung at 1:1 →
       `Rung`, cued; the mid alone at fit on a box it does not serve →
       `Fit{cue: true}` (the G6 row); the mid alone on a box it serves →
@@ -1168,18 +1170,26 @@ renderer's source offsets are `Fixed<u16, 4>`.
       `render_rung_is_total_and_reaches_every_decision`,
       `render_rung_reproduces_the_old_app_ladder_where_it_can_speak` (renamed
       from `render_rung_reproduces_the_old_app_ladder_on_every_input`),
-      `the_fit_cue_needs_a_cursor_in_the_view`. The synthetic-session mask is
+      `the_fit_cue_needs_a_cursor_in_the_view`; and the fit cell draws the rung
+      its mark names, one order for both (full > screen > mid > thumb) —
+      `the_fit_cell_draws_the_rung_it_names`. The synthetic-session mask is
       review-verified: no driven test reads the cue in a synthetic session.
-      Open: lands with the app's fit cue.
-- [ ] **The pill never flickers** (Manager M2, 2026-09-26): core — while
+      Ticked by brief 008's step-5 commit, which carries the app's fit cue and
+      these tests; each mutant's red is in its message.
+- [x] **The pill never flickers** (Manager M2, 2026-09-26): core — while
       travelling a lit pill stays on until `CUE_MIN_ON` has passed since the
       last soft frame, so a sharp frame shown inside that time keeps it lit
       and one shown after it clears it — with a row where a second soft
       frame restarts the minimum, red when it is counted from the lighting
       (the reading brief 008 Q-B ruled); it clears at once on a sharp frame
       after the key is released; any soft frame lights it, however brief —
-      `the_cue_pill_keeps_its_minimum_while_travelling`. Open: lands with
-      the app's fit cue.
+      `the_cue_pill_keeps_its_minimum_while_travelling`; app, debug and
+      release — a pill held lit over a sharp frame by the minimum clears once
+      the hold has ended although nothing lands, the app re-evaluating it at
+      the instant core names — `a_cue_pill_held_over_a_sharp_frame_clears_when_the_hold_ends`
+      (the pure rows cannot see that re-evaluation). Ticked by brief 008's
+      step-5 commit, which carries the app's pill and both tests; each
+      mutant's red is in its message.
 - [x] **The texture rings hold their leaned windows** (brief 008): core — an
       entry inside the window is never evicted while one outside it is held,
       both leans; a symmetric window is the old distance rule exactly, which
@@ -1194,16 +1204,17 @@ renderer's source offsets are `Fixed<u16, 4>`.
       `the_engine_hands_the_app_its_leaned_windows`. Ticked by brief 008's
       step-3b commit, which carries the windows and these tests; each
       mutant's red is in its message.
-- [ ] **The kitchen drops stale full fills, cooks the rest in the order the
+- [x] **The kitchen drops stale full fills, cooks the rest in the order the
       cursor meets them, and keeps both wraps** (brief 008, the redesign's G4;
       the order, Manager ruling 2026-09-26): core — `transit::next_fill` picks the cursor's fill
       first, then the nearest by view distance, ties toward the window's lean
       and forward without one, whatever order the fills were queued in —
       `full_fills_cook_in_the_order_the_cursor_meets_them`; app unit (the
       kitchen's) — a queued full-res fill for a frame outside the full-res
-      window is culled at the next submission wave, never one inside it; the
-      kitchen pops its Full fills in `next_fill`'s order; a mid wrap and a
-      screen-rung wrap of one index both stay queued —
+      window is culled at the next submission wave, never one inside it, and
+      the culled indexes are returned in queue order, for the engine's
+      `note_dropped`; the kitchen pops its Full fills in `next_fill`'s order; a
+      mid wrap and a screen-rung wrap of one index both stay queued —
       `full_fills_outside_the_window_are_culled`,
       `the_kitchen_pops_full_fills_in_next_fill_order`,
       `wrap_jobs_dedupe_per_kind_not_per_index`, and
@@ -1212,9 +1223,11 @@ renderer's source offsets are `Fixed<u16, 4>`.
       Full > Wrap > Thumb > Mid and the per-index dedupe and
       lose "latest first" among fills, the promise this box replaces. Mutants:
       the latest-first pop restored, red on the kitchen's pop test;
-      `next_fill` ignoring the lean, red on the core test's tie rows. Open:
-      lands with the app's rung textures.
-- [ ] **A hold at fit on a viewport the mid serves keeps each frame's mid in
+      `next_fill` ignoring the lean, red on the core test's tie rows. Ticked
+      by brief 008's step-5 commit, which carries the kitchen's fill order and
+      the app unit tests (the core test landed in step 3b); each mutant's red
+      is in its message.
+- [x] **A hold at fit on a viewport the mid serves keeps each frame's mid in
       hand** (brief 008 Q-A): app, debug and release, the default window —
       its fit box served by the mid — over a folder of 24, the three
       fixtures cycled: after a rest that waited for the mid of each of the
@@ -1222,7 +1235,8 @@ renderer's source offsets are `Fixed<u16, 4>`.
       cue off, on its first `loupe fit` mark, never the thumb; red when the
       loupe's mids are pruned to the visible set alone —
       `a_held_arrow_at_fit_on_a_mid_served_viewport_keeps_each_mid_in_hand`.
-      Open: lands with the app's rung textures.
+      Ticked by brief 008's step-5 commit, which carries the retain and the
+      test; the mutant's red is in its message.
 - [ ] **A held arrow at fit on a 4K viewport stays at the rung** (brief 008
       A5): app, release, a 3840×2160 window over real A1 files linked on the
       RAWs' volume (test-harness.md) — the three fixtures cycled into a folder

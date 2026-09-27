@@ -70,6 +70,28 @@ fastcull-core.workspace = true
 # (raw-pipeline.md, "Memory", The Linux allocator, and the glibc canary
 # below): a Slint that allocates pixel buffers another way takes them out
 # of it, and the whole-app formula's "counts no allocator term" is re-read.
+# FIFTH CANARY (brief 008, the switch rule's residual; same 1.17.1): the
+# GPU upload of a full-res frame is outside what the switch rule and the
+# suite can see (raw-pipeline.md, "Above fit", the GPU-upload bullet), and
+# that rests on two renderer behaviours, read in the 1.17.1 sources:
+#   1. The software renderer the driven suite runs under (`--screenshot`)
+#      answers `Window::set_rendering_notifier` with `Unsupported`: that is
+#      the trait default (i-slint-core `renderer.rs` 126-131), and
+#      i-slint-renderer-software's `lib.rs` implements the renderer without
+#      overriding it — so no test can time a frame's draw.
+#   2. femtovg creates the GPU texture for a `slint::Image` at the frame's
+#      first draw, on the UI thread (i-slint-renderer-femtovg
+#      `itemrenderer.rs` 1282-1343: `draw_image_impl` →
+#      `TextureCache::lookup_image_in_cache_or_create` →
+#      `Texture::new_from_image`, `images.rs` 130, "Upload the image to the
+#      GPU"), and after each flush drops every texture no element still uses
+#      (`lib.rs` 298-300 → `TextureCache::drain`, `images.rs` 283-294) — so
+#      the GPU holds the drawn frames only. On a unified-memory APU (the
+#      Ryzen AI Max+ 395; the development laptop's i915) that copy, 150-200 MB
+#      for a full-res frame (a driver may pad RGB to four bytes), comes out of
+#      system RAM too, outside raw-pipeline.md's whole-app formula, which
+#      counts the app's own copies — a residual for brief 008's Outcome.
+# If either changes, re-read that residual.
 slint = { version = "1", default-features = false, features = [
     "std",
     "backend-winit",

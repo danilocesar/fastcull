@@ -1,37 +1,85 @@
-//! Transit policy: WHICH rung the loupe overlay shows, and which full-res
-//! texture the ring gives up — as pure decision functions.
+//! Transit policy: WHICH rung the loupe shows, whether the "◌ loading" cue
+//! pill is lit, and which texture the rings give up — as pure decision
+//! functions.
 //!
-//! The render ladder (`specs/modules/ui-grid.md`, quality rule as revised
-//! by issues #21 and #46) is: full-res (sharp) → the cursor's mid rung
+//! The render ladder (`specs/modules/ui-grid.md`, "The render ladder", as
+//! revised by issues #21, #46 and #60) is: full-res (sharp) → the cursor's
+//! SCREEN RUNG (soft above fit: the fit-size decode) → the cursor's mid rung
 //! (soft) → the cursor's own 320 px grid THUMB (soft) → a bounded residual
 //! HOLD of the previous image's pixels → the honest drop to fit. Two bounds
 //! guard the hold: a decode FAILURE of the cursor image drops immediately
 //! (the strip owns the failed badge), and a cap (`OVERLAY_HOLD_CAP` in the
-//! app, `hold_cap` here) ends a wedged decode's hold.
+//! app, `hold_cap` here) ends a wedged decode's hold. At FIT the fit cell
+//! shows the best rung in hand ([`fit_cell`]) and the pill flags it whenever
+//! it does not serve the fit box (brief 008 R8: "never show upscaled pixels
+//! UNFLAGGED" holds at fit too); while travelling a lit pill holds for a
+//! minimum on-time ([`cue_pill`]).
 //!
-//! This module owns that ladder as [`render_rung`], the texture rings'
-//! victim choice as [`evict_ring`], and the order the kitchen cooks its
-//! queued full-res fills in as [`next_fill`]. It speaks in rungs, holds and
-//! decisions only — never textures, properties or Slint (01-architecture.md:
-//! if a piece of code can live in `fastcull-core`, it must). The app gathers
-//! the plain-data inputs (texture lookups, the clock read, the zoom factor,
-//! the engine's windows), calls in, and does the property writes its answer
-//! names.
+//! This module owns that ladder as [`render_rung`], the fit cell's one order
+//! as [`fit_cell`], the pill as [`cue_pill`], the texture rings' victim choice
+//! as [`evict_ring`], and the order the kitchen cooks its queued full-res
+//! fills in as [`next_fill`]. It speaks in rungs, holds and decisions only —
+//! never textures, properties or Slint (01-architecture.md: if a piece of code
+//! can live in `fastcull-core`, it must). The app gathers the plain-data
+//! inputs (texture lookups, the clock read, the zoom factor, the engine's
+//! windows and travel time), calls in, and does the property writes its
+//! answer names.
 //!
 //! **Why it lives here** (ui-grid.md's own recorded deferral, gate
 //! 2026-08-09): every #46-class bug so far lived exactly in untestable
-//! app-side state. `elapsed` is an INPUT rather than a clock read, which is
-//! what makes the cap testable as a table instead of a stopwatch.
+//! app-side state. `elapsed` and `now` are INPUTS rather than clock reads,
+//! which is what makes the cap and the pill's minimum testable as tables
+//! instead of stopwatches.
 
-use std::time::Duration;
+use std::fmt;
+use std::time::{Duration, Instant};
 
 use crate::loupe::RingWindow;
 
-/// What the overlay should do this refresh.
+/// Where the loupe is — the first thing the render decision asks
+/// (ui-grid.md, "The render ladder"): off it, at its fit view, or above fit
+/// in the zoom overlay.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum LoupeWhere {
+    /// Not at the loupe (a grid zoom), or at the loupe's fit view with an
+    /// empty view: nothing on the ladder applies, and there is no cursor to
+    /// cue.
+    Off,
+    /// The loupe's fit view: the fit cell shows the best rung in hand and
+    /// the cue decides whether it is flagged.
+    Fit,
+    /// Any factor above fit: the zoom overlay and its ladder.
+    AboveFit,
+}
+
+/// Where the loupe is, from the three facts the app has: whether the view
+/// is at one column, the factor it renders (the desire clamped to the known
+/// 1:1 ceiling — an unresolved 1:1 pin is infinite, so above fit), and how
+/// many images the view holds. Above fit the factor decides first, as the
+/// overlay's own `factor > 1.0 && at_loupe` always did; at fit an empty view
+/// is Off, there being no cursor to cue (the app's `at-fit` surface is down
+/// there as well).
+pub fn loupe_where(at_loupe: bool, factor: f32, view_len: usize) -> LoupeWhere {
+    if !at_loupe {
+        LoupeWhere::Off
+    } else if factor > 1.0 {
+        LoupeWhere::AboveFit
+    } else if view_len == 0 {
+        LoupeWhere::Off
+    } else {
+        LoupeWhere::Fit
+    }
+}
+
+/// What the loupe should do this refresh.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum RenderDecision {
     /// Render the cursor's TOP rung: sharp, no cue pill.
     Sharp,
+    /// Render the cursor's SCREEN RUNG above fit, at the carried factor and
+    /// pan centre, flagged by the cue pill: it is the fit-size decode, so any
+    /// factor above fit upscales it (ui-grid.md, the ladder above fit).
+    Rung,
     /// Render a sub-top rung of the cursor's OWN image at the carried
     /// factor and pan centre, flagged by the cue pill. `is_thumb`
     /// distinguishes the mid rung from the 320 px grid-thumb rescue —
@@ -45,6 +93,10 @@ pub enum RenderDecision {
     Hold { start: bool },
     /// Take the overlay down to the fit view.
     Drop { reason: DropReason },
+    /// The loupe is at fit: the fit cell shows the best rung in hand
+    /// ([`fit_cell`]), and `cue` says that rung does not serve the fit box,
+    /// so the pill must flag it (ui-grid.md, "At fit"; brief 008 R8).
+    Fit { cue: bool },
 }
 
 /// Why the overlay came down. The two *traced* reasons are the ones that
@@ -53,7 +105,7 @@ pub enum RenderDecision {
 /// trace distinguishes them and the regression tests grep for them.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum DropReason {
-    /// The desire is at or below fit, or the loupe is not on screen: the
+    /// The loupe is not on screen (a grid zoom, or an empty view): the
     /// overlay simply does not apply. Not traced — nothing was lost.
     BelowLadder,
     /// The cursor image's decode FAILED. Traced `(decode failed)`.
@@ -84,8 +136,12 @@ pub struct HoldState {
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct RungInputs {
     /// A TOP-rung texture for the cursor is in hand (`loupe::is_top_rung`
-    /// over the full-res slot, terminality included).
+    /// over the full-res slot, terminality included): the file's best,
+    /// sharp at every factor.
     pub has_sharp: bool,
+    /// The cursor's SCREEN RUNG texture is in hand — the embedded full JPEG
+    /// decoded at N/8 to the fit box (brief 008).
+    pub has_rung: bool,
     /// SOME texture of the cursor's own image below the sharp arm is in
     /// hand: its mid rung, or a warm texture the engine re-announced into
     /// the full-res slot (the pruned-and-revisited path). The app gathers
@@ -96,11 +152,17 @@ pub struct RungInputs {
     pub has_mid: bool,
     /// The cursor's own 320 px grid thumb is in hand.
     pub has_thumb: bool,
+    /// The screen rung in hand serves the CURRENT fit box
+    /// (`loupe::serves_box`, the 1.25 rule's one home): one cached for a
+    /// smaller display does not. False with no box.
+    pub rung_serves_fit: bool,
+    /// The mid in hand serves the current fit box: on viewports up to ~2K,
+    /// not on a wide one. False with no box.
+    pub mid_serves_fit: bool,
     /// The cursor image's decode has FAILED (the strip shows its badge).
     pub cursor_failed: bool,
-    /// The desire is above fit AND the loupe is on screen — the overlay
-    /// applies at all this refresh.
-    pub overlay_wanted: bool,
+    /// Where the loupe is ([`loupe_where`]).
+    pub loupe: LoupeWhere,
     /// The overlay was up on the PREVIOUS refresh: there are previous
     /// pixels on screen that a hold would be keeping.
     pub overlay_was_up: bool,
@@ -111,10 +173,18 @@ pub struct RungInputs {
 }
 
 /// The render ladder, as one total function: every combination of inputs
-/// yields a decision (`render_rung_is_total` sweeps them).
+/// yields a decision (`render_rung_is_total_and_reaches_every_decision`
+/// sweeps them).
 ///
-/// Order is the ladder's own, top rung first. Two rules are easy to state
-/// backwards and are therefore spelled out here:
+/// Off the loupe nothing applies. At fit the answer is always the fit view,
+/// cued unless a rung in hand serves the fit box — the full-res (or a
+/// terminal rung, which the app gathers as sharp), a screen rung or a mid
+/// that serves it — or the cursor has failed (the strip owns the badge).
+/// "Serves" is the ladder's 1.25 tolerance, so a ≤ 25 % upscale is
+/// unflagged at fit as everywhere on the ladder (Manager M2, 2026-09-26).
+///
+/// Above fit the order is the ladder's own, top rung first. Two rules are
+/// easy to state backwards and are therefore spelled out here:
 ///
 /// * the thumb RESCUE is skipped for a failed cursor image — a file whose
 ///   320 px thumb survived while every loupe rung is corrupt would sit at
@@ -132,14 +202,26 @@ pub struct RungInputs {
 ///   run over consecutively cold frames — the bound is on how long any ONE
 ///   photograph can be misrepresented (recorded in ui-grid.md).
 pub fn render_rung(i: &RungInputs) -> RenderDecision {
-    if !i.overlay_wanted {
-        // Leaving the ladder: at or below fit, or out of the loupe.
-        return RenderDecision::Drop {
-            reason: DropReason::BelowLadder,
-        };
+    match i.loupe {
+        LoupeWhere::Off => {
+            return RenderDecision::Drop {
+                reason: DropReason::BelowLadder,
+            };
+        }
+        LoupeWhere::Fit => {
+            let served =
+                i.has_sharp || (i.has_rung && i.rung_serves_fit) || (i.has_mid && i.mid_serves_fit);
+            return RenderDecision::Fit {
+                cue: !(served || i.cursor_failed),
+            };
+        }
+        LoupeWhere::AboveFit => {}
     }
     if i.has_sharp {
         return RenderDecision::Sharp;
+    }
+    if i.has_rung {
+        return RenderDecision::Rung;
     }
     if i.has_mid {
         return RenderDecision::Soft { is_thumb: false };
@@ -167,6 +249,147 @@ pub fn render_rung(i: &RungInputs) -> RenderDecision {
         } else {
             // The only remaining way past the hold arm.
             DropReason::HoldCap
+        },
+    }
+}
+
+/// Which rung the fit cell draws — and the rung its trace mark names
+/// (test-harness.md, `loupe fit idx N rung K`; the dump's `rung=`).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum FitRung {
+    None,
+    Thumb,
+    Mid,
+    Screen,
+    Full,
+}
+
+impl fmt::Display for FitRung {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        // The words are a contract: driven tests wait on and read them.
+        f.write_str(match self {
+            FitRung::None => "none",
+            FitRung::Thumb => "thumb",
+            FitRung::Mid => "mid",
+            FitRung::Screen => "screen",
+            FitRung::Full => "full",
+        })
+    }
+}
+
+/// The texture the fit cell DRAWS and the rung its mark NAMES, from one
+/// order — full > screen > mid > thumb (ui-grid.md, "At fit": "the fit cell
+/// shows the best rung in hand — full-res, then the screen rung, the mid, the
+/// thumb"). The app gathers the four textures it holds for an index and draws
+/// exactly what this returns, so the mark names the drawn texture by
+/// construction: an order of the app's own beside this one could draw the 2×
+/// mid while every gate read `rung screen` (brief 008's plan, fix round 3).
+/// Generic so core owns the order without knowing `slint::Image`.
+pub fn fit_cell<T>(
+    full: Option<T>,
+    rung: Option<T>,
+    mid: Option<T>,
+    thumb: Option<T>,
+) -> (FitRung, Option<T>) {
+    match (full, rung, mid, thumb) {
+        (Some(t), _, _, _) => (FitRung::Full, Some(t)),
+        (None, Some(t), _, _) => (FitRung::Screen, Some(t)),
+        (None, None, Some(t), _) => (FitRung::Mid, Some(t)),
+        (None, None, None, Some(t)) => (FitRung::Thumb, Some(t)),
+        (None, None, None, None) => (FitRung::None, None),
+    }
+}
+
+/// [`fit_cell`]'s label over presence alone, for the decision's inputs —
+/// one definition, so the two cannot disagree.
+pub fn fit_rung_shown(i: &RungInputs) -> FitRung {
+    fit_cell(
+        i.has_sharp.then_some(()),
+        i.has_rung.then_some(()),
+        i.has_mid.then_some(()),
+        i.has_thumb.then_some(()),
+    )
+    .0
+}
+
+/// The "◌ loading" pill for one render, and the clock the app keeps for the
+/// next one.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct CuePill {
+    /// The pill is lit.
+    pub on: bool,
+    /// Re-evaluate the pill after this long although nothing may land. Set
+    /// ONLY while the pill is lit over a frame that is not soft — held by the
+    /// minimum while travelling — to the earlier of the minimum's end and the
+    /// end of travel, the two instants at which the held pill must clear.
+    /// None while the pill is off or the frame is soft: whatever makes a soft
+    /// frame sharp is a landing, which refreshes anyway. Without it a pill
+    /// held over a sharp frame at a hold's last refresh stays lit at rest,
+    /// where nothing may land to clear it (brief 008's plan, fix round 2).
+    pub recheck_in: Option<Duration>,
+    /// The last soft frame on screen, which the minimum counts from: the app
+    /// keeps it and hands it back at its next render. Forgotten for a failed
+    /// cursor, whose pill is off.
+    pub last_soft: Option<Instant>,
+}
+
+/// The pill (ui-grid.md, "The pill never flickers"; the pill rule, Manager
+/// M2 on the persona's redesign check, 2026-09-26), decided whole here so the
+/// re-check can never disagree with the pill and no rule of it lives in the
+/// app:
+/// * a soft frame lights it, however brief — a minimum on-time errs toward
+///   flagging a sharp frame, never toward hiding a soft one;
+/// * while travelling (`travel_left` is `Some`, the engine's `travel_left()`)
+///   a lit pill stays on until `min_on` has passed since the LAST soft frame,
+///   so soft and sharp frames alternating in a hold keep it lit rather than
+///   blinking — counted from the last soft frame, not from the lighting, so a
+///   second soft frame restarts the minimum (Manager ruling 2026-09-26, brief
+///   008 Q-B);
+/// * not travelling, a sharp frame clears it at once ("it clears the moment a
+///   sharp frame is on screen after the key is released");
+/// * the minimum never holds it for a failed cursor: the strip owns the
+///   failed badge, and "◌ loading" must not linger over it — the clock is
+///   forgotten there. A failed cursor's own soft pixels (its mid or screen
+///   rung above fit) still light it, as any soft frame does: they are
+///   upscaled pixels, which are never shown unflagged (ui-grid.md, the
+///   quality rule), and at fit the cue itself is off for a failed cursor.
+///
+/// `soft` is whether the frame now on screen is below what the view needs
+/// (the app's per-decision value), `last_soft` the clock the previous call
+/// returned, `now` this render's instant.
+pub fn cue_pill(
+    soft: bool,
+    cursor_failed: bool,
+    travel_left: Option<Duration>,
+    last_soft: Option<Instant>,
+    now: Instant,
+    min_on: Duration,
+) -> CuePill {
+    if soft {
+        return CuePill {
+            on: true,
+            recheck_in: None,
+            last_soft: Some(now),
+        };
+    }
+    if cursor_failed {
+        return CuePill {
+            on: false,
+            recheck_in: None,
+            last_soft: None,
+        };
+    }
+    let since_last_soft = last_soft.map(|t| now.saturating_duration_since(t));
+    match (travel_left, since_last_soft) {
+        (Some(left), Some(since)) if since < min_on => CuePill {
+            on: true,
+            recheck_in: Some((min_on - since).min(left)),
+            last_soft,
+        },
+        _ => CuePill {
+            on: false,
+            recheck_in: None,
+            last_soft,
         },
     }
 }
@@ -283,15 +506,18 @@ mod tests {
     /// keeps its value: with a symmetric window the rule is plain distance.
     const SYMMETRIC: RingWindow = RingWindow::symmetric(PREFETCH);
 
-    /// The inputs, with everything absent and the overlay wanted: rows
+    /// The inputs, with everything absent and the loupe above fit: rows
     /// name only what they are about.
     fn cold() -> RungInputs {
         RungInputs {
             has_sharp: false,
+            has_rung: false,
             has_mid: false,
             has_thumb: false,
+            rung_serves_fit: false,
+            mid_serves_fit: false,
             cursor_failed: false,
-            overlay_wanted: true,
+            loupe: LoupeWhere::AboveFit,
             overlay_was_up: false,
             hold: None,
             hold_cap: CAP,
@@ -588,34 +814,232 @@ mod tests {
         );
     }
 
+    /// Renamed from `at_or_below_fit_nothing_on_the_ladder_applies`, whose
+    /// promise — nothing applies at or below fit — brief 008 changes: at fit
+    /// the cue applies (ui-grid.md, "At fit"). Every input off the loupe is
+    /// the untraced drop; every input at fit is the fit view, whatever rungs,
+    /// hold or failure it carries.
     #[test]
-    fn at_or_below_fit_nothing_on_the_ladder_applies() {
-        // Every rung in hand, every hold state — off the ladder is off the
-        // ladder, and the drop is the untraced kind.
-        for has_sharp in [false, true] {
-            for has_mid in [false, true] {
-                for has_thumb in [false, true] {
-                    for overlay_was_up in [false, true] {
-                        let i = RungInputs {
-                            has_sharp,
-                            has_mid,
-                            has_thumb,
-                            overlay_wanted: false,
-                            overlay_was_up,
-                            hold: held_for_this_cursor(1),
-                            ..cold()
-                        };
-                        assert_eq!(
-                            render_rung(&i),
-                            RenderDecision::Drop {
-                                reason: DropReason::BelowLadder
-                            },
-                            "off the ladder: {i:?}"
-                        );
-                    }
+    fn off_the_loupe_nothing_applies_and_at_fit_only_the_cue_does() {
+        let (mut off, mut fit) = (0, 0);
+        for i in every_input_combination() {
+            match i.loupe {
+                LoupeWhere::Off => {
+                    off += 1;
+                    assert_eq!(
+                        render_rung(&i),
+                        RenderDecision::Drop {
+                            reason: DropReason::BelowLadder
+                        },
+                        "off the loupe: {i:?}"
+                    );
                 }
+                LoupeWhere::Fit => {
+                    fit += 1;
+                    assert!(
+                        matches!(render_rung(&i), RenderDecision::Fit { .. }),
+                        "at fit only the cue applies: {i:?}"
+                    );
+                }
+                LoupeWhere::AboveFit => {}
             }
         }
+        assert_eq!(
+            (off, fit),
+            (1280, 1280),
+            "each position is a third of the sweep"
+        );
+    }
+
+    /// Brief 008 A3 (ui-grid.md, "At fit"), the rows written out: the pill
+    /// shows whenever the rung the fit cell shows does not serve the fit box.
+    #[test]
+    fn at_fit_the_cue_follows_the_serving_rung() {
+        let fit = RungInputs {
+            loupe: LoupeWhere::Fit,
+            ..cold()
+        };
+        // A screen rung that serves the box: the frame at the size the
+        // screen draws it — no cue.
+        assert_eq!(
+            render_rung(&RungInputs {
+                has_rung: true,
+                rung_serves_fit: true,
+                has_mid: true,
+                has_thumb: true,
+                ..fit
+            }),
+            RenderDecision::Fit { cue: false }
+        );
+        // THE G6 ROW: the mid alone on a box it does not serve (a 4K
+        // viewport) — before brief 008 this was the 2× upscaled mid, unflagged.
+        assert_eq!(
+            render_rung(&RungInputs {
+                has_mid: true,
+                has_thumb: true,
+                ..fit
+            }),
+            RenderDecision::Fit { cue: true },
+            "an upscaled mid at fit must be flagged"
+        );
+        // The mid alone on a box it serves (~2K and below): nothing changes
+        // there — no cue.
+        assert_eq!(
+            render_rung(&RungInputs {
+                has_mid: true,
+                mid_serves_fit: true,
+                has_thumb: true,
+                ..fit
+            }),
+            RenderDecision::Fit { cue: false }
+        );
+        // Nothing in hand yet — a cold frame's placeholder: cued.
+        assert_eq!(render_rung(&fit), RenderDecision::Fit { cue: true });
+        // A failed cursor: never cued — the strip owns the failed badge.
+        for i in [
+            RungInputs {
+                cursor_failed: true,
+                ..fit
+            },
+            RungInputs {
+                cursor_failed: true,
+                has_thumb: true,
+                has_mid: true,
+                ..fit
+            },
+        ] {
+            assert_eq!(render_rung(&i), RenderDecision::Fit { cue: false }, "{i:?}");
+        }
+        // A screen rung cached for a smaller display (the window moved to a
+        // bigger screen): a soft rung, cued — never presented as sharp.
+        assert_eq!(
+            render_rung(&RungInputs {
+                has_rung: true,
+                rung_serves_fit: false,
+                has_mid: true,
+                has_thumb: true,
+                ..fit
+            }),
+            RenderDecision::Fit { cue: true }
+        );
+        // The full-res — or a terminal rung, the file's best, which the app
+        // gathers as sharp: never cued, over any other rung.
+        for i in [
+            RungInputs {
+                has_sharp: true,
+                ..fit
+            },
+            RungInputs {
+                has_sharp: true,
+                has_rung: true,
+                has_mid: true,
+                has_thumb: true,
+                ..fit
+            },
+        ] {
+            assert_eq!(render_rung(&i), RenderDecision::Fit { cue: false }, "{i:?}");
+        }
+        // The thumb alone: cued.
+        assert_eq!(
+            render_rung(&RungInputs {
+                has_thumb: true,
+                ..fit
+            }),
+            RenderDecision::Fit { cue: true }
+        );
+    }
+
+    /// "Never show upscaled pixels UNFLAGGED" at fit, as an invariant over the
+    /// whole sweep, stated independently of how the arm is written: a cue off
+    /// at fit means a sharp or terminal rung, a screen rung or mid that
+    /// serves the box, or a failed cursor — nothing else.
+    #[test]
+    fn at_fit_a_cue_off_means_a_serving_rung_or_a_sharp_or_a_failure() {
+        let (mut off, mut on) = (0, 0);
+        for i in every_input_combination() {
+            if i.loupe != LoupeWhere::Fit {
+                continue;
+            }
+            match render_rung(&i) {
+                RenderDecision::Fit { cue: false } => {
+                    off += 1;
+                    assert!(
+                        i.has_sharp
+                            || (i.has_rung && i.rung_serves_fit)
+                            || (i.has_mid && i.mid_serves_fit)
+                            || i.cursor_failed,
+                        "upscaled pixels unflagged at fit: {i:?}"
+                    );
+                }
+                RenderDecision::Fit { cue: true } => on += 1,
+                other => panic!("at fit the decision is the fit view, not {other:?}: {i:?}"),
+            }
+        }
+        assert!(off > 0 && on > 0, "the sweep reached both cues");
+    }
+
+    /// Above fit the screen rung is the fit-size decode, so any factor above
+    /// fit upscales it: it renders, below the full-res and above the mid and
+    /// the thumb, and the app lights the pill for it (ui-grid.md, the ladder
+    /// above fit) — whether or not it serves the fit box, since above fit the
+    /// rule is strict.
+    #[test]
+    fn above_fit_a_screen_rung_renders_cued() {
+        for i in [
+            RungInputs {
+                has_rung: true,
+                ..cold()
+            },
+            RungInputs {
+                has_rung: true,
+                rung_serves_fit: true,
+                ..cold()
+            },
+            RungInputs {
+                has_rung: true,
+                has_mid: true,
+                mid_serves_fit: true,
+                has_thumb: true,
+                ..cold()
+            },
+            // A real rung of the cursor's own image, like the mid: a failure
+            // gates the thumb rescue and the hold, not this.
+            RungInputs {
+                has_rung: true,
+                cursor_failed: true,
+                ..cold()
+            },
+        ] {
+            assert_eq!(render_rung(&i), RenderDecision::Rung, "{i:?}");
+        }
+        // The full-res wins over it.
+        assert_eq!(
+            render_rung(&RungInputs {
+                has_sharp: true,
+                has_rung: true,
+                rung_serves_fit: true,
+                ..cold()
+            }),
+            RenderDecision::Sharp
+        );
+    }
+
+    /// Brief 008 (ui-grid.md, "The render ladder": "an empty view at fit is
+    /// off, there being no cursor to cue"): where the loupe is.
+    #[test]
+    fn the_fit_cue_needs_a_cursor_in_the_view() {
+        assert_eq!(loupe_where(true, 1.0, 0), LoupeWhere::Off);
+        assert_eq!(loupe_where(true, 1.0, 5), LoupeWhere::Fit);
+        assert_eq!(loupe_where(true, 2.0, 5), LoupeWhere::AboveFit);
+        assert_eq!(
+            loupe_where(true, 2.0, 0),
+            LoupeWhere::AboveFit,
+            "above fit the factor decides first, as the overlay's own test did"
+        );
+        assert_eq!(loupe_where(false, 1.0, 5), LoupeWhere::Off);
+        assert_eq!(loupe_where(false, 2.0, 5), LoupeWhere::Off);
+        // `Z` before the ceiling is known: the infinite pin is above fit.
+        assert_eq!(loupe_where(true, f32::INFINITY, 5), LoupeWhere::AboveFit);
     }
 
     // ---------------------------------------------------------------
@@ -631,12 +1055,16 @@ mod tests {
     /// extraction lost or inverted a condition, the sweep below finds the
     /// input that shows it. Deliberately written the OLD way — a
     /// transcription that mirrored the new early-return chain would prove
-    /// nothing.
+    /// nothing. It can speak only where the old ladder had an answer: off
+    /// the fit view (the old ladder left it) and without a screen rung
+    /// (brief 008 added it), so its one input line reads the loupe's
+    /// position where it read `overlay_wanted`.
     fn the_old_app_ladder(i: &RungInputs) -> RenderDecision {
         // `let sharp = fullres.filter(is_top_rung)` — the Option the old
         // match scrutinised. `overlay` is `factor > 1.0 && at_loupe`.
         let sharp = i.has_sharp;
-        let overlay = i.overlay_wanted;
+        assert!(i.loupe != LoupeWhere::Fit);
+        let overlay = i.loupe == LoupeWhere::AboveFit;
         // `let soft = if sharp.is_none() && overlay { mids.get(cursor)
         //     .or_else(|| fullres_for(cursor)) } else { None };`
         let soft = if !sharp && overlay { i.has_mid } else { false };
@@ -687,10 +1115,12 @@ mod tests {
         }
     }
 
-    /// Every combination of the SEVEN inputs that vary: 2^6 boolean
-    /// combinations × 5 hold states = 320 rows. The eighth, `hold_cap`,
-    /// is pinned at production's `OVERLAY_HOLD_CAP` on purpose — only
-    /// `elapsed >= cap` is ever asked, and the 249/250 ms hold states
+    /// Every combination of the inputs that vary: 2^8 booleans (the four
+    /// rungs in hand, the two "serves the fit box" facts, the failure, the
+    /// overlay's previous state) × 3 loupe positions × 5 hold states = 3,840
+    /// rows (ui-grid.md: "2^8 booleans × 3 loupe positions × 5 hold states").
+    /// `hold_cap` is pinned at production's `OVERLAY_HOLD_CAP` on purpose —
+    /// only `elapsed >= cap` is ever asked, and the 249/250 ms hold states
     /// above already sweep both sides of that comparison. Varying the cap
     /// itself would re-test the same boundary in different units.
     fn every_input_combination() -> Vec<RungInputs> {
@@ -702,44 +1132,54 @@ mod tests {
             held_for_the_previous_image(10_000),
         ];
         let mut rows = Vec::new();
-        for has_sharp in [false, true] {
-            for has_mid in [false, true] {
-                for has_thumb in [false, true] {
-                    for cursor_failed in [false, true] {
-                        for overlay_wanted in [false, true] {
-                            for overlay_was_up in [false, true] {
-                                for hold in holds {
-                                    rows.push(RungInputs {
-                                        has_sharp,
-                                        has_mid,
-                                        has_thumb,
-                                        cursor_failed,
-                                        overlay_wanted,
-                                        overlay_was_up,
-                                        hold,
-                                        hold_cap: CAP,
-                                    });
-                                }
-                            }
-                        }
-                    }
+        for bits in 0u16..256 {
+            let bit = |n: u16| bits & (1 << n) != 0;
+            for loupe in [LoupeWhere::Off, LoupeWhere::Fit, LoupeWhere::AboveFit] {
+                for hold in holds {
+                    rows.push(RungInputs {
+                        has_sharp: bit(0),
+                        has_rung: bit(1),
+                        has_mid: bit(2),
+                        has_thumb: bit(3),
+                        rung_serves_fit: bit(4),
+                        mid_serves_fit: bit(5),
+                        cursor_failed: bit(6),
+                        loupe,
+                        overlay_was_up: bit(7),
+                        hold,
+                        hold_cap: CAP,
+                    });
                 }
             }
         }
         rows
     }
 
+    /// Renamed from `render_rung_reproduces_the_old_app_ladder_on_every_input`:
+    /// the equivalence with the pre-move ladder holds on the rows without a
+    /// screen rung and off the fit view (ui-grid.md), the only rows the old
+    /// ladder could answer; the new rows are sentences of the spec with their
+    /// decisions written out (the tests above).
     #[test]
-    fn render_rung_reproduces_the_old_app_ladder_on_every_input() {
+    fn render_rung_reproduces_the_old_app_ladder_where_it_can_speak() {
         let rows = every_input_combination();
-        assert_eq!(rows.len(), 320, "the sweep must be the full cross product");
-        for i in &rows {
+        assert_eq!(rows.len(), 3840, "the sweep must be the full cross product");
+        let mut spoken = 0;
+        for i in rows
+            .iter()
+            .filter(|i| !i.has_rung && i.loupe != LoupeWhere::Fit)
+        {
+            spoken += 1;
             assert_eq!(
                 render_rung(i),
                 the_old_app_ladder(i),
                 "extraction changed behavior for {i:?}"
             );
         }
+        assert_eq!(
+            spoken, 1280,
+            "a third of the rows lack both the rung and the fit"
+        );
     }
 
     #[test]
@@ -755,6 +1195,7 @@ mod tests {
         }
         for expected in [
             RenderDecision::Sharp,
+            RenderDecision::Rung,
             RenderDecision::Soft { is_thumb: false },
             RenderDecision::Soft { is_thumb: true },
             RenderDecision::Hold { start: true },
@@ -771,27 +1212,30 @@ mod tests {
             RenderDecision::Drop {
                 reason: DropReason::NothingToHold,
             },
+            RenderDecision::Fit { cue: true },
+            RenderDecision::Fit { cue: false },
         ] {
             assert!(seen.contains(&expected), "no input produces {expected:?}");
         }
-        assert_eq!(seen.len(), 9, "an unexpected decision appeared: {seen:?}");
+        assert_eq!(seen.len(), 12, "an unexpected decision appeared: {seen:?}");
     }
 
     #[test]
     fn the_overlay_never_drops_to_fit_with_pixels_of_the_cursor_in_hand() {
         // The transit contract as an invariant over the whole sweep,
         // stated independently of how the ladder is written: while the
-        // desire is above fit and the cursor image is not known dead, a
-        // rung of the CURSOR's own image always renders — never fit.
+        // loupe is above fit and the cursor image is not known dead, a
+        // rung of the CURSOR's own image always renders — never fit. The
+        // screen rung counts as pixels in hand (brief 008).
         for i in every_input_combination() {
-            if !i.overlay_wanted || i.cursor_failed {
+            if i.loupe != LoupeWhere::AboveFit || i.cursor_failed {
                 continue;
             }
-            if i.has_sharp || i.has_mid || i.has_thumb {
+            if i.has_sharp || i.has_rung || i.has_mid || i.has_thumb {
                 assert!(
                     matches!(
                         render_rung(&i),
-                        RenderDecision::Sharp | RenderDecision::Soft { .. }
+                        RenderDecision::Sharp | RenderDecision::Rung | RenderDecision::Soft { .. }
                     ),
                     "fit-flash with pixels in hand: {i:?}"
                 );
@@ -802,10 +1246,10 @@ mod tests {
     #[test]
     fn a_drop_above_fit_always_carries_an_excuse() {
         // The M1 fit-flash rule: an overlay that was UP coming down while
-        // the desire is still above fit must name failure or the cap —
-        // the excuse-less `(no rung in hand)` form is outlawed.
+        // the loupe is still above fit must name failure or the cap — the
+        // excuse-less `(no rung in hand)` form is outlawed.
         for i in every_input_combination() {
-            if !i.overlay_wanted || !i.overlay_was_up {
+            if i.loupe != LoupeWhere::AboveFit || !i.overlay_was_up {
                 continue;
             }
             if let RenderDecision::Drop { reason } = render_rung(&i) {
@@ -814,6 +1258,162 @@ mod tests {
                     "unexcused drop above fit: {i:?}"
                 );
             }
+        }
+    }
+
+    // ---------------------------------------------------------------
+    // The fit cell and the pill.
+    // ---------------------------------------------------------------
+
+    /// The fit cell draws what its mark names (brief 008's plan, fix round
+    /// 3): over all 16 combinations of held textures, each with a distinct
+    /// marker, `fit_cell` returns the highest present in the order full >
+    /// screen > mid > thumb AND the texture its label names, and
+    /// `fit_rung_shown` agrees with the label on every combination. Red with
+    /// the screen rung and the mid swapped in the order (the {rung, mid} row
+    /// labels `mid`), and with `Screen` handing back the mid's texture (the
+    /// label right, the texture wrong).
+    #[test]
+    fn the_fit_cell_draws_the_rung_it_names() {
+        // The order as data, scanned — not a mirror of the match.
+        let order = [
+            (FitRung::Full, "full"),
+            (FitRung::Screen, "screen"),
+            (FitRung::Mid, "mid"),
+            (FitRung::Thumb, "thumb"),
+        ];
+        for mask in 0u8..16 {
+            let has = |n: u8| mask & (1 << n) != 0;
+            let (label, drawn) = fit_cell(
+                has(0).then_some("full"),
+                has(1).then_some("screen"),
+                has(2).then_some("mid"),
+                has(3).then_some("thumb"),
+            );
+            let best = (0u8..4).find(|n| has(*n)).map(|n| order[usize::from(n)]);
+            assert_eq!(
+                label,
+                best.map_or(FitRung::None, |(rung, _)| rung),
+                "the highest rung held, mask {mask:04b}"
+            );
+            assert_eq!(
+                drawn,
+                best.map(|(_, marker)| marker),
+                "the texture drawn is the one the label names, mask {mask:04b}"
+            );
+            // The texture a label names reads the same in the mark.
+            assert_eq!(label.to_string(), drawn.unwrap_or("none"));
+            let inputs = RungInputs {
+                has_sharp: has(0),
+                has_rung: has(1),
+                has_mid: has(2),
+                has_thumb: has(3),
+                ..cold()
+            };
+            assert_eq!(fit_rung_shown(&inputs), label, "mask {mask:04b}");
+        }
+    }
+
+    /// The pill never flickers (ui-grid.md; the pill rule, Manager M2
+    /// 2026-09-26; Q-B): while travelling a lit pill stays on until
+    /// `CUE_MIN_ON` has passed since the LAST soft frame, a sharp frame after
+    /// the key is released clears it at once, any soft frame lights it, the
+    /// minimum never holds it over a failed cursor — and the re-check is due
+    /// at the earlier of the minimum's end and the end of travel. Red with no
+    /// minimum (the
+    /// 100 ms row), with the minimum held when not travelling (the "off at
+    /// once" row), with the failed clause dropped (the failed rows), with the
+    /// re-check ignoring the travel left (the first re-check row reads 150 ms)
+    /// or always `None` (both `Some` rows), and with the minimum counted from
+    /// the lighting (the sequence's 400 ms row: a second soft frame must
+    /// restart it).
+    #[test]
+    fn the_cue_pill_keeps_its_minimum_while_travelling() {
+        let t0 = Instant::now();
+        let ms = Duration::from_millis;
+        let at = |n: u64| t0 + ms(n);
+        let min = ms(250);
+        // Travel left never exceeds `SETTLE_DEBOUNCE` (150 ms).
+        let travelling = Some(ms(120));
+        // Travelling: a soft frame lights it, and the minimum counts from it.
+        let lit = cue_pill(true, false, travelling, None, at(0), min);
+        assert!(lit.on, "a soft frame lights the pill");
+        assert_eq!(lit.last_soft, Some(at(0)));
+        // A sharp frame 100 ms after the last soft one, still travelling:
+        // held lit.
+        assert!(cue_pill(false, false, travelling, Some(at(0)), at(100), min).on);
+        // 250 ms after it: cleared.
+        assert!(!cue_pill(false, false, travelling, Some(at(0)), at(250), min).on);
+        // Not travelling: a sharp frame clears it at once, however recent
+        // the soft one.
+        assert!(
+            !cue_pill(false, false, None, Some(at(0)), at(10), min).on,
+            "the key is released: a sharp frame clears the pill at once"
+        );
+        // A single soft frame lights it, travelling or not.
+        assert!(cue_pill(true, false, None, None, at(0), min).on);
+        assert!(cue_pill(true, false, None, Some(at(0)), at(900), min).on);
+        // A failed cursor: the minimum never holds the pill over its badge —
+        // travelling or not, inside the minimum or not — and the clock is
+        // forgotten.
+        for (travel, since) in [(travelling, 100), (None, 100), (travelling, 900)] {
+            let failed = cue_pill(false, true, travel, Some(at(0)), at(since), min);
+            assert_eq!(
+                failed,
+                CuePill {
+                    on: false,
+                    recheck_in: None,
+                    last_soft: None
+                },
+                "a failed cursor's pill: travel {travel:?}, {since} ms"
+            );
+        }
+        // Its own soft pixels still light it, as any soft frame does: they
+        // are upscaled, never shown unflagged.
+        assert!(cue_pill(true, true, travelling, Some(at(0)), at(100), min).on);
+        // The re-check: lit over a sharp frame, 100 ms since the last soft
+        // one, 120 ms of travel left — travel ends first.
+        assert_eq!(
+            cue_pill(false, false, Some(ms(120)), Some(at(0)), at(100), min).recheck_in,
+            Some(ms(120))
+        );
+        // 200 ms since the last soft frame, 120 ms left — the minimum ends
+        // first.
+        assert_eq!(
+            cue_pill(false, false, Some(ms(120)), Some(at(0)), at(200), min).recheck_in,
+            Some(ms(50))
+        );
+        // Lit over a soft frame: none (its landing refreshes).
+        assert_eq!(
+            cue_pill(true, false, Some(ms(120)), Some(at(0)), at(100), min).recheck_in,
+            None
+        );
+        // Off: none.
+        assert_eq!(
+            cue_pill(false, false, None, Some(at(0)), at(100), min).recheck_in,
+            None
+        );
+        assert_eq!(
+            cue_pill(false, false, travelling, Some(at(0)), at(300), min).recheck_in,
+            None
+        );
+        // Q-B: soft, sharp, soft, sharp, sharp while travelling, the clock
+        // threaded through as the app threads it. The second soft frame, at
+        // 200 ms, restarts the minimum, so the sharp frame at 400 ms is still
+        // held lit (200 ms since the last soft frame) — counted from the
+        // lighting at 0 it would read 400 ms and clear. At 450 ms the minimum
+        // has passed.
+        let mut last_soft = None;
+        for (t, soft, on) in [
+            (0, true, true),
+            (100, false, true),
+            (200, true, true),
+            (400, false, true),
+            (450, false, false),
+        ] {
+            let pill = cue_pill(soft, false, travelling, last_soft, at(t), min);
+            assert_eq!(pill.on, on, "the frame at {t} ms (soft {soft})");
+            last_soft = pill.last_soft;
         }
     }
 

@@ -478,6 +478,24 @@ fn out_dir() -> PathBuf {
     dir
 }
 
+/// A fixture directory that is deleted even when an assertion panics.
+///
+/// Copied from `tests/perf_budgets.rs` (brief 008), where without it a red
+/// budget leaks its 1,000 files under the target directory. Here the
+/// folders live under `out_dir()` like every other fixture, and nothing
+/// else removes one before the next run's one-hour reaper: on Windows
+/// `place_fixture` COPIES each RAW (63 to 113 MB a file), and on this seat
+/// the temp dir is a tmpfs.
+struct Fixture {
+    dir: PathBuf,
+}
+
+impl Drop for Fixture {
+    fn drop(&mut self) {
+        std::fs::remove_dir_all(&self.dir).ok();
+    }
+}
+
 fn raws_dir() -> PathBuf {
     let raws = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../../testdata/raws");
     assert!(
@@ -971,10 +989,19 @@ fn one_to_one_entry_is_center_anchored() {
         line.contains("center 0.500,0.500"),
         "1:1 entry did not anchor on the image center: {line}"
     );
+    // Each number is read as its first whitespace-separated token: since
+    // brief 008 the sharp mark ends `off X,Y cue C` (test-harness.md), so
+    // the second number is followed by ` cue off` — a parse-only change,
+    // the assertions below are untouched.
     let offsets: Vec<f32> = line
         .split(" off ")
         .nth(1)
-        .and_then(|s| s.trim().split(',').map(|n| n.trim().parse().ok()).collect())
+        .and_then(|s| {
+            s.trim()
+                .split(',')
+                .map(|n| n.split_whitespace().next()?.parse().ok())
+                .collect()
+        })
         .unwrap_or_else(|| panic!("unparseable offsets in: {line}"));
     assert!(
         offsets.len() == 2 && offsets.iter().all(|o| *o < -50.0),
@@ -1941,6 +1968,22 @@ fn grid_resize_at_top_stays_at_top() {
 /// cooks before 2026-09-05 and ~1-2 s since dependencies compile
 /// optimised there (issue #76) — either way far past the key spacing,
 /// with the virgin-pin rule rendering soft on mid adoption).
+///
+/// FIXTURE CHANGED, assertions untouched (brief 008; ui-grid.md, the #46
+/// box): twenty-four files where there were six, one backlog decoder
+/// (`FASTCULL_DECODERS=2`: the reserved lane serves a resting focus, never a
+/// held key) and sixteen keys 60 ms apart where there were five. From brief
+/// 008 a 1:1 rest decodes its full-res ring, fifteen ahead, so on six files
+/// every frame of the hold was already full-res when the keys came — five
+/// release runs on the development seat rendered the whole hold sharp, and
+/// the test passed only on the cold start's `loupe soft idx 0`, the virgin
+/// pin's render 600 ms before the first key. Now the premise holds by
+/// construction on any seat whose ONE decoder cannot decode and fill an A1
+/// full-res frame in 60 ms — none on record can (01-architecture.md's perf
+/// table): the rest fills a few frames of runway and the sixteen-key hold
+/// outruns it, so the frames it meets beyond the runway show their fit-box
+/// rung, the mid on this window, rendered `loupe soft idx`. The script's
+/// last key is at 1600 ms; the shutter waits for the whole script.
 #[test]
 fn transit_at_zoom_stays_soft_never_drops_to_fit() {
     if !has_display() {
@@ -1950,7 +1993,7 @@ fn transit_at_zoom_stays_soft_never_drops_to_fit() {
     let _s = serial();
     let dir = out_dir().join("soft-transit");
     std::fs::create_dir_all(&dir).unwrap();
-    for i in 1..=6 {
+    for i in 1..=24 {
         place_fixture(
             &raws_dir().join("A1_full_compressed.ARW"),
             &dir.join(format!("a{i}.ARW")),
@@ -1964,14 +2007,16 @@ fn transit_at_zoom_stays_soft_never_drops_to_fit() {
     // 2026-09-05 and ~1-2 s since (issue #76) — either way past the key
     // spacing — and the virgin-pin rule renders soft the moment the
     // landing mid adopts, long before the shutter's sharp gate opens.
+    let drive: String = (0..16)
+        .map(|k| format!("{}:right", 700 + 60 * k))
+        .collect::<Vec<_>>()
+        .join(";");
     let stderr = shoot_env_stderr(
         &["--start-11", dir.to_str().unwrap()],
         &[
             ("FASTCULL_TRACE", "1"),
-            (
-                "FASTCULL_DRIVE",
-                "700:right;760:right;820:right;880:right;940:right",
-            ),
+            ("FASTCULL_DECODERS", "2"),
+            ("FASTCULL_DRIVE", &drive),
         ],
         &out,
     );
@@ -1993,6 +2038,270 @@ fn transit_at_zoom_stays_soft_never_drops_to_fit() {
         sharp_after,
         "the landing frame never swapped in sharp:\n{stderr}"
     );
+}
+
+/// Brief 008 (ui-grid.md, "The pill never flickers"): a cue pill held lit
+/// over a SHARP frame by its minimum while travelling clears once the hold
+/// has ended, although nothing lands to refresh the app — what the pure rows
+/// of `the_cue_pill_keeps_its_minimum_while_travelling` cannot see: that the
+/// app re-evaluates a held pill on its own (the pump's 33 ms tick, at the
+/// instant `transit::cue_pill` names), since at rest nothing may land.
+///
+/// The fixture makes "nothing lands" true by construction. Four files, one
+/// capture time, so the view is the filename order; the third, id 2, is a
+/// real copy whose FULL embedded JPEG has its last 64 KiB zeroed: entropy
+/// data is byte-stuffed, so no `FF D9` follows its first SOS, the byte check
+/// refuses it, and the loupe keeps the intact mid as the file's best — no
+/// Failed badge, one stderr line naming the file
+/// (`truncated_full_rung_keeps_the_good_mid_and_no_failed_badge`'s rule).
+/// At 1:1 on id 0, on the default window (its fit box served by the mid, so
+/// no screen rung exists), the rest waits for ids 1 and 3 full-res and id
+/// 2's mid; then three keys 40 ms apart: id 1 (sharp), id 2 (SOFT: its mid,
+/// the pill lights), id 3 (sharp while still travelling: the minimum holds
+/// the pill over it). After the third key nothing lands: ids 1 and 3 are
+/// full-res, cached and held; id 2's best is the memoized mid, so every
+/// request for it is served and its failed full emits no event; the ring
+/// around id 3 holds only ids 1 to 3; the kitchen has nothing pending; the
+/// reserved lane's settled ring (Q-I) asks nothing, every member being
+/// served; `dump.` reads the pill without refreshing, and the shutter never
+/// refreshes. Only the re-check can clear it.
+///
+/// Non-vacuity, never a skip: the soft render of id 2 and, after it, a sharp
+/// mark of id 3 carrying `cue on` must both be there. A scheduler stall of
+/// more than 250 ms between the second and third keys lets the minimum
+/// expire before id 3 renders; the scenario then does not arise and the test
+/// FAILS, naming the stall — a red to read, never a margin. The property: a
+/// sharp mark of id 3 carrying `cue off` before the `after` dump, and the
+/// dump's `soft=false`. Red with the pump's re-check removed (the last sharp
+/// mark of id 3 says `cue on`, the dump `soft=true`) and with `cue_pill`
+/// never asking for one (the same). Debug and release.
+#[test]
+fn a_cue_pill_held_over_a_sharp_frame_clears_when_the_hold_ends() {
+    if !has_display() {
+        eprintln!("screenshot smoke skipped: no display server");
+        return;
+    }
+    let _s = serial();
+    let fixture = Fixture {
+        dir: out_dir().join("pill-expiry"),
+    };
+    let dir = &fixture.dir;
+    std::fs::create_dir_all(dir).unwrap();
+    let src = raws_dir().join("A1_full_compressed.ARW");
+    for name in ["IMG_0000.ARW", "IMG_0001.ARW", "IMG_0003.ARW"] {
+        place_fixture(&src, &dir.join(name));
+    }
+    // A real COPY, never a symlink: the zeroing must not touch the shared
+    // fixture RAW. The unlink first makes hard rule 1 structural rather than
+    // conventional — copying ONTO a symlink of that name would write
+    // straight through to the fixture (the failgate test's corrupter does
+    // the same).
+    let damaged = dir.join("IMG_0002.ARW");
+    std::fs::remove_file(&damaged).ok();
+    std::fs::copy(&src, &damaged).unwrap();
+    let full = {
+        let mut file = std::fs::File::open(&damaged).unwrap();
+        fastcull_core::raw::find_embedded_jpegs(&mut file)
+            .expect("the copy's TIFF structure")
+            .fullres()
+            .cloned()
+            .expect("the A1's embedded full JPEG")
+    };
+    {
+        use std::io::{Seek, SeekFrom, Write};
+        const CUT: u64 = 64 * 1024;
+        let mut file = std::fs::OpenOptions::new()
+            .write(true)
+            .open(&damaged)
+            .unwrap();
+        file.seek(SeekFrom::Start(full.offset + full.len - CUT))
+            .unwrap();
+        file.write_all(&[0u8; CUT as usize]).unwrap();
+    }
+    let out = out_dir().join("pill-expiry.jpg");
+    let stderr = shoot_env_stderr(
+        &["--start-11", dir.to_str().unwrap()],
+        &[
+            ("FASTCULL_TRACE", "1"),
+            (
+                "FASTCULL_DRIVE",
+                "100:wait:load settled gen 0;\
+                 200:wait:loupe adopted idx 1 kind full;\
+                 300:wait:loupe adopted idx 3 kind full;\
+                 400:wait:loupe adopted idx 2 kind mid;\
+                 500:right;540:right;580:right;1580:dump.after",
+            ),
+        ],
+        &out,
+    );
+    // The rest really happened: each wait fired (a misspelt token would put
+    // the keys back on the clock in silence).
+    for token in [
+        "wait:load settled gen 0 (satisfied",
+        "wait:loupe adopted idx 1 kind full (satisfied",
+        "wait:loupe adopted idx 3 kind full (satisfied",
+        "wait:loupe adopted idx 2 kind mid (satisfied",
+    ] {
+        assert!(stderr.contains(token), "`{token}` never fired:\n{stderr}");
+    }
+    // The premise that id 2 has no better rung: its full really failed over
+    // the good mid, which stays — the ladder's own line, and no Failed.
+    assert!(
+        stderr.lines().any(|l| l.starts_with("fastcull: loupe ")
+            && l.contains("IMG_0002.ARW: the full rung failed (")
+            && l.ends_with("the lower rung stays")),
+        "id 2's damaged full did not fail over its mid:\n{stderr}"
+    );
+    let rights: Vec<usize> = stderr
+        .match_indices("drive: right")
+        .map(|(i, _)| i)
+        .collect();
+    assert_eq!(rights.len(), 3, "the three keys ran:\n{stderr}");
+    let clock = |at: usize| -> u64 {
+        stderr[..at]
+            .rsplit("fastcull-trace: [")
+            .next()
+            .and_then(|r| r.split(']').next())
+            .and_then(|ms| ms.parse().ok())
+            .unwrap_or_else(|| panic!("no trace clock before offset {at}:\n{stderr}"))
+    };
+    let stall_ms = clock(rights[2]).saturating_sub(clock(rights[1]));
+    // Non-vacuity: id 2 rendered soft, and after it the minimum held the
+    // pill lit over id 3's sharp frame.
+    let soft = stderr
+        .find("loupe soft idx 2 ")
+        .unwrap_or_else(|| panic!("id 2 never rendered soft (its mid):\n{stderr}"));
+    let is_sharp_3 = |l: &&str| l.contains("loupe idx 3 factor ");
+    let held_on = stderr[soft..]
+        .lines()
+        .filter(is_sharp_3)
+        .any(|l| l.ends_with(" cue on"));
+    assert!(
+        held_on,
+        "no sharp mark of id 3 carried `cue on` after id 2's soft render — the \
+         minimum never held the pill over a sharp frame, so this run proves \
+         nothing; the second and third keys were {stall_ms} ms apart (a stall \
+         over 250 ms expires the minimum first):\n{stderr}"
+    );
+    // The property: the held pill cleared on its own before the dump, and
+    // the dump reads it off.
+    let dump_at = stderr
+        .find("drive: dump.after")
+        .unwrap_or_else(|| panic!("the dump never ran:\n{stderr}"));
+    let last_sharp_3 = stderr[soft..dump_at]
+        .lines()
+        .rfind(is_sharp_3)
+        .unwrap_or_default();
+    assert!(
+        last_sharp_3.ends_with(" cue off"),
+        "the pill held over id 3's sharp frame was still lit at rest — nothing \
+         re-evaluated it once the hold ended: {last_sharp_3}\n{stderr}"
+    );
+    assert_eq!(
+        dump_field(qedump(&stderr, "after"), "soft"),
+        "false",
+        "the pill is lit at rest over a sharp frame:\n{stderr}"
+    );
+}
+
+/// Brief 008 Q-A (ui-grid.md, "Virtualization"; Manager ruling 2026-09-26):
+/// a hold at fit on a viewport the MID serves finds each frame's mid in
+/// hand, as a hold on a wide viewport finds its screen rung. At the loupe the
+/// mids inside the rung ring's texture window are kept beside the visible
+/// set; pruned to the visible set alone — at one column the cursor −2 ..= +3
+/// — a ring member's mid that landed while it was farther ahead was dropped,
+/// nothing re-announced it, and the fit cell showed the THUMB, cued, until a
+/// re-wrap landed: the pill on every frame of a hold on a 1080p screen.
+///
+/// The default window, whose fit box the mid serves (asserted: no screen
+/// rung is ever decoded here), over twenty-four files, the three fixtures
+/// cycled. Their capture times sort the classes compressed < lossless <
+/// uncompressed, filename ties within each, so view position p holds id 3p
+/// for p < 8, 3(p − 8) + 1 for p < 16 and 3(p − 16) + 2 after — pinned by the
+/// `held` dump, which must find the cursor on position 15's id. At fit on id
+/// 0 the rest waits for `loupe adopted idx <id> kind mid` for each of the
+/// fifteen positions ahead; then fifteen keys 60 ms apart, and the FIRST
+/// `loupe fit` mark of each of the fifteen frames must name the mid, cue off.
+/// Red when the loupe's mids are pruned to the visible set alone (those
+/// frames first read `rung thumb` or `rung none`, cue on). Debug and release:
+/// mids decode in milliseconds in both since #76.
+#[test]
+fn a_held_arrow_at_fit_on_a_mid_served_viewport_keeps_each_mid_in_hand() {
+    if !has_display() {
+        eprintln!("screenshot smoke skipped: no display server");
+        return;
+    }
+    let _s = serial();
+    let fixture = Fixture {
+        dir: out_dir().join("mid-hold"),
+    };
+    let dir = &fixture.dir;
+    std::fs::create_dir_all(dir).unwrap();
+    let classes = [
+        "A1_full_compressed.ARW",
+        "A1_full_lossless_compressed.ARW",
+        "A1_full_uncompressed.ARW",
+    ];
+    for i in 0..24 {
+        place_fixture(
+            &raws_dir().join(classes[i % 3]),
+            &dir.join(format!("IMG_{i:04}.ARW")),
+        );
+    }
+    let id_at = |p: usize| match p {
+        0..=7 => 3 * p,
+        8..=15 => 3 * (p - 8) + 1,
+        _ => 3 * (p - 16) + 2,
+    };
+    let ahead: Vec<usize> = (1..=15).map(id_at).collect();
+    let mut drive = String::from("100:wait:load settled gen 0");
+    for id in &ahead {
+        drive.push_str(&format!(";200:wait:loupe adopted idx {id} kind mid"));
+    }
+    for k in 0..15 {
+        drive.push_str(&format!(";{}:right", 300 + 60 * k));
+    }
+    drive.push_str(";1500:dump.held");
+    let out = out_dir().join("mid-hold.jpg");
+    let stderr = shoot_env_stderr(
+        &["--start-loupe", dir.to_str().unwrap()],
+        &[("FASTCULL_TRACE", "1"), ("FASTCULL_DRIVE", &drive)],
+        &out,
+    );
+    // The rest really waited for every mid ahead.
+    for id in &ahead {
+        let token = format!("wait:loupe adopted idx {id} kind mid (satisfied");
+        assert!(stderr.contains(&token), "`{token}` never fired:\n{stderr}");
+    }
+    // The view-order model: fifteen keys from position 0 end on position 15.
+    let held = qedump(&stderr, "held");
+    assert_eq!(
+        dump_field(held, "cursor"),
+        id_at(15).to_string(),
+        "the view-order model is wrong — every wait above named the wrong ids:\n{held}"
+    );
+    // The premise: this viewport's fit box is served by the mid.
+    assert!(
+        !stderr.contains(" kind screen "),
+        "a screen rung was decoded: this seat's default window is not a \
+         viewport the mid serves, and the test proves nothing here:\n{stderr}"
+    );
+    // The property: the FIRST fit mark of each frame of the hold names the
+    // mid, uncued.
+    let hold = &stderr[stderr
+        .find("drive: right")
+        .unwrap_or_else(|| panic!("the hold never ran:\n{stderr}"))..];
+    for id in &ahead {
+        let first = hold
+            .lines()
+            .find_map(|l| l.split(&format!("loupe fit idx {id} rung ")).nth(1))
+            .unwrap_or_else(|| panic!("id {id} never got a fit mark in the hold:\n{stderr}"));
+        assert_eq!(
+            first, "mid cue off",
+            "id {id}'s first frame of the hold did not show its mid, uncued — \
+             the mid that landed during the rest was dropped:\n{stderr}"
+        );
+    }
 }
 
 /// Issue #20: the loupe state badge — the cursor's mark must be readable
@@ -5238,18 +5547,20 @@ fn dump_text<'a>(dump: &'a str, name: &str) -> &'a str {
     &rest[..end]
 }
 
-/// Ten files cycling the three A1 classes: identical per-class EXIF
+/// `count` files cycling the three A1 classes: identical per-class EXIF
 /// capture times make the capture sort interleave VIEW order against
 /// image-id order — the issue #46 M1 shape, where the pre-fix id-space
-/// prefetch ring left every arrow neighbor cold, deterministically.
-fn interleaved_session(dir: &Path) {
+/// prefetch ring left every arrow neighbor cold, deterministically. The
+/// count is the caller's since brief 008: a test whose target must stay
+/// cold needs a folder longer than a 1:1 rest's full-res ring.
+fn interleaved_session(dir: &Path, count: usize) {
     std::fs::create_dir_all(dir).unwrap();
     let classes = [
         "A1_full_compressed.ARW",
         "A1_full_lossless_compressed.ARW",
         "A1_full_uncompressed.ARW",
     ];
-    for i in 0..10 {
+    for i in 0..count {
         place_fixture(
             &raws_dir().join(classes[i % 3]),
             &dir.join(format!("IMG_{i:04}.ARW")),
@@ -5304,7 +5615,7 @@ fn interleaved_session(dir: &Path) {
 /// EVERY time, but in 8 of 11 runs after the clock had already
 /// photographed the honest fit (0 of 4 green as written; the same script
 /// in release under the same load: 3 of 3). The dump is gated on the
-/// sharp rung's own mark now (`wait:loupe idx 8 factor` at 20.2 s, the
+/// sharp rung's own mark now (`wait:loupe idx 14 factor` at 20.2 s, the
 /// dump 6.3 s behind it — the CI-audit shape rule, echo asserted below),
 /// which is stricter, not looser: the sharp must land within the wait's
 /// 30 s cap and the overlay must be up 6.3 s later. The dump's authored
@@ -5322,6 +5633,17 @@ fn interleaved_session(dir: &Path) {
 /// render and the sharp landing, not the absence of a bounded drop
 /// (corrected 2026-09-05, senior-developer review F5: its own Windows
 /// debug run of PR #80 carried a `(hold cap)` drop and passed).
+///
+/// FIXTURE CHANGED, assertions untouched (brief 008; ui-grid.md, the #46
+/// box): seventeen files where there were ten. From brief 008 a 1:1 rest
+/// decodes its full-res ring — up to fifteen frames ahead — so on ten files
+/// the End target was decoded and adopted during the 20 s rest, rendered
+/// sharp on arrival, and neither the hold nor the thumb rung this test
+/// exists for could happen (the `midgap` dump read `soft=false rung=full`).
+/// The capture sort of seventeen gives the view [0, 3, 6, 9, 12, 15, 1, 4,
+/// 7, 10, 13, 16, 2, 5, 8, 11, 14]: End lands on id 14 at view position 16,
+/// one past the ring's fifteen ahead of position 0, so it stays cold — the
+/// same promise, and the wait below names that id.
 #[test]
 fn transit_to_a_cold_frame_keeps_the_overlay_at_the_carried_center() {
     if !has_display() {
@@ -5330,7 +5652,7 @@ fn transit_to_a_cold_frame_keeps_the_overlay_at_the_carried_center() {
     }
     let _s = serial();
     let dir = out_dir().join("i46-m1");
-    interleaved_session(&dir);
+    interleaved_session(&dir, 17);
     let out = out_dir().join("i46-m1.jpg");
     let stderr = shoot_env_stderr(
         &["--start-11", dir.to_str().unwrap()],
@@ -5339,7 +5661,7 @@ fn transit_to_a_cold_frame_keeps_the_overlay_at_the_carried_center() {
             ("FASTCULL_KITCHEN_COOK_MS", "150"),
             (
                 "FASTCULL_DRIVE",
-                "20000:dump.pre;20050:end;20130:dump.midgap;20200:wait:loupe idx 8 factor;26500:dump.landed",
+                "20000:dump.pre;20050:end;20130:dump.midgap;20200:wait:loupe idx 14 factor;26500:dump.landed",
             ),
         ],
         &out,
@@ -5415,8 +5737,8 @@ fn transit_to_a_cold_frame_keeps_the_overlay_at_the_carried_center() {
     // the dump back on the clock in silence — the CI-audit shape rule
     // says assert the echo, so that fails loudly here instead.
     assert!(
-        stderr.contains("wait:loupe idx 8 factor (satisfied"),
-        "the `wait:loupe idx 8 factor` step never fired — the landing was \
+        stderr.contains("wait:loupe idx 14 factor (satisfied"),
+        "the `wait:loupe idx 14 factor` step never fired — the landing was \
          timed, not gated:\n{stderr}"
     );
     assert_eq!(
@@ -5629,7 +5951,7 @@ fn paced_taps_over_an_interleaved_session_land_warm() {
     }
     let _s = serial();
     let dir = out_dir().join("i46-f2");
-    interleaved_session(&dir);
+    interleaved_session(&dir, 10);
     let out = out_dir().join("i46-f2.jpg");
     // The first tap. The warm-landing assertion below splits the log at
     // this step's own echo rather than at this number, so the script and
@@ -5809,16 +6131,16 @@ fn overlay_wheel_still_zooms_one_stop_per_notch() {
 /// or die together; QE, gate round 2), so this test manufactures the
 /// field route: the file dies on disk AFTER its thumb was read. A
 /// helper thread zeroes the copy from byte 200,000 to EOF, anchored to
-/// the app's own `thumb bytes idx 11` trace (the pipeline has the
+/// the app's own `thumb bytes idx 16` trace (the pipeline has the
 /// embedded JPEG) and floored at T+9 s. Both halves matter: corrupting
-/// before the read leaves idx 11 with no thumb at all (verified — the
+/// before the read leaves idx 16 with no thumb at all (verified — the
 /// app then drops on arrival and the masking shape never exists),
 /// corrupting after the first End leaves the file readable.
 ///
 /// The thumb path is TWO stages, which is what the old guard got
 /// wrong: the pipeline reads every embedded JPEG at scan time (~0.1 s
 /// here), but the kitchen only decodes one into a texture when its
-/// cell comes near the view — for idx 11 of 12 in a 1-column loupe,
+/// cell comes near the view — for idx 16 of 17 in a 1-column loupe,
 /// that is the first End itself. So the texture lands at ~15.0 s, the
 /// failed full decode arrives ~17 ms later, and "did the rescue render
 /// once before the failure?" is a same-tick coin flip — ~15 % red
@@ -5827,7 +6149,7 @@ fn overlay_wheel_still_zooms_one_stop_per_notch() {
 /// What is NOT a coin flip, and is what this test exists for, is the
 /// SECOND End: the failure is known, the thumb texture is in memory,
 /// and the rescue must NOT render. So armed-ness is asserted as the
-/// texture landing (`thumb landed idx 11`, which must precede the
+/// texture landing (`thumb landed idx 16`, which must precede the
 /// second End — nothing evicts a thumb texture within a session, so
 /// from there the rescue has one in hand), and the render count is
 /// asserted where it binds: AFTER the `t1` dump it must be zero.
@@ -5844,7 +6166,7 @@ fn overlay_wheel_still_zooms_one_stop_per_notch() {
 /// RED on the pre-gate build (b2ce1f9): the thumb renders on EVERY
 /// End (so the after-t1 count is 1) and the "(decode failed)" drop
 /// never appears. That the REWRITE fixed the flake rather than hiding
-/// it was proven the other way round too: with idx 11's thumb decode
+/// it was proven the other way round too: with idx 16's thumb decode
 /// deliberately delayed 600 ms so the failure wins the race, the OLD
 /// body fails with the issue's own "never rendered at all" message
 /// while this one passes.
@@ -5863,7 +6185,14 @@ fn a_decode_failed_cursor_drops_to_fit_instead_of_masking_the_badge() {
     let _s = serial();
     let dir = out_dir().join("i46-failgate");
     std::fs::create_dir_all(&dir).unwrap();
-    for i in 0..11 {
+    // FIXTURE CHANGED, assertions untouched (brief 008; ui-grid.md, the
+    // decode-failed box): sixteen good files where there were eleven, so the
+    // corrupt copy is id 16 at view position 16 — one past a 1:1 rest's
+    // full-res ring (fifteen ahead of position 0) — and is never decoded
+    // before its End. On twelve files the rest's ring decoded it at the start,
+    // before the corrupter zeroed it (~9 s), so the End landed sharp and
+    // `(decode failed)` never appeared. Every `idx 11` became `idx 16`.
+    for i in 0..16 {
         place_fixture(
             &raws_dir().join("A1_full_compressed.ARW"),
             &dir.join(format!("IMG_{i:04}.ARW")),
@@ -5877,7 +6206,7 @@ fn a_decode_failed_cursor_drops_to_fit_instead_of_masking_the_badge() {
     std::fs::remove_file(&corrupt).ok();
     std::fs::copy(raws_dir().join("A1_full_compressed.ARW"), &corrupt).unwrap();
     // Corruption timing is the app's to decide, not a wall clock's: the
-    // thread waits for the trace that says idx 11's embedded JPEG is in
+    // thread waits for the trace that says idx 16's embedded JPEG is in
     // memory, so a scan slowed by a loaded runner moves the corruption
     // with it instead of beating the pipeline to the file. The two real
     // constraints are that anchor and the first End at 15 s; nothing
@@ -5913,14 +6242,14 @@ fn a_decode_failed_cursor_drops_to_fit_instead_of_masking_the_badge() {
             (
                 "FASTCULL_DRIVE",
                 "15000:end;15250:dump.t1;16000:home;\
-                 16500:wait:thumb landed idx 11;17000:end;17150:dump.t2;18000:home",
+                 16500:wait:thumb landed idx 16;17000:end;17150:dump.t2;18000:home",
             ),
         ],
         &out,
-        // End-anchored: `idx 11` must not match `idx 110` if this shape
+        // End-anchored: `idx 16` must not match `idx 160` if this shape
         // is ever copied to a bigger session.
         move |line| {
-            if line.trim_end().ends_with("thumb bytes idx 11") {
+            if line.trim_end().ends_with("thumb bytes idx 16") {
                 let _ = bytes_tx.send(());
             }
         },
@@ -5930,26 +6259,26 @@ fn a_decode_failed_cursor_drops_to_fit_instead_of_masking_the_badge() {
     // this is the difference between "the token held the second End" and
     // "the token was a typo the parser dropped".
     assert!(
-        stderr.contains("wait:thumb landed idx 11 (satisfied"),
-        "the `wait:thumb landed idx 11` step never fired — the second End \
+        stderr.contains("wait:thumb landed idx 16 (satisfied"),
+        "the `wait:thumb landed idx 16` step never fired — the second End \
          was not gated on anything:\n{stderr}"
     );
     // The anchor must have FIRED, not merely timed out into the 9 s floor:
     // a renamed trace mark would otherwise leave the observer dead and
     // this test green on the floor alone (QE finding 2026-08-29).
     assert!(
-        stderr.contains("thumb bytes idx 11\n"),
-        "the corrupter's anchor `thumb bytes idx 11` never appeared — the \
+        stderr.contains("thumb bytes idx 16\n"),
+        "the corrupter's anchor `thumb bytes idx 16` never appeared — the \
          trace mark was renamed, or the pipeline never read the corrupt \
          copy:\n{stderr}"
     );
-    // Non-vacuity, deterministic: idx 11's thumb TEXTURE reached memory
+    // Non-vacuity, deterministic: idx 16's thumb TEXTURE reached memory
     // before the second End, so the rescue rung had something to render
     // there and chose not to. This is an ORDERING on one serial trace
     // stream (~2 s apart in practice), not a same-tick contest — the old
     // guard demanded a thumb RENDER on the FIRST End, which is exactly
     // the coin flip issue #50 was filed for. The script's own
-    // `wait:thumb landed idx 11` makes the ordering causal rather than
+    // `wait:thumb landed idx 16` makes the ordering causal rather than
     // scheduled (a renamed mark ends the run loudly at the wait's own
     // cap); this assertion reads the same fact off the log, and is what
     // still binds if the wait is ever taken out of the script.
@@ -5959,13 +6288,13 @@ fn a_decode_failed_cursor_drops_to_fit_instead_of_masking_the_badge() {
         .unwrap_or_else(|| panic!("the drive script's second End never ran:\n{stderr}"))
         .0;
     assert!(
-        stderr[..second_end].contains("thumb landed idx 11\n"),
-        "idx 11's thumb texture never reached memory before the second \
+        stderr[..second_end].contains("thumb landed idx 16\n"),
+        "idx 16's thumb texture never reached memory before the second \
          End — the masking shape was never armed and this test proves \
          nothing:\n{stderr}"
     );
     assert!(
-        stderr.contains("loupe overlay dropped idx 11 (decode failed)"),
+        stderr.contains("loupe overlay dropped idx 16 (decode failed)"),
         "a failed cursor never dropped to fit — the thumb rescue is \
          masking the failed badge again:\n{stderr}"
     );
@@ -5976,7 +6305,7 @@ fn a_decode_failed_cursor_drops_to_fit_instead_of_masking_the_badge() {
     //
     // The two ways this count could be zero for free are both closed by
     // assertions, not by reasoning: the second End actually landed on
-    // idx 11 with the 1:1 desire intact (`cursor`/`zf` below — a
+    // idx 16 with the 1:1 desire intact (`cursor`/`zf` below — a
     // swallowed key or a dropped pin would otherwise buy the zero), and
     // the ladder was really re-entered above fit there (the drop
     // assertion below). Mutant A — the gate branch removed — corroborates
@@ -5987,13 +6316,13 @@ fn a_decode_failed_cursor_drops_to_fit_instead_of_masking_the_badge() {
         .unwrap_or_else(|| panic!("no `dump.t1` trace in stderr:\n{stderr}"))
         .1;
     assert_eq!(
-        after_t1.matches("loupe thumb idx 11 ").count(),
+        after_t1.matches("loupe thumb idx 16 ").count(),
         0,
         "the thumb rendered on a KNOWN-failed cursor (the second End) — \
          the gate is gone:\n{stderr}"
     );
     assert!(
-        stderr.matches("loupe thumb idx 11 ").count() <= 1,
+        stderr.matches("loupe thumb idx 16 ").count() <= 1,
         "the thumb rescue rendered more than the one causally \
          unavoidable transient on the first End:\n{stderr}"
     );
@@ -6003,15 +6332,15 @@ fn a_decode_failed_cursor_drops_to_fit_instead_of_masking_the_badge() {
     // the rung was attempted there". Deterministic — the `home` at 16 s
     // re-raises the overlay on idx 0, which is healthy and warm.
     assert!(
-        after_t1.contains("loupe overlay dropped idx 11 (decode failed)"),
-        "the second End never re-entered the zoom ladder on idx 11 — the \
+        after_t1.contains("loupe overlay dropped idx 16 (decode failed)"),
+        "the second End never re-entered the zoom ladder on idx 16 — the \
          zero thumb-render count above proves nothing:\n{stderr}"
     );
     for label in ["t1", "t2"] {
         let dump = qedump(&stderr, label);
         assert_eq!(
             dump_field(dump, "cursor"),
-            "11",
+            "16",
             "the End at {label} never reached the corrupt image — a \
              swallowed key makes every count above zero for free:\n{stderr}"
         );

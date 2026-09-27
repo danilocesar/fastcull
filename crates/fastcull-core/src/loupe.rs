@@ -810,6 +810,17 @@ impl LoupeEngine {
         dropped(&mut lock(&self.shared), index);
     }
 
+    /// How long the request state stays TRANSIT without another index
+    /// change — the app's pill input (raw-pipeline.md, Contracts;
+    /// `transit::cue_pill`): while [`in_transit`], `SETTLE_DEBOUNCE` minus
+    /// the time since the last index change, so its `is_some()` is
+    /// "travelling" and its value the instant travel ends, when a pill held
+    /// lit by its minimum must clear; `None` at rest. The app has no
+    /// definition of travelling of its own.
+    pub fn travel_left(&self) -> Option<std::time::Duration> {
+        travel_left_at(&lock(&self.shared), std::time::Instant::now())
+    }
+
     /// Cached image without scheduling anything (e.g. re-render).
     pub fn peek(&self, index: usize) -> Option<FullImage> {
         lock(&self.shared).cache.get(&index).map(|(i, _)| i.clone())
@@ -1644,6 +1655,16 @@ fn in_transit(state: &LoupeState, now: std::time::Instant) -> bool {
         && state
             .last_index_change
             .is_some_and(|t| now.saturating_duration_since(t) < SETTLE_DEBOUNCE)
+}
+
+/// The body of [`LoupeEngine::travel_left`], pure over the state and an
+/// explicit clock so it is tested without workers.
+fn travel_left_at(state: &LoupeState, now: std::time::Instant) -> Option<std::time::Duration> {
+    if !in_transit(state, now) {
+        return None;
+    }
+    let since = now.saturating_duration_since(state.last_index_change?);
+    Some(SETTLE_DEBOUNCE.saturating_sub(since))
 }
 
 /// Pick this worker's next job off the queue.
@@ -2990,6 +3011,40 @@ mod tests {
             note_focus(&mut st, i, Target::Long(u32::MAX), t);
             assert!(!in_transit(&st, t), "a 400 ms tap must not be transit");
         }
+    }
+
+    /// Brief 008 (raw-pipeline.md, Contracts, `travel_left()`): the transit
+    /// time that remains — `SETTLE_DEBOUNCE` minus the time since the last
+    /// index change while in transit, `None` at rest. The pill's input: its
+    /// `is_some()` is "travelling", and its value is when a pill held lit by
+    /// its minimum must clear, so both are pinned in absolute terms.
+    #[test]
+    fn travel_left_is_the_transit_that_remains() {
+        use std::time::{Duration, Instant};
+        let ms = Duration::from_millis;
+        let t0 = Instant::now();
+        let mut st = LoupeState::default();
+        note_focus(&mut st, 0, Target::Long(u32::MAX), t0);
+        assert_eq!(
+            travel_left_at(&st, t0),
+            None,
+            "the first focus is never travel"
+        );
+        // A held key: the next frame one repeat interval later.
+        let t1 = t0 + ms(120);
+        note_focus(&mut st, 1, Target::Long(u32::MAX), t1);
+        assert_eq!(travel_left_at(&st, t1), Some(ms(150)));
+        assert_eq!(travel_left_at(&st, t1 + ms(40)), Some(ms(110)));
+        assert_eq!(travel_left_at(&st, t1 + ms(149)), Some(ms(1)));
+        assert_eq!(
+            travel_left_at(&st, t1 + ms(150)),
+            None,
+            "travel ends when the settle debounce has passed"
+        );
+        // A tap a second later is not travel.
+        let t2 = t1 + ms(1000);
+        note_focus(&mut st, 2, Target::Long(u32::MAX), t2);
+        assert_eq!(travel_left_at(&st, t2), None, "a tap is not travel");
     }
 
     /// SETTLE GUARANTEE: after a transit, something must ask for the

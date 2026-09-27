@@ -733,7 +733,7 @@ fn dispatch(win: &MainWindow, state: &Rc<RefCell<AppState>>, key: &str, layout: 
                          clip={} clipstate={} clipavail={} clipsummary={:?} clipskipped={:?} \
                          cliperror={:?} clipreport={:?} clipconfirm={:?} clipprogress={:?} \
                          cliphint={:?} exported={} curexported={} \
-                         cursor={} selected={} vpy={:.1} focusowner={}",
+                         cursor={} selected={} vpy={:.1} focusowner={} rung={}",
             win.get_dbg_keys_focus(),
             win.get_one2one(),
             st.grid.zoom,
@@ -846,6 +846,14 @@ fn dispatch(win: &MainWindow, state: &Rc<RefCell<AppState>>, key: &str, layout: 
             // main scope, 1..=N a panel field row, N+1 the
             // keyword field, -1 a dialog's own scope.
             win.get_focus_owner(),
+            // The rung the cursor is rendered from this instant (brief 008;
+            // test-harness.md, the dump): `none`, `thumb`, `mid`, `screen`,
+            // `full` — at fit the texture the fit cell draws, above fit the
+            // decision's rung. Without it a dump tells soft from sharp but
+            // not the screen rung from the mid. The LAST placeholder and the
+            // LAST argument: `format!` pairs them by position (the trap the
+            // copy block above names), and new fields are appended.
+            st.loupe_view.shown_rung,
         ));
         return;
     }
