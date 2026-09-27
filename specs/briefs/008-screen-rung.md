@@ -846,3 +846,88 @@ the cursor's rungs) → a later brief.
     requirement; A10 gains "compiled optimised on both targets"; step 6
     adds VS 2022 on the release runner to RELEASING.md and the dist
     plumbing.
+- 2026-09-26 (senior developer, the other-cameras spec pass: the
+  measurements behind raw-pipeline.md "The decoder's complaints", for the
+  Manager's ruling on where the pass departs from the preferred direction.
+  Synthetic 1024×768 streams through the vendored libjpeg-turbo 3.1.0
+  (turbojpeg 1.5.1) and zune-jpeg 0.4.21 in its default, strict, options;
+  no RAW file read):
+  - Header gaps: with three non-FF bytes before the first DQT, our byte
+    check called the stream "truncated" and the SOF sniff found nothing;
+    libjpeg-turbo's header read failed ("3 extraneous bytes before marker
+    0xdb"), after which the safe crate offers no header; zune-jpeg refused
+    two or more such bytes ("[strict-mode]: Extra bytes between headers")
+    and accepted one.
+  - Harmless streams, each decoded by libjpeg-turbo byte-identical to the
+    same stream intact, at 8/8 and at 3/8: an SOS whose Se byte is 0
+    ("Invalid SOS parameters for sequential JPEG"); junk left after a scan —
+    1 to 7 bytes before EOI with no warning at all (the Huffman decoder's
+    bit buffer had read them; 8 bytes gave "2 extraneous bytes", 64 gave
+    "59"), 3 and 64 bytes before a restart marker (every byte counted), and
+    3 bytes between a progressive stream's DHT and its next SOS, each under
+    an "extraneous bytes" warning; zune-jpeg decoded each of them
+    byte-identical to its own decode of the intact stream.
+  - Header complaints: a JFIF APP0 of revision 2 and an ICC chunk with
+    sequence number 0 fail libjpeg-turbo's header read, and zune-jpeg
+    decodes both. An Adobe APP14 with transform 5 on a three-component
+    stream decodes in libjpeg-turbo with no complaint when a JFIF APP0 is
+    present and fails its header read without one; zune-jpeg refuses
+    transform 5 in both modes, with JFIF or without.
+  - Restart markers: RST1 renumbered RST5 (four ahead) decodes in
+    libjpeg-turbo byte-identical to the intact stream; renumbered RST2 (one
+    ahead) or RST0 (one behind) it does not; zune-jpeg, which resets at any
+    restart marker whatever its number, decodes all three byte-identical to
+    its intact decode.
+  - Corruption campaign, 1,000 single-byte flips of the scan data per
+    stream shape, sorted by libjpeg-turbo's first message. Baseline without
+    restarts: HIT_MARKER 348, all damaged; bytes left before EOI 39, all
+    visibly damaged, zune-jpeg decoding all 39 as a success; no warning 613,
+    of which 506 damaged (309 visibly). Restart every 64 MCUs: HIT_MARKER
+    373; bytes left before a marker 312; no warning 315 (235 damaged); no
+    damage above 0.5 % of the pixels. Progressive: HIT_MARKER 324;
+    HUFF_BAD_CODE 69, all refused by zune-jpeg too; bytes left before a
+    marker 55, all damaged, zune-jpeg a success on 54; no warning 546 (350
+    damaged); fatal header errors 6, refused by both. NOT_SEQUENTIAL,
+    BOGUS_PROGRESSION and MUST_RESYNC never came first. Arithmetic coding,
+    200 flips: ARITH_BAD_CODE 103, no warning 36, other messages 57.
+  - Behind a kept message: an SOS with Se = 0 over a scan cut to a quarter
+    and closed with EOI decodes with 69 % of its pixels grey, the kept
+    message hiding the short scan.
+  - Corrected by the pass's second round: its first draft refused bytes
+    left over after a scan as damage, on the campaign alone (406 of 406
+    such streams damaged); the padding rows above raise the same message
+    over byte-identical images, so the spec keeps libjpeg-turbo's image and
+    records the damaged case as a residual.
+- 2026-09-26 (Manager, the relaxation pass, after two check rounds the
+  last with no material flaw; the senior developer's recommendations
+  accepted): the damage class that is refused is the truncation pair
+  plus `HUFF_BAD_CODE`, `ARITH_BAD_CODE` and `MUST_RESYNC` — messages only
+  damage raises; the leftover-bytes warning (`EXTRANEOUS_DATA`) and the
+  scan-parameter pair are decoded past with libjpeg-turbo's completed
+  image (padding raises the same text over byte-identical pixels);
+  anything else gets zune-jpeg's second opinion at full scale, no rung.
+  The Manager's first direction ("outside the truncation class, zune-jpeg")
+  is refined by the measurements above, not overruled. Also accepted: the
+  header-gap pre-pass and its SOF sniff, on the grid-thumb path too
+  (inside N7: zune-jpeg itself is unchanged); the Adobe, missing-EOI and
+  full-scale-only-at-fit residuals as recorded; README's camera-support
+  paragraph; step 2 as three commits reviewed together.
+- 2026-09-26 (Manager, the generator, re-ruled on the developer's
+  evidence): the F1 ruling named "Visual Studio 17 2022", but CI's
+  `windows-latest` is now the `windows-2025-vs2026` image (VS 2026 only)
+  while dist's release plan builds on `windows-2022` (VS 2022 only);
+  naming either version breaks the other build. The developer disputed
+  the ruled value with that evidence and committed nothing for it — a
+  sound dispute, so no user arbitration is needed. Re-ruled: the
+  workspace `.cargo/config.toml` names `Ninja` for the MSVC target, which
+  is preinstalled on all three images and independent of the Visual
+  Studio version, so CI and the release build one way; it is proven by
+  the Windows guard going green and the Windows perf rows (the 3/8 rung
+  faster than the full landscape decode). If the cmake crate's
+  Ninja-with-MSVC path fails on the runner, the fallback is the
+  developer's option (c): VS 2022 named and CI's Windows job on the
+  `windows-2025` image, keeping the check name. Spec first: 01-architecture
+  "Native dependencies", ADR 0002, ADR 0005, docs/index.md and CLAUDE.md's
+  Commands block change with it. The guard reading every turbojpeg-sys
+  cache, debug builds included, is confirmed; so are the three new
+  BUDGET-MEDIAN prints.

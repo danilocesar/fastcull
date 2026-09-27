@@ -49,9 +49,16 @@ ARW variants (compressed / lossless-compressed / uncompressed). Every A1 ARW emb
 | Preview | 1616×1080 | ~0.5 MB | grid thumbnails; loupe fit on displays up to ~2K, at rest and under a held key |
 | Full-res JPEG | 8640×5760 | ~10–12 MB | 1:1 and every factor above fit; loupe fit on wider displays through the screen rung — this JPEG decoded at N/8 to the fit size (`modules/raw-pipeline.md`) |
 
-Other cameras: best-effort — TIFF-shaped RAWs (NEF/CR2/DNG…) read EXIF via the
-same in-tree walker as ARW; non-TIFF containers (CR3/RAF/X3F) fall back to
-rawler's parser (slower, mmap-based — acceptable for out-of-scope formats).
+Other cameras (the user, 2026-09-26: *"at some point, I will want more users
+with different cameras"*; CLAUDE.md M11): TIFF-shaped RAWs (NEF/CR2/DNG…) are
+designed for, not best-effort — they read EXIF and their embedded JPEGs
+through the same in-tree walker as ARW, every general path (a decoder, a
+parser, a ring, a cache) is built and tested for files from other bodies, a
+decoder's harmless complaint never refuses a frame
+(`modules/raw-pipeline.md`, "The decoder's complaints"), and a decision that
+rests on an A1 property says so where it is recorded. Only the A1 is enforced
+with real files. Non-TIFF containers (CR3/RAF/X3F) stay best-effort until a
+unit takes them on: they fall back to rawler's parser (slower, mmap-based).
 Decode fallback chain in `modules/raw-pipeline.md`.
 
 ## Glossary

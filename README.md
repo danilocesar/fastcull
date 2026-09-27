@@ -135,9 +135,12 @@ standard fields; for Lightroom there's a naming caveat, covered honestly in
 ## Camera support
 
 The **Sony A1** is the reference camera — 100% supported and enforced by tests
-against real files in all three ARW variants. Any other camera supported by
-[rawler](https://github.com/dnglab/dnglab) should work through its embedded
-previews on a best-effort basis. If your camera misbehaves, please
+against real files in all three ARW variants. Other cameras whose RAWs are
+TIFF-shaped (NEF, CR2, DNG, …) are designed for: FastCull reads their embedded
+previews with the same code as the A1's, and a camera's harmless quirk doesn't
+stop a photo from showing. Other formats (CR3, RAF, X3F) work through
+[rawler](https://github.com/dnglab/dnglab) on a best-effort basis. Only the A1
+is tested with real files, so if your camera misbehaves, please
 [open an issue](https://github.com/danilocesar/fastcull/issues) — sample files
 make fixes fast.
 

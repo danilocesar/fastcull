@@ -94,19 +94,26 @@ compete.
 The file's embedded preview couldn't be decoded — typically a file cut
 off mid-write: a dying card, an interrupted copy, a full disk. FastCull
 checks that the image data is actually complete before decoding, so a
-truncated file is flagged honestly instead of being shown as a
-half-blank frame (and a corrupt file claiming absurd dimensions is
-rejected outright instead of eating gigabytes of memory). Your original
-file is never touched — try re-copying it from the card; if the badge
-persists, the file really is damaged. One exception: if the grid
-thumbnail shows the photo but the loupe says Failed, the file may be
-fine — the loupe's decoder refuses a JPEG it has any complaint about,
-even a harmless one, and the project would like to hear about it. A RAW
-whose full-size preview is damaged shows no badge at all: the loupe keeps
-the smaller preview, so at 1:1 — and at fit on a large screen (1440p or
-more) — that one frame stays soft under the "◌ loading" pill however long
-you wait, and FastCull prints a line naming the file in the terminal, if
-you started it from one.
+truncated file is flagged honestly instead of being shown as a half-blank
+frame (and a corrupt file claiming absurd dimensions is rejected outright
+instead of eating gigabytes of memory). That check is not a full
+corruption test: a file damaged in the middle can still open, showing the
+damage. Your original file is never touched — try re-copying it from the
+card; if the badge persists, the file really is damaged. If the grid
+thumbnail shows the photo but the loupe says Failed, the loupe found
+something in the image data it treats as damage — usually a stretch the
+thumbnail's decoder quietly fills in (look for a blank or smeared band),
+occasionally a flaw too small to see. A camera's harmless quirks — a few
+stray bytes in the file, an unusual version number, a header field some
+encoders leave at zero — don't cause the badge: FastCull shows the photo
+anyway and, if you started it from a terminal, prints one line naming the
+file. If a photo from another camera shows the badge while it looks whole
+in other programs, the project would like to hear about it — please open
+an issue with a sample file. A RAW whose full-size preview is damaged shows
+no badge at all: the loupe keeps the smaller preview, so at 1:1 — and at
+fit on a large screen (1440p or more) — that one frame stays soft under
+the "◌ loading" pill however long you wait, and FastCull prints a line
+naming the file in the terminal, if you started it from one.
 
 **Something misbehaves — what should I attach to a bug report?**
 Run with `FASTCULL_TRACE=1` from a terminal and attach the output: it

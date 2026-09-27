@@ -58,15 +58,17 @@ libjpeg-turbo at the size the screen draws them (ADR 0005).
   crate, except a stream whose header says CMYK or YCCK (a print-ready bare
   JPEG, issue #8): libjpeg-turbo will not convert those to RGB, so zune-jpeg
   decodes them, at full scale, with no screen rung (brief 008 R14, Manager
-  ruling 2026-09-26). The grid thumb stays on zune-jpeg: its
-  source is the small preview, whose decode is a small share of the thumb's
-  budget, so a swap would buy little and re-open the grid path's
-  hostile-input surface for nothing visible; the one place scaling would pay
+  ruling 2026-09-26). The same zune-jpeg route is the loupe's second opinion
+  for a stream libjpeg-turbo refuses over a complaint outside the damage and
+  kept classes (The decoder's complaints, below). The grid thumb stays on
+  zune-jpeg: its source is the small preview, whose decode is a small share
+  of the thumb's budget, so a swap would buy little and re-open the grid
+  path's hostile-input surface for nothing visible; the one place scaling would pay
   there — a large bare JPEG's thumb, which decodes at full size — is its own
   change with its own measurement; the two decoders' chroma upsampling
   differs by an amount invisible at 320 px (the senior developer's call,
-  brief 008 N7). zune-jpeg stays at 0.4, for the thumbs and the
-  CMYK/YCCK route alike: 0.5.15 measured slower on the full-size decode
+  brief 008 N7). zune-jpeg stays at 0.4, for the thumbs and the loupe's
+  zune-jpeg route alike: 0.5.15 measured slower on the full-size decode
   (History, 2026-08-02).
 - **Fallback chain** when a source is missing (non-A1 cameras): full-res
   JPEG → the mid preview upscaled → a half-size RAW decode via rawler
@@ -235,8 +237,9 @@ output serves the loupe's fit box under the 1.25 rule (brief 008).
   bare JPEG (issue #8, one candidate = the whole file) gets a rung by the same
   rule, and only its full-scale decode is `terminal`. A lossless stream, which
   libjpeg-turbo cannot scale, decodes full-scale with no rung (developer
-  2026-09-26, brief 008 step 1), and so does a CMYK or YCCK stream (Manager
-  ruling 2026-09-26, brief 008 R14).
+  2026-09-26, brief 008 step 1), and so do a CMYK or YCCK stream (Manager
+  ruling 2026-09-26, brief 008 R14) and a stream the second opinion decodes
+  (The decoder's complaints); what such frames cost at fit is Memory's.
 - **The factor follows the viewport**, never a constant: a resize, a panel
   toggle or a move to another display re-keys the box at the next refresh; a
   cached rung that no longer serves the new box is re-requested at the new
@@ -550,11 +553,14 @@ before allocation:
   no image buffer), on the header's FULL dimensions before any scaling factor
   or decoder is chosen — so it binds the zune-jpeg route for CMYK and YCCK
   streams too — and before the decode buffer, the prefault pass or the
-  transpose scratch exist. 500 MP is ~10× the A1's 49.8 MP and ~3× the
-  largest shipping sensor, with room for stitched panoramas served as bare
-  JPEGs; the JPEG format ceiling (65535×65535) would commit ~12.9 GB of RGB
-  per buffer, and a sub-KB stream claiming 30000×30000 measured 5.29 GB RSS
-  on the pre-fix path. The thumb/mid decode keeps zune's default
+  transpose scratch exist; the zune-jpeg route checks it again on its own
+  header, because a stream the second opinion decodes may have left no
+  libjpeg-turbo header to check (The decoder's complaints). 500 MP is ~10×
+  the A1's 49.8 MP and ~3× the largest shipping sensor, with room for
+  stitched panoramas served as bare JPEGs; the JPEG format ceiling
+  (65535×65535) would commit ~12.9 GB of RGB per buffer, and a sub-KB
+  stream claiming 30000×30000 measured 5.29 GB RSS on the pre-fix path.
+  The thumb/mid decode keeps zune's default
   16384-per-side limit (268 MP, already stricter); the pixel cap lives on
   the loupe path, the only one that lifts the per-side limits (it must accept
   panorama-wide bare JPEGs).
@@ -563,65 +569,76 @@ before allocation:
   so a genuine FF D9 at or after the first SOS is an EOI. The search runs
   backwards from the tail — intact camera files end with EOI, so the hot
   path pays effectively nothing — and pre-SOS APP1 segments (EXIF
-  thumbnails are whole JPEGs) never vouch for the main scan. Applied in the
-  grid-thumb decode and on the loupe path (below). zune-jpeg 0.4 — the grid
-  thumb, and the loupe's CMYK and YCCK route — zero-fills missing scan data,
-  reports a truncated stream as SUCCESS and exposes no bytes-consumed
-  accessor, so on those paths the byte check is the only guard.
+  thumbnails are whole JPEGs) never vouch for the main scan. It finds the
+  first SOS with the one marker walker, which skips header gaps as libjpeg
+  does (The decoder's complaints). Applied in the grid-thumb decode and on
+  the loupe path (below). zune-jpeg 0.4 — the grid thumb, and the loupe's
+  zune-jpeg route (CMYK and YCCK streams, and the second opinion) —
+  zero-fills missing scan data, reports a truncated stream as SUCCESS and
+  exposes no bytes-consumed accessor, so on those paths the byte check is
+  the only guard.
 - **Truncation on the loupe path**: two guards, in this order. The byte check
-  runs after the header read and the pixel cap, before the decoder is chosen —
-  so the CMYK and YCCK route gets it as well — and before any buffer is sized
-  or any scan byte is decoded, so a hostile claim that is also cut short is
-  named for its size (Manager ruling Q10, 2026-09-26); it spares the grey
-  decode of the commonest field corruption, a cut-off copy, and names the
-  cause ("truncated"), which the decoder's own message does not. Past it,
-  libjpeg-turbo fails a short stream by its own return contract: its memory
-  source inserts a fake EOI when the bytes run out (`JWRN_JPEG_EOF`,
-  "Premature end of JPEG file"), its Huffman decoder warns on meeting a marker
-  with data still to decode (`JWRN_HIT_MARKER`, "Corrupt JPEG data: premature
-  end of data segment"), `tj3Decompress8` returns −1 whenever a decode emitted
-  any warning, and the safe `turbojpeg` crate maps that to `Err` — a `Failed`
-  badge over the grey-bottomed buffer, never a blank success (brief 008 R2).
-  `TJPARAM_STOPONWARNING` and `TJPARAM_MAXPIXELS` are not set: the safe crate
-  keeps its handle private, and setting them would take a raw-FFI decompressor
-  in core to abort a crafted stream a little sooner and to duplicate our own
-  pixel cap; the loupe uses the safe `Decompressor` as published (Manager
-  ruling 2026-09-26). The scope, by design ("warnings are errors on the
-  decode", brief 008 R2): a stream whose only warning is benign — another
-  body's `JWRN_EXTRANEOUS_DATA`-class warning — fails on the loupe path; the
-  A1's streams are warning-free. Two symptoms follow. A bare JPEG, whose
-  stream is its only rung, shows the `Failed` badge in the loupe, and its
-  zune-jpeg thumb shows only where zune tolerates the same fault — its strict
-  mode refuses bytes between two header markers as libjpeg-turbo does. A RAW
-  whose mid decodes but whose full JPEG carries the warning shows no badge:
-  its full-res fails, and so does its screen rung, a scaled decode of the
-  same stream, so the frame stays on its mid for the session — at 1:1, and
-  at fit on a wide viewport — cued, and its one sign is the stderr line of a
-  rung that fails over a good lower one (below; brief 008, the step-1
-  review, Manager ruling 2026-09-26).
-  (PENDING brief 008, other cameras: ruled 2026-09-26 into step 2 — a benign warning uses the buffer the library completed and prints one stderr line, and the truncation class stays fatal — so this scope, its two symptoms and docs/faq.md's Failed-badge answer are rewritten by the spec pass that precedes step 2's code.)
+  runs after the pixel cap — on libjpeg-turbo's header, or on zune-jpeg's
+  when the zune-jpeg route decodes the stream — so every route gets it, and
+  before any buffer is sized or any scan byte is decoded, so a hostile claim
+  that is also cut short is named for its size (Manager ruling Q10,
+  2026-09-26); it spares the grey decode of the commonest field corruption,
+  a cut-off copy, and names the cause ("truncated"), which the decoder's own
+  message does not. Past it, libjpeg-turbo fails a short stream by its own
+  return contract: its memory source inserts a fake EOI when the bytes run
+  out (`JWRN_JPEG_EOF`, "Premature end of JPEG file"), its Huffman decoder
+  warns on meeting a marker with data still to decode (`JWRN_HIT_MARKER`,
+  "Corrupt JPEG data: premature end of data segment"), `tj3Decompress8`
+  returns −1 whenever a decode emitted any warning, and the safe `turbojpeg`
+  crate maps that to `Err` — both messages are in the damage class the loupe
+  refuses, so a `Failed` badge over the grey-bottomed buffer (brief 008 R2),
+  unless a message the loupe decodes past came first: libjpeg-turbo reports
+  only its first message, which then hides them (the residual below).
+  `TJPARAM_STOPONWARNING` and `TJPARAM_MAXPIXELS` are
+  not set: the safe crate keeps its handle private, and setting them would
+  take a raw-FFI decompressor in core to abort a crafted stream a little
+  sooner and to duplicate our own pixel cap; the loupe uses the safe
+  `Decompressor` as published (Manager ruling 2026-09-26). Which of
+  libjpeg-turbo's messages refuse a rung and which the loupe decodes past is
+  The decoder's complaints, below.
 - **The scaled decode refuses a numerator outside 1..=8**: 9/8 and above would
   UPSCALE, which no rung may do (developer 2026-09-26, brief 008 step 1).
-- **Residual, accepted — on the zune-jpeg paths only** (the grid thumb, and
-  the loupe's CMYK and YCCK route): a crafted stream carrying plausible
-  dimensions, a valid EOI and too little entropy data still decodes there as a
-  mostly-blank "success" — detecting that needs decoder cooperation neither
-  zune 0.4 nor 0.5 offers, while libjpeg-turbo warns on it and fails it
-  (above); and in a MULTI-SCAN (progressive) stream the table segments between
-  scans may legitimately contain a literal FF D9, so a truncated progressive
-  stream can pass the byte check. Both are bounded blank successes, never a
-  giant allocation. (0.5.15's strict mode rejects the plain no-EOI truncation
-  but not these, and is the regression "The decoder", above, keeps out.)
+- **Residual, accepted — the bounded blank success**: a stream carrying
+  plausible dimensions, a valid EOI and too little entropy data decodes as a
+  mostly-blank "success" in three places. On the zune-jpeg paths (the grid
+  thumb, and the loupe's zune-jpeg route: CMYK and YCCK streams, and the
+  second opinion), because detecting it needs decoder cooperation neither
+  zune 0.4 nor 0.5 offers. On the libjpeg-turbo path behind a first message
+  the loupe decodes past (The decoder's complaints, its residuals) — its
+  Huffman decoders warn on a short scan, and the loupe refuses it when that
+  warning is the first message (above). And in an arithmetic-coded stream,
+  whose decoder meets a marker in the data without a warning — "hitting a
+  marker while processing the compressed data segment is legal in arithmetic
+  coding. The convention is to supply zero data" (`jdarith.c`) — a coding no
+  camera on record writes. Besides, in a MULTI-SCAN (progressive) stream the
+  table segments between scans may legitimately contain a literal FF D9, so
+  a truncated progressive stream can pass the byte check. zune-jpeg 0.5.15's
+  strict mode rejects the plain no-EOI truncation but not these, and is the
+  regression "The decoder", above, keeps out. All are bounded blank
+  successes, never a giant allocation (issue #31; brief 008, other cameras,
+  2026-09-26).
+- **Residual, accepted — a complete scan without its EOI**: a writer, or a
+  container length, that leaves out the EOI of a complete scan is refused as
+  truncated — the byte check, and libjpeg-turbo's `JWRN_JPEG_EOF`, cannot
+  tell it from a cut scan. The rule rests on intact camera files ending with
+  EOI, which no body on record breaks (brief 008, other cameras, 2026-09-26;
+  M11).
 - **Progressive scans: at most 100** (brief 008 R2; Manager ruling
   2026-09-26): the loupe's libjpeg-turbo decode sets
   `Decompressor::set_scan_limit(100)`, the bound zune-jpeg 0.4's default
-  gave the whole loupe path before brief 008 and still gives the grid thumb
-  and the loupe's CMYK and YCCK route — each scan of a progressive stream is
-  a pass over every block of the components it covers, so a small crafted
-  stream with thousands of scans would hold a decoder far longer than any
-  real file (the exploit libjpeg-turbo documents for `TJPARAM_SCANLIMIT`,
-  whose default is no limit). A stream over the limit is `Failed` with the
-  library's message. A crafted stream reaches the loupe as a bare JPEG
+  (zune-core's `max_scans`, 100) gave the whole loupe path before brief 008
+  and still gives the grid thumb and the loupe's zune-jpeg route — each scan
+  of a progressive stream is a pass over every block of the components it
+  covers, so a small crafted stream with thousands of scans would hold a
+  decoder far longer than any real file (the exploit libjpeg-turbo documents
+  for `TJPARAM_SCANLIMIT`, whose default is no limit). A stream over the
+  limit is `Failed` with the library's message, in the damage class (The
+  decoder's complaints). A crafted stream reaches the loupe as a bare JPEG
   (issue #8) or inside a crafted RAW; the A1's embedded JPEGs are baseline,
   one scan each.
 
@@ -636,6 +653,143 @@ wherever that rung does not serve — and prints one line on stderr, the
 diagnostics channel, naming the file, the rung that failed and the decoder's
 reason, so a fault that shows no badge is still seen (brief 008, the step-1
 review; Manager ruling 2026-09-26).
+
+### The decoder's complaints (other cameras; the user 2026-09-26, M11)
+
+The A1 is the reference body, not the only one — the user's words: *"the
+software should be able to handle more files as, at some point, I will want
+more users with different cameras"*. A decoder's harmless complaint never
+refuses a frame or leaves it silently soft: the frame shows what decoded, and
+the log names it once. A frame with nothing decodable shows the `Failed`
+badge, and a frame whose better rung is damaged stays on the good one with
+the log naming it (All rejections, above; the user 2026-09-26, CLAUDE.md
+M11). libjpeg-turbo gives the loupe one handle on a complaint: the text of
+the FIRST message its decode emitted, which the safe crate returns as the
+call's `Err` — libjpeg reports only its first warning, a fatal error replaces
+it, and nothing the crate exposes tells a harmless warning from a damaging
+one — and its header read fails on any warning at all, leaving no header to
+decode from (ADR 0005). So the loupe removes one harmless fault before either
+decoder sees the stream, and sorts every other complaint by that text: a
+message only damage raises is refused, and one a writer's quirk can raise is
+decoded past — through libjpeg-turbo's own image where its decode completed,
+through zune-jpeg where it did not.
+
+- **Header gaps are skipped before any decode.** Bytes that are not a marker
+  between two header segments before the first SOS — a segment whose
+  declared length falls short, a writer's padding — are what libjpeg's
+  `next_marker` skips with `JWRN_EXTRANEOUS_DATA` ("Corrupt JPEG data: N
+  extraneous bytes before marker 0x.."). The one JPEG marker walker in
+  `raw/jpeg.rs`, behind the SOF sniff, the byte check's SOS search and the
+  APP1 Exif search, skips them the same way — any byte other than FF, and an
+  FF 00 pair, where a segment should start; FF fill bytes are legal and
+  stay — instead of calling the stream desynchronized, and a second SOI ends
+  the walk as it ends libjpeg's (`JERR_SOI_DUPLICATE`), so a walk that
+  resyncs into an embedded thumbnail stops at its SOI instead of taking its
+  markers for the main image's. The SOF sniff sizes a SOF only when it
+  passes the checks libjpeg's `get_sof` makes — a non-zero height, width and
+  component count, and a length of 8 + 3 × the component count — so a walk
+  through junk does not size a stray FF Cx. The resync changes what is
+  sized: an embedded JPEG with a header gap and no size in its IFD, dropped
+  before as unparseable, is now a candidate — for the grid thumb, the
+  loupe's full-res and the video export's frame, which copies it byte for
+  byte, gap included (video-export.md) — and a bare JPEG with a gap before
+  its SOF, refused before as unparseable, opens. Before either decoder runs,
+  on the loupe and grid-thumb paths alike, the stream is copied without the
+  gap bytes — only when it has any — so libjpeg-turbo reads its header with
+  no warning and decodes at the rung asked for, and zune-jpeg, whose strict
+  mode refuses two or more such bytes, never meets them (brief 008, other
+  cameras, 2026-09-26).
+- **Refused: the damage class** — the messages only a damaged stream raises,
+  which say a scan's data ran out or holds what no encoder writes:
+  `JWRN_JPEG_EOF` ("Premature end of JPEG file": the data ran out before
+  EOI), `JWRN_HIT_MARKER` ("Corrupt JPEG data: premature end of data
+  segment": a scan's data ended before its blocks did), `JWRN_HUFF_BAD_CODE`
+  and `JWRN_ARITH_BAD_CODE` ("Corrupt JPEG data: bad Huffman code", "…: bad
+  arithmetic code": a code no table holds), and `JWRN_MUST_RESYNC`
+  ("Corrupt JPEG data: found marker 0x.. instead of RST..": a restart marker
+  out of sequence — renumbered by damage, or lost with its interval, which
+  the text cannot tell apart; libjpeg-turbo resynchronizes by dropping or
+  zero-filling intervals, and where every block comes out intact the stream
+  is refused all the same, being damaged). Beside them: the scan limit's
+  message ("Progressive JPEG image has more than 100 scans"; Hostile-input
+  bounds) and our own gates — the pixel cap, the byte check, a numerator
+  outside 1..=8. The rung fails with that message and no second decoder is
+  asked: zune-jpeg decodes most damaged scans as a success over the damage,
+  refuses a bad Huffman code itself, has no arithmetic decoder, and would
+  spend its own hundred scans refusing the scan limit's stream (brief 008,
+  other cameras, 2026-09-26).
+- **Kept: libjpeg-turbo's image, when every block was decoded and the
+  message is one a writer's quirk can raise.** `JWRN_NOT_SEQUENTIAL`
+  ("Invalid SOS parameters for sequential JPEG"; libjpeg's own comment:
+  "there are some baseline files out there with all zeroes in these bytes")
+  and `JWRN_BOGUS_PROGRESSION` ("Inconsistent progression sequence for
+  component N coefficient M", an inter-scan inconsistency libjpeg treats as
+  a warning, "not clear if this is right way to behave") are raised at a
+  scan's start, about its parameters. `JWRN_EXTRANEOUS_DATA` from the
+  decode, once the header gaps are gone ("Corrupt JPEG data: N extraneous
+  bytes before marker 0x.."), says bytes were left before a marker once the
+  blocks ahead of it were all decoded — a writer's padding before EOI,
+  before a restart marker or between a later scan's segments, or a scan
+  that desynchronized and finished early, which the text cannot tell
+  apart. `tj3Decompress8` writes every scanline before
+  it returns −1 for a warning, and a fatal error after one would have
+  replaced its text, so the buffer the loupe handed it is complete: it is
+  used as decoded, at the rung asked for (brief 008, other cameras,
+  2026-09-26).
+- **Everything else: the second opinion.** Any other refusal — the header
+  read's complaints (`JWRN_JFIF_MAJOR`, a JFIF revision other than 1;
+  `JWRN_BOGUS_ICC`, an ICC profile chunk out of sequence, read because
+  TurboJPEG saves APP2 markers by default; `JWRN_ADOBE_XFORM`, an unknown
+  Adobe colour transform), a kept message should the header read ever raise
+  one, since it leaves no image, and any message this section does not
+  name — hands the stream to the zune-jpeg route exactly as a CMYK or YCCK
+  stream is handed (The decoder): strict mode, full scale whatever the rung
+  asked, no screen rung, and its own pixel cap, byte check and scan limit
+  (Hostile-input bounds). libjpeg-turbo's buffer, if it made one, is freed
+  first, so a decoder never holds more than its two full-size frames
+  (Memory). When zune-jpeg refuses too, the rung has failed, with both
+  decoders' reasons. So no complaint outside the damage class refuses a
+  frame that one of the two decoders can decode (Manager ruling 2026-09-26,
+  brief 008 spec amendment 1, the direction; brief 008, other cameras,
+  2026-09-26).
+- **One line on stderr, once.** A rung decoded past a complaint — a header
+  gap skipped, libjpeg-turbo's image kept, the second opinion taken — prints
+  one line on stderr, the diagnostics channel, naming the file, the rung, the
+  complaint and what the loupe did, at most once per session for each of a
+  file's embedded JPEGs; a damaged rung over a good lower one has its own
+  line (All rejections, above). The grid thumb applies the header-gap
+  pre-pass and prints nothing; its decoder, zune-jpeg in strict mode, is
+  otherwise unchanged (brief 008 N7; the user 2026-09-26, M11; brief 008,
+  other cameras, 2026-09-26).
+- **Residuals, accepted.**
+  - A kept message can come from damage, and the frame then shows the
+    damage — a RAW on its better rung instead of falling back to a good
+    lower one, a bare JPEG instead of the `Failed` badge: bytes left over
+    after a scan are also what a scan that desynchronized and finished early
+    leaves, and an inconsistent progression is also what a missing or
+    corrupted progressive scan raises. zune-jpeg would show both as well —
+    it decodes such a scan as a success, and checks a scan's parameters only
+    for their ranges.
+  - A first message hides what follows it: damage behind a kept message or a
+    header complaint can be shown — libjpeg-turbo's buffer, grey where the
+    data ran short, or zune-jpeg's, zero-filled — the bounded blank success
+    of Hostile-input bounds. A header gap hides nothing, being removed
+    before the decode.
+  - An unknown Adobe colour transform: a four-component stream is `Failed`
+    with or without a JFIF APP0 — libjpeg-turbo warns on its transform
+    either way (`jdapimin.c`), and zune-jpeg refuses the transform in either
+    mode — and so is a three-component one without JFIF; with JFIF, which
+    then decides its colours, a three-component stream decodes in the loupe
+    with no complaint while its grid thumb is `Failed`, zune-jpeg refusing
+    the transform. Reading libjpeg-turbo's header past a warning takes a
+    raw-FFI decompressor, core's second `unsafe` block, which is ruled out —
+    and raw FFI would not sort the classes any better, since the TurboJPEG
+    API reports every warning as `TJERR_WARNING`.
+  - The classes rest on the vendored library's message texts (`jerror.h`): a
+    test decodes a real stream of each class, so a version that rewords one
+    turns its row red, and the version canary names them (Manager ruling
+    2026-09-26, brief 008 spec amendment 1: no second `unsafe` block; brief
+    008, other cameras, 2026-09-26).
 
 ### The adaptive read pool (user requirement 2026-07-25)
 
@@ -793,7 +947,18 @@ medium's measured behaviour:
   line by less than the formula's own precision, which counts no decoder's
   working rows and no allocator overhead (Manager ruling 2026-09-26, brief 008
   Q-G). At fit the full-res ring is not asked for (the idle cook's cursor
-  frame aside), so the peak there is lower by most of the full-res copies. The
+  frame aside), so the peak there is lower by most of the full-res copies —
+  for frames that take a rung. A frame the loupe decodes only at full scale
+  (a lossless, CMYK or YCCK stream, or one the second opinion decodes — The
+  screen rung, The decoder's complaints) serves the fit box with a full-size
+  frame, so a folder of them brings the full-res texture copies to fit, as
+  many as the cache's clamp leaves, and the peak there to the 1:1 figures;
+  and its fit ring, which that clamp does not shorten, asks all eighteen
+  members for full-size decodes, so on a cache that cannot hold eighteen of
+  them the far members are decoded and then evicted (Above fit) — accepted
+  while no body on record writes such previews: the fit ring's cost rests on
+  a rung the size of the reference A1's (brief 008, other cameras,
+  2026-09-26; M11). The
   rows are nominal sizes, and the app reads the total the OS reports, which is
   lower: a 32 GB machine reports 31 to 32 GiB, where a 16-core machine runs 15
   decoders, not 16 (The decode workers), and an 8 GB machine a little under 8
@@ -851,8 +1016,15 @@ medium's measured behaviour:
   line prints too); `scaled_dims` is the decoder's own ceiling division.
 - `loupe::decode_oriented(bytes, orientation)` is the perf-budget target
   (full scale, then the soft-rotate); `loupe::decode_scaled_oriented(bytes,
-  orientation, numerator)` is its N/8 sibling, numerator 1..=8; `raw/mod.rs`
-  holds `MAX_EMBEDDED_JPEG_LEN`, `MAX_DECODED_PIXELS` and
+  orientation, numerator)` is its N/8 sibling, numerator 1..=8; both apply
+  the header-gap pre-pass and sort the decoder's complaints (The decoder's
+  complaints), returning the image or the refusal, and the complaint line is
+  the ladder's, which knows the file. `raw/jpeg.rs` holds the one JPEG marker
+  walker, which the SOF sniff, the byte check, the APP1 Exif search and the
+  header-gap pre-pass read; the SOF sniff sizes the candidates of
+  `find_embedded_jpegs`, which the grid thumb, the loupe and the video
+  export (`clip.rs`, video-export.md) choose from. `raw/mod.rs` holds
+  `MAX_EMBEDDED_JPEG_LEN`, `MAX_DECODED_PIXELS` and
   `GRID_SOURCE_MAX_PIXELS`.
 - `budget.rs`: the pixel cache from total RAM, the decoder count from
   physical cores, total RAM and `FASTCULL_DECODERS`, the machine probe, and
@@ -866,7 +1038,9 @@ medium's measured behaviour:
 - Trace marks (test-harness.md): `thumb bytes idx N` (the pipeline read the
   embedded JPEG), `thumb landed idx N` (the kitchen decoded it), `loupe
   ready idx N long L kind K state S`; the read pool's stderr line; the
-  startup line.
+  startup line; and on stderr the complaint line and the damaged-rung line,
+  each beginning `fastcull: loupe ` and naming the file, the rung and the
+  decoder's message, which the stderr tests read from a child process.
 - The request states — TRANSIT, SETTLED and SETTLED-AND-IDLE, when each
   applies and the user requirement behind them — are ui-grid.md's ("Transit
   and settled"); what each state asks of this engine for every position of the
@@ -1047,14 +1221,83 @@ commit that lands its tests, and stays open until then):
       after the route — `cmyk_and_ycck_streams_decode_on_the_loupe_path`.
       Open: lands with the route.
 - [ ] **A rung that fails over a good lower one is named on stderr** (brief
-      008, the step-1 review; Manager ruling 2026-09-26): a higher rung
+      008, the step-1 review; Manager rulings 2026-09-26): a higher rung
       whose decode fails while a lower one is in hand — decoded in the same
       flight or already cached — leaves the lower rung shown, emits no
       `Failed` and prints one stderr line naming the file, the rung that
       failed and the decoder's reason; a ladder that climbs cleanly prints
-      nothing; red with the line removed —
+      nothing. Read from the stderr of a child process — the test runs its
+      own test binary again, in the manner of `tests/xmp_crash.rs`, over a
+      synthetic RAW with a good mid and a full cut before EOI, and over a
+      control RAW whose full is intact (Manager ruling 2026-09-26, brief 008
+      spec amendment 1: "so the box keeps its promise"); red with the line
+      removed —
       `a_rung_that_fails_over_a_good_lower_one_is_named_on_stderr`. Open:
       the line lands in step 2.
+- [ ] **A harmless complaint never refuses a frame; damage still does**
+      (brief 008, other cameras; the user 2026-09-26, M11): through both
+      entry points. Decoded at the rung asked for, pixel-identical to the
+      same stream without the fault: three bytes between two header segments
+      (and its grid thumb decodes); a baseline stream whose SOS parameters
+      are all zero; junk left after a scan — one and three bytes before EOI
+      with no note, the bit buffer having dropped them, and 64 bytes before
+      EOI, three before a restart marker and three between a progressive
+      stream's DHT and its next SOS with the note naming them; and a
+      three-component stream with a JFIF APP0 and an Adobe APP14 of
+      transform 5, with no note. A progressive stream whose first band's
+      refinement scan precedes its first scan decodes. The walker: the SOF
+      sniff and the Exif search find what lies past a header gap, a second
+      SOI ends the walk (a short-declared APP1 over an embedded thumbnail, in
+      front of a scan cut before EOI, is still refused), and a SOF whose
+      length does not match its component count is not sized. The second
+      opinion: a stream whose JFIF APP0 says revision 2, and one whose ICC
+      chunk is out of sequence, decode at full scale — the numerator run is 8
+      when 3/8 was asked; it keeps the bounds — such a stream claiming
+      30000×30000 is refused as "implausible" before any allocation, one cut
+      before EOI as "truncated", and a 101-scan progressive stream with a
+      JFIF APP0 of revision 2 by zune-jpeg's own scan limit; and a refusal by
+      both decoders — a three-component stream with an Adobe APP14 of
+      transform 5 and no JFIF APP0 — names both decoders' reasons. The damage
+      class is refused with libjpeg-turbo's own message and no second
+      opinion: the short scan with a valid EOI; a truncated progressive
+      stream whose later table holds a literal FF D9 (it passes the byte
+      check); a progressive scan with a run of all-ones bits; a restart
+      marker renumbered one ahead, where libjpeg-turbo zero-fills an
+      interval, and one renumbered four ahead, refused though every block
+      decodes intact — the row pins that the class is the message's, not the
+      pixels'; and the 101-scan progressive stream, whose refusal must be
+      libjpeg-turbo's, not zune-jpeg's. A table sorts every warning text of
+      the vendored message table, the scan limit's message and an unknown
+      text into their classes. Review-verified, not driven: libjpeg-turbo's
+      buffer is freed before the zune-jpeg route allocates (driving it needs
+      a stream that fails libjpeg-turbo's decode after its buffer exists,
+      then decodes in zune-jpeg, under a memory cap). Red today on every
+      harmless row; red with the pre-pass removed (the gap row, and
+      zune-jpeg's strict "Extra bytes between headers" on the thumb), with
+      the walker's resync removed ("truncated"), with the SOF check removed
+      (a junk SOF sized), with the damage class sent to the second opinion
+      and with it kept, with the kept class refused (the padding rows) or
+      sent to the second opinion (full scale, not the rung), with the second
+      opinion removed, with its pixel cap, its byte check or its scan limit
+      removed, and with its combined reason cut to one decoder —
+      `harmless_complaints_decode_on_the_loupe_path`,
+      `the_damage_class_is_refused_without_a_second_opinion`,
+      `the_second_opinion_keeps_the_bounds`,
+      `libjpeg_turbo_messages_sort_into_three_classes`,
+      `a_header_gap_is_skipped_by_every_marker_walker`,
+      `a_grid_thumb_decodes_past_a_header_gap`. Open: lands in step 2.
+- [ ] **A rung decoded past a complaint is named on stderr, once** (brief
+      008, other cameras; M11): one line naming the file, the rung, the
+      complaint and what the loupe did — a gap skipped, the image kept, the
+      second opinion taken — at most once per session for each of a file's
+      embedded JPEGs, read from a child process's stderr as above: a
+      synthetic RAW whose full carries a JFIF APP0 of revision 2, a bare
+      JPEG with a header gap and a bare JPEG with 64 junk bytes before EOI,
+      each climbed twice in the one process, print one line each; an intact
+      file prints nothing, and neither does the grid thumb's decode of the
+      gapped JPEG in the same child; red with the line removed, with it
+      printed on every decode, and with the thumb printing —
+      `a_harmless_complaint_is_named_on_stderr_once`. Open: lands in step 2.
 - [ ] **Perf budgets** (brief 008 A9): the full-res row stays green with
       more headroom, and the three new rows are green on the idle
       development laptop — `budget_fullres_decode_under_350ms`,
@@ -1165,6 +1408,33 @@ commit that lands its tests, and stays open until then):
 
 ## History
 
+- 2026-09-26 — Other cameras (brief 008; the user's answer that other bodies'
+  files must be handled, CLAUDE.md M11): the loupe no longer refuses a stream
+  for a harmless complaint (The decoder's complaints). Header gaps are
+  skipped by one marker walker and removed before either decoder;
+  libjpeg-turbo's complaints are sorted by their text into the damage class,
+  refused; the kept class — two scan-parameter warnings and bytes left over
+  after a scan — whose image is used at the rung; and everything else, which
+  zune-jpeg decodes at full scale; one stderr line names a rung decoded past
+  a complaint. Replaced: the benign-warning scope of "Truncation on the loupe
+  path" — "warnings are errors on the decode" (brief 008 R2), so a stream
+  whose only warning was benign failed on the loupe path — and its two
+  symptoms, a bare JPEG's `Failed` badge and a RAW held on its mid for the
+  session. Two premises of the rulings that led here were narrowed by
+  measurement (brief 008's decisions log has the rows): the refused class is
+  not the two truncation warnings alone but every message only damage
+  raises — a bad Huffman or arithmetic code, a restart marker out of
+  sequence — and the ruling's first wording, "the decode's completed buffer
+  is used", holds for the kept class only, since after a damage-class message
+  that buffer holds zero-filled or garbage blocks. Corrected in place the
+  same day: the loupe path's "a `Failed` badge over the grey-bottomed
+  buffer, never a blank success" and the residual's "on the zune-jpeg paths
+  only" — a first message the loupe decodes past hides a later truncation,
+  and libjpeg-turbo's arithmetic decoder meets a marker in the data without
+  a warning, which was already so before this change (Hostile-input
+  bounds). Before this, our byte check called a header gap "truncated", the
+  SOF sniff and the Exif search gave up at one, and zune-jpeg's strict mode,
+  on the grid thumb, refused a gap of two bytes or more.
 - 2026-09-26 — The screen rung (brief 008, issue #60; ADR 0005): a held arrow
   at fit on a 4K viewport went soft after two or three frames, because transit
   asked the decoder for the 1616 px mid only and the fit cell showed it 2×

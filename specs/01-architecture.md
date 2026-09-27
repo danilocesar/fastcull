@@ -463,9 +463,23 @@ rung).
   `crates/fastcull-app/Cargo.toml`, so an upgrade re-reads them —
   `tj3Decompress8` returns −1 whenever a decode emitted any warning and the
   safe crate maps it to `Err` (the residual gap's only guard on the loupe
-  path); the header read allocates no image buffer; the reduced-size IDCTs
-  have SIMD only at 4×4 and 2×2, so the 3/8 rung runs a C 3×3 IDCT; a
-  lossless stream cannot be DCT-scaled; CMYK and YCCK are refused for RGB
+  path); that `Err` carries only the text of the decode's first message —
+  libjpeg reports its first warning, a fatal error replaces it — and every
+  scanline is written before a warning's −1, which is how the loupe sorts
+  complaints and keeps a kept-class message's image, by the vendored message
+  texts (raw-pipeline.md, "The decoder's complaints"); at a scan's end the
+  Huffman decoder drops, uncounted, the bytes its bit buffer read ahead,
+  where at a restart marker it counts them, so a few junk bytes before EOI
+  raise no message at all, and its arithmetic decoder meets a marker in the
+  data without a warning; the header read fails on any warning, an ICC
+  chunk's included, since TurboJPEG saves APP2 markers by default (and,
+  beside the zune-jpeg dependency, that its 0.4 default options are strict,
+  refusing two or more bytes between header segments; that it refuses an
+  unknown Adobe transform in either mode; and that its default scan limit,
+  100, bounds the loupe's zune-jpeg route); the header read allocates no
+  image buffer; the reduced-size IDCTs have SIMD only at 4×4 and 2×2, so
+  the 3/8 rung runs a C 3×3 IDCT; a lossless stream cannot be DCT-scaled;
+  CMYK and YCCK are refused for RGB
   output ("Unsupported color conversion request"), which is why those
   streams go through zune-jpeg; `TJPARAM_SCANLIMIT` defaults to no limit,
   which is why the loupe sets 100, zune-jpeg 0.4's own default; the `cmake`

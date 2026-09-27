@@ -99,7 +99,11 @@ the smallest N/8 factor that serves the loupe's fit box under the existing
   libjpeg-turbo refuses those for RGB output ("Unsupported color conversion
   request"), so zune-jpeg decodes them as before, at full scale with no
   rung — no regression for a print-ready bare JPEG, and no new colour path
-  in core for files no camera writes (Manager ruling 2026-09-26).
+  in core for files no camera writes (Manager ruling 2026-09-26). The same
+  route is the loupe's second opinion for a stream libjpeg-turbo refuses
+  over a complaint outside the damage and kept classes (raw-pipeline.md,
+  "The decoder's complaints"; added 2026-09-26, the other-cameras pass of
+  brief 008).
 - **The hostile-input bounds carry over, and the loupe path closes one
   residual with the library's own return contract.** `MAX_DECODED_PIXELS`
   is checked on the header's FULL dimensions right after the header read,
@@ -112,8 +116,17 @@ the smallest N/8 factor that serves the loupe's fit box under the existing
   a decode emitted any warning, which the safe crate maps to `Err`. So no
   truncated stream is ever a blank success on the loupe path (measured:
   `Err` over a grey-bottomed buffer; raw-pipeline.md, "Hostile-input
-  bounds"). `TJPARAM_STOPONWARNING` and `TJPARAM_MAXPIXELS` are not set: the
-  safe crate keeps its handle private and exposes neither, they would buy an
+  bounds"). (Narrowed 2026-09-26, the other-cameras pass of brief 008:
+  the loupe now reads that `Err`'s text, the decode's first message,
+  refuses the damage class and decodes past the rest, so damage behind a
+  first message it decodes past can be shown, grey or zero-filled; and an
+  arithmetic-coded stream never warned — its decoder meets a marker in the
+  data without a word (`jdarith.c`) — so a short arithmetic scan behind a
+  valid EOI was a blank success on the loupe path from the start. Both are
+  raw-pipeline.md's "Hostile-input bounds" residual. A Huffman-coded stream
+  cut short with no such message ahead of the cut is still refused.)
+  `TJPARAM_STOPONWARNING` and `TJPARAM_MAXPIXELS` are not set: the safe
+  crate keeps its handle private and exposes neither, they would buy an
   abort 13–24 ms sooner on a crafted stream and a second copy of our own
   pixel cap, and taking them means a raw-FFI decompressor in core.
   `TJPARAM_SCANLIMIT` is set, to 100, through the safe crate's
@@ -171,6 +184,21 @@ the smallest N/8 factor that serves the loupe's fit box under the existing
   senior-developer review F1: this said the #76 line alone kept the decode
   optimised; the first Windows artifact of brief 008 carried the library
   unoptimised.)
+- **Complaints are read by their text** (the other-cameras pass of brief
+  008, 2026-09-26; CLAUDE.md M11). The safe crate returns a complaint as
+  text only — the first message of the decode, which libjpeg reports and a
+  fatal error replaces — and fails the header read on any warning, so the
+  loupe sorts libjpeg-turbo's complaints by the vendored message texts:
+  it removes gaps between header segments before the decode as libjpeg
+  itself skips them, refuses what only damage raises, keeps libjpeg-turbo's
+  image where its decode completed past a message a writer's quirk can
+  raise, and asks zune-jpeg for a second opinion where it did not
+  (raw-pipeline.md, "The decoder's complaints"). No raw FFI: it would let
+  the loupe read a header past a warning, at the cost of core's second
+  `unsafe` block, and would sort nothing better, since the TurboJPEG API
+  reports every warning as `TJERR_WARNING`. A version that rewords a message moves its stream to
+  another class; the tests decode a real stream of each class, and the
+  version canary names the texts.
 - **`decode_oriented`'s public contract holds** (bytes and orientation in,
   oriented RGB out; the perf budget measures it), the scaled decode is its
   sibling `decode_scaled_oriented`, and `scaled_dims` is the decoder's own
