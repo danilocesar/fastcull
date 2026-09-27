@@ -234,6 +234,34 @@ pub(crate) mod hostile {
         out
     }
 
+    /// [`encoded`] in any of `jpeg_encoder`'s colour types, mid-grey in
+    /// every component. For `Cmyk` and `CmykAsYcck` the encoder writes four
+    /// components behind an Adobe APP14 whose transform (0 or 2) makes a
+    /// decoder read the stream as CMYK or YCCK -- the print-ready bare JPEGs
+    /// of brief 008 R14, which libjpeg-turbo will not convert to RGB.
+    pub(crate) fn encoded_as(w: u16, h: u16, color: jpeg_encoder::ColorType) -> Vec<u8> {
+        use jpeg_encoder::ColorType;
+        let components = match color {
+            ColorType::Luma => 1,
+            ColorType::Rgb | ColorType::Bgr | ColorType::Ycbcr => 3,
+            ColorType::Rgba
+            | ColorType::Bgra
+            | ColorType::Cmyk
+            | ColorType::CmykAsYcck
+            | ColorType::Ycck => 4,
+        };
+        let mut out = Vec::new();
+        jpeg_encoder::Encoder::new(&mut out, 90)
+            .encode(
+                &vec![128u8; usize::from(w) * usize::from(h) * components],
+                w,
+                h,
+                color,
+            )
+            .expect("test JPEG encodes");
+        out
+    }
+
     /// Overwrite the SOF height/width fields in place (the hostile header
     /// claim). Panics if the stream has no SOF — test-only.
     pub(crate) fn patch_sof_dims(jpeg: &mut [u8], w: u16, h: u16) {

@@ -969,7 +969,9 @@ fn decode_jpeg_rung(
 /// `Err`: a `Failed` badge, never a blank success. A progressive stream of
 /// more than 100 scans fails the same way (the scan limit, set on every
 /// decompressor). See [`decode_scaled_oriented`] for the same decode at an
-/// N/8 scale; a lossless stream ignores the scale and decodes full-size.
+/// N/8 scale; a lossless stream ignores the scale and decodes full-size, and
+/// so does a CMYK or YCCK stream, which libjpeg-turbo will not convert to
+/// RGB and zune-jpeg decodes instead (brief 008 R14).
 pub fn decode_oriented(bytes: &[u8], orientation: u16) -> Result<(Vec<u8>, u32, u32), String> {
     decode_with(bytes, orientation, 8).map(|(rgb, w, h, _)| (rgb, w, h))
 }
@@ -982,7 +984,8 @@ pub fn decode_oriented(bytes: &[u8], orientation: u16) -> Result<(Vec<u8>, u32, 
 /// may do. The guards and their order are `decode_oriented`'s, applied to
 /// the header's FULL dimensions before any factor is set. A lossless JPEG,
 /// which libjpeg-turbo cannot scale, decodes full-size whatever
-/// `numerator` asks (the Cargo.toml canary, item 4).
+/// `numerator` asks (the Cargo.toml canary, item 4), and so does a CMYK or
+/// YCCK stream, which zune-jpeg decodes (the canary, item 8).
 pub fn decode_scaled_oriented(
     bytes: &[u8],
     orientation: u16,
@@ -1005,10 +1008,10 @@ pub fn scaled_dims(width: u32, height: u32, numerator: u8) -> (u32, u32) {
 
 /// The one decode behind [`decode_oriented`] and [`decode_scaled_oriented`].
 /// The fourth field is the numerator the decoder RAN — 8 for a lossless
-/// stream whatever was asked — so the ladder can tell a scaled rung from
-/// the full by what the decoder did, never by comparing a size with an
-/// IFD's claim (raw-pipeline.md, "The screen rung": the app never infers
-/// top-rung-ness from a size).
+/// stream, and for a CMYK or YCCK one, whatever was asked — so the ladder
+/// can tell a scaled rung from the full by what the decoder did, never by
+/// comparing a size with an IFD's claim (raw-pipeline.md, "The screen
+/// rung": the app never infers top-rung-ness from a size).
 fn decode_with(
     bytes: &[u8],
     orientation: u16,
@@ -1054,6 +1057,25 @@ fn decode_with(
     if !crate::raw::scan_is_terminated(bytes) {
         return Err("truncated JPEG stream (scan reaches no end-of-image marker)".into());
     }
+    // CMYK and YCCK (brief 008 R14; raw-pipeline.md, "The decoder"):
+    // libjpeg-turbo will not convert either to RGB ("Unsupported color
+    // conversion request", the Cargo.toml canary, item 8), so such a stream
+    // -- a print-ready bare JPEG, issue #8 -- decodes through zune-jpeg as
+    // every loupe stream did before the swap, at FULL scale whatever
+    // `numerator` asked: no screen rung, and 8 reported as the numerator
+    // run, so the ladder sees a full. The route sits after the two guards
+    // above on purpose: it has none of its own, so it inherits them, and
+    // both read this same stream -- the pixel cap its SOF, the byte check
+    // its bytes. Moved before them, a hostile CMYK header would size
+    // zune-jpeg's buffers and a cut CMYK scan would zero-fill into a
+    // "success" (`cmyk_and_ycck_streams_decode_on_the_loupe_path` pins both).
+    if matches!(
+        header.colorspace,
+        turbojpeg::Colorspace::CMYK | turbojpeg::Colorspace::YCCK
+    ) {
+        let (rgb, w, h) = decode_through_zune(bytes, orientation)?;
+        return Ok((rgb, w, h, 8));
+    }
     let numerator = if header.is_lossless { 8 } else { numerator };
     // `ScalingFactor::new` reduces by the gcd, so 8/8 is the crate's `ONE`
     // and a lossless stream never meets `CannotScaleLossless`.
@@ -1074,10 +1096,10 @@ fn decode_with(
     //
     // - The decode fills a pre-faulted buffer we own: `decompress` writes
     //   into `rgb`, whose first-touch page faults `prefault_parallel` pays
-    //   from several threads first (brief 008's benchmark: alloc + prefault
-    //   ~14 ms at full size, ~4 ms at a rung; under zune-jpeg, `decode_into`
-    //   a pre-faulted buffer saved ~30 ms against `decode()`'s internal
-    //   allocation).
+    //   from several threads first (measured 2026-09-26 during brief 008:
+    //   alloc + prefault ~14 ms at full size, ~4 ms at a rung; under
+    //   zune-jpeg, `decode_into` a pre-faulted buffer saved ~30 ms against
+    //   `decode()`'s internal allocation).
     // - The transpose's output buffer is allocated AND pre-faulted on a
     //   spare thread WHILE the decode runs, so the rotate that follows
     //   starts with hot pages ([`crate::raw::Scratch`]).
@@ -1113,6 +1135,59 @@ fn decode_with(
     // Soft-rotate to display orientation (spec: every rung).
     let (rgb, w, h) = crate::raw::apply_orientation_with(rgb, w, h, orientation, scratch);
     Ok((rgb, w, h, numerator))
+}
+
+/// The zune-jpeg route (brief 008 R14; raw-pipeline.md, "The decoder"):
+/// the loupe's decode as it shipped before libjpeg-turbo (the pre-swap
+/// `decode_oriented`, e1b488a^), for the streams libjpeg-turbo cannot
+/// give as RGB -- CMYK and YCCK. zune-jpeg 0.4 converts both. It decodes
+/// at FULL size only (zune-jpeg has no DCT scaling), into a pre-faulted
+/// buffer with the transpose scratch built while it runs, then rotates --
+/// the same discipline as the libjpeg-turbo path above.
+///
+/// It checks neither the pixel cap nor the byte check itself: its only
+/// caller, `decode_with`, has run both on this stream before it gets here.
+/// The per-side limits are lifted as before (the default 16384 would
+/// reject a panorama-wide bare JPEG), which is why that order matters.
+fn decode_through_zune(bytes: &[u8], orientation: u16) -> Result<(Vec<u8>, u32, u32), String> {
+    let options = zune_jpeg::zune_core::options::DecoderOptions::default()
+        .jpeg_set_out_colorspace(zune_jpeg::zune_core::colorspace::ColorSpace::RGB)
+        .set_max_width(usize::MAX)
+        .set_max_height(usize::MAX);
+    let mut decoder = zune_jpeg::JpegDecoder::new_with_options(bytes, options);
+    decoder
+        .decode_headers()
+        .map_err(|e| format!("decode: {e}"))?;
+    let (w, h) = decoder.dimensions().ok_or("no dimensions")?;
+    let n = w
+        .checked_mul(h)
+        .and_then(|px| px.checked_mul(3))
+        .ok_or("dimension overflow")?;
+    let w = u32::try_from(w).map_err(|_| "width overflow")?;
+    let h = u32::try_from(h).map_err(|_| "height overflow")?;
+    let needs_transpose = matches!(orientation, 5..=8);
+    let (rgb, scratch) = std::thread::scope(|scope| {
+        let scratch = needs_transpose.then(|| {
+            // Output dims are swapped, but the byte count is what matters
+            // and it is identical; build it while the decode runs.
+            scope.spawn(|| crate::raw::Scratch::prefaulted(h, w))
+        });
+        let mut rgb = vec![0u8; n];
+        crate::raw::orient::prefault_parallel(&mut rgb);
+        let decoded = decoder
+            .decode_into(&mut rgb)
+            .map_err(|e| format!("decode: {e}"));
+        let scratch = scratch.map(|j| j.join().expect("prefault thread"));
+        decoded.map(|()| (rgb, scratch))
+    })?;
+    // Soft-rotate to display orientation (spec: every rung).
+    Ok(crate::raw::apply_orientation_with(
+        rgb,
+        w,
+        h,
+        orientation,
+        scratch,
+    ))
 }
 
 fn evict_to_budget(state: &mut LoupeState, budget: usize) {
@@ -2032,6 +2107,143 @@ mod tests {
                 ),
             }
         }
+    }
+
+    /// A `Shared` over `paths` with no worker threads, for tests that drive
+    /// `decode_ladder` directly and read what it published.
+    fn shared_over(paths: Vec<PathBuf>) -> (Shared, std::sync::mpsc::Receiver<LoupeEvent>) {
+        let (tx, rx) = std::sync::mpsc::channel();
+        let shared = Shared {
+            state: Mutex::new(LoupeState::default()),
+            wakeup: Condvar::new(),
+            paths,
+            events: tx,
+            shutdown: AtomicBool::new(false),
+            stamp: AtomicU64::new(0),
+            budget: DEFAULT_BUDGET_BYTES,
+        };
+        (shared, rx)
+    }
+
+    /// Brief 008 R14 (raw-pipeline.md A14). libjpeg-turbo refuses CMYK and
+    /// YCCK for RGB output ("Unsupported color conversion request", the
+    /// Cargo.toml canary, item 8), so from the decoder swap on a
+    /// print-ready bare JPEG showed a Failed badge in the loupe where
+    /// zune-jpeg had decoded it. Such a stream now takes the zune-jpeg
+    /// route: pixels, at full scale whatever rung was asked, with 8 reported
+    /// as the numerator run. Delete the route and every decode row below
+    /// fails with the library's "Unsupported color conversion request" --
+    /// the step-1 code's red.
+    ///
+    /// The route keeps both hostile-input bounds because it runs after
+    /// them: a cut CMYK scan is refused as "truncated" (zune-jpeg alone
+    /// zero-fills it into a success), and a CMYK header claiming
+    /// 30000x30000 as "implausible" before any buffer exists (zune-jpeg
+    /// alone would size ~2.7 GB from it). Move either guard after the route
+    /// and its row is red.
+    #[test]
+    fn cmyk_and_ycck_streams_decode_on_the_loupe_path() {
+        use jpeg_encoder::ColorType;
+        for (color, colorspace) in [
+            (ColorType::Cmyk, turbojpeg::Colorspace::CMYK),
+            (ColorType::CmykAsYcck, turbojpeg::Colorspace::YCCK),
+        ] {
+            let jpeg = crate::raw::jpeg_hostile::encoded_as(64, 48, color);
+            assert_eq!(
+                turbojpeg::read_header(&jpeg)
+                    .expect("the fixture's header reads")
+                    .colorspace,
+                colorspace,
+                "the fixture must be a stream libjpeg-turbo reads as {colorspace:?}"
+            );
+            for (orientation, want) in [(1u16, (64u32, 48u32)), (6, (48, 64))] {
+                let outcomes = [
+                    ("full", decode_oriented(&jpeg, orientation)),
+                    ("3/8", decode_scaled_oriented(&jpeg, orientation, 3)),
+                ];
+                for (entry, outcome) in outcomes {
+                    match outcome {
+                        Ok((rgb, w, h)) => {
+                            assert_eq!(
+                                (w, h),
+                                want,
+                                "{colorspace:?} {entry}, orientation {orientation}: \
+                                 decoded at full scale and oriented"
+                            );
+                            assert_eq!(rgb.len(), 64 * 48 * 3, "{colorspace:?} {entry}: RGB");
+                        }
+                        Err(err) => panic!(
+                            "{colorspace:?} {entry}, orientation {orientation}: {err} -- a \
+                             Failed badge on a stream zune-jpeg decodes"
+                        ),
+                    }
+                }
+                let ran = decode_with(&jpeg, orientation, 3)
+                    .map(|(_, _, _, ran)| ran)
+                    .unwrap_or_else(|err| panic!("{colorspace:?} at 3/8: {err}"));
+                assert_eq!(
+                    ran, 8,
+                    "{colorspace:?}: the route runs full scale, so the ladder sees a full"
+                );
+            }
+            let cut = crate::raw::jpeg_hostile::truncate_scan(&jpeg, 16);
+            let mut hostile = jpeg.clone();
+            crate::raw::jpeg_hostile::patch_sof_dims(&mut hostile, 30000, 30000);
+            let bounds = [
+                ("cut, full", decode_oriented(&cut, 1), "truncated"),
+                ("cut, 3/8", decode_scaled_oriented(&cut, 1, 3), "truncated"),
+                (
+                    "30000x30000, full",
+                    decode_oriented(&hostile, 1),
+                    "implausible",
+                ),
+                (
+                    "30000x30000, 3/8",
+                    decode_scaled_oriented(&hostile, 1, 3),
+                    "implausible",
+                ),
+            ];
+            for (row, outcome, cause) in bounds {
+                match outcome {
+                    // Not `expect_err`: its message would print the buffer.
+                    Ok((_, w, h)) => panic!(
+                        "{colorspace:?} {row}: decoded a {w}x{h} success -- the route \
+                         lost the bound that says \"{cause}\""
+                    ),
+                    Err(err) => assert!(
+                        err.contains(cause),
+                        "{colorspace:?} {row}: the reason must say \"{cause}\": {err}"
+                    ),
+                }
+            }
+        }
+
+        // Through the ladder: a bare CMYK file at the app's 1:1 target shows
+        // its one rung, terminal, and the flight emits no Failed.
+        let dir = crate::testutil::scratch_dir("cmyk-ladder");
+        let path = dir.join("print.jpg");
+        std::fs::write(
+            &path,
+            crate::raw::jpeg_hostile::encoded_as(2000, 1500, ColorType::Cmyk),
+        )
+        .unwrap();
+        let (shared, rx) = shared_over(vec![path]);
+        assert_eq!(
+            decode_ladder(&shared, 0, u32::MAX, 0, false),
+            Ok(()),
+            "a CMYK bare JPEG must not fail its only rung"
+        );
+        match rx.try_recv() {
+            Ok(LoupeEvent::Ready {
+                image, terminal, ..
+            }) => {
+                assert_eq!((image.width, image.height), (2000, 1500));
+                assert!(terminal, "a bare JPEG's only rung is its best");
+            }
+            other => panic!("expected the CMYK rung's Ready event, got {other:?}"),
+        }
+        assert!(rx.try_recv().is_err(), "one rung, one event, no Failed");
+        std::fs::remove_dir_all(&dir).ok();
     }
 
     #[test]

@@ -30,7 +30,10 @@ blake3 = "1"
 fs2 = "0.4"
 # The grid-thumb decoder (`pipeline::make_grid_thumb`; the app's thumb cook
 # declares its own). The loupe left it for libjpeg-turbo below and the
-# thumbs stay on it (raw-pipeline.md, "The decoder", N7).
+# thumbs stay on it (raw-pipeline.md, "The decoder", N7), except for one
+# loupe route: a CMYK or YCCK stream, which libjpeg-turbo will not convert
+# to RGB, still decodes through it (`loupe::decode_through_zune`, brief 008
+# R14; canary 8 below).
 # VERSION-BUMP CANARY (read in the sources 2026-09-26): zune-core 0.4.12's
 # `DecoderOptions::default()` sets `max_scans: 100` (`src/options/
 # decoder.rs`) and zune-jpeg 0.4.21 fails a progressive stream past it
@@ -122,6 +125,14 @@ zune-jpeg = "0.4"
 #      artifact" reads each build's CMake cache for /O2 and prints the
 #      generator it used. The `cmake` crate arrives through turbojpeg-sys:
 #      re-read both on a bump of either.
+#   8. `tj3Decompress8` refuses CMYK and YCCK for RGB output: libjpeg's
+#      colour deconverter has no CMYK/YCCK -> RGB path and fails with
+#      JERR_CONVERSION_NOTIMPL, "Unsupported color conversion request"
+#      (`src/jdcolor.c`, `_jinit_color_deconverter`; measured 2026-09-26,
+#      brief 008 step 1's probe), although `tj3DecompressHeader` reads
+#      such a stream and reports TJCS_CMYK / TJCS_YCCK. So `decode_with`
+#      routes those streams to zune-jpeg 0.4, which converts both (brief
+#      008 R14): `cmyk_and_ycck_streams_decode_on_the_loupe_path` pins it.
 turbojpeg = { version = "1.5.1", default-features = false, features = ["cmake", "pkg-config", "require-simd"] }
 
 [dev-dependencies]

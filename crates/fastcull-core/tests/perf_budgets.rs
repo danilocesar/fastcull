@@ -182,7 +182,10 @@ fn budget_fullres_decode_under_350ms() {
         })
         .collect();
     let med = median(samples);
-    eprintln!("BUDGET-MEDIAN {}", med.as_secs_f64() * 1000.0);
+    eprintln!(
+        "BUDGET-MEDIAN {:.1} ms (full-res portrait o8 + rotate)",
+        med.as_secs_f64() * 1000.0
+    );
     assert!(
         med < Duration::from_millis(350),
         "full-res decode+rotate median {med:?} (budget 350 ms)"
@@ -384,7 +387,10 @@ fn budget_folder_scan_1000_entries_under_50ms() {
         })
         .collect();
     let med = median(samples);
-    eprintln!("BUDGET-MEDIAN {:.1} ms", med.as_secs_f64() * 1000.0);
+    eprintln!(
+        "BUDGET-MEDIAN {:.1} ms (folder scan, 1,000 entries)",
+        med.as_secs_f64() * 1000.0
+    );
     assert!(
         med < Duration::from_millis(50),
         "1,000-entry folder scan median {med:?} (budget 50 ms)"

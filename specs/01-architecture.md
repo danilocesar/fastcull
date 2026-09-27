@@ -439,7 +439,12 @@ rung).
   `CMAKE_GENERATOR_x86_64_pc_windows_msvc` in its own environment — `[env]`
   never overrides a variable the environment already holds, while a plain
   `CMAKE_GENERATOR` loses to the target's own name — and any named generator,
-  a Visual Studio one included, keeps CMake's flags. A new name takes effect
+  a Visual Studio one included, keeps CMake's flags. Only a cargo command run
+  inside the checkout reads the file: a `cargo install --git`, or a cargo
+  command run from outside the checkout (`--manifest-path` included), does not
+  (cargo's configuration discovery), so on Windows it builds the library
+  unoptimised unless the seat sets the variable itself — build from a checkout
+  (senior-developer review 2026-09-27, F7). A new name takes effect
   only where `turbojpeg-sys`'s build script runs afresh: neither crate
   declares the variable a rerun trigger, so a tree that built the library
   under another generator keeps that build until `cargo clean -p

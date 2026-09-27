@@ -1211,7 +1211,7 @@ commit that lands its tests, and stays open until then):
       limit unset — `a_progressive_stream_over_100_scans_fails_on_the_loupe_path`.
       Ticked by the step-1 fix round's commit, which carries the limit and
       the test; the limit-unset red is in its message.
-- [ ] **CMYK and YCCK open in the loupe** (brief 008 A14): a CMYK and a YCCK
+- [x] **CMYK and YCCK open in the loupe** (brief 008 A14): a CMYK and a YCCK
       bare JPEG decode through the loupe path with pixels, at full scale with
       no rung, never a Failed badge; red on the decoder swap without the
       zune-jpeg route. The route keeps the bounds (brief 008 R2): a CMYK
@@ -1219,7 +1219,8 @@ commit that lands its tests, and stays open until then):
       and a CMYK header claiming 30000×30000 is refused as "implausible"
       before any allocation; red with the byte check or the pixel cap moved
       after the route — `cmyk_and_ycck_streams_decode_on_the_loupe_path`.
-      Open: lands with the route.
+      Ticked by the step-2a commit, which carries the route and the test;
+      each mutant's red is in its message.
 - [ ] **A rung that fails over a good lower one is named on stderr** (brief
       008, the step-1 review; Manager rulings 2026-09-26): a higher rung
       whose decode fails while a lower one is in hand — decoded in the same
