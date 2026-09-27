@@ -1462,9 +1462,10 @@ commit that lands its tests, and stays open until then):
       rung during a hold (red on the simulation too); the re-plan skipped when
       the fit-box rung is cached (red on the cached row; corrected 2026-09-27,
       brief 008 step 4: this read "and on the simulation", which cannot see
-      it — every key of a steady hold queues fresher ring work behind the
-      stale entry, and the cull drops it before a worker reaches it; the
-      step-4b commit's message has the reading); distances counted from 0;
+      it — every key of a steady hold queues fresher ring work, which the
+      workers take before the stale entry, and the cull drops that entry
+      before a worker reaches it; the step-4b commit's message has the
+      reading); distances counted from 0;
       the revival at the stored target; a step-up that waits for nothing in
       flight; one that ignores the free worker; one that counts a member whose
       rung is in flight as missing (red on the in-flight row); the lock
