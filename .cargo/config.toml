@@ -1,0 +1,50 @@
+# Build-script environment for every cargo command run inside this checkout:
+# developer seats, CI and the release workflow alike (specs/01-architecture.md,
+# "Native dependencies"; brief 008, senior-developer review 2026-09-26, F1,
+# and the generator re-ruling of the same day).
+#
+# Why a generator is named: libjpeg-turbo, the loupe's decoder, is a C library
+# built by the `cmake` crate. On the MSVC target with no CMake generator named,
+# that crate picks the Visual Studio generator it finds and overwrites the C
+# flags of the configuration it builds (CMAKE_C_FLAGS_RELEASE in a release
+# build) with the `cc` crate's, every /O flag stripped (cmake 0.1.58,
+# src/lib.rs 652 and 723-768), so MSVC compiles the library at its unoptimised
+# default in every profile, release included: brief 008's first Windows
+# artifact decoded its 3/8 screen rung slower than the full frame. Any named
+# generator skips that override, and CMake's own /O2 applies. Setting
+# CFLAGS=/O2 instead would do nothing: the same stripping drops it. The crate
+# reads this name only when it builds for the MSVC target, so Linux builds
+# ignore it. CI's "Verify Windows artifact" step reads each build's CMake
+# cache for /O2 on every run.
+#
+# Why Ninja and not a Visual Studio name: a Visual Studio generator names one
+# Visual Studio version, and CI's `windows-latest` image carries Visual Studio
+# 2026 only while the release runner, `windows-2022`, carries 2022 only
+# (2026-09-26); ninja is preinstalled on both and builds with whichever Visual
+# Studio the seat has. With Ninja on MSVC the crate hands CMake the `cc`
+# crate's cl.exe as the compiler, and cc's MSVC environment -- the compiler's
+# and the Windows SDK's tool directories on PATH, INCLUDE, LIB -- for the
+# configure and the build (src/lib.rs 780-806, 822-823, 837-838), so a plain
+# shell builds it. That environment adds no ninja: a Windows seat needs
+# `ninja` on its own PATH (Visual Studio's "C++ CMake tools for Windows"
+# component carries one, on the PATH in a Developer PowerShell). Without it
+# the configure fails loudly -- CMake: unable to find a build program
+# corresponding to "Ninja" -- never silently unoptimised.
+#
+# Another generator: a seat may set CMAKE_GENERATOR_x86_64_pc_windows_msvc in
+# its own environment, because [env] never overrides a variable the
+# environment already holds; a plain CMAKE_GENERATOR loses to this
+# target-specific name, which the crate reads first (src/lib.rs 947-960). Any
+# named generator, a Visual Studio one included, keeps CMake's flags.
+#
+# A changed name reaches only a fresh build: neither the `cmake` crate nor
+# turbojpeg-sys declares it a rerun trigger, so a Windows tree that built the
+# library before this file, or under another generator, keeps that build --
+# stripped flags included -- until `cargo clean -p turbojpeg-sys`; and if the
+# build script does re-run over such a tree, CMake refuses the old cache
+# ("Does not match the generator used previously"). CI's restored target
+# directory is such a tree: this file is in rust-cache's full key but not in
+# its restore key (01-architecture.md, "The CI cache key"), so the run after an
+# edit here restores the library as it was built, `full match: false`.
+[env]
+CMAKE_GENERATOR_x86_64_pc_windows_msvc = "Ninja"

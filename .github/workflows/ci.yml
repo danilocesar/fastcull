@@ -180,6 +180,12 @@ jobs:
       # artifact" below prints the `WITH_SIMD = 1` line from each build's
       # output file instead (senior-developer review 2026-09-26, F3: this
       # comment named a configure line the log does not contain).
+      #
+      # ninja is not installed here: the MSVC target's CMake generator is Ninja
+      # (`.cargo/config.toml`, 01-architecture.md "Native dependencies"), and
+      # ninja is preinstalled on this image and on the release runner's
+      # (`windows-2022`), like cmake; a configure that cannot find it fails
+      # loudly rather than building unoptimised.
       - name: Install NASM (Windows)
         if: runner.os == 'Windows'
         run: choco install nasm --no-progress -y
@@ -669,19 +675,20 @@ jobs:
       # unoptimised default: brief 008's first artifact shipped that way, its
       # 3/8 rung decoding slower than the full frame (senior-developer review
       # 2026-09-26, F1). The workspace `.cargo/config.toml` names the
-      # generator; this check reads what each build actually used, with no
-      # clock: every turbojpeg-sys `CMakeCache.txt` under target/ must carry
+      # generator, Ninja; this check reads what each build actually used, with
+      # no clock: every turbojpeg-sys `CMakeCache.txt` under target/ must carry
       # /O2 in the C flags of the configuration its CMAKE_BUILD_TYPE names.
       # That one and not always `_RELEASE`: with debug info the crate builds
-      # RelWithDebInfo and overwrites THAT configuration's flags, while
-      # `_RELEASE` keeps CMake's default /O2, so reading `_RELEASE` would
-      # pass an unoptimised library. The debug suite's, the release suite's
-      # and the artifact's builds are all read, and the artifact's must be
-      # among them, so a moved path fails instead of checking nothing. The
-      # build script's `output` beside each cache must carry libjpeg-turbo's
-      # `WITH_SIMD = 1` configure line (its NASM kernels are in): cargo shows
-      # that file only when a build script fails, so this step is where the
-      # line reaches the log. Every line it judges is printed, pass or fail.
+      # RelWithDebInfo and, under its own pick of generator, overwrites THAT
+      # configuration's flags, while `_RELEASE` keeps CMake's default /O2, so
+      # reading `_RELEASE` would pass an unoptimised library. The debug
+      # suite's, the release suite's and the artifact's builds are all read,
+      # and the artifact's must be among them, so a moved path fails instead
+      # of checking nothing. The build script's `output` beside each cache
+      # must carry libjpeg-turbo's `WITH_SIMD = 1` configure line (its NASM
+      # kernels are in): cargo shows that file only when a build script
+      # fails, so this step is where the line reaches the log. Every line it
+      # judges is printed, pass or fail.
       - name: Verify Windows artifact (static CRT + subsystems + starts + optimised decoder)
         if: runner.os == 'Windows'
         shell: bash

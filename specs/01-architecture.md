@@ -285,12 +285,13 @@ library, built by the `cmake` crate at the CMake profile cargo's opt-level
 implies (opt-level 0 → `Debug`, 1–3 with debug info → `RelWithDebInfo`,
 without → `Release`; `turbojpeg-sys` sets none of its own), so under this
 line the dev profile builds it `RelWithDebInfo` and without the line it
-would be a `Debug` build at `-O0`: the line keeps the loupe's debug decode
-optimised — on the MSVC target only because that target names its CMake
-generator, without which the crate strips every `/O` flag and MSVC compiles
-the library unoptimised in every profile, release included (Native
-dependencies, below; corrected 2026-09-26, senior-developer review F1: this
-said the line alone kept the decode optimised).
+would be an unoptimised `Debug` build (`-O0`; `/Od` under MSVC): the line
+keeps the loupe's debug decode optimised — on the MSVC target only because
+the workspace names that target's CMake generator, Ninja, without which the
+crate picks a Visual Studio generator itself, strips every `/O` flag and
+MSVC compiles the library unoptimised in every profile, release included
+(Native dependencies, below; corrected 2026-09-26, senior-developer review
+F1: this said the line alone kept the decode optimised).
 
 What it costs: a cold debug build compiles every dependency optimised once
 — 4-4.7× the stock cold build on the development seat (2 m 17 s → 10 m 43 s
@@ -384,67 +385,105 @@ rung).
   assembles its SIMD kernels — or, on Linux, a system libjpeg-turbo 3.0 or
   newer found through `pkg-config` (`TURBOJPEG_SOURCE=pkg-config`; Fedora
   44 ships 3.1.3, Ubuntu 24.04's 2.1.x is too old). A Windows seat also
-  needs Visual Studio 2022, whose CMake generator the MSVC target names
-  (below). The default is the vendored sources, built and linked statically
-  on both targets; README's build block and `docs/index.md` name the
-  requirement, and ADR 0002's "contributors need only rustup" is narrowed
-  by it.
+  needs `ninja` on its PATH, for the Ninja generator the MSVC target names
+  (below), beside the Visual Studio C++ tools the MSVC toolchain always
+  needed, of any version (corrected 2026-09-26, the generator re-ruling of
+  brief 008: this said a Windows seat needs Visual Studio 2022). The
+  default is the vendored sources, built and linked statically on both
+  targets; README's build block (the Linux one) and `docs/index.md` name
+  the requirement, and ADR 0002's "contributors need only rustup" is
+  narrowed by it.
 - **Without NASM the build FAILS**: `require-simd` passes
   `-DREQUIRE_SIMD=ON`, and libjpeg-turbo's `simd/CMakeLists.txt` then
   raises a CMake `FATAL_ERROR` instead of falling back to a C-only
   library. Deliberate: a SIMD-less decoder is 1.95× slower at full size
   and would break every promise of the loupe silently. The runtime half of
   the guard is the landscape full-res perf row above.
-- **The C library follows cargo's opt-level — on MSVC only because the
-  target names its CMake generator** (Manager ruling 2026-09-26, brief 008;
-  senior-developer review 2026-09-26, F1). The `cmake` crate maps cargo's
-  opt-level to a CMake profile (Build profiles, above), and where it leaves
-  CMake's own flags for that profile alone — on Linux, and on MSVC once a
-  generator is named — the #76 line keeps the library optimised in debug and
-  a release build is CMake's `Release`. When the crate picks the Visual
-  Studio generator itself, on the MSVC target, it sets the C flags of the
+- **The C library follows cargo's opt-level — on MSVC only because the target
+  names its CMake generator, Ninja** (Manager ruling 2026-09-26, brief 008,
+  re-ruled the same day on the developer's evidence; senior-developer review
+  2026-09-26, F1). The `cmake` crate maps cargo's opt-level to a CMake
+  profile (Build profiles, above), and where it leaves CMake's own flags for
+  that profile alone — on Linux, and on MSVC under any named generator — the
+  #76 line keeps the library optimised in debug and a release build is
+  CMake's `Release`. With no generator named on the MSVC target, the crate
+  picks the Visual Studio generator it finds and sets the C flags of the
   configuration it builds — `CMAKE_C_FLAGS_<BUILD_TYPE>`, the other
   configurations keeping CMake's defaults — to the `cc` crate's, each `/O`
-  flag stripped (cmake 0.1.58, `src/lib.rs` 722-766), and MSVC compiles
-  libjpeg-turbo at its default, unoptimised, in every profile, release
-  included. So a workspace `.cargo/config.toml` names the generator in its
-  `[env]` table, which cargo hands to every build script run inside the
-  checkout, the release workflow's included:
-  `CMAKE_GENERATOR_x86_64_pc_windows_msvc = "Visual Studio 17 2022"`, a name
-  the crate reads for that target only. Setting `CFLAGS=/O2` instead would
-  do nothing: the same stripping drops it. A seat without Visual Studio 2022
-  fails the configure loudly, never silently unoptimised, unless it sets
-  `CMAKE_GENERATOR_x86_64_pc_windows_msvc` itself — `[env]` never overrides
-  a variable the environment already holds, while a plain `CMAKE_GENERATOR`
-  does not win over it, the crate reading the target's own name first; the
-  line moves when the runner images move to a newer Visual Studio. The file
-  is part of rust-cache's key (The CI cache key, above), so landing or
-  editing it costs one cold pair of CI jobs. The check: "Verify Windows
-  artifact" reads each `turbojpeg-sys` build's `CMakeCache.txt` and its
-  build output and fails, printing the lines, unless the flags of the
+  flag stripped (cmake 0.1.58, `src/lib.rs` 652 and 723-768), and MSVC
+  compiles libjpeg-turbo at its default, unoptimised, in every profile,
+  release included. Setting `CFLAGS=/O2` instead would do nothing: the same
+  stripping drops it from every flag variable the crate writes. So a
+  workspace `.cargo/config.toml` names the generator in its `[env]` table,
+  which cargo hands to every build script run inside the checkout, the
+  release workflow's included:
+  `CMAKE_GENERATOR_x86_64_pc_windows_msvc = "Ninja"`, a name the crate reads
+  for that target only (`src/lib.rs` 510-513, 947-960). Ninja, not a Visual
+  Studio name, because it holds whatever Visual Studio a seat carries: CI's
+  `windows-latest` image carries Visual Studio 2026 only and dist's release
+  runner, `windows-2022`, Visual Studio 2022 only (2026-09-26), so naming
+  either version breaks the other build, while ninja is preinstalled on
+  both. With Ninja on MSVC the crate
+  hands CMake the `cc` crate's `cl.exe` as the compiler and cc's MSVC
+  environment — the compiler's and the Windows SDK's tool directories on the
+  PATH, `INCLUDE`, `LIB` — for the configure and the build (`src/lib.rs`
+  780-806, 822-823, 837-838), so a plain shell builds it, with no Developer
+  prompt; that environment carries no `ninja` (`find-msvc-tools` 0.1.9,
+  `src/find_tools.rs` 806-834), and CMake's lookup for it
+  (`CMakeNinjaFindMake.cmake`) has no install-directory hint like NASM's. So
+  a Windows seat puts `ninja` on its PATH — Visual Studio's "C++ CMake tools
+  for Windows" component carries one, on the PATH in a Developer PowerShell —
+  and a seat without it fails the configure loudly (CMake: `unable to find a
+  build program corresponding to "Ninja"`), never silently unoptimised. A
+  seat may name another generator by setting
+  `CMAKE_GENERATOR_x86_64_pc_windows_msvc` in its own environment — `[env]`
+  never overrides a variable the environment already holds, while a plain
+  `CMAKE_GENERATOR` loses to the target's own name — and any named generator,
+  a Visual Studio one included, keeps CMake's flags. A new name takes effect
+  only where `turbojpeg-sys`'s build script runs afresh: neither crate
+  declares the variable a rerun trigger, so a tree that built the library
+  under another generator keeps that build until `cargo clean -p
+  turbojpeg-sys`, and when the script does re-run over such a tree, CMake
+  refuses the old cache ("Does not match the generator used previously"). The
+  file is part of rust-cache's full key but not of its restore key (The CI
+  cache key, above), so an edit to it makes no run cold: the next run
+  restores the newest entry under the unchanged restore key, `full match:
+  false`. The check: "Verify Windows artifact" reads each `turbojpeg-sys`
+  build's `CMakeCache.txt` and its build output and fails, printing the
+  lines, the generator each build used among them, unless the flags of the
   configuration the cache's `CMAKE_BUILD_TYPE` names carry `/O2` and the
   output says `WITH_SIMD = 1` — for the release build
   `CMAKE_C_FLAGS_RELEASE`, while `[profile.release]` carries no debug info:
-  with debug info the crate builds `RelWithDebInfo` and overrides that
-  configuration's flags, while `CMAKE_C_FLAGS_RELEASE` keeps CMake's default
-  `/O2`, so a check reading it would pass an unoptimised library. (Corrected
-  2026-09-26: this bullet read "the #76 line is what keeps it optimised in
-  debug" and said nothing of MSVC, where the first Windows artifact of brief
-  008 carried the library unoptimised.)
+  with debug info the crate builds `RelWithDebInfo`, and under its own pick
+  of generator overrides that configuration's flags while
+  `CMAKE_C_FLAGS_RELEASE` keeps CMake's default `/O2`, so a check reading it
+  would pass an unoptimised library. (Corrected 2026-09-26: this bullet read
+  "the #76 line is what keeps it optimised in debug" and said nothing of
+  MSVC, where the first Windows artifact of brief 008 carried the library
+  unoptimised. Corrected again the same day, the generator re-ruling of brief
+  008: the name was `"Visual Studio 17 2022"`, a seat without Visual Studio
+  2022 was to fail the configure, and the line was to move when the runner
+  images moved — they already had, and no one Visual Studio is on both the CI
+  and the release image; and this said that landing or editing the file costs
+  one cold pair of CI jobs, which rust-cache's restore key does not bear
+  out.)
 - **CI** installs `nasm` on both jobs — `apt-get` on ubuntu, `choco install
   nasm` on Windows, which CMake finds in `C:\Program Files\NASM` without a
-  PATH step — and `cmake` is on both runner images; both jobs build the
-  library from source, its cold cost paid once per cache key like every
-  dependency. The Windows executables carry it statically (the crate links
+  PATH step — and `cmake` is on both runner images, `ninja` on the Windows
+  images CI and the release build on; both jobs build the library from
+  source, its cold cost paid once per cache key like every dependency. The
+  Windows executables carry it statically (the crate links
   `turbojpeg-static` on MSVC), and "Verify Windows artifact" checks that
   neither exe imports `turbojpeg.dll` or `jpeg62.dll`, beside the
   `VCRUNTIME140` and subsystem checks. The release workflow gets `nasm` from
   `dist-workspace.toml` (`[dist.dependencies.apt]` and
   `[dist.dependencies.chocolatey]`), keys the workflow reads at release time,
   so `release.yml` does not change (RELEASING.md), and RELEASING.md names the
-  requirement. No pull-request run builds the release artifacts (the release
-  workflow's PR run is `dist plan` only), so the release job's nasm is
-  review-verified until the first release.
+  requirement, ninja on the Windows runner included. No pull-request run
+  builds the release artifacts (the release workflow's PR run is `dist plan`
+  only), so the release job's nasm, and its Ninja build against Visual
+  Studio 2022 where CI's is against 2026, are review-verified until the
+  first release (the generator re-ruling of brief 008, 2026-09-26).
 - **Licences**: libjpeg-turbo is IJG and BSD-3-Clause, with zlib on the SIMD
   sources — all in `about.toml`'s accepted list, and README already carries
   the IJG attribution sentence. `cargo about` keys on the crates' SPDX
@@ -483,10 +522,18 @@ rung).
   output ("Unsupported color conversion request"), which is why those
   streams go through zune-jpeg; `TJPARAM_SCANLIMIT` defaults to no limit,
   which is why the loupe sets 100, zune-jpeg 0.4's own default; the `cmake`
-  crate's opt-level → CMake profile mapping; and that crate's override of
-  the C flags of the configuration it builds, `/O` stripped, when it picks
-  the MSVC generator itself — why the MSVC target names one
-  (senior-developer review 2026-09-26, F1).
+  crate's opt-level → CMake profile mapping; that crate's override of the C
+  flags of the configuration it builds, `/O` stripped, when it picks the
+  MSVC generator itself, which any named generator skips — why the MSVC
+  target names one (senior-developer review 2026-09-26, F1); the order it
+  reads the name in, the target's own before a plain `CMAKE_GENERATOR`;
+  with Ninja on MSVC, its handing CMake cc's `cl.exe` and cc's MSVC
+  environment, which carries no `ninja`; that neither it nor
+  `turbojpeg-sys` declares the name a rerun trigger, so a changed name
+  rebuilds nothing already built; and libjpeg-turbo's own default of the
+  static C runtime on MSVC (`WITH_CRT_DLL` off, `CMakeLists.txt` 400-427),
+  the runtime the artifact's `crt-static` build links (the generator
+  re-ruling of brief 008, 2026-09-26).
 - **No upstream contribution** (hard rule 2): the crates are used as
   published; a patch, if ever needed, stays in-tree.
 
@@ -494,23 +541,30 @@ Acceptance (brief 008; each box is ticked by the commit or run that
 carries its evidence):
 - [ ] CI green on both runners with the C dependency, libjpeg-turbo compiled
       optimised on both targets (brief 008 A10): both checks green on the
-      PR; the Windows job builds libjpeg-turbo from source with cmake and
-      nasm, and its artifact passes the `VCRUNTIME140`, subsystem and
-      no-`turbojpeg.dll`-import checks and runs `fastcull-cli.exe
+      PR; the Windows job builds libjpeg-turbo from source with cmake,
+      ninja and nasm, and its artifact passes the `VCRUNTIME140`, subsystem
+      and no-`turbojpeg.dll`-import checks and runs `fastcull-cli.exe
       --version`; the library is compiled optimised on both targets — on
       Windows by the CMake-cache check in the verify step, seen red on the
       runner one commit ahead of the generator's fix (Manager ruling
-      2026-09-26), and on Linux review-verified, the `cmake` crate
-      overriding no configuration's flags there; the ubuntu job installs
-      nasm and builds from source. Review-verified: the import check's red
-      (no local seat builds a dynamic MSVC binary) and the release job's
-      nasm (no PR run builds release artifacts; the first release after
-      brief 008 is its proof). The user's test of that artifact on the
-      desktop with real folders precedes any release (user decision
-      2026-09-26). Open: ticked with the run id. (Changed 2026-09-26,
-      senior-developer review F1: the box asked only for green checks and a
-      running artifact, which brief 008's first run met with the library
-      compiled unoptimised on Windows.)
+      2026-09-26) and green after it with every cache it prints naming
+      `CMAKE_GENERATOR=Ninja`, and by that run's Windows perf log, where the
+      3/8 rung's median is below the landscape full-res median (the step is
+      advisory, so the log is read, not asserted); and on Linux
+      review-verified, the
+      `cmake` crate overriding no configuration's flags there; the ubuntu
+      job installs nasm and builds from source. Review-verified: the import
+      check's red (no local seat builds a dynamic MSVC binary) and the
+      release job's nasm and Ninja build (no PR run builds release
+      artifacts; the first release after brief 008 is its proof). The
+      user's test of that artifact on the desktop with real folders
+      precedes any release (user decision 2026-09-26). Open: ticked with
+      the run id. (Changed 2026-09-26, senior-developer review F1: the box
+      asked only for green checks and a running artifact, which brief 008's
+      first run met with the library compiled unoptimised on Windows.
+      Changed again the same day, the generator re-ruling of brief 008: the
+      generator is Ninja, and the perf-log reading is the proof that ruling
+      names.)
 - [ ] The licence file carries libjpeg-turbo's notices (brief 008 A15):
       `turbojpeg-sys` listed under the IJG, BSD-3-Clause and zlib licences
       with their notice texts; red on a file regenerated after the

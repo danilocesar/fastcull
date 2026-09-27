@@ -138,13 +138,18 @@ the smallest N/8 factor that serves the loupe's fit box under the existing
 ## Consequences
 
 - **Build seats need cmake and nasm** (or a system libjpeg-turbo ≥ 3.0 on
-  Linux): CI installs nasm on both jobs, cmake is on both runner images,
-  the release workflow's `dist-workspace.toml` lists nasm for apt and
-  chocolatey, and README's build block and `docs/index.md` name the
-  requirement (01-architecture.md, "Native dependencies"). ADR 0002's
-  "contributors need only rustup" becomes "rustup, cmake and nasm" — and on
-  Windows Visual Studio 2022, whose generator the MSVC target names (below;
-  senior-developer review 2026-09-26, F1).
+  Linux), **and Windows seats ninja**: CI installs nasm on both jobs, cmake
+  is on both runner images and ninja on the Windows images CI and the
+  release build on, the release workflow's `dist-workspace.toml` lists nasm
+  for apt and chocolatey, and README's build block (the Linux one) and
+  `docs/index.md` name the requirement (01-architecture.md, "Native
+  dependencies"). ADR 0002's "contributors need only rustup" becomes
+  "rustup, cmake and nasm" — and on Windows ninja, for the generator the
+  MSVC target names (below; senior-developer review 2026-09-26, F1), beside
+  whatever Visual Studio C++ tools the MSVC toolchain already needs.
+  (Corrected 2026-09-26, the generator re-ruling of brief 008: this said
+  Windows seats need Visual Studio 2022, whose generator the target was to
+  name.)
 - **The Windows artifact carries the library statically** (the crate links
   `turbojpeg-static` on MSVC): the `crt-static` promise and the "no
   VCRUNTIME140 import" check still apply, and a check that neither exe
@@ -176,14 +181,18 @@ the smallest N/8 factor that serves the loupe's fit box under the existing
   #76 line, `Release` in release), so the #76 line — `[profile.dev.package."*"]
   opt-level = 2` — keeps the loupe's debug decode optimised; on the MSVC
   target only because a workspace `.cargo/config.toml` names its CMake
-  generator, since the crate, when it picks the Visual Studio generator
-  itself, overrides the C flags of the configuration it builds with every
-  `/O` flag stripped, which leaves MSVC's unoptimised default in every
-  profile, release included (01-architecture.md, "Native
-  dependencies", has the rule and its check). (Corrected 2026-09-26,
-  senior-developer review F1: this said the #76 line alone kept the decode
-  optimised; the first Windows artifact of brief 008 carried the library
-  unoptimised.)
+  generator, Ninja, since the crate, when it picks the Visual Studio
+  generator itself, overrides the C flags of the configuration it builds
+  with every `/O` flag stripped, which leaves MSVC's unoptimised default in
+  every profile, release included; any named generator skips that
+  override, and Ninja is the one name that holds whatever Visual Studio a
+  seat carries (01-architecture.md, "Native dependencies", has the rule and
+  its check). (Corrected 2026-09-26, senior-developer review F1: this said
+  the #76 line alone kept the decode optimised; the first Windows artifact
+  of brief 008 carried the library unoptimised. Named the same day, the
+  generator re-ruling of brief 008: Ninja, not the "Visual Studio 17 2022"
+  first ruled, which CI's `windows-latest` image — Visual Studio 2026 only
+  — cannot configure.)
 - **Complaints are read by their text** (the other-cameras pass of brief
   008, 2026-09-26; CLAUDE.md M11). The safe crate returns a complaint as
   text only — the first message of the decode, which libjpeg reports and a

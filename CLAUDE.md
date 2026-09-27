@@ -42,9 +42,15 @@ the loupe's JPEG decoder is libjpeg-turbo, built from source by `cargo
 build`: every build seat needs `cmake` and `nasm` (a seat without nasm
 fails the build on purpose — ADR 0005), or on Linux a system
 libjpeg-turbo ≥ 3.0 with `TURBOJPEG_SOURCE=pkg-config`. On Windows the
-workspace `.cargo/config.toml` names the Visual Studio 2022 generator (the
-`cmake` crate otherwise strips `/O2`); a seat without VS 2022 sets
-`CMAKE_GENERATOR_x86_64_pc_windows_msvc` itself.
+workspace `.cargo/config.toml` names the Ninja generator for the MSVC
+target (the `cmake` crate, left to pick a Visual Studio generator itself,
+strips `/O2`), so a Windows seat also needs `ninja` on its PATH, with any
+Visual Studio; a seat may name another generator in its own
+`CMAKE_GENERATOR_x86_64_pc_windows_msvc`, and a change of generator takes
+effect only after `cargo clean -p turbojpeg-sys` (01-architecture.md,
+"Native dependencies"). (Corrected 2026-09-26: this named the Visual
+Studio 2022 generator, which CI's `windows-latest` image — Visual Studio
+2026 only — lacks.)
 
 ## Hard rules
 

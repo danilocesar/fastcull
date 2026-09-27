@@ -76,9 +76,13 @@ zune-jpeg = "0.4"
 #   5. The `cmake` crate (0.1.58, `src/lib.rs` `get_profile`) builds the C
 #      library at the CMake profile cargo's opt-level implies: opt-level 0
 #      -> Debug, 1-3 with debug info -> RelWithDebInfo, without -> Release.
-#      The workspace's `[profile.dev.package."*"] opt-level = 2` (#76) is
-#      what keeps the debug decode optimised; remove it and the debug
-#      decoder is -O0.
+#      The workspace's `[profile.dev.package."*"] opt-level = 2` (#76) makes
+#      the debug build RelWithDebInfo; remove it and the debug decoder is a
+#      Debug build, unoptimised. A profile's own flags are optimised only
+#      where CMake's defaults apply: on Linux, and on MSVC only because the
+#      generator is named (item 7). (Corrected 2026-09-26, senior-developer
+#      review F1: this said the #76 line alone kept the decode optimised,
+#      which was false on MSVC.)
 #   6. `TJPARAM_SCANLIMIT` defaults to 0, no limit (`src/turbojpeg.h`:
 #      "[default: `0` (no limit)]"; `tj3Init` zeroes the instance), and
 #      `tj3Decompress8` installs its progress monitor, which fails a decode
@@ -88,6 +92,36 @@ zune-jpeg = "0.4"
 #      `Decompressor::set_scan_limit`: zune-jpeg 0.4's own default (see
 #      zune-jpeg above), the bound the loupe had before the swap.
 #      `a_progressive_stream_over_100_scans_fails_on_the_loupe_path` pins it.
+#   7. The `cmake` crate (0.1.58) on the MSVC target. With no generator
+#      named it picks the Visual Studio generator it finds (`src/lib.rs`
+#      652) and sets CMAKE_C_FLAGS_<BUILD_TYPE> -- the flags of the
+#      configuration it builds -- to the `cc` crate's with every `-O`/`/O`
+#      flag stripped (`skip_arg`, `generator.is_none() && msvc`, 723-768),
+#      replacing CMake's `/O2 /Ob2 /DNDEBUG`, so MSVC compiles libjpeg-turbo
+#      unoptimised in every profile (brief 008's first Windows artifact: its
+#      3/8 rung decoded slower than the full frame). Any named generator
+#      skips that override. The workspace `.cargo/config.toml` names Ninja
+#      as `CMAKE_GENERATOR_x86_64_pc_windows_msvc`; the crate reads
+#      `CMAKE_GENERATOR_<target>` with the target's dashes, then with
+#      underscores, then `HOST_`/`TARGET_CMAKE_GENERATOR`, then a plain
+#      `CMAKE_GENERATOR` (947-960), after the builder's own `.generator()`,
+#      which turbojpeg-sys does not call (510-513). With Ninja on MSVC it
+#      passes cc's `cl.exe` as CMAKE_C_COMPILER (780-806) and runs the
+#      configure and the build in cc's MSVC environment (822-823, 837-838):
+#      PATH with the compiler's and the Windows SDK's tool directories in
+#      front, INCLUDE and LIB (find-msvc-tools 0.1.9, `src/find_tools.rs`,
+#      `tool_from_vs15plus_instance` and `add_env`), no ninja among the
+#      added directories, so a seat brings `ninja` on its own PATH. Neither
+#      crate declares the name a rerun trigger (turbojpeg-sys's are
+#      `build.rs`, `bindings.rs` and `TURBOJPEG_*`; the `cmake` crate
+#      prints none), so a changed name rebuilds nothing already built until
+#      `cargo clean -p turbojpeg-sys`. libjpeg-turbo itself links the static
+#      C runtime on MSVC by default (`WITH_CRT_DLL` off, `CMakeLists.txt`
+#      400-427: CMAKE_MSVC_RUNTIME_LIBRARY MultiThreaded), the runtime the
+#      artifact's `crt-static` build links. ci.yml's "Verify Windows
+#      artifact" reads each build's CMake cache for /O2 and prints the
+#      generator it used. The `cmake` crate arrives through turbojpeg-sys:
+#      re-read both on a bump of either.
 turbojpeg = { version = "1.5.1", default-features = false, features = ["cmake", "pkg-config", "require-simd"] }
 
 [dev-dependencies]
