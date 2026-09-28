@@ -620,13 +620,43 @@ fn claim_cursor_at_loupe(
             // never happen, so each ends its decode's time-to-screen
             // measurement unmeasured (Manager ruling Q-K). The view is
             // snapshotted per refresh: one copy of the id list, never per pop.
+            let windows = loupe.texture_windows();
             let order = FillOrder {
                 cursor: focus_index,
                 view: st.grid.view.iter().copied().collect(),
-                window: loupe.texture_windows().full,
+                window: windows.full,
             };
             for index in st.kitchen.set_fill_order(order) {
                 loupe.note_dropped(index);
+            }
+            // The rescue thumbs' lead (ui-grid.md, "Virtualization"; Manager
+            // ruling 2026-09-28, brief 008 step-6 review F1): a frame's thumb
+            // is what the loupe shows when the cursor reaches it before any
+            // loupe rung. Sent only as its row entered the visible window, a
+            // few rows ahead, it could still be queued behind the full-res
+            // ring's 149 MB fills when the cursor arrived, and a 1:1 hold kept
+            // the previous frame's pixels for a few frames. So the thumbs of
+            // the rung window — 2 behind, 15 ahead, the cursor's first, then
+            // the nearest — go now, and the kitchen pops each ahead of any
+            // fill while its frame is inside the fill window (kitchen.rs,
+            // `pick`); neither half was enough alone. AFTER the focus and the
+            // fill order: the focus is what latches the lean, so the window
+            // is the one this very step leaned and a reversal re-leans the
+            // lead at once — read in `visible_window`, which runs before the
+            // focus, it would lean the previous step's way, one refresh late
+            // after a reversal — and a thumb queued here is judged against
+            // this step's fill window. Idempotent like the visible rows'
+            // loop: a sent index leaves `thumb_jpegs`.
+            if let Some(cursor_pos) = st.cursor_pos() {
+                for pos in windows.rung.nearest_first(cursor_pos, st.grid.view.len()) {
+                    let index = st.grid.view[pos];
+                    if st.textures.images.contains_key(&index) {
+                        continue;
+                    }
+                    if let Some(jpeg) = st.textures.thumb_jpegs.remove(&index) {
+                        st.kitchen.submit_thumb(index, jpeg);
+                    }
+                }
             }
         }
     }

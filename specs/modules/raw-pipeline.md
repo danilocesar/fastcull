@@ -366,10 +366,21 @@ feared would show.
   outruns the aggregate rung rate, every decode beyond the frontier starts
   on a frame the cursor reaches before it lands, so the frames a hold sees
   at the rung are the runway plus the frontier race — a decode-rate figure,
-  never a gate (issue #27). The lever, if a decode-bound seat ever matters,
-  is a transit LEAD — pop the member latency ÷ key period ahead of the
-  cursor instead of the nearest — a change to this queue order with its own
-  clock-free row, for a later unit, never a silent reorder.
+  never a gate (issue #27). On such a seat — four cores driving a 4K
+  viewport, for one — most frames past the runway show the grid thumb, cued,
+  the render ladder's best rung in hand (ui-grid.md): their flights start on
+  frames the cursor has already reached, the focused frame's own work coming
+  first, so even the mid, which such a flight decodes first on its way to the
+  screen rung, mostly lands after the cursor has left, and shows only on the
+  few frames where it lands in time; above fit a hold on such a seat meets
+  the same past the full-res runway (Above fit; brief 008 step-6 review F2,
+  Manager ruling 2026-09-28). The lever, if a decode-bound seat ever
+  matters, is a transit LEAD — pop the member latency ÷ key period ahead of
+  the cursor instead of the nearest — a change to this queue order with its
+  own clock-free row, for a later unit, never a silent reorder; whether such
+  a seat should fall back to the mid there instead — by this lever, or by
+  asking the ring's mids before its rungs — is the user's question (Manager
+  ruling 2026-09-28, brief 008).
 - Not done here (a later unit): preparing the `]` target — the next burst's
   first frame — while the user rests (Manager 2026-09-26).
 
@@ -434,8 +445,14 @@ feared would show.
      2026-09-26, brief 008 Q-K). When the cursor would arrive first, that
      member and every member beyond it ask for the fit box — one boundary,
      in view positions, set before any of their full-res decodes starts, so
-     the frames the cursor meets step from full-res to the fit-box rung once
-     and never dip through a mid or a thumb that the switch caused. A
+     the requests step from full-res to the fit-box rung once and the switch
+     itself never sends a frame through a mid or a thumb; what the cursor
+     meets is the best rung in hand, which on a seat whose decoders fall
+     behind the fit-box rung too is mostly the grid thumb past the full-res
+     runway (Nearest-first when the decoders fall behind at fit; corrected
+     2026-09-28, brief 008 step-6 review F2: this said the frames the cursor
+     meets step from full-res to the fit-box rung once, true only where the
+     decoders keep ahead of the fit-box rung). A
      full-res entry still queued at or beyond the boundary becomes a fit-box
      entry, or is dropped when that rung is already in hand; one already in
      flight lands.
@@ -1433,7 +1450,7 @@ commit that lands its tests, and stays open until then):
       `the_request_state_travels_with_the_decode`. Ticked by the step-2b
       commit, which carries the state and the test; each mutant's red is in
       its message.
-- [ ] **The hold above fit** (brief 008 A13): engine-level and clock-free, the
+- [x] **The hold above fit** (brief 008 A13): engine-level and clock-free, the
       time-to-screen, the key period and the workers' state handed in —
       decoders that keep up leave every member ahead full-res; a member that
       cannot land before the cursor steps it and every member beyond it to the
@@ -1533,14 +1550,21 @@ commit that lands its tests, and stays open until then):
       (01-architecture.md's perf table); how many times each hold switches
       between full-res and the rung is a number for humans in brief 008's
       Outcome. What the user sees on the desktop — one step or a flicker — is
-      the user's own test of the CI build (brief 008). Open: its driven half,
-      the two 1:1 runs of ui-grid.md A5's driven test, landed with brief 008's
-      step 6 and waits on the same ruling as ui-grid.md A6's 1:1 floor — the
-      run on two decoders showed every frame on every run, the run on the
-      seat's decoders is the one that fell under the floor once; every
-      clock-free row and the simulation landed with the switch rule (brief
-      008's step-4b commit, each mutant's red in its message) and its review's
-      fix round (the added rows' reds in that round's commit messages).
+      the user's own test of the CI build (brief 008). Its driven half, the
+      two 1:1 runs of ui-grid.md A5's driven test, landed with brief 008's
+      step 6 — the run on two decoders showed every frame on every run, the
+      run on the seat's decoders is the one that fell under ui-grid.md A6's
+      floor once — and the box is ticked with ui-grid.md A6, by the commit
+      that lands the fix ruled on 2026-09-28 (Manager, brief 008 step-6 review
+      F1: the rung window's thumbs sent ahead of the cursor, ui-grid.md
+      "Virtualization"; a thumb inside the fill window popping before any
+      full fill, 01-architecture.md, the kitchen), once at least ten release
+      runs of that test on the development laptop were each green, both 1:1
+      runs among them, with the readings ui-grid.md A6 names in that commit's
+      message; every clock-free row and the simulation landed with the switch
+      rule (brief 008's step-4b commit, each mutant's red in its message) and
+      its review's fix round (the added rows' reds in that round's commit
+      messages).
 - [x] **The settled ring after a hold** (brief 008, Manager ruling Q-I):
       clock-free — a stop above fit on a frame whose full-res is in hand, its
       ring members holding only their fit-box rungs, has the reserved lane
@@ -1621,6 +1645,16 @@ commit that lands its tests, and stays open until then):
 
 ## History
 
+- 2026-09-28 — What a seat whose decoders fall behind shows past the runway
+  is recorded (brief 008's step-6 review, F2; Manager ruling 2026-09-28): the
+  grid thumb, cued, on most frames, at fit and past the full-res runway
+  above fit, where the request before brief 008, capped at the mid, kept
+  the mid ahead of the key and showed it, uncued and upscaled 2× on 4K. "The
+  best rung in hand, cued" was accurate; docs/culling.md, which promised the
+  smaller preview there, follows, and the switch rule's rule 1 is corrected
+  in place — it said the frames the cursor meets step once to the fit-box
+  rung, which is what the requests do. Whether the mid should be that
+  fallback again is the user's question.
 - 2026-09-27 — The re-plan runs at every focus of an engine with a fit box
   (brief 008 step 5, the senior developer's review; Manager ruling
   2026-09-27 (5), closing step 3's review's gap): confined to a hold above

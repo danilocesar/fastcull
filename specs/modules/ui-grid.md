@@ -163,8 +163,11 @@ fit, as the mid is) → the mid rung
 (soft) → the cursor's own 320 px THUMB (soft — ~25× mush at 1:1, and right
 during transit, where position and identity continuity is what the eye
 tracks; persona MUST-HAVE) → the residual HOLD. When not even the thumb
-exists (a cold-start edge), the overlay keeps the PREVIOUS image's pixels at
-the carried geometry, pill on — the video-player dropped-frame convention;
+exists (a cold start, a jump onto a frame whose thumb has not landed, a
+folder still loading; corrected 2026-09-28, brief 008 step-6 review F1: this
+read "a cold-start edge", which the cold-frame test's own End jump
+contradicts), the overlay keeps the PREVIOUS image's pixels at the carried
+geometry, pill on — the video-player dropped-frame convention;
 the alternatives were the fit strobe (the bug) or a black frame. That is a
 knowing, bounded breach of "never the previous frame": the mark badge and
 the status bar name the NEW image over the old pixels (addressing is
@@ -372,7 +375,22 @@ window (`LoupeEngine::texture_windows()`) is kept too: on a viewport the mid
 serves it is the frame's fit-box rung, which a hold at fit must find in hand
 as it finds the screen rung on a wide one — dropped, the fit cell would show
 the thumb, cued, until a re-wrap landed (Manager ruling 2026-09-26, brief
-008 Q-A). Ctrl+scroll zoom stays
+008 Q-A). At the loupe the thumbs of the frames inside that same window
+(`texture_windows().rung`: 2 behind and 15 ahead of the cursor, leaned the
+way of travel as of the step that moved the cursor, so a reversal re-leans
+it at once, as it does the texture rings — brief 008 G4) go to the kitchen
+with the visible rows' — the cursor's first. A frame's thumb is its rescue
+rung, what the render ladder shows when the cursor reaches the frame before
+any loupe rung; sent only as its row enters the visible window, a few rows
+ahead, it can still be queued when the cursor arrives, and the loupe then
+keeps the previous frame's pixels above fit — the residual hold, a stutter
+in a hold at 1:1 — and shows no pixels of the frame at fit. Sent up to
+fifteen frames ahead, and popped before any full fill while its frame is
+inside the fill window (01-architecture.md, the kitchen) — neither half is
+enough alone — it is in hand when the cursor gets there unless one fill
+outlasts that lead (Manager ruling 2026-09-28, brief 008 step-6 review F1).
+Thumbs stay for the session anyway (raw-pipeline.md, "Memory"), so this
+cooks early what a hold would cook on arrival. Ctrl+scroll zoom stays
 deferred: Slint's Flickable consumes wheel events and an overlay TouchArea
 would steal the drag and click gestures; `+`/`-` cover it.
 
@@ -953,7 +971,11 @@ renderer's source offsets are `Fixed<u16, 4>`.
       the premise asserted by trace order — brief 008 step-5 review; the
       thumb-rung render-order pin release-only, since a congested debug
       kitchen can collapse the order; fixture changed, brief 008: a folder
-      longer than the full-res ring, so its target stays cold),
+      longer than the full-res ring, so its target stays cold — eighteen
+      files from the fix of brief 008's step-6 review F1, whose thumbs sent
+      ahead cover the rung window in the filename order the loupe walks
+      until the capture sort as well, so the target, id 17, sits past that
+      window in both orders, where seventeen put it inside the first),
       `loupe_drag_pans_one_to_one_and_a_fling_never_survives_navigation`
       (both profiles; its pointer work gated on `wait:loupe idx 0 factor`),
       `paced_taps_over_an_interleaved_session_land_warm` (its warm-landing
@@ -1234,13 +1256,33 @@ renderer's source offsets are `Fixed<u16, 4>`.
       `wrap_jobs_dedupe_per_kind_not_per_index`, and
       `pick_orders_full_wrap_thumb_mid` and
       `full_jobs_coexist_per_index_and_dedupe`, which keep
-      Full > Wrap > Thumb > Mid and the per-index dedupe and
+      Full > Wrap > Thumb > Mid — among the jobs the thumb clause of the next
+      box does not reach (qualified 2026-09-28, brief 008 step-6 review F1:
+      `pick_orders_full_wrap_thumb_mid`'s thumbs sit outside its fill
+      order's window, its promise kept) — and the per-index dedupe and
       lose "latest first" among fills, the promise this box replaces. Mutants:
       the latest-first pop restored, red on the kitchen's pop test;
       `next_fill` ignoring the lean, red on the core test's tie rows. Ticked
       by brief 008's step-5 commit, which carries the kitchen's fill order and
       the app unit tests (the core test landed in step 3b); each mutant's red
       is in its message.
+- [x] **A thumb inside the fill window pops before any full fill** (brief
+      008 step-6 review F1; Manager ruling 2026-09-28; 01-architecture.md, the
+      kitchen): app unit, the kitchen's pop — with a fill order set, a queued
+      thumb for a frame inside the window it carries (the full-res ring's,
+      `texture_windows().full`, around the cursor) pops before every queued
+      Full fill, the cursor's own included, and so before every Wrap — a
+      thumb at either edge of the window included; a thumb just past either
+      edge, or for a frame out of the view, keeps its place behind them, and
+      no thumb goes first with no fill order set or with the order's cursor
+      out of its view (no window to be inside); red with the clause removed,
+      with it applied to a thumb outside the window, and with "inside" read
+      as "not outside" (`!FillOrder::outside`, which answers so for every
+      thumb once the cursor has left the view) —
+      `a_thumb_inside_the_fill_window_pops_before_any_full_fill`. Ticked by the
+      commit that lands the fix of brief 008's step-6 review F1, which carries
+      the clause and the test; each mutant's red, and the test's red on the
+      kitchen before the fix, are in its message.
 - [x] **A hold at fit on a viewport the mid serves keeps each frame's mid in
       hand** (brief 008 Q-A): app, debug and release, the default window —
       its fit box served by the mid — over a folder of 24, the three
@@ -1251,6 +1293,48 @@ renderer's source offsets are `Fixed<u16, 4>`.
       `a_held_arrow_at_fit_on_a_mid_served_viewport_keeps_each_mid_in_hand`.
       Ticked by brief 008's step-5 commit, which carries the retain and the
       test; the mutant's red is in its message.
+- [x] **At the loupe the rung window's thumbs are in hand before the cursor
+      reaches them** (brief 008 step-6 review F1; Manager ruling 2026-09-28):
+      app, release, on A5's folder and 3840×2160 window, read off the trace
+      with each `thumb landed idx N` mark taken as the whole label, since it
+      ends at its index with nothing to terminate it (test-harness.md), and
+      "the id at k" the id the view-order model puts at view position k —
+      (1) at fit, before the first key of the 400-key hold, the rest has
+      landed the thumb of the id at k for every k in 1..=15, and for none of
+      the five past the window's far end, k in 16..=20; (2) at 1:1, in the
+      run on the seat's decoders, after the 400-key hold stops at view
+      position 400, a rest that waits for `loupe adopted idx <the id at
+      400+k> kind full` for every k in 1..=F (F, the full-res ring ahead,
+      from the startup line) finds each of those frames' first `thumb
+      landed` before its first full-res adoption; (3) after that, `End`, a
+      wait for the last frame's sharp render, one `left`, and a rest that
+      waits for the full-res of each of the F frames behind the new cursor:
+      each of those frames' first `thumb landed` comes before its first
+      full-res adoption too. The order is structural, the same on every seat
+      and under any load: a frame's thumb has gone to the kitchen by the step
+      that brings the frame into the rung window, which the full-res ring
+      never reaches past, so no later than the step that first asks for its
+      full-res; its fill can only be queued on a later turn of the UI thread,
+      when that decode lands; and the kitchen pops the thumb first ("A thumb
+      inside the fill window pops before any full fill", above). Red by
+      construction when the loupe sends the visible rows' thumbs alone, which
+      reach a few positions from the cursor at one column ((1), (2) and (3)),
+      when it sends the window's only at fit ((2) and (3)), when it ignores
+      the lean ((3)), and when it sends thumbs past the window ((1)) —
+      `a_held_arrow_at_fit_on_4k_stays_at_the_rung_and_never_slows` (its fit
+      run and its 1:1 run on the seat's decoders). These rows pin the thumbs'
+      lead, the kitchen's box its pop order; the stutter the two remove is
+      counted, as a number, in "The hold never slows" below. The window's
+      span, clamped at both ends of the view, and the order the lead sends it
+      in — the cursor's first, then the nearest, at equal distance the one
+      toward the lean, the engine's decode order — are core's
+      (`RingWindow::span`, `RingWindow::nearest_first`, which the kitchen's
+      fill window reads too), pinned clock-free by
+      `a_ring_window_spans_its_positions_and_meets_them_nearest_first`, red
+      with either end unclamped, the lean ignored or the cursor not first.
+      Ticked by the commit that lands the fix of brief 008's step-6 review F1,
+      which carries the lead and the rows; each red, and row (1)'s red on the
+      product before the fix, are in its message.
 - [x] **A held arrow at fit on a 4K viewport stays at the rung** (brief 008
       A5): app, release, a 3840×2160 window over real A1 files linked on the
       RAWs' volume (test-harness.md) — the three fixtures cycled into a folder
@@ -1281,9 +1365,16 @@ renderer's source offsets are `Fixed<u16, 4>`.
       (raw-pipeline.md A4). A5 binds on any seat that grants 3840×2160 and
       skips, printing the geometry it got, on one that does not;
       `FASTCULL_A5_REQUIRE_4K` (test-harness.md) turns the skip into a
-      failure. The numbers for humans — frames at the rung, the p90 frame
+      failure. The numbers for humans — frames at the rung, the rung each
+      frame of the fit hold shows on its first and on its last `loupe fit`
+      mark (full, screen, mid, thumb or none: what a seat whose decoders fall
+      behind shows past the runway, raw-pipeline.md "Nearest-first when the
+      decoders fall behind at fit"; added 2026-09-28, brief 008 step-6 review
+      F2), the p90 frame
       interval, the transit-state landings, the app's `VmHWM`, `Z` after a
-      stop, the 1:1 hold, and at 1:1 the delay from the hold's first key to
+      stop, the 1:1 hold and its residual holds (`loupe hold` marks between
+      its first key and `dump.held`; added 2026-09-28, brief 008 step-6
+      review F1), and at 1:1 the delay from the hold's first key to
       the first screen-rung adoption and from the first screen rung a member
       ahead brought to the app during a hold to its adoption (the kitchen's
       Full-before-Wrap order, 01-architecture.md) — go per seat in brief
@@ -1293,7 +1384,7 @@ renderer's source offsets are `Fixed<u16, 4>`.
       transit capped at the mid (gate 2 reads 0) and with the rung ring
       evicting by plain distance (the rest after a hold never fills), each red
       in its message.
-- [ ] **The hold never slows** (brief 008 A6 and the redesign's G1): app,
+- [x] **The hold never slows** (brief 008 A6 and the redesign's G1): app,
       release, on A5's folder and window, at fit (A5's 400-key hold) and at
       1:1 (a 400-key hold from a filled full-res ring, its own child run) — at
       least 98 % of the 400 keys render a distinct frame (the 787-of-800
@@ -1308,15 +1399,28 @@ renderer's source offsets are `Fixed<u16, 4>`.
       the pacing mutant — advance only when the next rung is in hand — stays
       red under any re-based floor, its reading in the Outcome beside the
       run's — `a_held_arrow_at_fit_on_4k_stays_at_the_rung_and_never_slows`
-      and its 1:1 run. Open: the test landed with brief 008's step 6, all 400
-      keys on screen at fit on every run; at 1:1 the development laptop's
-      count sat just above the floor and fell under it once, the p90 interval
-      about 1.5× the key rather than far above it — frames left on the
-      previous frame's pixels (the residual hold) while the kitchen's
-      full-res fills for the members the switch rule let through at the
-      hold's start held the thumb rescue back, not the renderer this clause
-      names — so the 1:1 floor awaits the Manager's ruling; the readings and
-      the pacing mutant's are in the step-6 commit's message.
+      and its 1:1 run. The test landed with brief 008's step 6, all 400 keys
+      on screen at fit on every run; at 1:1 the development laptop's count
+      sat just above the floor and fell under it once, the p90 interval about
+      1.5× the key rather than far above it — frames left on the previous
+      frame's pixels (the residual hold) while the kitchen's full-res fills
+      for the members the switch rule let through at the hold's start held
+      the thumb rescue back, not the renderer this clause names; those
+      readings and the pacing mutant's are in the step-6 commit's message.
+      Ruled 2026-09-28 (Manager, brief 008 step-6 review F1): the floor stands
+      and the product is fixed — the rung window's thumbs sent ahead of the
+      cursor (Virtualization) and a thumb inside the fill window popping
+      before any full fill (01-architecture.md, the kitchen), each pinned by
+      its own box above. The floor cannot tell the fixed product from the
+      unfixed one, which met it on most runs; the two boxes' reds prove the
+      fix, and its signature is the 1:1 hold's residual holds, which it
+      brings to none — a number for humans (A5's), never a gate here. Ticked
+      by the commit that lands the fix, once at least ten release runs of the
+      test on the development laptop's 3840×2160 virtual screen were each
+      green — every 400-key hold at 392 distinct frames or more, at fit and
+      at 1:1 — with each run's distinct frames, its 1:1 holds' `loupe hold`
+      counts and the pacing mutant's reading on the fixed product in that
+      commit's message.
 - [ ] **Time-to-sharp no worse than v0.14.0** (brief 008, the redesign's
       G5): QE, on the idle development laptop and the 3840×2160 headless
       screen A5 uses — where the screen rung and the idle cook act — this
@@ -1338,6 +1442,31 @@ renderer's source offsets are `Fixed<u16, 4>`.
 
 ## History
 
+- 2026-09-28 — The rescue thumb is in hand before the cursor (brief 008's
+  step-6 review, F1 and F2; Manager rulings 2026-09-28): the 4K test of step 6
+  showed a 1:1 hold on a four-core seat keeping the previous frame's pixels
+  for a few frames right after the full-res runway — a frame's thumb reached
+  the kitchen only as its row entered the visible window, a few rows ahead,
+  and waited there behind the full-res ring's fills, a stutter brief 008
+  introduced, since before it a 1:1 hold queued no full-res fills. At the
+  loupe the rung window's thumbs now go to the kitchen with the visible
+  rows' (Virtualization), and a thumb inside the fill window pops before any
+  full fill (01-architecture.md). Neither half was enough alone: the pop
+  order cannot interrupt a fill already cooking against a lead of a few
+  rows, and thumbs sent fifteen ahead could still wait behind a chain of
+  full-res fills. A6's floor could not tell the two builds apart, so the
+  lead has deterministic rows of its own — at fit, at 1:1 ahead of a stop and
+  behind a reversal — the pop order a kitchen row, and the 1:1 hold's residual
+  holds joined A5's numbers for humans. The cold-frame test's folder grew to
+  eighteen, since the thumbs sent ahead also follow the filename order the
+  loupe walks until the capture sort, where seventeen put its End target
+  inside the window. Corrected in place: the residual hold's "a cold-start
+  edge". The same test showed what a seat whose decoders fall behind shows at
+  fit past the runway — the thumb, cued, where the
+  request before brief 008, capped at the mid, showed the mid, uncued and
+  upscaled 2× on 4K — which raw-pipeline.md now records, with the fit hold's
+  first- and last-rung split among A5's numbers for humans; whether the mid
+  should be that fallback again is the user's question.
 - 2026-09-26 — A held arrow at fit on 4K (brief 008, issue #60): the user saw
   what the transit section had recorded as not yet eyeballed on a 4K monitor —
   *"the quality gets bad very quickly, maybe within 2 or 3 frames"* —

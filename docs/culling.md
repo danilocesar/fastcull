@@ -216,15 +216,18 @@ coming frames are ready before you reach them.
 **At fit, frames stay sharp for as long as the decoders keep ahead of
 you.** On a big screen the app decodes each coming frame straight to the
 size your screen draws it at — on a 4K screen about three-eighths of the
-camera's width, far cheaper than the whole 50-megapixel frame. On a strong
-desktop that should be a whole burst at full sharpness. On a modest
-four-core laptop, a hold that starts after a moment's pause is sharp for
-the fifteen frames the app read ahead while you paused, and for as long
-after that as the decoders keep up with the key (how long depends on the
-key's repeat rate and the machine); then they fall behind and you see the
-smaller preview, marked with the "◌ loading" pill, until you slow down or
-stop. On a 1080p or similar screen nothing changes — the preview was
-already sharp at that size.
+camera's width, far cheaper than the whole 50-megapixel frame. A hold that
+starts after a moment's pause is sharp for the fifteen frames the app read
+ahead while you paused, and for as long after that as the decoders keep up
+with the key (how long depends on the key's repeat rate and the machine).
+On a strong desktop with many cores that should be a whole burst at full
+sharpness — that is what the design expects, though it has not yet been
+measured on such a machine. On a modest four-core laptop the decoders keep
+up for about a dozen frames more; after that most frames show as a rough,
+thumbnail-quality placeholder — the right photo, with little detail —
+marked with the "◌ loading" pill (on some frames the smaller preview
+instead), until you slow down or stop. On a 1080p or similar screen
+nothing changes — the preview was already sharp at that size.
 
 **At 1:1, the frames ahead are full quality.** Stop or tap, and the frames
 ahead of you — fifteen of them on any machine with more than about 20 GB of
@@ -235,12 +238,15 @@ you reach them. When they can't, the hold steps down once to the
 screen-size version, marked with the pill, and steps back up when the
 decoders have caught up; if it would have to step down again soon after, it
 stays on the screen-size version until you stop rather than flicker between
-the two. How long a hold at 1:1 stays sharp depends on the machine.
+the two. How long a hold at 1:1 stays sharp depends on the machine. On a
+four-core laptop the screen-size frames can't keep up with a held key
+either, so once the full-quality frames ahead run out, most frames show
+the same rough placeholder as at fit, with the pill, until you stop.
 
 **Stop, and it sharpens.** At fit on a big screen the frame you land on is
-usually already at screen size — whenever the decoders kept ahead of you —
-so the stop costs nothing, and `Z` a moment later finds full quality ready
-or nearly so.
+already at screen size whenever the decoders kept ahead of you, so the stop
+costs nothing (otherwise it sharpens moments after you stop), and `Z` a
+moment later finds full quality ready or nearly so.
 At 1:1, if the frame you stop on isn't sharp yet, the app fetches full
 quality about a quarter of a second after your last keystroke. You don't
 press anything; just stop.
@@ -287,7 +293,12 @@ to hear about it.
 > the read-ahead is fifteen frames instead of eight, the number of decoders
 > follows your machine's cores, the frames ahead are full quality at 1:1,
 > and the "◌ loading" pill shows at fit too whenever what you see is not the
-> real thing.
+> real thing. One trade to know about: on a machine with few cores, such as
+> a four-core laptop, a long hold now stays sharp for longer, but most of
+> the frames after that — past the first couple of dozen at fit, past the
+> full-quality ones at 1:1 — are softer than before: the rough,
+> thumbnail-quality placeholder with the pill, where 0.14.0 showed the
+> preview.
 
 > **Fixed after 0.8.1**: arrowing onto a frame nothing had decoded yet
 > used to flash the ENTIRE next photo at fit for a split second before

@@ -392,6 +392,44 @@ impl RingWindow {
         pos.saturating_add(self.before) >= cursor_pos
             && pos <= cursor_pos.saturating_add(self.after)
     }
+
+    /// The view positions the window reaches around the cursor at view
+    /// position `cursor_pos`, in a view of `len` positions: the positions
+    /// [`contains`](Self::contains) says yes to, clamped at both ends of the
+    /// view, as one range — empty when the cursor is not in the view. One
+    /// home for the clamp, so the app's rescue-thumb lead and the kitchen's
+    /// fill window (ui-grid.md, "Virtualization"; 01-architecture.md, the
+    /// kitchen) cannot reach different frames.
+    pub fn span(&self, cursor_pos: usize, len: usize) -> std::ops::Range<usize> {
+        if cursor_pos >= len {
+            return 0..0;
+        }
+        let lo = cursor_pos.saturating_sub(self.before);
+        let hi = cursor_pos.saturating_add(self.after).min(len - 1);
+        lo..hi + 1
+    }
+
+    /// [`span`](Self::span) in the order the cursor meets its frames: the
+    /// cursor's own first, then the nearest, at equal distance the one toward
+    /// the window's lean first — `after > before` leans forward, and a
+    /// symmetric window reads forward, as in `transit::next_fill` — which is
+    /// the order the engine decodes its ring in (`ring_order`, reversed:
+    /// raw-pipeline.md, "Order in the queue"). The order the app sends the
+    /// rung window's thumbs to the kitchen in (ui-grid.md, "Virtualization":
+    /// "the cursor's first"), so the frame an arrow reaches next is cooked
+    /// first after a jump or a reversal.
+    pub fn nearest_first(&self, cursor_pos: usize, len: usize) -> Vec<usize> {
+        let span = self.span(cursor_pos, len);
+        if span.is_empty() {
+            return Vec::new();
+        }
+        let forward = self.after >= self.before;
+        // Push order, farthest first, the cursor excluded — reversed below.
+        let mut order = ring_order(cursor_pos, span.start, span.end - 1, forward);
+        order.push(cursor_pos);
+        order.reverse();
+        order
+    }
 }
 
 /// The windows of the app's two texture rings (ui-grid.md, "The render
@@ -5354,6 +5392,81 @@ mod tests {
             engine.texture_windows().full,
             RingWindow::symmetric(PREFETCH),
             "no box: the settled ±2 ring, the app's texture ring before brief 008"
+        );
+    }
+
+    /// Brief 008 step-6 review F1 (ui-grid.md, "Virtualization";
+    /// 01-architecture.md, the kitchen): a window's `span` is exactly the
+    /// positions `contains` says yes to, clamped at both ends of the view —
+    /// swept over every cursor and position of a 40-frame view for a forward,
+    /// a backward and a symmetric window, and empty when the cursor is not in
+    /// the view — and `nearest_first` meets them in the engine's decode
+    /// order: the cursor first, then the nearest, at equal distance the one
+    /// toward the lean first. Red when the far end is not clamped (the
+    /// far-end row), when the near end is not (the sweep), when the lean is
+    /// ignored (the backward tie row) and when the cursor is not first (the
+    /// sweep).
+    #[test]
+    fn a_ring_window_spans_its_positions_and_meets_them_nearest_first() {
+        let forward = RingWindow::leaning(2, 15, true);
+        let backward = RingWindow::leaning(2, 15, false);
+        let even = RingWindow::symmetric(2);
+        for window in [forward, backward, even] {
+            for cursor in 0..40 {
+                let span = window.span(cursor, 40);
+                for pos in 0..40 {
+                    assert_eq!(
+                        span.contains(&pos),
+                        window.contains(cursor, pos),
+                        "{window:?} around {cursor}: position {pos}"
+                    );
+                }
+                let mut met = window.nearest_first(cursor, 40);
+                assert_eq!(met.first(), Some(&cursor), "{window:?}: the cursor first");
+                met.sort_unstable();
+                assert_eq!(
+                    met,
+                    span.collect::<Vec<_>>(),
+                    "{window:?}: the span, once each"
+                );
+            }
+            assert!(window.span(40, 40).is_empty(), "the cursor out of the view");
+            assert!(window.span(0, 0).is_empty(), "an empty view");
+            assert!(window.nearest_first(40, 40).is_empty());
+        }
+        assert_eq!(forward.span(0, 40), 0..16, "the near end clamps");
+        assert_eq!(forward.span(39, 40), 37..40, "the far end clamps");
+        assert_eq!(forward.span(2, 5), 0..5, "a view shorter than the window");
+        let run = |from: usize, to: usize| -> Vec<usize> {
+            if from <= to {
+                (from..=to).collect()
+            } else {
+                (to..=from).rev().collect()
+            }
+        };
+        let mut want = vec![10, 11, 9, 12, 8];
+        want.extend(run(13, 25));
+        assert_eq!(
+            forward.nearest_first(10, 40),
+            want,
+            "forward: the tie ahead first"
+        );
+        let mut want = vec![30, 29, 31, 28, 32];
+        want.extend(run(27, 15));
+        assert_eq!(
+            backward.nearest_first(30, 40),
+            want,
+            "backward: the tie behind first"
+        );
+        assert_eq!(
+            even.nearest_first(5, 10),
+            [5, 6, 4, 7, 3],
+            "a symmetric window reads forward"
+        );
+        assert_eq!(
+            forward.nearest_first(39, 40),
+            [39, 38, 37],
+            "clamped at the far end"
         );
     }
 

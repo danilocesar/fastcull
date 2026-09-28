@@ -2657,6 +2657,44 @@ fn a5_assert_first_fifteen_at_the_rung(run: &str, hold: &[Traced<'_>], from: usi
     }
 }
 
+/// Where a run's first `thumb landed idx <id>` mark sits among its marks —
+/// the kitchen decoded that frame's thumb into a texture, which nothing
+/// evicts within a session. Read as the WHOLE label: the mark ends at its
+/// index with nothing to terminate it, so a prefix read of `idx 1` would
+/// take `idx 10` (test-harness.md, the thumb marks).
+fn a5_thumb_landed(marks: &[Traced<'_>], id: usize) -> Option<usize> {
+    let label = format!("thumb landed idx {id}");
+    marks.iter().position(|m| m.label == label)
+}
+
+/// Rows (2) and (3) of ui-grid.md "At the loupe the rung window's thumbs are
+/// in hand before the cursor reaches them": the frames at the view positions
+/// given whose first `thumb landed` mark does NOT come before their first
+/// full-res adoption, each with what it lacked. The order is structural: a
+/// frame's thumb goes to the kitchen by the step that brings it into the
+/// rung window, which the full-res ring never reaches past, so no later than
+/// the step that first asks for its full-res; the fill can only be queued on
+/// a later turn of the UI thread, when that decode lands; and the kitchen
+/// pops a thumb inside the fill window before any fill.
+fn a5_thumbs_not_before_full(
+    marks: &[Traced<'_>],
+    positions: impl Iterator<Item = usize>,
+) -> Vec<(usize, &'static str)> {
+    positions
+        .filter_map(|p| {
+            let id = a5_id_at(p);
+            let full = format!("loupe adopted idx {id} kind full");
+            let full = marks.iter().position(|m| m.label == full);
+            match (a5_thumb_landed(marks, id), full) {
+                (Some(thumb), Some(full)) if thumb < full => None,
+                (Some(_), Some(_)) => Some((p, "full-res adopted first")),
+                (None, _) => Some((p, "no thumb landed")),
+                (Some(_), None) => Some((p, "no full-res adopted")),
+            }
+        })
+        .collect()
+}
+
 /// The startup line (raw-pipeline.md, "Memory"): exactly one per run — A4's
 /// last clause — and the full-res ring ahead at 1:1 it names, `full-res F
 /// ahead at 1:1`.
@@ -2705,7 +2743,10 @@ fn a5_assert_model(run: &str, dump: &str, pos: usize, trace: &Path) {
 /// the rung"), with A6 at fit and at 1:1 ("The hold never slows"), A13's
 /// driven half (raw-pipeline.md "The hold above fit": the two 1:1 runs), A7's
 /// driven half (a transit capped at the mid lands no transit-state screen
-/// rung: gate 2 reads 0) and A4's last clause (one startup line per run).
+/// rung: gate 2 reads 0), A4's last clause (one startup line per run) and
+/// the three rows of ui-grid.md "At the loupe the rung window's thumbs are
+/// in hand before the cursor reaches them" (the thumb lead: row 1 in run 1,
+/// rows 2 and 3 in run 3).
 /// Release only — what a hold sees at the rung is the seat's decode rate —
 /// and a 3840×2160 window over real A1 files. It binds on any seat that
 /// grants that window and skips, printing the geometry it got, on one that
@@ -2736,6 +2777,9 @@ fn a5_assert_model(run: &str, dump: &str, pos: usize, trace: &Path) {
 /// victim — 0 under a transit capped at the mid, by construction; 3
 /// ([`a5_assert_first_fifteen_at_the_rung`]); A6 at fit, at least 392 of the
 /// 400 keys (98 %) show a distinct frame; and the model pinned at both ends.
+/// The thumb lead's row (1), over the whole trace up to the hold's first key:
+/// the rest has landed the thumb of each frame at view positions 1 to 15,
+/// the rung window, and of none at 16 to 20, past its far end.
 /// The run ends at `dump.held`: every `wait:` after a hold names view
 /// positions the hold must have reached, so a paced hold (A6's mutant)
 /// would end the child at a wait — the harness's red, not A6's — and A6's
@@ -2759,20 +2803,34 @@ fn a5_assert_model(run: &str, dump: &str, pos: usize, trace: &Path) {
 /// every seat on record. A6 at 1:1 in both: at least 392 of the 400 keys show
 /// a distinct frame on a render mark — the sharp render, the rung, the mid or
 /// the thumb; a residual hold keeps the previous frame and shows none. Each
-/// run's startup line must name the probe's F.
+/// run's startup line must name the probe's F. Run 3 goes on for the thumb
+/// lead's rows (2) and (3), on the seat's own decoders only: a rest that
+/// waits for the full-res of each of the F frames ahead of the stop; `End`,
+/// a wait for its sharp render, one `left` — a reversal, which re-leans the
+/// windows — and a rest that waits for the full-res of each of the F frames
+/// behind the new cursor, `dump.back` pinning where that is; it ends on that
+/// cursor's sharp mark instead. In both rests each frame's first `thumb
+/// landed` comes before its first full-res adoption ([`a5_thumbs_not_before_full`]
+/// says why the order is structural), asserted before A6 so a red of the
+/// lead names its row.
 ///
-/// What a hold SEES at the rung, the frame interval, the landings, the
-/// switch count at 1:1, `Z` after a stop and the app's `VmHWM` are numbers
-/// for humans per seat (issue #27), printed as `MEASURED` lines for brief
-/// 008's Outcome, never gates. The step-down's own instant is traced by no
-/// mark (core decides it and traces nothing), so the 1:1 delay reported is
-/// the kitchen leg the marks can see: from the first transit-state screen
-/// rung a member ahead brought to the app during the hold to its adoption.
+/// What a hold SEES at the rung, the rung each frame of the fit hold shows on
+/// its first and on its last fit mark, the frame interval, the landings, the
+/// switch count and the residual holds at 1:1, `Z` after a stop and the app's
+/// `VmHWM` are numbers for humans per seat (issue #27), printed as `MEASURED`
+/// lines for brief 008's Outcome, never gates. The step-down's own instant is
+/// traced by no mark (core decides it and traces nothing), so the 1:1 delay
+/// reported is the kitchen leg the marks can see: from the first
+/// transit-state screen rung a member ahead brought to the app during the
+/// hold to its adoption.
 ///
 /// Red with the transit capped at the mid (gate 2 reads 0), with a hold that
-/// advances only onto a frame whose rung is held (A6), and with the rung
-/// ring evicting by plain distance (run 2's second rest never fills: the
-/// child exits at its wait).
+/// advances only onto a frame whose rung is held (A6), with the rung ring
+/// evicting by plain distance (run 2's second rest never fills: the child
+/// exits at its wait), and, for the thumb lead, with the loupe sending the
+/// visible rows' thumbs alone (row 1), with the lead reaching past the
+/// window (row 1), with the lead at fit only (row 2) and with the lead
+/// ignoring the lean (row 3).
 #[test]
 fn a_held_arrow_at_fit_on_4k_stays_at_the_rung_and_never_slows() {
     let require = std::env::var_os("FASTCULL_A5_REQUIRE_4K").is_some();
@@ -2931,6 +2989,7 @@ fn a_held_arrow_at_fit_on_4k_stays_at_the_rung_and_never_slows() {
     // The numbers, before any gate.
     let mut frames: Vec<usize> = Vec::new();
     let mut first_rung: std::collections::HashMap<usize, String> = Default::default();
+    let mut last_rung: std::collections::HashMap<usize, String> = Default::default();
     let mut any_rung = std::collections::HashSet::new();
     let mut new_frame_ms: Vec<u64> = Vec::new();
     for m in in_hold {
@@ -2941,11 +3000,22 @@ fn a_held_arrow_at_fit_on_4k_stays_at_the_rung_and_never_slows() {
                 new_frame_ms.push(m.ms);
             }
             first_rung.entry(n).or_insert_with(|| rung.to_string());
+            last_rung.insert(n, rung.to_string());
             if matches!(rung, "screen" | "full") {
                 any_rung.insert(n);
             }
         }
     }
+    // Each frame's rung on its first and on its last fit mark of the hold,
+    // counted per rung: what a seat whose decoders fall behind shows past the
+    // runway (ui-grid.md A5's numbers; brief 008 step-6 review, F2).
+    let split = |rungs: &std::collections::HashMap<usize, String>| {
+        ["full", "screen", "mid", "thumb", "none"]
+            .iter()
+            .map(|r| format!("{r} {}", rungs.values().filter(|v| v == r).count()))
+            .collect::<Vec<_>>()
+            .join(", ")
+    };
     let distinct: std::collections::HashSet<usize> = frames.iter().copied().collect();
     let runway: std::collections::HashSet<usize> = (1..=15).map(a5_id_at).collect();
     let at_rung_first = |beyond: bool| {
@@ -2986,6 +3056,12 @@ fn a_held_arrow_at_fit_on_4k_stays_at_the_rung_and_never_slows() {
         at_rung_any(true)
     ));
     measured.line(&format!(
+        "a5 fit hold: each frame's rung on its first fit mark: {}; on its last: {} ({} frames)",
+        split(&first_rung),
+        split(&last_rung),
+        first_rung.len()
+    ));
+    measured.line(&format!(
         "a5 fit hold: transit-state screen-rung landings {transit_landings} (gate 2 >= 15); \
          interval between new frames p50 {p50} ms, p90 {p90} ms, max {max} ms"
     ));
@@ -3016,6 +3092,32 @@ fn a_held_arrow_at_fit_on_4k_stays_at_the_rung_and_never_slows() {
     assert_eq!(
         fit_ahead, ahead,
         "run 1's startup line names another full-res ring than the probe's"
+    );
+    // THE THUMB LEAD, row (1) (ui-grid.md, "At the loupe the rung window's
+    // thumbs are in hand before the cursor reaches them"): before the hold's
+    // first key the rest has landed the thumb of every frame the rung window
+    // reaches, view positions 1 to 15, and of none of the five past its far
+    // end. Read over the WHOLE trace up to that key, not from the settle: a
+    // thumb the lead sent in the provisional filename order, before the
+    // capture sort, lands once and is never cooked again.
+    let first_key = settled + key_at[0];
+    let landed_before_hold =
+        |k: usize| a5_thumb_landed(&marks, a5_id_at(k)).is_some_and(|at| at < first_key);
+    let missing: Vec<usize> = (1..=15).filter(|k| !landed_before_hold(*k)).collect();
+    assert!(
+        missing.is_empty(),
+        "run 1: THUMB LEAD (1) — before the hold, the thumbs at view positions {missing:?}, \
+         inside the rung window, had not landed: the loupe sent the visible rows' thumbs \
+         alone, not the window's (trace {})",
+        fit_trace.display()
+    );
+    let past: Vec<usize> = (16..=20).filter(|k| landed_before_hold(*k)).collect();
+    assert!(
+        past.is_empty(),
+        "run 1: THUMB LEAD (1) — before the hold, the thumbs at view positions {past:?}, past \
+         the rung window's far end (15), had landed: the lead reaches past the window \
+         (trace {})",
+        fit_trace.display()
     );
     a5_assert_the_rung_holds("run 1", after, &fit_trace);
     assert!(
@@ -3137,6 +3239,31 @@ fn a_held_arrow_at_fit_on_4k_stays_at_the_rung_and_never_slows() {
         drive.push_str(&format!(
             ";16500:dump.held;16600:wait:loupe idx {stop} factor"
         ));
+        // Run 3 only, the thumb lead's rows (2) and (3): a rest that waits
+        // for the full-res of each of the F frames ahead of the stop; `End`
+        // and its sharp render; one `left`, which re-leans the windows
+        // backward; a rest that waits for the full-res of each of the F
+        // frames behind the new cursor; the script ends on that cursor's
+        // sharp mark, for the shutter (the doc comment, runs 3 and 4).
+        let lead_rows = decoders.is_none();
+        let back_at = A5_FILES - 2;
+        if lead_rows {
+            rest(&mut drive, 16700, 400, "full", ahead);
+            drive.push_str(&format!(
+                ";16800:end;16900:wait:loupe idx {} factor;17000:left",
+                a5_id_at(A5_FILES - 1)
+            ));
+            for k in 1..=ahead {
+                drive.push_str(&format!(
+                    ";17100:wait:loupe adopted idx {} kind full",
+                    a5_id_at(back_at - k)
+                ));
+            }
+            drive.push_str(&format!(
+                ";17200:dump.back;17300:wait:loupe idx {} factor",
+                a5_id_at(back_at)
+            ));
+        }
         let mut envs = vec![("FASTCULL_TRACE", "1"), ("FASTCULL_DRIVE", drive.as_str())];
         if let Some(n) = decoders {
             envs.push(("FASTCULL_DECODERS", n));
@@ -3245,6 +3372,17 @@ fn a_held_arrow_at_fit_on_4k_stays_at_the_rung_and_never_slows() {
             "{name} kitchen leg ready→adopted {} (the step-down instant is not traced)",
             kitchen_leg.map_or("none".to_string(), |(n, ms)| format!("{ms} ms, id {n}"))
         ));
+        // The residual holds: a frame the cursor reached with no texture of
+        // its own keeps the previous frame's pixels — the stutter the thumb
+        // lead removes, a number for humans (ui-grid.md A5 and A6).
+        let holds = in_hold
+            .iter()
+            .filter(|m| m.label.starts_with("loupe hold idx "))
+            .count();
+        measured.line(&format!(
+            "{name} hold: residual holds {holds} (`loupe hold` marks from the first key to \
+             dump.held)"
+        ));
         for (at, kb) in &hwm {
             measured.line(&format!("{name} VmHWM at {at}: {} MiB", kb / 1024));
         }
@@ -3263,10 +3401,67 @@ fn a_held_arrow_at_fit_on_4k_stays_at_the_rung_and_never_slows() {
             run_ahead, ahead,
             "{name}: its startup line names another full-res ring than the probe's"
         );
+        if lead_rows {
+            for k in 1..=ahead {
+                assert_waited(
+                    name,
+                    &stderr,
+                    &format!("loupe adopted idx {} kind full", a5_id_at(400 + k)),
+                    &trace,
+                );
+                assert_waited(
+                    name,
+                    &stderr,
+                    &format!("loupe adopted idx {} kind full", a5_id_at(back_at - k)),
+                    &trace,
+                );
+            }
+            assert_waited(
+                name,
+                &stderr,
+                &format!("loupe idx {} factor", a5_id_at(A5_FILES - 1)),
+                &trace,
+            );
+            assert_waited(
+                name,
+                &stderr,
+                &format!("loupe idx {} factor", a5_id_at(back_at)),
+                &trace,
+            );
+            a5_assert_model(name, qedump(&stderr, "back"), back_at, &trace);
+            // THE THUMB LEAD, rows (2) and (3) (ui-grid.md, "At the loupe
+            // the rung window's thumbs are in hand before the cursor reaches
+            // them"), read BEFORE A6 so a mutant of the lead names its row:
+            // ahead of the stop, and behind the cursor after a reversal, each
+            // frame's thumb lands before its full-res is adopted.
+            let ahead_late = a5_thumbs_not_before_full(&marks, (1..=ahead).map(|k| 400 + k));
+            assert!(
+                ahead_late.is_empty(),
+                "{name}: THUMB LEAD (2) — after the stop at view position 400, these frames \
+                 ahead (view position, what was missing) had their full-res adopted before \
+                 their thumb landed: {ahead_late:?} — the lead does not run above fit \
+                 (trace {})",
+                trace.display()
+            );
+            let behind_late = a5_thumbs_not_before_full(&marks, (1..=ahead).map(|k| back_at - k));
+            assert!(
+                behind_late.is_empty(),
+                "{name}: THUMB LEAD (3) — after `End` and one `left`, these frames behind the \
+                 cursor (view position, what was missing) had their full-res adopted before \
+                 their thumb landed: {behind_late:?} — the lead did not re-lean with the \
+                 reversal (trace {})",
+                trace.display()
+            );
+        }
+        let unrendered: Vec<usize> = (1..=400)
+            .filter(|p| !best.contains_key(&a5_id_at(*p)))
+            .collect();
         assert!(
             best.len() >= 392,
             "{name}: A6 — the 400-key hold at 1:1 showed {} distinct frames on a render \
-             mark, under 98 % (392) (trace {})",
+             mark, under 98 % (392); the view positions with none — a residual hold, which \
+             keeps the previous frame's pixels (`loupe hold` in the trace), or no refresh \
+             at all: {unrendered:?} (trace {})",
             best.len(),
             trace.display()
         );
@@ -6579,14 +6774,17 @@ fn interleaved_session(dir: &Path, count: usize) {
 /// End — racing the debug KITCHEN, which is workspace code at opt-level
 /// 0. Under the #76 load recipe (six spinners and the app on two cores)
 /// the new cursor's rescue rungs queue behind off-cursor 149 MB full-res
-/// fills of 3.5-5.5 s each — the kitchen pops Full > Wrap > Thumb with
-/// no notion of the cursor — so the hold cap fires at the next refresh
+/// fills of 3.5-5.5 s each — the kitchen then popped Full > Wrap > Thumb
+/// with no notion of the cursor (as of 2026-09-05; since brief 008 it cooks
+/// the cursor's fill first, and since its step-6 review a thumb inside the
+/// fill window before any fill, 01-architecture.md, the kitchen) — so the
+/// hold cap fires at the next refresh
 /// (the spec'd bounded drop, 14 of 14 loaded runs) and the first rung of
 /// the new image lands 5.0-13.9 s after the End; the overlay re-raised
 /// EVERY time, but in 8 of 11 runs after the clock had already
 /// photographed the honest fit (0 of 4 green as written; the same script
 /// in release under the same load: 3 of 3). The dump is gated on the
-/// sharp rung's own mark now (`wait:loupe idx 14 factor` at 20.2 s, the
+/// sharp rung's own mark now (`wait:loupe idx 17 factor` at 20.2 s, the
 /// dump 6.3 s behind it — the CI-audit shape rule, echo asserted below),
 /// which is stricter, not looser: the sharp must land within the wait's
 /// 30 s cap and the overlay must be up 6.3 s later. The dump's authored
@@ -6606,15 +6804,26 @@ fn interleaved_session(dir: &Path, count: usize) {
 /// debug run of PR #80 carried a `(hold cap)` drop and passed).
 ///
 /// FIXTURE CHANGED, assertions untouched (brief 008; ui-grid.md, the #46
-/// box): seventeen files where there were ten. From brief 008 a 1:1 rest
+/// box): eighteen files where there were ten. From brief 008 a 1:1 rest
 /// decodes its full-res ring — up to fifteen frames ahead — so on ten files
 /// the End target was decoded and adopted during the 20 s rest, rendered
 /// sharp on arrival, and neither the hold nor the thumb rung this test
 /// exists for could happen (the `midgap` dump read `soft=false rung=full`).
-/// The capture sort of seventeen gives the view [0, 3, 6, 9, 12, 15, 1, 4,
-/// 7, 10, 13, 16, 2, 5, 8, 11, 14]: End lands on id 14 at view position 16,
-/// one past the ring's fifteen ahead of position 0, so it stays cold — the
-/// same promise, and the wait below names that id.
+/// The capture sort of eighteen gives the view [0, 3, 6, 9, 12, 15, 1, 4,
+/// 7, 10, 13, 16, 2, 5, 8, 11, 14, 17]: End lands on id 17 at view position
+/// 17, two past the ring's fifteen ahead of position 0, so it stays cold —
+/// the same promise, and the waits below name that id. Seventeen files
+/// (End on id 14 at view position 16) until the fix of brief 008's step-6
+/// review, F1: the loupe now sends the thumbs of the rung window's frames,
+/// 2 behind and 15 ahead, to the kitchen before the cursor reaches them
+/// (ui-grid.md, "Virtualization"), in the view the loupe has — until the
+/// capture sort lands, the FILENAME order, where that window around id 0
+/// reaches ids 0 to 15. On seventeen files the target, id 14, sat inside it:
+/// with one pipeline reader (`FASTCULL_MAX_READERS=1`) id 14's thumb bytes
+/// can arrive a pump tick before the capture sort lands, its thumb was then
+/// in hand before the End, and the End refresh rendered the thumb, not the
+/// hold ("the End refresh never rendered the hold"). On eighteen the target,
+/// id 17, is past the window in both orders.
 ///
 /// THE MIDGAP DUMP IS CHAINED TO THE END KEY, the promise unchanged (brief
 /// 008 step 5, the senior developer's review, 2026-09-27). It ran on the
@@ -6639,12 +6848,12 @@ fn transit_to_a_cold_frame_keeps_the_overlay_at_the_carried_center() {
     }
     let _s = serial();
     // Removed at the end even when an assertion panics: on Windows each of
-    // the seventeen files is a COPY (`place_fixture`), 63 to 113 MB apiece.
+    // the eighteen files is a COPY (`place_fixture`), 63 to 113 MB apiece.
     let fixture = Fixture {
         dir: out_dir().join("i46-m1"),
     };
     let dir = &fixture.dir;
-    interleaved_session(dir, 17);
+    interleaved_session(dir, 18);
     let out = out_dir().join("i46-m1.jpg");
     let stderr = shoot_env_stderr(
         &["--start-11", dir.to_str().unwrap()],
@@ -6656,7 +6865,7 @@ fn transit_to_a_cold_frame_keeps_the_overlay_at_the_carried_center() {
                 // `end>>dump.midgap`: the dump runs in the End key's own
                 // callback, the moment its refresh returns (test-harness.md,
                 // "The drive script").
-                "20000:dump.pre;20050:end>>dump.midgap;20200:wait:loupe idx 14 factor;26500:dump.landed",
+                "20000:dump.pre;20050:end>>dump.midgap;20200:wait:loupe idx 17 factor;26500:dump.landed",
             ),
         ],
         &out,
@@ -6681,16 +6890,16 @@ fn transit_to_a_cold_frame_keeps_the_overlay_at_the_carried_center() {
     // rung of the new image rendered — which the `>>` chain gives by
     // construction and the clock it replaced did not (the doc comment).
     let hold_at = stderr
-        .find("loupe hold idx 14 ")
+        .find("loupe hold idx 17 ")
         .unwrap_or_else(|| panic!("the End refresh never rendered the hold:\n{stderr}"));
     let dump_at = stderr
         .find("drive: dump.midgap")
         .unwrap_or_else(|| panic!("the midgap dump never ran:\n{stderr}"));
     let first_rung_at = [
-        "loupe thumb idx 14 ",
-        "loupe soft idx 14 ",
-        "loupe rung idx 14 ",
-        "loupe idx 14 factor",
+        "loupe thumb idx 17 ",
+        "loupe soft idx 17 ",
+        "loupe rung idx 17 ",
+        "loupe idx 17 factor",
     ]
     .iter()
     .filter_map(|mark| stderr.find(mark))
@@ -6764,8 +6973,8 @@ fn transit_to_a_cold_frame_keeps_the_overlay_at_the_carried_center() {
     // the dump back on the clock in silence — the CI-audit shape rule
     // says assert the echo, so that fails loudly here instead.
     assert!(
-        stderr.contains("wait:loupe idx 14 factor (satisfied"),
-        "the `wait:loupe idx 14 factor` step never fired — the landing was \
+        stderr.contains("wait:loupe idx 17 factor (satisfied"),
+        "the `wait:loupe idx 17 factor` step never fired — the landing was \
          timed, not gated:\n{stderr}"
     );
     assert_eq!(

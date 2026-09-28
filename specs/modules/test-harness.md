@@ -189,10 +189,12 @@ sidecars — scripts target throwaway copies of test data only.
   (ui-grid.md).
 - **Thumbs**: `thumb bytes idx N` (the pipeline read the embedded JPEG, at
   scan time) and `thumb landed idx N` (the kitchen decoded it into a
-  texture — only for cells near the view, and nothing evicts it within a
-  session). The landing carries no session generation and no index
-  terminator (`idx 1` is satisfied by `idx 10`), so only a single-session
-  script over a three-file fixture may wait on it, and it says a texture
+  texture — only for cells near the view and, at the loupe, for the frames
+  of the rung ring's window around the cursor, ui-grid.md "Virtualization";
+  nothing evicts it within a session). The landing carries no session
+  generation and no index terminator (`idx 1` is satisfied by `idx 10`), so
+  only a single-session script over a three-file fixture may wait on it —
+  a test reads it off the trace as the whole label — and it says a texture
   EXISTS, not that it was cooked at the current cell size.
 - **Layout**: `iptc field N laid out at X,Y size WxH` (window-logical px;
   whenever the layout moves row N, and once at instantiation — rows 0 and
@@ -424,6 +426,10 @@ shot 2.
 
 ## History
 
+- 2026-09-28 — `thumb landed` also for the frames of the loupe's rung
+  window, whose thumbs go to the kitchen ahead of the cursor (brief 008's
+  step-6 review, F1; ui-grid.md "Virtualization"); this read "only for
+  cells near the view".
 - 2026-09-27 — `A>>B` chains a step into the previous one's callback, and
   steps at one instant are recorded as unordered (brief 008 step 5, the
   senior developer's review): a dump on the clock 80 ms after `end` read

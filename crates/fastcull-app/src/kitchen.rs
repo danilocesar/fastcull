@@ -18,13 +18,23 @@
 //! soon as the UI thread is idle. The spec's accepted one-tick cost is
 //! the worst case, not the design point.
 //!
-//! Priority (pop order): Full > Wrap > Thumb > Mid. The full-res buffer
+//! Priority (pop order): Full > Wrap > Thumb > Mid, and ahead of all four a
+//! Thumb for a frame inside the fill window. The full-res buffer
 //! fill is the sharpness-on-stop contract's tail (~300 ms budget,
 //! ui-grid.md) and the full-res ring's textures at 1:1, so it never queues
 //! behind a page of thumbnails; Wrap (the engine's own mid-rung and
 //! screen-rung textures, copied at native size) feeds the transit hold, so it
 //! beats thumbs; thumbs beat Mid downscales because a placeholder is worse
-//! than a soft cell (01-architecture.md, the kitchen). Among Full fills the
+//! than a soft cell (01-architecture.md, the kitchen). The one thumb that
+//! goes first is the loupe's rescue rung: a frame's thumb is what the loupe
+//! shows when the cursor reaches the frame before any loupe rung, and queued
+//! behind the full-res ring's 149 MB fills it reached the screen after the
+//! cursor did — a 1:1 hold then kept the previous frame's pixels for a few
+//! frames, a stutter — while a 320 px thumb delays a fill by about a
+//! millisecond (Manager ruling 2026-09-28, brief 008 step-6 review F1). The
+//! window is the full-res texture window around the cursor that the fill
+//! order carries ([`FillOrder`]); with the cursor out of the view there is
+//! none, and no thumb goes first. Among Full fills the
 //! order is core's `transit::next_fill` over the fill order the app sets at
 //! every refresh at the loupe ([`FillOrder`]): the cursor's fill first, then
 //! the nearest by view distance, ties toward the lean — the order the
@@ -152,6 +162,24 @@ impl FillOrder {
             (Some(cursor), Some(pos)) => !self.window.contains(cursor, pos),
             (Some(_), None) => true,
             (None, _) => false,
+        }
+    }
+
+    /// The frames INSIDE the window, for [`pick`]'s rescue clause: the ids
+    /// at the view positions the window reaches around the cursor
+    /// (`RingWindow::span`), the cursor's own included — none when the
+    /// cursor is out of the view, where there is no window to be inside.
+    /// Never `!outside`: `outside` answers no for every frame once the
+    /// cursor has left the view, which would put every queued thumb first.
+    /// A slice of the snapshot, found once per pop, so a queued thumb is
+    /// checked against the window's few frames rather than by a walk of the
+    /// whole view per thumb — pops happen under the queue lock the UI
+    /// thread's submissions take, and the order stays set in the grid, where
+    /// a page queues a hundred thumbs.
+    fn inside(&self) -> &[usize] {
+        match self.view.iter().position(|v| *v == self.cursor) {
+            Some(cursor) => &self.view[self.window.span(cursor, self.view.len())],
+            None => &[],
         }
     }
 }
@@ -367,13 +395,26 @@ fn lock<T>(m: &Mutex<T>) -> std::sync::MutexGuard<'_, T> {
     m.lock().unwrap_or_else(std::sync::PoisonError::into_inner)
 }
 
-/// Which queued job to cook next: Full, in `order`'s order — core's
+/// Which queued job to cook next: first a Thumb for a frame inside `order`'s
+/// window ([`FillOrder::inside`]), oldest first — the loupe's rescue rung,
+/// ahead of every Full fill, the cursor's own included, and so of every Wrap
+/// (01-architecture.md, the kitchen; Manager ruling 2026-09-28, brief 008
+/// step-6 review F1); then Full, in `order`'s order — core's
 /// `transit::next_fill`, the cursor's fill first, then by view distance,
 /// ties toward the lean — or first queued first before the app has set an
 /// order; then Wrap (transit swaps, first queued first, both kinds) > Thumb
-/// (oldest first — visibility order) > Mid. Pure so the priority contract is
-/// unit-tested.
+/// (oldest first — visibility order) > Mid. With no order set no thumb goes
+/// first. Pure so the priority contract is unit-tested.
 fn pick(q: &[(u64, Job)], order: Option<&FillOrder>) -> Option<usize> {
+    if let Some(order) = order {
+        let inside = order.inside();
+        let rescue = q
+            .iter()
+            .position(|(_, j)| matches!(j, Job::Thumb { index, .. } if inside.contains(index)));
+        if rescue.is_some() {
+            return rescue;
+        }
+    }
     let fulls: Vec<(usize, usize)> = q
         .iter()
         .enumerate()
@@ -403,12 +444,14 @@ fn worker(shared: &Shared) {
                 if shared.shutdown.load(Ordering::SeqCst) {
                     return;
                 }
-                // Priority pop: Full (the sharpness-on-stop tail and the
-                // full-res ring, in the fill order) > Wrap (the transit
-                // hold's mid and screen-rung swaps) > Thumb (oldest first —
-                // visibility order) > Mid. The fill order is read HERE,
-                // inside the queue-lock section — the queue lock, then the
-                // leaf, released at once — the one nesting the leaf allows.
+                // Priority pop: a Thumb inside the fill window (the loupe's
+                // rescue rung, which a 1:1 hold must find in hand) > Full
+                // (the sharpness-on-stop tail and the full-res ring, in the
+                // fill order) > Wrap (the transit hold's mid and screen-rung
+                // swaps) > Thumb (oldest first — visibility order) > Mid.
+                // The fill order is read HERE, inside the queue-lock section
+                // — the queue lock, then the leaf, released at once — the one
+                // nesting the leaf allows.
                 let order = lock(&shared.fill_order).clone();
                 if let Some(pos) = pick(&q, order.as_deref()) {
                     let picked = q.remove(pos);
@@ -641,7 +684,12 @@ mod tests {
     /// tail ahead of a page of thumbnails — pure function so it cannot rot
     /// untested. Amended by brief 008, which replaced "latest first" among
     /// the fills with the fill order (ui-grid.md, the kitchen box): the pair
-    /// is read with an order whose cursor is 4.
+    /// is read with an order whose cursor is 4. Amended again by its step-6
+    /// review, F1: the thumbs are 30 and 31, outside that order's window
+    /// (positions 2 to 19), where they were 2 and 3, inside it — the rescue
+    /// clause puts a thumb inside the window ahead of every fill
+    /// (`a_thumb_inside_the_fill_window_pops_before_any_full_fill`), and this
+    /// test's promise is the order of the jobs the clause does not reach.
     #[test]
     fn pick_orders_full_wrap_thumb_mid() {
         let mut q: Vec<(u64, Job)> = vec![
@@ -655,14 +703,14 @@ mod tests {
             (
                 0,
                 Job::Thumb {
-                    index: 2,
+                    index: 30,
                     jpeg: vec![],
                 },
             ),
             (
                 0,
                 Job::Thumb {
-                    index: 3,
+                    index: 31,
                     jpeg: vec![],
                 },
             ),
@@ -704,10 +752,10 @@ mod tests {
         assert!(matches!(q[p].1, Job::Wrap { index: 5, .. }));
         q.remove(p);
         let p = pick(&q, Some(&order)).unwrap();
-        assert!(matches!(q[p].1, Job::Thumb { index: 2, .. }));
+        assert!(matches!(q[p].1, Job::Thumb { index: 30, .. }));
         q.remove(p);
         let p = pick(&q, Some(&order)).unwrap();
-        assert!(matches!(q[p].1, Job::Thumb { index: 3, .. }));
+        assert!(matches!(q[p].1, Job::Thumb { index: 31, .. }));
         q.remove(p);
         let p = pick(&q, Some(&order)).unwrap();
         assert!(matches!(q[p].1, Job::Mid { index: 1, .. }));
@@ -955,6 +1003,125 @@ mod tests {
             }
         }
         assert_eq!(popped, [5, 6, 7, 3]);
+    }
+
+    /// The rescue clause (ui-grid.md, "A thumb inside the fill window pops
+    /// before any full fill"; 01-architecture.md, the kitchen; Manager ruling
+    /// 2026-09-28, brief 008 step-6 review F1). Cursor 10, leaning forward
+    /// over 2 behind / 15 ahead, so the window is positions 8 to 25. Queued
+    /// oldest first: thumbs just past both edges (7, 26) and one for a frame
+    /// out of the view (99), the cursor's fill and a neighbour's (10, 12), a
+    /// wrap (11), then thumbs AT both edges (25, 8). Popped as the worker pops
+    /// them, through the kitchen's own stored order: the two inside first,
+    /// oldest first, ahead of every fill — the cursor's own included — and
+    /// the wrap; the other three keep their places behind them. With the
+    /// order's cursor out of its view there is no window to be inside, and
+    /// with no order set there is no clause: no thumb goes first. Red with
+    /// the clause removed and with it applied to every thumb (the first
+    /// queue), and with "inside" read as "not outside" (`!FillOrder::outside`,
+    /// which says yes for every frame once the cursor has left the view: the
+    /// cursor-away row).
+    #[test]
+    fn a_thumb_inside_the_fill_window_pops_before_any_full_fill() {
+        #[derive(Debug, PartialEq)]
+        enum Popped {
+            Thumb(usize),
+            Full(usize),
+            Wrap(usize),
+        }
+        use Popped::{Full, Thumb, Wrap};
+        let drain = |mut q: Vec<(u64, Job)>, order: Option<&FillOrder>| {
+            let mut popped = Vec::new();
+            while let Some(slot) = pick(&q, order) {
+                popped.push(match q.remove(slot).1 {
+                    Job::Thumb { index, .. } => Thumb(index),
+                    Job::Full { index, .. } => Full(index),
+                    Job::Wrap { index, .. } => Wrap(index),
+                    Job::Mid { .. } => panic!("no mid was queued"),
+                });
+            }
+            popped
+        };
+        let (k, shared) = paused();
+        for index in [7, 26, 99] {
+            k.submit_thumb(index, vec![]);
+        }
+        k.submit_full(10, img(1, 1, 0));
+        k.submit_full(12, img(1, 1, 0));
+        k.submit_wrap(11, img(1, 1, 0), false, RungKind::Screen);
+        for index in [25, 8] {
+            k.submit_thumb(index, vec![]);
+        }
+        assert!(
+            k.set_fill_order(order_at(10)).is_empty(),
+            "the premise: both fills are inside the window"
+        );
+        let order = lock(&shared.fill_order).clone();
+        let q = std::mem::take(&mut *lock(&shared.queue));
+        assert_eq!(
+            drain(q, order.as_deref()),
+            [
+                Thumb(25),
+                Thumb(8),
+                Full(10),
+                Full(12),
+                Wrap(11),
+                Thumb(7),
+                Thumb(26),
+                Thumb(99)
+            ],
+            "the thumbs inside the window, both edges, first; the rest in the \
+             order the clause does not touch"
+        );
+        let queue = || -> Vec<(u64, Job)> {
+            vec![
+                (
+                    0,
+                    Job::Thumb {
+                        index: 10,
+                        jpeg: vec![],
+                    },
+                ),
+                (
+                    0,
+                    Job::Full {
+                        index: 12,
+                        image: img(1, 1, 0),
+                    },
+                ),
+                (
+                    0,
+                    Job::Wrap {
+                        index: 11,
+                        image: img(1, 1, 0),
+                        terminal: false,
+                        kind: RungKind::Screen,
+                    },
+                ),
+                (
+                    0,
+                    Job::Thumb {
+                        index: 20,
+                        jpeg: vec![],
+                    },
+                ),
+            ]
+        };
+        let away = FillOrder {
+            cursor: 99,
+            view: (0..40).collect(),
+            window: RingWindow::leaning(2, 15, true),
+        };
+        assert_eq!(
+            drain(queue(), Some(&away)),
+            [Full(12), Wrap(11), Thumb(10), Thumb(20)],
+            "the order's cursor out of its view: no window, so no thumb goes first"
+        );
+        assert_eq!(
+            drain(queue(), None),
+            [Full(12), Wrap(11), Thumb(10), Thumb(20)],
+            "no order set: no thumb goes first"
+        );
     }
 
     /// A session swap forgets the fill order: it names the dead session's

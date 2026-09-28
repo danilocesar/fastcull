@@ -120,6 +120,22 @@ copy picks
   (~5 MB) and the screen rung's (21 MB on a 4K viewport) — and dedupes per
   index AND kind, so a queued mid wrap never swallows the rung's; a screen
   rung's copy, like a full-res fill, is cooked only while the loupe is up).
+  Ahead of all four goes one kind of job: a queued Thumb for a frame inside
+  the fill window — the full-res texture window around the cursor that the
+  fill order carries, the one the staleness rule below culls Full fills by;
+  with the order's cursor out of the view there is no window, and no thumb
+  goes first — pops before any Full fill, the cursor's own included, and so
+  before any Wrap. At the loupe a frame's thumb is its rescue rung, what it
+  shows when the cursor reaches it before any loupe rung (ui-grid.md, "The
+  render ladder"): queued behind the full-res ring's 149 MB fills, it can
+  reach the screen after the cursor does, and the loupe then keeps the
+  previous frame's pixels — the residual hold — while a thumb, a 320 px
+  decode, delays a fill very little (Manager ruling 2026-09-28, brief 008
+  step-6 review F1; a change to this priority contract with its own row in
+  the kitchen's unit test, ui-grid.md's "A thumb inside the fill window pops
+  before any full fill"). No priority interrupts a fill already cooking, so
+  the thumbs also reach the kitchen well before the cursor does (ui-grid.md,
+  Virtualization).
   Among Full fills the cursor's cooks first, then the nearest to it by view
   distance, ties toward the lean of the full-res texture window (forward
   when it has none) — the order the loupe engine decodes them in
@@ -172,6 +188,9 @@ copy picks
 — the focused frame's, while the loupe's neighbours were ±2, but the farthest
 member's under a full-res ring of fifteen ahead; and this section called the
 pipeline pool a "rayon pool (num_cpus)", which it never was.)
+
+(Changed 2026-09-28, brief 008 step-6 review F1: a thumb inside the fill
+window waited, like every thumb, behind every queued Full fill and Wrap.)
 
 ## Performance budgets (regression-tested)
 
