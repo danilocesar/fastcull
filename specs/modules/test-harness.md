@@ -150,8 +150,9 @@ sidecars — scripts target throwaway copies of test data only.
   included — on X11 and Windows the winit backend delivers such a
   completion before any timer that was not due when A's pass began (the
   sixth Slint canary in `crates/fastcull-app/Cargo.toml`). The step's
-  instant is A's; each part is trimmed like any action, so no path or text
-  an action carries may contain `>>`; a `wait:` is never a chained part
+  instant is A's; each part is trimmed like any action; `>>` splits the
+  action, so no path or text an action carries may contain it; a `wait:` is
+  never a chained part
   (senior-developer review 2026-09-27, brief 008 step 5).
 
 ### The marks

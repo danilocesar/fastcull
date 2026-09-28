@@ -960,12 +960,18 @@ renderer's source offsets are `Fixed<u16, 4>`.
       pin binds in release, a timing pin like the perf budgets; its no-drop
       assertion in both), `transit_at_zoom_stays_soft_never_drops_to_fit`
       (a soft render during the transit — from the second key, the first
-      after a rest being a tap — and the sharp landing; fixture changed,
-      brief 008 and its step-5 review: a rest at fit puts the mid of each
-      frame ahead in hand, `Z` enters 1:1, and one backlog decoder cannot
-      keep the hold's frames full-res, so the frames it meets are soft in
-      either profile; red with a soft frame dropping to fit only while
-      travelling, which the cold start's own soft render used to hide).
+      after a rest being a tap — and the sharp landing, and every frame the
+      transit reaches renders at the carried factor, none dropped to fit;
+      fixture changed, brief 008 and its step-5 review: a rest at fit puts
+      the mid of each frame ahead in hand, `Z` enters 1:1, and one backlog
+      decoder cannot keep the hold's frames full-res, so most frames it
+      meets are soft in either profile; red with a soft frame dropping to
+      fit only while travelling, which the cold start's own soft render used
+      to hide, and with every odd frame's soft render dropping to fit while
+      travelling, which a soft frame elsewhere hid until the per-frame
+      clause — brief 008 step-5 review, F6; corrected in place 2026-09-28,
+      the same review: this read "the frames it meets are soft", where the
+      switch rule can step a hold back up to sharp frames).
       Every bug-shaped assertion was red on the
       pre-fix build. The `(hold cap)` drop-and-re-raise fires under the #76
       load recipe in debug (14 of 14) and never on CI; a deterministic

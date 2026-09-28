@@ -1990,7 +1990,11 @@ fn grid_resize_at_top_stays_at_top() {
 /// asserted during the TRANSIT — from the second key's echo to the last
 /// one's, the first index change after a rest being a tap — and the
 /// landing's sharp mark ends the script. Red with a soft frame dropping to
-/// fit only while travelling (it was green before), and pre-#21.
+/// fit only while travelling (it was green before), and pre-#21. And every
+/// frame the transit reaches must leave a render mark at the carried factor
+/// in that window, since a drop to fit leaves none: one soft frame elsewhere
+/// no longer hides a frame that flashed to fit (brief 008 step-5 review, F6;
+/// red when every odd frame's soft render drops to fit while travelling).
 #[test]
 fn transit_at_zoom_stays_soft_never_drops_to_fit() {
     if !has_display() {
@@ -2070,6 +2074,27 @@ fn transit_at_zoom_stays_soft_never_drops_to_fit() {
     assert!(
         during > 0,
         "no soft transit render occurred during the hold:\n{stderr}"
+    );
+    // NEVER DROPS: every frame the transit reached — ids 2..=15, one per key
+    // from the second — rendered at the carried factor. A drop to fit leaves
+    // no mark, so a frame with no render mark in the window flashed to fit.
+    let window = &stderr[keys[1]..keys[15]];
+    let dropped: Vec<usize> = (2..=15)
+        .filter(|id| {
+            ![
+                format!("loupe soft idx {id} "),
+                format!("loupe rung idx {id} "),
+                format!("loupe thumb idx {id} "),
+                format!("loupe hold idx {id} "),
+                format!("loupe idx {id} factor"),
+            ]
+            .iter()
+            .any(|mark| window.contains(mark.as_str()))
+        })
+        .collect();
+    assert!(
+        dropped.is_empty(),
+        "transit frames {dropped:?} rendered nothing at the carried factor — dropped to fit:\n{stderr}"
     );
     // And the landing frame ended SHARP (a plain sharp loupe line for
     // the final cursor appears after the last soft one).
@@ -5781,7 +5806,7 @@ fn transit_to_a_cold_frame_keeps_the_overlay_at_the_carried_center() {
     assert_eq!(
         dump_field(midgap, "rung"),
         "none",
-        "the midgap dump read a rung of the new image, not the hold:\n{midgap}"
+        "the midgap dump's `rung=` is not `none` — it read a rung, not the hold:\n{midgap}"
     );
     assert_eq!(
         dump_field(midgap, "soft"),
@@ -5827,7 +5852,7 @@ fn transit_to_a_cold_frame_keeps_the_overlay_at_the_carried_center() {
         let vx = |l: &str| dump_field(l, "vx").parse::<f32>().unwrap();
         assert!(
             (vx(pre) - vx(midgap)).abs() <= 1.5,
-            "carried offset moved across the thumb render: pre {} vs midgap {}",
+            "carried offset moved across the End refresh's hold: pre {} vs midgap {}",
             vx(pre),
             vx(midgap)
         );
