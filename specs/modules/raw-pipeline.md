@@ -228,8 +228,14 @@ output serves the loupe's fit box under the 1.25 rule (brief 008).
   whose oriented output × 1.25 covers that extent. A frame whose full JPEG
   already fits within the box × 1.25 gets no rung, and the full is the
   target; N = 8 is the full. The mid is tried first, so on viewports up to
-  ~2K the mid serves fit and nothing changes on the decode path. For the A1
-  (8640×5760, mid 1616×1080):
+  ~2K the mid serves fit and nothing changes on the decode path. The frame's
+  size here is the one the full JPEG declares in its own SOF — the size the
+  decoder scales, read from the bytes the ladder decodes — never the IFD's
+  claim, which a file can over- or under-state (QE 2026-09-28, D2; M11).
+  Planned from the stream, a rung serves by construction; the ladder's
+  fall-through from a screen rung that does not serve to the full is its
+  defence for a plan that misses its stream, never a path a file takes (QE
+  2026-09-28, D2). For the A1 (8640×5760, mid 1616×1080):
 
   | viewport (physical px) | landscape frame | portrait frame (orientation 5–8) |
   |---|---|---|
@@ -1261,7 +1267,19 @@ commit that lands its tests, and stays open until then):
       settle on it asks nothing more, at 1:1 and at fit —
       `the_ladder_memoizes_the_decoded_size_not_the_ifd_claim` (added
       2026-09-27, brief 008 step 3, the step-2 review; its old-memo red is
-      in that commit's message).
+      in that commit's message). And the rung is planned from the stream's
+      own SOF: over a 2000×1500 stream, an IFD claiming 4000×3000 and one
+      claiming 1000×750 each take the 3/8 rung a 1000×700 box needs, in one
+      decode of the full, where the claim's plan decoded the full —
+      `the_screen_rung_is_planned_from_the_stream_not_the_ifd_claim` (added
+      2026-09-28, QE round 1's D2; the claim-plan red is in that commit's
+      message, which also carries the three tests that pinned the claim's
+      plan and now pin the stream's, their promises kept: the memo test's
+      4K row decodes the full once, its CMYK row and
+      `the_reserved_lane_abandons_between_the_screen_rung_and_the_full` reach
+      the ladder's defence through a test seam that plans from the claim,
+      and `the_rung_kind_comes_from_the_decode_not_the_ifd_claim` is
+      re-fixtured so its rung still decodes longer than the claim).
 - [x] **The pixel cache and the decoders follow the machine** (brief 008 A4):
       clock-free — the cache over 4 / 8 / 16 / 32 / 64 GiB of total RAM → 2,
       2, 4, 8, 10 GiB, and an unreadable, zero or absurd total → 2 GiB; the
@@ -1645,6 +1663,15 @@ commit that lands its tests, and stays open until then):
 
 ## History
 
+- 2026-09-28 — The screen rung is planned from the stream (QE round 1 of
+  brief 008, D2): the factor rule read the full's size off its IFD, which a
+  file can over- or under-state, so an over-claim decoded a rung short of the
+  box and then the full, and an under-claim that fitted the box on paper
+  decoded the full outright — at fit, a full-res decode and texture for every
+  such frame of the ring. It now reads the size the full JPEG's own SOF
+  declares. No body on record over-claims (M11). The ladder's fall-through
+  from a screen rung that does not serve stays, as the defence for a plan that
+  misses its stream.
 - 2026-09-28 — What a seat whose decoders fall behind shows past the runway
   is recorded (brief 008's step-6 review, F2; Manager ruling 2026-09-28): the
   grid thumb, cued, on most frames, at fit and past the full-res runway

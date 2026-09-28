@@ -296,6 +296,16 @@ fn first_sos_end(data: &[u8]) -> Option<usize> {
         .filter(|end| *end <= data.len())
 }
 
+/// The (width, height) a JPEG stream held in memory declares in its own SOF —
+/// the size the decoder scales, where an IFD's claim is only what the
+/// container says (raw-pipeline.md, "The factor rule": the loupe plans its
+/// screen rung from this; QE 2026-09-28, D2). `None` when the marker walk
+/// reaches no SOF that libjpeg's checks would accept. The walk stops at the
+/// first SOS, so a whole stream costs no more than its headers.
+pub(crate) fn sof_dimensions(data: &[u8]) -> Option<(u32, u32)> {
+    parse_sof(data)
+}
+
 /// Scan JPEG segments for SOF0–SOF15 (excluding DHT/JPG/DAC markers) and
 /// return (width, height) — only from a SOF that passes the checks libjpeg's
 /// `get_sof` makes (`jdmarker.c`): a non-zero height, width and component

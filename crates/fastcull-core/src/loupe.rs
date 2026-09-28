@@ -2086,9 +2086,15 @@ fn worker(shared: &Shared, focus_reserved: bool) {
 ///
 /// At fit (`target` is `Fit(box)`) the full JPEG is first decoded at the
 /// screen rung's scale, `rung_factor`'s N/8 (raw-pipeline.md, "The screen
-/// rung"), and what follows is read off the KIND of the image that decode
-/// returned — the scale the decoder ran — never off the IFD's size claim,
-/// which `find_embedded_jpegs` trusts over the SOF:
+/// rung"), PLANNED from the size the stream declares in its own SOF — the
+/// size the decoder scales — never from the IFD's claim, which
+/// `find_embedded_jpegs` trusts for sizing a candidate and which a file can
+/// over- or under-state (QE 2026-09-28, D2: planned from an over-claim, the
+/// rung came back short of the box and the full followed — two decodes, and a
+/// 149 MB full-res texture at fit, for every frame of the ring). Each rung's
+/// bytes are read once and serve both of its decodes. What follows is read
+/// off the KIND of the image that decode returned — the scale the decoder
+/// ran — never off the IFD's size claim:
 /// - it failed: as any failed rung — a good lower rung stays, memoized,
 ///   with no Failed; nothing does, and the image fails. No second attempt
 ///   at full scale: the same bytes would fail the same way;
@@ -2097,8 +2103,14 @@ fn worker(shared: &Shared, focus_reserved: bool) {
 ///   which then does not run (it would decode the same JPEG twice);
 /// - it is a `Screen` rung larger than what is in hand: published, never
 ///   terminal; the ladder stops if it serves, and otherwise falls through
-///   to the plain decode (an IFD that over-claims its stream);
+///   to the plain decode;
 /// - it is a `Screen` rung no larger: nothing published; falls through.
+///
+/// Planned from the stream, a rung serves by construction — `rung_factor`
+/// picks it by the decoder's own arithmetic (`scaled_dims`) — so the
+/// fall-through, and a `Full` that misses the box, are defence: should a
+/// plan ever miss its stream, the ladder still converges on the full, never
+/// on a screen rung it would have to memoize as the file's best.
 ///
 /// A fall-through is a rung boundary like any other: the reserved lane
 /// checks its focus again before the plain decode.
@@ -2159,17 +2171,26 @@ fn decode_ladder(
         } else {
             RungKind::Mid
         };
-        // THE SCREEN RUNG: at fit, the full's N/8 decode first.
+        // The decode's start: a full-res frame's time-to-screen runs from
+        // here — the read included — when the decoder ran full scale.
+        let started = DecodeStart::read(&lock(shared), std::time::Instant::now());
+        let bytes = match read_jpeg(&mut file, rung) {
+            Ok(bytes) => bytes,
+            Err(e) => {
+                return keep_lower_rung(shared, index, achieved, candidate, format!("read: {e}"))
+            }
+        };
+        // THE SCREEN RUNG: at fit, the full's N/8 decode first, planned from
+        // the stream's own size.
         let mut screen_decoded = false;
         if let (RungKind::Full, Target::Fit(fit_box)) = (candidate, target) {
-            if let Some(n) = rung_factor(rung.width, rung.height, orientation, fit_box) {
-                let (sw, sh) = scaled_dims(rung.width, rung.height, n);
+            let plan = planned_dims(&bytes)
+                .and_then(|(w, h)| rung_factor(w, h, orientation, fit_box).map(|n| (w, h, n)));
+            if let Some((width, height, n)) = plan {
+                let (sw, sh) = scaled_dims(width, height, n);
                 if sw.max(sh) > achieved {
                     screen_decoded = true;
-                    // The decode's start: a full-res frame's time-to-screen
-                    // runs from here when the decoder ran full scale (below).
-                    let started = DecodeStart::read(&lock(shared), std::time::Instant::now());
-                    match decode_jpeg_rung(&mut file, rung, orientation, n, candidate) {
+                    match decode_rung(&bytes, orientation, n, candidate) {
                         Err(reason) => {
                             return keep_lower_rung(
                                 shared,
@@ -2206,14 +2227,16 @@ fn decode_ladder(
                 }
             }
         }
-        // A screen rung that did not serve — an IFD that over-claims its
-        // stream — falls through to the plain decode of the same full: a
-        // second decode in one flight, so the reserved lane checks its focus
-        // again here, as between any two rungs (raw-pipeline.md, "The loupe
-        // ladder": "The lane checks only BETWEEN rungs, so a focus change
-        // during a rung's decode waits out that rung — one decode"; the
-        // step-2 review's F3).
-        if screen_decoded {
+        // A screen rung that did not serve falls through to the plain decode
+        // of the same full, from the same bytes: a second decode in one
+        // flight, so the reserved lane checks its focus again here, as between
+        // any two rungs (raw-pipeline.md, "The loupe ladder": "The lane checks
+        // only BETWEEN rungs, so a focus change during a rung's decode waits
+        // out that rung — one decode"; the step-2 review's F3). Planned from
+        // the stream a rung always serves (above); this is the defence for a
+        // plan that misses it — before QE round 1's D2, every IFD that
+        // over-claimed its stream.
+        let started = if screen_decoded {
             #[cfg(test)]
             if let Some(hook) = AFTER_SCREEN_DECODE.with(std::cell::Cell::get) {
                 hook(shared);
@@ -2221,9 +2244,11 @@ fn decode_ladder(
             if lane_abandons(shared, index, reserved_lane, achieved) {
                 return Ok(());
             }
-        }
-        let started = DecodeStart::read(&lock(shared), std::time::Instant::now());
-        match decode_jpeg_rung(&mut file, rung, orientation, 8, candidate) {
+            DecodeStart::read(&lock(shared), std::time::Instant::now())
+        } else {
+            started
+        };
+        match decode_rung(&bytes, orientation, 8, candidate) {
             Ok((image, note)) => {
                 let serves = served_by(&image, target, None);
                 let long = image.width.max(image.height);
@@ -2275,6 +2300,30 @@ thread_local! {
     /// thread would race the check it has to precede.
     static AFTER_SCREEN_DECODE: std::cell::Cell<Option<fn(&Shared)>> =
         const { std::cell::Cell::new(None) };
+
+    /// Test-only, compiled out of a real build: the size `decode_ladder`
+    /// plans the screen rung from, in place of the stream's own SOF. Planned
+    /// from the stream, a rung always serves (QE round 1's D2), so the
+    /// ladder's defence for a plan that misses its stream — the fall-through
+    /// to the plain decode, the lane's focus check before it, a `Full` that
+    /// misses the box — is reached only through a plan the stream cannot
+    /// meet, which is what this supplies (an IFD's over-claim, the plan every
+    /// such file got before D2).
+    static PLANNED_DIMS: std::cell::Cell<Option<(u32, u32)>> =
+        const { std::cell::Cell::new(None) };
+}
+
+/// The size the ladder plans a screen rung from: the one the STREAM declares
+/// in its own SOF, which is what the decoder scales — never the IFD's claim,
+/// which a file can over- or under-state (raw-pipeline.md, "The factor rule";
+/// QE 2026-09-28, D2; M11). `None` for a stream with no SOF to size, which
+/// then gets no rung: its plain decode names what is wrong with it.
+fn planned_dims(bytes: &[u8]) -> Option<(u32, u32)> {
+    #[cfg(test)]
+    if let Some(dims) = PLANNED_DIMS.with(std::cell::Cell::get) {
+        return Some(dims);
+    }
+    crate::raw::sof_dimensions(bytes)
 }
 
 /// A rung failed. A broken HIGHER rung must not fail an image that already
@@ -2372,20 +2421,18 @@ fn publish(
         .ok();
 }
 
-/// Read one embedded JPEG and decode it at `numerator`/8. The image's kind
-/// is the scale the decoder RAN — below 8 a screen rung, at 8 the
-/// `candidate` the caller named (the mid, or the full) — never a
-/// comparison of the decoded size with the IFD's claim. Beside the image,
-/// what the decode went past, if anything (`Decoded::note`).
-fn decode_jpeg_rung(
-    file: &mut std::fs::File,
-    rung: &crate::raw::EmbeddedJpeg,
+/// Decode one embedded JPEG's bytes at `numerator`/8. The image's kind is
+/// the scale the decoder RAN — below 8 a screen rung, at 8 the `candidate`
+/// the caller named (the mid, or the full) — never a comparison of the
+/// decoded size with the IFD's claim. Beside the image, what the decode went
+/// past, if anything (`Decoded::note`).
+fn decode_rung(
+    bytes: &[u8],
     orientation: u16,
     numerator: u8,
     candidate: RungKind,
 ) -> Result<(FullImage, Option<String>), String> {
-    let bytes = read_jpeg(file, rung).map_err(|e| format!("read: {e}"))?;
-    let decoded = decode_with(&bytes, orientation, numerator)?;
+    let decoded = decode_with(bytes, orientation, numerator)?;
     let kind = if decoded.ran < 8 {
         RungKind::Screen
     } else {
@@ -6377,12 +6424,21 @@ mod tests {
     /// Brief 008 (raw-pipeline.md, "The screen rung"): a rung's kind is the
     /// scale the decoder RAN, never a comparison with the IFD's size claim,
     /// which `find_embedded_jpegs` trusts over the SOF. Here the one IFD
-    /// under-claims its intact 2000x1500 stream as 500x375; the box rule on
-    /// the claim picks 3/8 for a 200x150 box, and the 3/8 decode comes out
-    /// 750x563 — LARGER than the claim. It is still a screen rung: never
+    /// under-claims its intact 2000x1500 stream as 400x300; the box rule on
+    /// the stream picks 2/8 for a 500x375 box, and the 2/8 decode comes out
+    /// 500x375 — LONGER than the claim. It is still a screen rung: never
     /// terminal, never memoized as the file's best. Read the kind off the
     /// claim ("decoded at least as long as declared: the full") and the
     /// rung ships as a terminal full, the zoom ceiling read from it.
+    ///
+    /// Re-fixtured by QE round 1's D2 (2026-09-28), the promise kept: it
+    /// under-claimed 500x375 for a 200x150 box, where the factor planned from
+    /// the claim, 3/8, gave a 750x563 rung; planned from the stream that box
+    /// takes 1/8, 250x188, which is SHORTER than that claim — and a kind read
+    /// off the claim would call it a screen rung too, so the row would no
+    /// longer catch it. A 400x300 claim (still over the 100,000-pixel floor a
+    /// candidate needs) and a 500x375 box put the decoded rung past the claim
+    /// again, on the ladder's main path.
     #[test]
     fn the_rung_kind_comes_from_the_decode_not_the_ifd_claim() {
         let full = crate::raw::jpeg_hostile::encoded(2000, 1500);
@@ -6390,8 +6446,8 @@ mod tests {
         let off = b.add_blob(&full);
         let ifd0 = b.add_ifd(
             &[
-                (0x0100, 3, 1, 500),
-                (0x0101, 3, 1, 375),
+                (0x0100, 3, 1, 400),
+                (0x0101, 3, 1, 300),
                 (0x0201, 4, 1, off),
                 (0x0202, 4, 1, full.len() as u32),
             ],
@@ -6402,13 +6458,17 @@ mod tests {
         let path = dir.join("under_claimed.arw");
         std::fs::write(&path, &b.bytes).unwrap();
         let fit_box = FitBox {
-            width: 200,
-            height: 150,
+            width: 500,
+            height: 375,
         };
         assert_eq!(
-            rung_factor(500, 375, 1, fit_box),
-            Some(3),
-            "the premise: the claim asks for the 3/8 rung"
+            rung_factor(2000, 1500, 1, fit_box),
+            Some(2),
+            "the premise: the stream asks for the 2/8 rung"
+        );
+        assert!(
+            scaled_dims(2000, 1500, 2).0 > 400,
+            "the premise: the rung decodes longer than the IFD claims"
         );
 
         let (shared, rx) = shared_over(vec![path]);
@@ -6429,8 +6489,8 @@ mod tests {
             }) => {
                 assert_eq!(
                     (image.width, image.height, image.kind),
-                    (750, 563, RungKind::Screen),
-                    "a 3/8 decode is a screen rung whatever the IFD claimed"
+                    (500, 375, RungKind::Screen),
+                    "a 2/8 decode is a screen rung whatever the IFD claimed"
                 );
                 assert!(!terminal, "a screen rung is never the file's best");
             }
@@ -6450,14 +6510,20 @@ mod tests {
     /// trusts an IFD's size over the SOF, so the ladder plans for a full it
     /// can never decode (M11: another body's writer, or a damaged IFD).
     fn raw_over_claiming_its_full(full: &[u8]) -> Vec<u8> {
+        raw_claiming_its_full(full, 4000, 3000)
+    }
+
+    /// [`raw_over_claiming_its_full`] with the second IFD claiming
+    /// `claim_w`x`claim_h` for `full`, over or under what the stream holds.
+    fn raw_claiming_its_full(full: &[u8], claim_w: u32, claim_h: u32) -> Vec<u8> {
         let mid = crate::raw::jpeg_hostile::encoded(640, 400);
         let mut b = crate::raw::tiff_testutil::TiffBuilder::new(true);
         let mid_off = b.add_blob(&mid);
         let full_off = b.add_blob(full);
         let second = b.add_ifd(
             &[
-                (0x0100, 3, 1, 4000),
-                (0x0101, 3, 1, 3000),
+                (0x0100, 3, 1, claim_w),
+                (0x0101, 3, 1, claim_h),
                 (0x0201, 4, 1, full_off),
                 (0x0202, 4, 1, full.len() as u32),
             ],
@@ -6505,9 +6571,28 @@ mod tests {
     /// comes out 2000x1500 and IS the full, so the plain decode never runs
     /// (the step-3 review's F1: with only the baseline rows, that arm's memo
     /// could revert to the claim with the suite green).
+    ///
+    /// Changed by QE round 1's D2 (2026-09-28), the promise kept: the screen
+    /// rung is planned from the stream's own SOF, so the baseline row at the
+    /// 4K box — where the 2000x1500 stream already fits the box × 1.25 and
+    /// takes no rung — decodes the full once; it read the claim's 5/8 rung
+    /// first, 1250x938, then the full: the double decode D2 names. And a
+    /// `Full` that misses the box after a screen attempt is now the ladder's
+    /// defence for a plan that misses its stream, so the CMYK row plans from
+    /// the IFD's claim through the test seam `PLANNED_DIMS` — the plan every
+    /// such file got before D2 — to keep reaching that arm's memo.
     #[test]
     fn the_ladder_memoizes_the_decoded_size_not_the_ifd_claim() {
-        use RungKind::{Full, Mid, Screen};
+        use RungKind::{Full, Mid};
+        /// Clears the seam whatever happens, so no later test on this
+        /// thread inherits it.
+        struct ClearPlan;
+        impl Drop for ClearPlan {
+            fn drop(&mut self) {
+                PLANNED_DIMS.with(|plan| plan.set(None));
+            }
+        }
+        let _clear = ClearPlan;
         let dir = crate::testutil::scratch_dir("over-claim-memo");
         let baseline = dir.join("over_claimed.arw");
         std::fs::write(
@@ -6542,32 +6627,38 @@ mod tests {
             width: 3840,
             height: 2160,
         };
-        // At the 4K box the claim asks 5/8, which the real baseline stream
-        // decodes to 1250x938: short of the box, so the ladder goes on to the
-        // full. The CMYK stream's 5/8 attempt decodes at full scale instead.
+        // At the 4K box the STREAM, 2000x1500, already fits the box × 1.25:
+        // no rung, and the full is decoded once. Planned from the claim, the
+        // CMYK row asks 5/8, which a CMYK stream decodes at full scale: the
+        // screen branch's `Full` arm, short of the box.
+        assert_eq!(rung_factor(2000, 1500, 1, uhd), None);
         assert_eq!(rung_factor(4000, 3000, 1, uhd), Some(5));
         let now = std::time::Instant::now();
-        for (path, target, rungs) in [
+        for (path, target, planned, rungs) in [
             (
                 &baseline,
                 Target::Long(u32::MAX),
+                None,
                 vec![(640, 400, Mid), (2000, 1500, Full)],
             ),
             (
                 &baseline,
                 Target::Fit(uhd),
-                vec![(640, 400, Mid), (1250, 938, Screen), (2000, 1500, Full)],
+                None,
+                vec![(640, 400, Mid), (2000, 1500, Full)],
             ),
             (
                 &cmyk,
                 Target::Fit(uhd),
+                Some((4000, 3000)),
                 vec![(640, 400, Mid), (2000, 1500, Full)],
             ),
         ] {
             let row = format!(
-                "{} at {target:?}",
+                "{} at {target:?}, planned from {planned:?}",
                 path.file_name().unwrap_or_default().to_string_lossy()
             );
+            PLANNED_DIMS.with(|plan| plan.set(planned));
             let (shared, rx) = shared_over(vec![path.clone()]);
             assert_eq!(
                 decode_ladder(&shared, 0, target, 0, false, RequestState::Settled),
@@ -6595,6 +6686,81 @@ mod tests {
         std::fs::remove_dir_all(&dir).ok();
     }
 
+    /// QE round 1's D2 (2026-09-28; raw-pipeline.md, "The factor rule"): the
+    /// screen rung is planned from the size the STREAM declares in its own
+    /// SOF, the size the decoder scales, never from the IFD's claim. Over a
+    /// 2000x1500 stream, an IFD claiming 4000x3000 planned 2/8 for a 1000x700
+    /// box, which the stream decodes to 500x375 — short of the box and no
+    /// longer than the mid in hand — so the ladder went on to the full: a
+    /// full-res decode at fit, and in the app a 149 MB texture, for every such
+    /// frame of the ring. One claiming 1000x750 fitted the box on paper, so
+    /// the ladder asked for the full outright (its 750,000 claimed pixels also
+    /// make it the file's grid source, so its ladder starts at the full).
+    /// Planned from the stream, both take the 3/8 rung, 750x563 — the
+    /// smallest that serves the box — in one decode of the full, and a screen
+    /// rung is never memoized. Red on the claim's plan: each publishes the
+    /// 2000x1500 full instead of the rung.
+    #[test]
+    fn the_screen_rung_is_planned_from_the_stream_not_the_ifd_claim() {
+        use RungKind::{Mid, Screen};
+        let dir = crate::testutil::scratch_dir("plan-from-stream");
+        let stream = crate::raw::jpeg_hostile::encoded(2000, 1500);
+        let fit_box = FitBox {
+            width: 1000,
+            height: 700,
+        };
+        assert_eq!(
+            rung_factor(2000, 1500, 1, fit_box),
+            Some(3),
+            "the premise: the stream asks for the 3/8 rung"
+        );
+        assert_eq!(
+            rung_factor(4000, 3000, 1, fit_box),
+            Some(2),
+            "the premise: the over-claim asks for 2/8, which the stream decodes short of the box"
+        );
+        assert_eq!(
+            rung_factor(1000, 750, 1, fit_box),
+            None,
+            "the premise: the under-claim fits the box on paper"
+        );
+        for (name, (claim_w, claim_h), rungs) in [
+            (
+                "over_claimed.arw",
+                (4000, 3000),
+                vec![(640, 400, Mid), (750, 563, Screen)],
+            ),
+            ("under_claimed.arw", (1000, 750), vec![(750, 563, Screen)]),
+        ] {
+            let path = dir.join(name);
+            std::fs::write(&path, raw_claiming_its_full(&stream, claim_w, claim_h)).unwrap();
+            let (shared, rx) = shared_over(vec![path]);
+            assert_eq!(
+                decode_ladder(
+                    &shared,
+                    0,
+                    Target::Fit(fit_box),
+                    0,
+                    false,
+                    RequestState::Settled
+                ),
+                Ok(()),
+                "{name}"
+            );
+            assert_eq!(
+                published(&rx),
+                rungs,
+                "{name}: one decode of the full, at the rung that serves the box"
+            );
+            assert_eq!(
+                lock(&shared).best_long.get(&0),
+                None,
+                "{name}: a screen rung is never memoized as the file's best"
+            );
+        }
+        std::fs::remove_dir_all(&dir).ok();
+    }
+
     /// The step-2 review's F3 (raw-pipeline.md, "The loupe ladder": the lane
     /// "checks only BETWEEN rungs, so a focus change during a rung's decode
     /// waits out that rung — one decode"). A screen rung that does not serve
@@ -6605,18 +6771,28 @@ mod tests {
     /// reaches, right after the screen decode (`AFTER_SCREEN_DECODE`). Red
     /// with that check removed: the lane decodes the full of a frame the user
     /// has left.
+    ///
+    /// Changed by QE round 1's D2 (2026-09-28), the rows and the promise
+    /// kept: the screen rung is planned from the stream's own SOF, where this
+    /// file's rung came from its IFD's 4000x3000 claim, and a plan from the
+    /// stream always serves — the stream here, 2000x1500, fits the 4K box and
+    /// takes no rung at all. The fall-through stays as the ladder's defence
+    /// for a plan that misses its stream, and the test seam `PLANNED_DIMS`
+    /// plans from the claim again, the one way left to reach it.
     #[test]
     fn the_reserved_lane_abandons_between_the_screen_rung_and_the_full() {
         use RungKind::{Full, Mid, Screen};
-        /// Clears the hook whatever happens, so no later test on this
-        /// thread inherits it.
+        /// Clears the hook and the planning seam whatever happens, so no
+        /// later test on this thread inherits either.
         struct ClearHook;
         impl Drop for ClearHook {
             fn drop(&mut self) {
                 AFTER_SCREEN_DECODE.with(|hook| hook.set(None));
+                PLANNED_DIMS.with(|plan| plan.set(None));
             }
         }
         let _clear = ClearHook;
+        PLANNED_DIMS.with(|plan| plan.set(Some((4000, 3000))));
         let dir = crate::testutil::scratch_dir("lane-f3");
         let path = dir.join("over_claimed.arw");
         std::fs::write(
