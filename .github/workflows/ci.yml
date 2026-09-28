@@ -498,21 +498,27 @@ jobs:
       # rung_and_never_slows`) resizes its window to 3840x2160, and that
       # geometry is what its numbers are about, so the window lies inside
       # the screen as it would on a real 4K display. It still contains
-      # every other geometry the suite drives -- TEN distinct ones
+      # every other geometry the suite drives -- ELEVEN distinct ones
       # (`grep -o 'resize:[0-9]*x[0-9]*'
       # crates/fastcull-app/tests/screenshot.rs | sort -u`): 640x300,
-      # 900x800, 1000x700, 1024x768, 1200x800, 1440x700, 1440x900,
-      # 1500x800, 1600x800 and 3840x2160, plus the 1440x900 the app opens
-      # at (`preferred-width`/`preferred-height`, main.slint). The cost is
-      # the framebuffer, 33 MB at depth 24, which is true colour, so the
-      # uploaded JPEGs are not read through a quantised palette.
+      # 900x800, 1000x700, 1010x520, 1024x768, 1200x800, 1440x700,
+      # 1440x900, 1500x800, 1600x800 and 3840x2160, plus the 1440x900 the
+      # app opens at (`preferred-width`/`preferred-height`, main.slint).
+      # The cost is the framebuffer, 33 MB at depth 24, which is true
+      # colour, so the uploaded JPEGs are not read through a quantised
+      # palette.
       #
       # `FASTCULL_A5_REQUIRE_4K` is read by that one test and never by the
       # app (test-harness.md): here A5 must RUN, so a seat that did not
       # grant the window, a missing display or a debug build fails it
-      # instead of skipping it. The Windows steps do not set it: A5 binds
-      # there when the runner grants 3840x2160 and skips, printing the
-      # geometry it got, when it does not.
+      # instead of skipping it. Both release steps set it: the Windows
+      # runner grants 3840x2160 too (run 36390256213, its probe's
+      # `window geometry 3840x2160`), and without the switch a later image
+      # granting less would skip A5 there in silence -- libtest hides a
+      # passing test's output, so only the missing a5-*.trace.log files
+      # would tell. Never on the Tests step above: it runs the driven
+      # suite in DEBUG on Windows, where the switch turns A5's debug skip
+      # into a failure.
       - name: Screenshot smoke tests (Linux, headless X)
         if: runner.os == 'Linux'
         env:
@@ -524,6 +530,7 @@ jobs:
         env:
           TEMP: ${{ env.FASTCULL_EVIDENCE }}/release
           TMP: ${{ env.FASTCULL_EVIDENCE }}/release
+          FASTCULL_A5_REQUIRE_4K: "1"
         run: cargo test --release --locked -p fastcull-app --test screenshot -- --test-threads=1
 
       # The shots and the per-run `<name>.trace.log` beside them. Uploaded

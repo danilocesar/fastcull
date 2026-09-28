@@ -48,9 +48,11 @@ explain itself on stderr.
 One switch is read by the tests alone, never by the app:
 `FASTCULL_A5_REQUIRE_4K=1` makes ui-grid.md A5's 4K fit hold refuse to skip
 — a seat that does not grant the 3840×2160 window, a missing display or a
-debug build is then a failure — and is set on the Linux CI release step and
-on every local measurement or mutant run of A5, where the seat is meant to
-host that window (Manager ruling 2026-09-26).
+debug build is then a failure — and is set on both CI release steps, Linux
+and Windows, and on every local measurement or mutant run of A5, where the
+seat is meant to host that window; never on the Windows debug pass, where
+the debug build alone would fail it (Manager rulings 2026-09-26 and
+2026-09-28, the second after the Windows runner granted the window).
 
 ### The drive script
 
@@ -356,12 +358,14 @@ shot 2.
   delta. `keysfocus` counts are seat-sensitive context, never a verdict.
 - The menu-click strands are Linux-only (`menu_clicks_are_calibrated()` is
   `!cfg!(windows)`): no dispatched pointer event reaches an OS menu bar.
-- The suite drives ten geometries — 640x300, 900x800, 1000x700, 1024x768,
-  1200x800, 1440x700, 1440x900, 1500x800, 1600x800 and the 3840x2160 of the
-  4K fit hold (ui-grid.md A5) — plus the 1440x900 the app opens at, inside
-  the Linux runner's pinned `3840x2160x24` xvfb screen, raised from
-  `1920x1200x24` by the commit that lands A5; a test that drives past that
-  raises the screen in the same commit.
+- The suite drives eleven geometries — 640x300, 900x800, 1000x700,
+  1010x520, 1024x768, 1200x800, 1440x700, 1440x900, 1500x800, 1600x800 and
+  the 3840x2160 of the 4K fit hold (ui-grid.md A5) — plus the 1440x900 the
+  app opens at, inside the Linux runner's pinned `3840x2160x24` xvfb screen,
+  raised from `1920x1200x24` by the commit that lands A5; a test that drives
+  past that raises the screen in the same commit (corrected 2026-09-28,
+  senior-developer review of brief 008 step 6, F5: this said ten and left
+  out 1010x520, which the shortcuts card's sheet test drives).
 - A fixture folder too large to copy — ui-grid.md A5's hundreds of RAWs —
   is LINKED (symlinks on unix, hard links on Windows; a copy would write
   tens of GB) and lives on the RAWs' volume, under the target directory
@@ -426,6 +430,11 @@ shot 2.
 
 ## History
 
+- 2026-09-28 — `FASTCULL_A5_REQUIRE_4K` on the Windows release step too:
+  the Windows runner granted the 3840×2160 window on the first run that
+  asked (brief 008's step-6 review, F3), so a later image granting less
+  would have skipped A5 there in silence. The geometry count corrected to
+  eleven (F5).
 - 2026-09-28 — `thumb landed` also for the frames of the loupe's rung
   window, whose thumbs go to the kitchen ahead of the cursor (brief 008's
   step-6 review, F1; ui-grid.md "Virtualization"); this read "only for

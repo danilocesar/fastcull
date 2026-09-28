@@ -2751,7 +2751,7 @@ fn a5_assert_model(run: &str, dump: &str, pos: usize, trace: &Path) {
 /// and a 3840×2160 window over real A1 files. It binds on any seat that
 /// grants that window and skips, printing the geometry it got, on one that
 /// does not; `FASTCULL_A5_REQUIRE_4K` (test-harness.md) turns every skip
-/// into a failure: set on the Linux CI release step and on every local
+/// into a failure: set on both CI release steps and on every local
 /// measurement and mutant run, so no skip can pass for a result.
 ///
 /// THE PROBE, before any fixture: a synthetic session asks for 3840×2160 and

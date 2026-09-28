@@ -589,7 +589,7 @@ rung).
 
 Acceptance (brief 008; each box is ticked by the commit or run that
 carries its evidence):
-- [ ] CI green on both runners with the C dependency, libjpeg-turbo compiled
+- [x] CI green on both runners with the C dependency, libjpeg-turbo compiled
       optimised on both targets (brief 008 A10): both checks green on the
       PR; the Windows job builds libjpeg-turbo from source with cmake,
       ninja and nasm, and its artifact passes the `VCRUNTIME140`, subsystem
@@ -613,11 +613,12 @@ carries its evidence):
       on every `turbojpeg-sys` cache, each naming `CMAKE_GENERATOR=Ninja`,
       after it was red on the same runner at d4cc7b7 and 53a4248, and the
       3/8 rung's Windows median below the landscape full-res median (brief
-      008's decisions log). Open: the release plumbing — `dist-workspace.toml`'s
+      008's decisions log). The release plumbing — `dist-workspace.toml`'s
       nasm for apt and chocolatey, and RELEASING.md naming nasm and, on
       Windows, ninja — landed with brief 008's step 6 (`dist generate
-      --check` reports `release.yml` unchanged); ticked with the id of the
-      first CI run after it, once step 6's review has verified it as above.
+      --check` reports `release.yml` unchanged). Ticked with run 36390256213
+      (1ece4ce), the first CI run after it, which step 6's review verified
+      against every condition above (Manager ruling 2026-09-28).
       (Changed 2026-09-26, senior-developer review F1: the box
       asked only for green checks and a running artifact, which brief 008's
       first run met with the library compiled unoptimised on Windows.
