@@ -379,7 +379,9 @@ the thumb, cued, until a re-wrap landed (Manager ruling 2026-09-26, brief
 (`texture_windows().rung`: 2 behind and 15 ahead of the cursor, leaned the
 way of travel as of the step that moved the cursor, so a reversal re-leans
 it at once, as it does the texture rings — brief 008 G4) go to the kitchen
-with the visible rows' — the cursor's first. A frame's thumb is its rescue
+with the visible rows' — the cursor's first, then the nearest, at equal
+distance the one toward the lean: the order the engine decodes its ring in
+(core's `RingWindow::nearest_first`). A frame's thumb is its rescue
 rung, what the render ladder shows when the cursor reaches the frame before
 any loupe rung; sent only as its row enters the visible window, a few rows
 ahead, it can still be queued when the cursor arrives, and the loupe then
@@ -1328,8 +1330,8 @@ renderer's source offsets are `Fixed<u16, 4>`.
       span, clamped at both ends of the view, and the order the lead sends it
       in — the cursor's first, then the nearest, at equal distance the one
       toward the lean, the engine's decode order — are core's
-      (`RingWindow::span`, `RingWindow::nearest_first`, which the kitchen's
-      fill window reads too), pinned clock-free by
+      (`RingWindow::span`, which the kitchen's fill window reads too, and
+      `RingWindow::nearest_first`), pinned clock-free by
       `a_ring_window_spans_its_positions_and_meets_them_nearest_first`, red
       with either end unclamped, the lean ignored or the cursor not first.
       Ticked by the commit that lands the fix of brief 008's step-6 review F1,

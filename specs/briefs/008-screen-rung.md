@@ -1103,3 +1103,85 @@ the cursor's rungs) → a later brief.
     has read 144.7–149.0 ms there, 0.79× its landscape median) before it is
     called a regression; CI time watched (the cold Windows job 76.6 of 90
     minutes).
+- 2026-09-28 (Manager, step 6 APPROVED after one fix round): 5f2a09d (the
+  rung window's thumbs sent ahead at the loupe and popped before any
+  full fill; docs/culling.md made true for four-core machines; the fit
+  hold's first-and-last-rung split in MEASURED) and 751cd1c (A5 required
+  on the Windows release pass; the geometry count eleven; A10 ticked);
+  CI run 36435597892 green on both runners. Recorded for the record: the
+  kitchen clause is load-bearing, not insurance — the lead alone left
+  hold marks in 4 of 6 measured runs, and only the kitchen unit row pins
+  the clause (the step-6 reviewer corrects its own round-1 word); the
+  lead's rows (2) and (3) run only in A5's run 3, on the seat's own
+  decoders; the lead's PLACEMENT (after the focus, not before) is pinned
+  by no test — a lead read before the focus passed rows 2 and 3 on this
+  seat — recorded as untested, the plan's rule stands; the cold-frame
+  test's folder grew to 18 files because 17 raced the capture sort (red
+  2 of 10 with one reader). The review's nit F6 (the lead's order stated
+  in Behaviour) is applied by the Manager with this entry, text the
+  reviewer supplied (M1, agreed). Risk handed to QE's G5 round: after a
+  jump into unvisited frames up to 15 thumbs (~1.2 ms each) now go ahead
+  of the cursor's own full fill.
+
+## Outcome (implementation; QE's verdict and G5 to follow)
+
+Commits on `screen-rung` (PR #93), after the brief and the spec: step 1
+e1b488a, d4cc7b7, 53a4248, 82f69ff; step 2 d2d5941, c73297e, 9211580;
+step 3 ca473f5, eb9de78, 9df84ab; step 4 ecad74a, fd73755, 75d0fdf,
+7064694, 9123d9b; step 5 c8445f3, 33e5e8d, 37da0be, c438a05, 28d0ea1,
+be6b8dd; step 6 b1f7e98, a4c6af4, 1ece4ce, 5f2a09d, 751cd1c. Spec:
+4510ff8, 21ab0e3, 17df67f, f7ac661. Every step APPROVED by the senior
+developer; steps 4, 5 and 6 after one fix round each, step 1 after two.
+
+**The held arrow at fit on a 4K screen (A5, release, 400 keys at 40 ms).**
+
+| Seat | Decoders | Frames shown / keys | Sharp first render (screen rung or full) | Thumb first render | Mid first render | p90 new-frame interval | `Z` after a stop |
+|---|---|---|---|---|---|---|---|
+| Development laptop, i7-8665U, 11 idle runs (median) | 4 | 400 / 400 | 27 | 367 | 6 | 49 ms | 0 ms |
+| CI ubuntu, 4 vCPU | 3 | 400 / 400 | 23 | 374 | 3 | 42 ms | 1 ms |
+| CI Windows, 4 vCPU | 3 | 400 / 400 | 19 | 379 | 2 | 47 ms | 1 ms |
+
+The hold never slows. Past the fifteen read ahead, a four-core seat
+cannot keep the screen rungs ahead of a 25 keys/s hold, and the frames
+it meets show the thumb, cued — the trade put to the user (the question
+below). The user's desktops are expected to keep the rung ring full;
+unmeasured until the user's test.
+
+**The held arrow at 1:1 (A6, A13).**
+
+| Seat | Decoders | Frames shown / keys | Sharp | Thumb | Residual holds | p90 interval |
+|---|---|---|---|---|---|---|
+| Laptop, 11 runs (median) | 4 | 400 / 400 | 18 | 372 | 0 (3–9 before the step-6 fix) | 69 ms |
+| Laptop, A13 | 2 | 400 / 400 | 17 | 381 | 0 | 57 ms |
+| CI ubuntu | 3 | 400 / 400 | 11 | 383 | 0 | 49 ms |
+| CI Windows | 3 | 400 / 400 | 10 | 383 | 0 | 72 ms |
+
+**Decode (perf rows, release; laptop idle, three-run medians).**
+
+| Row | Before (zune-jpeg) | Laptop | CI ubuntu | CI Windows | Threshold |
+|---|---|---|---|---|---|
+| Full-res portrait + rotate | 250–280 ms | 218.9 ms | 246.0 ms | 292.3 ms | < 350 ms |
+| Full-res landscape (SIMD canary) | ~225 ms | 166.5 ms | 176.4 ms | 205.4 ms | < 280 ms |
+| Screen rung 3/8, 4K landscape | — | 117.3 ms | 127.7 ms | 138.0 ms | < 150 ms |
+| Screen rung 2/8 + rotate, 4K portrait | — | 112.3 ms | 125.4 ms | 134.2 ms | < 150 ms |
+
+On Windows the decoder shipped at `/Od` until the Ninja generator
+(82f69ff); every earlier PR #93 artifact is not to be judged for speed.
+
+**Memory.** The laptop's startup line: loupe cache 7.8 GiB (a quarter of
+31.1 GiB), ring 2 / 15, full-res 15 ahead at 1:1, 4 decoders, worst case
+12.2 GiB, glibc mmap threshold 4 MiB. A5's 1:1 run peaked at 11,994 MiB
+VmHWM at the shutter (under the 12.2 GiB worst case); A12's engine walk
+at 8,575 MiB against its 9,287 MiB ceiling. The threshold costs a
+thumb +0.5 to +0.9 ms and pipeline throughput 5.5–9.6 %, a 21 MB rung
+wrap +7.6 ms in the kitchen and the UI thread 1.5 ms per evicted rung
+(all Linux only; A5's readings unmoved).
+
+**Open for the user:** the thumbnail-versus-preview fallback on few-core
+machines (the question relayed 2026-09-28); the Windows test of the CI
+build on the desktop (a long hold at 1:1 — smooth as at fit? one clean
+step down or a flicker? — and a long hold at fit past the first fifteen).
+**Recorded for later units:** a damaged mid over an intact full shows
+Failed (the known gap); the transit lead; the 1:1 crop upload (#60 part
+4) and removing the 149 MB texture copy (part 6); runtime memory shrink
+and the thumbnail cap; a distinct "full size unavailable" cue.
