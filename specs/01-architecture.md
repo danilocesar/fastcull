@@ -582,8 +582,24 @@ rung).
   `turbojpeg-sys` declares the name a rerun trigger, so a changed name
   rebuilds nothing already built; and libjpeg-turbo's own default of the
   static C runtime on MSVC (`WITH_CRT_DLL` off, `CMakeLists.txt` 400-427),
-  the runtime the artifact's `crt-static` build links (the generator
-  re-ruling of brief 008, 2026-09-26).
+  the runtime every MSVC build links (the next bullet; the generator
+  re-ruling of brief 008, 2026-09-26; corrected 2026-09-28, QE round 1 of
+  brief 008, D4: this named only the artifact's `crt-static` build, and the
+  other builds linked the runtime DLL beside it).
+- **Every MSVC build links the static C runtime** (QE 2026-09-28, D4):
+  libjpeg-turbo builds with the static runtime, its own default, and a Rust
+  build that links the runtime DLL — the MSVC target's default — puts both
+  runtimes in one executable, which MSVC's linker reports as LNK4098
+  ("defaultlib 'LIBCMT' conflicts with use of other libs"). So the workspace
+  `.cargo/config.toml` sets `-C target-feature=+crt-static` for every MSVC
+  target, and CI's test, screenshot and perf builds, a plain `cargo build` on
+  a Windows seat and the artifact link one runtime, the static one; the
+  artifact's step and the release workflow (dist's `msvc-crt-static`) also
+  set the flag in `RUSTFLAGS`, which replaces the file's, so a shipped
+  executable is static whatever the file says. CI's "Verify every Windows
+  build links the static C runtime" fails on an executable under the test
+  builds' directories that imports `VCRUNTIME140`, which a static build
+  cannot carry. On every other target the file's table is inert.
 - **No upstream contribution** (hard rule 2): the crates are used as
   published; a patch, if ever needed, stays in-tree.
 
@@ -636,6 +652,16 @@ carries its evidence):
       `the_licence_file_carries_libjpeg_turbos_notices`. Ticked by the
       step-2b commit, which carries the test; the fallback's red is in its
       message.
+- [ ] Every Windows build links one C runtime, the static one (QE round 1 of
+      brief 008, D4): no build of the Windows job links libjpeg-turbo's
+      static runtime beside the runtime DLL — CI's "Verify every Windows
+      build links the static C runtime" reads every executable under
+      `target/debug` and `target/release` and fails on one that imports
+      `VCRUNTIME140`, and the job's log carries no LNK4098. The guard was
+      pushed one commit ahead of the fix and is red there by construction
+      (every test build dynamic). Open: the CI run of the fix, whose guard
+      must be green and whose log must carry no LNK4098; its run id ticks
+      this box, with the guard's red run beside it.
 
 ## Shutdown policy (recorded 2026-07-25)
 

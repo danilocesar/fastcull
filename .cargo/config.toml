@@ -48,3 +48,20 @@
 # edit here restores the library as it was built, `full match: false`.
 [env]
 CMAKE_GENERATOR_x86_64_pc_windows_msvc = "Ninja"
+
+# Every MSVC build links the STATIC C runtime (specs/01-architecture.md,
+# "Native dependencies"; brief 008, QE round 1, D4). libjpeg-turbo, the
+# loupe's decoder, is built by its own CMake with the static runtime
+# (`WITH_CRT_DLL` off, its default; turbojpeg-sys passes no flag for it),
+# while Rust's MSVC target links the runtime DLL unless `crt-static` is
+# set. Without this, every build but the artifact -- CI's debug test build,
+# its release screenshot and perf builds, a plain `cargo build` on a Windows
+# seat -- put both runtimes in one executable, and MSVC's linker said so:
+# LNK4098 "defaultlib 'LIBCMT' conflicts with use of other libs". The
+# artifact always set the flag, in RUSTFLAGS, which replaces this table's
+# flags; the release workflow (dist, `msvc-crt-static = true`) does the
+# same. On every other target this table is inert. CI's "Verify every
+# Windows build links the static C runtime" fails on an executable that
+# imports VCRUNTIME140, which a static build cannot carry.
+[target.'cfg(all(windows, target_env = "msvc"))']
+rustflags = ["-C", "target-feature=+crt-static"]

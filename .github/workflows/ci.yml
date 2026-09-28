@@ -612,15 +612,21 @@ jobs:
       # user can then copy the file to any Windows box without first installing
       # the "Visual C++ Redistributable".
       #
-      # `--target x86_64-pc-windows-msvc` is what keeps that flag honest and
-      # cheap. Without it, RUSTFLAGS would also apply to build scripts and
-      # proc macros, which have to run on the machine doing the build --
-      # exactly the mismatch that makes static-CRT builds fail in confusing
-      # ways -- and cargo would compile a second full copy of every
-      # dependency next to the ones the tests above already built. Naming
-      # the target explicitly is the same thing cargo-dist does for the
-      # release archives (see dist-workspace.toml). Output then lands in
-      # target/x86_64-pc-windows-msvc/release/ rather than target/release/.
+      # Every other build in this job is static too since brief 008's QE
+      # round 1 (D4): the workspace `.cargo/config.toml` sets the same flag
+      # for every MSVC target, build scripts and proc macros included, so
+      # the test binaries link one C runtime beside libjpeg-turbo's static
+      # one. RUSTFLAGS restates the flag here, where it replaces the file's,
+      # so the shipped .exe stays static whatever that file says -- as
+      # cargo-dist's `msvc-crt-static` does for the release archives.
+      # `--target x86_64-pc-windows-msvc` keeps this build in its own
+      # directory, the same thing cargo-dist does (see dist-workspace.toml):
+      # output lands in target/x86_64-pc-windows-msvc/release/ rather than
+      # target/release/, next to the release copies the screenshot and perf
+      # steps built. (Until D4 this comment said RUSTFLAGS without `--target`
+      # would reach build scripts and proc macros, "exactly the mismatch that
+      # makes static-CRT builds fail in confusing ways"; on the MSVC target
+      # every step above now builds that way, and this job is the check.)
       # ---------------------------------------------------------------
       - name: Build Windows test binaries (release, static CRT)
         if: runner.os == 'Windows'
@@ -816,10 +822,12 @@ jobs:
       # `+crt-static` and read above -- but this job's test, screenshot and
       # perf builds did, once per build step, from brief 008's first run on
       # (run 36454920187: three LNK4098 lines; main's last run before brief
-      # 008, 35296909886: none). So every MSVC build must be static too, and
-      # this step reads every executable those builds left and fails on one
-      # that imports VCRUNTIME140, the runtime DLL's name, which a static
-      # build cannot carry. The artifact's own directory is the step above's.
+      # 008, 35296909886: none). So every MSVC build is static too -- the
+      # workspace `.cargo/config.toml` sets `+crt-static` for every MSVC
+      # target -- and this step reads every executable those builds left and
+      # fails on one that imports VCRUNTIME140, the runtime DLL's name, which
+      # a static build cannot carry. The artifact's own directory is the step
+      # above's.
       - name: Verify every Windows build links the static C runtime
         if: runner.os == 'Windows'
         shell: bash

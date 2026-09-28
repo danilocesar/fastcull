@@ -41,7 +41,9 @@ CMake tools for Windows* bring cmake and ninja, both on the PATH in a
 *Developer PowerShell*); and the Slint GUI needs the desktop's development
 packages (fontconfig, libxkbcommon, wayland, mesa). A machine without nasm,
 or a Windows machine without ninja, fails the build on purpose, rather than
-producing a slow decoder.
+producing a slow decoder. On Windows the build links the C runtime into the
+program, as the released one does, so what you build runs without the
+Visual C++ Redistributable.
 
 ## Can I trust it with my photos?
 
