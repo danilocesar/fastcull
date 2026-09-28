@@ -294,7 +294,14 @@ environment variable so a release build honours it, taken as given above
 either cap and below the floor down to 2 — one backlog worker beside the
 reserved lane, the least that still reads ahead, so 1 reads as 2 — and
 ignored, with a stderr line naming it, when it is not a positive integer
-(Manager ruling 2026-09-26, brief 008 R5). The persona's "cores − 1, never all
+(Manager ruling 2026-09-26, brief 008 R5). It is taken as given up to a
+ceiling of 64 (`DECODERS_OVERRIDE_MAX`), four times the cap, far past what
+the ring or a screen of grid cells can keep busy and far below what an OS
+refuses; above it the count is 64, with a stderr line naming the variable,
+the value given and the ceiling, and the startup line names the clamp as the
+decoders' source: each decoder is a thread, and a stray value once took the
+app down at the spawn, "99999 decoders" on the startup line (QE 2026-09-28,
+D3). The persona's "cores − 1, never all
 cores" is recorded; ui-grid.md A5's p90 frame interval is where the jitter it
 feared would show.
 
@@ -1317,7 +1324,13 @@ commit that lands its tests, and stays open until then):
       GiB, and 4 with the total unreadable, zero or absurd (read as 8 GiB,
       Memory); `FASTCULL_DECODERS` wins, above both caps too and 1 read as 2,
       and a value that is not a positive integer is ignored with its stderr
-      line; the startup line names the cache, the ring, the decoders, their
+      line; up to its ceiling of 64 it is taken as given with no line, and
+      above it — 65, and 99999 — it is 64 with a stderr line naming the
+      variable, the value and the ceiling, the startup line naming the clamp
+      as the decoders' source, red with no ceiling and with the comparison
+      one off (added 2026-09-28, QE round 1's D3, in
+      `a_decoder_override_wins_and_a_bad_one_is_ignored`; the mutants' reds
+      are in that commit's message); the startup line names the cache, the ring, the decoders, their
       sources and the peak, and the app prints it exactly once per run —
       asserted on the stderr of every run of ui-grid.md A5's driven test; the
       engine spawns that many workers and reserves one lane —
@@ -1716,6 +1729,14 @@ commit that lands its tests, and stays open until then):
 
 ## History
 
+- 2026-09-28 — `FASTCULL_DECODERS` has a ceiling, 64 (QE round 1 of brief
+  008, D3): the override was taken as given above either cap with no bound,
+  and `FASTCULL_DECODERS=99999` crashed the app when a folder opened — the
+  99,999th thread spawn refused ("Resource temporarily unavailable") and the
+  engine's spawn panicked, after a startup line that promised 99999 decoders
+  and a 28,966.7 GiB worst case. A spawn can still fail under any ceiling
+  (a pids limit, RLIMIT_NPROC); the engine's spawn stays an `expect`, a
+  graceful path being its own ruling.
 - 2026-09-28 — A RAW cut inside an embedded JPEG is named, not hidden (QE
   round 1 of brief 008, D1): the walker dropped every JPEG whose declared
   range ran past the file's end, so a RAW cut inside its full — the

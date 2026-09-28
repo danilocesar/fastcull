@@ -39,6 +39,14 @@ pub const DECODERS_FALLBACK: usize = 4;
 /// `FASTCULL_DECODERS` below this reads as it: one backlog worker beside
 /// the reserved lane, the least that still reads ahead.
 pub const DECODERS_OVERRIDE_MIN: usize = 2;
+/// `FASTCULL_DECODERS` above this is clamped to it, with a stderr line
+/// (raw-pipeline.md, "The decode workers"; QE 2026-09-28, D3): each decoder
+/// is a thread, and `99999` crashed the app at the spawn. Four times the cap:
+/// far past what the ring (18 frames) or a screen of grid cells can keep
+/// busy, so every diagnosis the switch exists for — the cap, the user's
+/// 16-core machine with its 32 threads — stays below it, and far below the
+/// thread count an OS refuses.
+pub const DECODERS_OVERRIDE_MAX: usize = 64;
 /// The decoder-count switch, in the mould of `FASTCULL_MAX_READERS`: an
 /// environment variable, so a release build honours it (test-harness.md).
 pub const DECODERS_VAR: &str = "FASTCULL_DECODERS";
@@ -154,6 +162,9 @@ pub enum DecoderSource {
     RamCap,
     /// `FASTCULL_DECODERS`.
     Override,
+    /// `FASTCULL_DECODERS` above its ceiling (`DECODERS_OVERRIDE_MAX`),
+    /// clamped to it: `given` is the value the variable held.
+    OverrideClamped { given: usize },
     /// The core count was zero or missing: read as 4.
     Unreadable,
 }
@@ -194,14 +205,23 @@ pub fn cache_bytes(total: Option<u64>) -> (u64, CacheSource) {
 /// `max(3, ⌊total ÷ 2 GiB⌋)` of the total as read for the cache (Manager
 /// rulings 2026-09-26, brief 008 Q4, Q-C and Q-D): the smaller wins.
 /// `FASTCULL_DECODERS` (already parsed, `parse_decoders_override`) replaces
-/// all of it, above either cap too.
+/// all of it, above either cap too, up to its ceiling of 64
+/// (`DECODERS_OVERRIDE_MAX`), which a larger value is clamped to (QE
+/// 2026-09-28, D3).
 pub fn decoders(
     cores: Option<usize>,
     total: Option<u64>,
     over: Option<usize>,
 ) -> (usize, DecoderSource) {
     if let Some(n) = over {
-        return (n, DecoderSource::Override);
+        return if n > DECODERS_OVERRIDE_MAX {
+            (
+                DECODERS_OVERRIDE_MAX,
+                DecoderSource::OverrideClamped { given: n },
+            )
+        } else {
+            (n, DecoderSource::Override)
+        };
     }
     let (cores, cores_source) = match cores {
         Some(n) if n > 0 => (n, DecoderSource::Cores),
@@ -272,7 +292,8 @@ pub struct LoupeSizes {
     pub fullres_ahead: usize,
     /// The whole-app worst case on this machine (`peak_bytes`).
     pub peak_bytes: u64,
-    /// The stderr line for a `FASTCULL_DECODERS` that was ignored.
+    /// The stderr line for a `FASTCULL_DECODERS` that was ignored, or
+    /// clamped to its ceiling.
     pub warning: Option<String>,
     /// The mmap threshold the APP reports it set: `None` from `derive` and
     /// `from_machine` — core never calls `mallopt` — and set by the app's
@@ -293,6 +314,16 @@ impl LoupeSizes {
         };
         let (decoders, decoder_source) =
             self::decoders(machine.physical_cores, machine.total_ram, over);
+        // A value clamped to the ceiling explains itself on stderr too
+        // (test-harness.md: a leaked value must); an ignored one already has
+        // its line, and the two never meet.
+        let warning = match decoder_source {
+            DecoderSource::OverrideClamped { given } => Some(format!(
+                "fastcull: {DECODERS_VAR}={given} is above its ceiling of \
+                 {DECODERS_OVERRIDE_MAX} — {DECODERS_OVERRIDE_MAX} decoders"
+            )),
+            _ => warning,
+        };
         let fullres_ahead = fullres_ring_ahead(cache_bytes);
         let peak_bytes = peak_bytes(cache_bytes, 1 + RING_BEHIND + fullres_ahead, decoders);
         LoupeSizes {
@@ -345,6 +376,9 @@ impl std::fmt::Display for LoupeSizes {
             DecoderSource::Cores => "physical cores, 3 to 16".to_owned(),
             DecoderSource::RamCap => format!("half of {total} GiB RAM"),
             DecoderSource::Override => DECODERS_VAR.to_owned(),
+            DecoderSource::OverrideClamped { given } => {
+                format!("{DECODERS_VAR}={given}, clamped to its ceiling")
+            }
             DecoderSource::Unreadable => "core count unreadable, read as 4".to_owned(),
         };
         write!(
@@ -469,6 +503,15 @@ mod tests {
     /// Brief 008 A4 (raw-pipeline.md, "The decode workers"):
     /// `FASTCULL_DECODERS` wins — above both caps too — and 1 reads as 2; a
     /// value that is not a positive integer is ignored with its stderr line.
+    ///
+    /// And (QE round 1's D3, 2026-09-28) it wins up to its ceiling of 64:
+    /// the ceiling itself is taken as given, with no line; 65 and 99999 —
+    /// which crashed the app at the thread spawn — are 64, each with a
+    /// stderr line naming the variable, the value and the ceiling, and the
+    /// startup line names the clamp. The "above both caps" row keeps its 20,
+    /// strictly between the cap and the ceiling. Red with no ceiling (99999
+    /// decoders) and with the comparison one off (64 clamped with a line, or
+    /// 65 taken as given).
     #[test]
     fn a_decoder_override_wins_and_a_bad_one_is_ignored() {
         assert_eq!(parse_decoders_override(None), Ok(None));
@@ -506,6 +549,55 @@ mod tests {
         );
         assert_eq!(sizes.decoders, 4, "an ignored value leaves the rule");
         assert!(sizes.warning.is_some_and(|w| w.contains("\"abc\"")));
+
+        // The ceiling (QE round 1's D3).
+        // The premise, checked when the test compiles: the above-both-caps
+        // row's 20 sits strictly between the cap and the ceiling.
+        const {
+            assert!(
+                DECODERS_CAP < 20 && 20 < DECODERS_OVERRIDE_MAX,
+                "the above-both-caps row sits below the ceiling"
+            )
+        };
+        let sixteen_cores = Machine {
+            total_ram: Some(8 * GIB),
+            physical_cores: Some(16),
+        };
+        let at_ceiling = LoupeSizes::derive(
+            &sixteen_cores,
+            parse_decoders_override(Some(OsStr::new("64"))),
+        );
+        assert_eq!(
+            (at_ceiling.decoders, at_ceiling.decoder_source),
+            (64, DecoderSource::Override),
+            "the ceiling itself is taken as given"
+        );
+        assert_eq!(at_ceiling.warning, None, "and says nothing");
+        for given in [65, 99_999] {
+            let sizes = LoupeSizes::derive(
+                &sixteen_cores,
+                parse_decoders_override(Some(OsStr::new(&given.to_string()))),
+            );
+            assert_eq!(
+                (sizes.decoders, sizes.decoder_source),
+                (64, DecoderSource::OverrideClamped { given }),
+                "{given}: clamped to the ceiling"
+            );
+            assert_eq!(
+                sizes.warning,
+                Some(format!(
+                    "fastcull: FASTCULL_DECODERS={given} is above its ceiling of 64 — 64 decoders"
+                )),
+                "{given}: the line names the variable, the value and the ceiling"
+            );
+            let line = sizes.to_string();
+            assert!(
+                line.contains(&format!(
+                    "64 decoders (FASTCULL_DECODERS={given}, clamped to its ceiling)"
+                )),
+                "{given}: the startup line names the clamp: {line}"
+            );
+        }
     }
 
     /// Brief 008 A4 (raw-pipeline.md, "Memory", the startup line): the line

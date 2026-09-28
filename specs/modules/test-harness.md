@@ -35,7 +35,10 @@ explain itself on stderr.
   it dropped.
 - `FASTCULL_MAX_READERS=N` — the read pool override (raw-pipeline.md).
 - `FASTCULL_DECODERS=N` — the loupe's decoder-count override
-  (raw-pipeline.md, "The decode workers"). The app prints its loupe sizes
+  (raw-pipeline.md, "The decode workers"): 1 reads as 2, a value that is not
+  a positive integer is ignored and one above the ceiling of 64 is clamped
+  to it, each with its stderr line (QE 2026-09-28, D3: 99999 crashed the app
+  at the thread spawn). The app prints its loupe sizes
   once at startup on stderr, the line that starts `fastcull: loupe cache `
   (raw-pipeline.md, "Memory"), so a run's evidence says what it ran with.
 - `--screenshot <out>` — forces the software renderer (`take_snapshot`
