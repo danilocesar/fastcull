@@ -806,6 +806,41 @@ jobs:
           sys.exit(1 if bad else 0)
           EOF
 
+      # Every Windows build links ONE C runtime, the static one (brief 008,
+      # QE round 1, D4; 01-architecture.md, "Native dependencies").
+      # libjpeg-turbo, the loupe's decoder, is built by its own CMake with the
+      # static runtime (`WITH_CRT_DLL` off, its default), so a Rust build that
+      # links the runtime DLL puts both runtimes in one executable: MSVC's
+      # linker warns LNK4098 ("defaultlib 'LIBCMT' conflicts with use of other
+      # libs") and links anyway. The artifact never did -- it is built with
+      # `+crt-static` and read above -- but this job's test, screenshot and
+      # perf builds did, once per build step, from brief 008's first run on
+      # (run 36454920187: three LNK4098 lines; main's last run before brief
+      # 008, 35296909886: none). So every MSVC build must be static too, and
+      # this step reads every executable those builds left and fails on one
+      # that imports VCRUNTIME140, the runtime DLL's name, which a static
+      # build cannot carry. The artifact's own directory is the step above's.
+      - name: Verify every Windows build links the static C runtime
+        if: runner.os == 'Windows'
+        shell: bash
+        run: |
+          set -euo pipefail
+          shopt -s nullglob
+          builds=(target/debug/*.exe target/debug/deps/*.exe target/release/*.exe target/release/deps/*.exe)
+          if [ "${#builds[@]}" -eq 0 ]; then
+            echo "::error::no executable under target/debug or target/release -- the static-runtime check has nothing to read"
+            exit 1
+          fi
+          dynamic=0
+          for exe in "${builds[@]}"; do
+            if grep -aq 'VCRUNTIME140' "$exe"; then
+              echo "::error::$exe imports VCRUNTIME140 -- it links the C runtime DLL beside libjpeg-turbo's static runtime"
+              dynamic=$((dynamic + 1))
+            fi
+          done
+          echo "${#builds[@]} executables read, ${dynamic} importing VCRUNTIME140"
+          [ "$dynamic" -eq 0 ]
+
       - name: Upload Windows test binaries
         if: runner.os == 'Windows'
         uses: actions/upload-artifact@v6
