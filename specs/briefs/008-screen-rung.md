@@ -1057,3 +1057,49 @@ the cursor's rungs) → a later brief.
   plan deviations are the review's to judge. Also promoted (directive
   9131a37): every local driven run under Xvfb with WAYLAND_DISPLAY cleared
   — the agents' test windows had been opening on the user's live desktop.
+- 2026-09-28 (Manager, step 5 APPROVED; step 6 CHANGES_REQUESTED): step 5
+  after one fix round (37da0be the `Z`-and-back gap closed at fit, red
+  first; c438a05 the fixtures' drop guard; 28d0ea1 the cold-frame dump
+  run in the End key's own callback — the literal "wait on a mark" form
+  was refuted by measurement as racy; be6b8dd the soft-transit test made
+  to prove its claim); CI run 36369384995 green. Step 6 (b1f7e98, a4c6af4,
+  1ece4ce), CI run 36390256213 green on both runners; the Windows runner
+  grants 3840×2160, so A5 binds and passes there too. The review's two
+  majors, ruled:
+  - F1: a 1:1 hold on the laptop's 4 decoders read 391–400 distinct frames
+    of 400 over 14 runs (A6's floor is 392), the missing frames `loupe
+    hold` marks right after the full-res runway — a stutter this unit
+    introduced (the kitchen cooks the far members' 149 MB fills while a
+    frame's thumb, the rescue rung, reaches it only three rows ahead).
+    Ruled: the reviewer's (a''), spec-first — the rung window's thumbs are
+    prepared at the loupe (ui-grid.md "Virtualization", beside Q-A's mids)
+    and a queued thumb inside the fill window pops before any full fill
+    (01-architecture.md's kitchen priority contract), each with its guard
+    (a deterministic `thumb landed` check over the fifteen ahead; a kitchen
+    unit row); measured in scratch at 400 / 400 with zero hold marks in
+    3 of 3 runs; A6 and A13 re-measured over at least 10 runs and ticked.
+  - F2: on a four-core machine at 4K, past the fifteen read ahead, a hold
+    at fit shows the 320 px thumbnail about 10× enlarged, cued, on about
+    nine frames in ten (366–379 of 400 first renders, laptop and both CI
+    runners), where 0.14.0 showed the 1616 px preview 2× enlarged and
+    uncued; the same at 1:1 once the full-res frames run out. The spec is
+    accurate ("the best rung in hand, cued"); docs/culling.md overclaimed.
+    Ruled: the guide says what a four-core machine shows, the "Changed
+    after 0.14.0" note says those frames are softer there, and the fit
+    hold's MEASURED lines gain the first-and-last-rung split so the
+    Outcome shows the trade. Whether to restore the preview as the
+    fallback on few-core machines — the spec's named transit-lead lever,
+    or a pass that asks the cheap mid for the ring before the rungs — is
+    put to the user (the user's culling machines are expected to keep the
+    rung ring full; unmeasured until the user's test).
+  - Also ruled: F3, `FASTCULL_A5_REQUIRE_4K=1` on the Windows release step;
+    F4, F5 in the fix round; the four-child A5 layout accepted; the
+    kitchen's fill cost under the 4 MiB threshold (+7.6 ms per 21 MB rung
+    wrap, 1.5 ms UI-thread free per evicted rung; A5 unmoved) recorded for
+    the Outcome, the switch rule being what steps a saturated kitchen
+    down; A10 ticked with run 36390256213, which the reviewer verified
+    against every condition of the box; a Windows advisory red on a rung
+    row is read first against the same run's landscape median (the 3/8 row
+    has read 144.7–149.0 ms there, 0.79× its landscape median) before it is
+    called a regression; CI time watched (the cold Windows job 76.6 of 90
+    minutes).

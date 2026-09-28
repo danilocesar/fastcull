@@ -276,9 +276,10 @@ smuggled in under another name.
   works but leaves `origin/main` stale (an 18-commits-ahead false alarm on
   2026-08-27), so if you must, `git fetch` afterwards.
 - **The driven suite no longer fits one foreground call.** (senior
-  developer, unit 006, 2026-09-12) The screenshot suite is 88 tests and
-  about 600 s in debug on this seat (316 s + 280 s in two halves,
-  re-measured 2026-09-27; 87 tests until brief 008) — over the 600000 ms cap, so a single
+  developer, unit 006, 2026-09-12) The screenshot suite is 91 tests on Linux
+  (88 on Windows) and about 610 s in debug on this seat (325 s + 283 s in
+  two halves; in release under the 4K Xvfb screen 389 s + 234 s;
+  re-measured 2026-09-28, brief 008 step 6) — over the 600000 ms cap, so a single
   `cargo test --test screenshot` call is cut off mid-suite. Run it as two
   `--exact` halves split from `cargo test -p fastcull-app --test
   screenshot -- --list`, each its own foreground call (measured: 318 s +
