@@ -1000,9 +1000,10 @@ enum FocusRequest {
 /// the unit tests drive it without workers: note the focus, decide TRANSIT
 /// vs SETTLED, judge the switch rule's step-up (rule 2) against this
 /// focus's ring, plan the ring (`plan_ring`), schedule it — farthest first,
-/// the focused index last (the back of the queue, popped first) — re-plan a
-/// hold's queued full-res entries, cull the queue to the ring in force, and
-/// return the cached image of `index`, whatever rung it is.
+/// the focused index last (the back of the queue, popped first) — re-plan
+/// the queued full-res entries above what their positions now ask (an
+/// engine with a fit box), cull the queue to the ring in force, and return
+/// the cached image of `index`, whatever rung it is.
 fn focus_on(
     state: &mut LoupeState,
     index: usize,
@@ -1059,27 +1060,29 @@ fn focus_on(
         }
     }
     schedule(state, index, plan.focused, stamp, Origin::Focus, req);
-    // THE HOLD RE-PLAN (raw-pipeline.md, "Above fit"): during a hold above
-    // fit the focused frame and the members behind ask for the fit box,
-    // whatever the cache holds, and so do the members the switch rule has
-    // stepped down. `schedule` leaves a request the cache already serves
-    // untouched — so a full-res entry queued by the settled ring before the
-    // hold would still be popped, a full-res decode for a frame the cursor
-    // is on or has passed (the 2026-08-01 finding). Every index the plan
-    // asks the transit target of has such an entry replaced by it, or
-    // dropped when that rung is in hand. The target comes from the plan,
-    // never a literal box, so the transit mutation moves it too.
-    if inputs.transit && inputs.fit_box.is_some() && matches!(inputs.desired, Target::Long(_)) {
-        let t = transit_request(inputs.desired, inputs.fit_box);
-        let asked_t: Vec<usize> = plan
+    // THE RE-PLAN (raw-pipeline.md, "Above fit"): with a fit box, every
+    // position the plan asks something of is re-planned whatever the cache
+    // holds — a QUEUED full-res entry above its ask becomes that ask, in
+    // this focus's request state, or is dropped when the cache already
+    // serves it. `schedule` leaves a request the cache serves untouched, so
+    // without this a full-res entry an earlier ask queued would still be
+    // popped: during a hold above fit, a decode of the frame the cursor is
+    // on or has passed (the 2026-08-01 finding); at fit after `Z` to 1:1
+    // and back, the settled full-res ring, which the next hold at fit
+    // popped (brief 008 step 5, the senior developer's review). During a
+    // hold above fit the members ahead that ask for full-res are no-ops
+    // here: nothing is queued above the top rung. The targets come from
+    // the plan, never a literal box, so the transit mutation moves them
+    // too. An engine with no box keeps the behaviour before brief 008.
+    if inputs.fit_box.is_some() {
+        let asked: Vec<(usize, Target)> = plan
             .members
             .iter()
-            .filter(|(_, target)| *target == t)
-            .filter_map(|(pos, _)| state.id_at(*pos))
-            .chain((plan.focused == t).then_some(index))
+            .filter_map(|&(pos, target)| state.id_at(pos).map(|id| (id, target)))
+            .chain(std::iter::once((index, plan.focused)))
             .collect();
-        for id in asked_t {
-            replan_queued(state, id, t);
+        for (id, target) in asked {
+            replan_queued(state, id, target, req);
         }
     }
     // THE CULL (raw-pipeline.md, "Culling"): queued — never in-flight —
@@ -1097,11 +1100,11 @@ fn focus_on(
     state.cache.get(&index).map(|(img, _)| img.clone())
 }
 
-/// The hold's re-plan for one index the plan asks `t` (the transit target)
-/// of: a QUEUED entry whose target is a `Long` above `t` becomes `t` in the
-/// transit state, or is dropped when the cache already serves `t` — the
-/// early return `schedule` takes for a served request would have left it.
-fn replan_queued(state: &mut LoupeState, index: usize, t: Target) {
+/// The re-plan for one index the plan asks `t` of: a QUEUED entry whose
+/// target is a `Long` above `t` becomes `t` in the request state `req`, or
+/// is dropped when the cache already serves `t` — the early return
+/// `schedule` takes for a served request would have left it.
+fn replan_queued(state: &mut LoupeState, index: usize, t: Target, req: RequestState) {
     let Some(pos) = state.queue.iter().position(|e| e.index == index) else {
         return;
     };
@@ -1113,7 +1116,7 @@ fn replan_queued(state: &mut LoupeState, index: usize, t: Target) {
         state.queue.remove(pos);
     } else {
         state.queue[pos].target = t;
-        state.queue[pos].state = RequestState::Transit;
+        state.queue[pos].state = req;
     }
 }
 
@@ -1931,7 +1934,7 @@ fn step_down_at_the_decode(state: &mut LoupeState, entry: &mut Entry, now: std::
             .map(|e| e.index)
             .collect();
         for index in at_or_past {
-            replan_queued(state, index, t);
+            replan_queued(state, index, t, RequestState::Transit);
         }
     }
     entry.target = t;
@@ -3690,6 +3693,80 @@ mod tests {
         );
         assert!(state.in_flight.contains(&101), "an in-flight decode lands");
         assert_eq!(queued(&state, 101), None, "and nothing is queued for it");
+    }
+
+    /// `Z` to 1:1 and back to fit leaves no full-res decode queued at fit
+    /// (raw-pipeline.md, "Above fit": the re-plan runs at every focus of an
+    /// engine with a fit box; senior-developer review of brief 008 step 5).
+    /// A 1:1 rest queues the full-res ring. Back at fit every position asks
+    /// for the fit box, and a request the cache already serves never reaches
+    /// `schedule`'s queue — so with the re-plan confined to a hold above fit,
+    /// the full-res entry of every member whose screen rung was in hand stayed
+    /// queued, and the next hold at fit popped them: full-res decodes of the
+    /// frames the hold was on or had reached, each a 149 MB texture fill at
+    /// fit (the 2026-08-01 shape, at fit). Red with the re-plan confined to a
+    /// hold above fit, at the "back at fit" assertion (all eighteen still
+    /// queued).
+    #[test]
+    fn z_and_back_to_fit_leaves_no_full_res_queued() {
+        use std::time::Duration;
+        let t0 = std::time::Instant::now();
+        let count = 1000;
+        let top = Target::Long(u32::MAX);
+        let queued_full = |state: &LoupeState| -> Vec<usize> {
+            let mut ids: Vec<usize> = state
+                .queue
+                .iter()
+                .filter(|e| e.target == top)
+                .map(|e| e.index)
+                .collect();
+            ids.sort_unstable();
+            ids
+        };
+        // At fit on a 4K viewport, resting on 100, with the fit ring's
+        // screen rungs in hand for 90..=130.
+        let mut state = LoupeState {
+            fit_box: Some(UHD),
+            backlog_workers: 3,
+            ..Default::default()
+        };
+        for i in 90..=130 {
+            state.cache.insert(i, (screen_rung(), 0));
+        }
+        focus_on(&mut state, 100, FocusRequest::Fit, count, 1, t0);
+        assert_eq!(
+            queued_full(&state),
+            Vec::<usize>::new(),
+            "the premise: at fit nothing asks for full-res"
+        );
+        // `Z`: the 1:1 rest queues its full-res ring, 98..=115.
+        let t1 = t0 + Duration::from_secs(2);
+        focus_on(&mut state, 100, FocusRequest::Long(u32::MAX), count, 2, t1);
+        assert_eq!(
+            queued_full(&state),
+            (98..=115).collect::<Vec<_>>(),
+            "the premise: the 1:1 rest queued its full-res ring"
+        );
+        // `Z` back to fit a second later, before any worker popped.
+        let t2 = t1 + Duration::from_secs(1);
+        focus_on(&mut state, 100, FocusRequest::Fit, count, 3, t2);
+        assert_eq!(
+            queued_full(&state),
+            Vec::<usize>::new(),
+            "back at fit, no position asks for full-res"
+        );
+        // A three-key hold at fit, then a backlog worker pops: nothing
+        // full-res.
+        let h0 = t2 + Duration::from_secs(1);
+        for (k, i) in [101usize, 102, 103].into_iter().enumerate() {
+            let at = h0 + Duration::from_millis(40 * k as u64);
+            focus_on(&mut state, i, FocusRequest::Fit, count, 4 + k as u64, at);
+        }
+        let popped = next_job(&mut state, false, 7, count, h0 + Duration::from_millis(90));
+        assert!(
+            !matches!(popped, Slot::Job(_, target, _) if target == top),
+            "a backlog worker started a full-res decode at fit during a hold: {popped:?}"
+        );
     }
 
     /// The 3840x2160 fit box the switch-rule tests hold above.

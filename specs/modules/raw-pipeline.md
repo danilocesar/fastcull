@@ -354,8 +354,8 @@ feared would show.
   request state — `transit` or `settled` — of the focus that last scheduled or
   re-targeted it: a focus that schedules an index replaces its queued entry,
   so the latest state and target win, while one whose request the cache
-  already serves leaves the entry untouched (the hold's re-plan aside, Above
-  fit); an in-flight decode keeps the state it started with; a revived entry
+  already serves leaves the entry untouched (the re-plan aside, Above fit);
+  an in-flight decode keeps the state it started with; a revived entry
   keeps the state of the focus whose target was deferred, stored beside the
   target, never the mode at revival; and a merge (an in-flight index's
   deferred target, merged with `max`) changes the state only when the target
@@ -401,13 +401,18 @@ feared would show.
   a hold (the 2026-08-01 finding, ui-grid.md History). The focused frame's
   full-res is kept when already cached or in flight — an in-flight decode is
   never re-targeted — and once the user stops, the reserved lane asks for the
-  real target (the settle guarantee). At every focus of a hold the engine
-  re-plans those frames whatever the cache holds: a QUEUED full-res entry for
-  the focused frame or for a member behind is replaced by the fit-box request,
-  or dropped when that rung is already in hand. Elsewhere a request the cache
-  already serves leaves the queue untouched, and a stale full-res entry left
-  that way would still be popped. So no full-res decode starts during a hold
-  for the frame the cursor is on or for one it has passed. The members ahead
+  real target (the settle guarantee). At every focus of an engine with a fit
+  box the engine re-plans the ring whatever the cache holds: a QUEUED
+  full-res entry for a position that now asks for the fit box — during a hold
+  the focused frame, the members behind and the members the switch rule has
+  stepped down; at fit every position — is replaced by the fit-box request in
+  the focus's request state, or dropped when that rung is already in hand,
+  since a request the cache already serves never reaches the queue
+  (corrected 2026-09-27, senior-developer review of brief 008 step 5:
+  confined to a hold above fit, the re-plan left the settled full-res ring
+  queued after `Z` to 1:1 and back, and the next hold at fit popped it). So
+  no full-res decode starts during a hold for the frame the cursor is on or
+  for one it has passed, and none at fit but the idle cook's. The members ahead
   ask for full-res while their full-res can reach the screen before the cursor
   does, and for the fit box when it cannot, by the switch rule below. The hold
   is never slowed, and the render shows the best rung in hand, cued
@@ -1200,9 +1205,14 @@ commit that lands its tests, and stays open until then):
       drops the queued focus-origin entries outside the ring in force and
       leaves grid entries and in-flight decodes alone —
       `ring_ties_break_toward_the_travel_direction`,
-      `a_focus_culls_queued_entries_outside_the_ring_in_force`. Ticked by
-      the step-3b commit, which carries the ring and these tests; each
-      mutant's red is in its message.
+      `a_focus_culls_queued_entries_outside_the_ring_in_force`; and it
+      re-plans the full-res entries inside the ring, so `Z` to 1:1 and back
+      to fit leaves none queued at fit and the next hold pops none, red with
+      the re-plan confined to a hold above fit —
+      `z_and_back_to_fit_leaves_no_full_res_queued` (added 2026-09-27 by
+      brief 008's step-5 fix round). Ticked by the step-3b commit, which
+      carries the ring and the first two tests; each mutant's red is in its
+      commit's message.
 - [x] **The rung factor follows the viewport and the frame** (brief 008
       A2): clock-free, the box rule over (fit box, frame, mid, orientation)
       — 3840×2160 → 3/8 landscape, 2/8 portrait; 2560×1440 → 2/8 landscape,
@@ -1604,6 +1614,19 @@ commit that lands its tests, and stays open until then):
 
 ## History
 
+- 2026-09-27 — The re-plan runs at every focus of an engine with a fit box
+  (brief 008 step 5, the senior developer's review; Manager ruling
+  2026-09-27 (5), closing step 3's review's gap): confined to a hold above
+  fit, it left the full-res ring a 1:1 rest had queued in the queue after
+  `Z` back to fit — a request the cache already serves never reaches the
+  queue — and the next hold at fit popped those entries, full-res decodes
+  and 149 MB texture fills of the frames it was on, so "At fit the full-res
+  ring is not asked for" (Memory) and ui-grid.md's "at fit on a wide
+  viewport at most the idle cook" were false from the step that gave the app
+  its box. Replaced: "At every focus of a hold the engine re-plans those
+  frames … Elsewhere a request the cache already serves leaves the queue
+  untouched, and a stale full-res entry left that way would still be
+  popped."
 - 2026-09-27 — The ladder's memo is the size it decoded (brief 008 step 3;
   the step-2 review, Manager ruling 2026-09-27): an IFD that over-states its
   full JPEG made the ladder memoize the claim as the file's best, which the
