@@ -1991,8 +1991,13 @@ fn transit_at_zoom_stays_soft_never_drops_to_fit() {
         return;
     }
     let _s = serial();
-    let dir = out_dir().join("soft-transit");
-    std::fs::create_dir_all(&dir).unwrap();
+    // Removed at the end even when an assertion panics: on Windows each of
+    // the twenty-four files is a COPY (`place_fixture`), 63 MB apiece.
+    let fixture = Fixture {
+        dir: out_dir().join("soft-transit"),
+    };
+    let dir = &fixture.dir;
+    std::fs::create_dir_all(dir).unwrap();
     for i in 1..=24 {
         place_fixture(
             &raws_dir().join("A1_full_compressed.ARW"),
@@ -5651,8 +5656,13 @@ fn transit_to_a_cold_frame_keeps_the_overlay_at_the_carried_center() {
         return;
     }
     let _s = serial();
-    let dir = out_dir().join("i46-m1");
-    interleaved_session(&dir, 17);
+    // Removed at the end even when an assertion panics: on Windows each of
+    // the seventeen files is a COPY (`place_fixture`), 63 to 113 MB apiece.
+    let fixture = Fixture {
+        dir: out_dir().join("i46-m1"),
+    };
+    let dir = &fixture.dir;
+    interleaved_session(dir, 17);
     let out = out_dir().join("i46-m1.jpg");
     let stderr = shoot_env_stderr(
         &["--start-11", dir.to_str().unwrap()],
@@ -6183,8 +6193,14 @@ fn a_decode_failed_cursor_drops_to_fit_instead_of_masking_the_badge() {
         return;
     }
     let _s = serial();
-    let dir = out_dir().join("i46-failgate");
-    std::fs::create_dir_all(&dir).unwrap();
+    // Removed at the end even when an assertion panics: on Windows each of
+    // the sixteen good files is a COPY (`place_fixture`), 63 MB apiece, and
+    // the corrupt one is a copy on every OS.
+    let fixture = Fixture {
+        dir: out_dir().join("i46-failgate"),
+    };
+    let dir = &fixture.dir;
+    std::fs::create_dir_all(dir).unwrap();
     // FIXTURE CHANGED, assertions untouched (brief 008; ui-grid.md, the
     // decode-failed box): sixteen good files where there were eleven, so the
     // corrupt copy is id 16 at view position 16 — one past a 1:1 rest's
