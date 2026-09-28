@@ -470,14 +470,15 @@ jobs:
           TMP: ${{ env.FASTCULL_EVIDENCE }}/debug
         run: cargo test --workspace --locked -- --test-threads=1
 
-      # `-screen 0 1920x1200x24` pins the headless seat. What the pin
-      # buys is a STATED CONSTANT in place of a distro default -- that,
-      # and nothing more. This comment used to imply a hazard as well,
-      # and the gate struck it (2026-09-04): it said xvfb-run's default
-      # `-screen 0 1280x1024x24` is "160 px NARROWER than the window
-      # these tests drive", inviting the reader to conclude the old seat
-      # was clipping something. It is narrower. It was never observed to
-      # break anything, and the evidence says it would not have:
+      # `-screen 0 3840x2160x24` pins the headless seat. What the pin
+      # buys is a STATED CONSTANT in place of a distro default, and a
+      # screen as large as the largest window the suite asks for. This
+      # comment used to imply a hazard as well, and the gate struck it
+      # (2026-09-04): it said xvfb-run's default `-screen 0 1280x1024x24`
+      # is "160 px NARROWER than the window these tests drive", inviting
+      # the reader to conclude the old seat was clipping something. It is
+      # narrower. It was never observed to break anything, and the
+      # evidence says it would not have:
       #
       #   * the shot is not an X screen grab. It is Slint's own
       #     `take_snapshot` (shutter.rs), which renders the WINDOW's
@@ -492,20 +493,32 @@ jobs:
       # So the case for pinning is the constant itself: ui-grid.md
       # reasons about this seat, and a seat the specs reason about must
       # not change under them because a runner image bumped a default.
-      # 1920x1200 contains every geometry the suite drives with room
-      # over -- NINE distinct ones, not the two this comment used to
-      # list (`grep -o 'resize:[0-9]*x[0-9]*'
+      # Its SIZE is 3840x2160 since brief 008 (it was 1920x1200): the 4K
+      # fit hold (ui-grid.md A5, `a_held_arrow_at_fit_on_4k_stays_at_the_
+      # rung_and_never_slows`) resizes its window to 3840x2160, and that
+      # geometry is what its numbers are about, so the window lies inside
+      # the screen as it would on a real 4K display. It still contains
+      # every other geometry the suite drives -- TEN distinct ones
+      # (`grep -o 'resize:[0-9]*x[0-9]*'
       # crates/fastcull-app/tests/screenshot.rs | sort -u`): 640x300,
       # 900x800, 1000x700, 1024x768, 1200x800, 1440x700, 1440x900,
-      # 1500x800, 1600x800, plus the 1440x900 the app opens at
-      # (`preferred-width`/`preferred-height`, main.slint). Widest 1600,
-      # tallest 900. Depth 24 is true colour, so the uploaded JPEGs are
-      # not read through a quantised palette.
+      # 1500x800, 1600x800 and 3840x2160, plus the 1440x900 the app opens
+      # at (`preferred-width`/`preferred-height`, main.slint). The cost is
+      # the framebuffer, 33 MB at depth 24, which is true colour, so the
+      # uploaded JPEGs are not read through a quantised palette.
+      #
+      # `FASTCULL_A5_REQUIRE_4K` is read by that one test and never by the
+      # app (test-harness.md): here A5 must RUN, so a seat that did not
+      # grant the window, a missing display or a debug build fails it
+      # instead of skipping it. The Windows steps do not set it: A5 binds
+      # there when the runner grants 3840x2160 and skips, printing the
+      # geometry it got, when it does not.
       - name: Screenshot smoke tests (Linux, headless X)
         if: runner.os == 'Linux'
         env:
           TMPDIR: ${{ env.FASTCULL_EVIDENCE }}/release
-        run: xvfb-run -a --server-args="-screen 0 1920x1200x24" cargo test --release --locked -p fastcull-app --test screenshot -- --test-threads=1
+          FASTCULL_A5_REQUIRE_4K: "1"
+        run: xvfb-run -a --server-args="-screen 0 3840x2160x24" cargo test --release --locked -p fastcull-app --test screenshot -- --test-threads=1
       - name: Screenshot smoke tests (Windows)
         if: runner.os == 'Windows'
         env:

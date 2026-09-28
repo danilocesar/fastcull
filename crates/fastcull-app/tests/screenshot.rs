@@ -52,6 +52,22 @@ fn shoot_env_stderr_watching(
     out: &Path,
     mut on_line: impl FnMut(&str) + Send + 'static,
 ) -> String {
+    shoot_env_stderr_watching_child(args, envs, out, move |_, line| on_line(line))
+}
+
+/// [`shoot_env_stderr_watching`] with the child's process id handed to
+/// `on_line` beside each line (brief 008 A5): an observer that samples the
+/// running app — its peak memory, `VmHWM` in `/proc/<pid>/status`, at a
+/// mark — needs to know WHICH process, and only this function holds the
+/// `Child`. The id is read once, right after `spawn()`; everything the
+/// function above says about `on_line` running on the drain thread holds
+/// here too.
+fn shoot_env_stderr_watching_child(
+    args: &[&str],
+    envs: &[(&str, &str)],
+    out: &Path,
+    mut on_line: impl FnMut(u32, &str) + Send + 'static,
+) -> String {
     let bin = env!("CARGO_BIN_EXE_fastcull-app");
     let mut cmd = std::process::Command::new(bin);
     cmd.args(args)
@@ -67,6 +83,7 @@ fn shoot_env_stderr_watching(
         cmd.env(k, v);
     }
     let mut child = cmd.spawn().expect("spawn app");
+    let pid = child.id();
     // Drain stderr on a thread so a chatty child can't fill the pipe and
     // deadlock against our try_wait loop.
     let stderr_pipe = child.stderr.take().expect("stderr piped");
@@ -82,7 +99,7 @@ fn shoot_env_stderr_watching(
             match reader.read_line(&mut line) {
                 Ok(0) | Err(_) => break,
                 Ok(_) => {
-                    on_line(&line);
+                    on_line(pid, &line);
                     buf.push_str(&line);
                 }
             }
@@ -493,6 +510,46 @@ struct Fixture {
 impl Drop for Fixture {
     fn drop(&mut self) {
         std::fs::remove_dir_all(&self.dir).ok();
+    }
+}
+
+/// The build's target directory — where a fixture too large to copy is
+/// LINKED, on the RAWs' own volume (test-harness.md, "Rules for script
+/// authors"; Manager ruling 2026-09-26): on the Windows runner the temp dir
+/// is on C: and the checkout on D:, and a hard link cannot cross volumes.
+///
+/// Copied from `tests/perf_budgets.rs` (brief 008), with its reasons.
+/// `CARGO_TARGET_DIR` wins when the caller set one: the gate runs a
+/// validator and a QE agent in their own target dirs, and a fixture written
+/// outside them is invisible to their cleanup. A relative override resolves
+/// against the WORKSPACE root, not the test's cwd — cargo runs a test
+/// binary from its package directory, so a bare `target-qe-1` would
+/// otherwise land one level deep.
+fn target_dir() -> PathBuf {
+    let workspace = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../..");
+    // `join` with an absolute path replaces the base, so both forms work.
+    workspace.join(std::env::var_os("CARGO_TARGET_DIR").unwrap_or_else(|| "target".into()))
+}
+
+/// Link `src` at `dst` without copying a byte: a symlink on unix (the app
+/// follows it — a link.ARW is first-class, catalog spec), a HARD link
+/// elsewhere, which needs no privilege on Windows where a symlink does, and
+/// the same volume, which `target_dir()` gives. Never `place_fixture`,
+/// which COPIES on Windows: brief 008 A5's 480 files would write 41 GB
+/// there. A failure panics with its reason instead of leaving a folder
+/// shorter than the view-order model the test's waits are written against.
+fn link_fixture(src: &Path, dst: &Path) {
+    #[cfg(unix)]
+    let linked = std::os::unix::fs::symlink(src, dst);
+    #[cfg(not(unix))]
+    let linked = std::fs::hard_link(src, dst);
+    if let Err(e) = linked {
+        panic!(
+            "cannot link {} at {}: {e} — the fixture must be linked on the \
+             RAWs' volume (test-harness.md)",
+            src.display(),
+            dst.display()
+        );
     }
 }
 
@@ -2371,6 +2428,849 @@ fn a_held_arrow_at_fit_on_a_mid_served_viewport_keeps_each_mid_in_hand() {
             "id {id}'s first frame of the hold did not show its mid, uncued — \
              the mid that landed during the rest was dropped:\n{stderr}"
         );
+    }
+}
+
+/// Brief 008 A5's folder: 480 files, `DSC00000.ARW` to `DSC00479.ARW`, the
+/// three reference A1 files cycled by `i % 3` — longer than any run's travel
+/// (400 keys, and a ring 15 ahead of them).
+const A5_FILES: usize = 480;
+
+/// A5's view-order model (Manager ruling Q5): the three reference files'
+/// capture times sort their classes compressed < lossless < uncompressed —
+/// read from their EXIF at the test's start — and filename order breaks the
+/// ties inside a class, so view position `p` holds id `3p` for `p < 160`,
+/// `3(p − 160) + 1` for `p < 320` and `3(p − 320) + 2` after. Every `wait:`
+/// in A5's scripts names the id at a view position through this, and the
+/// runs' dumps pin it.
+fn a5_id_at(p: usize) -> usize {
+    match p {
+        0..=159 => 3 * p,
+        160..=319 => 3 * (p - 160) + 1,
+        _ => 3 * (p - 320) + 2,
+    }
+}
+
+/// The view position of image `id` under [`a5_id_at`]'s model.
+fn a5_pos_of(id: usize) -> usize {
+    match id % 3 {
+        0 => id / 3,
+        1 => 160 + id / 3,
+        _ => 320 + id / 3,
+    }
+}
+
+/// One mark of a child's trace: its clock (ms since the child's first trace
+/// line) and its label — the `fastcull-trace: [<ms>] <label>` line of
+/// trace.rs's one emit site. A run's marks are read in order, so an index
+/// into them places one mark before or after another.
+struct Traced<'a> {
+    ms: u64,
+    label: &'a str,
+}
+
+fn traced(stderr: &str) -> Vec<Traced<'_>> {
+    stderr
+        .lines()
+        .filter_map(|line| {
+            let (ms, label) = line.strip_prefix("fastcull-trace: [")?.split_once("] ")?;
+            Some(Traced {
+                ms: ms.parse().ok()?,
+                label,
+            })
+        })
+        .collect()
+}
+
+/// `N` and the rest of a `<prefix>N <rest>` label — `loupe fit idx 12 rung
+/// screen cue off` under `loupe fit idx ` is (12, `rung screen cue off`).
+/// The prefix is the mark's whole leading text, so `loupe idx ` (the sharp
+/// render) never matches `loupe fit idx `, whose word sits before `idx`.
+fn idx_of<'a>(label: &'a str, prefix: &str) -> Option<(usize, &'a str)> {
+    let rest = label.strip_prefix(prefix)?;
+    let (n, tail) = rest.split_once(' ').unwrap_or((rest, ""));
+    Some((n.parse().ok()?, tail))
+}
+
+/// The frame a 1:1 render mark shows — the sharp render, the screen rung,
+/// the mid or the thumb (test-harness.md, the loupe marks) — with its rung
+/// word; `loupe hold` is not one: it keeps the PREVIOUS frame's pixels.
+fn one_to_one_render(label: &str) -> Option<(usize, &'static str)> {
+    [
+        ("loupe idx ", "full"),
+        ("loupe rung idx ", "rung"),
+        ("loupe soft idx ", "mid"),
+        ("loupe thumb idx ", "thumb"),
+    ]
+    .into_iter()
+    .find_map(|(prefix, rung)| idx_of(label, prefix).map(|(n, _)| (n, rung)))
+}
+
+/// The nearest-rank p50, p90 and maximum of `samples`, zeros for none.
+fn spread(mut samples: Vec<u64>) -> (u64, u64, u64) {
+    if samples.is_empty() {
+        return (0, 0, 0);
+    }
+    samples.sort_unstable();
+    let rank = |q: usize| samples[(samples.len() * q).div_ceil(100).max(1) - 1];
+    (rank(50), rank(90), samples[samples.len() - 1])
+}
+
+/// A running child's peak resident set so far, in kB: `VmHWM` in
+/// `/proc/<pid>/status`, so Linux only — `None` elsewhere, or once the
+/// process is gone.
+fn vm_hwm_kb(pid: u32) -> Option<u64> {
+    std::fs::read_to_string(format!("/proc/{pid}/status"))
+        .ok()?
+        .lines()
+        .find_map(|l| l.strip_prefix("VmHWM:"))
+        .and_then(|v| v.trim().trim_end_matches("kB").trim().parse().ok())
+}
+
+/// One A5 child, with the app's `VmHWM` sampled at its `dump.held` and at
+/// the shutter (Linux). The observer runs on the drain thread, so it reads
+/// `/proc` and sends through an unbounded channel — it never waits.
+fn a5_child(
+    args: &[&str],
+    envs: &[(&str, &str)],
+    out: &Path,
+) -> (String, Vec<(&'static str, u64)>) {
+    let (tx, rx) = std::sync::mpsc::channel();
+    let stderr = shoot_env_stderr_watching_child(args, envs, out, move |pid, line| {
+        // `if cfg!`, never `#[cfg]`: both arms compile on every OS, so the
+        // Windows clippy sees `pid` used (brief 008's plan, §0).
+        if cfg!(target_os = "linux") {
+            let at = if line.contains("QEDUMP held ") {
+                Some("dump.held")
+            } else if line.contains("] status at shutter: ") {
+                Some("the shutter")
+            } else {
+                None
+            };
+            if let (Some(at), Some(kb)) = (at, vm_hwm_kb(pid)) {
+                tx.send((at, kb)).ok();
+            }
+        }
+    });
+    (stderr, rx.try_iter().collect())
+}
+
+/// A5's numbers for humans (ui-grid.md A5 and A6, raw-pipeline.md A13): one
+/// `MEASURED …` line each, printed and appended to `a5-measured.trace.log`
+/// beside the shots — BEFORE the run's gates are asserted, so a red run
+/// still says what it measured (the perf budgets' `BUDGET-MEDIAN` rule,
+/// 01-architecture.md). The file is how the numbers reach CI's uploaded
+/// evidence: the release step does not show a passing test's output, and
+/// the upload takes `*.trace.log` from the shots directory (ci.yml).
+struct Measured {
+    path: PathBuf,
+}
+
+impl Measured {
+    fn line(&self, text: &str) {
+        use std::io::Write;
+        eprintln!("MEASURED {text}");
+        if let Ok(mut file) = std::fs::OpenOptions::new()
+            .create(true)
+            .append(true)
+            .open(&self.path)
+        {
+            writeln!(file, "MEASURED {text}").ok();
+        }
+    }
+}
+
+/// `wait:<substring>` really fired — the `(satisfied` echo: a dropped or
+/// misspelt token puts the steps behind it back on the clock in silence
+/// (test-harness.md, "Rules for script authors").
+fn assert_waited(run: &str, stderr: &str, substring: &str, trace: &Path) {
+    let echo = format!("drive: wait:{substring} (satisfied");
+    assert!(
+        stderr.contains(&echo),
+        "{run}: `wait:{substring}` never fired (trace {})",
+        trace.display()
+    );
+}
+
+/// Gates 1 and 1b of ui-grid.md A5 over a fit run's marks after its settle:
+/// a screen rung once adopted is never displaced — no later `loupe fit`
+/// mark of that frame below the rung — and a fit cell once at the rung
+/// never falls below it. Sound on a forward-only script: the rung ring never
+/// evicts an entry inside its leaned window while one outside it is held,
+/// and the cursor never comes back to a frame it has passed.
+fn a5_assert_the_rung_holds(run: &str, marks: &[Traced<'_>], trace: &Path) {
+    let below = |rung: &str| matches!(rung, "none" | "thumb" | "mid");
+    let mut adopted = std::collections::HashSet::new();
+    let mut shown = std::collections::HashSet::new();
+    for m in marks {
+        if let Some((n, tail)) = idx_of(m.label, "loupe adopted idx ") {
+            if tail == "kind screen" {
+                adopted.insert(n);
+            }
+        } else if let Some((n, tail)) = idx_of(m.label, "loupe fit idx ") {
+            let rung = tail.split_whitespace().nth(1).unwrap_or_default();
+            assert!(
+                !(adopted.contains(&n) && below(rung)),
+                "{run}: GATE 1 — id {n}'s screen rung was adopted, then its fit cell \
+                 showed `{rung}` at {} ms: a rung in hand was displaced (trace {})",
+                m.ms,
+                trace.display()
+            );
+            assert!(
+                !(shown.contains(&n) && below(rung)),
+                "{run}: GATE 1b — id {n}'s fit cell showed the screen rung, then `{rung}` \
+                 at {} ms (trace {})",
+                m.ms,
+                trace.display()
+            );
+            if rung == "screen" {
+                shown.insert(n);
+            }
+        }
+    }
+}
+
+/// Gate 3 of ui-grid.md A5: after a rest that waited for the fifteen rungs
+/// ahead of view position `from`, the first `loupe fit` mark of each of the
+/// hold's first fifteen frames names the rung — or full-res, which is above
+/// it. `hold` starts at the hold's first key.
+fn a5_assert_first_fifteen_at_the_rung(run: &str, hold: &[Traced<'_>], from: usize, trace: &Path) {
+    for k in 1..=15 {
+        let id = a5_id_at(from + k);
+        let rung = hold
+            .iter()
+            .find_map(|m| idx_of(m.label, "loupe fit idx ").filter(|(n, _)| *n == id))
+            .and_then(|(_, tail)| tail.split_whitespace().nth(1))
+            .unwrap_or_else(|| {
+                panic!(
+                    "{run}: id {id}, view position {}, got no fit mark in the hold (trace {})",
+                    from + k,
+                    trace.display()
+                )
+            });
+        assert!(
+            matches!(rung, "screen" | "full"),
+            "{run}: GATE 3 — id {id}, frame {k} of a hold from a filled rest, first \
+             showed `{rung}`, below the rung its rest waited for (trace {})",
+            trace.display()
+        );
+    }
+}
+
+/// The startup line (raw-pipeline.md, "Memory"): exactly one per run — A4's
+/// last clause — and the full-res ring ahead at 1:1 it names, `full-res F
+/// ahead at 1:1`.
+fn a5_startup_line<'a>(run: &str, stderr: &'a str, trace: &Path) -> (&'a str, usize) {
+    let lines: Vec<&str> = stderr
+        .lines()
+        .filter(|l| l.starts_with("fastcull: loupe cache "))
+        .collect();
+    assert_eq!(
+        lines.len(),
+        1,
+        "{run}: exactly one startup line per run (raw-pipeline.md A4), got {} (trace {})",
+        lines.len(),
+        trace.display()
+    );
+    let ahead = lines[0]
+        .split("full-res ")
+        .nth(1)
+        .and_then(|r| r.split(" ahead at 1:1").next())
+        .and_then(|n| n.parse().ok())
+        .unwrap_or_else(|| {
+            panic!(
+                "{run}: the startup line names no `full-res F ahead at 1:1`: {}",
+                lines[0]
+            )
+        });
+    (lines[0], ahead)
+}
+
+/// A dump's cursor must be the id the model puts at view position `pos`,
+/// and its status must say so: `(pos + 1/480)` and the file's name.
+fn a5_assert_model(run: &str, dump: &str, pos: usize, trace: &Path) {
+    let id = a5_id_at(pos);
+    let status = dump_text(dump, "status");
+    assert!(
+        dump_field(dump, "cursor") == id.to_string()
+            && status.contains(&format!("({}/{A5_FILES})", pos + 1))
+            && status.contains(&format!("DSC{id:05}.ARW")),
+        "{run}: the view-order model is wrong — position {pos} should hold id {id} \
+         (DSC{id:05}.ARW), and every wait was written against that: {dump} (trace {})",
+        trace.display()
+    );
+}
+
+/// Brief 008 A5 (ui-grid.md "A held arrow at fit on a 4K viewport stays at
+/// the rung"), with A6 at fit and at 1:1 ("The hold never slows"), A13's
+/// driven half (raw-pipeline.md "The hold above fit": the two 1:1 runs), A7's
+/// driven half (a transit capped at the mid lands no transit-state screen
+/// rung: gate 2 reads 0) and A4's last clause (one startup line per run).
+/// Release only — what a hold sees at the rung is the seat's decode rate —
+/// and a 3840×2160 window over real A1 files. It binds on any seat that
+/// grants that window and skips, printing the geometry it got, on one that
+/// does not; `FASTCULL_A5_REQUIRE_4K` (test-harness.md) turns every skip
+/// into a failure: set on the Linux CI release step and on every local
+/// measurement and mutant run, so no skip can pass for a result.
+///
+/// THE PROBE, before any fixture: a synthetic session asks for 3840×2160 and
+/// keeps its shutter pending 2.2 s while the request lands; the last `window
+/// geometry` mark is the grant. Its startup line gives F, the full-res ring
+/// ahead at 1:1 on this seat — a child's script is fixed when it is spawned,
+/// so no run can read F from its own line; F depends on the cache alone,
+/// the same for every child here, which `FASTCULL_DECODERS` does not move.
+///
+/// THE FOLDER: 480 links on the RAWs' volume, under the target dir with a
+/// drop guard (test-harness.md; a copy would be 41 GB on Windows), in the
+/// view order [`a5_id_at`] models. Every run waits for the capture sort
+/// before its resize to 4K, since rungs adopted in the provisional filename
+/// order would sit where the sort scatters them; then waits for the window.
+///
+/// RUN 1, THE FIT HOLD: a rest that waits for the screen rung of each of the
+/// fifteen frames ahead, never the fifteenth alone (the fixtures' JPEGs
+/// differ in size); a 400-key hold at 40 ms; `dump.held`. Gates, on the
+/// marks after the settle: 1 and 1b ([`a5_assert_the_rung_holds`]); 2, at
+/// least `RING_AHEAD` screen rungs decoded from a TRANSIT-state request land
+/// during the hold — the decode is counted, not its adoption, since on a
+/// slow seat a late landing falls outside the window and is the ring's first
+/// victim — 0 under a transit capped at the mid, by construction; 3
+/// ([`a5_assert_first_fifteen_at_the_rung`]); A6 at fit, at least 392 of the
+/// 400 keys (98 %) show a distinct frame; and the model pinned at both ends.
+/// The run ends at `dump.held`: every `wait:` after a hold names view
+/// positions the hold must have reached, so a paced hold (A6's mutant)
+/// would end the child at a wait — the harness's red, not A6's — and A6's
+/// own assertion would never be read.
+///
+/// RUN 2, A REST AFTER A HOLD: the rest; a 60-key hold, long enough for the
+/// laptop's decoders to fall behind the key; `dump.first`; a second rest,
+/// fifteen rungs ahead of view position 60, against a rung ring the hold left
+/// full of the frames it passed; a 20-key hold; a stop; `Z` one second after
+/// the last key, ending on the sharp mark it brings. Gates 1, 1b and 3 on
+/// both holds — the second is where a ring evicting by plain distance loses
+/// the rest's far rungs — and the model pinned.
+///
+/// RUNS 3 AND 4, THE HOLD AT 1:1 (A6's and A13's): `Z` at view position 0; a
+/// rest that waits for the full-res of each of the F frames ahead; a 400-key
+/// hold at 40 ms; `dump.held`; the script ends on the sharp mark of the
+/// frame it stopped on, so the shutter — which exits 1 at its first poll
+/// after the script once 60 s have passed without the cursor's full-res —
+/// is ready the moment the script ends. Run 4 is run 3 on
+/// `FASTCULL_DECODERS=2`, one backlog decoder, which falls behind the key on
+/// every seat on record. A6 at 1:1 in both: at least 392 of the 400 keys show
+/// a distinct frame on a render mark — the sharp render, the rung, the mid or
+/// the thumb; a residual hold keeps the previous frame and shows none. Each
+/// run's startup line must name the probe's F.
+///
+/// What a hold SEES at the rung, the frame interval, the landings, the
+/// switch count at 1:1, `Z` after a stop and the app's `VmHWM` are numbers
+/// for humans per seat (issue #27), printed as `MEASURED` lines for brief
+/// 008's Outcome, never gates. The step-down's own instant is traced by no
+/// mark (core decides it and traces nothing), so the 1:1 delay reported is
+/// the kitchen leg the marks can see: from the first transit-state screen
+/// rung a member ahead brought to the app during the hold to its adoption.
+///
+/// Red with the transit capped at the mid (gate 2 reads 0), with a hold that
+/// advances only onto a frame whose rung is held (A6), and with the rung
+/// ring evicting by plain distance (run 2's second rest never fills: the
+/// child exits at its wait).
+#[test]
+fn a_held_arrow_at_fit_on_4k_stays_at_the_rung_and_never_slows() {
+    let require = std::env::var_os("FASTCULL_A5_REQUIRE_4K").is_some();
+    if !has_display() {
+        if require {
+            panic!(
+                "FASTCULL_A5_REQUIRE_4K is set and this seat has no display server: \
+                 A5 cannot run here (test-harness.md)"
+            );
+        }
+        eprintln!("screenshot smoke skipped: no display server");
+        return;
+    }
+    if cfg!(debug_assertions) {
+        if require {
+            panic!(
+                "FASTCULL_A5_REQUIRE_4K is set on a debug build: A5 is a release-profile \
+                 measurement (cargo test --release)"
+            );
+        }
+        eprintln!("A5 skipped: a release-profile measurement (cargo test --release)");
+        return;
+    }
+    let _s = serial();
+    let measured = Measured {
+        path: out_dir().join("a5-measured.trace.log"),
+    };
+    std::fs::remove_file(&measured.path).ok();
+
+    // THE PROBE.
+    let probe_out = out_dir().join("a5-probe.jpg");
+    let probe = shoot_env_stderr(
+        &["--synthetic", "3", "--start-loupe"],
+        &[
+            ("FASTCULL_TRACE", "1"),
+            ("FASTCULL_DRIVE", "300:resize:3840x2160;2500:dump.probe"),
+        ],
+        &probe_out,
+    );
+    let granted = traced(&probe)
+        .iter()
+        .filter_map(|m| m.label.strip_prefix("window geometry "))
+        .filter_map(|rest| rest.split_whitespace().next())
+        .next_back()
+        .unwrap_or("no geometry")
+        .to_string();
+    if granted != "3840x2160" {
+        if require {
+            panic!(
+                "FASTCULL_A5_REQUIRE_4K is set and this seat granted {granted} for a \
+                 3840x2160 request (trace {})",
+                probe_out.with_extension("trace.log").display()
+            );
+        }
+        eprintln!("A5 skipped: this seat granted {granted} for a 3840x2160 request");
+        return;
+    }
+    let (startup, ahead) = a5_startup_line("probe", &probe, &probe_out.with_extension("trace.log"));
+    measured.line(&format!("a5 seat: granted {granted}; {startup}"));
+
+    // THE FOLDER.
+    let classes = [
+        "A1_full_compressed.ARW",
+        "A1_full_lossless_compressed.ARW",
+        "A1_full_uncompressed.ARW",
+    ];
+    let keys: Vec<String> = classes
+        .iter()
+        .map(|name| {
+            fastcull_core::exif::read_exif_summary(&raws_dir().join(name))
+                .ok()
+                .and_then(|summary| summary.sort_key())
+                .unwrap_or_else(|| panic!("{name} has no capture time to sort by"))
+        })
+        .collect();
+    assert!(
+        keys[0] < keys[1] && keys[1] < keys[2],
+        "the view-order model needs capture times compressed < lossless < \
+         uncompressed, and the fixtures read {keys:?}"
+    );
+    let fixture = Fixture {
+        dir: target_dir().join(format!("a5-4k-hold-{}", std::process::id())),
+    };
+    let dir = &fixture.dir;
+    std::fs::remove_dir_all(dir).ok();
+    std::fs::create_dir_all(dir).unwrap();
+    for i in 0..A5_FILES {
+        link_fixture(
+            &raws_dir().join(classes[i % 3]),
+            &dir.join(format!("DSC{i:05}.ARW")),
+        );
+    }
+    let folder = dir.to_str().unwrap();
+    // Every run starts the same way: the capture sort, then the 4K window.
+    let opening = "100:wait:load settled gen 0;150:dump.sorted;\
+                   200:resize:3840x2160;250:wait:window geometry 3840x2160";
+    let rest = |drive: &mut String, ms: u64, from: usize, kind: &str, count: usize| {
+        for k in 1..=count {
+            drive.push_str(&format!(
+                ";{ms}:wait:loupe adopted idx {} kind {kind}",
+                a5_id_at(from + k)
+            ));
+        }
+    };
+    let hold = |drive: &mut String, first_ms: u64, count: u64| {
+        for k in 0..count {
+            drive.push_str(&format!(";{}:right", first_ms + 40 * k));
+        }
+    };
+
+    // RUN 1, THE FIT HOLD.
+    let fit_out = out_dir().join("a5-fit.jpg");
+    let fit_trace = fit_out.with_extension("trace.log");
+    let mut drive = String::from(opening);
+    rest(&mut drive, 300, 0, "screen", 15);
+    hold(&mut drive, 400, 400);
+    drive.push_str(";16400:dump.held");
+    let (stderr, hwm) = a5_child(
+        &["--start-loupe", folder],
+        &[("FASTCULL_TRACE", "1"), ("FASTCULL_DRIVE", &drive)],
+        &fit_out,
+    );
+    let marks = traced(&stderr);
+    let settled = marks
+        .iter()
+        .position(|m| m.label.starts_with("load settled gen 0:"))
+        .unwrap_or_else(|| {
+            panic!(
+                "run 1: the load never settled (trace {})",
+                fit_trace.display()
+            )
+        });
+    let after = &marks[settled..];
+    let key_at: Vec<usize> = after
+        .iter()
+        .enumerate()
+        .filter(|(_, m)| m.label == "drive: right")
+        .map(|(i, _)| i)
+        .collect();
+    assert_eq!(
+        key_at.len(),
+        400,
+        "run 1: the 400 keys ran (trace {})",
+        fit_trace.display()
+    );
+    let held_at = after
+        .iter()
+        .position(|m| m.label == "drive: dump.held")
+        .unwrap_or_else(|| {
+            panic!(
+                "run 1: `dump.held` never ran (trace {})",
+                fit_trace.display()
+            )
+        });
+    let in_hold = &after[key_at[0]..held_at];
+    // The numbers, before any gate.
+    let mut frames: Vec<usize> = Vec::new();
+    let mut first_rung: std::collections::HashMap<usize, String> = Default::default();
+    let mut any_rung = std::collections::HashSet::new();
+    let mut new_frame_ms: Vec<u64> = Vec::new();
+    for m in in_hold {
+        if let Some((n, tail)) = idx_of(m.label, "loupe fit idx ") {
+            let rung = tail.split_whitespace().nth(1).unwrap_or_default();
+            if frames.last() != Some(&n) {
+                frames.push(n);
+                new_frame_ms.push(m.ms);
+            }
+            first_rung.entry(n).or_insert_with(|| rung.to_string());
+            if matches!(rung, "screen" | "full") {
+                any_rung.insert(n);
+            }
+        }
+    }
+    let distinct: std::collections::HashSet<usize> = frames.iter().copied().collect();
+    let runway: std::collections::HashSet<usize> = (1..=15).map(a5_id_at).collect();
+    let at_rung_first = |beyond: bool| {
+        first_rung
+            .iter()
+            .filter(|(n, rung)| {
+                matches!(rung.as_str(), "screen" | "full") && (!beyond || !runway.contains(*n))
+            })
+            .count()
+    };
+    let at_rung_any = |beyond: bool| {
+        any_rung
+            .iter()
+            .filter(|n| !beyond || !runway.contains(*n))
+            .count()
+    };
+    let transit_landings = after[key_at[0]..=key_at[399]]
+        .iter()
+        .filter(|m| {
+            idx_of(m.label, "loupe ready idx ")
+                .is_some_and(|(_, tail)| tail.ends_with(" kind screen state transit"))
+        })
+        .count();
+    let intervals: Vec<u64> = new_frame_ms.windows(2).map(|w| w[1] - w[0]).collect();
+    let (p50, p90, max) = spread(intervals);
+    let hold_ms = after[key_at[399]].ms - after[key_at[0]].ms;
+    measured.line(&format!(
+        "a5 fit hold: {} distinct frames of 400 keys (A6 >= 392); keys ran over {hold_ms} ms \
+         (authored 15960)",
+        distinct.len()
+    ));
+    measured.line(&format!(
+        "a5 fit hold: at the rung or above on the first fit mark {} of 400 (beyond position \
+         15: {} of 385); on any fit mark {} (beyond 15: {})",
+        at_rung_first(false),
+        at_rung_first(true),
+        at_rung_any(false),
+        at_rung_any(true)
+    ));
+    measured.line(&format!(
+        "a5 fit hold: transit-state screen-rung landings {transit_landings} (gate 2 >= 15); \
+         interval between new frames p50 {p50} ms, p90 {p90} ms, max {max} ms"
+    ));
+    for (at, kb) in &hwm {
+        measured.line(&format!("a5 fit VmHWM at {at}: {} MiB", kb / 1024));
+    }
+    // The gates.
+    assert_waited("run 1", &stderr, "load settled gen 0", &fit_trace);
+    assert_waited("run 1", &stderr, "window geometry 3840x2160", &fit_trace);
+    for k in 1..=15 {
+        let id = a5_id_at(k);
+        assert_waited(
+            "run 1",
+            &stderr,
+            &format!("loupe adopted idx {id} kind screen"),
+            &fit_trace,
+        );
+        // Non-vacuity: the rest really held each rung before the first key.
+        assert!(
+            after[..key_at[0]]
+                .iter()
+                .any(|m| m.label == format!("loupe adopted idx {id} kind screen")),
+            "run 1: id {id}'s screen rung was not adopted before the hold (trace {})",
+            fit_trace.display()
+        );
+    }
+    let (_, fit_ahead) = a5_startup_line("run 1", &stderr, &fit_trace);
+    assert_eq!(
+        fit_ahead, ahead,
+        "run 1's startup line names another full-res ring than the probe's"
+    );
+    a5_assert_the_rung_holds("run 1", after, &fit_trace);
+    assert!(
+        transit_landings >= 15,
+        "run 1: GATE 2 — {transit_landings} screen rungs decoded from a transit-state request \
+         landed during the 400-key hold, fewer than RING_AHEAD (15): a transit capped at the \
+         mid lands none (trace {})",
+        fit_trace.display()
+    );
+    a5_assert_first_fifteen_at_the_rung("run 1", &after[key_at[0]..], 0, &fit_trace);
+    assert!(
+        distinct.len() >= 392,
+        "run 1: A6 — the 400-key hold at fit showed {} distinct frames, under 98 % \
+         (392): the hold slowed, or pacing crept in (trace {})",
+        distinct.len(),
+        fit_trace.display()
+    );
+    a5_assert_model("run 1", qedump(&stderr, "sorted"), 0, &fit_trace);
+    a5_assert_model("run 1", qedump(&stderr, "held"), 400, &fit_trace);
+
+    // RUN 2, A REST AFTER A HOLD.
+    let rest_out = out_dir().join("a5-fit-rest.jpg");
+    let rest_trace = rest_out.with_extension("trace.log");
+    let mut drive = String::from(opening);
+    rest(&mut drive, 300, 0, "screen", 15);
+    hold(&mut drive, 400, 60);
+    drive.push_str(";2800:dump.first");
+    rest(&mut drive, 2900, 60, "screen", 15);
+    hold(&mut drive, 3000, 20);
+    let landing = a5_id_at(80);
+    drive.push_str(&format!(
+        ";4760:one2one;4800:wait:loupe idx {landing} factor"
+    ));
+    let (stderr, _) = a5_child(
+        &["--start-loupe", folder],
+        &[("FASTCULL_TRACE", "1"), ("FASTCULL_DRIVE", &drive)],
+        &rest_out,
+    );
+    let marks = traced(&stderr);
+    let settled = marks
+        .iter()
+        .position(|m| m.label.starts_with("load settled gen 0:"))
+        .unwrap_or_else(|| {
+            panic!(
+                "run 2: the load never settled (trace {})",
+                rest_trace.display()
+            )
+        });
+    let after = &marks[settled..];
+    let key_at: Vec<usize> = after
+        .iter()
+        .enumerate()
+        .filter(|(_, m)| m.label == "drive: right")
+        .map(|(i, _)| i)
+        .collect();
+    assert_eq!(
+        key_at.len(),
+        80,
+        "run 2: the 60 + 20 keys ran (trace {})",
+        rest_trace.display()
+    );
+    let z_at = after
+        .iter()
+        .position(|m| m.label == "drive: one2one")
+        .unwrap_or_else(|| panic!("run 2: `Z` never ran (trace {})", rest_trace.display()));
+    let sharp_ms = after[z_at..]
+        .iter()
+        .find(|m| m.label.starts_with(&format!("loupe idx {landing} factor")))
+        .map(|m| m.ms - after[z_at].ms);
+    let cooked = after[..z_at]
+        .iter()
+        .any(|m| m.label == format!("loupe adopted idx {landing} kind full"));
+    measured.line(&format!(
+        "a5 fit rest: Z after a stop, from `drive: one2one` to `loupe idx {landing} factor`: \
+         {} ms; the idle cook's full-res adopted before the Z: {}",
+        sharp_ms.map_or("never".to_string(), |ms| ms.to_string()),
+        if cooked { "yes" } else { "no" }
+    ));
+    for k in 1..=15 {
+        assert_waited(
+            "run 2",
+            &stderr,
+            &format!("loupe adopted idx {} kind screen", a5_id_at(k)),
+            &rest_trace,
+        );
+        assert_waited(
+            "run 2",
+            &stderr,
+            &format!("loupe adopted idx {} kind screen", a5_id_at(60 + k)),
+            &rest_trace,
+        );
+    }
+    assert_waited(
+        "run 2",
+        &stderr,
+        &format!("loupe idx {landing} factor"),
+        &rest_trace,
+    );
+    a5_startup_line("run 2", &stderr, &rest_trace);
+    a5_assert_the_rung_holds("run 2", after, &rest_trace);
+    a5_assert_first_fifteen_at_the_rung("run 2", &after[key_at[0]..key_at[60]], 0, &rest_trace);
+    a5_assert_first_fifteen_at_the_rung("run 2", &after[key_at[60]..], 60, &rest_trace);
+    a5_assert_model("run 2", qedump(&stderr, "sorted"), 0, &rest_trace);
+    a5_assert_model("run 2", qedump(&stderr, "first"), 60, &rest_trace);
+
+    // RUNS 3 AND 4, THE HOLD AT 1:1.
+    for (name, decoders) in [("a5 1:1", None), ("a13 1:1 decoders=2", Some("2"))] {
+        let out = out_dir().join(if decoders.is_some() {
+            "a5-a13.jpg"
+        } else {
+            "a5-one2one.jpg"
+        });
+        let trace = out.with_extension("trace.log");
+        let mut drive = String::from(opening);
+        drive.push_str(";300:one2one;350:wait:loupe idx 0 factor");
+        rest(&mut drive, 400, 0, "full", ahead);
+        hold(&mut drive, 500, 400);
+        let stop = a5_id_at(400);
+        drive.push_str(&format!(
+            ";16500:dump.held;16600:wait:loupe idx {stop} factor"
+        ));
+        let mut envs = vec![("FASTCULL_TRACE", "1"), ("FASTCULL_DRIVE", drive.as_str())];
+        if let Some(n) = decoders {
+            envs.push(("FASTCULL_DECODERS", n));
+        }
+        let (stderr, hwm) = a5_child(&["--start-loupe", folder], &envs, &out);
+        let marks = traced(&stderr);
+        let settled = marks
+            .iter()
+            .position(|m| m.label.starts_with("load settled gen 0:"))
+            .unwrap_or_else(|| {
+                panic!("{name}: the load never settled (trace {})", trace.display())
+            });
+        let after = &marks[settled..];
+        let key_at: Vec<usize> = after
+            .iter()
+            .enumerate()
+            .filter(|(_, m)| m.label == "drive: right")
+            .map(|(i, _)| i)
+            .collect();
+        assert_eq!(
+            key_at.len(),
+            400,
+            "{name}: the 400 keys ran (trace {})",
+            trace.display()
+        );
+        let held_at = after
+            .iter()
+            .position(|m| m.label == "drive: dump.held")
+            .unwrap_or_else(|| panic!("{name}: `dump.held` never ran (trace {})", trace.display()));
+        let in_hold = &after[key_at[0]..held_at];
+        // Each frame's best render while the cursor was on it — a render mark
+        // names only the cursor, and the cursor never comes back.
+        let rank = |rung: &str| {
+            ["thumb", "mid", "rung", "full"]
+                .iter()
+                .position(|r| *r == rung)
+        };
+        let mut best: std::collections::HashMap<usize, &'static str> = Default::default();
+        let mut order: Vec<usize> = Vec::new();
+        let mut new_frame_ms: Vec<u64> = Vec::new();
+        for m in in_hold {
+            if let Some((n, rung)) = one_to_one_render(m.label) {
+                if order.last() != Some(&n) {
+                    order.push(n);
+                    new_frame_ms.push(m.ms);
+                }
+                let entry = best.entry(n).or_insert(rung);
+                if rank(rung) > rank(entry) {
+                    *entry = rung;
+                }
+            }
+        }
+        let count = |rung: &str| best.values().filter(|r| **r == rung).count();
+        // Switches between full-res and the rung along the hold, frames at
+        // neither (the mid, the thumb, nothing) left out.
+        let path: Vec<&str> = (1..=400)
+            .filter_map(|p| best.get(&a5_id_at(p)).copied())
+            .filter(|r| matches!(*r, "full" | "rung"))
+            .collect();
+        let switches = path.windows(2).filter(|w| w[0] != w[1]).count();
+        let (p50, p90, max) = spread(new_frame_ms.windows(2).map(|w| w[1] - w[0]).collect());
+        let first_key_ms = after[key_at[0]].ms;
+        let first_rung_adopted = after[key_at[0]..]
+            .iter()
+            .find(|m| {
+                idx_of(m.label, "loupe adopted idx ").is_some_and(|(_, t)| t == "kind screen")
+            })
+            .map(|m| m.ms - first_key_ms);
+        // The kitchen leg: the first transit-state screen rung of a member
+        // AHEAD of the cursor (its view position past the keys run so far)
+        // reaching the app, to that frame's adoption.
+        let kitchen_leg = after[key_at[0]..held_at]
+            .iter()
+            .enumerate()
+            .find_map(|(i, m)| {
+                let (n, tail) = idx_of(m.label, "loupe ready idx ")?;
+                if !tail.ends_with(" kind screen state transit") {
+                    return None;
+                }
+                let cursor = key_at.iter().filter(|k| **k <= key_at[0] + i).count();
+                if a5_pos_of(n) <= cursor {
+                    return None;
+                }
+                let adopted = format!("loupe adopted idx {n} kind screen");
+                after[key_at[0] + i..]
+                    .iter()
+                    .find(|a| a.label == adopted)
+                    .map(|a| (n, a.ms - m.ms))
+            });
+        measured.line(&format!(
+            "{name} hold: {} distinct frames of 400 keys (A6 >= 392); sharp {}, rung {}, mid {}, \
+             thumb {}, none {}; full<->rung switches {switches}",
+            best.len(),
+            count("full"),
+            count("rung"),
+            count("mid"),
+            count("thumb"),
+            400 - best.len()
+        ));
+        measured.line(&format!(
+            "{name} hold: interval between new frames p50 {p50} ms, p90 {p90} ms, max {max} ms; \
+             first key to the first screen-rung adoption {}",
+            first_rung_adopted.map_or("none".to_string(), |ms| format!("{ms} ms"))
+        ));
+        measured.line(&format!(
+            "{name} kitchen leg ready→adopted {} (the step-down instant is not traced)",
+            kitchen_leg.map_or("none".to_string(), |(n, ms)| format!("{ms} ms, id {n}"))
+        ));
+        for (at, kb) in &hwm {
+            measured.line(&format!("{name} VmHWM at {at}: {} MiB", kb / 1024));
+        }
+        assert_waited(name, &stderr, "loupe idx 0 factor", &trace);
+        for k in 1..=ahead {
+            assert_waited(
+                name,
+                &stderr,
+                &format!("loupe adopted idx {} kind full", a5_id_at(k)),
+                &trace,
+            );
+        }
+        assert_waited(name, &stderr, &format!("loupe idx {stop} factor"), &trace);
+        let (_, run_ahead) = a5_startup_line(name, &stderr, &trace);
+        assert_eq!(
+            run_ahead, ahead,
+            "{name}: its startup line names another full-res ring than the probe's"
+        );
+        assert!(
+            best.len() >= 392,
+            "{name}: A6 — the 400-key hold at 1:1 showed {} distinct frames on a render \
+             mark, under 98 % (392) (trace {})",
+            best.len(),
+            trace.display()
+        );
+        a5_assert_model(name, qedump(&stderr, "held"), 400, &trace);
     }
 }
 

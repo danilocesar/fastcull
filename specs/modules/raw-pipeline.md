@@ -1245,7 +1245,7 @@ commit that lands its tests, and stays open until then):
       `the_ladder_memoizes_the_decoded_size_not_the_ifd_claim` (added
       2026-09-27, brief 008 step 3, the step-2 review; its old-memo red is
       in that commit's message).
-- [ ] **The pixel cache and the decoders follow the machine** (brief 008 A4):
+- [x] **The pixel cache and the decoders follow the machine** (brief 008 A4):
       clock-free — the cache over 4 / 8 / 16 / 32 / 64 GiB of total RAM → 2,
       2, 4, 8, 10 GiB, and an unreadable, zero or absurd total → 2 GiB; the
       decoders over 2 / 4 / 16 / 32 physical cores on 64 GiB → 3, 4, 16, 16, a
@@ -1256,19 +1256,20 @@ commit that lands its tests, and stays open until then):
       and a value that is not a positive integer is ignored with its stderr
       line; the startup line names the cache, the ring, the decoders, their
       sources and the peak, and the app prints it exactly once per run —
-      asserted on the stderr of ui-grid.md A5's fit run; the engine spawns
-      that many workers and reserves one lane —
+      asserted on the stderr of every run of ui-grid.md A5's driven test; the
+      engine spawns that many workers and reserves one lane —
       `the_pixel_cache_is_a_quarter_of_total_ram_between_2_and_10_gib`,
       `the_decoders_follow_the_physical_cores`,
       `the_decoders_are_capped_at_half_the_ram_in_gib`,
       `a_decoder_override_wins_and_a_bad_one_is_ignored`,
       `the_startup_line_names_the_cache_the_ring_the_decoders_and_the_peak`,
-      `start_with_spawns_the_decoders_and_reserves_the_last`. Open: its
-      exactly-once clause, read on the stderr of ui-grid.md A5's fit run,
-      lands with that driven test; every other clause's test landed with the
-      rules (the step-3b and step-3c commits, each mutant's red in its
-      message).
-- [ ] **Old red first, the three mutants** (brief 008 A7): a transit capped
+      `start_with_spawns_the_decoders_and_reserves_the_last`, and the
+      exactly-once clause in
+      `a_held_arrow_at_fit_on_4k_stays_at_the_rung_and_never_slows`. Ticked by
+      brief 008's step-6 commit, which lands that driven test; every other
+      clause's test landed with the rules (the step-3b and step-3c commits,
+      each mutant's red in its message).
+- [x] **Old red first, the three mutants** (brief 008 A7): a transit capped
       at the mid is red clock-free — `transit_request_is_the_fit_box_and_never_the_full`
       handed a 3840×2160 box resolves to the mid class under it — and
       driven, where ui-grid.md A5's gate 2 reads 0; `revive_deferred` gating
@@ -1277,9 +1278,10 @@ commit that lands its tests, and stays open until then):
       above fit); a travel direction derived per call is red on
       `a_backward_hold_keeps_leaning_backward_across_refocus`, unchanged
       (the ring behind is 2, as before). Each mutant in a scratch worktree,
-      its red named in the commit. Open: the driven half, ui-grid.md A5's gate
-      2, lands with the driven test; the clock-free reds of all three mutants
-      are in the step-3b commit's message.
+      its red named in the commit. Ticked by brief 008's step-6 commit, which
+      lands the driven half — ui-grid.md A5's gate 2 reads 0 under the first
+      mutant, in that commit's message; the clock-free reds of all three
+      mutants are in the step-3b commit's message.
 - [x] **Hostile inputs on the new path** (brief 008 A8): the existing tests
       pass on libjpeg-turbo; the 30000×30000 SOF is refused before any
       allocation through the scaled decode too, on both orientation paths;
@@ -1402,7 +1404,7 @@ commit that lands its tests, and stays open until then):
       `a_harmless_complaint_is_named_on_stderr_once`. Ticked by the step-2c
       commit, which carries the line and the test; each mutant's red is in
       its message.
-- [ ] **Perf budgets** (brief 008 A9): the full-res row stays green with
+- [x] **Perf budgets** (brief 008 A9): the full-res row stays green with
       more headroom, and the three new rows are green on the idle
       development laptop — `budget_fullres_decode_under_350ms`,
       `budget_fullres_landscape_decode_under_280ms`,
@@ -1410,8 +1412,10 @@ commit that lands its tests, and stays open until then):
       `budget_screen_rung_2_8_portrait_under_the_kind_guard` (their
       thresholds, `RUNG_ROW_MS` among them, are 01-architecture.md's);
       `tests/zoom_walk.rs`, the mandatory zoom-quality gate above,
-      passes in release against the real A1 files on the final tree. Open:
-      ticked on the final tree's release run.
+      passes in release against the real A1 files on the final tree. Ticked
+      by brief 008's step-6 commit, whose message has the final tree's idle
+      release readings: the four rows three times, two minutes apart, and the
+      gate once.
 - [x] **The idle cook** (brief 008): settled at fit on a 4K box with the
       cursor's screen rung in hand, the reserved lane's next job is the
       cursor's full-res; none on a box the reference mid serves (a 3/8 rung
@@ -1530,7 +1534,10 @@ commit that lands its tests, and stays open until then):
       between full-res and the rung is a number for humans in brief 008's
       Outcome. What the user sees on the desktop — one step or a flicker — is
       the user's own test of the CI build (brief 008). Open: its driven half,
-      the two 1:1 runs, lands with ui-grid.md A5's driven test; every
+      the two 1:1 runs of ui-grid.md A5's driven test, landed with brief 008's
+      step 6 and waits on the same ruling as ui-grid.md A6's 1:1 floor — the
+      run on two decoders showed every frame on every run, the run on the
+      seat's decoders is the one that fell under the floor once; every
       clock-free row and the simulation landed with the switch rule (brief
       008's step-4b commit, each mutant's red in its message) and its review's
       fix round (the added rows' reds in that round's commit messages).

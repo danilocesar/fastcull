@@ -1251,7 +1251,7 @@ renderer's source offsets are `Fixed<u16, 4>`.
       `a_held_arrow_at_fit_on_a_mid_served_viewport_keeps_each_mid_in_hand`.
       Ticked by brief 008's step-5 commit, which carries the retain and the
       test; the mutant's red is in its message.
-- [ ] **A held arrow at fit on a 4K viewport stays at the rung** (brief 008
+- [x] **A held arrow at fit on a 4K viewport stays at the rung** (brief 008
       A5): app, release, a 3840×2160 window over real A1 files linked on the
       RAWs' volume (test-harness.md) — the three fixtures cycled into a folder
       longer than all of the runs' travel, 480 files as ruled. The script
@@ -1273,8 +1273,10 @@ renderer's source offsets are `Fixed<u16, 4>`.
       DECODE is counted, not the adoption, because on a slow seat a late
       landing falls outside the window and is the texture ring's first victim;
       (3) after the rest, the first fifteen frames of the next hold render at
-      the rung on their first `loupe fit` mark. How many frames a hold SEES at
-      the rung is a decode-rate figure, never a gate (issue #27). The fit run
+      the rung on their first `loupe fit` mark — read on the 400-key hold and
+      on a hold whose rest follows another hold, where a ring evicting by
+      plain distance loses the rest's far rungs. How many frames a hold SEES
+      at the rung is a decode-rate figure, never a gate (issue #27). Every run
       also asserts exactly one `fastcull: loupe cache ` line on its stderr
       (raw-pipeline.md A4). A5 binds on any seat that grants 3840×2160 and
       skips, printing the geometry it got, on one that does not;
@@ -1287,7 +1289,10 @@ renderer's source offsets are `Fixed<u16, 4>`.
       Full-before-Wrap order, 01-architecture.md) — go per seat in brief
       008's Outcome —
       `a_held_arrow_at_fit_on_4k_stays_at_the_rung_and_never_slows`.
-      Open: lands with the driven test.
+      Ticked by brief 008's step-6 commit, which carries the test; red with a
+      transit capped at the mid (gate 2 reads 0) and with the rung ring
+      evicting by plain distance (the rest after a hold never fills), each red
+      in its message.
 - [ ] **The hold never slows** (brief 008 A6 and the redesign's G1): app,
       release, on A5's folder and window, at fit (A5's 400-key hold) and at
       1:1 (a 400-key hold from a filled full-res ring, its own child run) — at
@@ -1303,7 +1308,15 @@ renderer's source offsets are `Fixed<u16, 4>`.
       the pacing mutant — advance only when the next rung is in hand — stays
       red under any re-based floor, its reading in the Outcome beside the
       run's — `a_held_arrow_at_fit_on_4k_stays_at_the_rung_and_never_slows`
-      and its 1:1 run. Open: lands with the driven test.
+      and its 1:1 run. Open: the test landed with brief 008's step 6, all 400
+      keys on screen at fit on every run; at 1:1 the development laptop's
+      count sat just above the floor and fell under it once, the p90 interval
+      about 1.5× the key rather than far above it — frames left on the
+      previous frame's pixels (the residual hold) while the kitchen's
+      full-res fills for the members the switch rule let through at the
+      hold's start held the thumb rescue back, not the renderer this clause
+      names — so the 1:1 floor awaits the Manager's ruling; the readings and
+      the pacing mutant's are in the step-6 commit's message.
 - [ ] **Time-to-sharp no worse than v0.14.0** (brief 008, the redesign's
       G5): QE, on the idle development laptop and the 3840×2160 headless
       screen A5 uses — where the screen rung and the idle cook act — this
