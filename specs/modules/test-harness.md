@@ -143,6 +143,16 @@ sidecars — scripts target throwaway copies of test data only.
   malformed. For a mark that is emitted more than once, put the thing that
   differs INTO the mark: `gen N`, `run N`, `row 0 (gen K)`.
 - `dump.<label>` — the `QEDUMP` line of app state.
+- `A>>B` — B runs in A's own callback, the moment A returns, before the
+  event loop delivers anything A queued (a kitchen completion posted while
+  A's refresh ran): the one way to read the state a step leaves before its
+  consequences land. A separate step cannot land there, a `wait:` poll
+  included — on X11 and Windows the winit backend delivers such a
+  completion before any timer that was not due when A's pass began (the
+  sixth Slint canary in `crates/fastcull-app/Cargo.toml`). The step's
+  instant is A's; each part is trimmed like any action, so no path or text
+  an action carries may contain `>>`; a `wait:` is never a chained part
+  (senior-developer review 2026-09-27, brief 008 step 5).
 
 ### The marks
 
@@ -312,6 +322,11 @@ shot 2.
   and, where order matters, the byte-offset ORDERING (`stderr.find(mark) <
   stderr.find("drive: …")`), since the echo proves a wait ran, not that it
   ran first.
+- Two steps at ONE instant run in no promised order: Slint's timer
+  deadlines are whole milliseconds and a tie runs the later-registered step
+  first. Give ordered steps distinct instants, or chain them with `>>` when
+  nothing may land between them (senior-developer review 2026-09-27, brief
+  008 step 5).
 - Positional navigation waits on `load settled gen N`: the view is in
   provisional filename order until the settle re-sorts it. A shot that reads
   RENDERED pixels waits on the textures it reads (`thumb landed idx N`),
@@ -374,7 +389,8 @@ shot 2.
 - The layout-mark table is written unconditionally, so a resolved click
   never depends on whether the run also asked for a trace.
 - The version canary in `crates/fastcull-app/Cargo.toml` records the Slint
-  and winit behaviours the shutter and the focus marks depend on.
+  and winit behaviours the shutter, the focus marks and the drive script's
+  ordering (`A>>B`, same-instant steps) depend on.
 
 ## Acceptance criteria
 
@@ -389,6 +405,13 @@ shot 2.
       assertions that go red when the gated step is hand-shifted ahead of
       the mark, when the wait step is deleted, or when the token is
       misspelled.
+- [x] `A>>B` runs B in A's own callback: the cold-frame test's midgap dump,
+      `end>>dump.midgap`, reads the no-texture window — after the End
+      refresh's hold mark, before any rung of the new image, asserted by
+      trace order — red when the chain is dispatched through a zero-delay
+      timer with the kitchen's cook hold forced below the End refresh's
+      duration —
+      `transit_to_a_cold_frame_keeps_the_overlay_at_the_carried_center`.
 - [x] The notch size: 59 logical px fire nothing and the 60th fires exactly
       one stop, residue carried — `overlay_wheel_still_zooms_one_stop_per_notch`.
 - [x] `resize:` is gated: the six resize tests are 6/6 red at the wait with
@@ -400,6 +423,13 @@ shot 2.
 
 ## History
 
+- 2026-09-27 — `A>>B` chains a step into the previous one's callback, and
+  steps at one instant are recorded as unordered (brief 008 step 5, the
+  senior developer's review): a dump on the clock 80 ms after `end` read
+  the thumb's adoption instead of the hold once a debug End refresh
+  outlasted the kitchen's cook hold, and neither a `wait:` nor a
+  same-instant step could land between the refresh and the completion it
+  queued (the measurements are in the commit that lands the chain).
 - 2026-09-26 — The loupe marks name the rung's kind and the request state;
   `loupe rung`, `loupe fit`, `loupe adopted`; the sharp mark's `cue`, since
   a lit pill may outlast a sharp swap while travelling; the dump's `rung=`;

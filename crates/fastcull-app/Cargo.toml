@@ -92,6 +92,23 @@ fastcull-core.workspace = true
 #      system RAM too, outside raw-pipeline.md's whole-app formula, which
 #      counts the app's own copies — a residual for brief 008's Outcome.
 # If either changes, re-read that residual.
+# SIXTH CANARY (brief 008, the step-5 review; same 1.17.1 + winit 0.30.13):
+# the drive script's ordering, which `A>>B` (test-harness.md, "The drive
+# script") and the rule against two steps at one instant rest on:
+#   1. The winit backend fires the due timers in `new_events` and delivers
+#      `invoke_from_event_loop` callbacks (the kitchen's completions) as user
+#      events after them in the same iteration on X11 and Windows
+#      (i-slint-backend-winit `event_loop.rs` 546-548 and 599-611; Wayland
+#      delivers them one iteration later, the THIRD CANARY's item 3), and a
+#      timer pass runs only the timers already due when it began —
+#      `update_timers_and_animations` reads `now` once and hands it to
+#      `maybe_activate_timers` (i-slint-core `platform.rs` 289-293,
+#      `timers.rs` 255-330). So a completion posted during a step's refresh
+#      is delivered before any later timer, a `wait:` poll included.
+#   2. Timer deadlines are whole milliseconds (`animations.rs` 169 and
+#      214-215) and a new timer is inserted BEFORE any with an equal deadline
+#      (`timers.rs` 396-403), so equal deadlines run last-registered first.
+# If either changes, re-read `A>>B` and the same-instant rule.
 slint = { version = "1", default-features = false, features = [
     "std",
     "backend-winit",

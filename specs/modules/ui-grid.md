@@ -948,9 +948,12 @@ renderer's source offsets are `Fixed<u16, 4>`.
       traces; paced taps over an interleaved session land warm —
       `transit_to_a_cold_frame_keeps_the_overlay_at_the_carried_center`
       (both profiles since 2026-09-05; its landing dump gated on the sharp
-      rung's mark; the thumb-rung render-order pin release-only, since a
-      congested debug kitchen can collapse the order; fixture changed, brief
-      008: a folder longer than the full-res ring, so its target stays cold),
+      rung's mark; its midgap dump chained to the End key,
+      `end>>dump.midgap`, so it reads the no-texture window by construction,
+      the premise asserted by trace order — brief 008 step-5 review; the
+      thumb-rung render-order pin release-only, since a congested debug
+      kitchen can collapse the order; fixture changed, brief 008: a folder
+      longer than the full-res ring, so its target stays cold),
       `loupe_drag_pans_one_to_one_and_a_fling_never_survives_navigation`
       (both profiles; its pointer work gated on `wait:loupe idx 0 factor`),
       `paced_taps_over_an_interleaved_session_land_warm` (its warm-landing

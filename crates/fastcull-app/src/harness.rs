@@ -230,7 +230,20 @@ fn schedule_from(
         slint::Timer::single_shot(delay, move || {
             pending.set(pending.get().saturating_sub(1));
             let Some(win) = win.upgrade() else { return };
-            dispatch(&win, &state, &key, &layout);
+            // `A>>B` (test-harness.md, "The drive script"): B runs in this
+            // same callback, the moment A returns — before the event loop
+            // delivers anything A queued, such as a kitchen completion posted
+            // while A's refresh ran. A separate step cannot land there, a
+            // `wait:` poll included: winit fires the due timers first in each
+            // iteration and delivers `invoke_from_event_loop` callbacks after
+            // them, and a timer that was not due when that pass began waits
+            // for the next one; nor are two steps at one instant ordered —
+            // Slint's timer list is millisecond-granular and runs equal
+            // deadlines last-registered first (the sixth Slint canary in
+            // Cargo.toml). Each part is trimmed, like any action.
+            for part in key.split(">>") {
+                dispatch(&win, &state, part.trim(), &layout);
+            }
         });
     }
 }

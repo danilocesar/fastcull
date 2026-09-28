@@ -5578,9 +5578,10 @@ fn interleaved_session(dir: &Path, count: usize) {
 /// must keep the overlay up at the carried factor and pan centre —
 /// never an EXCUSE-LESS drop to fit. The target's thumb was never
 /// visible so it is not even in `st.textures.images` yet: the overlay
-/// HOLDs the previous pixels (that is where the +80 ms dump lands — the
-/// hold engages synchronously with the End refresh and `OVERLAY_HOLD_CAP`
-/// cannot fire before 250 ms), then the freshly prepped thumb renders
+/// HOLDs the previous pixels (that is what the midgap dump reads — it runs
+/// in the End key's own callback, `end>>dump.midgap`, the moment the End
+/// refresh returns, and `OVERLAY_HOLD_CAP` cannot fire before 250 ms), then
+/// the freshly prepped thumb renders
 /// (~150–300 ms behind the cook hold in release; later in debug, where
 /// the kitchen queue is congested by 149 MB debug-profile fills and the
 /// hold cap may legitimately fire first — the spec'd bounded drop,
@@ -5649,6 +5650,22 @@ fn interleaved_session(dir: &Path, count: usize) {
 /// 7, 10, 13, 16, 2, 5, 8, 11, 14]: End lands on id 14 at view position 16,
 /// one past the ring's fifteen ahead of position 0, so it stays cold — the
 /// same promise, and the wait below names that id.
+///
+/// THE MIDGAP DUMP IS CHAINED TO THE END KEY, the promise unchanged (brief
+/// 008 step 5, the senior developer's review, 2026-09-27). It ran on the
+/// clock, 80 ms after `end`, which assumed the End refresh returns before
+/// the kitchen's 150 ms cook hold runs out. From brief 008 step 5 that
+/// refresh also frees the mids the loupe kept for the ring (ui-grid.md,
+/// "Virtualization") — a per-pixel drop loop that a debug build compiles at
+/// opt-level 0: about 60 ms on the development seat, 113-189 ms on the
+/// Windows runner — so the thumb's completion, posted while the refresh ran,
+/// was delivered before the dump's timer, and the dump read the thumb's
+/// aspect instead of the hold (`pre -3600 vs midgap -3606.8`, one Windows
+/// debug run in two). No separate step can land between a refresh and a
+/// completion it queued — a `wait:` on the hold mark read the thumb too —
+/// and two steps at one instant have no order (test-harness.md). The chain
+/// reads the no-texture window by construction, and its premise is asserted
+/// by trace order below.
 #[test]
 fn transit_to_a_cold_frame_keeps_the_overlay_at_the_carried_center() {
     if !has_display() {
@@ -5671,7 +5688,10 @@ fn transit_to_a_cold_frame_keeps_the_overlay_at_the_carried_center() {
             ("FASTCULL_KITCHEN_COOK_MS", "150"),
             (
                 "FASTCULL_DRIVE",
-                "20000:dump.pre;20050:end;20130:dump.midgap;20200:wait:loupe idx 14 factor;26500:dump.landed",
+                // `end>>dump.midgap`: the dump runs in the End key's own
+                // callback, the moment its refresh returns (test-harness.md,
+                // "The drive script").
+                "20000:dump.pre;20050:end>>dump.midgap;20200:wait:loupe idx 14 factor;26500:dump.landed",
             ),
         ],
         &out,
@@ -5690,6 +5710,38 @@ fn transit_to_a_cold_frame_keeps_the_overlay_at_the_carried_center() {
         dump_field(midgap, "one2one"),
         "true",
         "the overlay dropped to fit on a cold jump — the M1 fit-flash:\n{stderr}"
+    );
+    // The midgap dump's premise, asserted rather than assumed: it read the
+    // NO-TEXTURE window — after the End refresh rendered the hold, before any
+    // rung of the new image rendered — which the `>>` chain gives by
+    // construction and the clock it replaced did not (the doc comment).
+    let hold_at = stderr
+        .find("loupe hold idx 14 ")
+        .unwrap_or_else(|| panic!("the End refresh never rendered the hold:\n{stderr}"));
+    let dump_at = stderr
+        .find("drive: dump.midgap")
+        .unwrap_or_else(|| panic!("the midgap dump never ran:\n{stderr}"));
+    let first_rung_at = [
+        "loupe thumb idx 14 ",
+        "loupe soft idx 14 ",
+        "loupe rung idx 14 ",
+        "loupe idx 14 factor",
+    ]
+    .iter()
+    .filter_map(|mark| stderr.find(mark))
+    .min()
+    .unwrap_or(stderr.len());
+    assert!(
+        hold_at < dump_at && dump_at < first_rung_at,
+        "the midgap dump did not read the no-texture window — it must run after \
+         the End refresh's hold and before the first rung of the new image \
+         (hold at byte {hold_at}, dump at {dump_at}, first rung at \
+         {first_rung_at}):\n{stderr}"
+    );
+    assert_eq!(
+        dump_field(midgap, "rung"),
+        "none",
+        "the midgap dump read a rung of the new image, not the hold:\n{midgap}"
     );
     assert_eq!(
         dump_field(midgap, "soft"),
