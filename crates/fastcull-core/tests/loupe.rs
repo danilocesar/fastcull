@@ -210,6 +210,91 @@ fn terminal_flag_marks_a_files_best_rung() {
     std::fs::remove_dir_all(&dir).ok();
 }
 
+/// QE round 1 of brief 008, D1 (raw-pipeline.md, "Hostile-input bounds"): the
+/// real shape of the commonest field corruption — `A1_full_compressed.ARW`
+/// cut at 10,000,000 bytes, inside its full JPEG (741,376 to 13,054,886), as
+/// an interrupted copy leaves it. The walker holds the 1616x1080 mid whole
+/// and the 8640x5760 full cut; the full is the loupe's top rung, and its read
+/// fails as truncated. Through the public engine, at 1:1 and at fit on a
+/// 3840x2160 box: the mid arrives NOT terminal — never the file's best, so
+/// the app cues it where it does not serve and zooms past it — and nothing
+/// else follows, no Failed, not even after a second focus (the memo). Red on
+/// the walker that dropped the cut full: the mid arrived terminal.
+#[test]
+fn an_a1_cut_inside_its_full_keeps_its_mid_below_the_top_rung() {
+    use std::io::Read;
+    let _serial = SERIAL
+        .lock()
+        .unwrap_or_else(std::sync::PoisonError::into_inner);
+    let dir = std::env::temp_dir().join(format!("fastcull-cut-{}", std::process::id()));
+    std::fs::remove_dir_all(&dir).ok();
+    std::fs::create_dir_all(&dir).unwrap();
+    let cut = dir.join("cut.ARW");
+    let mut head = vec![0u8; 10_000_000];
+    std::fs::File::open(testdata("A1_full_compressed.ARW"))
+        .unwrap()
+        .read_exact(&mut head)
+        .unwrap();
+    std::fs::write(&cut, &head).unwrap();
+
+    let mut file = std::fs::File::open(&cut).unwrap();
+    let previews = fastcull_core::raw::find_embedded_jpegs(&mut file).unwrap();
+    let size = |c: Option<&fastcull_core::raw::EmbeddedJpeg>| c.map(|c| (c.width, c.height));
+    assert_eq!(
+        size(previews.fullres()),
+        Some((1616, 1080)),
+        "the premise: only the mid is whole"
+    );
+    let top = previews.loupe_top().expect("the cut full");
+    assert_eq!((top.width, top.height), (8640, 5760), "the full is the top");
+    let err = fastcull_core::raw::read_jpeg(&mut file, top)
+        .expect_err("the file ends inside the full")
+        .to_string();
+    assert!(err.starts_with("truncated"), "{err}");
+
+    for phase in ["1:1", "fit on 3840x2160"] {
+        let (engine, rx) = LoupeEngine::start(vec![cut.clone()], DEFAULT_BUDGET_BYTES);
+        let focus = || match phase {
+            "1:1" => {
+                engine.focus(0, u32::MAX);
+            }
+            _ => {
+                engine.focus_fit(0);
+            }
+        };
+        if phase != "1:1" {
+            engine.set_fit_box(Some(fastcull_core::loupe::FitBox {
+                width: 3840,
+                height: 2160,
+            }));
+        }
+        focus();
+        match rx.recv_timeout(Duration::from_secs(120)).expect("event") {
+            LoupeEvent::Ready {
+                image, terminal, ..
+            } => {
+                assert_eq!((image.width, image.height), (1616, 1080), "{phase}");
+                assert!(
+                    !terminal,
+                    "{phase}: the mid is never the best of a cut file"
+                );
+            }
+            other => panic!("{phase}: unexpected {other:?}"),
+        }
+        assert!(
+            rx.recv_timeout(Duration::from_millis(800)).is_err(),
+            "{phase}: the cut full fails nothing and publishes nothing"
+        );
+        focus();
+        assert!(
+            rx.recv_timeout(Duration::from_millis(800)).is_err(),
+            "{phase}: refocused, nothing is climbed again"
+        );
+        drop(engine);
+    }
+    std::fs::remove_dir_all(&dir).ok();
+}
+
 /// A 24-slot folder made of the three real A1 files, so ring arithmetic
 /// has room to be wrong in (`RING_AHEAD` is 15, `RING_BEHIND` 2; the settled
 /// ring of an engine with no fit box, `PREFETCH`, is 2).

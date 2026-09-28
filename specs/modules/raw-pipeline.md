@@ -617,9 +617,13 @@ before allocation:
   when the zune-jpeg route decodes the stream — so every route gets it, and
   before any buffer is sized or any scan byte is decoded, so a hostile claim
   that is also cut short is named for its size (Manager ruling Q10,
-  2026-09-26); it spares the grey decode of the commonest field corruption,
-  a cut-off copy, and names the cause ("truncated"), which the decoder's own
-  message does not. Past it, libjpeg-turbo fails a short stream by its own
+  2026-09-26); it spares the grey decode of a stream cut short — a bare JPEG
+  cut off by an interrupted copy, a scan that stops before its EOI — and names
+  the cause ("truncated"), which the decoder's own message does not; a RAW cut
+  off inside an embedded JPEG is named before any read (the next bullet;
+  corrected 2026-09-28, QE round 1 of brief 008, D1: this said the byte check
+  names the commonest field corruption, a cut-off copy, which in a RAW never
+  reached it). Past it, libjpeg-turbo fails a short stream by its own
   return contract: its memory source inserts a fake EOI when the bytes run
   out (`JWRN_JPEG_EOF`, "Premature end of JPEG file"), its Huffman decoder
   warns on meeting a marker with data still to decode (`JWRN_HIT_MARKER`,
@@ -636,6 +640,25 @@ before allocation:
   `Decompressor` as published (Manager ruling 2026-09-26). Which of
   libjpeg-turbo's messages refuse a rung and which the loupe decodes past is
   The decoder's complaints, below.
+- **Truncation, a RAW cut inside an embedded JPEG** — the commonest field
+  corruption, a cut-off copy, where the cut falls inside the container: the
+  JPEG's declared range runs past the file's end, so no stream of it reaches
+  the byte check. The walker keeps such a JPEG APART from the ones the file
+  holds whole (`EmbeddedPreviews::cut`): one that begins inside the file with
+  a JPEG signature, a declared length no larger than `MAX_EMBEDDED_JPEG_LEN`,
+  and a size from its IFD or from the bytes the file still holds. No consumer
+  reads it as whole — the grid thumb and the video export choose among the
+  whole ones — and `read_jpeg` refuses it before a byte is read or a buffer
+  sized, naming the cause ("truncated") and how much of it the file holds.
+  The loupe alone takes it as the file's top rung (`loupe_top`: the largest
+  embedded JPEG whole or cut, a whole one winning a tie), so a RAW cut inside
+  its full keeps its mid below the top — never the file's best, so soft and
+  cued wherever the mid does not serve, at fit on a wide viewport and above
+  fit, and the zoom reaches past it — with the damaged-rung line naming the
+  cut (All rejections, below). A pointer that starts at or past the file's
+  end, or runs past it with a length over `MAX_EMBEDDED_JPEG_LEN`, is dropped:
+  there is nothing of it to name, or it is a hostile claim (QE 2026-09-28,
+  D1).
 - **The scaled decode refuses a numerator outside 1..=8**: 9/8 and above would
   UPSCALE, which no rung may do (developer 2026-09-26, brief 008 step 1).
 - **Residual, accepted — the bounded blank success**: a stream carrying
@@ -1112,7 +1135,12 @@ medium's measured behaviour:
   walker, which the SOF sniff, the byte check, the APP1 Exif search and the
   header-gap pre-pass read; the SOF sniff sizes the candidates of
   `find_embedded_jpegs`, which the grid thumb, the loupe and the video
-  export (`clip.rs`, video-export.md) choose from. `raw/mod.rs` holds
+  export (`clip.rs`, video-export.md) choose from, and over a stream in
+  memory (`sof_dimensions`) gives the size the ladder plans the screen rung
+  from (The factor rule). `find_embedded_jpegs` keeps apart, as
+  `EmbeddedPreviews::cut`, the JPEGs the file was cut inside, which the
+  loupe alone reads, as its top rung (`loupe_top`), and `read_jpeg` refuses
+  as truncated (Hostile-input bounds). `raw/mod.rs` holds
   `MAX_EMBEDDED_JPEG_LEN`, `MAX_DECODED_PIXELS` and
   `GRID_SOURCE_MAX_PIXELS`.
 - `budget.rs`: the pixel cache from total RAM, the decoder count from
@@ -1371,6 +1399,31 @@ commit that lands its tests, and stays open until then):
       `a_rung_that_fails_over_a_good_lower_one_is_named_on_stderr`. Ticked
       by the step-2c commit, which carries the line and the test; the
       removed line's red is in its message.
+- [x] **A RAW cut inside its full keeps its mid below the top and names the
+      cut** (QE round 1 of brief 008, D1): the walker keeps a JPEG the file
+      ends inside apart from the whole ones — sized from its IFD, or from the
+      bytes the file still holds, and none when its SOF is gone too — and
+      drops a pointer at the file's end and one whose length no embedded JPEG
+      has; `fullres` and `grid_source` choose among the whole ones; the
+      loupe's top rung is the largest whole or cut, a whole one winning a tie;
+      `read_jpeg` refuses the cut one as truncated, with how much of it the
+      file holds. Over a synthetic RAW laid out as an A1 is and cut inside its
+      full, at a fit box the mid does not serve and at 1:1: the mid is
+      published, never `terminal`, no `Failed`, the mid memoized; and, read
+      from a child process's stderr, one line names the file, the full rung
+      and "truncated", a whole control file none. The real
+      `A1_full_compressed.ARW` cut at 10,000,000 bytes, inside its full: the
+      1616×1080 mid arrives not `terminal` and nothing follows, not after a
+      second focus either, at 1:1 and at fit on a 3840×2160 box. Red on the
+      walker that dropped the cut JPEG, with the length guard removed, with
+      `loupe_top` reading the whole ones alone, and with `read_jpeg`'s check
+      removed (the line then names no cause) —
+      `a_jpeg_the_file_was_cut_inside_is_kept_apart_as_cut`,
+      `a_raw_cut_inside_its_full_never_makes_the_mid_its_best`,
+      `a_raw_cut_inside_its_full_is_named_on_stderr`,
+      `an_a1_cut_inside_its_full_keeps_its_mid_below_the_top_rung`. Ticked by
+      the commit that lands the fix; the old red and each mutant's red are in
+      its message.
 - [x] **A harmless complaint never refuses a frame; damage still does**
       (brief 008, other cameras; the user 2026-09-26, M11): through both
       entry points. Decoded at the rung asked for, pixel-identical to the
@@ -1663,6 +1716,20 @@ commit that lands its tests, and stays open until then):
 
 ## History
 
+- 2026-09-28 — A RAW cut inside an embedded JPEG is named, not hidden (QE
+  round 1 of brief 008, D1): the walker dropped every JPEG whose declared
+  range ran past the file's end, so a RAW cut inside its full — the
+  commonest field corruption, an interrupted copy — kept its mid as the
+  file's only rung and published it as the file's best: at fit on a 4K
+  viewport the 1616 px preview upscaled 2×, uncued, its mark saying `rung
+  full`; `Z` inert, the 1:1 ceiling read from the mid; and no stderr line,
+  against "The decoder's complaints" and docs/faq.md, both written by brief
+  008. v0.14.0 showed the same frame the same way, uncued and `Z`-inert, but
+  promised nothing better. The walker now keeps such a JPEG apart as cut, the
+  loupe takes it as the top rung, and `read_jpeg` names the cut. Corrected in
+  place: "Truncation on the loupe path", which credited the byte check with
+  naming a cut-off copy that in a RAW never reached it; and video-export.md's
+  "the loupe's own" for `fullres()`.
 - 2026-09-28 — The screen rung is planned from the stream (QE round 1 of
   brief 008, D2): the factor rule read the full's size off its IFD, which a
   file can over- or under-state, so an over-claim decoded a rung short of the

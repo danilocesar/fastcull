@@ -69,7 +69,21 @@ const USEFUL_MIN_PIXELS: u64 = 100_000;
 /// All embedded JPEGs of one RAW file, largest first.
 #[derive(Debug, Clone)]
 pub struct EmbeddedPreviews {
+    /// The embedded JPEGs whose byte range lies inside the file: the ones
+    /// every consumer may read whole.
     pub candidates: Vec<EmbeddedJpeg>,
+    /// The embedded JPEGs the file was CUT inside — an interrupted copy, a
+    /// dying card: each begins inside the file with a JPEG signature and a
+    /// plausible declared length that runs past the file's end. Kept apart
+    /// so no consumer reads one as whole: the grid thumb, the video export
+    /// and [`fullres`](Self::fullres) see only `candidates`, and
+    /// [`read_jpeg`] names a cut one "truncated" without reading it. The
+    /// loupe alone takes one as the file's top rung
+    /// ([`loupe_top`](Self::loupe_top)), so a RAW cut inside its full keeps
+    /// its mid as a lower rung — soft, cued — and names the cut on stderr
+    /// (raw-pipeline.md, "Hostile-input bounds"; QE 2026-09-28, D1). Always
+    /// empty for a bare JPEG, whose one candidate is the whole file.
+    pub cut: Vec<EmbeddedJpeg>,
     /// True when the source IS a bare image file (issue #8): the single
     /// whole-file candidate is the actual image, not a 160x120 embedded
     /// thumbnail — the min-useful-pixels filter must not apply (QE: a
@@ -85,6 +99,7 @@ impl Default for EmbeddedPreviews {
     fn default() -> Self {
         Self {
             candidates: Vec::new(),
+            cut: Vec::new(),
             whole_file: false,
             orientation: 1,
         }
@@ -111,7 +126,9 @@ impl EmbeddedPreviews {
             })
     }
 
-    /// Source for loupe fit/1:1: the largest embedded JPEG.
+    /// The largest embedded JPEG the file holds WHOLE: the full-res source
+    /// for every consumer that reads it (the video export's frame; the
+    /// loupe's, when nothing larger was cut — [`loupe_top`](Self::loupe_top)).
     pub fn fullres(&self) -> Option<&EmbeddedJpeg> {
         if self.whole_file {
             return self.candidates.first();
@@ -121,14 +138,41 @@ impl EmbeddedPreviews {
             .filter(|c| c.pixels() >= USEFUL_MIN_PIXELS)
             .max_by_key(|c| (c.pixels(), c.len))
     }
+
+    /// The loupe's top rung: the largest useful embedded JPEG, whole or CUT.
+    /// When the file was cut inside a JPEG larger than any it holds whole —
+    /// a RAW cut inside its full — that JPEG is still the file's best, so the
+    /// rungs below it are never its best (never `terminal`), and its read
+    /// fails as truncated: the loupe keeps the lower rung, cued, and names
+    /// the cut on stderr, where dropping it made the mid the file's best —
+    /// shown unflagged at fit, with no line (raw-pipeline.md, "Hostile-input
+    /// bounds"; QE 2026-09-28, D1). A whole candidate wins a tie.
+    pub fn loupe_top(&self) -> Option<&EmbeddedJpeg> {
+        let whole = self.fullres();
+        let cut = self
+            .cut
+            .iter()
+            .filter(|c| c.pixels() >= USEFUL_MIN_PIXELS)
+            .max_by_key(|c| (c.pixels(), c.len));
+        match (whole, cut) {
+            (Some(w), Some(c)) if (c.pixels(), c.len) > (w.pixels(), w.len) => Some(c),
+            (Some(w), _) => Some(w),
+            (None, c) => c,
+        }
+    }
 }
 
 /// Walk the TIFF structure of `reader` and return every embedded JPEG whose
-/// byte range lies inside the file, sorted largest-first by pixel count.
+/// byte range lies inside the file, sorted largest-first by pixel count —
+/// and, apart, every one the file was CUT inside
+/// ([`EmbeddedPreviews::cut`]).
 ///
 /// Reads only IFD tables and JPEG headers — a few KB total. Candidates whose
 /// payload does not start with a JPEG signature or whose dimensions cannot be
-/// determined are dropped.
+/// determined are dropped, and so are pointers the file cannot hold at all:
+/// an empty range, one that starts at or past the file's end, and one that
+/// runs past it with a length no embedded JPEG has (over
+/// `MAX_EMBEDDED_JPEG_LEN`: a hostile claim, not a cut).
 pub fn find_embedded_jpegs<R: Read + Seek>(reader: &mut R) -> Result<EmbeddedPreviews, TiffError> {
     let file_len = reader.seek(SeekFrom::End(0))?;
 
@@ -150,6 +194,7 @@ pub fn find_embedded_jpegs<R: Read + Seek>(reader: &mut R) -> Result<EmbeddedPre
                     width,
                     height,
                 }],
+                cut: Vec::new(),
                 whole_file: true,
                 orientation,
             });
@@ -164,15 +209,25 @@ pub fn find_embedded_jpegs<R: Read + Seek>(reader: &mut R) -> Result<EmbeddedPre
     let walk = tiff::walk_jpeg_pointers(reader)?;
 
     let mut candidates: Vec<EmbeddedJpeg> = Vec::new();
+    let mut cut: Vec<EmbeddedJpeg> = Vec::new();
     for loc in walk.jpegs {
         if loc.len == 0
-            || loc
-                .offset
-                .checked_add(loc.len)
-                .is_none_or(|end| end > file_len)
-            || candidates.iter().any(|c| c.offset == loc.offset)
+            || loc.offset >= file_len
+            || candidates
+                .iter()
+                .chain(&cut)
+                .any(|c| c.offset == loc.offset)
         {
             continue;
+        }
+        // `loc.offset < file_len`, so the end overflows only for a length
+        // no file holds; either way the range runs past the file's end.
+        let whole = loc
+            .offset
+            .checked_add(loc.len)
+            .is_some_and(|end| end <= file_len);
+        if !whole && loc.len > MAX_EMBEDDED_JPEG_LEN {
+            continue; // a hostile length, not a cut-off copy
         }
         let dims = match (loc.width, loc.height) {
             (Some(w), Some(h)) if w > 0 && h > 0 => {
@@ -182,20 +237,28 @@ pub fn find_embedded_jpegs<R: Read + Seek>(reader: &mut R) -> Result<EmbeddedPre
                     false => None,
                 }
             }
-            _ => jpeg::sniff_dimensions(reader, loc.offset, loc.len)?,
+            // Only the bytes the file still holds can be sniffed.
+            _ => jpeg::sniff_dimensions(reader, loc.offset, loc.len.min(file_len - loc.offset))?,
         };
         if let Some((width, height)) = dims {
-            candidates.push(EmbeddedJpeg {
+            let found = EmbeddedJpeg {
                 offset: loc.offset,
                 len: loc.len,
                 width,
                 height,
-            });
+            };
+            if whole {
+                candidates.push(found);
+            } else {
+                cut.push(found);
+            }
         }
     }
     candidates.sort_by_key(|c| std::cmp::Reverse((c.pixels(), c.len)));
+    cut.sort_by_key(|c| std::cmp::Reverse((c.pixels(), c.len)));
     Ok(EmbeddedPreviews {
         candidates,
+        cut,
         whole_file: false,
         orientation: walk.orientation,
     })
@@ -223,6 +286,12 @@ pub(crate) fn plausible_decoded_dims(width: usize, height: usize) -> bool {
 }
 
 /// Read one embedded JPEG's bytes.
+///
+/// A JPEG the file ends inside — a cut-off copy, the commonest field
+/// corruption — is refused as [`TiffError::Truncated`] before a byte of it is
+/// read or a buffer sized for it, naming the cause where a short read would
+/// only say the buffer did not fill (raw-pipeline.md, "Hostile-input
+/// bounds"; QE 2026-09-28, D1). The check costs one seek.
 pub fn read_jpeg<R: Read + Seek>(
     reader: &mut R,
     jpeg: &EmbeddedJpeg,
@@ -231,6 +300,14 @@ pub fn read_jpeg<R: Read + Seek>(
         return Err(TiffError::Malformed("implausible embedded JPEG length"));
     }
     let len = usize::try_from(jpeg.len).map_err(|_| TiffError::Malformed("JPEG length"))?;
+    let file_len = reader.seek(SeekFrom::End(0))?;
+    let present = file_len.saturating_sub(jpeg.offset).min(jpeg.len);
+    if present < jpeg.len {
+        return Err(TiffError::Truncated {
+            present,
+            declared: jpeg.len,
+        });
+    }
     reader.seek(SeekFrom::Start(jpeg.offset))?;
     let mut buf = vec![0u8; len];
     reader.read_exact(&mut buf)?;
@@ -277,6 +354,7 @@ mod tests {
     fn grid_source_prefers_largest_at_or_below_2mp() {
         let previews = EmbeddedPreviews {
             candidates: vec![jpeg(8640, 5760), jpeg(1616, 1080), jpeg(160, 120)],
+            cut: Vec::new(),
             whole_file: false,
             orientation: 1,
         };
@@ -292,6 +370,7 @@ mod tests {
     fn grid_source_falls_back_to_smallest_larger_preview() {
         let previews = EmbeddedPreviews {
             candidates: vec![jpeg(8640, 5760), jpeg(4000, 3000)],
+            cut: Vec::new(),
             whole_file: false,
             orientation: 1,
         };
@@ -303,6 +382,7 @@ mod tests {
     fn tiny_thumbnails_are_never_selected() {
         let previews = EmbeddedPreviews {
             candidates: vec![jpeg(160, 120)],
+            cut: Vec::new(),
             whole_file: false,
             orientation: 1,
         };
@@ -317,6 +397,7 @@ mod tests {
     fn whole_file_candidate_is_exempt_from_min_pixels() {
         let previews = EmbeddedPreviews {
             candidates: vec![jpeg(380, 260)],
+            cut: Vec::new(),
             whole_file: true,
             orientation: 1,
         };
@@ -389,6 +470,151 @@ mod tests {
         // The wording itself (both engines badge with these).
         assert_eq!(NO_USABLE_PREVIEW, "no usable embedded preview");
         assert_eq!(NO_DECODABLE_PREVIEW, "no decodable preview");
+    }
+
+    /// A RAW cut by an interrupted copy, laid out as an A1 is: IFD0 pointing
+    /// at a whole `mid`, IFD1 at `full`, then the two JPEGs, the full last —
+    /// and the file cut `keep` bytes into the full. `dims` puts the full's
+    /// size in IFD1, as an A1's IFD2 carries it; `declared` is the length
+    /// IFD1 gives the full.
+    fn cut_inside_the_full(
+        mid: &[u8],
+        full: &[u8],
+        dims: Option<(u32, u32)>,
+        declared: u32,
+        keep: usize,
+    ) -> Vec<u8> {
+        let ifd_len = |entries: u32| 2 + 12 * entries + 4;
+        let mut b = TiffBuilder::new(true);
+        let ifd0 = b.bytes.len() as u32;
+        let ifd1 = ifd0 + ifd_len(2);
+        let mid_off = ifd1 + ifd_len(if dims.is_some() { 4 } else { 2 });
+        let full_off = mid_off + mid.len() as u32;
+        assert_eq!(
+            b.add_ifd(
+                &[(0x0201, 4, 1, mid_off), (0x0202, 4, 1, mid.len() as u32)],
+                ifd1
+            ),
+            ifd0
+        );
+        let mut entries = Vec::new();
+        if let Some((w, h)) = dims {
+            entries.extend([(0x0100, 3, 1, w), (0x0101, 3, 1, h)]);
+        }
+        entries.extend([(0x0201, 4, 1, full_off), (0x0202, 4, 1, declared)]);
+        assert_eq!(b.add_ifd(&entries, 0), ifd1);
+        assert_eq!(b.add_blob(mid), mid_off);
+        assert_eq!(b.add_blob(full), full_off);
+        b.set_ifd0(ifd0);
+        b.bytes.truncate(full_off as usize + keep);
+        b.bytes
+    }
+
+    /// QE round 1 of brief 008, D1 (raw-pipeline.md, "Hostile-input
+    /// bounds"): a JPEG the file was cut inside is kept APART from the ones it
+    /// holds whole. Sized from its IFD, or — with no size there — from the
+    /// bytes the file still holds; no consumer reads it as whole (`fullres`
+    /// and `grid_source` pick among the whole ones, every one of which lies
+    /// inside the file); the loupe's top rung is the largest whole or cut, a
+    /// whole one winning a tie; `read_jpeg` refuses it as truncated, naming
+    /// how much of it the file holds. A pointer at the file's end and one
+    /// whose length no embedded JPEG has are dropped as before. Red with cut
+    /// JPEGs dropped, with the length guard gone, with `loupe_top` reading the
+    /// whole ones alone, and with `read_jpeg`'s check gone (the short read's
+    /// I/O error names no cause).
+    #[test]
+    fn a_jpeg_the_file_was_cut_inside_is_kept_apart_as_cut() {
+        let mid = tiny_jpeg(500, 400);
+        let full = tiny_jpeg(1000, 800); // SOI, a 13-byte SOF, EOI: 16 bytes
+        let declared = full.len() as u32;
+        let find = |bytes: Vec<u8>| find_embedded_jpegs(&mut Cursor::new(bytes)).unwrap();
+        let dims = |c: Option<&EmbeddedJpeg>| c.map(|c| (c.width, c.height));
+
+        // The A1's shape: IFD dims, the file ending inside the full.
+        let bytes = cut_inside_the_full(&mid, &full, Some((1000, 800)), declared, 10);
+        let file_len = bytes.len() as u64;
+        let previews = find(bytes.clone());
+        assert_eq!(dims(previews.candidates.first()), Some((500, 400)));
+        assert_eq!(previews.candidates.len(), 1, "only the mid is whole");
+        for c in &previews.candidates {
+            assert!(c.offset + c.len <= file_len, "a whole one lies inside");
+        }
+        assert_eq!(previews.cut.len(), 1, "the full is kept, apart");
+        assert_eq!(
+            (
+                previews.cut[0].width,
+                previews.cut[0].height,
+                previews.cut[0].len
+            ),
+            (1000, 800, u64::from(declared)),
+            "sized from its IFD, with the length the IFD declares"
+        );
+        assert_eq!(dims(previews.fullres()), Some((500, 400)));
+        assert_eq!(dims(previews.grid_source()), Some((500, 400)));
+        assert_eq!(
+            dims(previews.loupe_top()),
+            Some((1000, 800)),
+            "the loupe's top is the cut full"
+        );
+        let mut reader = Cursor::new(bytes);
+        let err = read_jpeg(&mut reader, &previews.cut[0]).expect_err("the file ends inside it");
+        assert!(
+            matches!(
+                err,
+                TiffError::Truncated { present: 10, declared: d } if d == u64::from(declared)
+            ),
+            "{err:?}"
+        );
+        assert!(err.to_string().starts_with("truncated"), "{err}");
+        let mid_bytes = read_jpeg(&mut reader, &previews.candidates[0]).expect("the mid is whole");
+        assert_eq!(mid_bytes, mid);
+
+        // No size in the IFD: sized from what the file holds — the SOF sits
+        // in the first 15 bytes.
+        let previews = find(cut_inside_the_full(&mid, &full, None, declared, 15));
+        assert_eq!(dims(previews.cut.first()), Some((1000, 800)));
+        // ... and with the SOF itself cut away there is nothing to size.
+        let previews = find(cut_inside_the_full(&mid, &full, None, declared, 6));
+        assert!(previews.cut.is_empty(), "{:?}", previews.cut);
+
+        // Dropped as before: a pointer at the file's very end (nothing of it
+        // is left), and a length no embedded JPEG has (a hostile claim).
+        let previews = find(cut_inside_the_full(
+            &mid,
+            &full,
+            Some((1000, 800)),
+            declared,
+            0,
+        ));
+        assert!(previews.cut.is_empty(), "at the end: {:?}", previews.cut);
+        let hostile = u32::try_from(MAX_EMBEDDED_JPEG_LEN + 1).unwrap();
+        let previews = find(cut_inside_the_full(
+            &mid,
+            &full,
+            Some((1000, 800)),
+            hostile,
+            10,
+        ));
+        assert!(
+            previews.cut.is_empty(),
+            "hostile length: {:?}",
+            previews.cut
+        );
+
+        // A whole JPEG wins a tie with a cut one: the whole 1000x800 mid slot
+        // over a cut full claiming the same size and length.
+        let previews = find(cut_inside_the_full(
+            &full,
+            &full,
+            Some((1000, 800)),
+            declared,
+            10,
+        ));
+        let top = previews.loupe_top().expect("a top rung");
+        assert!(
+            previews.candidates.contains(top),
+            "the whole one wins the tie: {top:?}"
+        );
     }
 
     /// Issue #31 boundary: the pixel cap admits everything up to and

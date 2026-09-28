@@ -14,6 +14,15 @@ pub enum TiffError {
     NotTiff(&'static str),
     #[error("malformed TIFF structure: {0}")]
     Malformed(&'static str),
+    /// The file ends inside an embedded JPEG (`read_jpeg`): a cut-off copy.
+    /// "truncated" leads the text because it is the cause the loupe's stderr
+    /// line and the Failed badge name (raw-pipeline.md, "Hostile-input
+    /// bounds").
+    #[error(
+        "truncated: the file ends {present} bytes into this embedded JPEG's {declared} \
+         (a cut-off copy)"
+    )]
+    Truncated { present: u64, declared: u64 },
     #[error("I/O error reading RAW file")]
     Io(#[from] std::io::Error),
 }

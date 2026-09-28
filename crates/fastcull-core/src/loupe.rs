@@ -2131,12 +2131,18 @@ fn decode_ladder(
     let previews = find_embedded_jpegs(&mut file).map_err(|e| format!("parse: {e}"))?;
 
     let orientation = previews.orientation;
-    let full = previews.fullres().cloned();
+    // The top rung is the largest embedded JPEG whole OR CUT: a RAW cut
+    // inside its full keeps that full as its best, so the mid below it is
+    // never `terminal` — soft and cued where it does not serve — and the
+    // full's read names the cut ("truncated") on the stderr line of a rung
+    // that fails over a good lower one (raw-pipeline.md, "Hostile-input
+    // bounds"; QE 2026-09-28, D1).
+    let full = previews.loupe_top().cloned();
     let mut rungs: Vec<crate::raw::EmbeddedJpeg> = Vec::new();
     if let Some(mid) = previews.grid_source() {
         rungs.push(mid.clone());
     }
-    if let Some(full) = previews.fullres() {
+    if let Some(full) = &full {
         if rungs.last() != Some(full) {
             rungs.push(full.clone());
         }
@@ -6421,6 +6427,111 @@ mod tests {
         std::fs::remove_dir_all(&dir).ok();
     }
 
+    /// A RAW cut by an interrupted copy, laid out as an A1 is — its IFD tables
+    /// first, then the intact 640x400 mid, then `full` with its size in its
+    /// IFD as an A1's IFD2 carries it — and cut `keep` bytes into the full.
+    fn raw_cut_inside_its_full(full: &[u8], keep: usize) -> Vec<u8> {
+        let mid = crate::raw::jpeg_hostile::encoded(640, 400);
+        let (w, h) = crate::raw::sof_dimensions(full).expect("a full with a SOF");
+        let ifd_len = |entries: u32| 2 + 12 * entries + 4;
+        let mut b = crate::raw::tiff_testutil::TiffBuilder::new(true);
+        let ifd0 = b.bytes.len() as u32;
+        let second = ifd0 + ifd_len(2);
+        let mid_off = second + ifd_len(4);
+        let full_off = mid_off + mid.len() as u32;
+        assert_eq!(
+            b.add_ifd(
+                &[(0x0201, 4, 1, mid_off), (0x0202, 4, 1, mid.len() as u32)],
+                second
+            ),
+            ifd0
+        );
+        assert_eq!(
+            b.add_ifd(
+                &[
+                    (0x0100, 3, 1, w),
+                    (0x0101, 3, 1, h),
+                    (0x0201, 4, 1, full_off),
+                    (0x0202, 4, 1, full.len() as u32),
+                ],
+                0
+            ),
+            second
+        );
+        assert_eq!(b.add_blob(&mid), mid_off);
+        assert_eq!(b.add_blob(full), full_off);
+        b.set_ifd0(ifd0);
+        b.bytes.truncate(full_off as usize + keep);
+        b.bytes
+    }
+
+    /// QE round 1 of brief 008, D1 (raw-pipeline.md, "Hostile-input bounds"
+    /// and "All rejections"): a RAW cut inside its full — an interrupted
+    /// copy, the commonest field corruption — keeps the full as its top rung,
+    /// so the good mid below it is published and is NEVER the file's best
+    /// (`terminal`): at fit it does not serve a box it would upscale, and the
+    /// app shows it cued; above fit it is soft under the pill and the zoom
+    /// reaches past it. The full's read fails as truncated over the good
+    /// mid: no Failed, the mid memoized so the ladder quiesces. At fit (a box
+    /// the mid does not serve, where the full's screen rung is tried) and at
+    /// 1:1. Red on the walker that dropped a JPEG the file ends inside: the
+    /// mid was the file's only rung, published terminal — its best — which
+    /// the app showed uncued at fit and would not zoom past.
+    #[test]
+    fn a_raw_cut_inside_its_full_never_makes_the_mid_its_best() {
+        let dir = crate::testutil::scratch_dir("cut-full");
+        let full = crate::raw::jpeg_hostile::encoded(2000, 1500);
+        let path = dir.join("cut_full.arw");
+        std::fs::write(&path, raw_cut_inside_its_full(&full, full.len() / 2)).unwrap();
+        let whole = find_embedded_jpegs(&mut std::fs::File::open(&path).unwrap())
+            .unwrap()
+            .fullres()
+            .map(|c| (c.width, c.height));
+        assert_eq!(
+            whole,
+            Some((640, 400)),
+            "the premise: the file holds its mid whole and its full cut"
+        );
+        let fit_box = FitBox {
+            width: 1000,
+            height: 700,
+        };
+        for target in [Target::Fit(fit_box), Target::Long(u32::MAX)] {
+            let (shared, rx) = shared_over(vec![path.clone()]);
+            assert_eq!(
+                decode_ladder(&shared, 0, target, 0, false, RequestState::Settled),
+                Ok(()),
+                "{target:?}: the mid is good, so the cut full fails nothing"
+            );
+            match rx.try_recv() {
+                Ok(LoupeEvent::Ready {
+                    image, terminal, ..
+                }) => {
+                    assert_eq!(
+                        (image.width, image.height, image.kind),
+                        (640, 400, RungKind::Mid),
+                        "{target:?}: the mid is shown"
+                    );
+                    assert!(
+                        !terminal,
+                        "{target:?}: the mid of a file whose full was cut is never its best"
+                    );
+                }
+                other => panic!("{target:?}: expected the mid's Ready event, got {other:?}"),
+            }
+            assert!(
+                rx.try_recv().is_err(),
+                "{target:?}: nothing else — no Failed, no phantom rung"
+            );
+            assert_eq!(
+                lock(&shared).best_long.get(&0).copied(),
+                Some(640),
+                "{target:?}: the mid memoized, so the ladder quiesces"
+            );
+        }
+        std::fs::remove_dir_all(&dir).ok();
+    }
+
     /// Brief 008 (raw-pipeline.md, "The screen rung"): a rung's kind is the
     /// scale the decoder RAN, never a comparison with the IFD's size claim,
     /// which `find_embedded_jpegs` trusts over the SOF. Here the one IFD
@@ -7667,6 +7778,15 @@ mod tests {
                 ("mid_ok_full_cut.arw", vec![fit(1000, 700)]),
                 ("mid_ok_full_ok.arw", vec![fit(1000, 700)]),
             ],
+            // QE round 1's D1: the FILE cut inside its full.
+            "cut-short" => vec![
+                ("file_cut_in_full.arw", vec![top]),
+                ("mid_ok_full_ok.arw", vec![top]),
+            ],
+            "cut-short-fit" => vec![
+                ("file_cut_in_full.arw", vec![fit(1000, 700)]),
+                ("mid_ok_full_ok.arw", vec![fit(1000, 700)]),
+            ],
             "complaint" => ["full_jfif2.arw", "gap.jpg", "pad.jpg", "intact.jpg"]
                 .into_iter()
                 .map(|f| (f, vec![top, top]))
@@ -7809,6 +7929,48 @@ mod tests {
             stderr.lines().all(|l| !l.contains("mid_ok_full_ok.arw")),
             "a clean climb at fit prints nothing:\n{stderr}"
         );
+        std::fs::remove_dir_all(&dir).ok();
+    }
+
+    /// QE round 1 of brief 008, D1 (raw-pipeline.md, "Hostile-input bounds"
+    /// and "All rejections"; docs/faq.md): a RAW whose FILE was cut inside its
+    /// full — an interrupted copy — names the cut on stderr, one line with
+    /// the file, the full rung and "truncated", climbed at the top rung and,
+    /// in a second child, at a fit box the mid does not serve, where the
+    /// full's read fails before any scale is chosen; a control RAW whose full
+    /// is whole prints nothing. Red on the walker that dropped a JPEG the file
+    /// ends inside: the full was never tried, and no line was printed.
+    #[test]
+    fn a_raw_cut_inside_its_full_is_named_on_stderr() {
+        let dir = crate::testutil::scratch_dir("stderr-cut-short");
+        let full = crate::raw::jpeg_hostile::encoded(2000, 1500);
+        std::fs::write(
+            dir.join("file_cut_in_full.arw"),
+            raw_cut_inside_its_full(&full, full.len() / 2),
+        )
+        .unwrap();
+        std::fs::write(dir.join("mid_ok_full_ok.arw"), raw_with_full(&full)).unwrap();
+        for scenario in ["cut-short", "cut-short-fit"] {
+            let stderr = stderr_of_child(scenario, &dir);
+            let named: Vec<&str> = stderr
+                .lines()
+                .filter(|l| l.starts_with("fastcull: loupe ") && l.contains("file_cut_in_full.arw"))
+                .collect();
+            assert_eq!(
+                named.len(),
+                1,
+                "{scenario}: one line for the file cut inside its full:\n{stderr}"
+            );
+            assert!(
+                named[0].contains("the full rung") && named[0].contains("truncated"),
+                "{scenario}: it names the rung and the cause: {}",
+                named[0]
+            );
+            assert!(
+                stderr.lines().all(|l| !l.contains("mid_ok_full_ok.arw")),
+                "{scenario}: a whole file prints nothing:\n{stderr}"
+            );
+        }
         std::fs::remove_dir_all(&dir).ok();
     }
 

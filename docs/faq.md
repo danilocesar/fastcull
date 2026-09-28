@@ -112,11 +112,14 @@ encoders leave at zero — don't cause the badge: FastCull shows the photo
 anyway and, if you started it from a terminal, prints one line naming the
 file. If a photo from another camera shows the badge while it looks whole
 in other programs, the project would like to hear about it — please open
-an issue with a sample file. A RAW whose full-size preview is damaged shows
-no badge at all: the loupe keeps the smaller preview, so at 1:1 — and at
-fit on a large screen (1440p or more) — that one frame stays soft under
+an issue with a sample file. A RAW whose full-size preview is damaged — or
+cut short, because an interrupted copy ended the file partway through it —
+shows no badge at all: the loupe keeps the smaller preview, so at 1:1 — and
+at fit on a large screen (1440p or more) — that one frame stays soft under
 the "◌ loading" pill however long you wait, and FastCull prints a line
-naming the file in the terminal, if you started it from one.
+naming the file in the terminal, if you started it from one. If the copy
+on the card is whole, copying the file again and reopening the folder
+brings the sharp frame back.
 
 **Something misbehaves — what should I attach to a bug report?**
 Run with `FASTCULL_TRACE=1` from a terminal and attach the output: it
