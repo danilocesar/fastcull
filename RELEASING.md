@@ -44,6 +44,22 @@ cargo-dist). `dist-workspace.toml` is the configuration;
 `.github/workflows/release.yml` is **generated from it** and should never be
 edited by hand.
 
+**The loupe's C decoder** (ADR 0005). A release build compiles libjpeg-turbo
+from source, so it needs **cmake** and **nasm** — and on Windows **ninja**,
+the CMake generator the workspace's `.cargo/config.toml` names for the MSVC
+target (`specs/01-architecture.md`, "Native dependencies"). The release
+runners get nasm from `dist-workspace.toml` (`[dist.dependencies.apt]` and
+`[dist.dependencies.chocolatey]`, which `dist plan` shows as `apt-get
+install … nasm` and `choco install nasm`) and have cmake preinstalled; the
+Windows runner, `windows-2022`, has ninja preinstalled too, and Ninja builds
+with whichever Visual Studio a seat carries, so no Visual Studio version is
+named anywhere. A local release build needs the same
+tools: a missing nasm fails the build on purpose, and so does a Windows seat
+without ninja on its PATH. No pull-request run builds the release artifacts
+(the release workflow only runs `dist plan` there), so the first release
+after brief 008 is the first run of that path — one more reason to start it
+with a throwaway prerelease tag (below).
+
 **A `v0.1.0` tag already exists** (it marks the end of milestone M4, a commit
 that predates this pipeline). The first tag that actually builds a release must
 be a new version — bump `[workspace.package] version` in `Cargo.toml` first. To

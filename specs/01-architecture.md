@@ -596,8 +596,9 @@ carries its evidence):
       3/8 rung's Windows median below the landscape full-res median (brief
       008's decisions log). Open: the release plumbing — `dist-workspace.toml`'s
       nasm for apt and chocolatey, and RELEASING.md naming nasm and, on
-      Windows, ninja (brief 008 step 6) — which step 6's review then
-      verifies as above; ticked with the id of the first CI run after it.
+      Windows, ninja — landed with brief 008's step 6 (`dist generate
+      --check` reports `release.yml` unchanged); ticked with the id of the
+      first CI run after it, once step 6's review has verified it as above.
       (Changed 2026-09-26, senior-developer review F1: the box
       asked only for green checks and a running artifact, which brief 008's
       first run met with the library compiled unoptimised on Windows.

@@ -36,3 +36,11 @@ include = ["LICENSE", "README.md", "THIRD-PARTY-LICENSES.md"]
 [dist.dependencies.apt]
 libfontconfig1-dev = '*'
 libxkbcommon-dev = '*'
+# The loupe's JPEG decoder, libjpeg-turbo, is built from source with its SIMD
+# kernels, which NASM assembles; a build without it fails on purpose (ADR 0005).
+nasm = '*'
+
+# The same NASM for the Windows release build (ADR 0005). Chocolatey installs it
+# to C:\Program Files\NASM, which CMake's NASM lookup searches by itself.
+[dist.dependencies.chocolatey]
+nasm = '*'
