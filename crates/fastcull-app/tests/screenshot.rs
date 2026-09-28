@@ -1969,21 +1969,28 @@ fn grid_resize_at_top_stays_at_top() {
 /// optimised there (issue #76) — either way far past the key spacing,
 /// with the virgin-pin rule rendering soft on mid adoption).
 ///
-/// FIXTURE CHANGED, assertions untouched (brief 008; ui-grid.md, the #46
-/// box): twenty-four files where there were six, one backlog decoder
-/// (`FASTCULL_DECODERS=2`: the reserved lane serves a resting focus, never a
-/// held key) and sixteen keys 60 ms apart where there were five. From brief
-/// 008 a 1:1 rest decodes its full-res ring, fifteen ahead, so on six files
-/// every frame of the hold was already full-res when the keys came — five
-/// release runs on the development seat rendered the whole hold sharp, and
-/// the test passed only on the cold start's `loupe soft idx 0`, the virgin
-/// pin's render 600 ms before the first key. Now the premise holds by
-/// construction on any seat whose ONE decoder cannot decode and fill an A1
-/// full-res frame in 60 ms — none on record can (01-architecture.md's perf
-/// table): the rest fills a few frames of runway and the sixteen-key hold
-/// outruns it, so the frames it meets beyond the runway show their fit-box
-/// rung, the mid on this window, rendered `loupe soft idx`. The script's
-/// last key is at 1600 ms; the shutter waits for the whole script.
+/// FIXTURE CHANGED TWICE (brief 008; ui-grid.md, the #46 box). Step 5 gave
+/// it twenty-four files, one backlog decoder (`FASTCULL_DECODERS=2`: the
+/// reserved lane serves a resting focus, never a held key) and sixteen keys,
+/// because a 1:1 rest now decodes its full-res ring and six files left the
+/// whole hold sharp. That left it VACUOUS (the senior developer's review of
+/// step 5, 2026-09-27): the cold start's own `loupe soft idx 0`, rendered
+/// before any key, met the soft assertion — a soft frame dropping to fit
+/// only while travelling passed in both profiles — and in debug no mid
+/// reached the hold at all (the one decoder was inside full-res decodes of
+/// the frames ahead; the hold showed thumbs and holds). So the mids are put
+/// in hand first, the way a user reaches 1:1: a rest at FIT on the default
+/// window, whose fit box the mid serves, waits for the mid of each of the
+/// fifteen frames ahead (the loupe keeps them, ui-grid.md
+/// "Virtualization"); `Z` enters 1:1 on id 0; the hold starts once id 0 is
+/// sharp, so it carries a resolved factor; and one backlog decoder cannot
+/// decode and fill an A1 full-res frame per 60 ms key on any seat on record
+/// (01-architecture.md's perf table), so the frames the hold meets beyond
+/// its full-res runway show their mid, in either profile. The soft render is
+/// asserted during the TRANSIT — from the second key's echo to the last
+/// one's, the first index change after a rest being a tap — and the
+/// landing's sharp mark ends the script. Red with a soft frame dropping to
+/// fit only while travelling (it was green before), and pre-#21.
 #[test]
 fn transit_at_zoom_stays_soft_never_drops_to_fit() {
     if !has_display() {
@@ -1998,26 +2005,35 @@ fn transit_at_zoom_stays_soft_never_drops_to_fit() {
     };
     let dir = &fixture.dir;
     std::fs::create_dir_all(dir).unwrap();
-    for i in 1..=24 {
+    // One capture time, so the view is the filename order: id N at view
+    // position N.
+    for i in 0..24 {
         place_fixture(
             &raws_dir().join("A1_full_compressed.ARW"),
-            &dir.join(format!("a{i}.ARW")),
+            &dir.join(format!("IMG_{i:04}.ARW")),
         );
     }
     let out = out_dir().join("soft-transit.jpg");
-    // No starvation knob: FASTCULL_MAX_READERS governs the thumbnail
-    // pipeline, NOT the loupe ladder (gate finding — it was a no-op
-    // here). The race is real in both profiles: release full-res cooks
-    // ~140ms against 60ms key spacing; debug cooked ~12 s before
-    // 2026-09-05 and ~1-2 s since (issue #76) — either way past the key
-    // spacing — and the virgin-pin rule renders soft the moment the
-    // landing mid adopts, long before the shutter's sharp gate opens.
-    let drive: String = (0..16)
-        .map(|k| format!("{}:right", 700 + 60 * k))
-        .collect::<Vec<_>>()
-        .join(";");
+    // The rest at FIT puts the mid of every frame the hold will meet in hand
+    // (the default window's fit box is served by the mid; the loupe keeps the
+    // mids inside the rung ring's window, ui-grid.md "Virtualization"); `Z`
+    // then enters 1:1 on id 0, and the hold starts once id 0 is sharp, so the
+    // factor it carries is resolved. One backlog decoder cannot decode and
+    // fill an A1 full-res frame per 60 ms key on any seat on record, so the
+    // frames the hold meets beyond its full-res runway show their mid —
+    // rendered `loupe soft idx` — in either profile. The script ends on the
+    // landing frame's sharp mark.
+    let mut drive = String::from("100:wait:load settled gen 0");
+    for id in 1..=15 {
+        drive.push_str(&format!(";200:wait:loupe adopted idx {id} kind mid"));
+    }
+    drive.push_str(";300:one2one;400:wait:loupe idx 0 factor");
+    for k in 0..16 {
+        drive.push_str(&format!(";{}:right", 500 + 60 * k));
+    }
+    drive.push_str(";1500:wait:loupe idx 16 factor");
     let stderr = shoot_env_stderr(
-        &["--start-11", dir.to_str().unwrap()],
+        &["--start-loupe", dir.to_str().unwrap()],
         &[
             ("FASTCULL_TRACE", "1"),
             ("FASTCULL_DECODERS", "2"),
@@ -2025,11 +2041,35 @@ fn transit_at_zoom_stays_soft_never_drops_to_fit() {
         ],
         &out,
     );
-    // The transit rendered SOFT at least once (pre-#21: the string does
-    // not exist — the view dropped to fit instead).
+    // The rest, the entry and the landing really happened: each wait fired
+    // (a misspelt token would put the script back on the clock in silence).
+    for id in 1..=15 {
+        let token = format!("wait:loupe adopted idx {id} kind mid (satisfied");
+        assert!(stderr.contains(&token), "`{token}` never fired:\n{stderr}");
+    }
+    for token in [
+        "wait:load settled gen 0 (satisfied",
+        "wait:loupe idx 0 factor (satisfied",
+        "wait:loupe idx 16 factor (satisfied",
+    ] {
+        assert!(stderr.contains(token), "`{token}` never fired:\n{stderr}");
+    }
+    // The TRANSIT rendered SOFT (pre-#21: the string does not exist — the
+    // view dropped to fit). Transit starts at the SECOND key: the first index
+    // change after a rest is a tap (ui-grid.md, "Transit and settled"), so the
+    // window runs from the second key's echo to the last one's, where every
+    // render is of a frame the held key is on. Neither the entry's own soft
+    // render before the first key, the first key's tap, nor the landing's
+    // render at rest counts.
+    let keys: Vec<usize> = stderr
+        .match_indices("drive: right")
+        .map(|(at, _)| at)
+        .collect();
+    assert_eq!(keys.len(), 16, "the sixteen keys ran:\n{stderr}");
+    let during = stderr[keys[1]..keys[15]].matches("loupe soft idx").count();
     assert!(
-        stderr.contains("loupe soft idx"),
-        "no soft transit render occurred:\n{stderr}"
+        during > 0,
+        "no soft transit render occurred during the hold:\n{stderr}"
     );
     // And the landing frame ended SHARP (a plain sharp loupe line for
     // the final cursor appears after the last soft one).
