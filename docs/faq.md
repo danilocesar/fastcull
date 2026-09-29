@@ -112,7 +112,11 @@ encoders leave at zero — don't cause the badge: FastCull shows the photo
 anyway and, if you started it from a terminal, prints one line naming the
 file. If a photo from another camera shows the badge while it looks whole
 in other programs, the project would like to hear about it — please open
-an issue with a sample file. A RAW whose full-size preview is damaged — or
+an issue with a sample file. The same goes for one whose 1:1 view stops at
+the size of its small preview: FastCull ranks the previews inside a RAW by
+the sizes the file states for them, so a file that understates its
+full-size preview shows the small one as if it were the whole photo — no
+camera on record does this. A RAW whose full-size preview is damaged — or
 cut short, because an interrupted copy ended the file partway through it —
 shows no badge at all: the loupe keeps the smaller preview, so at 1:1 — and
 at fit on a screen at least 1600 pixels tall, such as 2560×1600 or 4K — that

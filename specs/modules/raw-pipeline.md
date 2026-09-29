@@ -52,7 +52,19 @@ libjpeg-turbo at the size the screen draws them (ADR 0005).
 - **Asset sources.** The grid thumb: the largest embedded preview ≤ ~2 MP
   (A1: the 1616×1080), decoded with zune-jpeg and SIMD-resized
   (`fast_image_resize`) to 320 px. Full-res: the largest embedded JPEG
-  (A1: the 8640×5760 `JpgFromRaw`).
+  (A1: the 8640×5760 `JpgFromRaw`). "Largest" is by the size an embedded
+  JPEG's IFD gives, when it gives one: the walker sniffs the SOF only of a
+  JPEG whose IFD gives none (the A1's preview and thumbnail; its full's IFD
+  gives 8640×5760). Residual, accepted: an IFD that claims fewer pixels for
+  its full than the preview has makes the preview the file's best —
+  terminal, so uncued at fit on a wide viewport, the zoom's ceiling read
+  from it, no line, and the video export's frame — and one that claims its
+  full at more pixels than the preview but no more than ~2 MP makes the
+  full the grid source, a full-size decode for every thumbnail. No body on
+  record misstates a size (the one size an A1's IFDs give, its full's, is
+  exact; M11), and the fix — every candidate sized from its SOF, measured
+  first against the thumb budget and a cold read from a card reader — is a
+  later unit's (the session audit of brief 008, S9, 2026-09-29).
 - **The decoder** (ADR 0005): every loupe rung — mid, screen rung,
   full-res — is decoded by libjpeg-turbo ≥ 3.0 through the `turbojpeg`
   crate, except a stream whose header says CMYK or YCCK (a print-ready bare
@@ -1181,8 +1193,9 @@ medium's measured behaviour:
   the ladder's, which knows the file. `raw/jpeg.rs` holds the one JPEG marker
   walker, which the SOF sniff, the byte check, the APP1 Exif search and the
   header-gap pre-pass read; the SOF sniff sizes the candidates of
-  `find_embedded_jpegs`, which the grid thumb, the loupe and the video
-  export (`clip.rs`, video-export.md) choose from, and over a stream in
+  `find_embedded_jpegs` whose IFD gives no size (Reading a file, "Asset
+  sources"), which the grid thumb, the loupe and the video export
+  (`clip.rs`, video-export.md) choose from, and over a stream in
   memory (`sof_dimensions`) gives the size the ladder plans the screen rung
   from (The factor rule). `find_embedded_jpegs` keeps apart, as
   `EmbeddedPreviews::cut`, the JPEGs the file was cut inside, which the
@@ -1825,6 +1838,13 @@ commit that lands its tests, and stays open until then):
 
 ## History
 
+- 2026-09-29 — The walker's ranking by the IFD's size claim is a recorded
+  residual (the session audit of brief 008, S9): QE round 1's D2 moved the
+  screen rung's plan to the stream's own SOF, while the IFD's claim still
+  orders the candidates and decides which is the file's top — the scope the
+  D2 commit (ff8c9b8) stated in its message and no sentence here recorded.
+  Contracts said the SOF sniff sizes the candidates of
+  `find_embedded_jpegs`; it sizes only those whose IFD gives no size.
 - 2026-09-29 — `note_adopted` takes no `held` flag (the session audit of
   brief 008, S4): the app passed whether its ring kept the texture, and the
   engine read it nowhere — by design since the Q-K ruling, which measures a
