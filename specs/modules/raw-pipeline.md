@@ -662,10 +662,24 @@ before allocation:
   its full keeps its mid below the top — never the file's best, so soft and
   cued wherever the mid does not serve, at fit on a wide viewport and above
   fit, and the zoom reaches past it — with the damaged-rung line naming the
-  cut (All rejections, below). A pointer that starts at or past the file's
-  end, or runs past it with a length over `MAX_EMBEDDED_JPEG_LEN`, is dropped:
-  there is nothing of it to name, or it is a hostile claim (QE 2026-09-28,
-  D1).
+  cut (All rejections, below; QE 2026-09-28, D1). A pointer that runs past
+  the file's end with a length over `MAX_EMBEDDED_JPEG_LEN` is dropped, a
+  hostile claim; and so is one whose JPEG signature the file does not hold —
+  one that starts at or past its end, or on its last byte: a JPEG is taken as
+  cut only once its two-byte signature is in the file, and an IFD alone is
+  not trusted to name a JPEG the file cannot show (corrected 2026-09-28, QE
+  round 2 of brief 008, R2-1: this said "there is nothing of it to name",
+  where the IFD still names it). The residual, recorded: a RAW cut before its
+  full's second byte — for the reference A1 files, in the few hundred to few
+  thousand bytes between the end of the mid and the start of the full —
+  keeps its mid as its best, as before brief 008: uncued at fit on a wide
+  viewport, the zoom's ceiling read from the mid, and no line; for a body
+  whose IFD gives no size, whose cut JPEG is sized from its SOF, the same
+  holds for a cut before the end of the full's SOF segment. Keeping an
+  IFD-sized pointer the file no longer reaches as cut, on the IFD's word, is
+  the Manager's open ruling (brief 008, QE round 2's R2-1): it would also
+  call "truncated", for good, an intact file whose IFD points past its end
+  (M11).
 - **The scaled decode refuses a numerator outside 1..=8**: 9/8 and above would
   UPSCALE, which no rung may do (developer 2026-09-26, brief 008 step 1).
 - **Residual, accepted — the bounded blank success**: a stream carrying
@@ -741,7 +755,8 @@ refuses a frame or leaves it silently soft: the frame shows what decoded, and
 the log names it once. A frame with nothing decodable shows the `Failed`
 badge, and a frame whose better rung is damaged stays on the good one with
 the log naming it (All rejections, above; the user 2026-09-26, CLAUDE.md
-M11). libjpeg-turbo gives the loupe one handle on a complaint: the text of
+M11) — all but a RAW cut before its full's second byte, a recorded residual
+(Hostile-input bounds, "Truncation, a RAW cut inside an embedded JPEG"). libjpeg-turbo gives the loupe one handle on a complaint: the text of
 the FIRST message its decode emitted, which the safe crate returns as the
 call's `Err` — libjpeg reports only its first warning, a fatal error replaces
 it, and nothing the crate exposes tells a harmless warning from a damaging
@@ -1749,6 +1764,16 @@ commit that lands its tests, and stays open until then):
 
 ## History
 
+- 2026-09-28 — A RAW cut before its full's second byte is a recorded
+  residual (QE round 2 of brief 008, R2-1; the senior developer's F2 of the
+  review of round 1's fixes): "Truncation, a RAW cut inside an embedded JPEG"
+  said a pointer at or past the file's end is dropped because "there is
+  nothing of it to name", while the IFD still names the full; the walker
+  takes a JPEG as cut only once its two-byte signature is in the file. Such a
+  cut keeps round 1's D1 symptom — the mid as the file's best, uncued at fit
+  on a wide viewport, no line — as v0.14.0 showed it; "The decoder's
+  complaints" points at it. Keeping an IFD-sized pointer as cut instead is
+  the Manager's open ruling.
 - 2026-09-28 — `FASTCULL_DECODERS` has a ceiling, 64 (QE round 1 of brief
   008, D3): the override was taken as given above either cap with no bound,
   and `FASTCULL_DECODERS=99999` crashed the app when a folder opened — the

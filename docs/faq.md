@@ -117,9 +117,12 @@ cut short, because an interrupted copy ended the file partway through it —
 shows no badge at all: the loupe keeps the smaller preview, so at 1:1 — and
 at fit on a large screen (1440p or more) — that one frame stays soft under
 the "◌ loading" pill however long you wait, and FastCull prints a line
-naming the file in the terminal, if you started it from one. If the copy
-on the card is whole, copying the file again and reopening the folder
-brings the sharp frame back.
+naming the file in the terminal, if you started it from one. The one
+exception is a copy that stopped just where the full-size preview begins:
+nothing of that preview is left for FastCull to find, so the frame shows
+the smaller preview as if it were the whole photo — no pill, no line — as
+FastCull 0.14.0 did. If the copy on the card is whole, copying the file
+again and reopening the folder brings the sharp frame back.
 
 **Something misbehaves — what should I attach to a bug report?**
 Run with `FASTCULL_TRACE=1` from a terminal and attach the output: it
