@@ -98,7 +98,8 @@ and never fixes a finding: the developer fixes, the reviewing roles report.
    the `claude` PIDs to their cwds before the first tool that touches the
    tree; stop, or get the user to stop, any peer in the same repo —
    sessions in other repos are unrelated and left alone). Tree clean, on
-   `main` or the unit's own branch; `testdata/raws/` fetched. Cleanup
+   `main` or the unit's own branch; `origin` fetched and a new unit's
+   branch cut from `origin/main` (M12); `testdata/raws/` fetched. Cleanup
    (M9): before the unit starts, `cargo clean -p fastcull-app -p
    fastcull-core -p fastcull-cli` in the tree's own `target/`, any
    `target-qe-*` directory or worktree a previous unit left removed, the
@@ -115,7 +116,7 @@ and never fixes a finding: the developer fixes, the reviewing roles report.
    best usability practice and records them, dated, for the spec. Test and
    CI plumbing skips this step.
 3. **The brief** — `specs/briefs/NNN-<slug>.md`, numbered and dated,
-   committed on the work branch (created from `main` for this unit):
+   committed on the work branch (created from `origin/main` for this unit):
    Context / Goals / Non-goals / numbered testable Requirements /
    Acceptance criteria / Applicable directives (hard rules, ADRs, spec
    sections, standing directives) / Persona verdicts / Open questions
@@ -323,17 +324,39 @@ developer owns re-verifying such claims against reality.
   recorded as such and put to the user (M8), never quietly deleted. An
   unticked box always carries its reason — a bare one is the silence the
   gate forbids.
+- **M11 — Other cameras are a design constraint, not an afterthought.**
+  (the user, 2026-09-26: "the software should be able to handle more files
+  as, at some point, I will want more users with different cameras") The
+  A1 is the reference body, not the only one. A code path that is general
+  — a decoder, a parser, a cache — is designed and tested for files from
+  other bodies too: a harmless complaint from a decoder never refuses a
+  frame or leaves it silently soft (use what decoded, log it once); a
+  frame with nothing decodable shows the Failed badge; a decision that
+  rests on an A1 property says so where it is recorded. Formats outside
+  the TIFF family stay best-effort until a unit takes them on.
+- **M12 — Every unit starts from `origin/main` as it is now.** (the user,
+  2026-09-29, approving the candidate; 2026-09-26: a unit's branch was cut
+  from a local `main` that had not been fetched, missed a merged PR that
+  had rewritten the specs, and its first days were rebuilt on the real
+  base) Before the brief, the Manager runs `git fetch origin` and cuts the
+  unit's branch from `origin/main`, never from a local `main` that has not
+  been fast-forwarded to it; a unit resumed on an existing branch checks
+  `git log HEAD..origin/main` first and rebases before more work lands.
 
 ### Open decisions the Manager tracks (do not re-ask unless relevant)
 
-- **Held-arrow softness on 4K, issue #60** (parked by the user 2026-08-29:
-  "let's discuss this in the future"). A bigger full-res cache was analysed
-  and rejected — it is a decode-rate problem; the refined proposal (a
-  screen-sized rung via half-scale decode, paced advance, one
-  `MemoryBudget`) and six questions for the user are in the ticket. Not to
-  be implemented without the user reopening it; the agreed first step is a
-  throwaway benchmark of turbojpeg half-scale decode against zune-jpeg
-  (baseline 305 ms) on the laptop.
+- **Held-arrow softness on 4K, issue #60** (parked by the user 2026-08-29,
+  reopened 2026-09-26, the experiment dropped 2026-09-29). The ticket's
+  proposal was built as an experiment — libjpeg-turbo, a screen-sized
+  rung, a ring of 2 behind / 15 ahead, a pixel cache sized from RAM,
+  decoders from physical cores — and never merged: PR #93 closed, the
+  branch `screen-rung` kept as an archive. The user tested it on the
+  laptop (Linux) and judged it too sluggish: a held arrow at fit or 1:1
+  advanced about one picture per half second. The user's requirement for
+  any next attempt (2026-09-26 and 2026-09-29): a held arrow keeps moving
+  at a movie pace, never paced down; softness during the hold is
+  acceptable, sharpness is maximised within that. Not to be picked up
+  again without the user reopening it.
 - **Export frames as video (M9, v0.11.0):** still open is a FastCull-made
   `.mov` on the user's phone (only an ffmpeg-muxed file of the same shape
   was tested), InShot honouring rotation on a portrait burst, other bodies'
