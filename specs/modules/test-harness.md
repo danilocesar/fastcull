@@ -387,9 +387,9 @@ shot 2.
   2026-09-26).
 - CI facts: a pull request's runs share one concurrency group per ref with
   `cancel-in-progress` (a run that vanishes without a verdict is a cancel,
-  not a hang); every other event gets its own group; the job cap is 100
+  not a hang); every other event gets its own group; the job cap is 102
   minutes, set to clear a COLD Windows job with 22 % of the cap to spare
-  (54-78 min measured; the runs are in ci.yml's comment), so a test that
+  (54-79 min measured; the runs are in ci.yml's comment), so a test that
   adds wall clock to the Windows job spends headroom that is measured;
   both runners are 4 vCPU with ~16 GB, recorded in each run's summary. The
   profile matrix: `has_display()` is `cfg!(windows)`, so on Windows `cargo
@@ -443,6 +443,9 @@ shot 2.
 
 ## History
 
+- 2026-09-29 — The job cap is 102 minutes: a cold Windows job took 79.0 min on
+  run 36564299941, and the cap's own 22 % rule asks 102 (brief 008, QE's final
+  spot-check D5; Manager, M3).
 - 2026-09-29 — The job cap is 100 minutes (the session audit of brief 008,
   S3; M3): every run of PR #93 was fully cold — an idle week had evicted
   main's cache pair — and its Windows jobs took 54-78 min, brief 008's A5

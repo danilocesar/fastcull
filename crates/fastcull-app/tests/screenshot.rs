@@ -7638,7 +7638,7 @@ fn overlay_wheel_still_zooms_one_stop_per_notch() {
 /// whose final cursor is failed above fit trips the 60 s readiness cap
 /// (recorded limitation). The ~2 s window the texture used to have to
 /// land in is closed: the second End is held by `wait:thumb landed idx
-/// 11` (issue #13's token), so a runner slow enough to take longer moves
+/// 16` (issue #13's token, renumbered by brief 008's fixture), so a runner slow enough to take longer moves
 /// the End with it instead of losing the arming. The assertion on that
 /// same line stays — the wait proves the texture landed, the assertion
 /// proves the ordering the count below is read against.

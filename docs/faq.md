@@ -132,7 +132,8 @@ again and reopening the folder brings the sharp frame back. One rarer case:
 a file damaged or cut on disk while its folder is open, after FastCull has
 already read its full-size preview — a copy still being written over the
 folder you are culling, say — shows the smaller preview as above, but while
-you rest on that frame where the pill shows, FastCull keeps retrying the
+you rest on that frame — with the pill, or without it when the copy stopped
+before the full-size preview began — FastCull keeps retrying the
 full-size preview it once read, which keeps one processor core busy (your
 fan may spin up). Moving to another frame stops it; reopening the folder
 ends it.

@@ -787,8 +787,13 @@ pixel cache evicts that larger rung, a rest on the frame finds its kept rung
 short of the memo wherever that rung does not serve the view, and the settle
 guarantee queues the frame again the moment each climb ends: the reserved
 lane re-walks the file, and re-reads a broken rung, for as long as the
-cursor rests there, one core busy. The screen shows the kept rung, cued, and
-the damaged rung's line prints once. Unchanged from before brief 008; the
+cursor rests there, one core busy. Where the file still holds the damaged
+rung (a cut or damage inside it), the screen shows the kept rung, cued, and
+the damaged rung's line prints once; where the file no longer holds it at
+all (a cut before it begins, or a file replaced by one with smaller
+previews), the kept rung is shown uncued, as the whole photo, with no line,
+while the core stays busy all the same (QE's final spot-check, D1, measured;
+corrected 2026-09-29). Unchanged from before brief 008; the
 fix — the memo keeps the latest decoded best, with its tests — is routed to
 brief 009 (brief 008, the pre-merge round: QE's R3-2 and the
 senior-developer review's F1; Manager ruling 2026-09-29).

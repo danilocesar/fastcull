@@ -89,15 +89,17 @@ jobs:
     # children holding the arrow in a 3840x2160 window, from run
     # 36390256213) added about 3 minutes, all in the release screenshot
     # step (15.3-18.9 min before, 18.0-21.9 after; A5 skips on the debug
-    # pass); the slow runners have taken 73.6-77.8 min since.
+    # pass); the slow runners have taken 73.6-79.0 min since (79.0 on run
+    # 36564299941, c0bbb8b).
     # The headroom is 22 % of the cap over the worst measured cold run:
-    # 90 gave 70.0 min its 20 minutes; 100 gives 77.8 min 22.2. It still
+    # 90 gave 70.0 min its 20 minutes; 100 gave 77.8 min 22.2; 102 gives
+    # 79.0 min 23.0 (22.5 %). It still
     # replaces GitHub's 6-hour default, under which one hung app child
     # would bill five idle hours of Windows minutes before anyone noticed.
     # Slow is not failed; hung is. Splitting this job, or dropping its
     # debug screenshot pass -- the only debug run of the driven suite on
     # CI -- changes what CI runs, which is the user's call (M3).
-    timeout-minutes: 100
+    timeout-minutes: 102
     strategy:
       fail-fast: false
       matrix:

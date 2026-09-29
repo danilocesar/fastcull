@@ -176,7 +176,11 @@ of the cursor image drops to fit immediately (the strip owns the failed
 badge), and `OVERLAY_HOLD_CAP` (250 ms, one settle window, PER CURSOR IMAGE)
 caps a wedged decode; a capped drop traces `loupe overlay dropped … (hold
 cap)` and the overlay re-raises the moment any rung of the cursor image
-lands. A cold ENTRY with no pixels of the image keeps the overlay down until
+lands. Known gap: the cap is evaluated at the next refresh, not at its own
+instant, so with nothing landing a wedged decode can hold the previous
+pixels past 250 ms (measured about 800 ms under load); the fix, a re-check
+at the cap instant like the pill's, is routed to brief 009 (brief 008,
+QE's final spot-check, D3; Manager ruling 2026-09-29). A cold ENTRY with no pixels of the image keeps the overlay down until
 the first rung. A decode-FAILED cursor skips the thumb rescue — a live thumb
 texture would otherwise sit at 1:1 behind a pill that can never complete,
 hiding the failed badge; fit plus the badge is the honest floor. One
