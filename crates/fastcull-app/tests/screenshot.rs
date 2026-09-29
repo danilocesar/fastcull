@@ -7643,6 +7643,25 @@ fn overlay_wheel_still_zooms_one_stop_per_notch() {
 /// same line stays — the wait proves the texture landed, the assertion
 /// proves the ordering the count below is read against.
 ///
+/// t1 WAITS for the first End's `(decode failed)` drop (brief 008, R3-1;
+/// senior-developer test-integrity review 2026-09-29) instead of reading at
+/// End + 250 ms. Nothing promises that latency — ui-grid.md: the first focus
+/// of a freshly dead file MAY render the thumb until its decode attempt
+/// fails — and the clock read a 773 ms failure as a defect on CI run
+/// 36526534230 (Windows debug; one red in the 12 Windows debug passes since
+/// 33e5e8d). t2 keeps its clock: by the second End the failure is known, so
+/// that drop is synchronous with the End (0-1 ms in 22 of 22 Windows passes).
+///
+/// WHEN THIS FAILS THIS WAY — the run ends at the t1 wait's 30 s cap with
+/// `loupe overlay dropped idx 16 (hold cap)` ahead of it — it is the one
+/// ordering this gate cannot witness: idx 16's thumb landed more than 250 ms
+/// after the hold began, and the failure arrived while the overlay was down,
+/// so the first End never drops on `(decode failed)`. The product is correct
+/// there (fit, the failed badge, no re-raise). Do not quiet it: the fix is a
+/// failure-arrival mark (brief 009), never a longer wait, a wider cap or a
+/// re-run. Not seen so far: in 22 Windows passes the thumb landed within
+/// 1 ms of the hold's start.
+///
 /// RED on the pre-gate build (b2ce1f9): the thumb renders on EVERY
 /// End (so the after-t1 count is 1) and the "(decode failed)" drop
 /// never appears. That the REWRITE fixed the flake rather than hiding
@@ -7727,8 +7746,9 @@ fn a_decode_failed_cursor_drops_to_fit_instead_of_masking_the_badge() {
             ("FASTCULL_TRACE", "1"),
             (
                 "FASTCULL_DRIVE",
-                "15000:end;15250:dump.t1;16000:home;\
-                 16500:wait:thumb landed idx 16;17000:end;17150:dump.t2;18000:home",
+                "15000:end;15010:wait:loupe overlay dropped idx 16 (decode failed);\
+                 15250:dump.t1;16000:home;16500:wait:thumb landed idx 16;17000:end;\
+                 17150:dump.t2;18000:home",
             ),
         ],
         &out,
@@ -7749,6 +7769,55 @@ fn a_decode_failed_cursor_drops_to_fit_instead_of_masking_the_badge() {
         "the `wait:thumb landed idx 16` step never fired — the second End \
          was not gated on anything:\n{stderr}"
     );
+    // t1 is gated on the event it reads, the first End's drop (brief 008,
+    // R3-1): the echo proves the wait ran, and the ORDERING below proves it
+    // ran in front of the dump (test-harness.md, "Rules for script authors").
+    assert!(
+        stderr.contains("wait:loupe overlay dropped idx 16 (decode failed) (satisfied"),
+        "the `wait:loupe overlay dropped idx 16 (decode failed)` step never \
+         fired — t1 was not gated on the first End's drop:\n{stderr}"
+    );
+    // Anchored on the mark's own line end: the wait's echo quotes the same
+    // text followed by ` (satisfied after N ms)`, so an unanchored find
+    // could land on the echo instead of the app's mark.
+    let first_drop = stderr
+        .find("loupe overlay dropped idx 16 (decode failed)\n")
+        .unwrap_or_else(|| {
+            panic!(
+                "no `loupe overlay dropped idx 16 (decode failed)` mark in \
+                 stderr — the failed cursor never dropped:\n{stderr}"
+            )
+        });
+    let t1_at = stderr
+        .find("QEDUMP t1 ")
+        .unwrap_or_else(|| panic!("no `dump.t1` trace in stderr:\n{stderr}"));
+    assert!(
+        first_drop < t1_at,
+        "t1 was dumped before the first End's `(decode failed)` drop — the \
+         gate is not in front of the dump:\n{stderr}"
+    );
+    // A reading for humans, never a gate: the first End to its drop, off the
+    // marks' own `[ms]` clock — the latency nothing promises, which the old
+    // clocked t1 asserted.
+    let mark_ms = |label: &str| {
+        stderr.lines().find_map(|line| {
+            let (ms, rest) = line.strip_prefix("fastcull-trace: [")?.split_once("] ")?;
+            if rest == label {
+                ms.parse::<u64>().ok()
+            } else {
+                None
+            }
+        })
+    };
+    if let (Some(end_at), Some(dropped_at)) = (
+        mark_ms("drive: end"),
+        mark_ms("loupe overlay dropped idx 16 (decode failed)"),
+    ) {
+        eprintln!(
+            "failgate: first End -> `(decode failed)` drop {} ms",
+            dropped_at.saturating_sub(end_at)
+        );
+    }
     // The anchor must have FIRED, not merely timed out into the 9 s floor:
     // a renamed trace mark would otherwise leave the observer dead and
     // this test green on the floor alone (QE finding 2026-08-29).
@@ -7794,9 +7863,12 @@ fn a_decode_failed_cursor_drops_to_fit_instead_of_masking_the_badge() {
     // idx 16 with the 1:1 desire intact (`cursor`/`zf` below — a
     // swallowed key or a dropped pin would otherwise buy the zero), and
     // the ladder was really re-entered above fit there (the drop
-    // assertion below). Mutant A — the gate branch removed — corroborates
-    // from the other side: it renders the thumb at the second End and
-    // turns this assertion red.
+    // assertion below). Mutant A — the gate removed, `&& !i.cursor_failed`
+    // deleted from `transit::render_rung`'s thumb arm — never reaches this
+    // assertion: the first End then never drops, so the run ends at the t1
+    // wait's 30 s cap (exit 1). On the old clocked script it went red at
+    // "a failed cursor never dropped to fit", never at this count (measured,
+    // brief 008 R3-1).
     let after_t1 = stderr
         .split_once("QEDUMP t1 ")
         .unwrap_or_else(|| panic!("no `dump.t1` trace in stderr:\n{stderr}"))
