@@ -397,9 +397,10 @@ impl RingWindow {
     /// position `cursor_pos`, in a view of `len` positions: the positions
     /// [`contains`](Self::contains) says yes to, clamped at both ends of the
     /// view, as one range — empty when the cursor is not in the view. One
-    /// home for the clamp, so the app's rescue-thumb lead and the kitchen's
-    /// fill window (ui-grid.md, "Virtualization"; 01-architecture.md, the
-    /// kitchen) cannot reach different frames.
+    /// home for the clamp, so the engine's ring plan (`plan_ring`), the app's
+    /// rescue-thumb lead and mids window, and the kitchen's fill window
+    /// (ui-grid.md, "Virtualization"; 01-architecture.md, the kitchen) cannot
+    /// reach different frames.
     pub fn span(&self, cursor_pos: usize, len: usize) -> std::ops::Range<usize> {
         if cursor_pos >= len {
             return 0..0;
@@ -1237,11 +1238,19 @@ fn plan_ring(i: &PlanInputs) -> RingPlan {
         Some(_) if above_fit => RingWindow::leaning(RING_BEHIND, i.fullres_ahead, i.forward),
         Some(_) => RingWindow::leaning(RING_BEHIND, RING_AHEAD, i.forward),
     };
-    let lo = i.fpos.saturating_sub(window.before);
-    let hi = i
-        .fpos
-        .saturating_add(window.after)
-        .min(i.len.saturating_sub(1));
+    // The window's positions, clamped at both ends of the view, by
+    // `RingWindow::span`: the one home for that clamp, which the app's
+    // rescue-thumb lead, its mids window and the kitchen's fill window read
+    // too, so no two of them can reach different frames. Every caller plans
+    // from a focused position inside the view — `pos_of`'s, or (0, 1) for a
+    // focus that has none — so the span holds it; a cursor outside the view
+    // would plan no ring.
+    let span = window.span(i.fpos, i.len);
+    let (lo, hi) = if span.is_empty() {
+        (i.fpos, i.fpos)
+    } else {
+        (span.start, span.end - 1)
+    };
     let focused = if i.transit { t } else { i.desired };
     let hold = i.transit && above_fit;
     let members = ring_order(i.fpos, lo, hi, i.forward)

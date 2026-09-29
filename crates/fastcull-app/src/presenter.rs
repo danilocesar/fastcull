@@ -701,15 +701,18 @@ fn climb_mid_rung(win: &MainWindow, st: &mut AppState, pass: &Pass, ids: &[usize
     // nothing re-announces it, and the fit cell showed the thumb, cued,
     // until a re-wrap landed. At most 18 more ~5 MB textures, inside
     // `MIDS_CAP`. The window is the engine's, leaned by its latch, never
-    // re-derived here. The bookkeeping in `va` keeps the same set.
+    // re-derived here, and so is its clamp at the view's ends
+    // (`RingWindow::span`, the one the rescue thumbs' lead and the kitchen's
+    // fill window read). The bookkeeping in `va` keeps the same set.
     let mut keep = ids.to_vec();
     if at_loupe {
         if let (Some(loupe), Some(cursor_pos)) = (&st.loupe_view.engine, st.cursor_pos()) {
             let window = loupe.texture_windows().rung;
-            let last = st.grid.view.len().saturating_sub(1);
-            let lo = cursor_pos.saturating_sub(window.before);
-            let hi = cursor_pos.saturating_add(window.after).min(last);
-            keep.extend(st.grid.view[lo..=hi].iter().copied());
+            keep.extend(
+                st.grid.view[window.span(cursor_pos, st.grid.view.len())]
+                    .iter()
+                    .copied(),
+            );
         }
     }
     st.textures.mids.retain(|i, _| keep.contains(i));
