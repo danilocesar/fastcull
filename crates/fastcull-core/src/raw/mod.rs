@@ -517,11 +517,17 @@ mod tests {
     /// and `grid_source` pick among the whole ones, every one of which lies
     /// inside the file); the loupe's top rung is the largest whole or cut, a
     /// whole one winning a tie; `read_jpeg` refuses it as truncated, naming
-    /// how much of it the file holds. A pointer at the file's end and one
-    /// whose length no embedded JPEG has are dropped as before. Red with cut
-    /// JPEGs dropped, with the length guard gone, with `loupe_top` reading the
-    /// whole ones alone, and with `read_jpeg`'s check gone (the short read's
-    /// I/O error names no cause).
+    /// how much of it the file holds. A pointer whose two-byte signature the
+    /// file does not hold — at the file's end, or on its last byte — is
+    /// dropped, and so is one whose length no embedded JPEG has; the file
+    /// holding the signature and nothing more keeps the JPEG as cut: the
+    /// recorded limit's two edges (Manager ruling 2026-09-29, brief 008, R2-1:
+    /// recorded, not fixed). Red with cut JPEGs dropped, with the length guard
+    /// gone, with `loupe_top` reading the whole ones alone, with `read_jpeg`'s
+    /// check gone (the short read's I/O error names no cause), with the
+    /// signature check skipped when the IFD gives a size (the one-byte row),
+    /// and with the SOF required beside an IFD size (the two-byte row, and
+    /// the first one, which holds only part of the SOF).
     #[test]
     fn a_jpeg_the_file_was_cut_inside_is_kept_apart_as_cut() {
         let mid = tiny_jpeg(500, 400);
@@ -573,12 +579,19 @@ mod tests {
         // in the first 15 bytes.
         let previews = find(cut_inside_the_full(&mid, &full, None, declared, 15));
         assert_eq!(dims(previews.cut.first()), Some((1000, 800)));
-        // ... and with the SOF itself cut away there is nothing to size.
+        // ... and with the SOF itself cut away there is nothing to size: for a
+        // body whose IFD gives no size, a cut before the end of the full's SOF
+        // segment is the recorded limit (raw-pipeline.md, "Truncation, a RAW
+        // cut inside an embedded JPEG").
         let previews = find(cut_inside_the_full(&mid, &full, None, declared, 6));
         assert!(previews.cut.is_empty(), "{:?}", previews.cut);
 
-        // Dropped as before: a pointer at the file's very end (nothing of it
-        // is left), and a length no embedded JPEG has (a hostile claim).
+        // Dropped: a pointer at the file's very end — raw-pipeline.md,
+        // "Truncation, a RAW cut inside an embedded JPEG": "a JPEG is taken as
+        // cut only once its two-byte signature is in the file, and an IFD
+        // alone is not trusted to name a JPEG the file cannot show" (the limit
+        // recorded rather than fixed, Manager ruling 2026-09-29, brief 008,
+        // R2-1) — and a length no embedded JPEG has (a hostile claim).
         let previews = find(cut_inside_the_full(
             &mid,
             &full,
@@ -587,6 +600,38 @@ mod tests {
             0,
         ));
         assert!(previews.cut.is_empty(), "at the end: {:?}", previews.cut);
+        // The limit's two edges, with the full's size in its IFD: one byte of
+        // the full is not its signature, so the pointer is dropped as at the
+        // end; two bytes are, so the full is kept apart as cut, sized from its
+        // IFD — the IFD sizes it, the bytes only vouch that it began.
+        let previews = find(cut_inside_the_full(
+            &mid,
+            &full,
+            Some((1000, 800)),
+            declared,
+            1,
+        ));
+        assert!(
+            previews.cut.is_empty(),
+            "one byte in, no signature: {:?}",
+            previews.cut
+        );
+        let previews = find(cut_inside_the_full(
+            &mid,
+            &full,
+            Some((1000, 800)),
+            declared,
+            2,
+        ));
+        assert_eq!(
+            previews
+                .cut
+                .iter()
+                .map(|c| (c.width, c.height, c.len))
+                .collect::<Vec<_>>(),
+            vec![(1000, 800, u64::from(declared))],
+            "two bytes in, the signature whole: kept apart as cut, sized from its IFD"
+        );
         let hostile = u32::try_from(MAX_EMBEDDED_JPEG_LEN + 1).unwrap();
         let previews = find(cut_inside_the_full(
             &mid,

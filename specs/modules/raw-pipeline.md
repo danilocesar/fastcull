@@ -681,17 +681,18 @@ before allocation:
   cut only once its two-byte signature is in the file, and an IFD alone is
   not trusted to name a JPEG the file cannot show (corrected 2026-09-28, QE
   round 2 of brief 008, R2-1: this said "there is nothing of it to name",
-  where the IFD still names it). The residual, recorded: a RAW cut before its
-  full's second byte — for the reference A1 files, in the few hundred to few
-  thousand bytes between the end of the mid and the start of the full —
-  keeps its mid as its best, as before brief 008: uncued at fit on a wide
-  viewport, the zoom's ceiling read from the mid, and no line; for a body
-  whose IFD gives no size, whose cut JPEG is sized from its SOF, the same
-  holds for a cut before the end of the full's SOF segment. Keeping an
-  IFD-sized pointer the file no longer reaches as cut, on the IFD's word, is
-  the Manager's open ruling (brief 008, QE round 2's R2-1): it would also
-  call "truncated", for good, an intact file whose IFD points past its end
-  (M11).
+  where the IFD still names it). The limit, recorded rather than fixed: a
+  RAW cut before its full's second byte — for the reference A1 files, a
+  window of a few hundred to a few thousand bytes between the end of the mid
+  and the start of the full, which holds one 4 KiB-aligned cut point and no
+  64 KiB-aligned one — keeps its mid as its best, as before brief 008:
+  uncued at fit on a wide viewport, the zoom's ceiling read from the mid,
+  and no line; for a body whose IFD gives no size, whose cut JPEG is sized
+  from its SOF, the same holds for a cut before the end of the full's SOF
+  segment. Keeping an IFD-sized pointer the file no longer reaches as cut,
+  on the IFD's word, would call "truncated", for good, an intact file from
+  another body whose IFD points past its end — the worse breach of M11
+  (Manager ruling 2026-09-29, brief 008, R2-1).
 - **The scaled decode refuses a numerator outside 1..=8**: 9/8 and above would
   UPSCALE, which no rung may do (developer 2026-09-26, brief 008 step 1).
 - **Residual, accepted — the bounded blank success**: a stream carrying
@@ -1464,8 +1465,16 @@ commit that lands its tests, and stays open until then):
       cut** (QE round 1 of brief 008, D1): the walker keeps a JPEG the file
       ends inside apart from the whole ones — sized from its IFD, or from the
       bytes the file still holds, and none when its SOF is gone too — and
-      drops a pointer at the file's end and one whose length no embedded JPEG
-      has; `fullres` and `grid_source` choose among the whole ones; the
+      drops a pointer whose two-byte signature the file does not hold, at
+      its end or on its last byte, and one whose length no embedded JPEG
+      has, while the file holding the signature and no more of the full
+      keeps it as cut, sized from its IFD: the recorded limit's two edges,
+      red with the signature check skipped when the IFD gives a size (the
+      one-byte row) and with the SOF required beside an IFD size (the
+      two-byte row, and the row cut inside the SOF) (Manager ruling
+      2026-09-29, brief 008, R2-1: recorded, not fixed; added the same day,
+      QE round 2's T8 in its recorded form; the reds are in that commit's
+      message); `fullres` and `grid_source` choose among the whole ones; the
       loupe's top rung is the largest whole or cut, a whole one winning a tie;
       `read_jpeg` refuses the cut one as truncated, with how much of it the
       file holds. Over a synthetic RAW laid out as an A1 is and cut inside its
@@ -1790,6 +1799,15 @@ commit that lands its tests, and stays open until then):
 
 ## History
 
+- 2026-09-29 — A RAW cut before its full's second byte is a limit, recorded
+  rather than fixed (Manager ruling 2026-09-29, brief 008, R2-1): the walker
+  keeps trusting a JPEG only once its signature is in the file, since
+  keeping an IFD-sized pointer past the end as cut would call an intact file
+  from another body with a stale index truncated for good. The ruling
+  replaces "the Manager's open ruling" in "Truncation, a RAW cut inside an
+  embedded JPEG", and the walker test pins the limit's two edges — one byte
+  of the full dropped, two kept as cut — beside its row at the file's end
+  (QE round 2's T8 in its recorded form).
 - 2026-09-28 — The re-key at a resize is driven (QE round 2 of brief 008,
   R2-4 and T1-R2): "The factor follows the viewport" had its core half
   pinned and its app half — the box re-keyed by the refresh that lands a
