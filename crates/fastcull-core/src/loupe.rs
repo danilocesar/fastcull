@@ -6472,6 +6472,15 @@ mod tests {
         bytes
     }
 
+    /// A RAW cut by an interrupted copy INSIDE ITS MID, laid out as an A1 is
+    /// ([`raw_laid_out_as_an_a1`], the full's size in its IFD): cut `keep`
+    /// bytes into the mid, so the full's pointer lies past the file's end.
+    fn raw_cut_inside_its_mid(full: &[u8], keep: usize) -> Vec<u8> {
+        let (mut bytes, mid_off, _) = raw_laid_out_as_an_a1(full, true);
+        bytes.truncate(mid_off + keep);
+        bytes
+    }
+
     /// QE round 1 of brief 008, D1 (raw-pipeline.md, "Hostile-input bounds"
     /// and "All rejections"): a RAW cut inside its full — an interrupted
     /// copy, the commonest field corruption — keeps the full as its top rung,
@@ -6560,6 +6569,88 @@ mod tests {
                     "{shape}, {target:?}: the mid memoized, so the ladder quiesces"
                 );
             }
+        }
+        std::fs::remove_dir_all(&dir).ok();
+    }
+
+    /// QE round 2 of brief 008, T7 (raw-pipeline.md, "Hostile-input bounds",
+    /// "Truncation, a RAW cut inside an embedded JPEG"): a RAW cut inside its
+    /// MID holds no JPEG whole — the full's pointer lies past the file's end
+    /// — so the loupe's top rung is the cut mid itself (`loupe_top`: the
+    /// largest embedded JPEG whole or cut, its `(None, c)` arm), `read_jpeg`
+    /// refuses it as truncated, and with nothing lower in hand the rung's
+    /// failure is the image's: the ladder fails naming the cut and publishes
+    /// nothing. With the mid's SOF cut away too (10 bytes in, no size in its
+    /// IFD) nothing of it can be sized, the walker keeps nothing, and the
+    /// failure is `NO_USABLE_PREVIEW`. At a fit box the mid would not serve
+    /// and at 1:1.
+    ///
+    /// Core's `Failed` event contract only: what the app shows for this file
+    /// is the grid pipeline's badge, whose tooltip reads the pipeline's own
+    /// reason, "no usable embedded preview" — the pump drops a loupe
+    /// `Failed`'s reason (pump.rs).
+    ///
+    /// Red with `loupe_top`'s `(None, c) => c` arm reading `(None, _) =>
+    /// None` (row 1 then fails "no usable embedded preview"; no other core
+    /// test sees that arm), and with `read_jpeg`'s truncation check removed
+    /// (row 1 then fails "read: I/O error reading RAW file", naming no
+    /// cause — a mutant shared with the walker and the stderr tests).
+    #[test]
+    fn a_raw_cut_inside_its_mid_fails_naming_the_cut() {
+        let dir = crate::testutil::scratch_dir("cut-mid");
+        let full = crate::raw::jpeg_hostile::encoded(2000, 1500);
+        let mid_len = crate::raw::jpeg_hostile::encoded(640, 400).len();
+        let fit_box = FitBox {
+            width: 1000,
+            height: 700,
+        };
+        let targets = [Target::Fit(fit_box), Target::Long(u32::MAX)];
+
+        // Row 1: cut inside the mid's scan, half of the mid kept — its SOF
+        // with it, so the walker sizes the cut mid.
+        let path = dir.join("cut_in_mid.arw");
+        std::fs::write(&path, raw_cut_inside_its_mid(&full, mid_len / 2)).unwrap();
+        let previews = find_embedded_jpegs(&mut std::fs::File::open(&path).unwrap()).unwrap();
+        assert!(
+            previews.fullres().is_none(),
+            "the premise: the file holds no JPEG whole: {previews:?}"
+        );
+        assert_eq!(
+            previews.loupe_top().map(|c| (c.width, c.height)),
+            Some((640, 400)),
+            "the premise: the loupe's top is the cut mid"
+        );
+        for target in targets {
+            let (shared, rx) = shared_over(vec![path.clone()]);
+            let outcome = decode_ladder(&shared, 0, target, 0, false, RequestState::Settled);
+            let reason = match outcome {
+                Err(reason) => reason,
+                Ok(()) => panic!("{target:?}: a file with no JPEG whole failed nothing"),
+            };
+            assert!(
+                reason.contains("truncated"),
+                "{target:?}: the failure names the cut: {reason}"
+            );
+            assert!(rx.try_recv().is_err(), "{target:?}: nothing is published");
+            assert_eq!(
+                lock(&shared).best_long.get(&0),
+                None,
+                "{target:?}: nothing is memoized"
+            );
+        }
+
+        // Row 2: cut 10 bytes into the mid — its SOF gone, and no size in its
+        // IFD — so nothing of the file can be sized.
+        let path = dir.join("cut_before_the_mids_sof.arw");
+        std::fs::write(&path, raw_cut_inside_its_mid(&full, 10)).unwrap();
+        for target in targets {
+            let (shared, rx) = shared_over(vec![path.clone()]);
+            assert_eq!(
+                decode_ladder(&shared, 0, target, 0, false, RequestState::Settled),
+                Err(crate::raw::NO_USABLE_PREVIEW.to_string()),
+                "{target:?}: the mid's SOF cut away leaves nothing to size"
+            );
+            assert!(rx.try_recv().is_err(), "{target:?}: nothing is published");
         }
         std::fs::remove_dir_all(&dir).ok();
     }

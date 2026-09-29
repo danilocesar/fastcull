@@ -1434,7 +1434,13 @@ commit that lands its tests, and stays open until then):
       serve and at 1:1: the mid is published, never `terminal`, no `Failed`,
       the mid memoized; and, read from a child process's stderr, one line
       names the file, the full rung and "truncated", a whole control file
-      none. The real
+      none. A RAW cut inside its mid holds no whole JPEG: its cut mid is the
+      top, and the ladder fails naming the cut, at that fit box and at 1:1,
+      publishing nothing; with the mid's SOF cut away too, the failure is
+      `NO_USABLE_PREVIEW` — red with `loupe_top` taking no cut JPEG when the
+      file holds none whole (the only core test that sees that arm) and with
+      `read_jpeg`'s check removed (added 2026-09-28, QE round 2 of brief 008,
+      T7; the reds are in that commit's message). The real
       `A1_full_compressed.ARW` cut at 10,000,000 bytes, inside its full: the
       1616×1080 mid arrives not `terminal` and nothing follows, not after a
       second focus either, at 1:1 and at fit on a 3840×2160 box. Red on the
@@ -1447,6 +1453,7 @@ commit that lands its tests, and stays open until then):
       `a_jpeg_the_file_was_cut_inside_is_kept_apart_as_cut`,
       `a_raw_cut_inside_its_full_never_makes_the_mid_its_best`,
       `a_raw_cut_inside_its_full_is_named_on_stderr`,
+      `a_raw_cut_inside_its_mid_fails_naming_the_cut`,
       `an_a1_cut_inside_its_full_keeps_its_mid_below_the_top_rung`. Ticked by
       the commit that lands the fix; the old red and each mutant's red are in
       its message.
