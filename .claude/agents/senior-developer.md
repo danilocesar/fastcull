@@ -493,7 +493,10 @@ on the answer. The Manager relays them verbatim; the user is the customer.
   spawn a load recipe and kill those; when a pattern is the only handle,
   the self-safe form is `pkill -9 -f 'whil[e] :; do :; done'` (a bracketed
   character never matches its own text) and the check is `ps -eo pid,args`
-  filtered the same way.
+  filtered the same way. The check's filter must be anchored — `pgrep -af '^sh -c whil[e]'` —
+  because an unanchored `ps -eo pid,args | grep 'whil[e] :'` also matches the
+  shell wrapper carrying the check's own command line (measured 2026-09-29,
+  brief 008 D2).
 - **The driven suite no longer fits one foreground call.** (senior
   developer, unit 006, 2026-09-12) The screenshot suite is 92 tests on Linux
   (89 on Windows; 91 / 88 until 7f7beba) and about 610 s in debug on this seat (325 s + 283 s in
@@ -515,3 +518,9 @@ on the answer. The Manager relays them verbatim; the user is the customer.
   WAYLAND_DISPLAY xvfb-run -a --server-args="-screen 0 1920x1200x24" cargo
   test …` (a 4K measurement uses `3840x2160x24`). Xvfb is a system package
   on the laptop since 2026-09-26.
+- **The stderr pipe is part of the measurement.** (senior developer, brief
+  008 D2 diagnosis, 2026-09-29) A paused or slow reader of a driven child's
+  stderr blocks the app's writers and, under `FASTCULL_TRACE`, the UI thread
+  through the kitchen's queue lock; any harness that reads a child's stderr
+  drains it continuously, and a trace-clock gap with an old-timestamped line
+  before it is a blocked write, not an app stall (test-harness.md).
