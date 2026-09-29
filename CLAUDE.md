@@ -346,7 +346,8 @@ developer owns re-verifying such claims against reality.
   refuses a frame or leaves it silently soft (use what decoded, log it
   once); a frame with nothing decodable shows the Failed badge, and a
   frame whose better rung is damaged stays on the good one with the log
-  naming it; a decision that rests on an A1 property says so where it is
+  naming it (one recorded exception: a copy cut before the full JPEG's
+  first bytes cannot be told from a file without one, brief 008); a decision that rests on an A1 property says so where it is
   recorded. Formats outside
   the TIFF family stay best-effort until a unit takes them on.
 
