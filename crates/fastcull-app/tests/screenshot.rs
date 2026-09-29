@@ -3469,6 +3469,250 @@ fn a_held_arrow_at_fit_on_4k_stays_at_the_rung_and_never_slows() {
     }
 }
 
+/// Brief 008 R3's app half (raw-pipeline.md, "The factor follows the
+/// viewport" and Contracts, `set_fit_box`; ui-grid.md A3's "a cached rung
+/// that no longer serves the box"): a resize at fit re-keys the fit box at
+/// the next refresh, and a cached screen rung that no longer serves the new
+/// box is re-requested at the new factor and, until that lands, shown with
+/// the cue — never presented as sharp. QE round 2 of brief 008, R2-4: the
+/// senior developer's amended T1 of round 1, implemented as the integrity
+/// review of round 2 approved it (T1-R2).
+///
+/// THE FIXTURE: twenty A1 frames LINKED on the RAWs' volume, under the
+/// target dir with a drop guard (test-harness.md) — seven compressed, seven
+/// lossless, six uncompressed, named so filename order is capture order
+/// (compressed < lossless < uncompressed, read from the files' EXIF as A5
+/// does), so view position 1 is id 1, the frame `right` lands on.
+///
+/// THE SCRIPT, `--start-loupe` on id 0: the load's settle; a 3000×1800
+/// window, whose fit box takes the 2/8 rung, 2160 px long; a wait for id 1's
+/// 2/8 rung to be adopted (a ring member at fit); then ONE step,
+/// `resize:3840x2160>>right` — the key rides in the resize step's own
+/// callback, so the cursor is on id 1 before the box grows, and the refresh
+/// that lands the geometry renders id 1 at the new box before any decode for
+/// that box can land (`detect_drift`, then `claim_cursor_at_loupe`'s
+/// `set_fit_box`, then `render_loupe_rung`, in one pass of `refresh_inner`);
+/// a wait for the 4K geometry; a wait for id 1's 3/8 rung, 3240 px long —
+/// the re-request at the new factor, which only a new box asks for; a dump.
+///
+/// THE GATES, read off the trace in byte order:
+/// (a) the premise: id 1's 2160 rung was decoded and adopted before the
+///     resize's echo, and before the 4K geometry the only decodes of id 1
+///     are its mid and that rung;
+/// (a2) the premise, checked before (c): no full-res decode of id 1 lands
+///     before its 3240. The idle cook can cook the cursor's full at the OLD
+///     box, which its 2160 serves, once id 1 has been the settled focus for
+///     the ~250 ms debounce; on a seat whose resize lands later than that the
+///     full then serves the new box first — the product right (a full serves
+///     the box, and its cue off is correct), the test's premise failed;
+/// (b) the first fit mark of id 1 after the 4K geometry EXISTS, reads `loupe
+///     fit idx 1 rung screen cue on`, and comes before the 3240's decode —
+///     whichever order the backend delivers the resize and the chained key
+///     in (Windows may deliver WM_SIZE synchronously), so no old-box `cue off`
+///     mark is ever asserted as a premise;
+/// (c) every fit mark of id 1 between the 4K geometry and the 3240's decode
+///     reads `cue on`;
+/// (d) each of the five waits echoes `(satisfied`.
+/// No gate on the cue clearing later: in debug the 3240's adoption (the
+/// kitchen's wrap at opt-level 0) lands seconds after the shutter; core's A3
+/// rows and A5's fit marks pin the cue clearing.
+///
+/// WHEN THIS FAILS at the 3240 wait ("wait never satisfied") with id 1's
+/// full ready before it, or at (a2), the premise failed on a seat whose
+/// resize outlasted the settle debounce: compare `drive: right` with the
+/// `window geometry 3840x2160` mark before touching anything. Never widen a
+/// gap, add a retry or move a step later.
+///
+/// Red with the fit cue judged against anything but the current pass's box
+/// (`rung_serves_fit: rungs.rung.is_some()` in `render_loupe_rung`: the fit
+/// mark of id 1 does not change at the geometry, gate (b)) and with
+/// `set_fit_box` called only while the engine has no box (the engine keeps
+/// the default window's 1428×788 cell, which the mid serves, so no screen
+/// rung is ever asked for: the `wait:loupe adopted idx 1 kind screen` step
+/// exits 1 at its 30 s cap). Both profiles; no skip beyond `has_display()` —
+/// both CI runners and a window-manager-less Xvfb grant 3840×2160.
+#[test]
+fn a_resize_at_fit_re_requests_the_rung_and_cues_the_one_that_no_longer_serves() {
+    if !has_display() {
+        eprintln!("screenshot smoke skipped: no display server");
+        return;
+    }
+    let _s = serial();
+    let classes = [
+        ("A1_full_compressed.ARW", 7),
+        ("A1_full_lossless_compressed.ARW", 7),
+        ("A1_full_uncompressed.ARW", 6),
+    ];
+    let keys: Vec<String> = classes
+        .iter()
+        .map(|(name, _)| {
+            fastcull_core::exif::read_exif_summary(&raws_dir().join(name))
+                .ok()
+                .and_then(|summary| summary.sort_key())
+                .unwrap_or_else(|| panic!("{name} has no capture time to sort by"))
+        })
+        .collect();
+    assert!(
+        keys[0] < keys[1] && keys[1] < keys[2],
+        "the fixture needs capture times compressed < lossless < uncompressed, so \
+         filename order is capture order and id 1 is view position 1; the files \
+         read {keys:?}"
+    );
+    let fixture = Fixture {
+        dir: target_dir().join(format!("resize-rekey-{}", std::process::id())),
+    };
+    let dir = &fixture.dir;
+    std::fs::remove_dir_all(dir).ok();
+    std::fs::create_dir_all(dir).unwrap();
+    let mut id = 0;
+    for (name, count) in classes {
+        for _ in 0..count {
+            link_fixture(&raws_dir().join(name), &dir.join(format!("DSC{id:05}.ARW")));
+            id += 1;
+        }
+    }
+    let drive = "100:wait:load settled gen 0;200:resize:3000x1800;\
+                 300:wait:window geometry 3000x1800;\
+                 400:wait:loupe adopted idx 1 kind screen;\
+                 500:resize:3840x2160>>right;\
+                 600:wait:window geometry 3840x2160;\
+                 700:wait:loupe ready idx 1 long 3240 kind screen;1500:dump.x";
+    let out = out_dir().join("resize-rekey.jpg");
+    let trace = out.with_extension("trace.log");
+    let stderr = shoot_env_stderr(
+        &["--start-loupe", dir.to_str().unwrap()],
+        &[("FASTCULL_TRACE", "1"), ("FASTCULL_DRIVE", drive)],
+        &out,
+    );
+    let run = "resize re-key";
+    // (d) Every wait ran: a dropped or misspelt token would put the steps
+    // behind it back on the clock in silence.
+    for wait in [
+        "load settled gen 0",
+        "window geometry 3000x1800",
+        "loupe adopted idx 1 kind screen",
+        "window geometry 3840x2160",
+        "loupe ready idx 1 long 3240 kind screen",
+    ] {
+        assert_waited(run, &stderr, wait, &trace);
+    }
+    let marks = traced(&stderr);
+    /// The tail of id `id`'s `<prefix>N <rest>` mark, parsed on the whole
+    /// index: `idx 1` never matches `idx 10` to `idx 19` here.
+    fn of_id<'a>(m: &Traced<'a>, prefix: &str, id: usize) -> Option<&'a str> {
+        idx_of(m.label, prefix).and_then(|(n, tail)| (n == id).then_some(tail))
+    }
+    let ready_of_1 = |m: &Traced<'_>| of_id(m, "loupe ready idx ", 1).map(str::to_owned);
+    let fit_of_1 = |m: &Traced<'_>| of_id(m, "loupe fit idx ", 1).map(str::to_owned);
+    let first = |what: &str, found: &dyn Fn(&Traced<'_>) -> bool| {
+        marks
+            .iter()
+            .position(found)
+            .unwrap_or_else(|| panic!("{run}: no {what} in the trace (trace {})", trace.display()))
+    };
+    let resize = first("`drive: resize:3840x2160` echo", &|m| {
+        m.label == "drive: resize:3840x2160"
+    });
+    let geometry = first("`window geometry 3840x2160` mark", &|m| {
+        m.label.starts_with("window geometry 3840x2160 ")
+    });
+    let rung_3240 = first("decode of id 1's 3240 rung", &|m| {
+        ready_of_1(m).is_some_and(|t| t.starts_with("long 3240 kind screen "))
+    });
+    // (a) The premise: the old box's rung was in hand before the box grew.
+    let rung_2160 = first("decode of id 1's 2160 rung", &|m| {
+        ready_of_1(m).is_some_and(|t| t.starts_with("long 2160 kind screen "))
+    });
+    let adopted = first("adoption of id 1's screen rung", &|m| {
+        m.label == "loupe adopted idx 1 kind screen"
+    });
+    assert!(
+        rung_2160 < resize && adopted < resize,
+        "{run}: PREMISE (a) — id 1's 2160 rung was not decoded and adopted before the \
+         resize to 3840x2160 (decoded at mark {rung_2160}, adopted at mark {adopted}, the \
+         resize at mark {resize}) (trace {})",
+        trace.display()
+    );
+    for m in &marks[..geometry] {
+        if let Some(tail) = ready_of_1(m) {
+            assert!(
+                tail.starts_with("long 1616 kind mid ")
+                    || tail.starts_with("long 2160 kind screen "),
+                "{run}: PREMISE (a) — before the 3840x2160 geometry id 1 decoded `{tail}` \
+                 at {} ms, beside its mid and its 2160 rung (trace {})",
+                m.ms,
+                trace.display()
+            );
+        }
+    }
+    // (a2) The premise: no full-res of id 1 served the new box first.
+    if let Some(full) = marks
+        .iter()
+        .position(|m| ready_of_1(m).is_some_and(|t| t.starts_with("long 8640 ")))
+    {
+        let right_ms = marks
+            .iter()
+            .find(|m| m.label == "drive: right")
+            .map_or_else(|| "never".to_string(), |m| format!("{} ms", m.ms));
+        assert!(
+            full > rung_3240,
+            "{run}: PREMISE (a2) FAILED, not the product — id 1's full-res decode landed at \
+             {} ms, before its 3240 rung at {} ms: the resize landed after id 1's settle \
+             debounce on this seat (`drive: right` at {right_ms}, the 3840x2160 geometry at \
+             {} ms), the idle cook cooked id 1's full at the old box, and the full served the \
+             new box first — which is right (a full serves the box; its cue off is \
+             correct). Do not widen a gap, add a retry or move a step later (trace {})",
+            marks[full].ms,
+            marks[rung_3240].ms,
+            marks[geometry].ms,
+            trace.display()
+        );
+    }
+    // (b) The first fit mark of id 1 after the geometry: the old rung, cued,
+    // before any decode for the new box has landed.
+    let (fit_at, fit_tail) = marks[geometry + 1..]
+        .iter()
+        .enumerate()
+        .find_map(|(k, m)| fit_of_1(m).map(|tail| (geometry + 1 + k, tail)))
+        .unwrap_or_else(|| {
+            panic!(
+                "{run}: GATE (b) — no `loupe fit idx 1` mark after the 3840x2160 geometry: the \
+                 refresh that re-keyed the box never re-judged id 1's rung against it \
+                 (trace {})",
+                trace.display()
+            )
+        });
+    assert_eq!(
+        fit_tail,
+        "rung screen cue on",
+        "{run}: GATE (b) — at the 3840x2160 box id 1's first fit mark must show its 2160 \
+         rung, which no longer serves, with the cue (trace {})",
+        trace.display()
+    );
+    assert!(
+        fit_at < rung_3240,
+        "{run}: GATE (b) — id 1's first fit mark at the new box came at {} ms, after its \
+         3240 rung's decode at {} ms: the geometry's refresh did not render at the new box \
+         (trace {})",
+        marks[fit_at].ms,
+        marks[rung_3240].ms,
+        trace.display()
+    );
+    // (c) Until the 3240 lands, the cue stays on.
+    for m in &marks[geometry + 1..rung_3240] {
+        if let Some(tail) = fit_of_1(m) {
+            assert!(
+                tail.ends_with(" cue on"),
+                "{run}: GATE (c) — id 1's fit mark `{tail}` at {} ms, between the 3840x2160 \
+                 geometry and its 3240 rung's decode, shows a rung that does not serve the \
+                 box without the cue (trace {})",
+                m.ms,
+                trace.display()
+            );
+        }
+    }
+}
+
 /// Issue #20: the loupe state badge — the cursor's mark must be readable
 /// in the loupe itself, and it must always be the CURRENT frame's mark
 /// (auto-advance makes memory of "the frame I marked" one frame stale by

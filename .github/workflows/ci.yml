@@ -498,12 +498,13 @@ jobs:
       # rung_and_never_slows`) resizes its window to 3840x2160, and that
       # geometry is what its numbers are about, so the window lies inside
       # the screen as it would on a real 4K display. It still contains
-      # every other geometry the suite drives -- ELEVEN distinct ones
+      # every other geometry the suite drives -- TWELVE distinct ones
       # (`grep -o 'resize:[0-9]*x[0-9]*'
       # crates/fastcull-app/tests/screenshot.rs | sort -u`): 640x300,
       # 900x800, 1000x700, 1010x520, 1024x768, 1200x800, 1440x700,
-      # 1440x900, 1500x800, 1600x800 and 3840x2160, plus the 1440x900 the
-      # app opens at (`preferred-width`/`preferred-height`, main.slint).
+      # 1440x900, 1500x800, 1600x800, 3000x1800 and 3840x2160, plus the
+      # 1440x900 the app opens at (`preferred-width`/`preferred-height`,
+      # main.slint).
       # The cost is the framebuffer, 33 MB at depth 24, which is true
       # colour, so the uploaded JPEGs are not read through a quantised
       # palette.

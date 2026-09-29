@@ -1134,9 +1134,14 @@ medium's measured behaviour:
   `u32::MAX`, the top rung — what a hold actually asks for the focused frame
   is the engine's, Above fit) and `focus_fit(index)` (the fit box);
   `want(range, cell_width)`; `set_view(order)`; `set_fit_box(box)` (the N=1
-  cell in physical pixels; none before the first layout and whenever the app
-  is not at the loupe — review-verified: the app's call is unconditional at
-  every refresh); `texture_windows()` (the leaned windows of the app's two
+  cell in physical pixels, re-keyed at every refresh — at a resize, the rung
+  that no longer serves the new box re-requested at its factor and cued
+  until it lands, driven by
+  `a_resize_at_fit_re_requests_the_rung_and_cues_the_one_that_no_longer_serves`
+  (QE round 2 of brief 008, T1-R2); none before the first layout and
+  whenever the app is not at the loupe, and a move to another display,
+  review-verified: the app's call is unconditional at every refresh);
+  `texture_windows()` (the leaned windows of the app's two
   texture rings, ui-grid.md); `note_adopted(index, kind, held)` (the app's
   report that a fill it made for that index completed at the loupe, with
   whether its ring kept it — where the switch rule's time-to-screen ends,
@@ -1314,13 +1319,21 @@ commit that lands its tests, and stays open until then):
       even when an IFD under-claims its stream; a portrait mid that serves the
       box stops the ladder; a truncated full at fit keeps the good mid with no
       Failed badge; a cached rung that no longer serves a grown box is
-      re-requested; a lossless stream decodes full-scale through the scaled
-      entry point, both orientation paths —
+      re-requested — and in the app, driven: a window grown at fit from
+      3000×1800 to 3840×2160 with the cursor's key chained into the resize
+      re-keys the box in the refresh that lands the geometry, whose first fit
+      mark of the cursor shows its 2/8 rung cued, before any decode for the
+      new box, and the 3/8 rung is decoded for it (added 2026-09-28, QE round
+      2 of brief 008, T1-R2; red with the fit cue judged against anything but
+      the pass's box and with `set_fit_box` called only while the engine has
+      no box, each red in that commit's message); a lossless stream decodes
+      full-scale through the scaled entry point, both orientation paths —
       `the_rung_kind_comes_from_the_decode_not_the_ifd_claim`,
       `a_portrait_mid_that_serves_the_box_stops_the_ladder`,
       `truncated_full_rung_keeps_the_good_mid_and_no_failed_badge` (gains a
       run at fit),
       `a_cached_rung_that_no_longer_serves_the_box_is_re_requested`,
+      `a_resize_at_fit_re_requests_the_rung_and_cues_the_one_that_no_longer_serves`,
       `a_lossless_stream_decodes_full_scale_through_the_scaled_entry_point`.
       Ticked by the step-2b commit, which carries the rung and the last of
       these tests; each mutant's red is in its message (the lossless one's
@@ -1776,6 +1789,15 @@ commit that lands its tests, and stays open until then):
 
 ## History
 
+- 2026-09-28 — The re-key at a resize is driven (QE round 2 of brief 008,
+  R2-4 and T1-R2): "The factor follows the viewport" had its core half
+  pinned and its app half — the box re-keyed by the refresh that lands a
+  resize, the rung that no longer serves shown cued until the new factor's
+  lands — review-verified only: round 1's amended test never reached a fix
+  round.
+  `a_resize_at_fit_re_requests_the_rung_and_cues_the_one_that_no_longer_serves`
+  drives it; the box going away off the loupe and a move to another display
+  stay review-verified (Contracts).
 - 2026-09-28 — The factor table is in fit boxes (QE round 2 of brief 008,
   R2-2): its column said "viewport", and brief 008's "QHD → 2/8" was read
   from its 2560×1440 row, while a window that fills a QHD screen has a box

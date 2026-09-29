@@ -1191,7 +1191,13 @@ renderer's source offsets are `Fixed<u16, 4>`.
       `Fit{cue: true}` (the G6 row); the mid alone on a box it serves →
       `Fit{cue: false}`; nothing at fit → `Fit{cue: true}`; a failed cursor at
       fit → `Fit{cue: false}`; a cached rung that no longer serves the box →
-      `Fit{cue: true}`; a terminal rung → `Fit{cue: false}`; off the loupe →
+      `Fit{cue: true}` — and in the app, driven at a resize: the refresh that
+      lands a window grown from 3000×1800 to 3840×2160 re-judges the cursor's
+      2/8 rung against the new box, its first fit mark `rung screen cue on`,
+      cued until the 3/8 rung is decoded
+      (`a_resize_at_fit_re_requests_the_rung_and_cues_the_one_that_no_longer_serves`,
+      added 2026-09-28, QE round 2 of brief 008, T1-R2); a terminal rung →
+      `Fit{cue: false}`; off the loupe →
       `Drop{BelowLadder}`; an empty view at fit → off; the sweep is the whole
       3,840-row cross product and reaches every decision; over it, at fit the
       cue is off only with a sharp or terminal rung, a screen rung or mid that
@@ -1444,6 +1450,12 @@ renderer's source offsets are `Fixed<u16, 4>`.
 
 ## History
 
+- 2026-09-28 — A3's "a cached rung that no longer serves the box" is driven
+  in the app too (QE round 2 of brief 008, R2-4 and T1-R2): a resize at fit
+  re-judges the cursor's cached rung against the new box in the refresh that
+  lands the geometry, cued until the new factor's rung is decoded —
+  `a_resize_at_fit_re_requests_the_rung_and_cues_the_one_that_no_longer_serves`;
+  until now only core's row pinned it.
 - 2026-09-28 — The rescue thumb is in hand before the cursor (brief 008's
   step-6 review, F1 and F2; Manager rulings 2026-09-28): the 4K test of step 6
   showed a 1:1 hold on a four-core seat keeping the previous frame's pixels

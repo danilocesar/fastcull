@@ -368,9 +368,11 @@ shot 2.
   delta. `keysfocus` counts are seat-sensitive context, never a verdict.
 - The menu-click strands are Linux-only (`menu_clicks_are_calibrated()` is
   `!cfg!(windows)`): no dispatched pointer event reaches an OS menu bar.
-- The suite drives eleven geometries — 640x300, 900x800, 1000x700,
-  1010x520, 1024x768, 1200x800, 1440x700, 1440x900, 1500x800, 1600x800 and
-  the 3840x2160 of the 4K fit hold (ui-grid.md A5) — plus the 1440x900 the
+- The suite drives twelve geometries — 640x300, 900x800, 1000x700,
+  1010x520, 1024x768, 1200x800, 1440x700, 1440x900, 1500x800, 1600x800,
+  3000x1800 and 3840x2160, the last two those of the resize at fit
+  (raw-pipeline.md, "The factor follows the viewport") and the last of the 4K
+  fit hold (ui-grid.md A5) — plus the 1440x900 the
   app opens at, inside the Linux runner's pinned `3840x2160x24` xvfb screen,
   raised from `1920x1200x24` by the commit that lands A5; a test that drives
   past that raises the screen in the same commit (corrected 2026-09-28,
@@ -440,6 +442,11 @@ shot 2.
 
 ## History
 
+- 2026-09-28 — Twelve geometries: 3000x1800 joins for the resize at fit
+  (QE round 2 of brief 008, T1-R2 —
+  `a_resize_at_fit_re_requests_the_rung_and_cues_the_one_that_no_longer_serves`
+  grows the window from 3000x1800 to 3840x2160 with the cursor's key chained
+  into the resize step, `resize:3840x2160>>right`).
 - 2026-09-28 — The shutter's cap names every final cursor above fit whose
   top rung never arrives (QE round 2 of brief 008, R2-3; the senior
   developer's F3(b) of the review of round 1's fixes): it named the
