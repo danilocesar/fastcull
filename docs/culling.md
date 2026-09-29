@@ -226,7 +226,7 @@ measured on such a machine. On a modest four-core laptop the decoders keep
 up for about a dozen frames more; after that most frames show as a rough,
 thumbnail-quality placeholder — the right photo, with little detail —
 marked with the "◌ loading" pill (on some frames the smaller preview
-instead), until you slow down or stop. On a 1080p or similar screen
+instead), until you slow down or stop. On a 1080p or 1440p screen
 nothing changes — the preview was already sharp at that size.
 
 **At 1:1, the frames ahead are full quality.** Stop or tap, and the frames

@@ -235,14 +235,26 @@ output serves the loupe's fit box under the 1.25 rule (brief 008).
   Planned from the stream, a rung serves by construction; the ladder's
   fall-through from a screen rung that does not serve to the full is its
   defence for a plan that misses its stream, never a path a file takes (QE
-  2026-09-28, D2). For the A1 (8640×5760, mid 1616×1080):
+  2026-09-28, D2). For the A1 (8640×5760, mid 1616×1080), by fit box:
 
-  | viewport (physical px) | landscape frame | portrait frame (orientation 5–8) |
+  | fit box (physical px) | landscape frame | portrait frame (orientation 5–8) |
   |---|---|---|
   | 1920×1080 | the mid | the mid |
-  | 2560×1440 (QHD) | 2/8 (2160×1440) | the mid (1080×1616 oriented covers the 960×1440 extent) |
-  | 3840×2160 (4K) | 3/8 (3240×2160) | 2/8 (1440×2160 oriented) |
-  | 5120×2880 (5K) | 4/8 (4320×2880) | 3/8 (2160×3240 oriented) |
+  | 2560×1440 | 2/8 (2160×1440) | the mid (1080×1616 oriented covers the 960×1440 extent) |
+  | 3840×2160 | 3/8 (3240×2160) | 2/8 (1440×2160 oriented) |
+  | 5120×2880 | 4/8 (4320×2880) | 3/8 (2160×3240 oriented) |
+
+  The rows are boxes, never screens: a window's box is its N = 1 cell, the
+  window less the bars it carries, and a screen's window is smaller than the
+  screen by what the OS keeps besides (a taskbar, a title bar). A landscape
+  A1's mid serves a box as long as the frame's extent there fits within
+  1.25 × 1616×1080 = 2020×1350, so a maximised window on a 2560×1440 (QHD)
+  screen, whose box falls short of the 2560×1440 row, is served by the mid —
+  no rung and no idle cook, as on ~2K — while one on a screen 1600 px tall,
+  or on a 4K screen, takes its rung (corrected 2026-09-28, QE round 2 of
+  brief 008, R2-2: the column read "viewport", which made the 2560×1440 row a
+  QHD monitor's; the rows are the boxes
+  `rung_factor_follows_the_viewport_and_the_frame` uses).
 
   A box between two factors takes the next one up ("the smallest N that
   serves", never "the nearest"). A portrait frame uses its ROTATED extent: a
@@ -1764,6 +1776,12 @@ commit that lands its tests, and stays open until then):
 
 ## History
 
+- 2026-09-28 — The factor table is in fit boxes (QE round 2 of brief 008,
+  R2-2): its column said "viewport", and brief 008's "QHD → 2/8" was read
+  from its 2560×1440 row, while a window that fills a QHD screen has a box
+  the mid serves — no rung and no idle cook there; docs/faq.md's "(1440p or
+  more)" for the pill over a damaged full's frame at fit was false with it.
+  The rows, the rule and the unit test were right.
 - 2026-09-28 — A RAW cut before its full's second byte is a recorded
   residual (QE round 2 of brief 008, R2-1; the senior developer's F2 of the
   review of round 1's fixes): "Truncation, a RAW cut inside an embedded JPEG"

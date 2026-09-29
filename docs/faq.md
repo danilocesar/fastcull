@@ -115,8 +115,10 @@ in other programs, the project would like to hear about it — please open
 an issue with a sample file. A RAW whose full-size preview is damaged — or
 cut short, because an interrupted copy ended the file partway through it —
 shows no badge at all: the loupe keeps the smaller preview, so at 1:1 — and
-at fit on a large screen (1440p or more) — that one frame stays soft under
-the "◌ loading" pill however long you wait, and FastCull prints a line
+at fit on a screen at least 1600 pixels tall, such as 2560×1600 or 4K — that
+one frame stays soft under the "◌ loading" pill however long you wait (on a
+1440p screen or smaller, fit shows the smaller preview for every frame, so
+that frame looks like any other there), and FastCull prints a line
 naming the file in the terminal, if you started it from one. The one
 exception is a copy that stopped just where the full-size preview begins:
 nothing of that preview is left for FastCull to find, so the frame shows
