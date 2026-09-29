@@ -393,9 +393,12 @@ guard test (turns one hand edit into two), and moving the profile into
 `.cargo/config.toml` (relocates the user decision, moves on comments too).
 
 A key move costs one cold pair of jobs — 28.5-39.5 min ubuntu and
-53.9-77.8 min windows over the twenty cold runs of PR #93 (brief 008,
-2026-09-26 to 09-29; 27-35 and 58-72 min when measured for briefs 003 and
-004), against 15 and 36 min cached — and only a main run saves
+53.9-77.8 min windows over PR #93's cold jobs that ran to the end up to
+7f7beba, 21 ubuntu and 20 windows (brief 008, 2026-09-26 to 09-29; 27-35
+and 58-72 min when measured for briefs 003 and 004; corrected 2026-09-29,
+the senior-developer review of brief 008's pre-merge round, F3: this said
+"over the twenty cold runs", a count of the windows jobs alone), against 15
+and 36 min cached — and only a main run saves
 (`save-if: main`); pull requests before that main run are cold too. A key
 move is not the only way to lose the pair: GitHub evicts a cache entry
 nobody has read for seven days, so after a week with no run on the
