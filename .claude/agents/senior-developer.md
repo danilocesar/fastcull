@@ -321,7 +321,7 @@ somebody else can repeat, it is not finished.
   seat can miss by one pixel. A traced element is clicked by NAME
   (`click:iptc field 0`), never by a coordinate measured on one platform.
 - CI (`.github/workflows/ci.yml`): one `test` job on `ubuntu-latest` and
-  `windows-latest`, 90-minute timeout, `RUST_BACKTRACE=1`, every test
+  `windows-latest`, 100-minute timeout (90 until 2026-09-29, brief 008), `RUST_BACKTRACE=1`, every test
   invocation `--test-threads=1`. On Windows `has_display()` is
   `cfg!(windows)`, so `cargo test --workspace` runs the screenshot suite in
   DEBUG there and the release step runs it again; on Linux only the
@@ -495,8 +495,8 @@ on the answer. The Manager relays them verbatim; the user is the customer.
   character never matches its own text) and the check is `ps -eo pid,args`
   filtered the same way.
 - **The driven suite no longer fits one foreground call.** (senior
-  developer, unit 006, 2026-09-12) The screenshot suite is 91 tests on Linux
-  (88 on Windows) and about 610 s in debug on this seat (325 s + 283 s in
+  developer, unit 006, 2026-09-12) The screenshot suite is 92 tests on Linux
+  (89 on Windows; 91 / 88 until 7f7beba) and about 610 s in debug on this seat (325 s + 283 s in
   two halves; in release under the 4K Xvfb screen 389 s + 234 s;
   re-measured 2026-09-28, brief 008 step 6) — over the 600000 ms cap, so a single
   `cargo test --test screenshot` call is cut off mid-suite. Run it as two

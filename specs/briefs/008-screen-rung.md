@@ -1158,6 +1158,34 @@ the cursor's rungs) → a later brief.
     36486218733), ui-grid G5, raw-pipeline A11. R3 and A2 corrected: "QHD
     → 2/8" holds for a 2560×1440 fit box; a QHD monitor's fit cell is
     served by the mid.
+- 2026-09-29 (Manager, the pre-merge round, reviewed APPROVED and QE PASS):
+  S4 narrowed the contract to `note_adopted(index, kind)` — Q-K unchanged in
+  substance, the "hard rule 5" reading of the flag retracted; the developer
+  kept the victim row, retitled "the latest fill", which QE's mutant shows
+  is a live guard. S3's cap is 100 minutes. S9 is recorded. Rulings on
+  what the round found:
+  - R3-2 / the review's F1, pre-existing since 2026-07-25 (v0.14.0 too): a
+    file changed on disk after its full decoded leaves its memo above what
+    its cache holds, and the reserved lane re-reads the broken full while
+    the cursor rests there, one core busy (~73,000 ladder reads a second
+    measured) — RECORDED as a known gap in raw-pipeline.md beside "a
+    damaged mid over an intact full", "so it never retries" corrected to
+    name the exception, and the fix (the memo keeps the latest decoded
+    best, with its tests) routed to brief 009. Not put to the user: the
+    Manager rules it with certainty — pre-existing, needs a file changed
+    mid-session, and the user's test cannot hit it.
+  - R3-1 / the review's F2: the failgate test's t1 check is clock-bound
+    (one red in 12 Windows debug passes, run 36526534230, recorded here)
+    — fixed before merge as a test change, under the integrity review:
+    the dump waits for the decode-failed drop mark instead of the clock;
+    no margin widened. Until it lands, a red of that test alone on the
+    Windows debug pass is diagnosed, not re-run.
+  - Practice from now: QE reads every PR run between two hand-offs, not
+    only the named ones.
+  - Bookkeeping done: the Outcome's 1:1 table carries the rung and switch
+    columns; the agent files' CI cap (100) and suite size (92 / 89); M11
+    points at the recorded limit's spec bullet, which covers both of its
+    forms.
 - 2026-09-29 (Manager, the session audit, verbatim triage below).
 
   The user, 2026-09-29: "this tasks has been running for three days now. So here's a new request. I want you to spawn a new fable 5 agent (or the best agent available), on the maximum effort possible. Ask this agent to analyze every code change that happened during this session, every commit and make some suggestions. route this suggestions via the regular pipeline."
@@ -1206,12 +1234,12 @@ unmeasured until the user's test.
 
 **The held arrow at 1:1 (A6, A13).**
 
-| Seat | Decoders | Frames shown / keys | Sharp | Thumb | Residual holds | p90 interval |
-|---|---|---|---|---|---|---|
-| Laptop, 11 runs (median) | 4 | 400 / 400 | 18 | 372 | 0 (3–9 before the step-6 fix) | 69 ms |
-| Laptop, A13 | 2 | 400 / 400 | 17 | 381 | 0 | 57 ms |
-| CI ubuntu | 3 | 400 / 400 | 11 | 383 | 0 | 49 ms |
-| CI Windows | 3 | 400 / 400 | 10 | 383 | 0 | 72 ms |
+| Seat | Decoders | Frames shown / keys | Sharp | Screen rung | Full↔rung switches | Thumb | Residual holds | p90 interval |
+|---|---|---|---|---|---|---|---|---|
+| Laptop, 11 runs (median) | 4 | 400 / 400 | 18 | 4 (0–5) | 1 (0–1) | 372 | 0 (3–9 before the step-6 fix) | 69 ms |
+| Laptop, A13 | 2 | 400 / 400 | 17 | 0 | 0 | 381 | 0 | 57 ms |
+| CI ubuntu | 3 | 400 / 400 | 11 | not recorded | not recorded | 383 | 0 | 49 ms |
+| CI Windows | 3 | 400 / 400 | 10 | not recorded | not recorded | 383 | 0 | 72 ms |
 
 **Decode (perf rows, release; laptop idle, three-run medians).**
 
@@ -1267,3 +1295,21 @@ two decoders (A13). M11 in the real app: CMYK and YCCK decode as before,
 padding before EOI and a header gap are decoded past with one line, a
 lossless JPEG and a header-gap JPEG now open where v0.14.0 could not, and
 truncated and 101-scan streams show Failed.
+
+**Pre-merge round (2026-09-29).** eb19425 (T8, R2-1 recorded), 9c3adec
+(audit S8: a damaged rung read and named once per session, old red
+first), ded7cae (audit S4: `note_adopted(index, kind)`), 3146cb2 (audit
+S7: `RingWindow::span` the clamp's one home), dddd90a (audit S3: the CI
+cap 100 minutes), 37924e3 (audit S9 recorded). Reviewed APPROVED; QE's
+final re-test PASS. CI run 36532559718 on 37924e3 green on both runners;
+its Windows artifact (id 11018884722) is the latest test build. Every
+Windows perf row inside its threshold (3/8 rung 136.3 ms, 0.81× the
+landscape median). The ubuntu advisory step read the 3/8 rung at
+155.5 ms against 150: a runner reading, not a regression — every decode
+row on that runner was 8–17 % slower than on 7f7beba's, the rung sat at
+0.815× its landscape median, no commit touched the decode path, and the
+same tree reads 117.1 ms idle on the laptop. The Manager's own run
+36526534230 on 95f19f9 (brief and CLAUDE.md only) went red once on the
+Windows debug pass in `a_decode_failed_cursor_drops_to_fit_instead_of_
+masking_the_badge` — a clock-bound check (R3-1), green on the runs before
+and after.
