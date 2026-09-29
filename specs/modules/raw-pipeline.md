@@ -1330,7 +1330,14 @@ commit that lands its tests, and stays open until then):
       as the decoders' source, red with no ceiling and with the comparison
       one off (added 2026-09-28, QE round 1's D3, in
       `a_decoder_override_wins_and_a_bad_one_is_ignored`; the mutants' reds
-      are in that commit's message); the startup line names the cache, the ring, the decoders, their
+      are in that commit's message); each of those two lines reaches stderr
+      once, read from a child process that derives the machine's sizes with
+      the variable set — 99999 and "abc" print their line, 12, 64 and an unset
+      variable none — red with `from_machine`'s print removed (added
+      2026-09-28, QE round 2 of brief 008, T5, in
+      `the_decoder_override_lines_reach_stderr`; the app's call to
+      `from_machine` before its startup line is review-verified); the
+      startup line names the cache, the ring, the decoders, their
       sources and the peak, and the app prints it exactly once per run —
       asserted on the stderr of every run of ui-grid.md A5's driven test; the
       engine spawns that many workers and reserves one lane —
@@ -1338,6 +1345,7 @@ commit that lands its tests, and stays open until then):
       `the_decoders_follow_the_physical_cores`,
       `the_decoders_are_capped_at_half_the_ram_in_gib`,
       `a_decoder_override_wins_and_a_bad_one_is_ignored`,
+      `the_decoder_override_lines_reach_stderr`,
       `the_startup_line_names_the_cache_the_ring_the_decoders_and_the_peak`,
       `start_with_spawns_the_decoders_and_reserves_the_last`, and the
       exactly-once clause in

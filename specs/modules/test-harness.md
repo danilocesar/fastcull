@@ -34,13 +34,15 @@ explain itself on stderr.
   cook is held`); with tracing, the retarget reports how many queued jobs
   it dropped.
 - `FASTCULL_MAX_READERS=N` — the read pool override (raw-pipeline.md).
-- `FASTCULL_DECODERS=N` — the loupe's decoder-count override
-  (raw-pipeline.md, "The decode workers"): 1 reads as 2, a value that is not
-  a positive integer is ignored and one above the ceiling of 64 is clamped
-  to it, each with its stderr line (QE 2026-09-28, D3: 99999 crashed the app
-  at the thread spawn). The app prints its loupe sizes
-  once at startup on stderr, the line that starts `fastcull: loupe cache `
-  (raw-pipeline.md, "Memory"), so a run's evidence says what it ran with.
+- `FASTCULL_DECODERS=N` — the loupe's decoder-count override;
+  raw-pipeline.md, "The decode workers", says how 1, a value that is not a
+  positive integer and one above the ceiling are read, and which of them
+  print a line (corrected 2026-09-28, the senior developer's review of QE
+  round 1's fixes of brief 008, F3(a): this restated that rule, and its "each
+  with its stderr line" read as covering 1, which prints none). The app
+  prints its loupe sizes once at startup on stderr, the line that starts
+  `fastcull: loupe cache ` (raw-pipeline.md, "Memory"), so a run's evidence
+  says what it ran with.
 - `--screenshot <out>` — forces the software renderer (`take_snapshot`
   yields black frames on the GPU renderer), so the suite does not exercise
   the shipping femtovg renderer; snapshots are JPEG q92 whatever the
@@ -433,6 +435,11 @@ shot 2.
 
 ## History
 
+- 2026-09-28 — `FASTCULL_DECODERS` points at raw-pipeline.md's rule instead
+  of restating it (the senior developer's review of QE round 1's fixes of
+  brief 008, F3(a)): the restatement's "each with its stderr line" read as
+  covering 1, which prints none, and a ruled ceiling other than 64 would
+  have had two specs to move.
 - 2026-09-28 — `FASTCULL_A5_REQUIRE_4K` on the Windows release step too:
   the Windows runner granted the 3840×2160 window on the first run that
   asked (brief 008's step-6 review, F3), so a later image granting less

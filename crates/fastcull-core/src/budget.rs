@@ -340,8 +340,8 @@ impl LoupeSizes {
     }
 
     /// The sizes for THIS machine: `Machine::probe` and the environment's
-    /// `FASTCULL_DECODERS`, whose stderr line — when the value is ignored —
-    /// is printed here, once.
+    /// `FASTCULL_DECODERS`, whose stderr line — when the value is ignored or
+    /// clamped — is printed here, once.
     pub fn from_machine() -> Self {
         let over = parse_decoders_override(std::env::var_os(DECODERS_VAR).as_deref());
         let sizes = Self::derive(&Machine::probe(), over);
@@ -681,6 +681,96 @@ mod tests {
         assert!(
             with.starts_with(&without),
             "the clause is appended to the same line: {with}"
+        );
+    }
+
+    /// The environment variable that turns [`stderr_child`] on.
+    const STDERR_CHILD_VAR: &str = "FASTCULL_BUDGET_STDERR_CHILD";
+
+    /// The child half of [`the_decoder_override_lines_reach_stderr`]: runs
+    /// only in the child process that test starts from this same test binary,
+    /// and returns at once in any other run (loupe.rs's `stderr_child`
+    /// pattern, no `#[ignore]`). It derives THIS machine's sizes the way the
+    /// app does, with whatever `FASTCULL_DECODERS` the parent handed it, so
+    /// what it prints on stderr is what the app prints.
+    #[test]
+    fn stderr_child() {
+        if std::env::var_os(STDERR_CHILD_VAR).is_none() {
+            return; // not the child: nothing to do
+        }
+        let _ = LoupeSizes::from_machine();
+    }
+
+    /// Brief 008 A4 (raw-pipeline.md, "The decode workers"; test-harness.md:
+    /// a value leaked into some environment must explain itself on stderr):
+    /// the two lines `derive` builds for `FASTCULL_DECODERS` — a value above
+    /// the ceiling, clamped, and one that is not a positive integer, ignored
+    /// — REACH stderr, once each, when the machine's sizes are derived; a
+    /// value the rule takes as given (12, and the ceiling itself, 64) and an
+    /// unset variable print none. `derive`'s `warning` field is asserted
+    /// above, but nothing read the print itself: with `from_machine`'s
+    /// `eprintln!` removed the suite stayed green (the senior developer's
+    /// review of QE round 1's fixes, F4). Read from a child process of this
+    /// test binary ([`stderr_child`]), the variable set on the child's
+    /// command, never in this process's environment, which other tests
+    /// share; the unset row removes it from the child's, since the runner's
+    /// own environment may carry one. Red with that print removed (the 99999
+    /// and the "abc" rows).
+    ///
+    /// Review-verified, not driven: that the app prints the same lines —
+    /// its `main` calls `LoupeSizes::from_machine()` before it prints the
+    /// startup line (crates/fastcull-app/src/main.rs), and no other code
+    /// derives the sizes.
+    #[test]
+    fn the_decoder_override_lines_reach_stderr() {
+        let lines = |value: Option<&str>| -> Vec<String> {
+            let exe = std::env::current_exe().expect("the test binary");
+            let mut child = std::process::Command::new(exe);
+            child
+                .args([
+                    "budget::tests::stderr_child",
+                    "--exact",
+                    "--nocapture",
+                    "--test-threads=1",
+                ])
+                .env(STDERR_CHILD_VAR, "1");
+            match value {
+                Some(value) => child.env(DECODERS_VAR, value),
+                None => child.env_remove(DECODERS_VAR),
+            };
+            let out = child.output().expect("the child runs");
+            let stderr = String::from_utf8_lossy(&out.stderr).into_owned();
+            assert!(
+                out.status.success(),
+                "{value:?}: the child failed:\n{stderr}"
+            );
+            stderr
+                .lines()
+                .filter(|l| l.starts_with("fastcull: FASTCULL_DECODERS="))
+                .map(str::to_owned)
+                .collect()
+        };
+        assert_eq!(
+            lines(Some("99999")),
+            ["fastcull: FASTCULL_DECODERS=99999 is above its ceiling of 64 — 64 decoders"],
+            "a value above the ceiling explains itself on stderr, once"
+        );
+        assert_eq!(
+            lines(Some("abc")),
+            ["fastcull: FASTCULL_DECODERS=\"abc\" is not a positive integer — ignored"],
+            "a value that is not a positive integer explains itself on stderr, once"
+        );
+        for taken in ["12", "64"] {
+            assert_eq!(
+                lines(Some(taken)),
+                Vec::<String>::new(),
+                "{taken}: a value taken as given prints no line"
+            );
+        }
+        assert_eq!(
+            lines(None),
+            Vec::<String>::new(),
+            "an unset variable prints no line"
         );
     }
 }
