@@ -128,7 +128,14 @@ exception is a copy that stopped just where the full-size preview begins:
 nothing of that preview is left for FastCull to find, so the frame shows
 the smaller preview as if it were the whole photo — no pill, no line — as
 FastCull 0.14.0 did. If the copy on the card is whole, copying the file
-again and reopening the folder brings the sharp frame back.
+again and reopening the folder brings the sharp frame back. One rarer case:
+a file damaged or cut on disk while its folder is open, after FastCull has
+already read its full-size preview — a copy still being written over the
+folder you are culling, say — shows the smaller preview as above, but while
+you rest on that frame where the pill shows, FastCull keeps retrying the
+full-size preview it once read, which keeps one processor core busy (your
+fan may spin up). Moving to another frame stops it; reopening the folder
+ends it.
 
 **Something misbehaves — what should I attach to a bug report?**
 Run with `FASTCULL_TRACE=1` from a terminal and attach the output: it

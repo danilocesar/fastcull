@@ -757,18 +757,19 @@ All rejections flow through the existing `LoupeEvent::Failed` /
 subsequent jobs are unaffected — except a HIGHER rung's: a rung that fails
 while the frame has a good lower rung, decoded in the same flight or already
 cached, fails nothing. The ladder keeps the lower rung and memoizes it as the
-highest rung it climbs for that file this session, so it never retries — an
-engine-internal memo, never published as `terminal`, so the frame stays cued
-wherever that rung does not serve — and prints one line on stderr, the
-diagnostics channel, naming the file, the rung that failed and the decoder's
-reason, so a fault that shows no badge is still seen (brief 008, the step-1
-review; Manager ruling 2026-09-26). The ladder's stop test reads that memo
-as the cached-image checks do, so a climb that finds the kept rung evicted
-from the pixel cache stops at it again, never reading the broken rung a
-second time; and the line is keyed as the complaint line is, by the
-embedded JPEG that failed, so it prints at most once per session for each
-of a file's embedded JPEGs whatever climbs reach it (the session audit of
-brief 008, S8, 2026-09-29).
+highest rung it climbs for that file this session, so it never retries, save
+for a file whose higher rung decoded earlier in the session (the known gap
+below) — an engine-internal memo, never published as `terminal`, so the
+frame stays cued wherever that rung does not serve — and prints one line on
+stderr, the diagnostics channel, naming the file, the rung that failed and
+the decoder's reason, so a fault that shows no badge is still seen (brief
+008, the step-1 review; Manager ruling 2026-09-26). The ladder's stop test
+reads that memo as the cached-image checks do, so a climb that finds the
+kept rung evicted from the pixel cache stops at it again, never reading the
+broken rung a second time (the same exception); and the line is keyed as the
+complaint line is, by the embedded JPEG that failed, so it prints at most
+once per session for each of a file's embedded JPEGs whatever climbs reach
+it (the session audit of brief 008, S8, 2026-09-29).
 
 **Known gap — a damaged mid over an intact full**: when a RAW's mid preview
 fails to decode, the ladder returns `Failed` without trying the full JPEG,
@@ -776,6 +777,21 @@ at fit and at 1:1, and the grid thumb fails too — so a frame whose full
 JPEG is intact shows the Failed badge, against M11's rule that the badge is
 for a frame with nothing decodable. Unchanged from before brief 008; left
 for a later unit (brief 008, the step-2 review; Manager ruling 2026-09-27).
+
+**Known gap — a memo above what the file now holds**: the memo keeps the
+largest rung a file has reached this session, so a file whose best shrinks
+on disk afterwards — cut or damaged after its full decoded, as by a copy
+still landing over the folder being culled, or replaced by a file with
+smaller previews — keeps a memo above anything it can now provide. Once the
+pixel cache evicts that larger rung, a rest on the frame finds its kept rung
+short of the memo wherever that rung does not serve the view, and the settle
+guarantee queues the frame again the moment each climb ends: the reserved
+lane re-walks the file, and re-reads a broken rung, for as long as the
+cursor rests there, one core busy. The screen shows the kept rung, cued, and
+the damaged rung's line prints once. Unchanged from before brief 008; the
+fix — the memo keeps the latest decoded best, with its tests — is routed to
+brief 009 (brief 008, the pre-merge round: QE's R3-2 and the
+senior-developer review's F1; Manager ruling 2026-09-29).
 
 ### The decoder's complaints (other cameras; the user 2026-09-26, M11)
 
@@ -1838,6 +1854,17 @@ commit that lands its tests, and stays open until then):
 
 ## History
 
+- 2026-09-29 — "So it never retries" names its exception, recorded as a
+  known gap (brief 008, the pre-merge round: QE's R3-2 and the
+  senior-developer review's F1; Manager ruling 2026-09-29): "All rejections"
+  said the ladder never retries a failed rung and never reads it a second
+  time, with no exception. The memo keeps the largest rung a file has
+  reached, so a file whose full decoded and then broke on disk keeps its
+  memo above the rung the ladder now keeps, and while the cursor rests on
+  it the settle guarantee queues it again the moment each climb ends — one
+  core re-reading the broken full, silent since S8 keyed the line.
+  Pre-existing (v0.14.0 behaves the same); the fix, the memo keeping the
+  latest decoded best, is routed to brief 009.
 - 2026-09-29 — The walker's ranking by the IFD's size claim is a recorded
   residual (the session audit of brief 008, S9): QE round 1's D2 moved the
   screen rung's plan to the stream's own SOF, while the IFD's claim still
