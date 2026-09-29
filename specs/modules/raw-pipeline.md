@@ -1429,16 +1429,21 @@ commit that lands its tests, and stays open until then):
       loupe's top rung is the largest whole or cut, a whole one winning a tie;
       `read_jpeg` refuses the cut one as truncated, with how much of it the
       file holds. Over a synthetic RAW laid out as an A1 is and cut inside its
-      full, at a fit box the mid does not serve and at 1:1: the mid is
-      published, never `terminal`, no `Failed`, the mid memoized; and, read
-      from a child process's stderr, one line names the file, the full rung
-      and "truncated", a whole control file none. The real
+      full — with the full's size in its IFD, as the A1 carries it, and
+      without it (sized from its SOF; M11) — at a fit box the mid does not
+      serve and at 1:1: the mid is published, never `terminal`, no `Failed`,
+      the mid memoized; and, read from a child process's stderr, one line
+      names the file, the full rung and "truncated", a whole control file
+      none. The real
       `A1_full_compressed.ARW` cut at 10,000,000 bytes, inside its full: the
       1616×1080 mid arrives not `terminal` and nothing follows, not after a
       second focus either, at 1:1 and at fit on a 3840×2160 box. Red on the
       walker that dropped the cut JPEG, with the length guard removed, with
       `loupe_top` reading the whole ones alone, and with `read_jpeg`'s check
-      removed (the line then names no cause) —
+      removed (the line then names no cause); and, on the shape without a size
+      in its IFD alone, with the walker dropping a cut JPEG its IFD does not
+      size (added 2026-09-28, QE round 2 of brief 008, T6; its red is in that
+      commit's message) —
       `a_jpeg_the_file_was_cut_inside_is_kept_apart_as_cut`,
       `a_raw_cut_inside_its_full_never_makes_the_mid_its_best`,
       `a_raw_cut_inside_its_full_is_named_on_stderr`,

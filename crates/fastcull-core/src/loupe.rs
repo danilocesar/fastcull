@@ -6427,17 +6427,21 @@ mod tests {
         std::fs::remove_dir_all(&dir).ok();
     }
 
-    /// A RAW cut by an interrupted copy, laid out as an A1 is — its IFD tables
-    /// first, then the intact 640x400 mid, then `full` with its size in its
-    /// IFD as an A1's IFD2 carries it — and cut `keep` bytes into the full.
-    fn raw_cut_inside_its_full(full: &[u8], keep: usize) -> Vec<u8> {
+    /// A whole RAW laid out as an A1 is — its IFD tables first, then the
+    /// intact 640x400 mid, whose IFD gives no size (an A1's IFD0 gives none),
+    /// then `full` — with the offsets of the mid and of the full. With
+    /// `dims_in_ifd` the full's IFD gives its size, as an A1's IFD2 does;
+    /// without it the walker sizes the full from its SOF, as it does for a
+    /// body whose IFD gives none (M11).
+    fn raw_laid_out_as_an_a1(full: &[u8], dims_in_ifd: bool) -> (Vec<u8>, usize, usize) {
         let mid = crate::raw::jpeg_hostile::encoded(640, 400);
-        let (w, h) = crate::raw::sof_dimensions(full).expect("a full with a SOF");
         let ifd_len = |entries: u32| 2 + 12 * entries + 4;
         let mut b = crate::raw::tiff_testutil::TiffBuilder::new(true);
         let ifd0 = b.bytes.len() as u32;
         let second = ifd0 + ifd_len(2);
-        let mid_off = second + ifd_len(4);
+        // The mid follows the second IFD, whose length is its own entry
+        // count: two pointer entries, and the size pair when it has one.
+        let mid_off = second + ifd_len(if dims_in_ifd { 4 } else { 2 });
         let full_off = mid_off + mid.len() as u32;
         assert_eq!(
             b.add_ifd(
@@ -6446,23 +6450,26 @@ mod tests {
             ),
             ifd0
         );
-        assert_eq!(
-            b.add_ifd(
-                &[
-                    (0x0100, 3, 1, w),
-                    (0x0101, 3, 1, h),
-                    (0x0201, 4, 1, full_off),
-                    (0x0202, 4, 1, full.len() as u32),
-                ],
-                0
-            ),
-            second
-        );
+        let mut entries = Vec::new();
+        if dims_in_ifd {
+            let (w, h) = crate::raw::sof_dimensions(full).expect("a full with a SOF");
+            entries.extend([(0x0100, 3, 1, w), (0x0101, 3, 1, h)]);
+        }
+        entries.extend([(0x0201, 4, 1, full_off), (0x0202, 4, 1, full.len() as u32)]);
+        assert_eq!(b.add_ifd(&entries, 0), second);
         assert_eq!(b.add_blob(&mid), mid_off);
         assert_eq!(b.add_blob(full), full_off);
         b.set_ifd0(ifd0);
-        b.bytes.truncate(full_off as usize + keep);
-        b.bytes
+        (b.bytes, mid_off as usize, full_off as usize)
+    }
+
+    /// A RAW cut by an interrupted copy, laid out as an A1 is
+    /// ([`raw_laid_out_as_an_a1`], the full's size in its IFD or not), cut
+    /// `keep` bytes into the full.
+    fn raw_cut_inside_its_full(full: &[u8], keep: usize, dims_in_ifd: bool) -> Vec<u8> {
+        let (mut bytes, _, full_off) = raw_laid_out_as_an_a1(full, dims_in_ifd);
+        bytes.truncate(full_off + keep);
+        bytes
     }
 
     /// QE round 1 of brief 008, D1 (raw-pipeline.md, "Hostile-input bounds"
@@ -6477,57 +6484,82 @@ mod tests {
     /// 1:1. Red on the walker that dropped a JPEG the file ends inside: the
     /// mid was the file's only rung, published terminal — its best — which
     /// the app showed uncued at fit and would not zoom past.
+    ///
+    /// Two shapes of the file (QE round 2 of brief 008, T6): the full's size
+    /// in its IFD, as the A1 carries it, and none there, as another body's
+    /// IFD may give none (M11) — the walker then sizes the cut full from the
+    /// SOF the file still holds, and the ladder must reach the same end: the
+    /// mid is never such a file's best either. Red on that second shape alone
+    /// with the walker dropping a cut JPEG its IFD does not size.
     #[test]
     fn a_raw_cut_inside_its_full_never_makes_the_mid_its_best() {
         let dir = crate::testutil::scratch_dir("cut-full");
         let full = crate::raw::jpeg_hostile::encoded(2000, 1500);
-        let path = dir.join("cut_full.arw");
-        std::fs::write(&path, raw_cut_inside_its_full(&full, full.len() / 2)).unwrap();
-        let whole = find_embedded_jpegs(&mut std::fs::File::open(&path).unwrap())
-            .unwrap()
-            .fullres()
-            .map(|c| (c.width, c.height));
-        assert_eq!(
-            whole,
-            Some((640, 400)),
-            "the premise: the file holds its mid whole and its full cut"
-        );
         let fit_box = FitBox {
             width: 1000,
             height: 700,
         };
-        for target in [Target::Fit(fit_box), Target::Long(u32::MAX)] {
-            let (shared, rx) = shared_over(vec![path.clone()]);
+        for dims_in_ifd in [true, false] {
+            let shape = if dims_in_ifd {
+                "the full's size in its IFD"
+            } else {
+                "no size in the full's IFD (sized from its SOF)"
+            };
+            let path = dir.join(if dims_in_ifd {
+                "cut_full.arw"
+            } else {
+                "cut_full_sized_from_its_sof.arw"
+            });
+            std::fs::write(
+                &path,
+                raw_cut_inside_its_full(&full, full.len() / 2, dims_in_ifd),
+            )
+            .unwrap();
+            let whole = find_embedded_jpegs(&mut std::fs::File::open(&path).unwrap())
+                .unwrap()
+                .fullres()
+                .map(|c| (c.width, c.height));
             assert_eq!(
-                decode_ladder(&shared, 0, target, 0, false, RequestState::Settled),
-                Ok(()),
-                "{target:?}: the mid is good, so the cut full fails nothing"
+                whole,
+                Some((640, 400)),
+                "{shape}: the premise: the file holds its mid whole and its full cut"
             );
-            match rx.try_recv() {
-                Ok(LoupeEvent::Ready {
-                    image, terminal, ..
-                }) => {
-                    assert_eq!(
-                        (image.width, image.height, image.kind),
-                        (640, 400, RungKind::Mid),
-                        "{target:?}: the mid is shown"
-                    );
-                    assert!(
-                        !terminal,
-                        "{target:?}: the mid of a file whose full was cut is never its best"
-                    );
+            for target in [Target::Fit(fit_box), Target::Long(u32::MAX)] {
+                let (shared, rx) = shared_over(vec![path.clone()]);
+                assert_eq!(
+                    decode_ladder(&shared, 0, target, 0, false, RequestState::Settled),
+                    Ok(()),
+                    "{shape}, {target:?}: the mid is good, so the cut full fails nothing"
+                );
+                match rx.try_recv() {
+                    Ok(LoupeEvent::Ready {
+                        image, terminal, ..
+                    }) => {
+                        assert_eq!(
+                            (image.width, image.height, image.kind),
+                            (640, 400, RungKind::Mid),
+                            "{shape}, {target:?}: the mid is shown"
+                        );
+                        assert!(
+                            !terminal,
+                            "{shape}, {target:?}: the mid of a file whose full was cut is \
+                             never its best"
+                        );
+                    }
+                    other => {
+                        panic!("{shape}, {target:?}: expected the mid's Ready event, got {other:?}")
+                    }
                 }
-                other => panic!("{target:?}: expected the mid's Ready event, got {other:?}"),
+                assert!(
+                    rx.try_recv().is_err(),
+                    "{shape}, {target:?}: nothing else — no Failed, no phantom rung"
+                );
+                assert_eq!(
+                    lock(&shared).best_long.get(&0).copied(),
+                    Some(640),
+                    "{shape}, {target:?}: the mid memoized, so the ladder quiesces"
+                );
             }
-            assert!(
-                rx.try_recv().is_err(),
-                "{target:?}: nothing else — no Failed, no phantom rung"
-            );
-            assert_eq!(
-                lock(&shared).best_long.get(&0).copied(),
-                Some(640),
-                "{target:?}: the mid memoized, so the ladder quiesces"
-            );
         }
         std::fs::remove_dir_all(&dir).ok();
     }
@@ -7944,9 +7976,10 @@ mod tests {
     fn a_raw_cut_inside_its_full_is_named_on_stderr() {
         let dir = crate::testutil::scratch_dir("stderr-cut-short");
         let full = crate::raw::jpeg_hostile::encoded(2000, 1500);
+        // The A1's shape: the full's size in its IFD.
         std::fs::write(
             dir.join("file_cut_in_full.arw"),
-            raw_cut_inside_its_full(&full, full.len() / 2),
+            raw_cut_inside_its_full(&full, full.len() / 2, true),
         )
         .unwrap();
         std::fs::write(dir.join("mid_ok_full_ok.arw"), raw_with_full(&full)).unwrap();
