@@ -1429,7 +1429,7 @@ renderer's source offsets are `Fixed<u16, 4>`.
       at 1:1 — with each run's distinct frames, its 1:1 holds' `loupe hold`
       counts and the pacing mutant's reading on the fixed product in that
       commit's message.
-- [ ] **Time-to-sharp no worse than v0.14.0** (brief 008, the redesign's
+- [x] **Time-to-sharp no worse than v0.14.0** (brief 008, the redesign's
       G5): QE, on the idle development laptop and the 3840×2160 headless
       screen A5 uses — where the screen rung and the idle cook act — this
       tree against the v0.14.0 tag, on the frame landed on: from the last
@@ -1442,7 +1442,8 @@ renderer's source offsets are `Fixed<u16, 4>`.
       per build and case; "no worse" is this tree's median at most v0.14.0's
       median plus the larger of the two builds' interquartile ranges — a
       wall clock that binds on the idle laptop only (issue #27); the
-      figures go in brief 008's Outcome. Open: QE's round.
+      figures go in brief 008's Outcome. Ticked 2026-09-29 (M10): QE round
+      2, 132 launches, no worse in all 15 cases.
 - RETIRED 2026-09-17 (user decision): the per-release manual acceptance
   (a 5,000-file A1 folder at 60 fps; no perceived latency in the
   pick→auto-advance loop) — never recorded as run; the perf budgets, the

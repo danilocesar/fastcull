@@ -1783,9 +1783,10 @@ commit that lands its tests, and stays open until then):
       statement of `main` on that platform (nothing observable tells first
       from early). Ticked by the step-3c commit, which carries the call, the
       line and both tests; each mutant's red is in its message.
-- [ ] **Hard rule 1** (brief 008 A11): the RAW-write tests are unchanged and
+- [x] **Hard rule 1** (brief 008 A11): the RAW-write tests are unchanged and
       green; QE records `sha256sum testdata/raws/*.ARW` before and after its
-      runs, and the listings match. Open: QE's rounds.
+      runs, and the listings match. Ticked 2026-09-29 (M10): QE rounds 1
+      and 2, the listings identical.
 
 ## History
 

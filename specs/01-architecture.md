@@ -652,16 +652,15 @@ carries its evidence):
       `the_licence_file_carries_libjpeg_turbos_notices`. Ticked by the
       step-2b commit, which carries the test; the fallback's red is in its
       message.
-- [ ] Every Windows build links one C runtime, the static one (QE round 1 of
+- [x] Every Windows build links one C runtime, the static one (QE round 1 of
       brief 008, D4): no build of the Windows job links libjpeg-turbo's
       static runtime beside the runtime DLL — CI's "Verify every Windows
       build links the static C runtime" reads every executable under
       `target/debug` and `target/release` and fails on one that imports
       `VCRUNTIME140`, and the job's log carries no LNK4098. The guard was
       pushed one commit ahead of the fix and is red there by construction
-      (every test build dynamic). Open: the CI run of the fix, whose guard
-      must be green and whose log must carry no LNK4098; its run id ticks
-      this box, with the guard's red run beside it.
+      (every test build dynamic). Ticked 2026-09-29 (M10): the guard red on
+      run 36477292291, green on run 36486218733 with no LNK4098 in the log.
 
 ## Shutdown policy (recorded 2026-07-25)
 

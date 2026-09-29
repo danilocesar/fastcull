@@ -150,7 +150,8 @@ Workers and ring depth derive from the machine; nothing is configured.
 - R3 (screen rung). A new loupe rung between mid and full: the embedded
   full JPEG decoded with DCT scaling at the smallest N/8 factor whose
   output serves the viewport's fit view under the existing 1.25 `serves`
-  rule (4K → 3/8 = 3240×2160; QHD → 2/8; ≤ 2K → no rung, the mid serves
+  rule (4K → 3/8 = 3240×2160; a 2560×1440 fit box → 2/8 — a QHD
+  monitor's fit cell, 2548×1328, is served by the mid; ≤ 2K → no rung, the mid serves
   and behaviour is unchanged; 5K → 4/8). Orientation is applied to the
   rung like every rung. The factor follows the viewport: a resize or a
   move to another display re-derives it, and a cached rung that no
@@ -248,7 +249,7 @@ Workers and ring depth derive from the machine; nothing is configured.
   than the ring → the whole folder. Fails on the old 2-behind / 8-ahead
   transit shape and the old settled ±2. (Revised 2026-09-26.)
 - A2. Clock-free: rung factor per viewport — a table over (viewport,
-  frame dims, orientation): 3840×2160 → 3/8; 2560×1440 → 2/8; 1920×1080 →
+  frame dims, orientation): 3840×2160 → 3/8; a 2560×1440 fit box → 2/8; 1920×1080 →
   none; 5120×2880 → 4/8; a portrait frame uses its rotated dims.
 - A3. Clock-free: `render_rung` extended and total; rows for rung-in-hand
   at fit → Sharp without cue, rung-in-hand at 1:1 → Soft with cue,
@@ -1123,7 +1124,63 @@ the cursor's rungs) → a later brief.
   jump into unvisited frames up to 15 thumbs (~1.2 ms each) now go ahead
   of the cursor's own full fill.
 
-## Outcome (implementation; QE's verdict and G5 to follow)
+- 2026-09-29 (Manager, QE): round 1 FAIL with one major — D1, a RAW cut
+  inside its full JPEG was silently soft, its mid published as the top rung
+  with no line — and four minors (D2 the factor from the IFD claim, D3
+  `FASTCULL_DECODERS=99999` panicked, D4 two C runtimes in non-artifact
+  Windows builds, D5 the video-export row's second red, which opened issue
+  #94 under the earlier M3 ruling); fixed in 3ec04b3, ff8c9b8, 47d4ee1,
+  10013ef, 3736b74 and APPROVED. Round 2 PASS with five minors (R2-1 to
+  R2-5) and five proposed test changes; fixed in 013d7a4, 22da12d,
+  f78bd40, f89ad90, 2efbb81, f226d53, 7f7beba (CI run 36520583463 green on
+  both runners), not yet re-reviewed. QE's G5 table (132 release launches,
+  this tree against v0.14.0) is in the Outcome. Rulings:
+  - R2-1, a copy cut before the full JPEG's second byte: RECORDED as a
+    limit, not fixed — the walker keeps trusting a JPEG only once its
+    signature is in the file; flagging an IFD pointer past the end would
+    flag intact files from other bodies with a stale index as truncated
+    forever, the worse breach of M11. It behaves as 0.14.0 did. T8 goes in
+    its recorded form (the walker test's keep = 1 and keep = 2 rows, the
+    keep = 0 row citing the sentence), the D1 box closes, and M11 names the
+    exception.
+  - D3's ceiling for `FASTCULL_DECODERS`, 64: confirmed.
+  - G5: kept as the spec words it (this tree's median at most v0.14.0's
+    plus the larger IQR) and ticked; recorded beside it: the stop at 1:1
+    after a 100-key hold reads 637 ms median (566–722) against 597
+    (594–607), the ring's full decodes still in flight when the key stops
+    — accepted as the look-ahead's price, and on the user's test checklist.
+  - The Manager's workflow script forwarded only APPROVED integrity
+    verdicts, so an amended CHANGES_REQUESTED form (T1 in round 1, T8 in
+    round 2) reached no one: T1 was implemented in round 2 (T1-R2), T8 is
+    answered by the R2-1 ruling. Every later loop forwards an amended form
+    as the change to implement, or stops for the Manager.
+  - M10 ticks, this commit: 01-architecture D4 (red run 36477292291, green
+    36486218733), ui-grid G5, raw-pipeline A11. R3 and A2 corrected: "QHD
+    → 2/8" holds for a 2560×1440 fit box; a QHD monitor's fit cell is
+    served by the mid.
+- 2026-09-29 (Manager, the session audit, verbatim triage below).
+
+  The user, 2026-09-29: "this tasks has been running for three days now. So here's a new request. I want you to spawn a new fable 5 agent (or the best agent available), on the maximum effort possible. Ask this agent to analyze every code change that happened during this session, every commit and make some suggestions. route this suggestions via the regular pipeline."
+  
+  Audit: one fresh agent on Fable at max effort, static reading of all 55 commits ee99067..91c2fdd (the same tree as 7f7beba: the developer reworded four unpushed commit messages) on a frozen worktree; each suggestion then put to an independent skeptic told to refute it. Verdict: no high-severity defect; the two unsafe blocks sound; the hostile-input bounds in the spec's order on every decode route; no lock-order inversion; hard rules 1 and 5 hold. 11 suggestions: 8 confirmed, 1 uncertain, 2 refuted. Full record: .qe-scratch/pipeline-007/session-audit.json.
+  
+  ## Routing
+  A. In brief 008, one reviewed round after QE's PASS and before merge (defects and small items in this unit's own code):
+  - S8 (defect, low): the damaged-rung stderr line has no dedupe key and, after the pixel cache evicts the kept lower rung, the ladder re-reads the known-broken full — read the file's memo at the top of decode_ladder and pass it to the four stop tests (the verifier's corrected form), key the line like the complaint line, and a test row that evicts the mid between two climbs. Old red first.
+  - S4 (simplification): note_adopted's `held` parameter is threaded through the contract and never read — drop it, with its Contracts clause, as one M1 commit.
+  - S7 (maintainability): presenter.rs re-derives RingWindow::span by hand (and core's plan_ring does too, per the verifier) — use span.
+  - S3, the immediate part (CI bookkeeping, M3): the Windows job ran fully cold on all 20 PR #93 runs at 54–78 min against a 90-min cap — raise timeout-minutes to 100 per the cap's own 22 % headroom rule and rewrite its comment with the measured range.
+  - S9 (record, M10): the walker ranks embedded JPEGs by the IFD's size claim; an IFD that under-claims its full below the preview's pixel count makes the preview the top rung — recorded as an accepted residual (no body on record does it), fix left for a later unit.
+  - S5's residue (M10, the Manager's): the Outcome's 1:1 table gains the rung and full↔rung switch columns the readings exist for.
+  B. Brief 009, after brief 008 merges (the regular pipeline: brief, spec, plan, developer, review, QE):
+  - S6 (spec shape): the three module specs' Behaviour sections and brief-008 boxes carry correction narratives and evidence that CLAUDE.md's shape assigns to History and the brief — a shape pass by brief 007's own mechanism.
+  - S10 (test plumbing): three copies of target_dir()/Fixture — use cargo's CARGO_TARGET_TMPDIR and share the guard.
+  - S1 (performance, Linux): the grid thumb's 5 MB decode buffer is a fresh mapping per file under the 4 MiB threshold (−5.5 to −9.6 % throughput on the laptop, inside the ruled bounds) — a buffer reused per pipeline worker; measured first on a many-core Linux seat.
+  - S2 (uncertain): texture eviction frees 21–149 MB on the UI thread — measured first (the kitchen-cost instrument's eviction timings, Linux and Windows) before any change; brief 008 ruled against moving frees off the UI thread on the mid-prune evidence.
+  - S3, the rest: splitting the Windows job or dropping its debug screenshot pass is "what CI runs" — the user's call (M3).
+  C. Refuted, recorded with the verifier's reason: S5 (the switch rule's measurement protocol guards real cases; "never delivers rungs" is false — rung 4 (0–5) with a switch on the laptop); S11 (the pill test's stall red is its designed, self-naming failure, never observed).
+
+## Outcome (implementation and QE)
 
 Commits on `screen-rung` (PR #93), after the brief and the spec: step 1
 e1b488a, d4cc7b7, 53a4248, 82f69ff; step 2 d2d5941, c73297e, 9211580;
@@ -1185,3 +1242,28 @@ step down or a flicker? — and a long hold at fit past the first fifteen).
 Failed (the known gap); the transit lead; the 1:1 crop upload (#60 part
 4) and removing the 149 MB texture copy (part 6); runtime memory shrink
 and the thumbnail cap; a distinct "full size unavailable" cue.
+
+**QE (two rounds, PASS).** Time-to-sharp on the frame landed on, this tree
+against v0.14.0, idle laptop, 11 interleaved runs per build and case,
+medians in ms (IQR):
+
+| Screen, hold | Case | v0.14.0 | This tree |
+|---|---|---|---|
+| 3840×2160, 30 keys | `]` at fit | 280 (11.5) | 216 (15.5) |
+| | stop at fit | 486 (19.5) | 1 (1) |
+| | `Z` after a stop at fit | 0 | 0 |
+| | `]` at 1:1 | 362 (35.5) | 385 (38) |
+| | stop at 1:1 | 564 (11.5) | 539 (45.5) |
+| 3840×2160, 100 keys | `]` at fit | 283 (4) | 212 (17.5) |
+| | stop at fit | 497 (12.5) | 259 (86.5) |
+| | stop at 1:1 | 597 (5) | 637 (104) — the recorded watch item |
+| 1920×1200, 30 keys | `]` at fit | 33 | 28 |
+| | `Z` after a stop at fit | 350 (52) | 338 (8) |
+| | stop at 1:1 | 557 (27) | 532 (17) |
+
+The 1:1 hold on the laptop's four decoders also reads rung 4 (0–5) of 400
+with 1 (0–1) full↔rung switch (5f2a09d's body), rung 0 and no switch on
+two decoders (A13). M11 in the real app: CMYK and YCCK decode as before,
+padding before EOI and a header gap are decoded past with one line, a
+lossless JPEG and a header-gap JPEG now open where v0.14.0 could not, and
+truncated and 101-scan streams show Failed.
