@@ -1186,6 +1186,52 @@ the cursor's rungs) → a later brief.
     columns; the agent files' CI cap (100) and suite size (92 / 89); M11
     points at the recorded limit's spec bullet, which covers both of its
     forms.
+- 2026-09-29 (Manager, the final small round, reviewed APPROVED and QE's
+  spot-check PASS): 1cb8323 (R3-1: the failgate test's t1 waits for the
+  first End's decode-failed drop — the integrity review's amended form,
+  with the ordering assertion, a forcing-device old red and the corrected
+  mutant record; 20 / 20 idle and 20 / 20 beside two spinners), e26c6c8
+  (R3-2 recorded), c0bbb8b (F3). CI run 36564299941 on c0bbb8b green on
+  both runners; Windows artifact 11036441429, the same app as 37924e3's.
+  QE's minors, ruled by the Manager as bookkeeping (M10, M3) in this
+  commit's companion: D1 — the R3-2 record and docs/faq.md named only the
+  cued way into the memo-above state; a file cut before its full begins, or
+  replaced by one with smaller previews, shows the kept rung uncued, as the
+  whole photo, with no line, while the core stays busy — both corrected; D3
+  — `OVERLAY_HOLD_CAP` is evaluated at the next refresh, so with nothing
+  landing a wedged decode held the previous pixels about 800 ms under load
+  — recorded as a known gap in ui-grid.md (a promise not fully kept,
+  pre-existing), the fix routed to brief 009 and put to the user in the
+  report; D4 — c0bbb8b's ubuntu advisory step read both rung rows red (3/8
+  181.2 ms, 2/8 166.3) on a runner 14–17 % slower on every decode row, the
+  rung-to-landscape ratios unchanged (0.814, 0.747) and the code path
+  untouched: a runner reading (the Outcome); D5 — the cold Windows job took
+  79.0 min, so the cap rises to 102 minutes by its own 22 % rule; the
+  review's F5 — a stale token in the failgate test's comment, fixed. The
+  integrity review's residuals, recorded here and routed to brief 009: a
+  failure arriving during a `(hold cap)` drop emits no `(decode failed)`
+  drop, which the new wait cannot witness (never approached: the thumb was
+  in hand within 1 ms of the hold in 22 of 22 CI passes; under load on the
+  laptop 5 of 6 runs landed it past 250 ms and stayed green only because
+  the failure arrived first); the "drops immediately" promise has a driven
+  witness only on seats where nothing lands after the End; the 773 ms
+  flight on run 36526534230 is unmeasured — all three want a
+  failure-arrival mark and flight-phase marks, never a longer wait.
+  D2 — ruled separately below.
+- 2026-09-29 (Manager, D2): run 36553824838 on 60a87e9 (product code
+  identical to 37924e3 and c0bbb8b) went red on ubuntu's release screenshot
+  step in A5: the 1:1 hold showed 367 of 400 frames (A6 wants 392) — the
+  trace has no line for 1,549 ms from [11426] to [12975], no `refresh took`
+  or `handle_nav took` after it, so the UI thread was outside the app's
+  self-timed phases, while the decode workers kept working (ten `loupe
+  ready` lines at once at [13052]) and the 33 key timers due in the gap
+  fired within 8 ms onto frames with no thumb. Once in 11 ubuntu A5 runs;
+  never on the laptop or in 8 Windows release runs. Ruled: recorded here;
+  the senior developer diagnoses it now by measurement (the "red only on
+  CI" case), in parallel with the user's Windows test; a repeat at the
+  merge run is diagnosed, never silently re-run; the user is asked to watch
+  for a freeze of a second or more followed by a jump during a long 1:1
+  hold — if seen, it is a product defect fixed before release.
 - 2026-09-29 (Manager, the session audit, verbatim triage below).
 
   The user, 2026-09-29: "this tasks has been running for three days now. So here's a new request. I want you to spawn a new fable 5 agent (or the best agent available), on the maximum effort possible. Ask this agent to analyze every code change that happened during this session, every commit and make some suggestions. route this suggestions via the regular pipeline."
@@ -1313,3 +1359,11 @@ same tree reads 117.1 ms idle on the laptop. The Manager's own run
 Windows debug pass in `a_decode_failed_cursor_drops_to_fit_instead_of_
 masking_the_badge` — a clock-bound check (R3-1), green on the runs before
 and after.
+
+**Final small round (2026-09-29).** 1cb8323, e26c6c8, c0bbb8b; CI run
+36564299941 green on both runners, Windows artifact 11036441429 (the same
+app as 37924e3's). Every Windows perf row inside its threshold (3/8 rung
+144.8 ms, 0.77× the landscape median). The ubuntu advisory step read the
+rung rows red (3/8 181.2 ms, 2/8 166.3) on a runner 14–17 % slower on every
+decode row, the ratios unchanged: a runner reading. The Windows job took
+79.0 min cold; the cap is now 102.

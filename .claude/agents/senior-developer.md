@@ -321,7 +321,7 @@ somebody else can repeat, it is not finished.
   seat can miss by one pixel. A traced element is clicked by NAME
   (`click:iptc field 0`), never by a coordinate measured on one platform.
 - CI (`.github/workflows/ci.yml`): one `test` job on `ubuntu-latest` and
-  `windows-latest`, 100-minute timeout (90 until 2026-09-29, brief 008), `RUST_BACKTRACE=1`, every test
+  `windows-latest`, 102-minute timeout (90 until 2026-09-29, then 100, brief 008), `RUST_BACKTRACE=1`, every test
   invocation `--test-threads=1`. On Windows `has_display()` is
   `cfg!(windows)`, so `cargo test --workspace` runs the screenshot suite in
   DEBUG there and the release step runs it again; on Linux only the
