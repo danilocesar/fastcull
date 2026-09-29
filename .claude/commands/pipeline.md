@@ -24,8 +24,8 @@ In order:
    ask if not). No peer Claude session has this repo as its cwd (map the
    `claude` PIDs to their cwds first; stop or get the user to stop any
    peer before touching the tree). `git status` clean, on `main` or the
-   unit's own branch; `testdata/raws/` fetched;
-   `export PATH=$HOME/.cargo/bin:$PATH`. Cleanup (M9): `cargo clean -p
+   unit's own branch; `git fetch origin` run (M12); `testdata/raws/`
+   fetched; `export PATH=$HOME/.cargo/bin:$PATH`. Cleanup (M9): `cargo clean -p
    fastcull-app -p fastcull-core -p fastcull-cli` in the tree's own
    `target/` (never a full `cargo clean`), remove any `target-qe-*`
    directory or worktree a previous unit left, apply the scratch cap's
@@ -51,8 +51,8 @@ In order:
    Acceptance criteria / Applicable directives (hard rules, ADRs, spec
    sections, standing directives) / Persona verdicts / Open questions
    (answered by the user before step 4) / Decisions log. Create the work
-   branch from `main` (`git switch -c <slug>`) and commit the brief on it,
-   in the project's commit voice.
+   branch from `origin/main` (`git switch -c <slug> origin/main`, M12)
+   and commit the brief on it, in the project's commit voice.
 4. **Spec first.** Hand `senior-developer` the brief for duty 1: it writes
    the spec change — the acceptance criteria in the module spec, the
    sentences that become false, the ADR if the decision is architectural,
