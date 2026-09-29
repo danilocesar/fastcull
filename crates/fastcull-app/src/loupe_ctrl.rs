@@ -514,8 +514,9 @@ fn apply_pointer_action(
 
 /// Keep a full-res texture, giving up slots until the ring is back within
 /// its window, and say whether `index` is still held afterwards — the
-/// ring's own victim is not, and the caller reports either answer to the
-/// engine (`LoupeEngine::note_adopted`) and marks only a texture still held.
+/// ring's own victim is not. The caller reports the fill to the engine
+/// either way (`LoupeEngine::note_adopted`), then marks only a texture
+/// still held.
 ///
 /// The victim CHOICE — protect the cursor's own texture, out-of-view
 /// entries first, then entries outside the window, farthest by view

@@ -389,14 +389,16 @@ pub(crate) fn start(window: &MainWindow, state: &Rc<RefCell<AppState>>) -> slint
 /// was adopted (callers refresh on true).
 ///
 /// Every fill that COMPLETES at the loupe — a full-res fill, a wrap of any
-/// kind — is reported to the engine (`LoupeEngine::note_adopted`) with
-/// whether its ring kept it, RIGHT AFTER the insert and BEFORE the `held`
-/// branch: a ring's own victim was ready to draw all the same, and skipping
-/// it would censor the slowest landings, the ones the switch rule's
-/// time-to-screen exists to see (raw-pipeline.md, "Above fit", rule 1;
-/// Manager ruling Q-K). What a report means is the engine's; the app carries
-/// no flag. The `loupe adopted idx N kind K` mark follows, once per ring the
-/// texture is still held in — a victim emits nothing (test-harness.md).
+/// kind — is reported to the engine (`LoupeEngine::note_adopted`) RIGHT
+/// AFTER the insert and BEFORE the `held` branch: a ring's own victim was
+/// ready to draw all the same, and skipping it would censor the slowest
+/// landings, the ones the switch rule's time-to-screen exists to see
+/// (raw-pipeline.md, "Above fit", rule 1; Manager ruling Q-K). The report
+/// carries no flag, so the engine cannot tell a victim from a held texture
+/// and this placement is the one thing that keeps a victim measured —
+/// review-verified, since nothing driven can see a missing report. The
+/// `loupe adopted idx N kind K` mark follows, once per ring the texture is
+/// still held in — a victim emits nothing (test-harness.md).
 ///
 /// ORDER: both callers refresh right after this returns true, in the same
 /// UI turn, so each mark is followed by the refresh that re-renders the
@@ -435,7 +437,7 @@ fn drain_kitchen(win: &MainWindow, state: &Rc<RefCell<AppState>>) -> bool {
                 if at_loupe {
                     let texture = slint::Image::from_rgb8(buf);
                     let held = insert_fullres(&mut st, index, texture);
-                    report_adoption(&st, index, RungKind::Full, held);
+                    report_adoption(&st, index, RungKind::Full);
                     if held {
                         adopted_mark(index, RungKind::Full);
                     }
@@ -455,7 +457,7 @@ fn drain_kitchen(win: &MainWindow, state: &Rc<RefCell<AppState>>) -> bool {
                 if at_loupe {
                     let texture = slint::Image::from_rgb8(buf);
                     let held = insert_rung(&mut st, index, texture);
-                    report_adoption(&st, index, RungKind::Screen, held);
+                    report_adoption(&st, index, RungKind::Screen);
                     if held {
                         adopted_mark(index, RungKind::Screen);
                     }
@@ -484,7 +486,7 @@ fn drain_kitchen(win: &MainWindow, state: &Rc<RefCell<AppState>>) -> bool {
                     st.textures.va.note_held(index, long);
                 }
                 if at_loupe {
-                    report_adoption(&st, index, kind, held_full || held_mid);
+                    report_adoption(&st, index, kind);
                     for _ in [held_full, held_mid].into_iter().filter(|held| *held) {
                         adopted_mark(index, kind);
                     }
@@ -507,12 +509,12 @@ fn drain_kitchen(win: &MainWindow, state: &Rc<RefCell<AppState>>) -> bool {
     true
 }
 
-/// The app's report that a fill for `index` completed at the loupe, with
-/// whether its ring kept it (`LoupeEngine::note_adopted`; see
-/// [`drain_kitchen`] for why it precedes the `held` branch).
-fn report_adoption(st: &AppState, index: usize, kind: RungKind, held: bool) {
+/// The app's report that a fill for `index` completed at the loupe, held by
+/// its ring or not (`LoupeEngine::note_adopted`; see [`drain_kitchen`] for
+/// why it precedes the `held` branch).
+fn report_adoption(st: &AppState, index: usize, kind: RungKind) {
     if let Some(engine) = &st.loupe_view.engine {
-        engine.note_adopted(index, kind, held);
+        engine.note_adopted(index, kind);
     }
 }
 

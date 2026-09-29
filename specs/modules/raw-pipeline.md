@@ -1149,10 +1149,11 @@ medium's measured behaviour:
   whenever the app is not at the loupe, and a move to another display,
   review-verified: the app's call is unconditional at every refresh);
   `texture_windows()` (the leaned windows of the app's two
-  texture rings, ui-grid.md); `note_adopted(index, kind, held)` (the app's
-  report that a fill it made for that index completed at the loupe, with
-  whether its ring kept it — where the switch rule's time-to-screen ends,
-  held or not) and `note_dropped(index)` (the app's report that it culled
+  texture rings, ui-grid.md); `note_adopted(index, kind)` (the app's report
+  that a fill it made for that index completed at the loupe — every fill,
+  held by its ring or at once that ring's victim, so the engine cannot tell
+  them apart; where the switch rule's time-to-screen ends) and
+  `note_dropped(index)` (the app's report that it culled
   that index's queued full-res fill, which ends that decode's measurement
   unmeasured) (Manager ruling 2026-09-26, brief 008 Q-K); `travel_left()`
   (how long the request state stays transit without another index change,
@@ -1691,11 +1692,17 @@ commit that lands its tests, and stays open until then):
       state reset in a settled window (red on its band row); the reversal's
       reset removed; the key period never written, or read off the debounce
       clock; the positions beyond the clamp asking for the fit box (red on the
-      clamp test's hold rows); a ring's victim measuring nothing,
-      `note_dropped` doing nothing, a stamp read against the box at the
-      publish alone (red on the started-without-a-box row), and the
-      measurements culled when their frame leaves the ring (red on the
-      passed-frame row, and on the simulation, which then never measures);
+      clamp test's hold rows); `note_dropped` doing nothing, a stamp read
+      against the box at the publish alone (red on the
+      started-without-a-box row), and the measurements culled when their
+      frame leaves the ring (red on the passed-frame row, and on the
+      simulation, which then never measures) — a report skipped for a
+      ring's victim cannot be written in core, the report carrying no such
+      flag, and is review-verified in the app, where the report stands
+      before the ring's `held` branch and nothing driven can see a missing
+      one (the session audit of brief 008, S4, 2026-09-29; until then the
+      flag was passed and unread, and "a ring's victim measuring nothing"
+      was a mutant of it);
       the hold row of the plan ignoring the step-down's boundary (red on the
       step-up test's row whose member 110 has no rung), a member beyond the
       boundary judged by its own timing (red on the step-down test's row for
@@ -1818,6 +1825,14 @@ commit that lands its tests, and stays open until then):
 
 ## History
 
+- 2026-09-29 — `note_adopted` takes no `held` flag (the session audit of
+  brief 008, S4): the app passed whether its ring kept the texture, and the
+  engine read it nowhere — by design since the Q-K ruling, which measures a
+  ring's victim as it measures a held texture. The Contracts clause
+  `note_adopted(index, kind, held)` is now `note_adopted(index, kind)`; the
+  ruling's substance is unchanged, and the one mutant the flag allowed, a
+  victim measuring nothing, can no longer be written in core, the app's
+  report before its `held` branch staying review-verified.
 - 2026-09-29 — A damaged rung is read, and named, once per session (the
   session audit of brief 008, S8): "memoizes it … so it never retries" held
   only while the kept rung stayed in the pixel cache — the memo was read

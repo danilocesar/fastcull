@@ -837,16 +837,16 @@ impl LoupeEngine {
     }
 
     /// The app's report that a fill it made for `index` — a texture of rung
-    /// `kind` — COMPLETED at the loupe, and whether its texture ring then
-    /// kept it (`held`). For a full-res frame this is where the switch rule's
-    /// time-to-screen ends: the moment the frame is ready to draw
+    /// `kind` — COMPLETED at the loupe: every fill, whether its texture ring
+    /// then kept it or it was at once that ring's victim, which the report
+    /// does not say — either way the frame was ready to draw. For a full-res
+    /// frame this is where the switch rule's time-to-screen ends
     /// (raw-pipeline.md, "Above fit", rule 1; Manager ruling 2026-09-26,
-    /// brief 008 Q-K). The app reports every completed fill at the loupe and
-    /// carries no flag of its own; the engine decides what a report means —
-    /// see [`adopted`].
-    pub fn note_adopted(&self, index: usize, kind: RungKind, held: bool) {
+    /// brief 008 Q-K); what a report means is the engine's — see
+    /// [`adopted`].
+    pub fn note_adopted(&self, index: usize, kind: RungKind) {
         let now = std::time::Instant::now();
-        adopted(&mut lock(&self.shared), index, kind, held, now);
+        adopted(&mut lock(&self.shared), index, kind, now);
     }
 
     /// The app's report that it CULLED `index`'s queued full-res fill — the
@@ -1001,25 +1001,17 @@ fn note_full_started(state: &mut LoupeState, index: usize, start: DecodeStart) {
 
 /// The body of [`LoupeEngine::note_adopted`]: a full-res fill for `index`
 /// completed at `now`. It ends the measurement its decode opened: the
-/// time-to-screen becomes `now` minus that decode's start. Whether the ring
-/// kept the texture does not matter — `held` false is the ring's own victim,
-/// a frame that was ready to draw at that instant all the same (the ring
-/// evicting it says where the cursor is, not how long the frame took), and
-/// skipping victims would censor the slowest landings, the ones farthest
-/// behind the cursor, which rule 1 exists to see (Manager ruling Q-K). Any
-/// other kind, and a full-res fill whose measurement already ended — a
-/// re-wrap of a cached frame, or one whose fill was culled — measures
-/// nothing.
-fn adopted(
-    state: &mut LoupeState,
-    index: usize,
-    kind: RungKind,
-    held: bool,
-    now: std::time::Instant,
-) {
-    // Deliberately unread: a victim measures like a held texture (above).
-    // The app reports the fact; what it means is the engine's (hard rule 5).
-    let _ = held;
+/// time-to-screen becomes `now` minus that decode's start. A victim measures
+/// as a held texture does — the app reports every completed fill, held by
+/// its ring or at once that ring's victim, and the engine cannot tell them
+/// apart: a victim's frame was ready to draw at that instant all the same
+/// (the ring evicting it says where the cursor is, not how long the frame
+/// took), and skipping victims would censor the slowest landings, the ones
+/// farthest behind the cursor, which rule 1 exists to see (Manager ruling
+/// Q-K). Any other kind, and a full-res fill whose measurement already
+/// ended — a re-wrap of a cached frame, or one whose fill was culled —
+/// measures nothing.
+fn adopted(state: &mut LoupeState, index: usize, kind: RungKind, now: std::time::Instant) {
     if kind != RungKind::Full {
         return;
     }
@@ -4546,12 +4538,15 @@ mod tests {
     /// kind measure nothing. And a measurement exists only while the engine
     /// has a fit box: a decode published with no box, one STARTED with no
     /// box, and one during which the box went, open none. Red when an
-    /// adoption leaves its stamp (a re-wrap re-measures), when a victim
-    /// measures nothing, when `note_dropped` does nothing, when the box going
-    /// keeps the stamps, when a stamp is taken without a box, when only the
-    /// box at the publish is read (the decode's start ignored), and when the
-    /// stamps are culled as their frame leaves the ring (fix round 2's cull,
-    /// which censored the slow landings rule 1 exists to see).
+    /// adoption leaves its stamp (a re-wrap re-measures), when `note_dropped`
+    /// does nothing, when the box going keeps the stamps, when a stamp is
+    /// taken without a box, when only the box at the publish is read (the
+    /// decode's start ignored), and when the stamps are culled as their frame
+    /// leaves the ring (fix round 2's cull, which censored the slow landings
+    /// rule 1 exists to see). A victim that measures nothing cannot be written
+    /// in core since the report carries no such flag (the session audit of
+    /// brief 008, S4); in the app the report stands before the ring's `held`
+    /// branch (pump.rs, `drain_kitchen`), review-verified.
     #[test]
     fn note_adopted_measures_a_full_res_frame_from_its_decode_start() {
         use std::time::Duration;
@@ -4570,36 +4565,38 @@ mod tests {
             ..Default::default()
         };
         published(&mut state, 7, t0);
-        adopted(&mut state, 7, Full, true, ms(250));
+        adopted(&mut state, 7, Full, ms(250));
         assert_eq!(state.time_to_screen, took(250), "decode start to the fill");
-        adopted(&mut state, 7, Full, true, ms(900));
+        adopted(&mut state, 7, Full, ms(900));
         assert_eq!(
             state.time_to_screen,
             took(250),
             "a re-wrap of the cached frame measures nothing"
         );
         published(&mut state, 8, ms(1000));
-        adopted(&mut state, 8, Screen, true, ms(1100));
+        adopted(&mut state, 8, Screen, ms(1100));
         assert_eq!(
             state.time_to_screen,
             took(250),
             "another kind measures nothing"
         );
 
-        // THE VICTIM: a fill its ring evicted at once still measures.
+        // THE LATEST FILL: its time replaces the earlier one — whether its
+        // ring then held it or it was at once that ring's victim, which the
+        // report does not say (the session audit of brief 008, S4).
         published(&mut state, 9, ms(2000));
-        adopted(&mut state, 9, Full, false, ms(2330));
+        adopted(&mut state, 9, Full, ms(2330));
         assert_eq!(
             state.time_to_screen,
             took(330),
-            "a victim was ready to draw too"
+            "the latest completed fill measures, whatever its ring did with it"
         );
 
         // THE DROP: a culled fill ends its measurement, and a later re-wrap
         // from the cache measures nothing.
         published(&mut state, 90, ms(3000));
         dropped(&mut state, 90);
-        adopted(&mut state, 90, Full, true, ms(6000));
+        adopted(&mut state, 90, Full, ms(6000));
         assert_eq!(
             state.time_to_screen,
             took(330),
@@ -4609,7 +4606,7 @@ mod tests {
         // THE BOX GOING clears every open measurement.
         published(&mut state, 101, ms(7000));
         apply_fit_box(&mut state, None);
-        adopted(&mut state, 101, Full, true, ms(7400));
+        adopted(&mut state, 101, Full, ms(7400));
         assert_eq!(
             state.time_to_screen,
             took(330),
@@ -4620,7 +4617,7 @@ mod tests {
         // nothing, and the box arriving afterwards does not measure it.
         published(&mut state, 102, ms(8000));
         apply_fit_box(&mut state, Some(UHD));
-        adopted(&mut state, 102, Full, true, ms(8500));
+        adopted(&mut state, 102, Full, ms(8500));
         assert_eq!(
             state.time_to_screen,
             took(330),
@@ -4634,7 +4631,7 @@ mod tests {
         let start = DecodeStart::read(&state, ms(9000));
         apply_fit_box(&mut state, Some(UHD));
         note_full_started(&mut state, 103, start);
-        adopted(&mut state, 103, Full, true, ms(9400));
+        adopted(&mut state, 103, Full, ms(9400));
         assert_eq!(
             state.time_to_screen,
             took(330),
@@ -4646,7 +4643,7 @@ mod tests {
         apply_fit_box(&mut state, None);
         apply_fit_box(&mut state, Some(UHD));
         note_full_started(&mut state, 104, start);
-        adopted(&mut state, 104, Full, true, ms(10_400));
+        adopted(&mut state, 104, Full, ms(10_400));
         assert_eq!(
             state.time_to_screen,
             took(330),
@@ -4678,7 +4675,7 @@ mod tests {
             in_transit(&state, ms(160)) && state.focused == Some(104),
             "the premise: a hold, the cursor on 104, 101 outside its ring 102..=119"
         );
-        adopted(&mut state, 101, Full, true, ms(400));
+        adopted(&mut state, 101, Full, ms(400));
         assert_eq!(
             state.time_to_screen,
             took(400),
@@ -5168,7 +5165,7 @@ mod tests {
                     } else {
                         counts.victims += 1;
                     }
-                    adopted(&mut state, index, RungKind::Full, held, now);
+                    adopted(&mut state, index, RungKind::Full, now);
                 }
             }
             // A key: the engine's focus, then the app's refresh, which culls
