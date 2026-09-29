@@ -123,11 +123,14 @@ orientation; the first frame in capture order sets both.
   reported the same way; so is a frame with **no usable embedded JPEG**
   (the loupe's `no usable embedded preview` badge). The source is
   `EmbeddedPreviews::fullres()`, the largest JPEG the RAW holds whole — the
-  loupe's top rung too, except in a RAW cut inside that JPEG, which the
-  loupe keeps as its top and names truncated and the export never copies
+  loupe's top rung too, except in a RAW cut inside a larger JPEG, which the
+  loupe keeps as its top and names truncated and the export never reads
   (corrected 2026-09-28, QE round 1 of brief 008, D1: this said "the loupe's
   own", which it stopped being when the loupe learnt of the cut JPEG,
-  raw-pipeline.md "Hostile-input bounds"); a container the in-tree
+  raw-pipeline.md "Hostile-input bounds"; and the same day, the senior
+  developer's review of that round's fixes, F5: "that JPEG" pointed back at
+  one the RAW holds whole, and "never copies" at the wrong act, the export
+  never reading a cut JPEG at all); a container the in-tree
   walker cannot read (CR3, RAF) has no frame here for the same reason it has
   no picture in the loupe — the rawler fallback is a half-size RAW *decode*,
   pixels, and an export needs a byte range. A selection made entirely of

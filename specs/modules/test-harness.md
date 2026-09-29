@@ -308,11 +308,16 @@ APPENDED; `dump_field` finds `name=` by prefix.
 
 `--screenshot` arms a readiness predicate per launch mode: at a grid zoom
 the 1.5 s floor; `--start-loupe` the mid-or-better texture (a screen rung
-included); `--start-11` the full-res adopted for the 1:1 frame — a
-decode-FAILED final cursor above
-fit trips the cap and exits 1, so a script that visits a failed image at
-1:1 must END on a decodable cursor. A 60 s readiness cap runs from
-`shutter::arm` and is not paused while a drive step is pending. The shutter
+included); `--start-11` the full-res adopted for the 1:1 frame. In every
+mode a final cursor above fit is ready only on its top rung, so one whose
+top rung never arrives — a decode-FAILED image, or one whose full failed
+over a good lower rung, a damaged or cut full (raw-pipeline.md, "All
+rejections") — trips the cap and exits 1: a script that visits one at 1:1
+must END on a decodable cursor or back at fit (corrected 2026-09-28, QE round
+2 of brief 008, R2-3: this named the decode-FAILED cursor alone, and a RAW
+cut inside its full, whose mid shows, trips the cap too). A 60 s readiness
+cap runs from `shutter::arm` and is not paused while a drive step is
+pending. The shutter
 WAITS for the whole script to have executed before it may fire (a fast
 release build otherwise captured a half-driven state). It fires EXACTLY
 ONCE (issue #77): the 250 ms poll returns at once when `shot_written` is
@@ -435,6 +440,13 @@ shot 2.
 
 ## History
 
+- 2026-09-28 — The shutter's cap names every final cursor above fit whose
+  top rung never arrives (QE round 2 of brief 008, R2-3; the senior
+  developer's F3(b) of the review of round 1's fixes): it named the
+  decode-FAILED cursor alone, and since round 1's D1 a RAW cut inside its
+  full — its mid shown, not failed — trips it too, 63 s and exit 1 under
+  `--start-11`; in every launch mode the readiness predicate asks a cursor
+  above fit for its top rung.
 - 2026-09-28 — `FASTCULL_DECODERS` points at raw-pipeline.md's rule instead
   of restating it (the senior developer's review of QE round 1's fixes of
   brief 008, F3(a)): the restatement's "each with its stderr line" read as

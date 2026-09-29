@@ -132,11 +132,16 @@ zune-jpeg = "0.4"
 #      prints none), so a changed name rebuilds nothing already built until
 #      `cargo clean -p turbojpeg-sys`. libjpeg-turbo itself links the static
 #      C runtime on MSVC by default (`WITH_CRT_DLL` off, `CMakeLists.txt`
-#      400-427: CMAKE_MSVC_RUNTIME_LIBRARY MultiThreaded), the runtime the
-#      artifact's `crt-static` build links. ci.yml's "Verify Windows
-#      artifact" reads each build's CMake cache for /O2 and prints the
-#      generator it used. The `cmake` crate arrives through turbojpeg-sys:
-#      re-read both on a bump of either.
+#      400-427: CMAKE_MSVC_RUNTIME_LIBRARY MultiThreaded), the runtime every
+#      MSVC build links since brief 008's QE round 1 (D4): the workspace
+#      `.cargo/config.toml` sets `+crt-static` for every MSVC target, where
+#      before only the artifact did and every other build linked the
+#      runtime DLL beside it (LNK4098). A bump that turns `WITH_CRT_DLL` on,
+#      or a turbojpeg-sys that passes it, breaks that pairing; ci.yml's
+#      "Verify every Windows build links the static C runtime" is the check.
+#      ci.yml's "Verify Windows artifact" reads each build's CMake cache for
+#      /O2 and prints the generator it used. The `cmake` crate arrives
+#      through turbojpeg-sys: re-read both on a bump of either.
 #   8. `tj3Decompress8` refuses CMYK and YCCK for RGB output: libjpeg's
 #      colour deconverter has no CMYK/YCCK -> RGB path and fails with
 #      JERR_CONVERSION_NOTIMPL, "Unsupported color conversion request"
