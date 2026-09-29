@@ -1232,6 +1232,27 @@ the cursor's rungs) → a later brief.
   merge run is diagnosed, never silently re-run; the user is asked to watch
   for a freeze of a second or more followed by a jump during a long 1:1
   hold — if seen, it is a product defect fixed before release.
+- 2026-09-29 (Manager, D2 diagnosed): the senior developer's diagnosis,
+  checked by an independent skeptic (verdict: holds): the CI freeze was the
+  UI thread off-CPU for 1.55 s inside non-blocking pump-tick code while the
+  kitchen finished four wraps and the decoders published ten rungs — the
+  runner's virtual CPU not scheduled (host steal or a guest stall), not the
+  product. Not reproduced in 7 instrumented laptop runs (0 of 26 off the
+  ubuntu runner against 1 of 11 on it); four forced mechanisms (a paused
+  stderr reader on a 64 KiB and a 4 KiB pipe, the app stopped, Xvfb stopped)
+  each gave an A6 red of the same size with a different fingerprint, none
+  matching CI's. The user's Windows build is unaffected (GPU renderer, no
+  trace, bare metal). Rulings, both on the diagnosis's questions, decided by
+  the Manager (M3): a future A5 red whose trace shows the UI thread simply
+  not given the CPU is ruled per red on its evidence and recorded, the test
+  unchanged (option a); the diagnostic watchdog (a trace-only heartbeat and
+  sampler naming what the UI thread was doing in a stall) is brief 009's
+  first item, not this branch's — a repeat at the merge run is diagnosed by
+  the same trace reading. Bookkeeping in this commit: the kitchen's
+  trace-only stall amplifier is commented at its print; test-harness.md and
+  the QE and senior-developer files gain "the stderr pipe is part of the
+  measurement"; the agents' spinner check is anchored; the benchmark's
+  leftover build tree (target-qe-issue-60-bench, 515 MB) is deleted.
 - 2026-09-29 (Manager, the session audit, verbatim triage below).
 
   The user, 2026-09-29: "this tasks has been running for three days now. So here's a new request. I want you to spawn a new fable 5 agent (or the best agent available), on the maximum effort possible. Ask this agent to analyze every code change that happened during this session, every commit and make some suggestions. route this suggestions via the regular pipeline."

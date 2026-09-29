@@ -337,6 +337,12 @@ shot 2.
   and, where order matters, the byte-offset ORDERING (`stderr.find(mark) <
   stderr.find("drive: …")`), since the echo proves a wait ran, not that it
   ran first.
+- The stderr pipe is part of the measurement: a harness that reads a driven
+  child's stderr drains it continuously and never pauses. Under
+  `FASTCULL_TRACE` a full pipe blocks the app's writers — the kitchen's
+  `cooking` print holds the queue lock — and so the UI thread; a trace-clock
+  gap with an old-timestamped line before it is a blocked write, not an app
+  stall (brief 008, the D2 diagnosis, 2026-09-29).
 - Two steps at ONE instant run in no promised order: Slint's timer
   deadlines are whole milliseconds and a tie runs the later-registered step
   first. Give ordered steps distinct instants, or chain them with `>>` when

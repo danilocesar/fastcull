@@ -471,6 +471,10 @@ fn worker(shared: &Shared) {
                     // assertion depends on that ordering (validator F3 —
                     // printed after unlock, a descheduled worker could
                     // interleave the two lines and fail the test falsely).
+                    // The cost, trace-only: a stderr reader that stops
+                    // draining blocks this print, so the UI thread's next
+                    // submit waits on the queue lock behind it (measured,
+                    // brief 008 D2 diagnosis, E1b) — a harness must drain.
                     if std::env::var_os("FASTCULL_TRACE").is_some() {
                         eprintln!(
                             "kitchen: cooking {:?} idx {i}",
