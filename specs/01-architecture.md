@@ -392,10 +392,18 @@ bump), an `awk` range over the manifest text (captured comments), a Rust
 guard test (turns one hand edit into two), and moving the profile into
 `.cargo/config.toml` (relocates the user decision, moves on comments too).
 
-A key move costs one cold pair of jobs — 27-35 min ubuntu and 58-72 min
-windows, against 15 and 36 min cached — and only a main run saves
-(`save-if: main`); pull requests before that main run are cold too. The
-Manager deletes the orphaned entries once the new pair exists and checks
+A key move costs one cold pair of jobs — 28.5-39.5 min ubuntu and
+53.9-77.8 min windows over the twenty cold runs of PR #93 (brief 008,
+2026-09-26 to 09-29; 27-35 and 58-72 min when measured for briefs 003 and
+004), against 15 and 36 min cached — and only a main run saves
+(`save-if: main`); pull requests before that main run are cold too. A key
+move is not the only way to lose the pair: GitHub evicts a cache entry
+nobody has read for seven days, so after a week with no run on the
+repository every pull request is cold until the next main run saves —
+main's pair, last used 2026-09-18, was gone when PR #93 opened (the session
+audit of brief 008, S3). The job cap clears a cold Windows job with 22 % of
+it to spare (ci.yml's comment has the runs). The Manager deletes the
+orphaned entries once the new pair exists and checks
 usage against the 10 GB limit (3.96 GiB over four entries once the v0 pair
 went, 5.6 GiB with the computed pair saved, 2026-09-06);
 thrash goes to the user with options.

@@ -65,29 +65,39 @@ jobs:
   test:
     # THE CAP MUST CLEAR A COLD WINDOWS JOB, NOT A WARM ONE. That is the
     # whole sizing rule, and it is `save-if` (below) that makes it bite:
-    # pull requests restore and never save, so after every rustc release
-    # -- and the toolchain here is `@stable`, unpinned -- each PR push
-    # rebuilds from scratch until a push to main repopulates the cache.
+    # pull requests restore and never save, so once main's cache pair is
+    # gone every PR push rebuilds from scratch until a push to main saves a
+    # new one. Two things take it away:
+    # - a rustc release: the toolchain here is `@stable`, unpinned, and the
+    #   toolchain is in the restore key, so the first runs after one find
+    #   nothing (2026-09-04, rustc 1.98.1);
+    # - an idle repository: GitHub evicts a cache entry nobody has read for
+    #   seven days, so a week with no run leaves nothing to restore
+    #   (main's pair, last used 2026-09-18, was gone when PR #93 opened on
+    #   2026-09-26).
     #
-    # Measured, all Windows: 45.3 min warm (run 33694019447), 40.1 min
-    # warm (33229151348), 60.9 min the previous record, and 65.7 min COLD
-    # on 2026-09-04 (run 33839957294, PR `ci-timing`, the first run after
-    # rustc moved to 1.98.1). A push to main the same day (33888473738)
-    # missed too -- a main run cannot read a PR's cache scope -- and took
-    # 59.5 min. Since #76 (dependencies compile optimised in debug,
-    # 2026-09-05) a cold job is colder, and a run under a NEW cache key
-    # rebuilds the release half too (QE 2026-09-06, D2): 61.7 min
-    # (33996087777, PR #80), 70.0 min = 1 h 09 m 58 s (34014978820,
-    # PR #82, the worst measured) and 57.7 min (34018510289, main,
-    # including a 2 m 15 s cache save) -- two samples of one shape 12
-    # minutes apart, so the cold figure is a range, not a number.
-    # Against the 75 the gate found here, 65.7 left 9.3 minutes: 12 % of
-    # headroom on the WARM number and none worth the name on the cold
-    # one, on a shared virtualised runner. 90 gives the worst measured
-    # run 20 minutes, 22 %, and still replaces GitHub's 6-hour default,
-    # under which one hung app child would bill five idle hours of
-    # Windows minutes before anyone noticed. Slow is not failed; hung is.
-    timeout-minutes: 90
+    # Measured, all Windows. Warm: 40.1 and 45.3 min (runs 33229151348,
+    # 33694019447). Cold before brief 008: 65.7 min (33839957294, the first
+    # run after rustc 1.98.1), and since #76 (dependencies compile
+    # optimised in debug, 2026-09-05) 57.7-70.0 min (33996087777,
+    # 34014978820, 34018510289). PR #93 (brief 008, 2026-09-26 to 09-29):
+    # every run fully cold -- no rust cache entry existed, the idle week
+    # above -- and its twenty Windows jobs that ran to the end took
+    # 53.9-77.8 min (36261597496 .. 36520583463). The same cold Clippy
+    # compile took 8.4-8.8 min on some runners and 12.3-13.3 on others, so
+    # the cold figure is a range, not a number. Brief 008's A5 (four app
+    # children holding the arrow in a 3840x2160 window, from run
+    # 36390256213) added about 3 minutes, all in the release screenshot
+    # step (15.3-18.9 min before, 18.0-21.9 after; A5 skips on the debug
+    # pass); the slow runners have taken 73.6-77.8 min since.
+    # The headroom is 22 % of the cap over the worst measured cold run:
+    # 90 gave 70.0 min its 20 minutes; 100 gives 77.8 min 22.2. It still
+    # replaces GitHub's 6-hour default, under which one hung app child
+    # would bill five idle hours of Windows minutes before anyone noticed.
+    # Slow is not failed; hung is. Splitting this job, or dropping its
+    # debug screenshot pass -- the only debug run of the driven suite on
+    # CI -- changes what CI runs, which is the user's call (M3).
+    timeout-minutes: 100
     strategy:
       fail-fast: false
       matrix:

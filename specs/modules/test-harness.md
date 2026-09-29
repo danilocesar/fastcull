@@ -387,9 +387,10 @@ shot 2.
   2026-09-26).
 - CI facts: a pull request's runs share one concurrency group per ref with
   `cancel-in-progress` (a run that vanishes without a verdict is a cancel,
-  not a hang); every other event gets its own group; the job cap is 90
-  minutes, set to clear a COLD Windows job (58-72 min measured), so a test
-  that adds wall clock to the Windows job spends headroom that is measured;
+  not a hang); every other event gets its own group; the job cap is 100
+  minutes, set to clear a COLD Windows job with 22 % of the cap to spare
+  (54-78 min measured; the runs are in ci.yml's comment), so a test that
+  adds wall clock to the Windows job spends headroom that is measured;
   both runners are 4 vCPU with ~16 GB, recorded in each run's summary. The
   profile matrix: `has_display()` is `cfg!(windows)`, so on Windows `cargo
   test --workspace` runs the screenshot suite in DEBUG and the release step
@@ -442,6 +443,13 @@ shot 2.
 
 ## History
 
+- 2026-09-29 — The job cap is 100 minutes (the session audit of brief 008,
+  S3; M3): every run of PR #93 was fully cold — an idle week had evicted
+  main's cache pair — and its Windows jobs took 54-78 min, brief 008's A5
+  adding about 3 in the release screenshot step, against a 90-minute cap
+  sized for the 58-72 min measured before; 100 restores the cap's own 22 %
+  headroom over the worst run. Splitting the job, or dropping its debug
+  screenshot pass, is the user's call.
 - 2026-09-28 — Twelve geometries: 3000x1800 joins for the resize at fit
   (QE round 2 of brief 008, T1-R2 —
   `a_resize_at_fit_re_requests_the_rung_and_cues_the_one_that_no_longer_serves`
