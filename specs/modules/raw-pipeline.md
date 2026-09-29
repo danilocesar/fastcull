@@ -750,7 +750,13 @@ engine-internal memo, never published as `terminal`, so the frame stays cued
 wherever that rung does not serve — and prints one line on stderr, the
 diagnostics channel, naming the file, the rung that failed and the decoder's
 reason, so a fault that shows no badge is still seen (brief 008, the step-1
-review; Manager ruling 2026-09-26).
+review; Manager ruling 2026-09-26). The ladder's stop test reads that memo
+as the cached-image checks do, so a climb that finds the kept rung evicted
+from the pixel cache stops at it again, never reading the broken rung a
+second time; and the line is keyed as the complaint line is, by the
+embedded JPEG that failed, so it prints at most once per session for each
+of a file's embedded JPEGs whatever climbs reach it (the session audit of
+brief 008, S8, 2026-09-29).
 
 **Known gap — a damaged mid over an intact full**: when a RAW's mid preview
 fails to decode, the ladder returns `Failed` without trying the full JPEG,
@@ -1460,7 +1466,20 @@ commit that lands its tests, and stays open until then):
       removed —
       `a_rung_that_fails_over_a_good_lower_one_is_named_on_stderr`. Ticked
       by the step-2c commit, which carries the line and the test; the
-      removed line's red is in its message.
+      removed line's red is in its message. Once per session (added
+      2026-09-29, the session audit of brief 008, S8): the damaged file, and
+      a file cut inside its full, climbed twice with nothing in hand — the
+      kept mid evicted between — print one line each, and the second climb
+      reads the mid and never the broken full, at a fit box the mid does not
+      serve and at 1:1; with a memo above the kept mid, as a file whose full
+      decoded before a copy cut it leaves, both climbs reach the broken full
+      and the line still prints once — red on the ladder before S8 (the
+      second climb read the full again and printed again), with the stop
+      test blind to the memo (the second read) and with the line unkeyed
+      (the memo-above child's second line) —
+      `a_broken_full_is_never_read_again_after_its_lower_rung_is_evicted`,
+      the two stderr tests; the old red and each mutant's red are in that
+      commit's message.
 - [x] **A RAW cut inside its full keeps its mid below the top and names the
       cut** (QE round 1 of brief 008, D1): the walker keeps a JPEG the file
       ends inside apart from the whole ones — sized from its IFD, or from the
@@ -1799,6 +1818,13 @@ commit that lands its tests, and stays open until then):
 
 ## History
 
+- 2026-09-29 — A damaged rung is read, and named, once per session (the
+  session audit of brief 008, S8): "memoizes it … so it never retries" held
+  only while the kept rung stayed in the pixel cache — the memo was read
+  beside a cached image alone, so once the cache evicted the kept mid, the
+  next climb started from nothing, stopped nowhere short of the broken
+  full, read it again and printed its line again. The ladder's stop test
+  now reads the memo, and the line is keyed as the complaint line is.
 - 2026-09-29 — A RAW cut before its full's second byte is a limit, recorded
   rather than fixed (Manager ruling 2026-09-29, brief 008, R2-1): the walker
   keeps trusting a JPEG only once its signature is in the file, since

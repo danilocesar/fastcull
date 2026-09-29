@@ -528,6 +528,16 @@ struct LoupeState {
     /// the ladder decodes them (raw-pipeline.md, "One line on stderr,
     /// once").
     noted: std::collections::HashSet<(usize, u64)>,
+    /// The embedded JPEGs — (index, offset in the file) — whose damaged-rung
+    /// line has been printed (a rung that failed over a good lower one): at
+    /// most once per session each, keyed as the complaint line is
+    /// (raw-pipeline.md, "All rejections"). The memo already stops a climb
+    /// at the rung the ladder kept; this set keeps the line single where a
+    /// climb reaches the broken rung anyway — a file whose full decoded
+    /// before a copy over it cut it keeps the larger memo its full left,
+    /// which the kept rung never reaches (the session audit of brief 008,
+    /// S8).
+    damaged: std::collections::HashSet<(usize, u64)>,
     /// The image the user is looking at: never evicted, even over-budget —
     /// evicting it after decode would strand the loupe forever (found by
     /// the tight-budget integration test).
@@ -2162,6 +2172,15 @@ fn decode_ladder(
     // at every settle while the cursor rested on it (raw-pipeline.md, "The
     // screen rung"; the step-2 review, Manager ruling 2026-09-27, M11).
     let mut achieved = current_long;
+    // The file's memo — the best rung it can provide, learned when a climb
+    // topped out or kept a lower rung over a failed higher one — read once
+    // and consulted by every stop test below, as the cached-image checks
+    // consult it: a climb that finds the kept rung evicted from the pixel
+    // cache starts from nothing, and without the memo its stop test would
+    // not stop at that rung, so it would read the broken higher one again
+    // and print its line again (raw-pipeline.md, "All rejections": "so it
+    // never retries"; the session audit of brief 008, S8).
+    let best = lock(shared).best_long.get(&index).copied();
     for rung in &rungs {
         let rung_long = rung.width.max(rung.height);
         if rung_long <= achieved {
@@ -2180,10 +2199,19 @@ fn decode_ladder(
         // The decode's start: a full-res frame's time-to-screen runs from
         // here — the read included — when the decoder ran full scale.
         let started = DecodeStart::read(&lock(shared), std::time::Instant::now());
+        #[cfg(test)]
+        LADDER_READS.with(|reads| reads.borrow_mut().push((index, rung.offset)));
         let bytes = match read_jpeg(&mut file, rung) {
             Ok(bytes) => bytes,
             Err(e) => {
-                return keep_lower_rung(shared, index, achieved, candidate, format!("read: {e}"))
+                return keep_lower_rung(
+                    shared,
+                    index,
+                    rung,
+                    achieved,
+                    candidate,
+                    format!("read: {e}"),
+                )
             }
         };
         // THE SCREEN RUNG: at fit, the full's N/8 decode first, planned from
@@ -2201,13 +2229,14 @@ fn decode_ladder(
                             return keep_lower_rung(
                                 shared,
                                 index,
+                                rung,
                                 achieved,
                                 RungKind::Screen,
                                 reason,
                             )
                         }
                         Ok((image, note)) if image.kind == RungKind::Full => {
-                            let serves = served_by(&image, target, None);
+                            let serves = served_by(&image, target, best);
                             let long = image.width.max(image.height);
                             report_complaint(shared, index, rung, image.kind, note);
                             publish(shared, index, image, rung_long >= top_long, req, started);
@@ -2220,7 +2249,7 @@ fn decode_ladder(
                         Ok((image, note)) => {
                             let long = image.width.max(image.height);
                             if long > achieved {
-                                let serves = served_by(&image, target, None);
+                                let serves = served_by(&image, target, best);
                                 report_complaint(shared, index, rung, image.kind, note);
                                 publish(shared, index, image, false, req, started);
                                 achieved = long;
@@ -2256,7 +2285,7 @@ fn decode_ladder(
         };
         match decode_rung(&bytes, orientation, 8, candidate) {
             Ok((image, note)) => {
-                let serves = served_by(&image, target, None);
+                let serves = served_by(&image, target, best);
                 let long = image.width.max(image.height);
                 report_complaint(shared, index, rung, image.kind, note);
                 publish(shared, index, image, rung_long >= top_long, req, started);
@@ -2265,7 +2294,9 @@ fn decode_ladder(
                     return Ok(());
                 }
             }
-            Err(reason) => return keep_lower_rung(shared, index, achieved, candidate, reason),
+            Err(reason) => {
+                return keep_lower_rung(shared, index, rung, achieved, candidate, reason)
+            }
         }
     }
     // Ladder topped out below the display target: memoize the terminal rung
@@ -2317,6 +2348,17 @@ thread_local! {
     /// such file got before D2).
     static PLANNED_DIMS: std::cell::Cell<Option<(u32, u32)>> =
         const { std::cell::Cell::new(None) };
+
+    /// Test-only, compiled out of a real build: every embedded JPEG
+    /// `decode_ladder` reads on this thread, as (index, offset in the file),
+    /// in order. The one way a test sees that a climb after the kept lower
+    /// rung was evicted stops at the memo instead of reading the broken
+    /// higher one again (raw-pipeline.md, "All rejections": "so it never
+    /// retries"; the session audit of brief 008, S8): the broken rung
+    /// publishes nothing either way, and its stderr line is keyed once per
+    /// session.
+    static LADDER_READS: std::cell::RefCell<Vec<(usize, u64)>> =
+        const { std::cell::RefCell::new(Vec::new()) };
 }
 
 /// The size the ladder plans a screen rung from: the one the STREAM declares
@@ -2339,21 +2381,30 @@ fn planned_dims(bytes: &[u8]) -> Option<(u32, u32)> {
 /// quiesces — and one line on stderr names the file, the rung that failed
 /// and the decoder's reason, so a fault that shows no badge is still seen
 /// (raw-pipeline.md, "All rejections"; brief 008, the step-1 review). The
-/// memo stops the climb, so the line prints once. With nothing lower in
-/// hand the rung's failure is the image's: the Failed badge says it.
+/// ladder's stop test reads the memo, so a later climb — the kept rung
+/// evicted meanwhile — stops at that rung instead of reading `rung` again;
+/// and the line is keyed as the complaint line is, by the embedded JPEG
+/// that failed (`rung`, the full at either scale), so it prints once per
+/// session for each (the session audit of brief 008, S8). With nothing
+/// lower in hand the rung's failure is the image's: the Failed badge says
+/// it.
 fn keep_lower_rung(
     shared: &Shared,
     index: usize,
+    rung: &crate::raw::EmbeddedJpeg,
     achieved: u32,
     attempted: RungKind,
     reason: String,
 ) -> Result<(), String> {
     if achieved > 0 {
         note_best(shared, index, achieved);
-        eprintln!(
-            "fastcull: loupe {}: the {attempted} rung failed ({reason}); the lower rung stays",
-            shared.paths[index].display()
-        );
+        let first = lock(shared).damaged.insert((index, rung.offset));
+        if first {
+            eprintln!(
+                "fastcull: loupe {}: the {attempted} rung failed ({reason}); the lower rung stays",
+                shared.paths[index].display()
+            );
+        }
         return Ok(());
     }
     Err(reason)
@@ -6573,6 +6624,133 @@ mod tests {
         std::fs::remove_dir_all(&dir).ok();
     }
 
+    /// The session audit of brief 008, S8 (raw-pipeline.md, "All
+    /// rejections": the ladder memoizes the rung it keeps over a failed
+    /// higher one "so it never retries"): once the pixel cache evicts the
+    /// kept mid, the next climb starts with nothing in hand — the worker
+    /// seeds `current_long` from the cache — so its stop test must read the
+    /// file's memo, stop at the re-decoded mid, and never read the broken
+    /// full again. Two broken shapes, each at a fit box the mid does not
+    /// serve (where the full's screen rung is tried) and at 1:1: a whole file
+    /// whose full has its scan cut before EOI, and a file cut inside its full.
+    /// Read off `LADDER_READS`, since the broken full publishes nothing either
+    /// way and its stderr line is keyed once per session. Red on the ladder
+    /// before S8, whose stop tests passed no memo: the second climb read the
+    /// broken full again.
+    #[test]
+    fn a_broken_full_is_never_read_again_after_its_lower_rung_is_evicted() {
+        let dir = crate::testutil::scratch_dir("evicted-mid");
+        let full = crate::raw::jpeg_hostile::encoded(2000, 1500);
+        let shapes = [
+            (
+                "mid_ok_full_cut.arw",
+                raw_with_full(&crate::raw::jpeg_hostile::truncate_scan(&full, 64)),
+            ),
+            (
+                "file_cut_in_full.arw",
+                raw_cut_inside_its_full(&full, full.len() / 2, true),
+            ),
+        ];
+        let fit_box = FitBox {
+            width: 1000,
+            height: 700,
+        };
+        for (name, bytes) in shapes {
+            let path = dir.join(name);
+            std::fs::write(&path, bytes).unwrap();
+            let previews = find_embedded_jpegs(&mut std::fs::File::open(&path).unwrap()).unwrap();
+            let mid = previews.grid_source().expect("a mid").offset;
+            let broken = previews.loupe_top().expect("a full").offset;
+            for target in [Target::Fit(fit_box), Target::Long(u32::MAX)] {
+                let (shared, rx) = shared_over(vec![path.clone()]);
+                LADDER_READS.with(|reads| reads.borrow_mut().clear());
+                // One climb as the worker runs it: `current_long` is what the
+                // cache holds for the index. Returns what it read.
+                let climb = || {
+                    let current_long = lock(&shared)
+                        .cache
+                        .get(&0)
+                        .map(|(image, _)| image.width.max(image.height))
+                        .unwrap_or(0);
+                    let outcome = decode_ladder(
+                        &shared,
+                        0,
+                        target,
+                        current_long,
+                        false,
+                        RequestState::Settled,
+                    );
+                    let reads = LADDER_READS.with(|reads| std::mem::take(&mut *reads.borrow_mut()));
+                    (outcome, reads)
+                };
+                let (outcome, reads) = climb();
+                assert_eq!(
+                    outcome,
+                    Ok(()),
+                    "{name}, {target:?}: the good mid fails nothing"
+                );
+                assert_eq!(
+                    reads,
+                    vec![(0, mid), (0, broken)],
+                    "{name}, {target:?}: the premise: the first climb reads the mid, then the \
+                     broken full"
+                );
+                assert_eq!(
+                    lock(&shared).best_long.get(&0).copied(),
+                    Some(640),
+                    "{name}, {target:?}: the premise: the mid memoized"
+                );
+                // The pixel cache evicts the mid.
+                {
+                    let mut state = lock(&shared);
+                    let (image, _) = state
+                        .cache
+                        .remove(&0)
+                        .expect("the mid, cached by its publish");
+                    state.cached_bytes -= image.rgb.len();
+                }
+                let (outcome, reads) = climb();
+                assert_eq!(
+                    outcome,
+                    Ok(()),
+                    "{name}, {target:?}: the second climb fails nothing"
+                );
+                assert_eq!(
+                    reads,
+                    vec![(0, mid)],
+                    "{name}, {target:?}: the second climb stops at the memo — the mid read \
+                     again, the broken full never"
+                );
+                for climb in ["first", "second"] {
+                    match rx.try_recv() {
+                        Ok(LoupeEvent::Ready {
+                            image, terminal, ..
+                        }) => {
+                            assert_eq!(
+                                (image.width, image.height, image.kind),
+                                (640, 400, RungKind::Mid),
+                                "{name}, {target:?}: the {climb} climb shows the mid"
+                            );
+                            assert!(
+                                !terminal,
+                                "{name}, {target:?}: the {climb} climb's mid is never the \
+                                 file's best"
+                            );
+                        }
+                        other => panic!(
+                            "{name}, {target:?}: expected the {climb} climb's mid, got {other:?}"
+                        ),
+                    }
+                }
+                assert!(
+                    rx.try_recv().is_err(),
+                    "{name}, {target:?}: nothing else — no Failed, no phantom rung"
+                );
+            }
+        }
+        std::fs::remove_dir_all(&dir).ok();
+    }
+
     /// QE round 2 of brief 008, T7 (raw-pipeline.md, "Hostile-input bounds",
     /// "Truncation, a RAW cut inside an embedded JPEG"): a RAW cut inside its
     /// MID holds no JPEG whole — the full's pointer lies past the file's end
@@ -7893,21 +8071,29 @@ mod tests {
         let fit = |width, height| Target::Fit(FitBox { width, height });
         // (file, the targets it is climbed at, in order)
         let plan: Vec<(&str, Vec<Target>)> = match scenario {
+            // Each broken file is climbed TWICE, nothing in hand on either
+            // climb (the loop below): what the worker seeds once the pixel
+            // cache has evicted the mid the first climb kept. The memo must
+            // stop the second at that mid, so one line in all (the session
+            // audit of brief 008, S8).
             "damaged" => vec![
-                ("mid_ok_full_cut.arw", vec![top]),
+                ("mid_ok_full_cut.arw", vec![top, top]),
                 ("mid_ok_full_ok.arw", vec![top]),
             ],
             "damaged-fit" => vec![
-                ("mid_ok_full_cut.arw", vec![fit(1000, 700)]),
+                ("mid_ok_full_cut.arw", vec![fit(1000, 700), fit(1000, 700)]),
                 ("mid_ok_full_ok.arw", vec![fit(1000, 700)]),
             ],
+            // A memo ABOVE the rung the ladder keeps (set below), so both
+            // climbs reach the broken full: one line is then the line's key.
+            "damaged-memo-above" => vec![("mid_ok_full_cut.arw", vec![top, top])],
             // QE round 1's D1: the FILE cut inside its full.
             "cut-short" => vec![
-                ("file_cut_in_full.arw", vec![top]),
+                ("file_cut_in_full.arw", vec![top, top]),
                 ("mid_ok_full_ok.arw", vec![top]),
             ],
             "cut-short-fit" => vec![
-                ("file_cut_in_full.arw", vec![fit(1000, 700)]),
+                ("file_cut_in_full.arw", vec![fit(1000, 700), fit(1000, 700)]),
                 ("mid_ok_full_ok.arw", vec![fit(1000, 700)]),
             ],
             "complaint" => ["full_jfif2.arw", "gap.jpg", "pad.jpg", "intact.jpg"]
@@ -7922,13 +8108,40 @@ mod tests {
             other => panic!("unknown scenario {other}"),
         };
         let (shared, _events) = shared_over(plan.iter().map(|(f, _)| dir.join(f)).collect());
+        if scenario == "damaged-memo-above" {
+            // The state a file leaves whose full decoded — its memo, the
+            // 2000 px the full decoded to — before a copy over it cut it
+            // short: the memo only grows (`note_best`), so it stays above
+            // the 640 px mid the ladder keeps, and no stop test ends a climb
+            // at that mid.
+            lock(&shared).best_long.insert(0, 2000);
+        }
         for (index, (_, targets)) in plan.iter().enumerate() {
             for target in targets {
-                // Nothing in hand on any climb, as before: every climb
-                // decodes again, so the once-memo is what keeps it to one
-                // line.
+                // Nothing in hand on any climb: every climb decodes the mid
+                // again, as after an eviction.
                 let _ = decode_ladder(&shared, index, *target, 0, false, RequestState::Settled);
             }
+        }
+        if scenario == "damaged-memo-above" {
+            // The premise, asserted rather than assumed: both climbs reached
+            // the broken full, so it is the line's key that keeps the line
+            // to one here, not the memo.
+            let full = find_embedded_jpegs(
+                &mut std::fs::File::open(dir.join("mid_ok_full_cut.arw")).expect("the file"),
+            )
+            .expect("its previews")
+            .loupe_top()
+            .map(|c| c.offset)
+            .expect("a full");
+            let reads = LADDER_READS.with(|reads| {
+                reads
+                    .borrow()
+                    .iter()
+                    .filter(|read| **read == (0, full))
+                    .count()
+            });
+            assert_eq!(reads, 2, "the premise: both climbs read the broken full");
         }
         if scenario == "complaint" {
             // The grid thumb decodes the gapped and the padded JPEG too, and
@@ -7997,8 +8210,18 @@ mod tests {
     /// whose full is intact, climbed at the top rung and, in a second child,
     /// at a fit box whose screen rung is the one that fails (the step-2
     /// review's F1: that failure reaches the line through its own call site).
-    /// (One climb each: in the app the memo stops the second, which
-    /// `truncated_full_rung_keeps_the_good_mid_and_no_failed_badge` pins.)
+    ///
+    /// Once per session (the session audit of brief 008, S8): the damaged
+    /// file is climbed twice with nothing in hand, as after the pixel cache
+    /// evicted the mid the first climb kept, and prints one line — red when
+    /// the ladder's stop test is blind to the memo AND the line is unkeyed
+    /// (the code before S8: the second climb read the broken full again and
+    /// printed again). The two guards are pinned apart: the memo by
+    /// `a_broken_full_is_never_read_again_after_its_lower_rung_is_evicted`,
+    /// and the key here, in a third child whose memo sits above the kept mid
+    /// — the state a file leaves whose full decoded before a copy over it cut
+    /// it — so both climbs reach the broken full (asserted in the child) and
+    /// only the key keeps the line to one: red with the key removed.
     #[test]
     fn a_rung_that_fails_over_a_good_lower_one_is_named_on_stderr() {
         let dir = crate::testutil::scratch_dir("stderr-damaged");
@@ -8052,6 +8275,23 @@ mod tests {
             stderr.lines().all(|l| !l.contains("mid_ok_full_ok.arw")),
             "a clean climb at fit prints nothing:\n{stderr}"
         );
+        // A memo above the kept mid: both climbs read the broken full (the
+        // child asserts it), and the line still prints once.
+        let stderr = stderr_of_child("damaged-memo-above", &dir);
+        let named: Vec<&str> = stderr
+            .lines()
+            .filter(|l| l.starts_with("fastcull: loupe ") && l.contains("mid_ok_full_cut.arw"))
+            .collect();
+        assert_eq!(
+            named.len(),
+            1,
+            "one line for the damaged full over two climbs that both reached it:\n{stderr}"
+        );
+        assert!(
+            named[0].contains("the full rung") && named[0].contains("truncated"),
+            "it names the rung and the reason: {}",
+            named[0]
+        );
         std::fs::remove_dir_all(&dir).ok();
     }
 
@@ -8062,7 +8302,10 @@ mod tests {
     /// in a second child, at a fit box the mid does not serve, where the
     /// full's read fails before any scale is chosen; a control RAW whose full
     /// is whole prints nothing. Red on the walker that dropped a JPEG the file
-    /// ends inside: the full was never tried, and no line was printed.
+    /// ends inside: the full was never tried, and no line was printed. The
+    /// cut file is climbed twice with nothing in hand, as after an eviction of
+    /// its mid, and still prints one line (the session audit of brief 008,
+    /// S8; red before it, when the second climb read the cut full again).
     #[test]
     fn a_raw_cut_inside_its_full_is_named_on_stderr() {
         let dir = crate::testutil::scratch_dir("stderr-cut-short");
