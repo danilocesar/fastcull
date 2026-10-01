@@ -121,6 +121,13 @@ The words the specs use as terms of art, grouped by where they live.
 - **Derived output** — a file built from bytes the RAW already contains;
   today the Motion JPEG `.mov` (ADR 0004, video-export.md).
 
+**Settings** (settings.md, brief 008)
+- **In force** — the value the app applies: the file's value parsed and
+  clamped, or — where an environment variable governs the knob — the
+  variable's value, which wins. **Applies at** — a setting's effect
+  moment: at once, or at the next folder open; every row's note says
+  which.
+
 **The harness** (test-harness.md)
 - **Drive script** — `FASTCULL_DRIVE`, the timed list of actions a headless
   run executes. **Mark** — a trace line the app emits, which a script can

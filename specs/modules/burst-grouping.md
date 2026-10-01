@@ -47,7 +47,9 @@ its own body's run.
    must survive recomputes — stacks, post-v1.
 
 `max_gap` and `min_run` are config values with fixed defaults; no settings
-UI in v1. Non-Sony files are never worse than time-only clustering: the
+UI in v1 — the Settings dialog of settings.md carries no burst knob, by
+decision (brief 008, 2026-10-01). Non-Sony files are never worse than
+time-only clustering: the
 generic path is the floor for every brand, Sony included — a corrupt maker
 note degrades to it, never to an error.
 
@@ -198,6 +200,8 @@ exposes no maker notes). The user guide surfaces the differences
 
 ## History
 
+- 2026-10-01 — The Settings dialog (brief 008) carries no burst knob; the
+  v1 sentence says so.
 - 2026-09-17 — Rewritten (brief 007). The pre-rewrite text is
   `specs/history/burst-grouping.md`.
 - 2026-09-06 — A plain `[`/`]` collapses the selection; Ctrl+`[`/`]` keep

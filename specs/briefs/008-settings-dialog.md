@@ -549,6 +549,54 @@ setting.
   option, recorded here as PROVISIONAL with its date, and relayed in
   the morning; the PR merges only when no provisional ruling is
   outstanding.
+- D11 (2026-10-01, Manager, on the senior developer's plan OQ-A):
+  ONE config-dir resolver, `settings::config_dir()`, names the directory
+  for `settings.toml`, `ui.toml` and `templates.toml`; `FASTCULL_NO_CONFIG`
+  hides all three and `FASTCULL_CONFIG_DIR=<dir>` redirects all three.
+  The resolver closes a measured hermeticity hole — every driven run had
+  read the user's real `templates.toml` — and `FASTCULL_CONFIG_DIR` is
+  harness plumbing in test-harness.md's family (announced on stderr), not
+  a setting, so it does not touch the user's "no new environment
+  variable" ruling, which is about settings. Reported to the user in the
+  morning as a decision taken.
+- D12 (2026-10-01, Manager, M2, plan OQ-B): the Settings dialog and the
+  two export dialogs never stack — File › Settings… is greyed while Copy
+  Picks or Export Frames as Video is up, and those two while Settings is
+  up; About and the shortcuts card still open over Settings. One fewer
+  stacking order to get wrong; nothing a user can do in Settings bears on
+  a copy in progress.
+- D13 (2026-10-01, Manager, plan OQ-C — a recorded deferral, not a
+  deferred criterion): no `FASTCULL_CACHE_DIR` in this unit. AC12's
+  mechanism — delete, VACUUM, the WAL truncated, the file never unlinked,
+  the size counting `-wal` and `-shm` — is pinned in core; the worker
+  thread, the `Clearing…` state and the re-measured readout are
+  review-verified and settings.md's AC12 box says so. If QE's run or a
+  later unit shows the bridge half needs a driven proof, the variable is
+  added then.
+- D14 (2026-10-01, Manager, M2, the senior developer's user question 2):
+  the shortcuts card swaps the FILE MENU and MOUSE columns so the `Ctrl+,`
+  row lands in the shorter column — measured on the development seat:
+  the right column was 19 px taller, a fifth row there would have grown
+  the card by 23 px and left 1.5 px of slack on this font (a coin flip on
+  DejaVu/Segoe), the swap grows it by 4 px with 31 px of slack. Every row
+  and every section is kept.
+- D15 (2026-10-01, Manager, the senior developer's user question 3): the
+  thumbnail cache cap's floor is 256 MB (one large shoot's thumbnails),
+  and the cap is enforced at every folder open rather than "at the next
+  start" — which is what the code path has done since M5 and sooner than
+  the brief's R9 said; R9 and AC11 read "next folder open" from here on.
+- D16 (2026-10-01, Manager, M3, plan OQ-D and OQ-E): two pre-existing
+  gaps the senior developer measured become issues after the unit, not
+  work in it — `default_cache_path` evicts on the UI thread at folder
+  open, so lowering the cap by gigabytes stalls the next open once; and
+  the copy and export dialogs' key scopes let Slint's window-level Tab
+  navigation walk into surfaces hidden behind the scrim. The Settings
+  dialog's scope handles Tab itself (settings.md) and is not affected.
+- D17 (2026-10-01, Manager, plan OQ-F): confirmed — the settings write
+  runs on the UI thread like `ui.toml`'s (ADR 0005; 01-architecture.md's
+  "never blocks on I/O" corrected to name the two ~1 KB exceptions), the
+  hint example is `≈ 89 A1 frames` for 12.4 GB (binary GB, the formatter's
+  unit), and "next folder open" replaces "next start" for the cache cap.
 - Directive candidate (2026-10-01): M9's cleanup command `cargo clean
   -p …` cleans the dev profile only — a `screen-rung` release binary
   from 2026-09-29 survived it and the persona ran it by mistake; the

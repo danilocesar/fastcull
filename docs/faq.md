@@ -42,8 +42,8 @@ Hidden on purpose: a JPEG with a same-name RAW twin doesn't appear as a
 second grid entry (that would double your cull and split your picks).
 You cull the RAW; the in-camera JPEG stays untouched in the folder.
 Making the pair travel together through Copy Picks — and a setting to
-show pairs — is planned alongside a Settings dialog. JPEGs *without* a
-RAW twin are always imported.
+show pairs — is planned as a row in the [Settings](settings.md) dialog.
+JPEGs *without* a RAW twin are always imported.
 
 **I opened my shoot folder and it says "No images".**
 FastCull reads one folder, not subfolders. Open the folder that
@@ -52,27 +52,43 @@ actually contains the RAW files (e.g. `.../2026-07-25/card1/`).
 yet (`Ctrl+O`).
 
 **What's this cache folder?**
-Decoded previews are cached (Linux: `~/.cache/fastcull/`; Windows:
-`%LOCALAPPDATA%\fastcull\fastcull\cache`) so the second open of a
-folder is instant. It's capped around 2 GiB with
-least-recently-used eviction, and deleting it is always safe — it just
-rebuilds thumbnails on the next open. After some upgrades the app
-rebuilds it once by itself; the only cost is a slower first open.
+Decoded previews are cached (Linux: `~/.cache/fastcull/previews.db`;
+Windows: `%LOCALAPPDATA%\fastcull\fastcull\cache\previews.db`) so the
+second open of a folder is instant. It's capped at 2 GB by default with
+least-recently-used eviction — the cap is a setting, and **File ›
+Settings… › Performance** shows the cache's size and path with a
+**Clear** button (see [Settings](settings.md)); clearing or deleting it is
+always safe — it just rebuilds thumbnails on the next open. After some
+upgrades the app rebuilds it once by itself; the only cost is a slower
+first open.
 
 **Thumbnails load slowly from my NAS / slow card.**
-Set `FASTCULL_MAX_READERS=4` (or 2) in the environment. It caps how
-many files are read at once — slow media thrashes when too many reads
-compete.
+Set a **Read workers** limit of 4 (or 2) in **File › Settings… ›
+Performance** — it caps how many files are read at once, and slow media
+thrashes when too many reads compete. `FASTCULL_MAX_READERS=4` in the
+environment does the same and wins over the setting, which the dialog
+then shows greyed out.
 
 **A frame shows a warning ("Failed") badge instead of the photo.**
 The file's embedded preview couldn't be decoded — typically a file cut
-off mid-write: a dying card, an interrupted copy, a full disk. FastCull
+off mid-write: a dying card, an interrupted copy, a full disk. Hover the
+badge and a tooltip gives the reason; with the cursor on the frame the
+status bar says it too. FastCull
 checks that the image data is actually complete before decoding, so a
 truncated file is flagged honestly instead of being shown as a
 half-blank frame (and a corrupt file claiming absurd dimensions is
 rejected outright instead of eating gigabytes of memory). Your original
 file is never touched — try re-copying it from the card; if the badge
 persists, the file really is damaged.
+
+**Where are my settings, and can I edit them by hand?**
+In `settings.toml` in your config directory (Linux:
+`~/.config/fastcull/`; Windows: `%APPDATA%\fastcull\fastcull\config\`),
+a plain text file you may edit — every key carries a comment saying what
+it does. The [Settings](settings.md) page has the whole file and what
+happens when it will not read (nothing bad: the defaults run, the status
+bar tells you, and the file is moved aside only when you next change a
+setting).
 
 **Something misbehaves — what should I attach to a bug report?**
 Run with `FASTCULL_TRACE=1` from a terminal and attach the output: it
@@ -136,4 +152,5 @@ Back to: [Getting started](index.md) ·
 [Culling](culling.md) ·
 [Metadata](metadata.md) ·
 [Copy Picks](copy-picks.md) ·
-[Export Frames as Video](export-video.md)
+[Export Frames as Video](export-video.md) ·
+[Settings](settings.md)

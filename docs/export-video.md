@@ -202,4 +202,4 @@ editor, and there are better ones on your phone.
 
 ---
 
-Next: [FAQ & troubleshooting](faq.md)
+Next: [Settings](settings.md)

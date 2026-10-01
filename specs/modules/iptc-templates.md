@@ -22,7 +22,11 @@ before the casefold dedup.
 
 - Named `IptcTemplate`s with the same fields; values may contain variables.
 - Persisted as TOML in the user config dir (`directories` crate), one file
-  `templates.toml`, written atomically (temp + fsync + rename). Read on
+  `templates.toml`, written atomically (temp + fsync + rename). The
+  directory is the one `settings::config_dir()` resolves for every config
+  file, so `FASTCULL_NO_CONFIG` hides it and `FASTCULL_CONFIG_DIR` moves
+  it exactly as for `settings.toml` (brief 008, 2026-10-01; until then
+  every driven run read the user's real `templates.toml`). Read on
   panel open and on Apply — no file watcher (2026-07-25); `templates.toml`
   is hand-edited in v1.
 - Errors: a corrupt entry (`[templates.x]` with wrong types) is surfaced per
@@ -139,6 +143,8 @@ continuity in full: ui-grid.md, *Focus continuity*.
 
 ## History
 
+- 2026-10-01 — `templates.toml` resolves through the one config-dir
+  resolver of settings.md, hermetic under `FASTCULL_NO_CONFIG` (brief 008).
 - 2026-09-17 — Rewritten (brief 007). The pre-rewrite text is
   `specs/history/iptc-templates.md`.
 - 2026-08-30 — The rebuild discard is deterministic and the keyboard

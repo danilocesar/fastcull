@@ -22,10 +22,21 @@ explain itself on stderr.
   decides what is printed, not what the app observes about itself; every
   test that waits traces anyway, because the failure is a trace line.
 - `FASTCULL_DRIVE="6000:one2one;9000:grid;12000:quit"` — the drive script.
-- `FASTCULL_NO_CONFIG=1` — `ui.toml` (the remembered copy and clip
-  destinations, the template) unreachable for load and save; what
-  `FASTCULL_NO_CACHE=1` does for `previews.db` (app-only; the CLI has
-  `--no-cache`). The screenshot harness sets both unconditionally.
+- `FASTCULL_NO_CONFIG=1` — the whole config dir unreachable for load and
+  save: `ui.toml` (the remembered copy and clip destinations, the
+  template), `templates.toml` and `settings.toml`, through the one
+  resolver `settings::config_dir()`, in the app and the CLI alike (brief
+  008, 2026-10-01; until then it covered `ui.toml` only, and every driven
+  run read the user's real `templates.toml`); what `FASTCULL_NO_CACHE=1`
+  does for `previews.db` (app-only; the CLI has `--no-cache`). The
+  screenshot harness sets both unconditionally. The Settings dialog still
+  works under it, in memory, and says `Not saved` (settings.md).
+- `FASTCULL_CONFIG_DIR=<dir>` — the config dir redirected to `<dir>`,
+  winning over `FASTCULL_NO_CONFIG`, for the driven tests that must prove
+  a file was written; announced once on stderr (`fastcull:
+  FASTCULL_CONFIG_DIR=<dir> — settings.toml, ui.toml and templates.toml are
+  read and written there`). Test plumbing in this family, not a setting
+  (brief 008 OQ1).
 - `FASTCULL_KITCHEN_COOK_MS=N` — hold every kitchen cook for N ms before the
   pixel work: the pacing knob for the `open:PATH` session-swap test, which
   must catch the queue mid-flight in both profiles; default 0, off. Announced
@@ -33,7 +44,9 @@ explain itself on stderr.
   stderr when set (`fastcull: FASTCULL_KITCHEN_COOK_MS=N — every texture
   cook is held`); with tracing, the retarget reports how many queued jobs
   it dropped.
-- `FASTCULL_MAX_READERS=N` — the read pool override (raw-pipeline.md).
+- `FASTCULL_MAX_READERS=N` — the read pool override (raw-pipeline.md);
+  wins over the `performance.max_readers` setting, whose field the dialog
+  then shows read-only (settings.md).
 - `--screenshot <out>` — forces the software renderer (`take_snapshot`
   yields black frames on the GPU renderer), so the suite does not exercise
   the shipping femtovg renderer; snapshots are JPEG q92 whatever the
@@ -61,7 +74,11 @@ sidecars — scripts target throwaway copies of test data only.
   toggles: the menu item's `activated` body — the visibility flag plus
   `modal-opened` — and nothing else; they do not force focus and cannot
   exercise the MenuBar's focus restore, which the click-driven tests
-  cover); `resize:WxH` in logical px — a REQUEST, gated with `wait:window
+  cover); `settings` (the Settings dialog's toggle, brief 008: the menu
+  item's body — `settings-open`, which re-reads the file, presents every
+  field and claims the keyboard — when it is closed, `settings-close`
+  when it is open; the same fidelity caveat as `about`); `resize:WxH` in
+  logical px — a REQUEST, gated with `wait:window
   geometry WxH`; `scroll:N` — browse the grid to offset N without claiming
   the cursor, what the wheel does natively; `open:PATH` — the Open Folder
   action minus the native dialog (session swap, kitchen retarget,
@@ -87,7 +104,12 @@ sidecars — scripts target throwaway copies of test data only.
   and scrims are drivable. `click:<element>` — the same click at the CENTRE
   of the rectangle the app last reported for a self-reporting element
   (`iptc field N`, `copy card`, `copy buttons`, `copy answer N|B|O|Esc`,
-  `clip card`, `clip buttons`), resolved at dispatch time from a table the
+  `clip card`, `clip buttons`, and since brief 008 `settings card`,
+  `settings tab general|ui|performance`, `settings auto-advance`,
+  `settings wash`, `settings loupe-memory`, `settings cache-cap`,
+  `settings readers-adaptive`, `settings readers-limit`,
+  `settings clear-cache`, `settings reset`, `settings close`,
+  `failed badge <id>`), resolved at dispatch time from a table the
   layout marks write unconditionally; it echoes `drive ptr click X,Y
   (<element>)`, which a test reads to assert the click landed inside the
   rectangle. A name with no mark yet aborts the run loudly (`drive: click:
@@ -104,7 +126,10 @@ sidecars — scripts target throwaway copies of test data only.
   separately schedulable steps, carrying real inter-event timing, which is
   what makes a drag a drag (the issue #46 fling was one). `press.` dispatches
   a move first; scripts pair press and release themselves — an unpaired
-  press is a stuck button, by design.
+  press is a stuck button, by design. `hover:<element>` — a real pointer
+  MOVE to the centre of a named rectangle, no press, echoing `drive ptr
+  hover X,Y (<element>)`; how a tooltip is raised (brief 008: the Failed
+  badge's), with the same loud abort as `click:` for a name with no mark.
 - `wheel.X,Y,DY` — a real scroll event, `DY` in logical px (60 = one
   notch-equivalent; positive = up), preceded by a move. `delta_x` is always
   0: horizontal scroll is undrivable, and nothing consumes it.
@@ -163,7 +188,20 @@ sidecars — scripts target throwaway copies of test data only.
   is up, the card being centred); `copy answer N|B|O|Esc laid out …`; `copy
   body scrolled to Y` / `clip body scrolled to Y` (0 at the top, negative
   going down, on change); `shortcuts card laid out …`; `status selected
-  laid out …` / `status head laid out …`.
+  laid out …` / `status head laid out …`; since brief 008 `settings card
+  laid out …`, `settings tab <name> laid out …`, `settings <control> laid
+  out …` for every control named under `click:` above, and `failed badge
+  <id> laid out …` (failed cells only, a handful).
+- **Settings** (brief 008, settings.md): `settings loaded from <path>` /
+  `settings: no file (defaults in force)` / `settings: <path> could not
+  be read: <error>` at startup and at every open; `settings opened` /
+  `settings closed`; `settings committed <table>.<key> = <value>` then
+  `settings written <path>` or `settings not written: <reason>`;
+  `settings moved aside <path>`; `settings reset <tab>`; `settings cache
+  cleared <before> -> <after>` (bytes); `loupe engine started budget
+  <bytes>` at every folder open (the proof that the loupe memory setting
+  reached the engine); `failed tooltip shown: <reason>` when the Failed
+  badge's tooltip popup is instantiated.
 - **`load settled gen N: cursor pos P, `** — the CONTRACTUAL PREFIX, the
   whole substring a `wait:` registers; the tail differs by zoom and is
   free to (the scroll correction above one column; `scroll X kept (one
@@ -248,8 +286,18 @@ line, the last surviving into the report), `copyerror=`; the clip block —
 `cliperror=`, `clipreport=`, `clipconfirm=`, `clipprogress=` (the export's
 running line, the twin of `copyprogress=`), `cliphint=`, `exported=`,
 `curexported=`; and `vpy=`, the grid Flickable's offset in Slint's sign (0
-at the top, negative going down). New fields are APPENDED; `dump_field`
-finds `name=` by prefix.
+at the top, negative going down); then the settings block (brief 008) —
+`settings=` (the dialog's visibility), `settingstab=` (0 General, 1 UI, 2
+Performance), `settingsfile=` (the path, or `none`), `settingsnote=` (the
+dialog's notice line), `autoadvance=`, `wash=` (the model's percent),
+`washprop=` (the WINDOW's `selection-wash-opacity`, `{:.3}` — the field
+that proves a commit reached the renderer, not the model),
+`loupemem=` (bytes in force), `loupehint=` (the hint text), `cachecap=`
+(bytes), `readers=` (`adaptive`, `limit:N` or `env:N`), `readersenv=`
+(the variable's raw value or empty), `cachereadout=` (the row's text).
+New fields are APPENDED; `dump_field` finds `name=` by prefix. The
+nav-token swallow mirror (`drive swallowed by modal`) covers the Settings
+dialog like About and the card.
 
 ### The shutter
 
@@ -358,6 +406,10 @@ shot 2.
 
 ## History
 
+- 2026-10-01 — Brief 008: `FASTCULL_NO_CONFIG` covers the whole config dir
+  (`templates.toml` and `settings.toml` too); `FASTCULL_CONFIG_DIR`; the
+  `settings` and `hover:` tokens; the settings and failed-badge marks and
+  the settings dump block.
 - 2026-09-17 — Moved out of ui-grid.md and reshaped (brief 007). The
   section as moved, with every measurement, is
   `specs/history/test-harness.md`.

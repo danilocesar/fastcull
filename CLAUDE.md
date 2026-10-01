@@ -25,7 +25,7 @@ the specs. A commit that changes user-visible behavior (or its module spec)
 updates the affected `docs/` page in the same commit — the page map is
 index↔release/install, culling↔ui-grid+burst-grouping, metadata↔xmp-sidecars+
 iptc-templates, copy-picks↔fileops, export-video↔video-export,
-faq↔catalog-cache+everything else.
+settings↔settings, faq↔catalog-cache+everything else.
 
 ## Commands
 
