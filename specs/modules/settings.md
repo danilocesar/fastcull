@@ -212,7 +212,9 @@ their precedence is `fastcull-core`'s; the app binds (brief 008, 2026-10-01).
   to get wrong; the menu bar stays live for everything else).
 - **The card** is the house style — `ModalScrim`'s card: `#202028`, 1 px
   `#3a3a44`, 8 px radius, 560 px wide, its height following its content,
-  the scrim swallowing the wheel — with a tab strip across the top:
+  the scrim swallowing the wheel as every modal's does (issue #49's rule,
+  ui-grid.md, whose ledger names this dialog's test) — with a tab strip
+  across the top:
   **General | UI | Performance**, in that order, the active tab marked
   (brighter label, a 2 px accent underline). The tabs are a LIST — one
   entry per tab on the Slint side, `settings::TABS` on the core side — so
@@ -378,7 +380,9 @@ their precedence is `fastcull-core`'s; the app binds (brief 008, 2026-10-01).
 - `cache::default_cache_file()` (the path, no open), `cache::
   default_cache_path(cap_bytes)`, `cache::size_on_disk(db)`,
   `PreviewCache::clear()` (catalog-cache.md). `Pipeline::start(jobs,
-  cache_path, threads, max_readers: Option<usize>)` (raw-pipeline.md).
+  cache_path, threads, max_readers: Option<usize>)`, and
+  `Pipeline::read_pool_bounds()` for the bounds the pool adopted from it
+  (raw-pipeline.md).
 - The window: `settings-visible`, `settings-tab`, one property per field,
   `settings-notice`; callbacks `settings-open`, `settings-close`,
   `settings-commit(key, text)`, `settings-reset(tab)`,
@@ -404,9 +408,16 @@ their precedence is `fastcull-core`'s; the app binds (brief 008, 2026-10-01).
       (the real File menu on Linux, the `settings` token elsewhere; QE
       2026-10-01, D8).
 - [x] **AC2 — containment.** Under the dialog `Y`/`N` mark nothing and
-      `Ctrl+E`/`Ctrl+Shift+E` open nothing; About over it closes
-      topmost-first; driven nav tokens are swallowed; the menu bar stays
-      live — `settings_contains_every_grid_key_and_stacks_under_about`.
+      `Ctrl+E`/`Ctrl+Shift+E` open nothing; driven nav tokens are
+      swallowed; the menu bar stays live; About and the shortcuts card over
+      it close topmost-first —
+      `settings_contains_every_grid_key_and_stacks_under_about`,
+      `settings_stacks_under_the_shortcuts_card_and_closes_topmost_first`
+      (the real Help menu on Linux, the `shortcuts` token elsewhere; a real
+      `?` cannot open the card over Settings because the dialog swallows
+      it, so the menu is the only real path; QE 2026-10-01, D27: until then
+      the box had dropped the brief's shortcuts-card half and mutant G3
+      stayed green).
       `Ctrl+O`'s inertness is review-verified: the arm is the same scope
       rule, and a driven Ctrl+O that worked would open the native picker
       and hang the run. The dialog and the export dialogs never stack —
@@ -425,7 +436,9 @@ their precedence is `fastcull-core`'s; the app binds (brief 008, 2026-10-01).
       the notes emit themselves, and the notes are drawn (the loupe memory
       note's rectangle holds text at the shutter, against the bare card) —
       `every_settings_note_is_the_core_text` (QE 2026-10-01, D22: until then
-      the box cited a test that read no note).
+      the box cited a test that read no note); it opens on General at
+      launch and reopens on the tab it was closed on — the tabs test's
+      `open` and `reopened` dumps (QE 2026-10-01, D27).
 - [x] **AC4 — the write.** Every commit writes `settings.toml` at once,
       preserving an unknown key and the user's comments; the field then
       shows the value in force; `Esc` discards an uncommitted field and
@@ -477,8 +490,15 @@ their precedence is `fastcull-core`'s; the app binds (brief 008, 2026-10-01).
       file's value governs the pool; an unparsable value is ignored —
       core `the_environment_wins_over_the_file_for_max_readers`,
       `the_readers_resolution_feeds_the_pool_exactly_as_the_variable_did`
-      (with `pipeline::tests::controller_override_caps_and_pins`); app
-      `the_environment_wins_over_the_settings_file_for_read_workers`.
+      (with `pipeline::tests::controller_override_caps_and_pins`) and
+      `pipeline::tests::the_pipeline_reports_the_bounds_its_pool_adopted`;
+      app `the_environment_wins_over_the_settings_file_for_read_workers`,
+      whose dump reads the bridge's resolution and whose `read pool started
+      floor F cap C` marks — waited on in the first two runs, read off the
+      third run's trace — are the pool's own bounds: env 3 pins (3, 3), an
+      ignored `abc` over the file's 7 gives (4, 7), no file gives floor 4
+      (QE 2026-10-01, D27: until then the app's call site was unproven —
+      mutant G1, `None` passed to `Pipeline::start`, stayed green).
 - [x] **AC8 — auto-advance off.** `Y`/`N` keep the cursor and leave the
       selection alone; the filter exception moves the cursor and ends the
       selection as `U` does; on, as today — core
@@ -555,6 +575,10 @@ their precedence is `fastcull-core`'s; the app binds (brief 008, 2026-10-01).
 
 ## History
 
+- 2026-10-01 — QE round 2 of brief 008, four promises with no guard (D27):
+  the read workers setting is read back from the pool itself, and the
+  reopen tab, the shortcuts card over the dialog and the wheel over its
+  scrim each gain a test; AC2 names the shortcuts card again.
 - 2026-10-01 — QE round 2 of brief 008, stderr at a re-read (D31): a file
   found unreadable by the dialog's re-read printed nothing on stderr,
   though "Reading" promised the line; the re-read prints core's one

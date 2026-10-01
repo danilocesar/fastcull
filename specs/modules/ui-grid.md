@@ -1012,13 +1012,16 @@ typed).
       off a tag a `-devel-` suffix is MANDATORY (CI checks out shallow, so
       it is always off-tag), an 8-digit date when present, a bare hex hash
       otherwise — `about_dialog_renders_and_contains_the_keyboard`.
-- [x] No modal scrolls the grid behind it (issue #49) — the two hand-rolled
-      scrims and `ModalScrim`, each test wheeling the grid before, under and
-      after the modal, and over a CHILD of the card —
+- [x] No modal scrolls the grid behind it (issue #49) — the THREE
+      hand-rolled scrims and `ModalScrim`, each test wheeling the grid
+      before, under and after the modal, and over a CHILD of the card —
       `a_wheel_over_the_copy_dialog_never_scrolls_the_grid_behind_it`,
       `a_wheel_over_the_export_dialog_never_scrolls_the_grid_behind_it`,
-      `a_wheel_over_the_help_popups_never_scrolls_the_grid_behind_them`
-      (red with the `scroll-event` arm removed: `vpy=-360` against `-180`).
+      `a_wheel_over_the_help_popups_never_scrolls_the_grid_behind_them`,
+      `a_wheel_over_the_settings_dialog_never_scrolls_the_grid_behind_it`
+      (red with the `scroll-event` arm removed: `vpy=-360` against `-180`;
+      QE 2026-10-01, D27: the Settings scrim had no test and mutant W
+      stayed green).
 - [x] Focus continuity, red-run-verified against the pre-fix build: panel
       close from the menu keeps the keyboard at 1:1 and in the grid; a
       modal over a focused field owns the keyboard and writes nothing; a
@@ -1138,6 +1141,8 @@ typed).
 
 ## History
 
+- 2026-10-01 — QE round 2 of brief 008 (D27): the issue #49 box names the
+  Settings dialog's scrim and its test.
 - 2026-10-01 — Brief 008 (issue #39): Settings… enabled with `Ctrl+,`;
   auto-advance and the wash strength become settings (settings.md); the
   Failed badge's promised tooltip built and the status line names the

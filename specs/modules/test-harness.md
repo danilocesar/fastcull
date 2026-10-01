@@ -221,8 +221,13 @@ sidecars — scripts target throwaway copies of test data only.
   driven proof of the `Clearing…` state (QE 2026-10-01, D24); `loupe
   engine started budget <bytes>` at every folder open — the budget the engine ADOPTED
   (`LoupeEngine::budget()`, floored), the proof that the loupe memory
-  setting reached the engine (QE 2026-10-01, D23); `failed tooltip shown:
-  <reason>` when the Failed badge's tooltip popup is instantiated.
+  setting reached the engine (QE 2026-10-01, D23); `read pool started
+  floor <F> cap <C>` at every folder open — the bounds the read pool
+  ADOPTED (`Pipeline::read_pool_bounds()`), the proof that the read workers
+  setting reached the pool (QE 2026-10-01, D27); a launch folder's own
+  open emits both before `harness::install`, so a `wait:` on either needs
+  an `open:`; `failed tooltip shown: <reason>` when the Failed badge's
+  tooltip popup is instantiated.
 - **`load settled gen N: cursor pos P, `** — the CONTRACTUAL PREFIX, the
   whole substring a `wait:` registers; the tail differs by zoom and is
   free to (the scroll correction above one column; `scroll X kept (one
@@ -442,6 +447,8 @@ shot 2.
 
 ## History
 
+- 2026-10-01 — QE round 2 of brief 008 (D27): `read pool started floor F
+  cap C`, the read pool's adopted bounds, at every folder open.
 - 2026-10-01 — Brief 008: `FASTCULL_NO_CONFIG` covers the whole config dir
   (`templates.toml` and `settings.toml` too); `FASTCULL_CONFIG_DIR`; the
   `settings` and `hover:` tokens; the settings and failed-badge marks and

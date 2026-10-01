@@ -699,6 +699,23 @@ setting.
   newer read error now wins on both lines and names the earlier aside
   (` — the earlier one is settings.toml.broken`); the next write moves the
   new file aside as `.broken.1` and says `rewritten` again.
+- D27 (2026-10-01, QE round 2 — defect D27; the senior developer's
+  test-integrity review, TP-A to TP-D): four shipped Settings promises had
+  no guard. QE removed each with a mutant in a worktree of 6f20679 and all
+  25 settings-related driven tests stayed green: G1, session.rs passing
+  `None` to `Pipeline::start` (the app's AC7 test read `readers=` from the
+  bridge's own resolution — D23's shape again); G2, the dialog always
+  reopening on General; G3, `|| root.shortcuts-visible` taken out of the
+  dialog's capture arm, so Esc closed Settings UNDER the shortcuts card
+  (settings.md's AC2 had dropped the brief's shortcuts-card half); W, the
+  Settings scrim's `scroll-event` arm removed (three wheels scrolled the
+  grid to -1800). Each now has a test that its mutant turns red, and the
+  pool's bounds are read back from the pool (`Pipeline::read_pool_bounds()`,
+  traced at every folder open). One measured adaptation of TP-A's approved
+  script: its `wait:` could not be satisfied on either launch — a
+  `--synthetic` session starts no pipeline, and a launch folder's mark comes
+  before the harness registers its waits (both probed: exit 1 after 30 s) —
+  so each run opens an empty folder with `open:` before it waits.
 - D31 (2026-10-01, QE round 2 — spec correction D31, "the Manager's
   call"; taken on the senior developer's recommendation under the Manager's
   ruling 8, for the Manager to confirm): settings.md "Reading" promised one

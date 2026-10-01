@@ -204,6 +204,14 @@ impl ReadPool {
             .unwrap_or_else(std::sync::PoisonError::into_inner)
     }
 
+    /// The floor and the cap this pool ADOPTED from its override — fixed
+    /// from construction on. A brief lock of the pool state, never held
+    /// across a read.
+    fn bounds(&self) -> (usize, usize) {
+        let state = self.lock();
+        (state.controller.floor, state.controller.cap)
+    }
+
     #[cfg(test)]
     fn set_limit_for_test(&self, limit: usize) {
         self.lock().controller.limit = limit;
@@ -530,6 +538,15 @@ impl Pipeline {
     /// The UI's viewport changed: everything in `range` becomes `Visible`.
     pub fn set_visible(&self, range: std::ops::Range<usize>) {
         self.promote(range, Priority::Visible);
+    }
+
+    /// The read pool's `(floor, cap)` as the pool ADOPTED them — the proof
+    /// that the read workers setting (or `FASTCULL_MAX_READERS`) reached
+    /// the pool, which the app's `read pool started floor F cap C` mark
+    /// reports (QE 2026-10-01, D27). Takes the pool's lock briefly, never
+    /// across a read; callable from any thread.
+    pub fn read_pool_bounds(&self) -> (usize, usize) {
+        self.shared.read_pool.bounds()
     }
 }
 
@@ -1034,6 +1051,31 @@ mod tests {
     fn pool_cap_is_at_least_the_floor() {
         assert!(pool_cap() >= POOL_MIN_READERS);
         assert_eq!(PoolController::with_override(None).limit, POOL_MIN_READERS);
+    }
+
+    /// The pipeline reports the bounds its pool ADOPTED from the override
+    /// it was started with — what the app's `read pool started` mark reads,
+    /// so a driven test sees the pool itself and never the caller's own
+    /// copy of the override (QE 2026-10-01, D27; the D23 shape). The rows
+    /// are `controller_override_caps_and_pins`'s.
+    ///
+    /// Mutant (2026-10-01): `ReadPool::bounds()` returning
+    /// `(POOL_MIN_READERS, pool_cap())` whatever the override → the
+    /// `Some(2)` row goes red.
+    #[test]
+    fn the_pipeline_reports_the_bounds_its_pool_adopted() {
+        for (max_readers, adopted) in [
+            (Some(2), (2, 2)),
+            (Some(6), (4, 6)),
+            (None, (POOL_MIN_READERS, pool_cap())),
+        ] {
+            let (pipeline, _events) = Pipeline::start(vec![], None, 1, max_readers);
+            assert_eq!(
+                pipeline.read_pool_bounds(),
+                adopted,
+                "the pool started with {max_readers:?}"
+            );
+        }
     }
 
     /// The in-tree concurrency invariant (spec: replaces the fixed-gate era's

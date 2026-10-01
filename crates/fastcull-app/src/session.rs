@@ -157,6 +157,13 @@ fn load_folder(state: &Rc<RefCell<AppState>>, folder: &std::path::Path) -> Resul
         fastcull_core::settings::resolve_max_readers_from_env(settings.max_readers)
             .override_for_pool(),
     );
+    // The proof the read workers setting reached the read pool
+    // (test-harness.md): a driven test waits on these exact bounds. Read
+    // back FROM the pipeline, never from the override passed above — a mark
+    // built from the caller's own value stays true with the pool started on
+    // anything else, as the loupe's did (QE 2026-10-01, D27; brief 008 D23).
+    let (floor, cap) = pipeline.read_pool_bounds();
+    crate::trace::trace_mark(&format!("read pool started floor {floor} cap {cap}"));
     let (budget, _) = settings.loupe_memory_bytes(st.settings.total_ram);
     let (loupe, loupe_rx) = fastcull_core::loupe::LoupeEngine::start(
         paths,

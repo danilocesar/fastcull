@@ -362,7 +362,9 @@ medium's measured behaviour:
 - `Pipeline::start(jobs, cache_path, threads, max_readers: Option<usize>)`
   — the fourth argument is the resolved read-pool override, `None` for
   adaptive (brief 008; the pool read `FASTCULL_MAX_READERS` itself until
-  2026-10-01).
+  2026-10-01). `Pipeline::read_pool_bounds() -> (floor, cap)` reports the
+  bounds the pool ADOPTED from it — what the app's `read pool started` mark
+  reads (QE 2026-10-01, D27).
 - `ExifSummary` (`exif.rs`): make, model, serial, capture time, subsec, the
   Sony sequence number; `sort_key()` normalizes subseconds to three digits.
 - The budget rows of 01-architecture.md bind this module: open+EXIF < 1 ms,
@@ -444,6 +446,9 @@ medium's measured behaviour:
 
 ## History
 
+- 2026-10-01 — QE round 2 of brief 008 (D27): `Pipeline::read_pool_bounds()`
+  reports the read pool's adopted bounds, so a test can see the read
+  workers setting reach the pool rather than the caller's copy of it.
 - 2026-10-01 — QE round 1 of brief 008 (D1): a budget below the prefetch
   window looped at 1:1 — every landing evicted a ring member that the
   app's re-focus asked for again — once the loupe memory setting let a

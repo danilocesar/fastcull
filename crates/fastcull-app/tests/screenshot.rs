@@ -9939,7 +9939,9 @@ const PIN_WINDOW: &str = "200:resize:1440x900";
 /// `900 - 40 - 26` = 834 px tall (the status bar is 26 px), so a centred
 /// card of height H spans y `40 + (834 - H) / 2` .. that plus H:
 /// Copy Picks (480) y 217..697, the export dialog (260) y 327..587,
-/// the shortcuts popup (549) y 182..731, About (348) y 283..631.
+/// the shortcuts popup (549) y 182..731, About (348) y 283..631, and the
+/// Settings dialog on General (266, content-driven, measured 2026-10-01)
+/// y 324..590.
 /// Cards are 560 px wide, 480 for About, and 780 for the shortcuts popup,
 /// centred in 1440.
 ///
@@ -9970,7 +9972,7 @@ const THREE_NOTCHES_DOWN: &str = "wheel.700,400,-180";
 const RENAME_FIELD_Y: u32 = 324;
 
 /// The shared assertions. `dialog` is the QEDUMP field that says this
-/// dialog is up (`copy` / `clip`).
+/// dialog is up (`copy` / `clip` / `settings`).
 fn assert_wheel_over_the_dialog_is_swallowed(stderr: &str, dialog: &str) {
     let vpy = |label: &str| dump_field(qedump(stderr, label), "vpy");
     assert_eq!(
@@ -10276,6 +10278,111 @@ fn a_wheel_over_the_help_popups_never_scrolls_the_grid_behind_them() {
         "-360.0",
         "the control wheel did not move the grid either, so the assertions \
          above are vacuous:\n{stderr}"
+    );
+}
+
+/// The centre of the Settings dialog's wash field on its UI tab at the
+/// pinned 1440x900: `settings wash laid out at 630,433 size 80x32`,
+/// measured on this seat (Noto Sans, 2026-10-01). The x is arithmetic — the
+/// 560 px card centred in 1440, then the padding and the 160 px label
+/// column — but the y sits under the title and the tab strip, whose heights
+/// are font metrics: the strand that uses this runs only where
+/// `menu_clicks_are_calibrated()`, like `RENAME_FIELD_Y`'s, and checks
+/// before it wheels that the point really is on the field. The wheel has no
+/// by-name token; this is the only coordinate the test needs, and the
+/// click at it is that check, not a way to reach a named control.
+const SETTINGS_WASH_FIELD: (u32, u32) = (670, 449);
+
+/// The Settings dialog, the fifth scrim (ui-grid.md: "ALL FIVE scrims
+/// swallow the wheel"; issue #49): a wheel over the card's centre, over bare
+/// scrim and — on the calibrated runners — over the wash field, a child
+/// that owns a `TextInput`, never scrolls the grid behind the dialog.
+/// `--synthetic 300` for the copy test's reason: the contract is about the
+/// scrim, and 300 cells leave the grid room to scroll. At 1440x900 the card
+/// is centred in the area under the menu bar (`settings card laid out at
+/// 440,324 size 560x266` on General, measured here), so (700,400) is on the
+/// card and (100,400) is bare scrim whatever the face.
+///
+/// The child strand is the copy test's rename-field shape, gated for its
+/// reason (the field's y is a font metric): UI tab, a click at the field's
+/// measured centre, a `9` typed — the field's own `settings wash shows`
+/// mark must carry it, or the point missed the field and the strand stops
+/// loudly instead of wheeling over the wrong element — then the wheel at
+/// the same point. The closing Esc discards the half-typed `9`.
+///
+/// Mutant (2026-10-01): the `scroll-event` arm taken out of the Settings
+/// scrim's `TouchArea` → the wheel over the card scrolls the grid,
+/// `dump.wheeled` reads `vpy=-360.0` — red (QE 2026-10-01, D27: no test
+/// wheeled this scrim, and QE measured the grid at -1800 after three wheels
+/// under that mutant with every settings test green).
+#[test]
+fn a_wheel_over_the_settings_dialog_never_scrolls_the_grid_behind_it() {
+    if !has_display() {
+        eprintln!("screenshot smoke skipped: no display server");
+        return;
+    }
+    let _s = serial();
+    let out = out_dir().join("i49-settings-wheel.jpg");
+    let over_the_field = menu_clicks_are_calibrated();
+    let (fx, fy) = SETTINGS_WASH_FIELD;
+    let child_steps = if over_the_field {
+        format!(
+            "4900:key:right;5200:click.{fx},{fy};5400:key:9;\
+             5700:wheel.{fx},{fy},-180;6400:dump.overfield;"
+        )
+    } else {
+        String::new()
+    };
+    let script = format!(
+        "{PIN_WINDOW};1600:{w};2100:dump.prewheel;\
+         2400:key:ctrl+,;2800:dump.open;\
+         3000:{w};3700:dump.wheeled;\
+         4000:wheel.100,400,-180;4700:dump.scrim;\
+         {child_steps}\
+         6900:key:escape;7200:dump.closed;\
+         7500:{w};8200:dump.control",
+        w = THREE_NOTCHES_DOWN
+    );
+    let stderr = shoot_env_stderr(
+        &["--synthetic", "300"],
+        &[("FASTCULL_TRACE", "1"), ("FASTCULL_DRIVE", script.as_str())],
+        &out,
+    );
+    // Over the card first: the primary contract, so a scrim that leaks
+    // fails HERE rather than in the child case below.
+    assert_wheel_over_the_dialog_is_swallowed(&stderr, "settings");
+    assert_eq!(
+        dump_field(qedump(&stderr, "scrim"), "vpy"),
+        "-180.0",
+        "a wheel over the bare scrim beside the Settings card scrolled the grid \
+         behind it (issue #49):\n{stderr}"
+    );
+    if !over_the_field {
+        eprintln!("over-the-field strand skipped: uncalibrated card geometry");
+        return;
+    }
+    // The calibration guard: the click at the measured point focused the
+    // wash field and the `9` landed in it, before the wheel at that point.
+    let labels = mark_labels(&stderr);
+    let wheel = format!("drive: wheel.{fx},{fy},-180");
+    let wheeled_at = labels
+        .iter()
+        .position(|l| *l == wheel)
+        .unwrap_or_else(|| panic!("the wheel over the field never ran:\n{stderr}"));
+    let shown = labels[..wheeled_at]
+        .iter()
+        .rev()
+        .find_map(|l| l.strip_prefix("settings wash shows "));
+    assert!(
+        shown.is_some_and(|text| text.contains('9')),
+        "the click at {SETTINGS_WASH_FIELD:?} missed the wash field (it shows {shown:?}), \
+         so the wheel below would be over the wrong element:\n{stderr}"
+    );
+    assert_eq!(
+        dump_field(qedump(&stderr, "overfield"), "vpy"),
+        "-180.0",
+        "a wheel over the Settings dialog's wash field scrolled the grid behind it \
+         (issue #49):\n{stderr}"
     );
 }
 
@@ -11006,6 +11113,113 @@ fn settings_contains_every_grid_key_and_stacks_under_about() {
     );
 }
 
+/// AC2's other half (settings.md, "Stacking"): the keyboard shortcuts card
+/// over the dialog closes topmost-first. Under the card a key neither
+/// marks a photo nor reaches the dialog's strip; Esc closes the CARD and
+/// leaves the dialog up; `?` from the dialog's scope closes the card too;
+/// with the card gone the strip answers again (a Left switches tabs); Esc
+/// then closes the dialog and the keyboard is back on the grid, where the
+/// control `N` rejects.
+///
+/// The card is opened from the real Help menu on the calibrated runners
+/// (Linux: Help at x 115 in the bar, Keyboard Shortcuts its first item at
+/// y 61), by its `shortcuts` token elsewhere — About's two-path shape in
+/// `settings_contains_every_grid_key_and_stacks_under_about`. A real `?`
+/// cannot be the opener: the dialog swallows it, so the menu is the only
+/// real path.
+///
+/// Mutant (2026-10-01): `|| root.shortcuts-visible` taken out of the
+/// dialog scope's `capture-key-pressed` → under the card the keyboard sits
+/// in the dialog's scope, the Esc bubbles to its `key-pressed` Esc arm and
+/// closes SETTINGS under the card, `dump.esc1` reads `settings=false
+/// shortcuts=true` — red (QE 2026-10-01, D27: until this test that mutant
+/// stayed green).
+#[test]
+fn settings_stacks_under_the_shortcuts_card_and_closes_topmost_first() {
+    if !has_display() {
+        eprintln!("screenshot smoke skipped: no display server");
+        return;
+    }
+    let _s = serial();
+    let out = out_dir().join("settings-under-shortcuts.jpg");
+    let card = |at: u32| -> String {
+        if menu_clicks_are_calibrated() {
+            format!("{}:click.115,19;{at}:click.180,61", at - 400)
+        } else {
+            format!("{at}:shortcuts")
+        }
+    };
+    let script = format!(
+        "900:key:ctrl+,;1200:key:right;{first};2400:dump.sc;2700:key:n;3000:key:left;\
+         3300:dump.under;3600:key:escape;3900:dump.esc1;{second};4800:dump.sc2;5000:key:?;\
+         5300:dump.q;\
+         5600:key:left;5900:dump.alive;6200:key:escape;6500:dump.closed;6800:key:n;\
+         7100:dump.control",
+        first = card(2000),
+        second = card(4600),
+    );
+    let stderr = shoot_env_stderr(
+        &["--synthetic", "24"],
+        &[("FASTCULL_TRACE", "1"), ("FASTCULL_DRIVE", script.as_str())],
+        &out,
+    );
+    let sc = qedump(&stderr, "sc");
+    assert!(
+        dump_field(sc, "shortcuts") == "true"
+            && dump_field(sc, "settings") == "true"
+            && dump_field(sc, "settingstab") == "1",
+        "the shortcuts card did not open over the Settings dialog on its UI tab \
+         (the menu bar is not live under it?): {sc}"
+    );
+    let under = qedump(&stderr, "under");
+    assert!(
+        dump_text(under, "status").contains("★0 ✕0"),
+        "an N under the shortcuts card over Settings marked a photo: {under}"
+    );
+    assert_eq!(
+        dump_field(under, "settingstab"),
+        "1",
+        "a Left under the shortcuts card reached the dialog's strip behind it:\n{stderr}"
+    );
+    // The contract: topmost first.
+    let esc1 = qedump(&stderr, "esc1");
+    assert!(
+        dump_field(esc1, "shortcuts") == "false" && dump_field(esc1, "settings") == "true",
+        "the first Esc did not close the shortcuts card alone — topmost first \
+         (issue #42): {esc1}"
+    );
+    // The premise of the `?` below: the card really is up again, or the
+    // `?` would close nothing and the assertion after it would be vacuous.
+    let sc2 = qedump(&stderr, "sc2");
+    assert!(
+        dump_field(sc2, "shortcuts") == "true" && dump_field(sc2, "settings") == "true",
+        "the shortcuts card did not open over the dialog a second time, so the `?` \
+         below would prove nothing: {sc2}"
+    );
+    let q = qedump(&stderr, "q");
+    assert!(
+        dump_field(q, "shortcuts") == "false" && dump_field(q, "settings") == "true",
+        "`?` from the Settings dialog did not close the shortcuts card over it, or \
+         closed the dialog too: {q}"
+    );
+    assert_eq!(
+        dump_field(qedump(&stderr, "alive"), "settingstab"),
+        "0",
+        "with the card gone a Left did not switch tabs — the keyboard did not come \
+         back to the dialog:\n{stderr}"
+    );
+    let closed = qedump(&stderr, "closed");
+    assert!(
+        dump_field(closed, "settings") == "false" && dump_field(closed, "focusowner") == "0",
+        "Esc did not close the dialog and give the keyboard back to the grid: {closed}"
+    );
+    assert!(
+        dump_text(qedump(&stderr, "control"), "status").contains("✕1"),
+        "the N after the dialogs closed did not reject — the containment above is \
+         vacuous:\n{stderr}"
+    );
+}
+
 /// AC3 (settings.md, "Keyboard"): the strip switches tabs on Left/Right
 /// (wrapping) and everywhere on Ctrl+Tab/Ctrl+Shift+Tab; a digit never
 /// switches; Tab walks the active tab's controls — the strip, the
@@ -11014,10 +11228,19 @@ fn settings_contains_every_grid_key_and_stacks_under_about() {
 /// closes it, and a Right after the wrap switches tabs); Reset resets the
 /// ACTIVE tab only.
 ///
-/// Mutant (2026-10-01): the Tab arm deleted from the dialog's scope →
+/// The dialog opens on General at launch (`dump.open`) and REOPENS on the
+/// tab it was last closed on (settings.md, "Opening and closing"): the
+/// last strand closes it on UI and opens it again. The reopen earlier in
+/// the script closes on General, which cannot tell the two rules apart —
+/// hence a strand that closes on a tab other than the first.
+///
+/// Mutants (2026-10-01): the Tab arm deleted from the dialog's scope →
 /// Slint's window navigation walks the whole item tree, the fourth Tab
 /// leaves the dialog for the grid, and `dump.wrapped` reads `cursor=1`
-/// with the tab unswitched — red.
+/// with the tab unswitched — red; `on_settings_open` setting the tab to 0
+/// instead of the one it was closed on → `dump.reopened` reads
+/// `settingstab=0` — red (QE 2026-10-01, D27: until this strand that
+/// mutant stayed green).
 #[test]
 fn settings_tabs_switch_by_keys_and_never_by_digits() {
     if !has_display() {
@@ -11036,7 +11259,8 @@ fn settings_tabs_switch_by_keys_and_never_by_digits() {
                   7800:key:left;8100:click:settings auto-advance;8500:dump.aaoff;\
                   8800:key:ctrl+tab;9200:click:settings wash;9500:key:ctrl+a;9700:key:1;\
                   9900:key:0;10100:key:return;10500:dump.wash;\
-                  10800:click:settings reset;11200:dump.reset";
+                  10800:click:settings reset;11200:dump.reset;\
+                  11500:key:escape;11900:dump.closed;12100:key:ctrl+,;12500:dump.reopened";
     let stderr = shoot_env_stderr(
         &["--synthetic", "24"],
         &[("FASTCULL_TRACE", "1"), ("FASTCULL_DRIVE", script)],
@@ -11140,6 +11364,26 @@ fn settings_tabs_switch_by_keys_and_never_by_digits() {
         "false",
         "Reset on the UI tab reset General's setting too — it resets the \
          ACTIVE tab only:\n{stderr}"
+    );
+    // The reopen. The close FIRST: a `Ctrl+,` over a dialog still open is
+    // inert, and `settingstab=1` would then hold for the wrong reason.
+    assert_eq!(
+        dump_field(qedump(&stderr, "closed"), "settings"),
+        "false",
+        "Esc on the UI tab did not close the dialog, so the reopen below proves \
+         nothing:\n{stderr}"
+    );
+    let reopened = qedump(&stderr, "reopened");
+    assert_eq!(
+        dump_field(reopened, "settings"),
+        "true",
+        "Ctrl+, did not reopen the dialog:\n{stderr}"
+    );
+    assert_eq!(
+        dump_field(reopened, "settingstab"),
+        "1",
+        "the dialog closed on UI did not reopen on UI — it reopens on the tab it \
+         was last closed on (settings.md):\n{stderr}"
     );
 }
 
@@ -11733,10 +11977,28 @@ fn settings_under_no_config_applies_in_memory_and_writes_nothing() {
 /// over the file's `max_readers`, the field shows the variable's value and
 /// cannot be changed — and an unparsable variable is ignored, the file
 /// governing. Two runs over the same file (`max_readers = 7`), one per
-/// value of the variable.
+/// value of the variable, and a third with no file at all.
 ///
-/// Mutant (2026-10-01): `resolve_max_readers` ignoring the environment →
-/// the first run reads `readers=limit:7` and this goes red.
+/// The dump's `readers=` is the BRIDGE's own resolution; what the read pool
+/// ADOPTED is read from the pool's mark, `read pool started floor F cap C`
+/// (`Pipeline::read_pool_bounds()`), at a folder open: env 3 pins (3, 3),
+/// an ignored `abc` over the file's 7 gives (4, 7), and no file gives floor
+/// 4 with the core count as the cap, never pinned. Each run opens an empty
+/// folder by `open:` — File › Open Folder…'s own path — before it waits on
+/// that mark, because neither launch can satisfy the wait: a `--synthetic`
+/// session starts no pipeline, and a folder given at launch is opened
+/// before the harness registers its waits (trace.rs: "past" starts at
+/// `harness::install`; measured 2026-10-01 — the launch folder's mark at
+/// 0 ms, the wait never satisfied, exit 1). The third run's variable is
+/// EMPTY, ignored like any unparsable value, so a shell's own
+/// FASTCULL_MAX_READERS cannot leak into it.
+///
+/// Mutants (2026-10-01): `resolve_max_readers` ignoring the environment →
+/// the first run reads `readers=limit:7` and this goes red; session.rs
+/// passing `None` to `Pipeline::start` with the mark untouched → the pool
+/// starts adaptive, the first run's wait is never satisfied, the run exits
+/// 1 and this goes red (QE 2026-10-01, D27: until the mark read the pool,
+/// nothing did, and that mutant stayed green).
 #[test]
 fn the_environment_wins_over_the_settings_file_for_read_workers() {
     if !has_display() {
@@ -11745,13 +12007,17 @@ fn the_environment_wins_over_the_settings_file_for_read_workers() {
     }
     let _s = serial();
     let dir = settings_scratch("readers", Some("[performance]\nmax_readers = 7\n"));
+    let photos = out_dir().join("settings-readers-photos");
+    std::fs::remove_dir_all(&photos).ok();
+    std::fs::create_dir_all(&photos).unwrap();
+    let open_folder = format!("300:open:{}", photos.display());
     let open = "900:key:ctrl+,;1300:key:ctrl+tab;1500:key:ctrl+tab;1900:dump.perf";
-    let run = |env: &str, script: &str, shot: &str| {
+    let run = |config: &Path, env: &str, script: &str, shot: &str| {
         shoot_env_stderr(
             &["--synthetic", "24"],
             &[
                 ("FASTCULL_TRACE", "1"),
-                ("FASTCULL_CONFIG_DIR", dir.to_str().unwrap()),
+                ("FASTCULL_CONFIG_DIR", config.to_str().unwrap()),
                 ("FASTCULL_MAX_READERS", env),
                 ("FASTCULL_DRIVE", script),
             ],
@@ -11760,10 +12026,16 @@ fn the_environment_wins_over_the_settings_file_for_read_workers() {
     };
     // The locked run also tries to type a limit into the field.
     let typing = format!(
-        "{open};2200:click:settings readers-limit;2500:key:ctrl+a;2700:key:9;\
+        "{open_folder};600:wait:read pool started floor 3 cap 3;{open};\
+         2200:click:settings readers-limit;2500:key:ctrl+a;2700:key:9;\
          2900:key:return;3300:dump.typed"
     );
-    let stderr = run("3", &typing, "settings-readers-env.jpg");
+    let stderr = run(&dir, "3", &typing, "settings-readers-env.jpg");
+    assert!(
+        stderr.contains("wait:read pool started floor 3 cap 3 (satisfied"),
+        "the read pool did not adopt FASTCULL_MAX_READERS=3 as floor 3 cap 3 — the \
+         environment never reached the pool (QE 2026-10-01, D27):\n{stderr}"
+    );
     let perf = qedump(&stderr, "perf");
     assert_eq!(
         dump_field(perf, "settingstab"),
@@ -11788,7 +12060,18 @@ fn the_environment_wins_over_the_settings_file_for_read_workers() {
         "a read-only field wrote the file"
     );
 
-    let stderr = run("abc", open, "settings-readers-abc.jpg");
+    let stderr = run(
+        &dir,
+        "abc",
+        &format!("{open_folder};600:wait:read pool started floor 4 cap 7;{open}"),
+        "settings-readers-abc.jpg",
+    );
+    assert!(
+        stderr.contains("wait:read pool started floor 4 cap 7 (satisfied"),
+        "the read pool did not adopt the file's max_readers = 7 as floor 4 cap 7 \
+         under an unparsable FASTCULL_MAX_READERS — the file never reached the \
+         pool (QE 2026-10-01, D27):\n{stderr}"
+    );
     let perf = qedump(&stderr, "perf");
     assert_eq!(
         dump_field(perf, "readers"),
@@ -11801,7 +12084,19 @@ fn the_environment_wins_over_the_settings_file_for_read_workers() {
         "[performance]\nmax_readers = 7\n",
         "the file changed: the only run that typed was the locked one"
     );
+
+    // No file, the variable ignored: the pool is adaptive — floor 4, the
+    // cap the core count (never pinned).
+    let none = settings_scratch("readers-none", None);
+    let stderr = run(&none, "", &open_folder, "settings-readers-none.jpg");
+    assert!(
+        stderr.contains("] read pool started floor 4 cap "),
+        "with no settings file the read pool did not start adaptive (floor 4) \
+         (QE 2026-10-01, D27):\n{stderr}"
+    );
     std::fs::remove_dir_all(&dir).ok();
+    std::fs::remove_dir_all(&none).ok();
+    std::fs::remove_dir_all(&photos).ok();
 }
 
 /// AC8 (settings.md, "General › Auto-advance"; brief 008 D7): with
