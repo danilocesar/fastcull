@@ -43,7 +43,8 @@ enum Command {
         /// Write the thumbnails as JPEGs into this directory.
         #[arg(long)]
         out: Option<PathBuf>,
-        /// Preview-cache DB path (default: per-user config dir).
+        /// Preview-cache DB path (default: the per-user cache dir, capped by
+        /// settings.toml's `performance.cache_cap`).
         #[arg(long, conflicts_with = "no_cache")]
         cache: Option<PathBuf>,
         /// Disable the preview cache entirely.
@@ -154,14 +155,27 @@ fn thumbs(
     if let Some(dir) = &out {
         std::fs::create_dir_all(dir).context("creating --out directory")?;
     }
+    // The same settings file the app reads (settings.md, ADR 0005): the
+    // cache cap and the read workers are knobs the two binaries share, so
+    // the CLI honours them with no flag surface of its own.
+    let settings = fastcull_core::settings::load_default().settings;
     let cache_path = if no_cache {
         None
+    } else if let Some(explicit) = cache {
+        // A caller-provided cache is uncapped in v1 (catalog-cache.md).
+        println!("cache: {}", explicit.display());
+        Some(explicit)
     } else {
-        cache.or_else(fastcull_core::cache::default_cache_path)
+        let default = fastcull_core::cache::default_cache_path(settings.cache_cap_bytes());
+        if let Some(p) = &default {
+            println!(
+                "cache: {} (cap {} from settings.toml)",
+                p.display(),
+                settings.cache_cap_text()
+            );
+        }
+        default
     };
-    if let Some(p) = &cache_path {
-        println!("cache: {}", p.display());
-    }
 
     let jobs: Vec<JobSpec> = session
         .images
@@ -178,7 +192,16 @@ fn thumbs(
         .max(1); // core clamps identically; keep the report honest
 
     let t = Instant::now();
-    let (pipeline, events) = Pipeline::start(jobs, cache_path.clone(), threads);
+    // FASTCULL_MAX_READERS wins over the file's `max_readers` (settings.md,
+    // "Environment precedence") — resolved in core, the one place the two
+    // are reconciled.
+    let readers = fastcull_core::settings::resolve_max_readers_from_env(settings.max_readers);
+    let (pipeline, events) = Pipeline::start(
+        jobs,
+        cache_path.clone(),
+        threads,
+        readers.override_for_pool(),
+    );
 
     let mut thumbs_done = 0usize;
     let mut cache_hits = 0usize;

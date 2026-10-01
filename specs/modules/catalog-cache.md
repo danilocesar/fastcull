@@ -135,12 +135,11 @@ reading a RAW.
 - [x] Sidecar-at-open: existing `.ARW.xmp` files yield Sidecar events with
       their pick state — `tests/pipeline.rs::existing_sidecars_are_reported_at_load`;
       keywords and IPTC fields ride the same event since M5.
-- [ ] Clear cache (brief 008): the on-disk size counts the `-wal` and
+- [x] Clear cache (brief 008): the on-disk size counts the `-wal` and
       `-shm` files; a clear leaves the file present and the same inode,
       the table empty, the file smaller and the connection usable —
       `size_on_disk_counts_the_wal_and_shm_files`,
       `clear_leaves_the_file_present_empty_and_smaller_and_the_connection_usable`.
-      Open until the plan's commit lands.
 
 ## History
 

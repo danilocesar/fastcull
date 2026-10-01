@@ -24,8 +24,13 @@ use crate::raw::{find_embedded_jpegs, read_jpeg};
 
 /// Neighbors prefetched on each side of the focused image.
 pub const PREFETCH: usize = 2;
-/// Default decoded-pixels budget (bytes of RGB kept in the LRU).
+/// Default decoded-pixels budget (bytes of RGB kept in the LRU) — the
+/// loupe memory setting's default (settings.md).
 pub const DEFAULT_BUDGET_BYTES: usize = 2 * 1024 * 1024 * 1024;
+/// The budget's floor: room for at least one decoded A1 full-res frame
+/// (149 MB). The loupe memory setting is clamped to it (settings.md), and
+/// `start` enforces it whatever it is handed.
+pub const BUDGET_FLOOR_BYTES: usize = 200 * 1024 * 1024;
 /// Asset ladder rule (user decision): a loaded asset serves any display up
 /// to 25% larger than itself; beyond that the next rung is cooked.
 pub const UPSCALE_THRESHOLD: f32 = 1.25;
@@ -228,7 +233,7 @@ impl LoupeEngine {
             events: tx,
             shutdown: AtomicBool::new(false),
             stamp: AtomicU64::new(0),
-            budget: budget.max(200 * 1024 * 1024), // room for at least one A1
+            budget: budget.max(BUDGET_FLOOR_BYTES),
         });
         // Two backlog workers plus ONE focus-reserved worker (see
         // next_job/FOCUS_DEBOUNCE/note_focus): the reserved thread only

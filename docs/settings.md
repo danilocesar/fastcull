@@ -85,30 +85,29 @@ change something. It is plain text, and hand-editing it is fine:
 
 ```toml
 [general]
-# Y or N moves to the next frame and ends a selection, like an arrow
-# (default on; applies at once). Off keeps the cursor on the frame you
-# marked — unless the filter hides it, in which case the cursor moves to
-# the next one.
+# Y or N moves to the next frame and ends a selection, like an arrow (default
+# on; applies at once). Off keeps the cursor on the frame you marked — unless
+# the filter hides it, in which case the cursor moves to the next one.
 auto_advance = true
 
 [ui]
-# How strongly selected frames are tinted in the grid, 0–50 % (default
-# 25; applies at once). Grid only — the loupe never tints. Above about
-# 15 % the tint can shift your colour judgement on a final scan.
+# How strongly selected frames are tinted in the grid, 0–50 % (default 25;
+# applies at once). Grid only — the loupe never tints. Above about 15 % the
+# tint can shift your colour judgement on a final scan.
 selection_wash = 25
 
 [performance]
-# Memory for decoded full-size frames: a number in GB (2, 0.5 GB) or a
-# share of this machine's RAM (40 %) (default 2 GB; applies at the next
-# folder open — File › Open Folder…, the same folder is fine). The app's
-# footprint runs 1–2 GB above this number.
+# Memory for decoded full-size frames: a number in GB (2, 0.5 GB) or a share
+# of this machine's RAM (40 %) (default 2 GB; applies at the next folder open
+# — File › Open Folder…, the same folder is fine). The app's footprint runs
+# 1–2 GB above this number.
 loupe_memory = "2 GB"
-# The most the thumbnail cache may keep on disk, in GB (default 2 GB,
-# never below 0.25 GB; enforced when a folder is next opened).
+# The most the thumbnail cache may keep on disk, in GB (default 2 GB, never
+# below 0.25 GB; enforced when a folder is next opened).
 cache_cap = "2 GB"
-# Adaptive (recommended): 4 readers, growing while the storage keeps up.
-# Limit N: exactly N readers when N is 4 or less; above 4, at most N
-# (default adaptive; applies at the next folder open).
+# Adaptive (recommended): 4 readers, growing while the storage keeps up. Limit
+# N: exactly N readers when N is 4 or less; above 4, at most N (default
+# adaptive; applies at the next folder open).
 max_readers = 0
 ```
 

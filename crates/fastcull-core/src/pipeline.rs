@@ -60,19 +60,15 @@ struct PoolController {
 }
 
 impl PoolController {
-    fn new() -> Self {
-        // FASTCULL_MAX_READERS=N (user request 2026-07-25, raw-pipeline.md):
-        // debug/testing override REPLACING the adaptive cap — N above the
-        // core count raises the ceiling (spec: an override, not merely a
-        // limiter). N <= 4 also lowers the floor, so N=1 pins a single
-        // reader and N=4 restores the old fixed-4 behavior; unset = adaptive.
-        let over = std::env::var("FASTCULL_MAX_READERS")
-            .ok()
-            .and_then(|v| v.parse::<usize>().ok())
-            .filter(|n| *n >= 1);
-        Self::with_override(over)
-    }
-
+    /// `max_readers` is the override `FASTCULL_MAX_READERS=N` or the
+    /// `performance.max_readers` setting names (user request 2026-07-25,
+    /// raw-pipeline.md), already reconciled by
+    /// `settings::resolve_max_readers` — the pool no longer reads the
+    /// environment itself (brief 008). It REPLACES the adaptive cap: N
+    /// above the core count raises the ceiling (an override, not merely a
+    /// limiter), and N <= 4 also lowers the floor, so N=1 pins a single
+    /// reader and N=4 restores the old fixed-4 behaviour; `None` is
+    /// adaptive.
     fn with_override(max_readers: Option<usize>) -> Self {
         let (floor, cap) = match max_readers {
             Some(n) => (POOL_MIN_READERS.min(n), n),
@@ -188,10 +184,10 @@ struct ReadPool {
 }
 
 impl ReadPool {
-    fn new() -> Self {
+    fn new(max_readers: Option<usize>) -> Self {
         Self {
             state: Mutex::new(PoolState {
-                controller: PoolController::new(),
+                controller: PoolController::with_override(max_readers),
                 active: HashMap::new(),
                 waiters: std::collections::BinaryHeap::new(),
                 next_ticket: 0,
@@ -452,10 +448,14 @@ impl Pipeline {
     /// Start `num_threads` workers over `jobs`; all jobs begin at
     /// `Background` priority in list order. `cache_path` is the SQLite
     /// preview cache (None disables caching, e.g. for tests).
+    /// `max_readers` is the read pool's override, `None` for adaptive —
+    /// what `settings::resolve_max_readers(..).override_for_pool()` gives
+    /// (raw-pipeline.md, "The adaptive read pool").
     pub fn start(
         jobs: Vec<JobSpec>,
         cache_path: Option<PathBuf>,
         num_threads: usize,
+        max_readers: Option<usize>,
     ) -> (Self, Receiver<SessionEvent>) {
         let (tx, rx) = std::sync::mpsc::channel();
         let mut state = QueueState {
@@ -489,7 +489,7 @@ impl Pipeline {
             cache_path,
             events: tx,
             shutdown: AtomicBool::new(false),
-            read_pool: ReadPool::new(),
+            read_pool: ReadPool::new(max_readers),
         });
         let workers = (0..num_threads.max(1))
             .map(|_| {
@@ -936,6 +936,47 @@ mod tests {
         assert_eq!(c.cap, pool_cap());
     }
 
+    /// The settings path feeds the pool exactly what the variable did
+    /// (settings.md, "Performance › Read workers"; brief 008 R10): the
+    /// same rows as `controller_override_caps_and_pins`, reached through
+    /// `settings::resolve_max_readers` from the environment, from the
+    /// file, and from both — the environment winning, an unparsable value
+    /// ignored.
+    ///
+    /// Mutant (2026-10-01): the file checked before the environment in
+    /// `resolve_max_readers` → env 4 + file 7 builds `(4, 4, 7)` and this
+    /// goes red.
+    #[test]
+    fn the_readers_resolution_feeds_the_pool_exactly_as_the_variable_did() {
+        use crate::settings::resolve_max_readers;
+        use std::ffi::OsStr;
+        let pool = |env: Option<&str>, setting: u32| {
+            let c = PoolController::with_override(
+                resolve_max_readers(env.map(OsStr::new), setting).override_for_pool(),
+            );
+            (c.limit, c.floor, c.cap)
+        };
+        for (env, setting, want) in [
+            (Some("1"), 0, (1, 1, 1)),
+            (Some("4"), 0, (4, 4, 4)),
+            (Some("6"), 0, (4, 4, 6)),
+            (None, 1, (1, 1, 1)),
+            (None, 4, (4, 4, 4)),
+            (None, 6, (4, 4, 6)),
+            (Some("4"), 7, (4, 4, 4)),
+            (Some("abc"), 6, (4, 4, 6)),
+            (Some("0"), 1, (1, 1, 1)),
+        ] {
+            assert_eq!(pool(env, setting), want, "env {env:?}, setting {setting}");
+        }
+        assert_eq!(pool(None, 0), (4, 4, pool_cap()), "adaptive");
+        assert_eq!(
+            pool(Some("abc"), 0),
+            (4, 4, pool_cap()),
+            "ignored env, adaptive file"
+        );
+    }
+
     #[test]
     fn controller_starts_at_floor_and_clamps_both_ends() {
         let mut c = test_controller(6);
@@ -962,7 +1003,7 @@ mod tests {
     /// read anywhere vetoes growth, no matter how fast the probe was.
     #[test]
     fn pool_warm_probe_cannot_outvote_stuck_read() {
-        let pool = ReadPool::new();
+        let pool = ReadPool::new(None);
         pool.set_thresholds_for_test(Duration::from_millis(150), Duration::from_secs(60));
         pool.set_cap_for_test(POOL_MIN_READERS + 2); // headroom even on 4-core CI
         let stuck = pool.acquire(0, false);
@@ -981,7 +1022,7 @@ mod tests {
     /// Dead-band: a probe between the thresholds moves nothing.
     #[test]
     fn pool_dead_band_holds() {
-        let pool = ReadPool::new();
+        let pool = ReadPool::new(None);
         pool.set_thresholds_for_test(Duration::from_millis(1), Duration::from_secs(60));
         let probe = pool.acquire(0, true);
         std::thread::sleep(Duration::from_millis(150));
@@ -992,7 +1033,7 @@ mod tests {
     #[test]
     fn pool_cap_is_at_least_the_floor() {
         assert!(pool_cap() >= POOL_MIN_READERS);
-        assert_eq!(PoolController::new().limit, POOL_MIN_READERS);
+        assert_eq!(PoolController::with_override(None).limit, POOL_MIN_READERS);
     }
 
     /// The in-tree concurrency invariant (spec: replaces the fixed-gate era's
@@ -1000,7 +1041,7 @@ mod tests {
     /// and the limit never exceeds the cap.
     #[test]
     fn pool_concurrency_never_exceeds_limit() {
-        let pool = std::sync::Arc::new(ReadPool::new());
+        let pool = std::sync::Arc::new(ReadPool::new(None));
         pool.set_limit_for_test(2);
         let current = std::sync::Arc::new(std::sync::atomic::AtomicUsize::new(0));
         let max_seen = std::sync::Arc::new(std::sync::atomic::AtomicUsize::new(0));
@@ -1034,7 +1075,7 @@ mod tests {
     /// highest-priority waiter, not FIFO — visible beats background.
     #[test]
     fn pool_releases_highest_priority_waiter_first() {
-        let pool = std::sync::Arc::new(ReadPool::new());
+        let pool = std::sync::Arc::new(ReadPool::new(None));
         // Disarm the stall shrink: under heavy parallel test load the held
         // permit could cross a 500 ms default threshold and mutate the limit
         // mid-assertion.
@@ -1065,7 +1106,7 @@ mod tests {
 
     #[test]
     fn pool_probe_grows_shrinks_and_excludes_large_reads() {
-        let pool = ReadPool::new();
+        let pool = ReadPool::new(None);
         pool.set_thresholds_for_test(Duration::from_millis(150), Duration::from_secs(60));
         pool.set_limit_for_test(2);
         // Fast probe completion grows.
@@ -1093,7 +1134,7 @@ mod tests {
     /// large-preview fallback pins a healthy medium at the floor.
     #[test]
     fn pool_large_probe_never_stall_shrinks() {
-        let pool = ReadPool::new();
+        let pool = ReadPool::new(None);
         pool.set_thresholds_for_test(Duration::from_millis(1), Duration::from_millis(150));
         pool.set_limit_for_test(16);
         let probe = pool.acquire(0, true);
@@ -1118,7 +1159,7 @@ mod tests {
     /// (validator round-3 observation: this branch was previously untested).
     #[test]
     fn pool_slow_completion_shrinks_without_other_touches() {
-        let pool = ReadPool::new();
+        let pool = ReadPool::new(None);
         pool.set_thresholds_for_test(Duration::from_millis(1), Duration::from_millis(150));
         pool.set_limit_for_test(16);
         let probe = pool.acquire(0, true);
@@ -1135,7 +1176,7 @@ mod tests {
     /// slow completion lands moments later.
     #[test]
     fn pool_stalled_probe_shrinks_once() {
-        let pool = std::sync::Arc::new(ReadPool::new());
+        let pool = std::sync::Arc::new(ReadPool::new(None));
         pool.set_thresholds_for_test(Duration::from_millis(1), Duration::from_millis(150));
         pool.set_limit_for_test(16);
         let probe = pool.acquire(0, true);

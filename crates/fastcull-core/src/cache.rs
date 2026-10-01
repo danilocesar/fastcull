@@ -25,7 +25,8 @@ use crate::exif::ExifSummary;
 // it and must re-read (recorded requirement in catalog-cache.md).
 const SCHEMA_VERSION: i32 = 3;
 
-/// Default size cap for stored thumbnails (spec: 2 GiB).
+/// Default size cap for stored thumbnails (spec: 2 GiB) — the
+/// `performance.cache_cap` setting's default (settings.md).
 pub const DEFAULT_CAP_BYTES: u64 = 2 * 1024 * 1024 * 1024;
 
 #[derive(Debug, thiserror::Error)]
@@ -243,20 +244,67 @@ impl PreviewCache {
     pub fn is_empty(&self) -> Result<bool, CacheError> {
         Ok(self.len()? == 0)
     }
+
+    /// Clear cache (settings.md, "Performance › Thumbnail cache"): delete
+    /// every row, VACUUM, and truncate the WAL — THROUGH THIS CONNECTION,
+    /// so the file stays where it is, the same inode, and every other
+    /// live handle on it keeps working. Never `remove_file`: deleting a
+    /// database under a live connection loses data and can SIGBUS the
+    /// peer process (the lock rule above, catalog-cache.md).
+    ///
+    /// Slow on a big cache (it rewrites the file), so callers run it off
+    /// the UI thread. No transaction is open on a `PreviewCache`
+    /// connection between calls, which VACUUM requires; each step waits
+    /// out a peer's write through the busy timeout and `with_busy_retry`.
+    pub fn clear(&mut self) -> Result<(), CacheError> {
+        with_busy_retry(|| self.conn.execute_batch("DELETE FROM previews;"))?;
+        with_busy_retry(|| self.conn.execute_batch("VACUUM;"))?;
+        // TRUNCATE returns one row (busy, log frames, checkpointed). A peer
+        // mid-read can keep the WAL from being reset (busy = 1); the rows
+        // are gone either way, so that is not an error — the file is just
+        // not as small as it could be until the next checkpoint.
+        with_busy_retry(|| {
+            self.conn
+                .query_row("PRAGMA wal_checkpoint(TRUNCATE)", [], |_| Ok(()))
+        })?;
+        Ok(())
+    }
 }
 
-/// The per-user default cache DB location (spec: one DB per user) — product
+/// The per-user default cache DB location, without opening it (the Clear
+/// cache readout's path). One DB per user, in the cache dir — product
 /// policy lives here in core so the CLI and the app can never drift onto
-/// different caches (validator finding). Opens the DB once, which creates it
-/// and opportunistically enforces the default size cap; explicit caller-
-/// provided cache paths are uncapped in v1 (recorded in catalog-cache.md).
-pub fn default_cache_path() -> Option<std::path::PathBuf> {
+/// different caches (validator finding).
+pub fn default_cache_file() -> Option<PathBuf> {
     let dirs = directories::ProjectDirs::from("org", "fastcull", "fastcull")?;
-    let path = dirs.cache_dir().join("previews.db");
+    Some(dirs.cache_dir().join("previews.db"))
+}
+
+/// [`default_cache_file`], opened once — which creates it — with the cap
+/// enforced: `cap_bytes` is the `performance.cache_cap` setting in force
+/// (settings.md), so the app (at every folder open) and the CLI (at every
+/// run) honour one number. Explicit caller-provided cache paths are
+/// uncapped in v1 (recorded in catalog-cache.md).
+pub fn default_cache_path(cap_bytes: u64) -> Option<PathBuf> {
+    let path = default_cache_file()?;
     if let Ok(mut cache) = PreviewCache::open(&path) {
-        cache.enforce_cap(DEFAULT_CAP_BYTES).ok();
+        cache.enforce_cap(cap_bytes).ok();
     }
     Some(path)
+}
+
+/// What the cache takes on disk: the database plus its `-wal` and `-shm`
+/// files, a missing one counting 0 — the figure `du` shows, which is what
+/// the Clear cache readout promises (settings.md).
+pub fn size_on_disk(db: &Path) -> u64 {
+    ["", "-wal", "-shm"]
+        .iter()
+        .map(|suffix| {
+            let mut os = db.as_os_str().to_owned();
+            os.push(suffix);
+            std::fs::metadata(PathBuf::from(os)).map_or(0, |m| m.len())
+        })
+        .sum()
 }
 
 /// Paths are keyed by their lossy UTF-8 form: stable, and collisions would
@@ -500,6 +548,85 @@ mod tests {
         });
         assert_eq!(result.unwrap(), 42);
         assert_eq!(calls, 3);
+    }
+
+    /// The readout counts what `du` would: the database and both of its
+    /// SQLite companions, a missing one as zero.
+    #[test]
+    fn size_on_disk_counts_the_wal_and_shm_files() {
+        let dir = tmp();
+        let db = dir.join("previews.db");
+        assert_eq!(size_on_disk(&db), 0, "no files, no bytes");
+        std::fs::write(&db, vec![0u8; 4096]).unwrap();
+        assert_eq!(size_on_disk(&db), 4096);
+        std::fs::write(dir.join("previews.db-wal"), vec![0u8; 1000]).unwrap();
+        std::fs::write(dir.join("previews.db-shm"), vec![0u8; 32768]).unwrap();
+        assert_eq!(size_on_disk(&db), 4096 + 1000 + 32768);
+        std::fs::remove_dir_all(&dir).ok();
+    }
+
+    /// Clear cache through the live connection (settings.md; catalog-cache
+    /// AC): the file stays — the SAME file, by inode on unix — the table is
+    /// empty, the file is smaller, and the connection (and a peer's) still
+    /// works.
+    ///
+    /// Mutant (2026-10-01): `clear` replaced by `remove_file` of the
+    /// database and a reopen → the inode changes and this goes red.
+    #[test]
+    fn clear_leaves_the_file_present_empty_and_smaller_and_the_connection_usable() {
+        let dir = tmp();
+        let db = dir.join("previews.db");
+        let mut cache = PreviewCache::open(&db).unwrap();
+        for i in 0..200u64 {
+            let p = PathBuf::from(format!("/photos/DSC{i:05}.ARW"));
+            cache
+                .store(&p, i, t(1), &exif("X"), &[7u8; 50_000])
+                .unwrap();
+        }
+        // Fold the WAL into the file so "smaller" measures the database
+        // shrinking, not only the WAL being truncated.
+        cache
+            .conn
+            .query_row("PRAGMA wal_checkpoint(TRUNCATE)", [], |_| Ok(()))
+            .unwrap();
+        let before = size_on_disk(&db);
+        assert!(before > 5_000_000, "the seed did not land: {before} bytes");
+        // A peer handle, the way a pipeline worker holds one.
+        let mut peer = PreviewCache::open(&db).unwrap();
+        #[cfg(unix)]
+        let inode = {
+            use std::os::unix::fs::MetadataExt;
+            std::fs::metadata(&db).unwrap().ino()
+        };
+
+        cache.clear().unwrap();
+
+        assert!(db.is_file(), "the database file was removed");
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::MetadataExt;
+            assert_eq!(
+                std::fs::metadata(&db).unwrap().ino(),
+                inode,
+                "the database is a NEW file: it was unlinked and recreated \
+                 under a live connection (catalog-cache.md's lock rule)"
+            );
+        }
+        assert_eq!(cache.len().unwrap(), 0);
+        let after = size_on_disk(&db);
+        assert!(
+            after < before / 10,
+            "the file did not shrink: {before} -> {after} bytes"
+        );
+        assert!(after > 0, "an empty database is never 0 B on disk");
+        let p = Path::new("/photos/after.ARW");
+        cache.store(p, 1, t(2), &exif("ILCE-1"), b"fresh").unwrap();
+        assert!(cache.lookup(p, 1, t(2)).unwrap().is_some());
+        assert!(
+            peer.lookup(p, 1, t(2)).unwrap().is_some(),
+            "the peer connection no longer sees the database"
+        );
+        std::fs::remove_dir_all(&dir).ok();
     }
 
     #[test]

@@ -25,6 +25,7 @@ pub mod pipeline;
 pub mod pointer;
 pub mod raw;
 pub mod selection;
+pub mod settings;
 pub mod sidecar_writer;
 pub mod transit;
 pub mod viewassets;

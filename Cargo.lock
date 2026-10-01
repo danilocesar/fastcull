@@ -1545,7 +1545,9 @@ dependencies = [
  "serde_json",
  "thiserror 2.0.19",
  "toml 0.8.23",
+ "toml_edit 0.22.27",
  "unicode-normalization",
+ "windows-sys 0.61.2",
  "zune-jpeg 0.4.21",
 ]
 

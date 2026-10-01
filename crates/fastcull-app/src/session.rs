@@ -143,12 +143,13 @@ fn load_folder(state: &Rc<RefCell<AppState>>, folder: &std::path::Path) -> Resul
     let cache_path = if std::env::var_os("FASTCULL_NO_CACHE").is_some() {
         None
     } else {
-        fastcull_core::cache::default_cache_path()
+        fastcull_core::cache::default_cache_path(fastcull_core::cache::DEFAULT_CAP_BYTES)
     };
     let (pipeline, rx) = Pipeline::start(
         jobs,
         cache_path,
         std::thread::available_parallelism().map_or(4, |n| n.get()),
+        fastcull_core::settings::resolve_max_readers_from_env(0).override_for_pool(),
     );
     let (loupe, loupe_rx) =
         fastcull_core::loupe::LoupeEngine::start(paths, fastcull_core::loupe::DEFAULT_BUDGET_BYTES);

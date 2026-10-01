@@ -574,11 +574,13 @@ impl RevertSlot {
 
 // --------------------------------------------------------------- templates
 
-/// templates.toml location per the `directories` conventions used by the
-/// preview cache (`org.fastcull.fastcull` config dir).
+/// templates.toml location: the config dir the ONE resolver names for
+/// every config file (`settings::config_dir`), so `FASTCULL_NO_CONFIG`
+/// hides it and `FASTCULL_CONFIG_DIR` moves it exactly as it does
+/// `settings.toml` (iptc-templates.md; brief 008 D11 — until then every
+/// driven run read the user's real templates.toml).
 pub fn default_templates_path() -> Option<PathBuf> {
-    let dirs = directories::ProjectDirs::from("org", "fastcull", "fastcull")?;
-    Some(dirs.config_dir().join("templates.toml"))
+    crate::settings::config_dir().map(|dir| dir.join("templates.toml"))
 }
 
 /// Load result: templates that parsed, plus per-entry errors for the ones
