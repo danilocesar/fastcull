@@ -713,6 +713,29 @@ impl Loaded {
             .as_deref()
             .map(|e| e.lines().next().unwrap_or("").trim())
     }
+
+    /// The one stderr line a read that failed prints, naming the file and
+    /// the error's first line (settings.md, "Reading") — `None` when the
+    /// read did not fail or read no file. The wording's one home: startup's
+    /// [`load_default`] and the app's re-read at every dialog open both
+    /// print it through [`Loaded::report_on_stderr`].
+    pub fn stderr_line(&self) -> Option<String> {
+        let path = self.path.as_ref()?;
+        let first = self.error_first_line()?;
+        Some(format!(
+            "fastcull: {} could not be read ({first}) — defaults in force",
+            path.display()
+        ))
+    }
+
+    /// Print [`Loaded::stderr_line`], if there is one — every read that
+    /// finds the file unreadable says so on stderr, a re-read included (QE
+    /// 2026-10-01, D31: the dialog's re-read used to print nothing).
+    pub fn report_on_stderr(&self) {
+        if let Some(line) = self.stderr_line() {
+            eprintln!("{line}");
+        }
+    }
 }
 
 /// Read the settings file at `path` (settings.md, "Reading"): a missing
@@ -746,21 +769,16 @@ pub fn load(path: &Path) -> Loaded {
 }
 
 /// [`load`] for this process's own file, at startup. A file that cannot
-/// be read says so on stderr, once, naming the file and the error's first
-/// line (settings.md, "Reading"; test-harness.md: what the environment
-/// changes explains itself on stderr). `None`-path defaults under
+/// be read says so on stderr, naming the file and the error's first line
+/// (settings.md, "Reading"; test-harness.md: what the environment changes
+/// explains itself on stderr). `None`-path defaults under
 /// `FASTCULL_NO_CONFIG`.
 pub fn load_default() -> Loaded {
     let Some(path) = default_settings_path() else {
         return Loaded::defaults(None);
     };
     let loaded = load(&path);
-    if let Some(first) = loaded.error_first_line() {
-        eprintln!(
-            "fastcull: {} could not be read ({first}) — defaults in force",
-            path.display()
-        );
-    }
+    loaded.report_on_stderr();
     loaded
 }
 
@@ -1325,6 +1343,31 @@ mod tests {
         let missing = load(&path.with_file_name("nothing.toml"));
         assert_eq!(missing.settings, Settings::default());
         assert_eq!(missing.error, None);
+    }
+
+    /// The one stderr line a failed read prints (settings.md, "Reading"):
+    /// the file and the error's first line — and nothing for a file that
+    /// reads, a missing file, or no file at all. Its one home, which
+    /// startup and the app's re-read at every dialog open both print
+    /// through (QE 2026-10-01, D31).
+    #[test]
+    fn a_failed_read_says_so_in_one_stderr_line_naming_the_file() {
+        let broken = file_with("stderr-broken", "[general\nauto_advance = false\n");
+        assert_eq!(
+            load(&broken).stderr_line(),
+            Some(format!(
+                "fastcull: {} could not be read (TOML parse error at line 1, column 9) — \
+                 defaults in force",
+                broken.display()
+            ))
+        );
+        let good = file_with("stderr-good", "[general]\nauto_advance = false\n");
+        assert_eq!(load(&good).stderr_line(), None);
+        assert_eq!(
+            load(&good.with_file_name("nothing.toml")).stderr_line(),
+            None
+        );
+        assert_eq!(Loaded::defaults(None).stderr_line(), None);
     }
 
     /// A write that finds the file unparsable moves it aside — to

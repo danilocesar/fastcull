@@ -55,6 +55,11 @@ pub(crate) fn wire(window: &MainWindow, state: &Rc<RefCell<AppState>>) {
                 if st.settings.write_error.is_none() {
                     if let Some(path) = st.settings.loaded.path.clone() {
                         st.settings.loaded = settings::load(&path);
+                        // A re-read that fails says so on stderr like the
+                        // startup read, in core's one wording (settings.md,
+                        // "Reading"; QE 2026-10-01, D31: this read used to
+                        // print nothing, only the trace mark below).
+                        st.settings.loaded.report_on_stderr();
                     }
                     trace_read(&st.settings);
                 } else {

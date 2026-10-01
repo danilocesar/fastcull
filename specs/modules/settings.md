@@ -93,11 +93,14 @@ their precedence is `fastcull-core`'s; the app binds (brief 008, 2026-10-01).
   (raw-pipeline.md, the ring's budget rule; QE 2026-10-01, D1).
 - **A file that fails to parse is never overwritten in place** (brief 008
   D5: a hand-edited config is the user's data). The defaults are in
-  force; both binaries print one stderr line naming the file and the
-  error's first line (`fastcull: <path> could not be read (<error>) —
-  defaults in force`), and the app's status line carries `⚠ settings.toml
-  could not be read (defaults in force)` until the file reads again or is
-  moved aside. The dialog's notice line shows the whole error.
+  force; every read that finds the file so — at startup in both binaries,
+  and in the app at every dialog open that re-reads it — prints one stderr
+  line naming the file and the error's first line (`fastcull: <path> could
+  not be read (<error>) — defaults in force`; QE 2026-10-01, D31: the
+  dialog's re-read had printed nothing), and the app's status line carries
+  `⚠ settings.toml could not be read (defaults in force)` until the file
+  reads again or is moved aside. The dialog's notice line shows the whole
+  error.
 
 ### Writing
 
@@ -353,7 +356,9 @@ their precedence is `fastcull-core`'s; the app binds (brief 008, 2026-10-01).
   `name()` and `note()` — the notes above have ONE home, here, and the
   file's comment lines and the dialog both read them), `Tab` and
   `TABS`; `load(path) -> Loaded` (settings, the read error if any, the
-  path), `load_default()`, `write(path, &Settings) ->
+  path; `Loaded::report_on_stderr()` prints a failed read's one stderr
+  line, worded by `Loaded::stderr_line()`), `load_default()`, `write(path,
+  &Settings) ->
   Result<Option<PathBuf>, WriteError>` (where a broken file went — and
   `WriteError::moved_aside()` says it too when the move succeeded and the
   write after it failed);
@@ -440,6 +445,10 @@ their precedence is `fastcull-core`'s; the app binds (brief 008, 2026-10-01).
       is never overwritten in place; the first write moves it aside under
       a reported name — core
       `a_malformed_file_yields_defaults_and_is_left_byte_identical`,
+      `a_failed_read_says_so_in_one_stderr_line_naming_the_file` (the
+      stderr line's one wording; the dialog's re-read prints it too — app
+      `a_hand_edit_that_breaks_the_fresh_file_is_shown_not_masked_by_rewritten`,
+      QE 2026-10-01, D31),
       `the_first_write_moves_a_broken_file_aside_and_writes_a_fresh_one`,
       and a file fixed by hand before the write is merged, not moved —
       `a_file_fixed_by_hand_after_a_failed_read_is_merged_not_moved_aside`;
@@ -546,6 +555,10 @@ their precedence is `fastcull-core`'s; the app binds (brief 008, 2026-10-01).
 
 ## History
 
+- 2026-10-01 — QE round 2 of brief 008, stderr at a re-read (D31): a file
+  found unreadable by the dialog's re-read printed nothing on stderr,
+  though "Reading" promised the line; the re-read prints core's one
+  wording now, and the sentence says which reads print it.
 - 2026-10-01 — QE round 2 of brief 008, a read error after the move-aside
   (D26): the spec said both "until … moved aside" and "name where it went
   … for the rest of the session" without saying which wins, and the code

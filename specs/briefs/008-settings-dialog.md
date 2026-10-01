@@ -699,6 +699,17 @@ setting.
   newer read error now wins on both lines and names the earlier aside
   (` — the earlier one is settings.toml.broken`); the next write moves the
   new file aside as `.broken.1` and says `rewritten` again.
+- D31 (2026-10-01, QE round 2 — spec correction D31, "the Manager's
+  call"; taken on the senior developer's recommendation under the Manager's
+  ruling 8, for the Manager to confirm): settings.md "Reading" promised one
+  stderr line for a file that will not parse, and only startup printed it.
+  QE measured a parse failure found at a dialog re-read printing nothing on
+  stderr; the D26 strand's log on 6f20679 shows it too — the startup line,
+  then two failed re-reads with trace marks and no stderr line. The code
+  now matches the agreed sentence rather than the sentence being weakened
+  to "at startup" (the alternative QE offered): `Loaded::stderr_line()` is
+  the wording's one home, printed by `load_default` and by the bridge's
+  re-read at every dialog open.
 - Directive candidate (2026-10-01): M9's cleanup command `cargo clean
   -p …` cleans the dev profile only — a `screen-rung` release binary
   from 2026-09-29 survived it and the persona ran it by mistake; the

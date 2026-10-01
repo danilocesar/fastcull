@@ -11468,13 +11468,20 @@ fn a_malformed_settings_file_yields_defaults_and_is_moved_aside_on_the_first_wri
 /// the notice, so a hand edit that lost the race fails on THAT assertion,
 /// never as a false D26.
 ///
+/// The reopen's re-read also prints the stderr line startup prints for a
+/// file that will not read (settings.md, "Reading"; QE 2026-10-01, D31) —
+/// the line-2 error, which only that re-read can produce.
+///
 /// RED on 6f20679, the head before the fix: the `reread` notice read
 /// `settings.toml rewritten — the file that would not read is
 /// settings.toml.broken` while the defaults had taken over. When this
-/// fails that way it is that defect; do not quiet it.
+/// fails that way it is that defect; do not quiet it. RED on 16abebd, the
+/// head before the D31 fix: no stderr line for the line-2 error.
 ///
-/// Mutant (2026-10-01): the old arm order restored in `notice` (the
-/// `moved_aside` arm above the read error) → red on the `reread` notice.
+/// Mutants (2026-10-01): the old arm order restored in `notice` (the
+/// `moved_aside` arm above the read error) → red on the `reread` notice;
+/// the bridge's `report_on_stderr()` call after the re-read removed → red
+/// on the stderr line.
 #[test]
 fn a_hand_edit_that_breaks_the_fresh_file_is_shown_not_masked_by_rewritten() {
     if !has_display() {
@@ -11536,6 +11543,17 @@ fn a_hand_edit_that_breaks_the_fresh_file_is_shown_not_masked_by_rewritten() {
         )),
         "the reopen did not read the hand edit (line 2) — it landed late, or \
          not at all, and the notice below would prove nothing:\n{stderr}"
+    );
+    // The stderr line, from the reopen's re-read (D31): the line-2 error
+    // exists only in the file the hand edit wrote.
+    assert!(
+        stderr.contains(&format!(
+            "fastcull: {} could not be read (TOML parse error at line 2, column 16) — \
+             defaults in force",
+            file.display()
+        )),
+        "the dialog's re-read found the file unreadable and printed no stderr line \
+         naming it (settings.md, \"Reading\"; QE 2026-10-01, D31):\n{stderr}"
     );
     // The contract.
     let reread = qedump(&stderr, "reread");
