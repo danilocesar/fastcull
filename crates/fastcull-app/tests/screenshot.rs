@@ -11452,6 +11452,113 @@ fn a_malformed_settings_file_yields_defaults_and_is_moved_aside_on_the_first_wri
     std::fs::remove_dir_all(&dir).ok();
 }
 
+/// AC5, a read error NEWER than the move-aside (settings.md, "Writing"; QE
+/// 2026-10-01, D26): a file broken at launch is moved aside by the first
+/// commit and a fresh one written; a hand edit then breaks the FRESH file
+/// while the session runs, and the next open's re-read fails. The notice
+/// and the status line must say the file could not be read — every
+/// setting just went back to its default — and still name the file moved
+/// aside earlier, instead of `rewritten`.
+///
+/// The hand edit is anchored to the app's own `settings written` mark (the
+/// issue #50 shape): the drain thread only signals, a helper thread
+/// rewrites the file. The reopen comes ~1.7 s later on the script's clock,
+/// and the verdict does not lean on that margin: the reopen's own read mark
+/// must carry the hand edit's error (line 2) before anything is read off
+/// the notice, so a hand edit that lost the race fails on THAT assertion,
+/// never as a false D26.
+///
+/// RED on 6f20679, the head before the fix: the `reread` notice read
+/// `settings.toml rewritten — the file that would not read is
+/// settings.toml.broken` while the defaults had taken over. When this
+/// fails that way it is that defect; do not quiet it.
+///
+/// Mutant (2026-10-01): the old arm order restored in `notice` (the
+/// `moved_aside` arm above the read error) → red on the `reread` notice.
+#[test]
+fn a_hand_edit_that_breaks_the_fresh_file_is_shown_not_masked_by_rewritten() {
+    if !has_display() {
+        eprintln!("screenshot smoke skipped: no display server");
+        return;
+    }
+    let _s = serial();
+    let at_launch = "[general\nauto_advance = false\n";
+    let by_hand = "[general]\nauto_advance = maybe\n";
+    let dir = settings_scratch("broken-again", Some(at_launch));
+    let file = dir.join("settings.toml");
+    // The helper waits for the drain thread's signal; when the run ends the
+    // sender goes with the drain thread, so a mark that never came ends the
+    // wait at once rather than at a timeout.
+    let (written_tx, written_rx) = std::sync::mpsc::channel::<()>();
+    let editor = {
+        let file = file.clone();
+        std::thread::spawn(move || {
+            if written_rx.recv().is_ok() {
+                std::fs::write(&file, by_hand).unwrap();
+            }
+        })
+    };
+    let out = out_dir().join("settings-broken-again.jpg");
+    let script = "900:key:ctrl+,;1300:key:right;1700:click:settings wash;2000:key:ctrl+a;\
+                  2200:key:1;2400:key:5;2600:key:return;3000:dump.after;3300:key:escape;\
+                  4300:key:ctrl+,;4700:dump.reread";
+    let mut signalled = false;
+    let stderr = shoot_env_stderr_watching(
+        &["--synthetic", "24"],
+        &[
+            ("FASTCULL_TRACE", "1"),
+            ("FASTCULL_CONFIG_DIR", dir.to_str().unwrap()),
+            ("FASTCULL_DRIVE", script),
+        ],
+        &out,
+        // The FIRST write only — the one that moved the launch file aside.
+        move |line| {
+            if !signalled && line.contains("] settings written ") {
+                signalled = true;
+                let _ = written_tx.send(());
+            }
+        },
+    );
+    editor.join().unwrap();
+    // The premises, each with its own message: the first commit moved the
+    // launch file aside, and the reopen's read saw the hand edit.
+    let after = qedump(&stderr, "after");
+    assert_eq!(
+        dump_text(after, "settingsnote"),
+        "settings.toml rewritten — the file that would not read is settings.toml.broken",
+        "the first commit did not move the launch file aside, so nothing below \
+         is about a read error AFTER a move:\n{stderr}"
+    );
+    assert!(
+        stderr.contains(&format!(
+            "settings: {} could not be read: TOML parse error at line 2, column 16",
+            file.display()
+        )),
+        "the reopen did not read the hand edit (line 2) — it landed late, or \
+         not at all, and the notice below would prove nothing:\n{stderr}"
+    );
+    // The contract.
+    let reread = qedump(&stderr, "reread");
+    let note = dump_text(reread, "settingsnote");
+    assert!(
+        note.starts_with(
+            "settings.toml could not be read (defaults in force): TOML parse error at line 2, \
+             column 16"
+        ) && note.ends_with(" — the earlier one is settings.toml.broken"),
+        "the notice does not say the hand-edited file could not be read, naming the \
+         earlier aside — `rewritten` masked the read error (QE 2026-10-01, D26): {note:?}"
+    );
+    assert!(
+        dump_text(reread, "status").contains(
+            "⚠ settings.toml could not be read (defaults in force) — the earlier one is \
+             settings.toml.broken"
+        ),
+        "the status line does not say the hand-edited file could not be read, naming \
+         the earlier aside (QE 2026-10-01, D26): {reread}"
+    );
+    std::fs::remove_dir_all(&dir).ok();
+}
+
 /// settings.md, "Reading" and "Writing": a write that fails keeps the
 /// commit in force in memory and says so on the notice line and stderr —
 /// and while that error stands, opening the dialog does NOT re-read the

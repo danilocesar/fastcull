@@ -685,6 +685,20 @@ setting.
   note was the false one. Reworded in its one home, `Key::CacheCap::note()`
   — the cap bounds the thumbnails held, and the file shrinks only when you
   Clear it — and settings.md and docs/settings.md follow.
+- D26 (2026-10-01, QE round 2 — defect D26; the senior developer's
+  test-integrity review, TP-E; the recommended precedence text applied under
+  the Manager's ruling 8 "proceed on the best reading", for the Manager to
+  confirm under M2): after a settings file had been moved aside, a hand edit
+  that broke the fresh file was masked. QE's repro on 6f20679: the open's
+  re-read failed (`TOML parse error at line 2, column 16`), the defaults took
+  over (wash 12 → 25), and the notice and the status line kept reading
+  `settings.toml rewritten — the file that would not read is
+  settings.toml.broken`. settings.md stated both "… until the file reads
+  again or is moved aside" and "… name where it went … for the rest of the
+  session" without saying which wins; the bridge checked the move first. The
+  newer read error now wins on both lines and names the earlier aside
+  (` — the earlier one is settings.toml.broken`); the next write moves the
+  new file aside as `.broken.1` and says `rewritten` again.
 - Directive candidate (2026-10-01): M9's cleanup command `cargo clean
   -p …` cleans the dev profile only — a `screen-rung` release binary
   from 2026-09-29 survived it and the persona ran it by mistake; the

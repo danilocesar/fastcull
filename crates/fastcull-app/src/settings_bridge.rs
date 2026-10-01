@@ -399,6 +399,8 @@ fn notice(st: &SettingsState) -> String {
             "Not saved: this system has no config directory".to_string()
         };
     }
+    // The write error first: it is always the NEWEST event, because no open
+    // re-reads the file while one stands (settings.md, "Reading").
     if let Some(e) = &st.write_error {
         // A moved-aside file is named for the rest of the session, a
         // failed write after the move included (settings.md, "Writing").
@@ -410,16 +412,23 @@ fn notice(st: &SettingsState) -> String {
             None => format!("Could not write {file}: {e}"),
         };
     }
+    // A read error BEFORE `rewritten`: a read error standing after a move is
+    // newer than the move — the open re-read a fresh file that a hand edit
+    // broke since — and it is the only thing that says why every setting
+    // just went back to its default; the move it follows is still named
+    // (settings.md, "Writing"; QE 2026-10-01, D26 — the old order kept
+    // `rewritten` on screen while the defaults silently took over).
+    if let Some(e) = &st.loaded.error {
+        return format!(
+            "{file} could not be read (defaults in force): {}{}",
+            whole_error(e),
+            earlier_aside(st)
+        );
+    }
     if let Some(aside) = &st.moved_aside {
         return format!(
             "{file} rewritten — the file that would not read is {}",
             file_name(aside)
-        );
-    }
-    if let Some(e) = &st.loaded.error {
-        return format!(
-            "{file} could not be read (defaults in force): {}",
-            whole_error(e)
         );
     }
     String::new()
@@ -427,10 +436,17 @@ fn notice(st: &SettingsState) -> String {
 
 /// The status line's piece of the same story (ui-grid.md's status bar;
 /// settings.md, "Reading" and "Writing"): a read failure until the file
-/// reads again or is moved aside, then where it went, for the session.
+/// reads again or is moved aside, then where it went, for the session — a
+/// read failure that comes AFTER a move winning over `rewritten`, as in
+/// [`notice`].
 pub(crate) fn status_note(st: &SettingsState) -> String {
     let file = settings::FILE_NAME;
-    if let Some(aside) = &st.moved_aside {
+    if st.loaded.error.is_some() {
+        format!(
+            " — ⚠ {file} could not be read (defaults in force){}",
+            earlier_aside(st)
+        )
+    } else if let Some(aside) = &st.moved_aside {
         // "Rewritten" only while it is true: a write can fail after the
         // move (senior-developer review F4 of brief 008).
         let state = if st.write_error.is_some() {
@@ -442,11 +458,18 @@ pub(crate) fn status_note(st: &SettingsState) -> String {
             " — {state} — the file that would not read is {}",
             file_name(aside)
         )
-    } else if st.loaded.error.is_some() {
-        format!(" — ⚠ {file} could not be read (defaults in force)")
     } else {
         String::new()
     }
+}
+
+/// ` — the earlier one is settings.toml.broken` when a file was moved aside
+/// before the read error that is now on screen, else nothing.
+fn earlier_aside(st: &SettingsState) -> String {
+    st.moved_aside
+        .as_deref()
+        .map(|aside| format!(" — the earlier one is {}", file_name(aside)))
+        .unwrap_or_default()
 }
 
 fn file_name(path: &std::path::Path) -> String {
@@ -638,6 +661,83 @@ mod tests {
         assert_eq!(
             notice(&st),
             "settings.toml rewritten — the file that would not read is settings.toml.broken"
+        );
+    }
+
+    /// A read error NEWER than the move-aside wins over `rewritten`
+    /// (settings.md, "Writing"; QE 2026-10-01, D26). The first write after a
+    /// failed read moved the file aside and wrote a fresh one; a hand edit
+    /// then broke the fresh file, and the open's re-read failed. Both lines
+    /// must say THAT — every setting just went back to its default, and
+    /// this is the only place that says why — while still naming the file
+    /// moved aside earlier; the next write moves the new one aside too and
+    /// both lines say `rewritten` again, naming it.
+    ///
+    /// RED on 6f20679, the head before the fix: `notice` and `status_note`
+    /// checked `moved_aside` before `loaded.error`, so both kept reading
+    /// `settings.toml rewritten — the file that would not read is
+    /// settings.toml.broken` while the defaults silently took over. When
+    /// this fails that way it is that defect; do not quiet it.
+    ///
+    /// Mutant (2026-10-01): the old arm order restored in either function →
+    /// red at step 3.
+    #[test]
+    fn a_read_error_after_the_move_aside_is_shown_not_masked_by_rewritten() {
+        let path = std::path::PathBuf::from("/nowhere/fastcull/settings.toml");
+        // 1. The first write after a failed read: the broken file moved
+        //    aside, a fresh one written.
+        let mut st = SettingsState::new(
+            settings::Loaded {
+                settings: Settings::default(),
+                error: None,
+                path: Some(path.clone()),
+            },
+            None,
+        );
+        record_write(
+            &mut st,
+            &path,
+            Ok(Some(path.with_file_name("settings.toml.broken"))),
+        );
+        // 2. A hand edit broke the fresh file, and the open re-read it.
+        st.loaded = settings::Loaded {
+            settings: Settings::default(),
+            error: Some(
+                "TOML parse error at line 2, column 16\n  |\n2 | auto_advance = maybe\n  \
+                 |                ^\ninvalid string\nexpected `\"`, `'`"
+                    .to_string(),
+            ),
+            path: Some(path.clone()),
+        };
+        // 3. The newer read error is what both lines say, the earlier
+        //    move still named.
+        assert_eq!(
+            status_note(&st),
+            " — ⚠ settings.toml could not be read (defaults in force) — the earlier one is \
+             settings.toml.broken"
+        );
+        assert_eq!(
+            notice(&st),
+            "settings.toml could not be read (defaults in force): TOML parse error at line 2, \
+             column 16 — invalid string — expected `\"`, `'` — the earlier one is \
+             settings.toml.broken"
+        );
+        // 4. The next write moves the new broken file aside too: a rewrite
+        //    again, naming where THIS one went.
+        record_write(
+            &mut st,
+            &path,
+            Ok(Some(path.with_file_name("settings.toml.broken.1"))),
+        );
+        assert_eq!(st.loaded.error, None, "the move answered the read error");
+        assert_eq!(
+            status_note(&st),
+            " — settings.toml rewritten — the file that would not read is \
+             settings.toml.broken.1"
+        );
+        assert_eq!(
+            notice(&st),
+            "settings.toml rewritten — the file that would not read is settings.toml.broken.1"
         );
     }
 

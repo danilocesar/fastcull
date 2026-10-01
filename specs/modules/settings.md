@@ -149,6 +149,15 @@ their precedence is `fastcull-core`'s; the app binds (brief 008, 2026-10-01).
   settings.toml.broken`, until a write succeeds and it says `rewritten`
   again; after a move the next write starts a fresh file
   (senior-developer review F4, 2026-10-01).
+- A read error NEWER than the move wins over `rewritten`: when the open's
+  re-read fails after a file has been moved aside (a second hand edit broke
+  the fresh file), the status line reads `⚠ settings.toml could not be read
+  (defaults in force) — the earlier one is settings.toml.broken` and the
+  dialog's notice shows the whole error followed by ` — the earlier one is
+  settings.toml.broken`; the next write moves the new file aside too
+  (`settings.toml.broken.1`) and both lines say `rewritten — the file that
+  would not read is settings.toml.broken.1` again (QE 2026-10-01, D26: until
+  then `rewritten` stayed on screen while the defaults silently took over).
 - The write runs on the UI thread, like `ui.toml`'s (ADR 0005): ~1 KB on
   an explicit user commit inside a modal, never on the culling path.
 - **Hermetic**: under `FASTCULL_NO_CONFIG=1` the config dir resolves to
@@ -440,7 +449,13 @@ their precedence is `fastcull-core`'s; the app binds (brief 008, 2026-10-01).
       `settings_bridge::tests::a_failed_write_after_the_move_aside_still_names_where_the_file_went`
       (core's half, the error carrying the path, review-verified: a rename
       that succeeds and a write that then fails in the same directory
-      cannot be provoked deterministically).
+      cannot be provoked deterministically); a read error after the move is
+      shown, never masked by `rewritten`, the earlier aside still named —
+      app unit
+      `settings_bridge::tests::a_read_error_after_the_move_aside_is_shown_not_masked_by_rewritten`
+      and app
+      `a_hand_edit_that_breaks_the_fresh_file_is_shown_not_masked_by_rewritten`
+      (QE 2026-10-01, D26).
 - [x] **AC6 — hermetic.** `FASTCULL_NO_CONFIG=1` makes `settings.toml`
       unreachable for load and save and the dialog says `Not saved`; no
       test touches the real file — core
@@ -531,6 +546,11 @@ their precedence is `fastcull-core`'s; the app binds (brief 008, 2026-10-01).
 
 ## History
 
+- 2026-10-01 — QE round 2 of brief 008, a read error after the move-aside
+  (D26): the spec said both "until … moved aside" and "name where it went
+  … for the rest of the session" without saying which wins, and the code
+  let `rewritten` mask a newer read error; the newer read error now wins,
+  naming the earlier aside, and AC5 gains its tests.
 - 2026-10-01 — QE round 1 of brief 008, the cache (D24): the app's cap
   enforcement and Clear cache are driven on Linux through a sandboxed
   default cache (`HOME`, `XDG_CACHE_HOME`), no new variable; AC11 and AC12
