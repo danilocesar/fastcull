@@ -11409,6 +11409,105 @@ fn a_malformed_settings_file_yields_defaults_and_is_moved_aside_on_the_first_wri
     std::fs::remove_dir_all(&dir).ok();
 }
 
+/// settings.md, "Reading" and "Writing": a write that fails keeps the
+/// commit in force in memory and says so on the notice line and stderr —
+/// and while that error stands, opening the dialog does NOT re-read the
+/// file, because the read would silently take the commit back; the trace
+/// says no read happened instead of naming a file it did not read. The
+/// write is made to fail by a read-only `settings.toml` (the file's
+/// permissions on unix, its read-only attribute on Windows).
+///
+/// Mutants (2026-10-01): the open's `write_error.is_none()` guard taken out
+/// of the bridge → the second open re-reads the file's 40 over the
+/// committed 15 and `dump.reopened` reads `wash=40` — red; the open's
+/// else-branch mark taken out → no `settings: not re-read` line — red
+/// (senior-developer review F5 of brief 008: the open used to trace
+/// `settings loaded from <path>` there).
+#[test]
+fn a_failed_settings_write_keeps_the_commit_and_the_next_open_does_not_reread() {
+    if !has_display() {
+        eprintln!("screenshot smoke skipped: no display server");
+        return;
+    }
+    let _s = serial();
+    let users = "[ui]\nselection_wash = 40\n";
+    let dir = settings_scratch("readonly", Some(users));
+    let file = dir.join("settings.toml");
+    let writable = std::fs::metadata(&file).unwrap().permissions();
+    let mut readonly = writable.clone();
+    readonly.set_readonly(true);
+    std::fs::set_permissions(&file, readonly).unwrap();
+    // The premise, asserted rather than assumed: a seat where this file is
+    // still writable (a root shell ignores the mode) cannot make the write
+    // fail, and the rest of the test would prove nothing.
+    assert!(
+        std::fs::OpenOptions::new().write(true).open(&file).is_err(),
+        "the read-only settings.toml is still writable on this seat — the \
+         write cannot be made to fail here"
+    );
+    let out = out_dir().join("settings-readonly.jpg");
+    let script = "900:key:ctrl+,;1300:key:right;1700:click:settings wash;2000:key:ctrl+a;\
+                  2200:key:1;2400:key:5;2600:key:return;3000:dump.committed;3300:key:escape;\
+                  3700:key:ctrl+,;4100:dump.reopened";
+    let stderr = shoot_env_stderr(
+        &["--synthetic", "24"],
+        &[
+            ("FASTCULL_TRACE", "1"),
+            ("FASTCULL_CONFIG_DIR", dir.to_str().unwrap()),
+            ("FASTCULL_DRIVE", script),
+        ],
+        &out,
+    );
+    std::fs::set_permissions(&file, writable).unwrap();
+    let committed = qedump(&stderr, "committed");
+    assert_eq!(
+        dump_field(committed, "wash"),
+        "15",
+        "the commit did not stay in force when the write failed:\n{stderr}"
+    );
+    assert!(
+        dump_text(committed, "settingsnote").starts_with("Could not write settings.toml: "),
+        "the notice does not say the write failed: {committed}"
+    );
+    assert!(
+        stderr.contains(&format!("fastcull: could not write {}: ", file.display())),
+        "no stderr line for the failed write:\n{stderr}"
+    );
+    let reopened = qedump(&stderr, "reopened");
+    assert_eq!(
+        dump_field(reopened, "wash"),
+        "15",
+        "the second open re-read the file's 40 over the commit the failed \
+         write left only in memory:\n{stderr}"
+    );
+    assert!(
+        dump_text(reopened, "settingsnote").starts_with("Could not write settings.toml: "),
+        "the notice stopped naming the write error at the second open: {reopened}"
+    );
+    // Startup and the first open read the file; the second open did not,
+    // and says so.
+    assert_eq!(
+        mark_lines(&stderr, "settings loaded from "),
+        2,
+        "`settings loaded from` was traced other than at startup and the \
+         first open:\n{stderr}"
+    );
+    assert_eq!(
+        mark_lines(
+            &stderr,
+            "settings: not re-read (a write failed and none has succeeded since)"
+        ),
+        1,
+        "the second open did not say it read nothing:\n{stderr}"
+    );
+    assert_eq!(
+        std::fs::read_to_string(&file).unwrap(),
+        users,
+        "the read-only file changed"
+    );
+    std::fs::remove_dir_all(&dir).ok();
+}
+
 /// AC6 (settings.md, "Writing" — hermetic): under FASTCULL_NO_CONFIG the
 /// dialog still works, in memory — the wash applies — writes nothing, and
 /// says `Not saved`.

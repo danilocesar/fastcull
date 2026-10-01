@@ -128,6 +128,14 @@ touch it: it runs on the defaults, the terminal and the status bar say
 error with its line number. The first change you make in the dialog
 moves the unreadable file aside as `settings.toml.broken` (numbered if
 one exists) and writes a fresh one; the status bar names where it went.
+The same happens if you break the file by hand while FastCull is running:
+it is moved aside at the next change, never written over.
+
+If the file cannot be written (a read-only config folder, a full disk),
+the change stays in force for this session and the dialog's notice line
+says so. Until a change can be saved again, reopening the dialog keeps
+what you set rather than re-reading the file, so nothing you chose is
+quietly taken back.
 
 ## Environment variables and settings
 

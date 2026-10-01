@@ -56,8 +56,15 @@ pub(crate) fn wire(window: &MainWindow, state: &Rc<RefCell<AppState>>) {
                     if let Some(path) = st.settings.loaded.path.clone() {
                         st.settings.loaded = settings::load(&path);
                     }
+                    trace_read(&st.settings);
+                } else {
+                    // No read happened, and the mark says so rather than
+                    // naming a file it did not read (senior-developer
+                    // review F5 of brief 008).
+                    trace_mark(
+                        "settings: not re-read (a write failed and none has succeeded since)",
+                    );
                 }
-                trace_read(&st.settings);
                 apply_instant(&win, st.current_settings());
                 if st.settings.clear_rx.is_none() {
                     st.settings.cache_readout = cache_readout(None);
@@ -273,7 +280,18 @@ fn save(st: &mut SettingsState, changed: bool) {
         return;
     }
     let broken = st.loaded.error.is_some();
-    match settings::write(&path, &st.loaded.settings, broken) {
+    let outcome = settings::write(&path, &st.loaded.settings, broken);
+    record_write(st, &path, outcome);
+}
+
+/// What a write's outcome leaves in the dialog's state: the notice, the
+/// status line and the next open read it.
+fn record_write(
+    st: &mut SettingsState,
+    path: &std::path::Path,
+    outcome: Result<Option<std::path::PathBuf>, settings::WriteError>,
+) {
+    match outcome {
         Ok(aside) => {
             st.write_error = None;
             if let Some(aside) = aside {
@@ -289,6 +307,16 @@ fn save(st: &mut SettingsState, changed: bool) {
             // The commit stays in force in memory, and says so (settings.md).
             eprintln!("fastcull: could not write {}: {e}", path.display());
             trace_mark(&format!("settings not written: {e}"));
+            // The broken file may already be gone from its name — moved
+            // aside before the write failed — and the session must still
+            // say where it went; the read error is answered by that move,
+            // so the next write starts a fresh file instead of looking for
+            // one to move (senior-developer review F4 of brief 008).
+            if let Some(aside) = e.moved_aside() {
+                trace_mark(&format!("settings moved aside {}", aside.display()));
+                st.moved_aside = Some(aside.to_path_buf());
+                st.loaded.error = None;
+            }
             st.write_error = Some(e.to_string());
         }
     }
@@ -365,7 +393,15 @@ fn notice(st: &SettingsState) -> String {
         };
     }
     if let Some(e) = &st.write_error {
-        return format!("Could not write {file}: {e}");
+        // A moved-aside file is named for the rest of the session, a
+        // failed write after the move included (settings.md, "Writing").
+        return match &st.moved_aside {
+            Some(aside) => format!(
+                "Could not write {file}: {e} — the file that would not read is {}",
+                file_name(aside)
+            ),
+            None => format!("Could not write {file}: {e}"),
+        };
     }
     if let Some(aside) = &st.moved_aside {
         return format!(
@@ -388,8 +424,15 @@ fn notice(st: &SettingsState) -> String {
 pub(crate) fn status_note(st: &SettingsState) -> String {
     let file = settings::FILE_NAME;
     if let Some(aside) = &st.moved_aside {
+        // "Rewritten" only while it is true: a write can fail after the
+        // move (senior-developer review F4 of brief 008).
+        let state = if st.write_error.is_some() {
+            format!("⚠ {file} could not be written")
+        } else {
+            format!("{file} rewritten")
+        };
         format!(
-            " — {file} rewritten — the file that would not read is {}",
+            " — {state} — the file that would not read is {}",
             file_name(aside)
         )
     } else if st.loaded.error.is_some() {
@@ -530,6 +573,64 @@ mod tests {
         assert_eq!(
             loupe_hint(&with(MemorySpec::Gb(0.5)), total),
             "= 512.0 MB of 31.1 GB ≈ 3 A1 frames"
+        );
+    }
+
+    /// A write that moved the broken file aside and THEN failed (a full
+    /// disk, a permission flipped mid-session) still leaves the session
+    /// naming where the user's file went — on the status line and the
+    /// notice, neither claiming a rewrite — and answers the read error, so
+    /// the next write starts a fresh file; the write that then succeeds
+    /// says "rewritten". The core half — `write` attaching the path to its
+    /// error — is review-verified: a rename that succeeds followed by a
+    /// write that fails in the same directory cannot be provoked
+    /// deterministically (senior-developer review F4 of brief 008).
+    ///
+    /// Mutant (2026-10-01): the `e.moved_aside()` arm taken out of
+    /// `record_write` → `moved_aside` stays `None` and this goes red.
+    #[test]
+    fn a_failed_write_after_the_move_aside_still_names_where_the_file_went() {
+        let path = std::path::PathBuf::from("/nowhere/fastcull/settings.toml");
+        let aside = path.with_file_name("settings.toml.broken");
+        let mut st = SettingsState::new(
+            settings::Loaded {
+                settings: Settings::default(),
+                error: Some("TOML parse error at line 1, column 9".to_string()),
+                path: Some(path.clone()),
+            },
+            None,
+        );
+        record_write(
+            &mut st,
+            &path,
+            Err(settings::WriteError::Io {
+                source: std::io::Error::other("No space left on device"),
+                moved_aside: Some(aside.clone()),
+            }),
+        );
+        assert_eq!(st.moved_aside.as_deref(), Some(aside.as_path()));
+        assert_eq!(st.loaded.error, None, "the move answered the read error");
+        assert_eq!(st.write_error.as_deref(), Some("No space left on device"));
+        assert_eq!(
+            status_note(&st),
+            " — ⚠ settings.toml could not be written — the file that would not read is \
+             settings.toml.broken"
+        );
+        assert_eq!(
+            notice(&st),
+            "Could not write settings.toml: No space left on device — the file that would \
+             not read is settings.toml.broken"
+        );
+        // The next write succeeds: now it is a rewrite, and still named.
+        record_write(&mut st, &path, Ok(None));
+        assert_eq!(st.write_error, None);
+        assert_eq!(
+            status_note(&st),
+            " — settings.toml rewritten — the file that would not read is settings.toml.broken"
+        );
+        assert_eq!(
+            notice(&st),
+            "settings.toml rewritten — the file that would not read is settings.toml.broken"
         );
     }
 

@@ -194,7 +194,10 @@ sidecars — scripts target throwaway copies of test data only.
   <id> laid out …` (failed cells only, a handful).
 - **Settings** (brief 008, settings.md): `settings loaded from <path>` /
   `settings: no file (defaults in force)` / `settings: <path> could not
-  be read: <error>` at startup and at every open; `settings opened` /
+  be read: <error>` at startup and at every open — except an open while a
+  write error stands, which reads nothing and traces `settings: not
+  re-read (a write failed and none has succeeded since)` (senior-developer
+  review F5 of brief 008); `settings opened` /
   `settings closed`; `settings committed <table>.<key> = <value>` then
   `settings written <path>` or `settings not written: <reason>`;
   `settings moved aside <path>`; `settings reset <tab>`; `settings

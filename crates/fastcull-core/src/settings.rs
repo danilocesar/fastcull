@@ -756,10 +756,28 @@ pub fn load_default() -> Loaded {
 /// (settings.md, "Writing").
 #[derive(Debug, thiserror::Error)]
 pub enum WriteError {
-    #[error("{0}")]
-    Io(#[from] std::io::Error),
+    /// Writing the fresh file failed. `moved_aside` says where the file
+    /// that would not read went when the move-aside before the write had
+    /// already succeeded — the user's hand-edited file is no longer at its
+    /// name, and the caller must still be able to say where it is
+    /// (settings.md, "Writing"; senior-developer review F4 of brief 008).
+    #[error("{source}")]
+    Io {
+        source: std::io::Error,
+        moved_aside: Option<PathBuf>,
+    },
     #[error("the file that would not read could not be moved aside: {0}")]
     MoveAside(std::io::Error),
+}
+
+impl WriteError {
+    /// Where this failed write had already moved the broken file, if it had.
+    pub fn moved_aside(&self) -> Option<&Path> {
+        match self {
+            WriteError::Io { moved_aside, .. } => moved_aside.as_deref(),
+            WriteError::MoveAside(_) => None,
+        }
+    }
 }
 
 /// Write `settings` to `path` (settings.md, "Writing"), as a
@@ -774,7 +792,8 @@ pub enum WriteError {
 /// read failed — or when the file fails to parse now — it is first moved
 /// aside to `settings.toml.broken`, or `settings.toml.broken.N` when that
 /// name is taken, and a fresh file is written; the return value says where
-/// it went.
+/// it went — and so does the error, when the move succeeded and the write
+/// after it did not.
 pub fn write(
     path: &Path,
     settings: &Settings,
@@ -798,13 +817,20 @@ pub fn write(
         },
     };
     merge_into(&mut doc, settings);
+    // From here on a failure must carry `moved_aside`: a broken file
+    // renamed above is no longer at `path`, and a bare `?` would lose
+    // where it went (senior-developer review F4 of brief 008).
+    let failed = |source: std::io::Error| WriteError::Io {
+        source,
+        moved_aside: moved_aside.clone(),
+    };
     if let Some(parent) = path.parent() {
-        std::fs::create_dir_all(parent)?;
+        std::fs::create_dir_all(parent).map_err(failed)?;
     }
     // A plain write, not temp-and-rename: a hand-managed config is often a
     // symlink into someone's dotfiles, and a rename would replace the link
     // with a file. `ui.toml` has always been written this way.
-    std::fs::write(path, doc.to_string())?;
+    std::fs::write(path, doc.to_string()).map_err(failed)?;
     Ok(moved_aside)
 }
 

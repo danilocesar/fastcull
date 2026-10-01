@@ -61,6 +61,11 @@ their precedence is `fastcull-core`'s; the app binds (brief 008, 2026-10-01).
   mid-session takes effect when the dialog is next opened (the Performance
   knobs still wait for their own moment, below). A missing file is the
   defaults and no error.
+- While a write has failed and none has succeeded since, an open does NOT
+  re-read the file: the commits since the failure live only in memory and
+  a re-read would silently take them back, so that open keeps what is in
+  force and the notice keeps naming the write error (developer 2026-10-01,
+  brief 008 commit B; Manager-accepted, senior-developer review F2).
 - A value of the wrong type (`auto_advance = "yes"`, `selection_wash =
   "25"`) reads as THAT key's default; an out-of-range value clamps —
   `selection_wash` 51 → 50 and −1 → 0, `max_readers` below 0 → 0, a
@@ -88,9 +93,12 @@ their precedence is `fastcull-core`'s; the app binds (brief 008, 2026-10-01).
 ### Writing
 
 - The file is written on every commit of the dialog and on every Reset,
-  and never otherwise: a missing file stays missing until the first
-  change. The write is a read-modify-write through `toml_edit`: every
-  known key is emitted under its table with its in-force value; a key the
+  and never otherwise, and a missing file stays missing until the first
+  CHANGE: a commit or a Reset that changes nothing writes only a file that
+  already exists (developer 2026-10-01, brief 008 commit B;
+  Manager-accepted, senior-developer review F2). The write is a
+  read-modify-write through `toml_edit`: every known key is emitted under
+  its table with its in-force value; a key the
   write CREATES is preceded by `#` comment lines carrying the field's
   note (`Key::note()`, wrapped at 78 columns over as many lines as it
   needs), so the file documents itself for hand editing; a key that already
@@ -105,10 +113,22 @@ their precedence is `fastcull-core`'s; the app binds (brief 008, 2026-10-01).
   line and the dialog's notice then name where it went
   (`settings.toml rewritten — the file that would not read is
   settings.toml.broken`) for the rest of the session.
+- So does any write that finds the file unparsable at that moment, whatever
+  the last read said — a hand edit that broke it mid-session: no path
+  overwrites a broken file in place (developer 2026-10-01, brief 008
+  commit A; Manager-accepted, senior-developer review F2).
 - A write that fails (a read-only config dir, a full disk) keeps the
   commit in force in memory, prints one stderr line and puts
   `Could not write settings.toml: <error>` on the dialog's notice line;
   nothing is silently lost on screen.
+- Once the broken file has been moved aside, a write that fails — the
+  very write that moved it, or any later one — still names where the file
+  went: the notice reads `Could not write settings.toml: <error> — the file
+  that would not read is settings.toml.broken` and the status line `⚠
+  settings.toml could not be written — the file that would not read is
+  settings.toml.broken`, until a write succeeds and it says `rewritten`
+  again; after a move the next write starts a fresh file
+  (senior-developer review F4, 2026-10-01).
 - The write runs on the UI thread, like `ui.toml`'s (ADR 0005): ~1 KB on
   an explicit user commit inside a modal, never on the culling path.
 - **Hermetic**: under `FASTCULL_NO_CONFIG=1` the config dir resolves to
@@ -292,7 +312,9 @@ their precedence is `fastcull-core`'s; the app binds (brief 008, 2026-10-01).
   file's comment lines and the dialog both read them), `Tab` and
   `TABS`; `load(path) -> Loaded` (settings, the read error if any, the
   path), `load_default()`, `write(path, &Settings, broken) ->
-  Result<Option<PathBuf>, WriteError>` (where a broken file went);
+  Result<Option<PathBuf>, WriteError>` (where a broken file went — and
+  `WriteError::moved_aside()` says it too when the move succeeded and the
+  write after it failed);
   `Settings::set_from_text(key, text)`, `Settings::reset_tab(tab)`;
   `parse_memory`, `MemorySpec` (`Gb(f64)` | `Percent(u32)`, `Display` is
   the normalised string), `memory_bytes(spec, total_ram) -> (bytes,
@@ -352,14 +374,22 @@ their precedence is `fastcull-core`'s; the app binds (brief 008, 2026-10-01).
       `a_written_file_round_trips_every_key`,
       `a_write_preserves_unknown_keys_and_the_users_comments`,
       `a_created_key_carries_its_note_and_an_existing_key_keeps_its_comment`,
-      `the_normalised_string_is_what_the_file_stores`.
+      `the_normalised_string_is_what_the_file_stores`; a write that fails
+      keeps the commit in force and the next open does not re-read over it
+      — app `a_failed_settings_write_keeps_the_commit_and_the_next_open_does_not_reread`.
 - [x] **AC5 — a broken file.** A malformed file yields the defaults, a
       status-line and a stderr warning naming the file and the error, and
       is never overwritten in place; the first write moves it aside under
       a reported name — core
       `a_malformed_file_yields_defaults_and_is_left_byte_identical`,
       `the_first_write_moves_a_broken_file_aside_and_writes_a_fresh_one`;
-      app `a_malformed_settings_file_yields_defaults_and_is_moved_aside_on_the_first_write`.
+      app `a_malformed_settings_file_yields_defaults_and_is_moved_aside_on_the_first_write`;
+      where it went is still named when the write after the move fails —
+      app unit
+      `settings_bridge::tests::a_failed_write_after_the_move_aside_still_names_where_the_file_went`
+      (core's half, the error carrying the path, review-verified: a rename
+      that succeeds and a write that then fails in the same directory
+      cannot be provoked deterministically).
 - [x] **AC6 — hermetic.** `FASTCULL_NO_CONFIG=1` makes `settings.toml`
       unreachable for load and save and the dialog says `Not saved`; no
       test touches the real file — core
@@ -429,6 +459,12 @@ their precedence is `fastcull-core`'s; the app binds (brief 008, 2026-10-01).
 
 ## History
 
+- 2026-10-01 — A write that fails (senior-developer review of brief 008,
+  F2, F4, F5): the two behaviours the developer had added without stating
+  them are stated — an open does not re-read while a write error stands,
+  and any write moves an unparsable file aside — with the no-change write
+  rule beside them; a write that fails after the move-aside still names
+  where the file went; AC4 and AC5 gain their tests.
 - 2026-10-01 — Reset over a half-typed field (senior-developer review of
   brief 008, F1): a Reset clicked while a field held typed text committed
   the text, reset, and then let the field commit its stale text again; a
