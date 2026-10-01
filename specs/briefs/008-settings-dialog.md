@@ -597,6 +597,22 @@ setting.
   "never blocks on I/O" corrected to name the two ~1 KB exceptions), the
   hint example is `≈ 89 A1 frames` for 12.4 GB (binary GB, the formatter's
   unit), and "next folder open" replaces "next start" for the cache cap.
+- D18 (2026-10-01, Manager, M2, on the senior developer's review
+  question): while a number is half-typed in Settings and About or the
+  shortcuts card is opened from the menu over it, the keyboard leaving
+  the field is a click-away and the number is applied — one rule for
+  every cover, the rule every dialog over a field already follows; `Esc`
+  before opening Help is the discard. No second rule for the Settings
+  fields. Relayed to the user in the morning as a decision taken.
+- D19 (2026-10-01, Manager, the circuit breaker on review finding F3):
+  the reviewer called the dialog scope's `settings dialog` focus handler
+  dormant and offered dropping it; the developer measured `focus:
+  settings dialog gained` on a scrim click (a Slint `FocusScope` takes
+  focus on click by default), kept the handler, and corrected the
+  test-harness.md sentence to name when each mark fires. Ruled for the
+  developer on the measurement; the re-review repeats the probe and
+  re-raises with the trace if it does not reproduce. Not a question for
+  the user: the spec answers it (a mark names when it fires).
 - Directive candidate (2026-10-01): M9's cleanup command `cargo clean
   -p …` cleans the dev profile only — a `screen-rung` release binary
   from 2026-09-29 survived it and the persona ran it by mistake; the
