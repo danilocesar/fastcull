@@ -797,17 +797,18 @@ impl WriteError {
 /// documents itself.
 ///
 /// A file that does not parse is NEVER overwritten in place (brief 008 D5:
-/// a hand-edited config is the user's data). When `broken` says the last
-/// read failed — or when the file fails to parse now — it is first moved
-/// aside to `settings.toml.broken`, or `settings.toml.broken.N` when that
-/// name is taken, and a fresh file is written; the return value says where
-/// it went — and so does the error, when the move succeeded and the write
-/// after it did not.
-pub fn write(
-    path: &Path,
-    settings: &Settings,
-    broken: bool,
-) -> Result<Option<PathBuf>, WriteError> {
+/// a hand-edited config is the user's data). What decides is the file as it
+/// is NOW, whatever the last read said: one that fails to parse — the first
+/// write after a failed read, or a hand edit that broke it mid-session — is
+/// first moved aside to `settings.toml.broken`, or `settings.toml.broken.N`
+/// when that name is taken, and a fresh file is written; the return value
+/// says where it went — and so does the error, when the move succeeded and
+/// the write after it did not. One the last read could not parse but that
+/// has been fixed by hand since is merged into like any other: moving a
+/// file that reads aside would set the user's fix aside and call it a file
+/// "that would not read" (QE 2026-10-01, TP10; the senior developer's
+/// test-integrity review, recommendation B).
+pub fn write(path: &Path, settings: &Settings) -> Result<Option<PathBuf>, WriteError> {
     let existing = match std::fs::read(path) {
         Ok(bytes) => Some(String::from_utf8(bytes).ok()),
         Err(e) if e.kind() == std::io::ErrorKind::NotFound => None,
@@ -827,7 +828,7 @@ pub fn write(
             .as_deref()
             .map(|t| (t, t.parse::<toml_edit::DocumentMut>()))
         {
-            Some((t, Ok(doc))) if !broken => {
+            Some((t, Ok(doc))) => {
                 crlf = t.contains("\r\n");
                 bom = t.starts_with('\u{FEFF}');
                 doc
@@ -1096,13 +1097,13 @@ mod tests {
     fn a_written_file_round_trips_every_key() {
         let path = scratch("roundtrip").join(FILE_NAME);
         let s = non_default();
-        assert_eq!(write(&path, &s, false).unwrap(), None);
+        assert_eq!(write(&path, &s).unwrap(), None);
         let loaded = load(&path);
         assert_eq!(loaded.error, None);
         assert_eq!(loaded.settings, s);
         // And a second write over the file it made changes nothing.
         let before = std::fs::read(&path).unwrap();
-        write(&path, &s, false).unwrap();
+        write(&path, &s).unwrap();
         assert_eq!(std::fs::read(&path).unwrap(), before);
     }
 
@@ -1118,12 +1119,12 @@ mod tests {
         let mut s = Settings::default();
         s.set_from_text(Key::LoupeMemory, "8gb").unwrap();
         s.set_from_text(Key::CacheCap, " 0.50 GB").unwrap();
-        write(&path, &s, false).unwrap();
+        write(&path, &s).unwrap();
         let text = std::fs::read_to_string(&path).unwrap();
         assert!(text.contains("loupe_memory = \"8 GB\""), "{text}");
         assert!(text.contains("cache_cap = \"0.5 GB\""), "{text}");
         s.set_from_text(Key::LoupeMemory, "40 %").unwrap();
-        write(&path, &s, false).unwrap();
+        write(&path, &s).unwrap();
         let text = std::fs::read_to_string(&path).unwrap();
         assert!(text.contains("loupe_memory = \"40%\""), "{text}");
         assert_eq!(s.text_of(Key::LoupeMemory), "40%");
@@ -1161,7 +1162,7 @@ mod tests {
         let mut s = load(&path).settings;
         assert!(!s.auto_advance, "the fixture's own value was read");
         s.selection_wash = 15;
-        write(&path, &s, false).unwrap();
+        write(&path, &s).unwrap();
         let text = std::fs::read_to_string(&path).unwrap();
         for kept in [
             "# My FastCull settings — tuned for the NAS\n[general]\n",
@@ -1188,7 +1189,7 @@ mod tests {
         let path = file_with("notes", USERS_FILE);
         let mut s = load(&path).settings;
         s.auto_advance = true;
-        write(&path, &s, false).unwrap();
+        write(&path, &s).unwrap();
         let text = std::fs::read_to_string(&path).unwrap();
         assert!(
             text.contains(
@@ -1246,7 +1247,7 @@ mod tests {
         assert_eq!(loaded.settings.selection_wash, 40);
         let mut s = loaded.settings;
         s.selection_wash = 15;
-        write(&path, &s, false).unwrap();
+        write(&path, &s).unwrap();
         let out = std::fs::read_to_string(&path).unwrap();
         assert!(
             out.starts_with('\u{FEFF}'),
@@ -1271,7 +1272,7 @@ mod tests {
 
         // The same file in LF, with no mark: written back LF, no mark.
         let lf = file_with("lf", &users.replace("\r\n", "\n").replace('\u{FEFF}', ""));
-        write(&lf, &s, false).unwrap();
+        write(&lf, &s).unwrap();
         let out = std::fs::read_to_string(&lf).unwrap();
         assert!(
             !out.contains('\r') && !out.starts_with('\u{FEFF}'),
@@ -1279,7 +1280,7 @@ mod tests {
         );
         // A file written from nothing: LF, no mark.
         let fresh = scratch("fresh").join(FILE_NAME);
-        write(&fresh, &s, false).unwrap();
+        write(&fresh, &s).unwrap();
         let out = std::fs::read_to_string(&fresh).unwrap();
         assert!(
             !out.contains('\r') && !out.starts_with('\u{FEFF}'),
@@ -1320,10 +1321,10 @@ mod tests {
         assert_eq!(missing.error, None);
     }
 
-    /// The first write after a failed read moves the broken file aside —
-    /// to `.broken`, then `.broken.1` when that is taken — and writes a
-    /// fresh one; a file found unparsable at write time is moved aside
-    /// too, whatever the caller believed.
+    /// A write that finds the file unparsable moves it aside — to
+    /// `.broken`, then `.broken.1` when that is taken — and writes a fresh
+    /// one: the first write after a failed read, and a file broken after a
+    /// good read alike (the write decides from the file as it is now).
     ///
     /// Mutant (2026-10-01): the `move_aside` call in `write` replaced by
     /// writing over the file → `.broken` never exists and this goes red.
@@ -1332,7 +1333,7 @@ mod tests {
         let first = "[general\n# the user's hours of work\n";
         let path = file_with("aside", first);
         let s = non_default();
-        let aside = write(&path, &s, load(&path).error.is_some()).unwrap();
+        let aside = write(&path, &s).unwrap();
         let broken = path.with_file_name("settings.toml.broken");
         assert_eq!(aside.as_deref(), Some(broken.as_path()));
         assert_eq!(std::fs::read_to_string(&broken).unwrap(), first);
@@ -1344,21 +1345,56 @@ mod tests {
         // one is untouched.
         let second = "selection_wash = = 3\n";
         std::fs::write(&path, second).unwrap();
-        let aside = write(&path, &s, true).unwrap();
+        let aside = write(&path, &s).unwrap();
         let numbered = path.with_file_name("settings.toml.broken.1");
         assert_eq!(aside.as_deref(), Some(numbered.as_path()));
         assert_eq!(std::fs::read_to_string(&numbered).unwrap(), second);
         assert_eq!(std::fs::read_to_string(&broken).unwrap(), first);
 
-        // Broken AFTER a good read: the caller says `false`, the write
-        // finds it unparsable and still refuses to overwrite it in place.
+        // Broken AFTER a good read: the write finds it unparsable and still
+        // refuses to overwrite it in place.
         let third = "[ui]\nselection_wash = [\n";
         std::fs::write(&path, third).unwrap();
-        let aside = write(&path, &s, false).unwrap();
+        let aside = write(&path, &s).unwrap();
         let numbered = path.with_file_name("settings.toml.broken.2");
         assert_eq!(aside.as_deref(), Some(numbered.as_path()));
         assert_eq!(std::fs::read_to_string(&numbered).unwrap(), third);
         assert_eq!(load(&path).settings, s);
+    }
+
+    /// A file the last read could not parse, FIXED by hand before the next
+    /// write, is merged into like any other — not moved aside as one "that
+    /// would not read" (settings.md, "Writing"; QE 2026-10-01, TP10, the
+    /// senior developer's recommendation B): the user's comment and unknown
+    /// key stay where they are, and the file reads the merged values.
+    ///
+    /// Mutant (2026-10-01): the merge arm of `write` replaced by an
+    /// unconditional move-aside → `settings.toml.broken` exists and the
+    /// write returns where it went — red.
+    #[test]
+    fn a_file_fixed_by_hand_after_a_failed_read_is_merged_not_moved_aside() {
+        let path = file_with("fixed", "[general\nauto_advance = false\n");
+        assert!(load(&path).error.is_some(), "the fixture must not read");
+        let fixed = "# fixed by hand\n[general]\nauto_advance = false\nmine = 1\n";
+        std::fs::write(&path, fixed).unwrap();
+        let s = non_default();
+        assert_eq!(
+            write(&path, &s).unwrap(),
+            None,
+            "a file that parses at the write was moved aside"
+        );
+        assert!(
+            !path.with_file_name("settings.toml.broken").exists(),
+            "a file that parses at the write was moved aside"
+        );
+        let text = std::fs::read_to_string(&path).unwrap();
+        assert!(
+            text.starts_with("# fixed by hand\n[general]\n") && text.contains("mine = 1\n"),
+            "the user's fixed file was not merged into: {text:?}"
+        );
+        let reread = load(&path);
+        assert_eq!(reread.error, None);
+        assert_eq!(reread.settings, s);
     }
 
     /// Out-of-range values clamp on read, and the memory figures clamp

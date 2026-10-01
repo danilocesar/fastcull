@@ -135,7 +135,11 @@ error with its line number. The first change you make in the dialog
 moves the unreadable file aside as `settings.toml.broken` (numbered if
 one exists) and writes a fresh one; the status bar names where it went.
 The same happens if you break the file by hand while FastCull is running:
-it is moved aside at the next change, never written over.
+it is moved aside at the next change, never written over. What counts is
+the file as it is when the change is saved: if you mend it by hand
+first, nothing is moved aside — reopen the dialog and your mended file is
+read; a change made with the dialog still open is written into it, the
+values the dialog shows taking the place of the ones in the file.
 
 If the file cannot be written (a read-only config folder, a full disk),
 the change stays in force for this session and the dialog's notice line

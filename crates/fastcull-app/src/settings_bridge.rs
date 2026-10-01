@@ -279,8 +279,10 @@ fn save(st: &mut SettingsState, changed: bool) {
     if !changed && !path.exists() {
         return;
     }
-    let broken = st.loaded.error.is_some();
-    let outcome = settings::write(&path, &st.loaded.settings, broken);
+    // Core decides from the file as it is now — moved aside only if it does
+    // not parse at this moment, whatever the last read said (settings.md,
+    // "Writing").
+    let outcome = settings::write(&path, &st.loaded.settings);
     record_write(st, &path, outcome);
 }
 

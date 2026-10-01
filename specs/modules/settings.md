@@ -120,16 +120,23 @@ their precedence is `fastcull-core`'s; the app binds (brief 008, 2026-10-01).
   every line, an LF file LF, a mark is kept; a file written from nothing
   is LF without a mark (QE 2026-10-01, D6; brief 008 D21: toml_edit writes
   LF and drops the mark, so the writer restores both).
-- The FIRST write after a failed read moves the broken file aside before
-  writing a fresh one: to `settings.toml.broken`, or `settings.toml.broken.N`
-  (N from 1) when that exists, never over an existing file. The status
-  line and the dialog's notice then name where it went
+- A write that finds the file unparsable AT THAT MOMENT moves it aside
+  before writing a fresh one, whatever the last read said — the first
+  write after a failed read, or a hand edit that broke the file
+  mid-session: to `settings.toml.broken`, or `settings.toml.broken.N` (N
+  from 1) when that exists, never over an existing file; no path
+  overwrites a broken file in place (brief 008 D5; developer 2026-10-01,
+  brief 008 commit A, Manager-accepted, senior-developer review F2). The
+  status line and the dialog's notice then name where it went
   (`settings.toml rewritten — the file that would not read is
   settings.toml.broken`) for the rest of the session.
-- So does any write that finds the file unparsable at that moment, whatever
-  the last read said — a hand edit that broke it mid-session: no path
-  overwrites a broken file in place (developer 2026-10-01, brief 008
-  commit A; Manager-accepted, senior-developer review F2).
+- A file the last read could not parse but that has been fixed by hand
+  since, and parses by the time of the write, is merged into like any
+  other — the user's comments and unknown keys kept, the values in force
+  written — and the read error is answered: moving a file that reads aside
+  would set the user's fix aside and name it as one that would not read
+  (QE 2026-10-01, test proposal TP10; senior-developer test-integrity
+  review, recommendation B).
 - A write that fails (a read-only config dir, a full disk) keeps the
   commit in force in memory, prints one stderr line and puts
   `Could not write settings.toml: <error>` on the dialog's notice line;
@@ -329,7 +336,7 @@ their precedence is `fastcull-core`'s; the app binds (brief 008, 2026-10-01).
   `name()` and `note()` — the notes above have ONE home, here, and the
   file's comment lines and the dialog both read them), `Tab` and
   `TABS`; `load(path) -> Loaded` (settings, the read error if any, the
-  path), `load_default()`, `write(path, &Settings, broken) ->
+  path), `load_default()`, `write(path, &Settings) ->
   Result<Option<PathBuf>, WriteError>` (where a broken file went — and
   `WriteError::moved_aside()` says it too when the move succeeded and the
   write after it failed);
@@ -400,7 +407,9 @@ their precedence is `fastcull-core`'s; the app binds (brief 008, 2026-10-01).
       is never overwritten in place; the first write moves it aside under
       a reported name — core
       `a_malformed_file_yields_defaults_and_is_left_byte_identical`,
-      `the_first_write_moves_a_broken_file_aside_and_writes_a_fresh_one`;
+      `the_first_write_moves_a_broken_file_aside_and_writes_a_fresh_one`,
+      and a file fixed by hand before the write is merged, not moved —
+      `a_file_fixed_by_hand_after_a_failed_read_is_merged_not_moved_aside`;
       app `a_malformed_settings_file_yields_defaults_and_is_moved_aside_on_the_first_write`;
       where it went is still named when the write after the move fails —
       app unit
@@ -480,6 +489,11 @@ their precedence is `fastcull-core`'s; the app binds (brief 008, 2026-10-01).
 
 ## History
 
+- 2026-10-01 — QE round 1 of brief 008, test proposal TP10 (the senior
+  developer's recommendation B): a write decides from the file as it is
+  NOW — one fixed by hand after a failed read is merged into, not moved
+  aside as a file "that would not read"; `write` loses its `broken`
+  argument.
 - 2026-10-01 — QE round 1 of brief 008, the file (D6, D7): a write keeps
   the file's CRLF line ends and its byte-order mark, which the "survive
   byte-for-byte" sentence had promised without the writer doing it (brief
