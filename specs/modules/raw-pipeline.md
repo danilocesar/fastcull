@@ -135,6 +135,13 @@ BACKLOG workers and one FOCUS-RESERVED lane.
   `BUDGET_FLOOR_BYTES`, 200 MB — settings.md) evicts the least recently
   focused images, never the focused one. The app's view-distance eviction
   of full-res TEXTURES is `transit::evict_fullres` (ui-grid.md).
+- A ring member evicted to make room for another is not re-requested while
+  the focus rests on the same frame and its target does not grow: each
+  member is decoded at most once per settled focus, and a step or a bigger
+  target asks for the new window whole. So a budget smaller than the
+  ±`PREFETCH` window (five A1 frames, ~746 MB) costs a re-decode on the
+  next step, never a loop while the user is idle (QE 2026-10-01, D1;
+  brief 008 D20).
 - turbojpeg DCT scaling is a recorded future optimization only (~35–45 %
   off the cook; the ladder already hides that latency).
 - The lane's three rules each answer a starvation that shipped once: a
@@ -342,7 +349,9 @@ medium's measured behaviour:
 ## Contracts
 
 - `LoupeEngine`: `focus(index, display_long)`, `want(range, cell_width)`,
-  `set_view` (deferred revival is internal); events `Ready` (with the `terminal` flag)
+  `set_view` (deferred revival is internal), `budget()` (the budget the
+  engine adopted, floored — what the app's `loupe engine started budget`
+  mark reports); events `Ready` (with the `terminal` flag)
   and `Failed`; constants `PREFETCH = 2`, `TRANSIT_BEHIND = 2`,
   `TRANSIT_AHEAD = 8`, `FOCUS_DEBOUNCE` (~250 ms), `MID_RUNG_MAX_LONG =
   2048`, `UPSCALE_THRESHOLD = 1.25`.
@@ -397,6 +406,13 @@ medium's measured behaviour:
 - [x] `set_visible` promotion: with a saturated queue a newly visible
       image's thumb arrives before ≥ 90 % of background items —
       `tests/pipeline.rs::promoted_jobs_finish_before_background_bulk`.
+- [x] **A budget below the prefetch window goes quiet** — settled at 512
+      MiB (three A1 frames against a window of five), each frame of the
+      window is decoded once and an idle engine decodes nothing more; a
+      step asks for the new window whole, the frames the budget evicted
+      included, each once — `tests/loupe.rs::a_budget_below_the_prefetch_window_goes_quiet_when_idle`
+      (the app's refresh simulated: a re-focus on every landing),
+      `loupe::tests::a_frame_evicted_under_a_settled_focus_waits_for_the_next_step`.
 - [x] The budgets of 01-architecture.md are enforced by release-mode tests —
       `tests/perf_budgets.rs`: `budget_open_exif_under_1ms`,
       `budget_grid_thumb_under_25ms`, `budget_fullres_decode_under_350ms`,
@@ -428,6 +444,11 @@ medium's measured behaviour:
 
 ## History
 
+- 2026-10-01 — QE round 1 of brief 008 (D1): a budget below the prefetch
+  window looped at 1:1 — every landing evicted a ring member that the
+  app's re-focus asked for again — once the loupe memory setting let a
+  budget that small through; an evicted member now waits for the next step
+  (brief 008 D20). `LoupeEngine::budget()` reports the adopted budget (D23).
 - 2026-10-01 — Brief 008: the loupe budget and the read-pool override
   become settings (settings.md); `Pipeline::start` takes the resolved
   override and the pool stops reading the environment; `BUDGET_FLOOR_BYTES`

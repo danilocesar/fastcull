@@ -613,6 +613,28 @@ setting.
   developer on the measurement; the re-review repeats the probe and
   re-raises with the trace if it does not reproduce. Not a question for
   the user: the spec answers it (a mark names when it fires).
+- D20 (2026-10-01, QE round 1 — defect D1 and spec correction D20; the
+  senior developer's test-integrity review, TP1): a loupe memory below the
+  ±PREFETCH window — five decoded A1 frames, ~746 MB — made the engine
+  re-decode window members for as long as the cursor rested at 1:1: each
+  landing evicted a ring member, and the app's re-focus on every landing
+  (`presenter::refresh`) queued it again. QE's measurement on 4856ce8,
+  release, 0.5 GB, 60 frames, idle on frame 10 at 1:1: 101 full-res
+  decodes in 15 idle seconds, two neighbours alternating every ~0.15 s,
+  CPU user 50.9 s over 25.3 s wall; at the 2 GB default 0 decodes and
+  6.2 s; 0.75 GB and 1 GB went quiet after one decode each; 0.2 GB on a
+  three-file folder gave 42 full-res decodes in 24 s on frame 0. The
+  engine logic predates the unit — the fixed 2 GiB hid it. Fixed in the
+  engine (raw-pipeline.md, the ring's budget rule: a member evicted under
+  a settled focus waits for the next step), not by raising the floor to
+  the window, which is an A1 number — a ~100 MP body's window is ~1.5 GB
+  (M11). QE's correction D20 (retire the `0.5 GB` example until a fix
+  lands) is answered by the fix.
+- D23 (2026-10-01, QE round 1 — defect D2 and spec correction D23; TP2):
+  AC10's driven test waited on `loupe engine started budget <bytes>`, a
+  mark the app built from its own local — mutant M-i (the engine started
+  with `DEFAULT_BUDGET_BYTES`, the mark untouched) stayed green. The mark
+  now reads the engine's adopted figure, `LoupeEngine::budget()`.
 - Directive candidate (2026-10-01): M9's cleanup command `cargo clean
   -p …` cleans the dev profile only — a `screen-rung` release binary
   from 2026-09-29 survived it and the persona ran it by mistake; the

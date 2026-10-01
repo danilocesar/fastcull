@@ -163,8 +163,11 @@ fn load_folder(state: &Rc<RefCell<AppState>>, folder: &std::path::Path) -> Resul
         usize::try_from(budget).unwrap_or(usize::MAX),
     );
     // The proof the loupe memory setting reached the engine
-    // (test-harness.md): a driven test waits on this exact budget.
-    crate::trace::trace_mark(&format!("loupe engine started budget {budget}"));
+    // (test-harness.md): a driven test waits on this exact budget. Read
+    // back FROM the engine, never from `budget` above — a mark built from
+    // the local stayed true with the engine started on the default (QE
+    // 2026-10-01, brief 008 D23).
+    crate::trace::trace_mark(&format!("loupe engine started budget {}", loupe.budget()));
     st.session.pipeline = Some(pipeline);
     st.loupe_view.engine = Some(loupe);
     st.session.pipeline_rx = Some(rx);

@@ -206,9 +206,10 @@ sidecars — scripts target throwaway copies of test data only.
   the dump's `wash=`, `loupemem=`, `cachecap=` and `readers=` are the
   model's (senior-developer review F1 of brief 008); `settings cache
   cleared <before> -> <after>` (bytes); `loupe engine started budget
-  <bytes>` at every folder open (the proof that the loupe memory setting
-  reached the engine); `failed tooltip shown: <reason>` when the Failed
-  badge's tooltip popup is instantiated.
+  <bytes>` at every folder open — the budget the engine ADOPTED
+  (`LoupeEngine::budget()`, floored), the proof that the loupe memory
+  setting reached the engine (QE 2026-10-01, D23); `failed tooltip shown:
+  <reason>` when the Failed badge's tooltip popup is instantiated.
 - **`load settled gen N: cursor pos P, `** — the CONTRACTUAL PREFIX, the
   whole substring a `wait:` registers; the tail differs by zoom and is
   free to (the scroll correction above one column; `scroll X kept (one

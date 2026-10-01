@@ -370,6 +370,191 @@ fn prefetch_follows_the_view_order_through_the_public_api() {
     drop(engine);
 }
 
+/// The full-res long edge of an A1 frame — what a landing at the top rung
+/// measures.
+const A1_FULL: u32 = 8640;
+
+/// Is `index` in the engine's cache at full size?
+fn full_in_cache(engine: &LoupeEngine, index: usize) -> bool {
+    engine
+        .peek(index)
+        .is_some_and(|img| img.width.max(img.height) == A1_FULL)
+}
+
+/// Drain the engine the way the APP does — `focus(on, 8640)` again after
+/// every landing, which is what `presenter::refresh` does on each one —
+/// and return the indexes of the full-res landings, in order.
+///
+/// It stops when every index in `want` has landed at full size and three
+/// quiet seconds follow; as soon as there are more full-res landings than
+/// `want` holds (a frame decoded twice: the loop, proven); or at 60 s.
+/// Gated on the landings themselves, never on a clock alone: a debug
+/// decode on a slow runner can leave a gap longer than the quiet window
+/// between two landings, and that gap must not end the phase early.
+fn drain_refocusing(
+    engine: &LoupeEngine,
+    rx: &std::sync::mpsc::Receiver<LoupeEvent>,
+    on: usize,
+    want: &[usize],
+) -> Vec<usize> {
+    let start = std::time::Instant::now();
+    let mut landed = Vec::new();
+    while start.elapsed() < Duration::from_secs(60) {
+        match rx.recv_timeout(Duration::from_secs(3)) {
+            Ok(LoupeEvent::Ready { index, image, .. }) => {
+                if image.width.max(image.height) == A1_FULL {
+                    landed.push(index);
+                }
+                engine.focus(on, A1_FULL);
+                if landed.len() > want.len() {
+                    break;
+                }
+            }
+            Ok(LoupeEvent::Failed { index, reason }) => panic!("{index} failed: {reason}"),
+            Err(std::sync::mpsc::RecvTimeoutError::Timeout) => {
+                if want.iter().all(|i| landed.contains(i)) {
+                    break;
+                }
+            }
+            Err(std::sync::mpsc::RecvTimeoutError::Disconnected) => break,
+        }
+    }
+    landed
+}
+
+/// Each index of `landed` once, every one of `want`, nothing else — the
+/// window served whole and decoded once.
+fn assert_each_once(landed: &[usize], want: &[usize], phase: &str) {
+    for i in landed {
+        let n = landed.iter().filter(|j| *j == i).count();
+        assert!(
+            n == 1,
+            "{phase}: frame {i} was decoded at full size {n} times under one \
+             settled focus — the budget evicted it and the re-focus asked for \
+             it again, the loop of QE 2026-10-01 D1 (landings {landed:?})"
+        );
+        assert!(
+            want.contains(i),
+            "{phase}: frame {i} is outside the window {want:?} (landings {landed:?})"
+        );
+    }
+    for i in want {
+        assert!(
+            landed.contains(i),
+            "{phase}: frame {i} of the window {want:?} was never decoded at full \
+             size — the engine stopped asking for frames it should fetch \
+             (landings {landed:?})"
+        );
+    }
+}
+
+/// A loupe budget SMALLER than the ±PREFETCH window goes quiet while the
+/// user is idle, and still serves the window once (raw-pipeline.md, the
+/// ring's budget rule; QE 2026-10-01, D1: at 0.5 GB the engine re-decoded
+/// two neighbours every ~150 ms for as long as the cursor rested). 512 MiB
+/// holds three decoded A1 frames; the settled window around 6 is five,
+/// 4..=8, so two of them must be evicted to make room.
+///
+/// The APP is simulated, not merely called: it re-focuses on every landing
+/// (`presenter::refresh`), and the loop cannot start without that — a
+/// single `focus()` is green on the engine that loops (measured,
+/// senior-developer test-integrity review of brief 008, 2026-10-01). Every
+/// assertion is a COUNT, never a duration:
+///
+///   1. settled on 6: each frame of 4..=8 lands at full size exactly once,
+///      and 6 is served (a fix that stopped prefetching cannot pass);
+///   2. eight more idle seconds of the app's re-focusing: no landing at all;
+///   3. a step: the new window is asked for WHOLE again — the frames the
+///      budget evicted under the old focus included — each once. Which two
+///      frames phase 1 evicted is the LRU's tie-break (each re-focus stamps
+///      every cached member alike), so the step is picked from what is
+///      missing: 5 when 4 or 7 was evicted, else 7 (the evicted pair is 5
+///      and 8). Either way the new window holds an evicted frame OTHER than
+///      the one stepped to — which only the step's request can fetch; the
+///      stepped-to frame itself the reserved lane's settle guarantee would
+///      fetch even from an engine that never asked again.
+///
+/// Mutants (2026-10-01), each measured red in debug on the development
+/// seat — see the commit: the hold check taken out of `schedule` (today's
+/// engine before the fix) → phase 1 sees a sixth full-res landing and
+/// stops early, red on "decoded … 2 times"; the clearing taken out of
+/// `note_focus` → phase 3 never fetches the evicted neighbour, red on
+/// "never decoded at full size" at the 60 s cap.
+#[test]
+fn a_budget_below_the_prefetch_window_goes_quiet_when_idle() {
+    let _serial = SERIAL
+        .lock()
+        .unwrap_or_else(std::sync::PoisonError::into_inner);
+    let (engine, rx) = LoupeEngine::start(a1_cycled(12), 512 * 1024 * 1024);
+    let window: Vec<usize> = (4..=8).collect();
+
+    // 1 — settled on 6.
+    engine.focus(6, A1_FULL);
+    let settled = drain_refocusing(&engine, &rx, 6, &window);
+    assert!(
+        full_in_cache(&engine, 6),
+        "the focused frame 6 was never served at full size (landings {settled:?})"
+    );
+    assert_each_once(&settled, &window, "settled on 6");
+
+    // 2 — idle: the app keeps re-focusing on every landing, and there must
+    // be none.
+    let idle_start = std::time::Instant::now();
+    let mut idle = Vec::new();
+    while let Some(left) = Duration::from_secs(8).checked_sub(idle_start.elapsed()) {
+        match rx.recv_timeout(left) {
+            Ok(LoupeEvent::Ready { index, image, .. }) => {
+                if image.width.max(image.height) == A1_FULL {
+                    idle.push(index);
+                }
+                engine.focus(6, A1_FULL);
+            }
+            Ok(LoupeEvent::Failed { index, reason }) => panic!("{index} failed: {reason}"),
+            Err(_) => break,
+        }
+    }
+    assert!(
+        idle.is_empty(),
+        "the engine kept decoding while the user sat idle on 6 — full-res \
+         landings {idle:?} in eight idle seconds"
+    );
+
+    // 3 — a step.
+    let evicted: Vec<usize> = window
+        .iter()
+        .copied()
+        .filter(|i| !full_in_cache(&engine, *i))
+        .collect();
+    assert!(
+        !evicted.is_empty(),
+        "512 MiB kept the whole five-frame window — the budget no longer \
+         sits below it, and this test proves nothing"
+    );
+    let step = if evicted.contains(&4) || evicted.contains(&7) {
+        5
+    } else {
+        7
+    };
+    let new_window: Vec<usize> = (step - 2..=step + 2).collect();
+    let to_land: Vec<usize> = new_window
+        .iter()
+        .copied()
+        .filter(|i| !full_in_cache(&engine, *i))
+        .collect();
+    assert!(
+        to_land.iter().any(|i| *i != step && evicted.contains(i)),
+        "the step to {step} has no evicted frame but itself in its window \
+         (evicted {evicted:?}) — the step choice above is wrong"
+    );
+    engine.focus(step, A1_FULL);
+    let stepped = drain_refocusing(&engine, &rx, step, &to_land);
+    assert!(
+        full_in_cache(&engine, step),
+        "the step to {step} was never served at full size (landings {stepped:?})"
+    );
+    assert_each_once(&stepped, &to_land, &format!("stepped to {step}"));
+}
+
 /// `decode_oriented` must actually APPLY the orientation it is given —
 /// the wiring, not the kernel. QE proved this seam unpinned (2026-08-02):
 /// deleting the `apply_orientation_with` call from `decode_oriented` left

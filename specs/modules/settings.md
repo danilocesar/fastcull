@@ -87,6 +87,9 @@ their precedence is `fastcull-core`'s; the app binds (brief 008, 2026-10-01).
   above this machine's RAM), and its hint says how it was clamped
   (developer 2026-10-01, brief 008 commit A — the spec was silent;
   Manager-accepted under M2, senior-developer review 2026-10-01).
+- A loupe budget below the prefetch window is legal: the engine holds what
+  fits and re-decodes the rest on a step, never while the user is idle
+  (raw-pipeline.md, the ring's budget rule; QE 2026-10-01, D1).
 - **A file that fails to parse is never overwritten in place** (brief 008
   D5: a hand-edited config is the user's data). The defaults are in
   force; both binaries print one stderr line naming the file and the
@@ -431,9 +434,12 @@ their precedence is `fastcull-core`'s; the app binds (brief 008, 2026-10-01).
       with the bytes in force at the next folder open — core
       `the_memory_string_parser`,
       `a_percentage_with_unknown_ram_falls_back_to_the_default_and_says_so`,
-      `the_frames_hint_counts_a1_frames`, `parse_mem_total_reads_meminfo`;
-      app `loupe_memory_takes_effect_at_the_next_folder_open` (waits on
-      `loupe engine started budget <bytes>`).
+      `the_frames_hint_counts_a1_frames`, `parse_mem_total_reads_meminfo`,
+      `loupe::tests::the_engine_reports_the_budget_it_adopted`; app
+      `loupe_memory_takes_effect_at_the_next_folder_open` (waits on
+      `loupe engine started budget <bytes>`, the engine's own figure,
+      `LoupeEngine::budget()` — QE 2026-10-01, D23: until then the mark was
+      the caller's local).
 - [x] **AC11 — the cache cap.** The file's cap is what
       `default_cache_path` enforces, app and CLI alike — core
       `defaults_are_the_specs_numbers` (the setting's default is
@@ -469,6 +475,10 @@ their precedence is `fastcull-core`'s; the app binds (brief 008, 2026-10-01).
 
 ## History
 
+- 2026-10-01 — QE round 1 of brief 008, the loupe memory (D1, D2): a
+  budget below the prefetch window is legal and goes quiet when the user is
+  idle (raw-pipeline.md's ring budget rule, brief 008 D20); AC10's driven
+  proof reads the budget the engine adopted (D23).
 - 2026-10-01 — Review round 1 closed (senior-developer review of brief
   008, F3 and F6, and the Manager's rulings): the four details recorded
   "for review" are Manager-accepted under M2 and read as rules, the cache
