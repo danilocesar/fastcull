@@ -60,10 +60,11 @@ fastcull-core.workspace = true
 #      would notice a new way to photograph twice.
 # Re-read the owner-invariant section of specs/modules/ui-grid.md before
 # raising this bound.
-# FOURTH CANARY (brief 008, the Settings dialog; same 1.17.1). Three
-# measured behaviours its keyboard stands on, none documented upstream
-# (read 2026-10-01 in i-slint-core window.rs `process_key_input` and
-# items/text.rs; ui-grid.md's Slint list):
+# FOURTH CANARY (brief 008, the Settings dialog and the Failed badge's
+# tooltip; same 1.17.1). Four measured behaviours they stand on, none
+# documented upstream (read 2026-10-01 in i-slint-core window.rs
+# `process_key_input`, items/text.rs and items.rs; ui-grid.md's Slint
+# list):
 #   1. The WINDOW handles a Tab or Shift+Tab that the focused item and
 #      every ancestor scope ignored, by walking the WHOLE item tree to the
 #      next focusable item — surfaces hidden behind a scrim included. The
@@ -76,6 +77,13 @@ fastcull-core.workspace = true
 #   3. A `TextInput` ignores Tab, Escape and Ctrl+Tab (control
 #      characters), so all three bubble from a focused field to the
 #      dialog's scope: Esc in a field closes the dialog, Tab walks on.
+#   4. The built-in `Tooltip` (the Failed badge's, `FcTooltip`) is lowered
+#      to a `TooltipArea` that observes the pointer without taking it and
+#      raises a popup 500 ms into a hover (i-slint-compiler
+#      passes/lower_tooltips.rs, i-slint-core items.rs `TooltipArea`). The
+#      popup's content is created at that moment — the `failed tooltip
+#      shown:` mark a driven test waits on — and the area forwards every
+#      press, so the cell under the badge still takes its click.
 slint = { version = "1", default-features = false, features = [
     "std",
     "backend-winit",

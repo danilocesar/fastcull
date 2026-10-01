@@ -11609,3 +11609,130 @@ fn clear_cache_is_off_under_no_cache() {
         "Clear ran with the cache off:\n{stderr}"
     );
 }
+
+/// `hover:<element>` landed inside the rectangle the app reported for the
+/// element — `assert_click_resolved`'s check for a hover: the echo is the
+/// first `drive ptr hover … (<element>)` after the step, and the rectangle
+/// the last one reported before it.
+fn assert_hover_resolved(stderr: &str, element: &str) {
+    let step = format!("] drive: hover:{element}");
+    let step_line = stderr
+        .lines()
+        .rfind(|l| l.ends_with(&step))
+        .unwrap_or_else(|| panic!("no `drive: hover:{element}` step in the trace:\n{stderr}"));
+    let after = stderr
+        .rfind(step_line)
+        .map(|at| &stderr[at + step_line.len()..])
+        .unwrap_or("");
+    let tag = format!(" ({element})");
+    let line = after
+        .lines()
+        .find(|l| l.contains("] drive ptr hover ") && l.ends_with(&tag))
+        .unwrap_or_else(|| panic!("the hover:{element} step never resolved:\n{stderr}"));
+    let point = || -> Option<(f32, f32)> {
+        let at = line.split_once("drive ptr hover ")?.1;
+        let (x, y) = at.split_once(' ')?.0.split_once(',')?;
+        Some((x.parse().ok()?, y.parse().ok()?))
+    };
+    let (px, py) = point().unwrap_or_else(|| panic!("malformed hover echo: {line:?}"));
+    let (x, y, w, h) = laid_out_rect(stderr, element, step_line);
+    assert!(
+        px >= x && px <= x + w && py >= y && py <= y + h,
+        "the hover resolved to ({px}, {py}), outside the {element} rectangle \
+         (x {x}..{}, y {y}..{}):\n{stderr}",
+        x + w,
+        y + h
+    );
+}
+
+/// AC13 (settings.md; ui-grid.md, "Visual language" — promised since M2,
+/// built in brief 008): the Failed badge shows its reason on HOVER —
+/// Slint's built-in tooltip raised by a real pointer move onto the badge,
+/// read from the `failed tooltip shown:` mark its popup emits when it is
+/// created — and the status line carries the same words while the cursor
+/// stands on the failed frame, and none while it stands on a healthy one.
+/// The reason is the pipeline's own, asked of core for the same bytes.
+///
+/// The cursor starts on `broken.ARW`: it is first in name order, and the
+/// load-settled re-sort that puts it last (no capture time) does not move
+/// an untouched cursor once the folder has loaded (issue #25).
+///
+/// Mutant (2026-10-01): the pump recording a failure without its reason
+/// (`or_insert(String::new())`) → the status reads `⚠ failed: ` with
+/// nothing after it and this goes red.
+#[test]
+fn the_failed_badge_shows_its_reason_on_hover_and_in_the_status_line() {
+    if !has_display() {
+        eprintln!("screenshot smoke skipped: no display server");
+        return;
+    }
+    let _s = serial();
+    let dir = out_dir().join("failed-tooltip");
+    std::fs::remove_dir_all(&dir).ok();
+    std::fs::create_dir_all(&dir).unwrap();
+    place_fixture(
+        &raws_dir().join("A1_full_compressed.ARW"),
+        &dir.join("good.ARW"),
+    );
+    let broken = dir.join("broken.ARW");
+    std::fs::write(&broken, vec![0xAB; 2048]).unwrap();
+    // The words the pipeline gives this file — the same function its
+    // workers run (`process_job` sends exactly this string as Failed).
+    let reason = fastcull_core::pipeline::make_grid_thumb(&fastcull_core::pipeline::JobSpec {
+        path: broken.clone(),
+        size: 2048,
+        mtime: None,
+    })
+    .expect_err("2 KB of 0xAB is not a RAW");
+    let out = out_dir().join("failed-tooltip.jpg");
+    // The tail clicks the badge itself with the cursor elsewhere: the
+    // tooltip's hover tracker must take no press (it observes and forwards,
+    // i-slint-core's `TooltipArea`), so the cell under it still claims the
+    // cursor — the pointer contract's click, untouched by the tooltip.
+    let script = "1500:wait:load settled gen 0;1600:dump.broken;1900:key:left;2200:dump.good;\
+                  2500:key:right;2800:dump.again;3100:hover:failed badge 0;\
+                  3200:wait:failed tooltip shown:;3600:dump.tip;3800:key:left;\
+                  4100:click:failed badge 0;4500:dump.clicked";
+    let stderr = shoot_env_stderr(
+        &[dir.to_str().unwrap()],
+        &[("FASTCULL_TRACE", "1"), ("FASTCULL_DRIVE", script)],
+        &out,
+    );
+    let words = format!("broken.ARW (2/2) · unmarked · ⚠ failed: {reason}");
+    for label in ["broken", "again"] {
+        let status = dump_text(qedump(&stderr, label), "status").to_string();
+        assert!(
+            status.starts_with(&words),
+            "dump.{label}: the status line does not name the failed cursor's \
+             reason after its mark words — wanted {words:?}, got {status:?}"
+        );
+    }
+    let good = dump_text(qedump(&stderr, "good"), "status").to_string();
+    assert!(
+        good.starts_with("good.ARW (1/2)") && !good.contains("failed:"),
+        "on the healthy frame the status line still talks of a failure: {good:?}"
+    );
+    assert_hover_resolved(&stderr, "failed badge 0");
+    assert!(
+        stderr.contains("wait:failed tooltip shown: (satisfied"),
+        "the hover never raised the badge's tooltip:\n{stderr}"
+    );
+    // Every time the popup was created it carried the pipeline's words
+    // (the click at the tail raises it once more: a click begins with a
+    // pointer move, which is a hover).
+    let shown = mark_lines(&stderr, "failed tooltip shown: ");
+    assert!(shown >= 1, "the tooltip never showed:\n{stderr}");
+    assert_eq!(
+        mark_lines(&stderr, &format!("failed tooltip shown: {reason}")),
+        shown,
+        "the tooltip did not show the pipeline's reason:\n{stderr}"
+    );
+    assert_click_resolved(&stderr, "failed badge 0");
+    let clicked = dump_text(qedump(&stderr, "clicked"), "status").to_string();
+    assert!(
+        clicked.starts_with(&words),
+        "a click on the badge did not reach the cell under it — the \
+         tooltip's hover tracker took the press: {clicked:?}"
+    );
+    std::fs::remove_dir_all(&dir).ok();
+}

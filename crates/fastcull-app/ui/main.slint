@@ -281,6 +281,34 @@ component SettingRow inherits VerticalLayout {
     }
 }
 
+// THE APP'S TOOLTIP (ui-grid.md, "Visual language"; brief 008 D8): what
+// Slint's built-in `Tooltip` shows, in the house card's colours — the
+// About and shortcuts cards' #202028 with a 1 px #3a3a44 border. Reusable
+// by construction: `Tooltip { FcTooltip { text: …; } }` on any element.
+// The built-in does the rest — it raises its popup 500 ms into a hover,
+// hides it when the pointer leaves, and observes the pointer without
+// taking it (a TooltipArea forwards every press; i-slint-core 1.17.1
+// items.rs). The Failed badge is its first user.
+component FcTooltip inherits Rectangle {
+    in property <string> text;
+    background: #202028;
+    border-color: #3a3a44;
+    border-width: 1px;
+    border-radius: 6px;
+    VerticalLayout {
+        padding-left: 10px;
+        padding-right: 10px;
+        padding-top: 6px;
+        padding-bottom: 6px;
+        Text {
+            text: root.text;
+            color: #e8e8f0;
+            font-size: 12px;
+            wrap: word-wrap;
+        }
+    }
+}
+
 // Modal scaffolding shared by the Help > Shortcuts and About popups:
 // full-area scrim, click-outside-to-close, wheel swallowed (validator M2
 // — TouchAreas pass unhandled scrolls through to the Flickable below),
@@ -1443,6 +1471,13 @@ export component MainWindow inherits Window {
                         border-color: #4da3ff;
                         background: transparent;
                     }
+                    // The Failed badge, and on hover its reason
+                    // (ui-grid.md, "Visual language": promised since M2,
+                    // built in brief 008 — the keyboard's way to the same
+                    // words is the status line). It reports where it is,
+                    // so a driven test can hover it BY NAME
+                    // (`hover:failed badge <id>`); failed cells are a
+                    // handful, so the marks cost nothing.
                     if cell.failed: Rectangle {
                         x: parent.width - 22px;
                         y: 4px;
@@ -1450,6 +1485,16 @@ export component MainWindow inherits Window {
                         height: 18px;
                         border-radius: 9px;
                         background: #c03030;
+                        init => {
+                            root.dbg-card-laid-out("failed badge " + cell.id,
+                                self.absolute-position.x, self.absolute-position.y,
+                                self.width, self.height);
+                        }
+                        changed absolute-position => {
+                            root.dbg-card-laid-out("failed badge " + cell.id,
+                                self.absolute-position.x, self.absolute-position.y,
+                                self.width, self.height);
+                        }
                         Text {
                             text: "!";
                             color: white;
@@ -1458,6 +1503,16 @@ export component MainWindow inherits Window {
                             vertical-alignment: center;
                             width: 100%;
                             height: 100%;
+                        }
+                        Tooltip {
+                            FcTooltip {
+                                text: cell.failed-reason;
+                                // The tooltip's popup exists only while it
+                                // shows: this is the mark a test waits on.
+                                init => {
+                                    root.dbg-note("failed tooltip shown: " + cell.failed-reason);
+                                }
+                            }
                         }
                     }
                 }

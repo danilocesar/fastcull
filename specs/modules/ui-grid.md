@@ -1111,14 +1111,14 @@ into a hover (`builtins.slint`, `TooltipArea`, not user-facing).
 - [x] The shutter fires exactly once per run; the 60 s readiness cap is
       margin again in a debug build — test-harness.md and
       01-architecture.md ("Build profiles").
-- [ ] The Failed badge shows its reason on hover and the status line
+- [x] The Failed badge shows its reason on hover and the status line
       carries it while the cursor stands on the frame (brief 008 R12) —
       `the_failed_badge_shows_its_reason_on_hover_and_in_the_status_line`
       (the hover half raised by `hover:failed badge <id>` and read from
-      the `failed tooltip shown:` mark; if Slint's tooltip popup proves
-      undrivable headlessly that half is recorded as review-verified in
-      the test and here, never faked with a proxy). Open until the plan's
-      commit lands.
+      the `failed tooltip shown:` mark — the popup proved drivable
+      headlessly, so neither half is review-verified; the reason is
+      compared with the pipeline's own for the same bytes, and a click on
+      the badge still reaches the cell under it).
 - [x] `Ctrl+,` opens the Settings dialog, the dialog contains the
       keyboard like the copy dialog, auto-advance off keeps the cursor
       and the selection as `U` does — settings.md's AC1, AC2 and AC8 and

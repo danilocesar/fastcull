@@ -404,11 +404,10 @@ their precedence is `fastcull-core`'s; the app binds (brief 008, 2026-10-01).
       `clear_cache_is_off_under_no_cache` (the disabled row). The worker
       thread, the `Clearing…` state and the re-measured readout are
       review-verified: a driven run cannot have a cache (OQ in the plan).
-- [ ] **AC13 — the Failed badge.** The badge shows the reason on hover and
+- [x] **AC13 — the Failed badge.** The badge shows the reason on hover and
       the status line carries it when the cursor stands on the frame —
       ui-grid.md's ledger
       (`the_failed_badge_shows_its_reason_on_hover_and_in_the_status_line`).
-      Open until brief 008's commit C, the tooltip and its test.
 - [x] **AC14 — the card.** The shortcuts card lists `Ctrl+,` and still
       fits whole at 1000×700 —
       `the_shortcuts_card_lists_every_binding_in_the_spec`,
@@ -423,6 +422,8 @@ their precedence is `fastcull-core`'s; the app binds (brief 008, 2026-10-01).
 
 ## History
 
+- 2026-10-01 — The Failed badge's tooltip (brief 008 commit C): AC13
+  ticked beside its test.
 - 2026-10-01 — Implemented (brief 008 commits A and B): the file, the
   precedence and the dialog; AC1–AC12 and AC14 ticked beside their tests.
   Four details the spec had left open are recorded where they apply as
