@@ -715,7 +715,12 @@ setting.
   script: its `wait:` could not be satisfied on either launch — a
   `--synthetic` session starts no pipeline, and a launch folder's mark comes
   before the harness registers its waits (both probed: exit 1 after 30 s) —
-  so each run opens an empty folder with `open:` before it waits.
+  so each run opens an empty folder with `open:` before it waits. TP-F,
+  recommended for this round by the integrity review, landed with it: the
+  CLI had no test at all, and the cache cap is the one knob both binaries
+  share — `settings_cap::the_cli_honours_the_files_cache_cap_and_says_where_it_came_from`
+  drives the CLI's cap and the four wordings of its `cache:` line on Linux,
+  through the sandboxed default cache; Windows stays review-verified.
 - D31 (2026-10-01, QE round 2 — spec correction D31, "the Manager's
   call"; taken on the senior developer's recommendation under the Manager's
   ruling 8, for the Manager to confirm): settings.md "Reading" promised one

@@ -532,9 +532,12 @@ their precedence is `fastcull-core`'s; the app binds (brief 008, 2026-10-01).
       `the_cache_cap_and_clear_cache_reach_the_default_cache` (300 seeded
       thumbnails of 1 MiB, at most 256 left after a folder open under the
       0.25 GB floor) — and review-verified on Windows, whose known-folder
-      lookup ignores the environment; the CLI's call site is
-      review-verified (QE 2026-10-01, D24: "every driven run is
-      `FASTCULL_NO_CACHE`" had made both review-verified).
+      lookup ignores the environment (QE 2026-10-01, D24: "every driven run
+      is `FASTCULL_NO_CACHE`" had made both call sites review-verified); the
+      CLI's call site is driven on Linux by
+      `settings_cap::the_cli_honours_the_files_cache_cap_and_says_where_it_came_from`
+      (the same sandbox and seed, and the four wordings of where the cap
+      came from) and review-verified on Windows (QE 2026-10-01, D27).
 - [x] **AC12 — Clear cache.** The readout is the db + `-wal` + `-shm`
       size with the path; clearing empties the table and shrinks the
       file through a live connection and never unlinks it; the
@@ -575,6 +578,9 @@ their precedence is `fastcull-core`'s; the app binds (brief 008, 2026-10-01).
 
 ## History
 
+- 2026-10-01 — QE round 2 of brief 008, the CLI's cap (D27, TP-F): the
+  CLI's call site and the wording of its `cache:` line get the CLI's first
+  test, driven on Linux through the sandboxed default cache.
 - 2026-10-01 — QE round 2 of brief 008, four promises with no guard (D27):
   the read workers setting is read back from the pool itself, and the
   reopen tab, the shortcuts card over the dialog and the wheel over its
