@@ -139,9 +139,11 @@ BACKLOG workers and one FOCUS-RESERVED lane.
   the focus rests on the same frame and its target does not grow: each
   member is decoded at most once per settled focus, and a step or a bigger
   target asks for the new window whole. So a budget smaller than the
-  ±`PREFETCH` window (five A1 frames, ~746 MB) costs a re-decode on the
-  next step, never a loop while the user is idle (QE 2026-10-01, D1;
-  brief 008 D20).
+  ±`PREFETCH` window (five A1 frames, ~712 MB — 0.7 GB in the app's binary
+  units) costs a re-decode on the next step, never a loop while the user is
+  idle (QE 2026-10-01, D1; brief 008 D20; the window's size corrected
+  2026-10-01, QE D30 — it read ~746 MB, decimal megabytes, where the app's
+  byte formatter and settings.md's GB are binary).
 - turbojpeg DCT scaling is a recorded future optimization only (~35–45 %
   off the cook; the ladder already hides that latency).
 - The lane's three rules each answer a starvation that shipped once: a
@@ -446,6 +448,9 @@ medium's measured behaviour:
 
 ## History
 
+- 2026-10-01 — QE round 2 of brief 008 (D30): the prefetch window's size
+  in the ring's budget rule is given in the app's binary units, ~712 MB,
+  where it gave ~746 decimal megabytes.
 - 2026-10-01 — QE round 2 of brief 008 (D27): `Pipeline::read_pool_bounds()`
   reports the read pool's adopted bounds, so a test can see the read
   workers setting reach the pool rather than the caller's copy of it.

@@ -721,6 +721,36 @@ setting.
   share — `settings_cap::the_cli_honours_the_files_cache_cap_and_says_where_it_came_from`
   drives the CLI's cap and the four wordings of its `cache:` line on Linux,
   through the sandboxed default cache; Windows stays review-verified.
+- D28 (2026-10-01, QE round 2 — defect D28; PROVISIONAL under D10, put to
+  the user): a write emits every known key with its value in force
+  (settings.md, "Writing"), so two FastCull instances sharing one config
+  dir take back each other's committed settings. QE: instance A committed
+  Selection highlight 15; 2.5 s later instance B, whose dialog had been
+  opened before A's commit, clicked Auto-advance off and wrote
+  `selection_wash = 25` with it; A reopened its dialog, re-read the file,
+  and its wash dropped to 25 with no message anywhere. Same root under the
+  TP10 ruling: a hand fix made while the dialog is open loses its values
+  for the known keys (QE measured `selection_wash = 40 # my choice` written
+  back as `25 # my choice`, no `.broken` kept, the notice empty). The code
+  follows the spec's text; the spec is silent on two instances and on a
+  hand edit made while the dialog is open. Taken on the most reversible
+  option — nothing changes in this unit — and put to the user: keep
+  writing every key, or write only the keys a commit or a Reset changes
+  (creating a missing key with its note), which QE and the developer
+  recommend.
+- D29 (2026-10-01, QE round 2 — spec correction D29): settings.md's AC6
+  said "the two that write set `FASTCULL_CONFIG_DIR`"; seven driven tests
+  set it on 6f20679, several of them read-only, and nine tests set it
+  after round 2 (eight driven, plus the CLI's). AC6 now reads "every test
+  that reads or writes a settings file", the senior developer's open nit
+  from the review.
+- D30 (2026-10-01, QE round 2 — spec correction D30): raw-pipeline.md's
+  ring rule gave the ±PREFETCH window as ~746 MB — 5 × 149,299,200 B =
+  746,496,000 B, decimal megabytes — while the app's byte formatter and
+  settings.md's GB are binary: 711.9 MB, 0.70 GB. The rule reads "~712 MB —
+  0.7 GB in the app's binary units", and docs/settings.md's "below about
+  0.75 GB" reads 0.7 GB so the two agree. D20 above keeps its decimal
+  figure as the record of round 1.
 - D31 (2026-10-01, QE round 2 — spec correction D31, "the Manager's
   call"; taken on the senior developer's recommendation under the Manager's
   ruling 8, for the Manager to confirm): settings.md "Reading" promised one
@@ -732,6 +762,19 @@ setting.
   to "at startup" (the alternative QE offered): `Loaded::stderr_line()` is
   the wording's one home, printed by `load_default` and by the bridge's
   re-read at every dialog open.
+- D32 (2026-10-01, QE round 2 — spec correction D32; evidence only, never
+  Behaviour): both cards at 1000×700 in their tallest states (the Settings
+  card with the environment note and a parse error on the notice line),
+  Settings card / shortcuts card, in px: Noto Sans 541 (slack 47) / 572
+  (slack 31); Liberation Sans 514 / 511; Comfortaa 521 / 536; Adwaita Mono
+  582 (slack 26) / clamped 594; Noto Sans Mono clamped 594, slack exactly
+  20 / clamped 594. Round 1 measured the Settings card at 587 under Noto
+  Sans Mono; D25's cache cap note is one line longer on a mono face, and
+  under that face `the_settings_card_fits_its_smallest_window_in_its_tallest_state`
+  would be red (it is not a CI face). The risk it carries: the next row
+  (#15, #24) will clamp the Settings card on wider faces. The fit test's
+  20 px stays as it is — the plan forbids loosening it or pinning a height
+  — and the next unit budgets for a taller card, not a wider margin.
 - Directive candidate (2026-10-01): M9's cleanup command `cargo clean
   -p …` cleans the dev profile only — a `screen-rung` release binary
   from 2026-09-29 survived it and the persona ran it by mistake; the

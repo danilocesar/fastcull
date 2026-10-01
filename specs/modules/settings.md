@@ -483,8 +483,10 @@ their precedence is `fastcull-core`'s; the app binds (brief 008, 2026-10-01).
       test touches the real file — core
       `config_dir_honours_the_override_then_no_config`; app
       `settings_under_no_config_applies_in_memory_and_writes_nothing`;
-      every driven run carries `FASTCULL_NO_CONFIG=1`, and the two that
-      write set `FASTCULL_CONFIG_DIR` to their own scratch dir.
+      every driven run carries `FASTCULL_NO_CONFIG=1`, and every test that
+      reads or writes a settings file sets `FASTCULL_CONFIG_DIR` to its own
+      scratch dir (corrected 2026-10-01, QE D29: it said "the two that
+      write", and seven tests set it then, several of them read-only).
 - [x] **AC7 — precedence.** With `FASTCULL_MAX_READERS` set the field is
       read-only with the environment's value and its note; unset, the
       file's value governs the pool; an unparsable value is ignored —
@@ -578,6 +580,9 @@ their precedence is `fastcull-core`'s; the app binds (brief 008, 2026-10-01).
 
 ## History
 
+- 2026-10-01 — QE round 2 of brief 008, bookkeeping (D29): AC6 says every
+  test that reads or writes a settings file sets `FASTCULL_CONFIG_DIR`,
+  where it said "the two that write".
 - 2026-10-01 — QE round 2 of brief 008, the CLI's cap (D27, TP-F): the
   CLI's call site and the wording of its `cache:` line get the CLI's first
   test, driven on Linux through the sandboxed default cache.
