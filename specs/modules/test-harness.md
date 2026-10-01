@@ -238,9 +238,21 @@ sidecars — scripts target throwaway copies of test data only.
 - **Focus**: `focus: <what> gained|lost` from the `changed has-focus`
   handlers of the main scope (`keys`), each `iptc field N`, the keyword
   field, `copy dialog`, `clip dialog`, and since brief 008 `settings
-  dialog` and `settings strip` (the Settings dialog's scope and its tab
-  strip, where the keyboard lands on open) — a `gained` with no matching
-  `lost` from the previous holder is the dangling-weak signature;
+  dialog` and `settings strip` — a `gained` with no matching `lost` from
+  the previous holder is the dangling-weak signature. `settings dialog` is
+  the Settings dialog's own scope: `gained` when a press on the scrim, or
+  on the card outside any control, hands it the keyboard (a FocusScope
+  takes focus on a click), `lost` when the keyboard moves on from there.
+  `settings strip` is its tab strip: `lost` when a control or the scope
+  takes the keyboard and when the dialog closes, `gained` when the
+  keyboard comes back to it from elsewhere in the dialog (a tab switch
+  from a control, `Tab`/`Shift+Tab` round the ring) — NEVER at the open
+  itself, though that is where the keyboard lands: the open's claim is
+  made in the dialog's `init`, before the strip's tracker exists, so the
+  landing is the tracker's baseline (Cargo.toml's second canary, fact 5),
+  and a test proves it by `focusowner=-1` and a `key:right` that switches
+  tabs (corrected 2026-10-01, senior-developer review F3: this sentence
+  said both marks fired where the keyboard lands on open);
   `focus-keys (<reason>)` — a claim was MADE, tagged at every call site:
   `swap`, `panel-open`, `panel-close`, `modal`, `rebuild`, `deferred` (a
   queued claim has ARRIVED — not the same event as its queuing),

@@ -3239,7 +3239,10 @@ export component MainWindow inherits Window {
         // click on the scrim does NOT (a form, like Copy Picks, not a
         // popup like About). Three tabs — the strip is a `for` over
         // `settings-tabs`, so the next unit adds a tab by adding an entry
-        // and a body — and under the strip the active tab's rows.
+        // and a body, AND the body's controls to the keyboard ring's hand
+        // lists below (`slot-count`, `slot-ok`, `focus-slot`, and `flush`
+        // for a number field), or Tab silently never reaches them — and
+        // under the strip the active tab's rows.
         //
         // The fifth hand-rolled scrim, for the copy dialog's reason: the
         // key scope must WRAP the card, and `ModalScrim` takes its
@@ -3298,6 +3301,9 @@ export component MainWindow inherits Window {
                 // Which slot of the ring holds the keyboard: 0 the strip,
                 // then the active tab's controls, then Reset, then Close.
                 property <int> slot: 0;
+                // The scope itself holds the keyboard only after a press on
+                // the scrim or on the card outside any control (a FocusScope
+                // takes focus on a click); the open lands on the strip.
                 changed has-focus => {
                     root.dbg-focus-changed("settings dialog", self.has-focus);
                     if (self.has-focus) { root.focus-owner = -1; }

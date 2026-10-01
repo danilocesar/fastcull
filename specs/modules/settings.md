@@ -51,7 +51,8 @@ their precedence is `fastcull-core`'s; the app binds (brief 008, 2026-10-01).
   always total RAM"). `cache_cap` takes the GB form only; a `%` there is
   garbage. A percentage is a whole number, as the contract's
   `Percent(u32)` says: `40.5%` is garbage, not rounded (developer
-  2026-10-01, brief 008 commit A — the spec was silent; for review).
+  2026-10-01, brief 008 commit A — the spec was silent; Manager-accepted
+  under M2, senior-developer review 2026-10-01).
 
 ### Reading
 
@@ -78,10 +79,14 @@ their precedence is `fastcull-core`'s; the app binds (brief 008, 2026-10-01).
   the dialog's hint says so; `cache_cap` bytes clamp to [256 MB, ∞) — 256 MB
   holds one large shoot's thumbnails (30–60 KB each), and below it the
   "second open is instant" promise of catalog-cache.md could not survive a
-  single big folder (senior-developer plan 2026-10-01). Having no hint
-  beside its field, the cap also reads as 0.25 GB in the model, so the
-  field shows the value in force (developer 2026-10-01, brief 008 commit
-  A — the spec was silent; for review).
+  single big folder (senior-developer plan 2026-10-01). The cap clamps IN
+  THE MODEL — below the floor it reads as 0.25 GB — so the field, and the
+  file at its next write, carry the value in force, an absolute figure
+  with no hint beside it; the loupe memory instead keeps the figure as
+  typed, because it is relative to the machine (a share, or a GB figure
+  above this machine's RAM), and its hint says how it was clamped
+  (developer 2026-10-01, brief 008 commit A — the spec was silent;
+  Manager-accepted under M2, senior-developer review 2026-10-01).
 - **A file that fails to parse is never overwritten in place** (brief 008
   D5: a hand-edited config is the user's data). The defaults are in
   force; both binaries print one stderr line naming the file and the
@@ -184,8 +189,12 @@ their precedence is `fastcull-core`'s; the app binds (brief 008, 2026-10-01).
   **General | UI | Performance**, in that order, the active tab marked
   (brighter label, a 2 px accent underline). The tabs are a LIST — one
   entry per tab on the Slint side, `settings::TABS` on the core side — so
-  the next unit adds a tab by adding an entry and a body. Under the strip
-  is the active tab's form: one row per setting with a label, a control
+  the next unit adds a tab by adding an entry and a body, and the body's
+  controls to the dialog's keyboard ring, whose lists are kept by hand
+  (`slot-count`, `slot-ok`, `focus-slot`, and `flush` for a number field):
+  a control missing there is one `Tab` never reaches (senior-developer
+  review F6, 2026-10-01). Under the strip is the active tab's form: one
+  row per setting with a label, a control
   and a one-line note beneath them in the shortcuts card's dim style (the
   `G` row's grey line, `#8a8a96`, 11 px) that says what the setting does,
   its default and when it takes effect. The footer carries `Reset <tab>
@@ -214,10 +223,10 @@ their precedence is `fastcull-core`'s; the app binds (brief 008, 2026-10-01).
   like any other: the field's text commits first, then the click does its
   own work — a Reset resets the very field it has just committed — so
   only `Esc` discards (developer 2026-10-01, brief 008 commit B — the spec
-  was silent on Close; for review). A field commits only what the user
-  typed into it, never a text it is merely showing, and it shows the value
-  in force whenever the keyboard leaves it (senior-developer review F1,
-  2026-10-01).
+  was silent on Close; Manager-accepted under M2, senior-developer review
+  2026-10-01). A field commits only what the user typed into it, never a
+  text it is merely showing, and it shows the value in force whenever the
+  keyboard leaves it (senior-developer review F1, 2026-10-01).
 
 ### The settings
 
@@ -279,8 +288,9 @@ their precedence is `fastcull-core`'s; the app binds (brief 008, 2026-10-01).
   a limit of 4 — the pool's floor and the fixed gate
   `FASTCULL_MAX_READERS=4` restores; the setting is one integer, so the
   box has to name some limit (developer 2026-10-01, brief 008 commit A —
-  the spec was silent; for review). Core resolves
-  `(environment, setting) → the pool's configuration` in one pure
+  the spec was silent; Manager-accepted under M2, senior-developer review
+  2026-10-01). Core resolves `(environment, setting) → the pool's
+  configuration` in one pure
   function, `settings::resolve_max_readers`, that both binaries call where
   `pipeline.rs` read the variable. The environment override shows
   read-only as above. Note: "Adaptive (recommended): 4 readers, growing
@@ -450,15 +460,20 @@ their precedence is `fastcull-core`'s; the app binds (brief 008, 2026-10-01).
       `the_shortcuts_card_lists_every_binding_in_the_spec`,
       `shortcuts_card_is_a_two_column_sheet_that_fits_its_window`
       (ui-grid.md).
-- [ ] **AC15 — docs.** `docs/settings.md` exists, CLAUDE.md's page map
+- [x] **AC15 — docs.** `docs/settings.md` exists, CLAUDE.md's page map
       names it, and `docs/culling.md` and `docs/faq.md` follow the
-      behaviour — review-verified. Open until the senior developer's
-      review of brief 008 verifies it (no test pins prose).
+      behaviour — review-verified by the senior developer's review of
+      brief 008, 2026-10-01 (no test pins prose).
 - [ ] **AC16 — no budget row moves** — `tests/perf_budgets.rs` green in
       release on the idle seat (QE). Open until QE's run.
 
 ## History
 
+- 2026-10-01 — Review round 1 closed (senior-developer review of brief
+  008, F3 and F6, and the Manager's rulings): the four details recorded
+  "for review" are Manager-accepted under M2 and read as rules, the cache
+  cap's as the ruling words it; the card paragraph names the keyboard
+  ring's hand lists a new tab must join; AC15 ticked, review-verified.
 - 2026-10-01 — A write that fails (senior-developer review of brief 008,
   F2, F4, F5): the two behaviours the developer had added without stating
   them are stated — an open does not re-read while a write error stands,
