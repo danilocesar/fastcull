@@ -3464,7 +3464,10 @@ export component MainWindow inherits Window {
                 y: (parent.height - self.height) / 2;
                 width: min(560px, parent.width - 40px);
                 // Content-driven, clamped to the window; the Performance
-                // tab is the tallest and fits whole at 1000x700.
+                // tab is the tallest and fits whole at 1000x700 in its
+                // tallest state (the environment note, a long notice) —
+                // `the_settings_card_fits_its_smallest_window_in_its_
+                // tallest_state` measures the slack (settings.md).
                 height: min(settings-card-layout.preferred-height, parent.height - 40px);
                 border-radius: 8px;
                 background: #202028;

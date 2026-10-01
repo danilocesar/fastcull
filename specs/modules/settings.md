@@ -215,7 +215,11 @@ their precedence is `fastcull-core`'s; the app binds (brief 008, 2026-10-01).
   its default and when it takes effect. The footer carries `Reset <tab>
   to defaults` — the ACTIVE tab's settings only, written at once — and
   `Close`, and a notice line that is empty unless the file could not be
-  read, could not be written, is not saved, or was moved aside.
+  read, could not be written, is not saved, or was moved aside. The
+  Performance tab in its tallest state — the environment's note on the read
+  workers row, a read error's whole text on the notice line — fits whole at
+  1000×700, the smallest supported window (ui-grid.md), measured as slack
+  under the card, never pinned as a height (QE 2026-10-01, D9).
 - **Keyboard.** `Tab`/`Shift+Tab` walk the strip and the active tab's
   controls in order — the strip, the controls top to bottom, Reset, Close
   — and never leave the dialog: the dialog's own key scope handles both,
@@ -379,14 +383,23 @@ their precedence is `fastcull-core`'s; the app binds (brief 008, 2026-10-01).
       dialog; `Esc` and Close close it; the keyboard returns to the grid
       (`key:+` zooms afterwards); a scrim click does not close it —
       `settings_opens_from_the_chord_and_the_menu_and_closes_with_esc_keeping_the_keyboard`
-      (its menu strand Linux-only, like About's).
+      (its menu strand Linux-only, like About's); opened over a focused
+      keyword field holding typed text, it commits the field like a
+      click-away and owns the keyboard —
+      `settings_over_a_focused_keyword_field_commits_it_and_owns_the_keyboard`
+      (the real File menu on Linux, the `settings` token elsewhere; QE
+      2026-10-01, D8).
 - [x] **AC2 — containment.** Under the dialog `Y`/`N` mark nothing and
       `Ctrl+E`/`Ctrl+Shift+E` open nothing; About over it closes
       topmost-first; driven nav tokens are swallowed; the menu bar stays
       live — `settings_contains_every_grid_key_and_stacks_under_about`.
       `Ctrl+O`'s inertness is review-verified: the arm is the same scope
       rule, and a driven Ctrl+O that worked would open the native picker
-      and hang the run.
+      and hang the run. The dialog and the export dialogs never stack —
+      `settings_and_the_export_dialogs_never_stack`: `Ctrl+,` under Copy
+      Picks on every runner; the File menu's greying driven on Linux, each
+      greyed click checked against a control click, and review-verified on
+      Windows, whose menu bar is the OS's (QE 2026-10-01, D3).
 - [x] **AC3 — the tabs.** Three tabs in order, switched by `Left`/`Right`
       on the strip and by `Ctrl+Tab`/`Ctrl+Shift+Tab` from a field; digits
       never switch; `Tab` walks the controls and never leaves the dialog;
@@ -409,7 +422,10 @@ their precedence is `fastcull-core`'s; the app binds (brief 008, 2026-10-01).
       `a_created_key_carries_its_note_and_an_existing_key_keeps_its_comment`,
       `the_normalised_string_is_what_the_file_stores`; a write that fails
       keeps the commit in force and the next open does not re-read over it
-      — app `a_failed_settings_write_keeps_the_commit_and_the_next_open_does_not_reread`.
+      — app `a_failed_settings_write_keeps_the_commit_and_the_next_open_does_not_reread`;
+      a commit or a Reset that changes nothing creates no file — app
+      `a_no_change_commit_or_reset_never_creates_the_file` (QE 2026-10-01,
+      D4).
 - [x] **AC5 — a broken file.** A malformed file yields the defaults, a
       status-line and a stderr warning naming the file and the error, and
       is never overwritten in place; the first write moves it aside under
@@ -488,6 +504,10 @@ their precedence is `fastcull-core`'s; the app binds (brief 008, 2026-10-01).
       `the_shortcuts_card_lists_every_binding_in_the_spec`,
       `shortcuts_card_is_a_two_column_sheet_that_fits_its_window`
       (ui-grid.md).
+- [x] **The Settings card fits its smallest window.** The Performance tab
+      in its tallest state fits whole at 1000×700, Close and Reset inside
+      the card — `the_settings_card_fits_its_smallest_window_in_its_tallest_state`
+      (slack measured, height never pinned; QE 2026-10-01, D9).
 - [x] **AC15 — docs.** `docs/settings.md` exists, CLAUDE.md's page map
       names it, and `docs/culling.md` and `docs/faq.md` follow the
       behaviour — review-verified by the senior developer's review of
@@ -497,6 +517,10 @@ their precedence is `fastcull-core`'s; the app binds (brief 008, 2026-10-01).
 
 ## History
 
+- 2026-10-01 — QE round 1 of brief 008, four promises with no test (D3,
+  D4, D8, D9): the never-stack greying, the no-change write, Settings over
+  a focused keyword field, and the card's fit in its tallest state each
+  gain a driven test; the card's fit is stated under "The card".
 - 2026-10-01 — QE round 1 of brief 008, the notes (D5): every note reports
   what it shows and where it is laid out, and AC3's note clause has a test
   that reads them (brief 008 D22).

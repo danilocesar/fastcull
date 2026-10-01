@@ -12045,3 +12045,364 @@ fn every_settings_note_is_the_core_text() {
          note is bound but not drawn:\n{stderr}"
     );
 }
+
+/// AC2, stacking (settings.md, "Stacking"; brief 008 D12): the Settings
+/// dialog and the export dialogs never stack. On every runner, the keyboard
+/// half: with Copy Picks up, `Ctrl+,` opens nothing (the chord lives in the
+/// main key scope, which the copy dialog's scope stands in front of). On
+/// the calibrated runners, the menu half: with Settings up, File › Copy
+/// Picks… is greyed and a click on it opens nothing; with Copy Picks up,
+/// File › Settings… is greyed likewise. Each greyed click is followed by a
+/// CONTROL — the same click with nothing up opens that dialog — so a click
+/// that missed its item cannot pass for a greyed one. The menu strand is
+/// Linux-only, like About's (`menu_clicks_are_calibrated`): on Windows the
+/// menu bar is the OS's, outside the client area, so the greying there is
+/// review-verified. (The pick made first is the approved script's; Copy
+/// Picks opens with or without one — a synthetic session has no files to
+/// plan, and its summary says so.)
+///
+/// Mutant (2026-10-01): both `enabled:` conditions of the File menu's Copy
+/// Picks… and Settings… items set to `true` → Copy Picks opens over
+/// Settings (`dump.greyed1` reads `copy=true`) and Settings over Copy Picks
+/// (`dump.greyed2` reads `settings=true`) — red on Linux.
+#[test]
+fn settings_and_the_export_dialogs_never_stack() {
+    if !has_display() {
+        eprintln!("screenshot smoke skipped: no display server");
+        return;
+    }
+    let _s = serial();
+    let out = out_dir().join("settings-never-stack.jpg");
+    let menu = if menu_clicks_are_calibrated() {
+        "3100:key:ctrl+,;3500:click.22,19;3900:click.80,93;4300:dump.greyed1;\
+         4500:key:escape;4800:key:escape;5200:dump.closed1;\
+         5500:click.22,19;5900:click.80,93;6300:dump.ctrl1;6500:key:escape;\
+         6900:key:ctrl+e;7300:click.22,19;7700:click.80,157;8100:dump.greyed2;\
+         8300:key:escape;8600:key:escape;9000:dump.closed2;\
+         9300:click.22,19;9700:click.80,157;10100:dump.ctrl2"
+    } else {
+        "3100:dump.nomenu"
+    };
+    let script = format!(
+        "900:key:y;1200:key:ctrl+e;1600:dump.copy;1800:key:ctrl+,;2200:dump.chord;\
+         2400:key:escape;2800:dump.copyclosed;{menu}"
+    );
+    let stderr = shoot_env_stderr(
+        &["--synthetic", "24"],
+        &[("FASTCULL_TRACE", "1"), ("FASTCULL_DRIVE", script.as_str())],
+        &out,
+    );
+    assert_eq!(
+        dump_field(qedump(&stderr, "copy"), "copy"),
+        "true",
+        "Ctrl+E did not open Copy Picks with a pick made — the premise:\n{stderr}"
+    );
+    let chord = qedump(&stderr, "chord");
+    assert!(
+        dump_field(chord, "settings") == "false" && dump_field(chord, "copy") == "true",
+        "Ctrl+, under Copy Picks opened Settings over it: {chord}"
+    );
+    assert_eq!(
+        dump_field(qedump(&stderr, "copyclosed"), "copy"),
+        "false",
+        "Esc did not close Copy Picks:\n{stderr}"
+    );
+    if !menu_clicks_are_calibrated() {
+        return;
+    }
+    let greyed1 = qedump(&stderr, "greyed1");
+    assert!(
+        dump_field(greyed1, "settings") == "true" && dump_field(greyed1, "copy") == "false",
+        "File › Copy Picks… opened over the Settings dialog — it is greyed while \
+         Settings is up (brief 008 D12): {greyed1}"
+    );
+    assert_eq!(
+        dump_field(qedump(&stderr, "closed1"), "settings"),
+        "false",
+        "two Escs (the menu, then the dialog) did not close Settings:\n{stderr}"
+    );
+    assert_eq!(
+        dump_field(qedump(&stderr, "ctrl1"), "copy"),
+        "true",
+        "CONTROL: the File › Copy Picks… click opened nothing with nothing up — \
+         the coordinate missed the item, so the greyed check above is vacuous:\n{stderr}"
+    );
+    let greyed2 = qedump(&stderr, "greyed2");
+    assert!(
+        dump_field(greyed2, "copy") == "true" && dump_field(greyed2, "settings") == "false",
+        "File › Settings… opened over Copy Picks — it is greyed while Copy Picks \
+         is up (brief 008 D12): {greyed2}"
+    );
+    let closed2 = qedump(&stderr, "closed2");
+    assert!(
+        dump_field(closed2, "copy") == "false" && dump_field(closed2, "settings") == "false",
+        "two Escs (the menu, then the dialog) did not close Copy Picks: {closed2}"
+    );
+    assert_eq!(
+        dump_field(qedump(&stderr, "ctrl2"), "settings"),
+        "true",
+        "CONTROL: the File › Settings… click opened nothing with nothing up — the \
+         coordinate missed the item, so the greyed check above is vacuous:\n{stderr}"
+    );
+}
+
+/// settings.md, "Writing": a commit or a Reset that changes nothing writes
+/// only a file that already exists — a missing settings.toml stays missing
+/// until the first CHANGE. Into an empty config dir: Reset General (all
+/// defaults already) and an Enter on the untouched wash field change nothing
+/// and write nothing — read off the trace's order, every `settings written`
+/// line coming after the one real commit — then typing 15 writes, once.
+/// (`Ctrl+Tab`, not the approved script's `Right`, switches to the UI tab:
+/// the Reset click leaves the keyboard on Reset, where Right does nothing.)
+///
+/// Mutant (2026-10-01): the `!changed && !path.exists()` guard taken out of
+/// `settings_bridge::save` → the Reset alone creates the file, a
+/// `settings written` line precedes the typed commit and this goes red.
+#[test]
+fn a_no_change_commit_or_reset_never_creates_the_file() {
+    if !has_display() {
+        eprintln!("screenshot smoke skipped: no display server");
+        return;
+    }
+    let _s = serial();
+    let dir = settings_scratch("nochange", None);
+    let out = out_dir().join("settings-nochange.jpg");
+    let script = "900:key:ctrl+,;1300:click:settings reset;1700:key:ctrl+tab;\
+                  2100:click:settings wash;2400:key:return;2800:dump.untouched;\
+                  3000:key:ctrl+a;3200:key:1;3400:key:5;3600:key:return;4000:dump.changed";
+    let stderr = shoot_env_stderr(
+        &["--synthetic", "24"],
+        &[
+            ("FASTCULL_TRACE", "1"),
+            ("FASTCULL_CONFIG_DIR", dir.to_str().unwrap()),
+            ("FASTCULL_DRIVE", script),
+        ],
+        &out,
+    );
+    let file = dir.join("settings.toml");
+    assert_click_resolved(&stderr, "settings reset");
+    assert_click_resolved(&stderr, "settings wash");
+    let labels = mark_labels(&stderr);
+    let count = |l: &str| labels.iter().filter(|x| **x == l).count();
+    assert_eq!(
+        count("settings reset general"),
+        1,
+        "the Reset of General did not run once — the premise:\n{stderr}"
+    );
+    assert_eq!(
+        count("settings committed ui.selection_wash = 25"),
+        1,
+        "the Enter on the untouched field did not commit — the premise:\n{stderr}"
+    );
+    let untouched = qedump(&stderr, "untouched");
+    assert_eq!(dump_field(untouched, "settingstab"), "1");
+    assert_eq!(
+        dump_text(untouched, "settingsnote"),
+        "",
+        "the notice is not empty after changes that changed nothing: {untouched}"
+    );
+    let typed = labels
+        .iter()
+        .position(|l| *l == "settings committed ui.selection_wash = 15")
+        .unwrap_or_else(|| panic!("the typed 15 was never committed:\n{stderr}"));
+    assert!(
+        !labels[..typed]
+            .iter()
+            .any(|l| l.starts_with("settings written ")),
+        "settings.toml was written before anything changed — a no-change Reset \
+         or commit created the file (settings.md, \"Writing\"):\n{stderr}"
+    );
+    assert_eq!(
+        mark_lines(&stderr, "settings written "),
+        1,
+        "the file was written other than once (once, for the one change):\n{stderr}"
+    );
+    let text = std::fs::read_to_string(&file).expect("settings.toml after the change");
+    assert!(
+        text.contains("selection_wash = 15"),
+        "the written file lacks the change:\n{text}"
+    );
+    std::fs::remove_dir_all(&dir).ok();
+}
+
+/// AC1 (settings.md, "The dialog"; focus continuity): opening Settings over
+/// a FOCUSED keyword field holding typed text commits the field like a
+/// click-away — the keyword lands in the sidecar, the Revert slot names it
+/// — and the dialog owns the keyboard (the `-1` token): `Y`/`N` under it
+/// mark nothing; `Esc` closes it and hands the keyboard back to the grid,
+/// proven by acting (`+` zooms). Opened from the real File menu on the
+/// calibrated runners — the menu's own focus restore is what bit issue #41
+/// — and by the `settings` token elsewhere, which runs the same
+/// `settings-open` body.
+///
+/// What this pins is the OUTCOME, which several belts hold up at once: on
+/// the menu path the field commits when the File menu opens, and the
+/// dialog takes the `-1` token at its creation, before the menu's deferred
+/// reassert reads it; the open's `focus-keys()`, its deferred refocus,
+/// focus.rs's covered term and the field's bounce are each redundant with
+/// those (measured: each taken out alone, and the last three together,
+/// leave this green).
+///
+/// Mutant (2026-10-01): the Settings branch taken out of `focus-keys()` →
+/// every claim while the dialog is up routes the keyboard to the grid
+/// behind it, `dump.opened` reads `focusowner=0` and this goes red — on the
+/// menu path and on the token path (the latter measured on Linux with the
+/// token forced).
+#[test]
+fn settings_over_a_focused_keyword_field_commits_it_and_owns_the_keyboard() {
+    if !has_display() {
+        eprintln!("screenshot smoke skipped: no display server");
+        return;
+    }
+    let _s = serial();
+    let dir = out_dir().join("settings-over-keyword");
+    std::fs::remove_dir_all(&dir).ok();
+    std::fs::create_dir_all(&dir).unwrap();
+    place_fixture(
+        &raws_dir().join("A1_full_compressed.ARW"),
+        &dir.join("one.ARW"),
+    );
+    let out = out_dir().join("settings-over-keyword.jpg");
+    let open = if menu_clicks_are_calibrated() {
+        "3600:click.22,19;4000:click.80,157"
+    } else {
+        "4000:settings"
+    };
+    let script = format!(
+        "2400:wait:load settled gen 0;2500:key:k;3000:key:b;3100:key:i;3200:key:r;\
+         3300:key:d;{open};4400:dump.opened;4600:key:y;4800:key:n;5100:dump.under;\
+         5300:key:escape;5700:dump.closed;5900:key:+;6200:dump.zoomed"
+    );
+    let stderr = shoot_env_stderr(
+        &[dir.to_str().unwrap()],
+        &[("FASTCULL_TRACE", "1"), ("FASTCULL_DRIVE", script.as_str())],
+        &out,
+    );
+    assert!(
+        stderr.contains("wait:load settled gen 0 (satisfied"),
+        "the `wait:load settled gen 0` step never fired — the panel opened on \
+         the clock:\n{stderr}"
+    );
+    let opened = qedump(&stderr, "opened");
+    assert_eq!(
+        dump_field(opened, "settings"),
+        "true",
+        "the Settings dialog never opened (the menu click missed?): {opened}"
+    );
+    assert_eq!(
+        dump_field(opened, "focusowner"),
+        "-1",
+        "the dialog is up but does not own the keyboard (the `-1` token) — \
+         the keyword field or the grid holds it behind the scrim: {opened}"
+    );
+    assert!(
+        opened.contains("revert=\"Revert: keywords on 1 image(s)\""),
+        "the typed keyword was not committed when Settings opened over the \
+         field — a click-away commits it: {opened}"
+    );
+    let under = qedump(&stderr, "under");
+    assert!(
+        dump_text(under, "status").contains("★0 ✕0") && dump_field(under, "settings") == "true",
+        "Y/N under the dialog marked a frame or closed the dialog: {under}"
+    );
+    let closed = qedump(&stderr, "closed");
+    assert!(
+        dump_field(closed, "settings") == "false" && dump_field(closed, "focusowner") == "0",
+        "Esc did not close the dialog and give the keyboard back to the grid: {closed}"
+    );
+    assert_eq!(
+        dump_field(qedump(&stderr, "zoomed"), "zoom"),
+        "2",
+        "the `+` after the dialog closed was dead:\n{stderr}"
+    );
+    let sidecar = dir.join("one.ARW.xmp");
+    let xmp = std::fs::read_to_string(&sidecar)
+        .unwrap_or_else(|e| panic!("no sidecar written for the committed keyword: {e}"));
+    assert!(
+        xmp.contains(">bird<"),
+        "the sidecar does not hold the committed keyword: {xmp}"
+    );
+    std::fs::remove_dir_all(&dir).ok();
+}
+
+/// settings.md, "The card": the Performance tab in its TALLEST state — the
+/// FASTCULL_MAX_READERS note on the read workers row, a read error's whole
+/// text on the notice line — fits whole in the smallest supported window,
+/// 1000x700 (ui-grid.md). Measured as SLACK, never as a height: the card is
+/// `min(content, layer − 40)`, so a clamped card sits exactly 20 px above
+/// the modal layer's floor (the status bar's top, `window − 26`) and an
+/// unclamped one more; Close and Reset lie inside the card. The slack is
+/// printed in the failure, never asserted as a number — a height is a sum of
+/// text line boxes and belongs to the face (the rule ui-grid.md gives the
+/// shortcuts card). The premises are asserted, so the state really is the
+/// tallest: the tab, the environment's value, the long notice.
+///
+/// Mutant (2026-10-01): the card layout's padding raised by 80 px → the card
+/// clamps, Close lands below its floor and the slack reads 20 — red.
+#[test]
+fn the_settings_card_fits_its_smallest_window_in_its_tallest_state() {
+    if !has_display() {
+        eprintln!("screenshot smoke skipped: no display server");
+        return;
+    }
+    let _s = serial();
+    let dir = settings_scratch("tallest", Some("[general\n"));
+    let out = out_dir().join("settings-tallest.jpg");
+    let script = "200:resize:1000x700;600:wait:window geometry 1000x700;900:key:ctrl+,;\
+                  1300:key:ctrl+tab;1600:key:ctrl+tab;2000:dump.perf";
+    let stderr = shoot_env_stderr(
+        &["--synthetic", "24"],
+        &[
+            ("FASTCULL_TRACE", "1"),
+            ("FASTCULL_MAX_READERS", "3"),
+            ("FASTCULL_CONFIG_DIR", dir.to_str().unwrap()),
+            ("FASTCULL_DRIVE", script),
+        ],
+        &out,
+    );
+    assert!(
+        stderr.contains("wait:window geometry 1000x700 (satisfied"),
+        "the window never reached 1000x700 — the premise:\n{stderr}"
+    );
+    let perf = qedump(&stderr, "perf");
+    assert_eq!(
+        dump_field(perf, "settingstab"),
+        "2",
+        "not on Performance: {perf}"
+    );
+    assert_eq!(
+        dump_field(perf, "readers"),
+        "env:3",
+        "the environment note row is not up: {perf}"
+    );
+    let note = dump_text(perf, "settingsnote");
+    assert!(
+        note.contains("could not be read") && note.contains("invalid table header"),
+        "the notice is not the whole parse error — not the tallest state: {note:?}"
+    );
+    let (wx, wy) = (1000.0f32, 700.0f32);
+    let (cx, cy, cw, ch) = laid_out_at(&stderr, "settings card", "perf");
+    for control in ["settings close", "settings reset"] {
+        let (x, y, w, h) = laid_out_at(&stderr, control, "perf");
+        assert!(
+            x >= cx && x + w <= cx + cw + 0.5 && y >= cy && y + h <= cy + ch + 0.5,
+            "{control} ({x},{y} {w}x{h}) is not inside the card ({cx},{cy} {cw}x{ch}) at \
+             1000x700 in the tallest state:\n{stderr}"
+        );
+    }
+    let floor = wy - 26.0;
+    assert!(
+        cx >= 0.0 && cx + cw <= wx && cy >= 0.0 && cy + ch <= floor,
+        "the card ({cx},{cy} {cw}x{ch}) is not inside the modal layer of a 1000x700 \
+         window (which ends at y={floor}, the status bar's top):\n{stderr}"
+    );
+    let slack = floor - (cy + ch);
+    assert!(
+        slack > 20.0,
+        "THE SETTINGS CARD OUTGREW ITS SMALLEST WINDOW: {ch} px tall at 1000x700 in \
+         its tallest state, leaving {slack} px above the status bar — the clamp's own \
+         20 px, so the card is clamped and its content cut. A row was added, or this \
+         seat's face is far taller than the ones it was measured on:\n{stderr}"
+    );
+    std::fs::remove_dir_all(&dir).ok();
+}
