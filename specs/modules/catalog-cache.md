@@ -46,7 +46,11 @@ reading a RAW.
 
 ### The cache
 
-- One SQLite database per user in the config dir, resolved by
+- One SQLite database per user in the CACHE dir — the `directories`
+  crate's `cache_dir()`, `~/.cache/fastcull/previews.db` on Linux (this
+  sentence said "config dir" until 2026-10-01, while `cache.rs` has used
+  the cache dir since M1 and docs/faq.md named `~/.cache/fastcull/`;
+  corrected under M10 at brief 008's persona gate) — resolved by
   `cache::default_cache_path()` at CLI and app startup; tests pass an
   explicit path. Table `previews(path TEXT PRIMARY KEY, size, mtime_ns,
   exif_json, thumb_jpeg BLOB, last_used)`, schema version in `PRAGMA
@@ -119,6 +123,8 @@ reading a RAW.
 
 ## History
 
+- 2026-10-01 — The cache's directory corrected: the cache dir, not the
+  config dir (M10; found at brief 008's persona gate against `cache.rs`).
 - 2026-09-17 — Rewritten (brief 007); folder watching dropped from v1 (the
   user). The pre-rewrite text is `specs/history/catalog-cache.md`.
 - 2026-08-30 — The folder-scan clock moved to the perf budgets (issue #59);
