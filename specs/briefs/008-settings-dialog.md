@@ -642,6 +642,18 @@ setting.
   it restores the file's CRLF line ends and its mark (QE's correction D21,
   to weaken the sentence instead, is answered by the fix). Notepad saves
   CRLF, which made this a Windows hazard.
+- D22 (2026-10-01, QE round 1 — defect D5 and spec correction D22; TP5):
+  AC3's "every field carries its note" cited
+  `settings_tabs_switch_by_keys_and_never_by_digits`, which reads no note,
+  and no dump field or mark exposed the notes — deleting the six
+  `set_settings_note_*` calls would have left the suite green (QE, by
+  inspection). The inline notes were the user's own choice over tooltips
+  (OQ-U1). Each note Text now reports what it shows and where it is laid
+  out, and `every_settings_note_is_the_core_text` compares every note with
+  core's sentence and checks, at the shutter, that the loupe memory note's
+  rectangle holds drawn text (its luma variance against the bare card's).
+  The dump-field variant QE also proposed was refused in the integrity
+  review.
 - D23 (2026-10-01, QE round 1 — defect D2 and spec correction D23; TP2):
   AC10's driven test waited on `loupe engine started budget <bytes>`, a
   mark the app built from its own local — mutant M-i (the engine started

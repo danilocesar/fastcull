@@ -392,9 +392,13 @@ their precedence is `fastcull-core`'s; the app binds (brief 008, 2026-10-01).
       never switch; `Tab` walks the controls and never leaves the dialog;
       Reset resets the active tab only, the field being typed in included
       (its text commits once, first, and the field then shows the
-      default); every field carries its note —
-      `settings_tabs_switch_by_keys_and_never_by_digits`,
-      `reset_with_a_half_typed_field_commits_it_then_resets`.
+      default) — `settings_tabs_switch_by_keys_and_never_by_digits`,
+      `reset_with_a_half_typed_field_commits_it_then_resets`; every field
+      carries its note, core's sentence byte for byte, read from the marks
+      the notes emit themselves, and the notes are drawn (the loupe memory
+      note's rectangle holds text at the shutter, against the bare card) —
+      `every_settings_note_is_the_core_text` (QE 2026-10-01, D22: until then
+      the box cited a test that read no note).
 - [x] **AC4 — the write.** Every commit writes `settings.toml` at once,
       preserving an unknown key and the user's comments; the field then
       shows the value in force; `Esc` discards an uncommitted field and
@@ -493,6 +497,9 @@ their precedence is `fastcull-core`'s; the app binds (brief 008, 2026-10-01).
 
 ## History
 
+- 2026-10-01 — QE round 1 of brief 008, the notes (D5): every note reports
+  what it shows and where it is laid out, and AC3's note clause has a test
+  that reads them (brief 008 D22).
 - 2026-10-01 — QE round 1 of brief 008, the cache cap's words (D10, D11):
   the note says the cap bounds the thumbnails held, and that the file
   shrinks only at Clear (brief 008 D25); the CLI names where the cap in

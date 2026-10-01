@@ -250,10 +250,19 @@ component KeySection inherits VerticalLayout {
 // every tab starts at the same x, whatever the face. `warning` is the
 // environment's line (settings.md, "Environment precedence"), amber, above
 // the note, and only when there is one.
+//
+// The note reports itself — what it shows and where it was laid out — so a
+// driven run can prove every row carries core's sentence and that it is
+// drawn (test-harness.md; QE 2026-10-01, D22: no dump field or mark read
+// the notes, and deleting them all left the suite green). `name` is the
+// row's control name, the one its `click:` mark uses.
 component SettingRow inherits VerticalLayout {
     in property <string> label;
     in property <string> note;
     in property <string> warning;
+    in property <string> name;
+    callback note-shown(string, string);
+    callback note-laid-out(string, length, length, length, length);
     spacing: 4px;
     HorizontalLayout {
         spacing: 12px;
@@ -278,6 +287,24 @@ component SettingRow inherits VerticalLayout {
         color: #8a8a96;
         font-size: 11px;
         wrap: word-wrap;
+        init => {
+            root.note-shown(root.name, self.text);
+            root.note-laid-out(root.name, self.absolute-position.x, self.absolute-position.y,
+                self.width, self.height);
+        }
+        changed text => { root.note-shown(root.name, self.text); }
+        changed absolute-position => {
+            root.note-laid-out(root.name, self.absolute-position.x, self.absolute-position.y,
+                self.width, self.height);
+        }
+        changed width => {
+            root.note-laid-out(root.name, self.absolute-position.x, self.absolute-position.y,
+                self.width, self.height);
+        }
+        changed height => {
+            root.note-laid-out(root.name, self.absolute-position.x, self.absolute-position.y,
+                self.width, self.height);
+        }
     }
 }
 
@@ -3554,6 +3581,9 @@ export component MainWindow inherits Window {
                             SettingRow {
                                 label: "Auto-advance after Y/N";
                                 note: root.settings-note-auto-advance;
+                                name: "auto-advance";
+                                note-shown(n, s) => { root.dbg-note("settings note " + n + " shows " + s); }
+                                note-laid-out(n, x, y, w, h) => { root.dbg-card-laid-out("settings note " + n, x, y, w, h); }
                                 set-auto-advance := CheckBox {
                                     checked <=> root.settings-auto-advance;
                                     toggled => {
@@ -3591,6 +3621,9 @@ export component MainWindow inherits Window {
                             SettingRow {
                                 label: "Selection highlight";
                                 note: root.settings-note-wash;
+                                name: "wash";
+                                note-shown(n, s) => { root.dbg-note("settings note " + n + " shows " + s); }
+                                note-laid-out(n, x, y, w, h) => { root.dbg-card-laid-out("settings note " + n, x, y, w, h); }
                                 set-wash := LineEdit {
                                     width: 80px;
                                     text: root.settings-wash;
@@ -3672,6 +3705,9 @@ export component MainWindow inherits Window {
                             SettingRow {
                                 label: "Loupe memory";
                                 note: root.settings-note-loupe-memory;
+                                name: "loupe-memory";
+                                note-shown(n, s) => { root.dbg-note("settings note " + n + " shows " + s); }
+                                note-laid-out(n, x, y, w, h) => { root.dbg-card-laid-out("settings note " + n, x, y, w, h); }
                                 set-loupe := LineEdit {
                                     width: 110px;
                                     text: root.settings-loupe-memory;
@@ -3731,6 +3767,9 @@ export component MainWindow inherits Window {
                             SettingRow {
                                 label: "Thumbnail cache cap";
                                 note: root.settings-note-cache-cap;
+                                name: "cache-cap";
+                                note-shown(n, s) => { root.dbg-note("settings note " + n + " shows " + s); }
+                                note-laid-out(n, x, y, w, h) => { root.dbg-card-laid-out("settings note " + n, x, y, w, h); }
                                 set-cache := LineEdit {
                                     width: 110px;
                                     text: root.settings-cache-cap;
@@ -3780,6 +3819,9 @@ export component MainWindow inherits Window {
                             SettingRow {
                                 label: "Read workers";
                                 note: root.settings-note-readers;
+                                name: "readers";
+                                note-shown(n, s) => { root.dbg-note("settings note " + n + " shows " + s); }
+                                note-laid-out(n, x, y, w, h) => { root.dbg-card-laid-out("settings note " + n, x, y, w, h); }
                                 warning: root.settings-readers-env-note;
                                 set-adaptive := CheckBox {
                                     text: "Adaptive (recommended)";
@@ -3901,11 +3943,32 @@ export component MainWindow inherits Window {
                                         }
                                     }
                                 }
+                                // A plain Text, not a SettingRow's note, so it
+                                // reports itself here — the same two marks.
                                 Text {
                                     text: root.settings-note-clear-cache;
                                     color: #8a8a96;
                                     font-size: 11px;
                                     wrap: word-wrap;
+                                    init => {
+                                        root.dbg-note("settings note clear-cache shows " + self.text);
+                                        root.dbg-card-laid-out("settings note clear-cache",
+                                            self.absolute-position.x, self.absolute-position.y,
+                                            self.width, self.height);
+                                    }
+                                    changed text => {
+                                        root.dbg-note("settings note clear-cache shows " + self.text);
+                                    }
+                                    changed absolute-position => {
+                                        root.dbg-card-laid-out("settings note clear-cache",
+                                            self.absolute-position.x, self.absolute-position.y,
+                                            self.width, self.height);
+                                    }
+                                    changed height => {
+                                        root.dbg-card-laid-out("settings note clear-cache",
+                                            self.absolute-position.x, self.absolute-position.y,
+                                            self.width, self.height);
+                                    }
                                 }
                             }
                         }

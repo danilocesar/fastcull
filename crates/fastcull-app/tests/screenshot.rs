@@ -11956,3 +11956,92 @@ fn the_failed_badge_shows_its_reason_on_hover_and_in_the_status_line() {
     );
     std::fs::remove_dir_all(&dir).ok();
 }
+
+/// The luma variance inside a window-logical rectangle `(x, y, w, h)` of a
+/// shot taken at scale factor 1 — the fraction `region_stats` wants is the
+/// rectangle over the shot's own size.
+fn rect_variance(shot: &Path, (x, y, w, h): (f32, f32, f32, f32)) -> f64 {
+    let (sw, sh, _) = analyze(shot);
+    assert_eq!(
+        sw, 1440,
+        "rect_variance assumes scale factor 1 (a 1440 px shot of the 1440 px window); got {sw} px"
+    );
+    let (sw, sh) = (sw as f64, sh as f64);
+    let (x, y, w, h) = (f64::from(x), f64::from(y), f64::from(w), f64::from(h));
+    region_stats(shot, x / sw, y / sh, (x + w) / sw, (y + h) / sh).1
+}
+
+/// AC3, the notes (settings.md, "The card"; QE 2026-10-01, D22): every row
+/// of every tab carries its one-line note, and the note is CORE's sentence
+/// byte for byte — `Key::note()` and `CLEAR_CACHE_NOTE`, the notes' one
+/// home — read from the `settings note <name> shows` mark each note Text
+/// emits itself, never from the bridge that feeds it. And it is DRAWN: at
+/// the shutter, on the Performance tab, the loupe memory note's rectangle
+/// holds text — its luma variance stands far above the bare card's (a strip
+/// of the card's top padding, above the title, in the same shot). Text was
+/// drawn there; a bound but hidden note would read like the bare card.
+///
+/// Mutants (2026-10-01): `set_settings_note_wash` taken out of
+/// `settings_bridge::wire` → the wash note shows an empty text and this goes
+/// red; the note Text taken out of `SettingRow` → no `settings note` mark at
+/// all — red.
+#[test]
+fn every_settings_note_is_the_core_text() {
+    if !has_display() {
+        eprintln!("screenshot smoke skipped: no display server");
+        return;
+    }
+    let _s = serial();
+    use fastcull_core::settings::{Key, CLEAR_CACHE_NOTE};
+    let out = out_dir().join("settings-notes.jpg");
+    let script = format!(
+        "{PIN_WINDOW};900:key:ctrl+,;1300:dump.general;1500:key:right;1800:dump.ui;\
+         2000:key:right;2400:dump.perf"
+    );
+    let stderr = shoot_env_stderr(
+        &["--synthetic", "24"],
+        &[("FASTCULL_TRACE", "1"), ("FASTCULL_DRIVE", script.as_str())],
+        &out,
+    );
+    for (label, tab) in [("general", "0"), ("ui", "1"), ("perf", "2")] {
+        assert_eq!(
+            dump_field(qedump(&stderr, label), "settingstab"),
+            tab,
+            "dump.{label} is not on tab {tab}:\n{stderr}"
+        );
+    }
+    let labels = mark_labels(&stderr);
+    for (name, note) in [
+        ("auto-advance", Key::AutoAdvance.note()),
+        ("wash", Key::SelectionWash.note()),
+        ("loupe-memory", Key::LoupeMemory.note()),
+        ("cache-cap", Key::CacheCap.note()),
+        ("readers", Key::MaxReaders.note()),
+        ("clear-cache", CLEAR_CACHE_NOTE),
+    ] {
+        let tag = format!("settings note {name} shows ");
+        let shown = labels
+            .iter()
+            .rev()
+            .find_map(|l| l.strip_prefix(tag.as_str()));
+        assert_eq!(
+            shown,
+            Some(note),
+            "the {name} row's note is not core's sentence (`settings note {name} \
+             shows` is its last mark; None means the row reported no note at \
+             all):\n{stderr}"
+        );
+    }
+    let note = laid_out_at(&stderr, "settings note loupe-memory", "perf");
+    let (cx, cy, cw, _) = laid_out_at(&stderr, "settings card", "perf");
+    // Inside the card's 18 px top padding, clear of the border, the rounded
+    // corners and the title below it: bare #202028.
+    let bare = (cx + 24.0, cy + 4.0, cw - 48.0, 10.0);
+    let (drawn, empty) = (rect_variance(&out, note), rect_variance(&out, bare));
+    assert!(
+        drawn > 100.0 && drawn > 20.0 * empty.max(1.0),
+        "the loupe memory note's rectangle {note:?} reads like bare card — luma \
+         variance {drawn:.1} against {empty:.1} for the card's padding: the \
+         note is bound but not drawn:\n{stderr}"
+    );
+}

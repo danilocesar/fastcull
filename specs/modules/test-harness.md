@@ -190,8 +190,9 @@ sidecars — scripts target throwaway copies of test data only.
   going down, on change); `shortcuts card laid out …`; `status selected
   laid out …` / `status head laid out …`; since brief 008 `settings card
   laid out …`, `settings tab <name> laid out …`, `settings <control> laid
-  out …` for every control named under `click:` above, and `failed badge
-  <id> laid out …` (failed cells only, a handful).
+  out …` for every control named under `click:` above, `settings note
+  <name> laid out …` for each row's one-line note (the names below), and
+  `failed badge <id> laid out …` (failed cells only, a handful).
 - **Settings** (brief 008, settings.md): `settings loaded from <path>` /
   `settings: no file (defaults in force)` / `settings: <path> could not
   be read: <error>` at startup and at every open — except an open while a
@@ -204,7 +205,11 @@ sidecars — scripts target throwaway copies of test data only.
   wash|loupe-memory|cache-cap|readers-limit shows <text>` whenever a number
   field's text changes, typed or re-shown — what the field DISPLAYS, where
   the dump's `wash=`, `loupemem=`, `cachecap=` and `readers=` are the
-  model's (senior-developer review F1 of brief 008); `settings cache
+  model's (senior-developer review F1 of brief 008); `settings note
+  auto-advance|wash|loupe-memory|cache-cap|readers|clear-cache shows
+  <text>` from each note Text itself, when the dialog creates it and
+  whenever its text changes — what the note says, never what the bridge
+  meant it to (QE 2026-10-01, D22); `settings cache
   cleared <before> -> <after>` (bytes); `loupe engine started budget
   <bytes>` at every folder open — the budget the engine ADOPTED
   (`LoupeEngine::budget()`, floored), the proof that the loupe memory
