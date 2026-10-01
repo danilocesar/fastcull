@@ -10752,3 +10752,860 @@ fn a_scrollbar_drag_in_the_loupe_claims_the_cursor() {
         "the follow-scroll claim traced but the cursor did not move:\n{stderr}"
     );
 }
+
+// ---------------------------------------------------------------------------
+// The Settings dialog (settings.md, brief 008, issue #39). Every run below is
+// FASTCULL_NO_CONFIG like every other (the harness sets it); the ones that
+// must read or write a settings file point FASTCULL_CONFIG_DIR at their own
+// scratch dir under the shot dir (test-harness.md), so no run ever touches
+// the real ~/.config/fastcull.
+// ---------------------------------------------------------------------------
+
+/// A fresh config dir for one test, holding `settings.toml` with `text`
+/// when there is any.
+fn settings_scratch(tag: &str, text: Option<&str>) -> PathBuf {
+    let dir = out_dir().join(format!("settings-{tag}"));
+    std::fs::remove_dir_all(&dir).ok();
+    std::fs::create_dir_all(&dir).unwrap();
+    if let Some(text) = text {
+        std::fs::write(dir.join("settings.toml"), text).unwrap();
+    }
+    dir
+}
+
+/// AC1 (settings.md): `Ctrl+,` and File › Settings… open the dialog; `Esc`
+/// and Close close it; a click on the scrim does NOT; the keyboard is back
+/// on the grid afterwards — asserted by ACTING (`+` zooms), never by
+/// `keysfocus`.
+///
+/// The menu strand is Linux-only, like About's (`menu_clicks_are_
+/// calibrated`): File is at x 22 in the in-window bar and Settings… is its
+/// fourth item, y = 61 + 3 × 32.
+///
+/// Mutant (2026-10-01): the `Ctrl+,` arm deleted from the main key scope →
+/// the dialog never opens, so `click:settings close` finds no layout mark
+/// and the run aborts loudly (exit 1) — red.
+#[test]
+fn settings_opens_from_the_chord_and_the_menu_and_closes_with_esc_keeping_the_keyboard() {
+    if !has_display() {
+        eprintln!("screenshot smoke skipped: no display server");
+        return;
+    }
+    let _s = serial();
+    let out = out_dir().join("settings-open-close.jpg");
+    let menu = if menu_clicks_are_calibrated() {
+        "6200:click.22,19;6600:click.80,157;7000:dump.menu;7300:key:escape;7700:dump.menuclosed"
+    } else {
+        "7000:dump.menu"
+    };
+    let script = format!(
+        "{PIN_WINDOW};900:key:ctrl+,;1300:dump.opened;1600:click.20,300;2000:dump.scrim;\
+         2300:key:escape;2700:dump.closed;3000:key:+;3300:dump.zoomed;\
+         3700:key:ctrl+,;4300:click:settings close;4700:dump.closebutton;\
+         5000:key:-;5300:dump.minus;{menu}"
+    );
+    let stderr = shoot_env_stderr(
+        &["--synthetic", "24"],
+        &[("FASTCULL_TRACE", "1"), ("FASTCULL_DRIVE", script.as_str())],
+        &out,
+    );
+    let opened = qedump(&stderr, "opened");
+    assert_eq!(
+        dump_field(opened, "settings"),
+        "true",
+        "Ctrl+, did not open the Settings dialog:\n{stderr}"
+    );
+    assert_eq!(
+        dump_field(opened, "focusowner"),
+        "-1",
+        "the dialog is up but does not own the keyboard (the `-1` token):\n{stderr}"
+    );
+    assert_eq!(
+        dump_field(qedump(&stderr, "scrim"), "settings"),
+        "true",
+        "a click on the scrim closed the dialog — it is a form, like Copy \
+         Picks, and closes on Esc or Close only:\n{stderr}"
+    );
+    let closed = qedump(&stderr, "closed");
+    assert_eq!(
+        dump_field(closed, "settings"),
+        "false",
+        "Esc did not close it:\n{stderr}"
+    );
+    assert_eq!(
+        dump_field(closed, "focusowner"),
+        "0",
+        "Esc closed the dialog but the keyboard did not come back to the grid:\n{stderr}"
+    );
+    assert_eq!(
+        dump_field(qedump(&stderr, "zoomed"), "zoom"),
+        "2",
+        "the `+` after the dialog closed was dead — the keyboard is stranded:\n{stderr}"
+    );
+    assert_click_resolved(&stderr, "settings close");
+    let closebutton = qedump(&stderr, "closebutton");
+    assert_eq!(
+        dump_field(closebutton, "settings"),
+        "false",
+        "the Close button did not close the dialog:\n{stderr}"
+    );
+    assert_eq!(
+        dump_field(qedump(&stderr, "minus"), "zoom"),
+        "1",
+        "the `-` after Close was dead — the keyboard did not come back:\n{stderr}"
+    );
+    if menu_clicks_are_calibrated() {
+        assert_eq!(
+            dump_field(qedump(&stderr, "menu"), "settings"),
+            "true",
+            "File › Settings… did not open the dialog (the menu click missed?):\n{stderr}"
+        );
+        assert_eq!(
+            dump_field(qedump(&stderr, "menuclosed"), "settings"),
+            "false",
+            "Esc did not close the dialog the menu opened:\n{stderr}"
+        );
+    }
+}
+
+/// AC2 (settings.md, "Stacking"): under the dialog every grid key dies —
+/// `Y`/`N` mark nothing, `Ctrl+E` and `Ctrl+Shift+E` open nothing, a driven
+/// nav token is swallowed — About over it closes topmost-first, and the
+/// menu bar stays live (About is opened from the Help menu on the
+/// calibrated runners, by its token elsewhere). The control at the end
+/// proves the `N` was contained rather than dead.
+///
+/// Mutant (2026-10-01): the harness's nav mirror without its
+/// `get_settings_visible()` term → the driven `reject` reaches the grid,
+/// `dump.contained` reads ✕1 and this goes red.
+#[test]
+fn settings_contains_every_grid_key_and_stacks_under_about() {
+    if !has_display() {
+        eprintln!("screenshot smoke skipped: no display server");
+        return;
+    }
+    let _s = serial();
+    let out = out_dir().join("settings-contained.jpg");
+    let about = if menu_clicks_are_calibrated() {
+        "3200:click.115,19;3600:click.180,93"
+    } else {
+        "3600:about"
+    };
+    let script = format!(
+        "900:key:ctrl+,;1300:dump.opened;1600:key:y;1800:key:n;2000:key:ctrl+e;\
+         2300:key:ctrl+shift+e;2600:reject;2900:dump.contained;{about};\
+         4000:dump.about;4200:key:n;4400:key:escape;4800:dump.esc1;5000:key:escape;\
+         5400:dump.esc2;5700:key:n;6100:dump.control"
+    );
+    let stderr = shoot_env_stderr(
+        &["--synthetic", "24"],
+        &[("FASTCULL_TRACE", "1"), ("FASTCULL_DRIVE", script.as_str())],
+        &out,
+    );
+    assert_eq!(
+        dump_field(qedump(&stderr, "opened"), "settings"),
+        "true",
+        "the dialog never opened:\n{stderr}"
+    );
+    let contained = qedump(&stderr, "contained");
+    assert!(
+        dump_text(contained, "status").contains("★0 ✕0"),
+        "a mark leaked through the Settings dialog: {contained}"
+    );
+    assert_eq!(
+        dump_field(contained, "cursor"),
+        "0",
+        "a key moved the cursor: {contained}"
+    );
+    assert_eq!(
+        dump_field(contained, "copy"),
+        "false",
+        "Ctrl+E opened Copy Picks: {contained}"
+    );
+    assert_eq!(
+        dump_field(contained, "clip"),
+        "false",
+        "Ctrl+Shift+E opened the export dialog: {contained}"
+    );
+    assert_eq!(
+        dump_field(contained, "settings"),
+        "true",
+        "a key closed the dialog: {contained}"
+    );
+    assert!(
+        stderr.contains("drive swallowed by modal: reject"),
+        "the driven nav token was not swallowed by the dialog:\n{stderr}"
+    );
+    let about = qedump(&stderr, "about");
+    assert!(
+        about.contains("about=true") && about.contains("settings=true"),
+        "About did not open over the Settings dialog (the menu bar is not \
+         live under it?): {about}"
+    );
+    let esc1 = qedump(&stderr, "esc1");
+    assert!(
+        esc1.contains("about=false") && esc1.contains("settings=true"),
+        "the first Esc did not close About alone — topmost first (issue #42): {esc1}"
+    );
+    assert!(
+        dump_text(esc1, "status").contains("★0 ✕0"),
+        "the N pressed under About over Settings marked a photo: {esc1}"
+    );
+    let esc2 = qedump(&stderr, "esc2");
+    assert!(
+        esc2.contains("settings=false") && dump_field(esc2, "focusowner") == "0",
+        "the second Esc did not close the dialog and return the keyboard: {esc2}"
+    );
+    assert!(
+        dump_text(qedump(&stderr, "control"), "status").contains("★0 ✕1"),
+        "the N after the dialogs closed did not reject — the containment \
+         above is vacuous:\n{stderr}"
+    );
+}
+
+/// AC3 (settings.md, "Keyboard"): the strip switches tabs on Left/Right
+/// (wrapping) and everywhere on Ctrl+Tab/Ctrl+Shift+Tab; a digit never
+/// switches; Tab walks the active tab's controls — the strip, the
+/// controls, Reset, Close — and wraps back to the strip without ever
+/// leaving the dialog (asserted by acting: an Enter that lands on Close
+/// closes it, and a Right after the wrap switches tabs); Reset resets the
+/// ACTIVE tab only.
+///
+/// Mutant (2026-10-01): the Tab arm deleted from the dialog's scope →
+/// Slint's window navigation walks the whole item tree, the fourth Tab
+/// leaves the dialog for the grid, and `dump.wrapped` reads `cursor=1`
+/// with the tab unswitched — red.
+#[test]
+fn settings_tabs_switch_by_keys_and_never_by_digits() {
+    if !has_display() {
+        eprintln!("screenshot smoke skipped: no display server");
+        return;
+    }
+    let _s = serial();
+    let out = out_dir().join("settings-tabs.jpg");
+    let script = "900:key:ctrl+,;1300:dump.open;1500:key:right;1800:dump.right;\
+                  2000:key:ctrl+tab;2300:dump.ctrltab;2500:key:2;2800:dump.digit;\
+                  3000:key:ctrl+shift+tab;3300:dump.back;3500:key:left;3700:key:left;\
+                  4000:dump.wrapleft;4200:key:right;4500:dump.general;\
+                  4700:key:tab;4900:key:tab;5100:key:tab;5300:key:return;5700:dump.enterclose;\
+                  6000:key:ctrl+,;6400:key:tab;6600:key:tab;6800:key:tab;7000:key:tab;\
+                  7200:key:right;7500:dump.wrapped;\
+                  7800:key:left;8100:click:settings auto-advance;8500:dump.aaoff;\
+                  8800:key:ctrl+tab;9200:click:settings wash;9500:key:ctrl+a;9700:key:1;\
+                  9900:key:0;10100:key:return;10500:dump.wash;\
+                  10800:click:settings reset;11200:dump.reset";
+    let stderr = shoot_env_stderr(
+        &["--synthetic", "24"],
+        &[("FASTCULL_TRACE", "1"), ("FASTCULL_DRIVE", script)],
+        &out,
+    );
+    let tab = |label: &str| dump_field(qedump(&stderr, label), "settingstab").to_string();
+    assert_eq!(
+        tab("open"),
+        "0",
+        "the dialog did not open on General:\n{stderr}"
+    );
+    assert_eq!(
+        tab("right"),
+        "1",
+        "Right on the strip did not switch to UI:\n{stderr}"
+    );
+    assert_eq!(
+        tab("ctrltab"),
+        "2",
+        "Ctrl+Tab did not switch to Performance:\n{stderr}"
+    );
+    assert_eq!(
+        tab("digit"),
+        "2",
+        "a digit switched tabs — 1–5 are reserved and never switch (settings.md):\n{stderr}"
+    );
+    assert_eq!(
+        tab("back"),
+        "1",
+        "Ctrl+Shift+Tab did not switch back:\n{stderr}"
+    );
+    assert_eq!(
+        tab("wrapleft"),
+        "2",
+        "Left twice from UI did not wrap round to Performance:\n{stderr}"
+    );
+    assert_eq!(
+        tab("general"),
+        "0",
+        "Right from Performance did not wrap to General:\n{stderr}"
+    );
+    // General's ring: strip → auto-advance → Reset → Close. Three Tabs land
+    // on Close, and Enter there closes the dialog.
+    let enter = qedump(&stderr, "enterclose");
+    assert_eq!(
+        dump_field(enter, "settings"),
+        "false",
+        "three Tabs and an Enter did not close the dialog — the ring is not \
+         strip, auto-advance, Reset, Close:\n{stderr}"
+    );
+    // Four Tabs from the strip wrap back to it: the Right that follows
+    // switches tabs, and nothing moved the grid behind.
+    let wrapped = qedump(&stderr, "wrapped");
+    assert_eq!(
+        dump_field(wrapped, "settingstab"),
+        "1",
+        "after four Tabs the keyboard was not back on the strip:\n{stderr}"
+    );
+    assert_eq!(
+        dump_field(wrapped, "focusowner"),
+        "-1",
+        "Tab left the dialog:\n{stderr}"
+    );
+    assert_eq!(
+        dump_field(wrapped, "cursor"),
+        "0",
+        "a key reached the grid behind the dialog — Tab walked out of it:\n{stderr}"
+    );
+    assert_click_resolved(&stderr, "settings auto-advance");
+    assert_eq!(
+        dump_field(qedump(&stderr, "aaoff"), "autoadvance"),
+        "false",
+        "the auto-advance checkbox did not apply on click:\n{stderr}"
+    );
+    assert_click_resolved(&stderr, "settings wash");
+    let wash = qedump(&stderr, "wash");
+    assert_eq!(
+        dump_field(wash, "wash"),
+        "10",
+        "the wash field did not commit 10:\n{stderr}"
+    );
+    assert_eq!(
+        dump_field(wash, "washprop"),
+        "0.100",
+        "the committed wash never reached the window's property:\n{stderr}"
+    );
+    assert_click_resolved(&stderr, "settings reset");
+    let reset = qedump(&stderr, "reset");
+    assert_eq!(
+        dump_field(reset, "wash"),
+        "25",
+        "Reset UI did not reset the wash:\n{stderr}"
+    );
+    assert_eq!(
+        dump_field(reset, "washprop"),
+        "0.250",
+        "Reset never reached the window:\n{stderr}"
+    );
+    assert_eq!(
+        dump_field(reset, "autoadvance"),
+        "false",
+        "Reset on the UI tab reset General's setting too — it resets the \
+         ACTIVE tab only:\n{stderr}"
+    );
+}
+
+/// AC4 and AC9 (settings.md, "Writing" and "Apply on commit"): a commit
+/// writes settings.toml at once, keeping the user's comment, the trailing
+/// comment on the key and an unknown table; the window's wash takes the
+/// committed value; and `Esc` in a field DISCARDS its half-typed text and
+/// closes — a `2` on the way to `20` never lands as 2 %.
+///
+/// Mutants (2026-10-01): the `settings::write` call taken out of the
+/// bridge's `save` → the file still says 40 and this goes red; the
+/// `root.settings-visible` guard taken out of the wash field's blur → the
+/// deferred blur runs before the closed dialog is torn down, commits the
+/// half-typed `2`, `dump.discarded` reads `wash=2` and this goes red.
+#[test]
+fn a_settings_commit_writes_the_file_and_esc_discards_a_half_typed_field() {
+    if !has_display() {
+        eprintln!("screenshot smoke skipped: no display server");
+        return;
+    }
+    let _s = serial();
+    let users = "# my hand-written settings\n[ui]\nselection_wash = 40 # too strong\n\n\
+                 [mine]\nkeep = \"me\"\n";
+    let dir = settings_scratch("write", Some(users));
+    let out = out_dir().join("settings-write.jpg");
+    let script = "900:dump.start;1100:key:ctrl+,;1500:key:right;1900:click:settings wash;\
+                  2200:key:ctrl+a;2400:key:1;2600:key:5;2800:key:return;3200:dump.committed;\
+                  3500:key:ctrl+a;3700:key:2;3900:key:escape;4300:dump.discarded";
+    let stderr = shoot_env_stderr(
+        &["--synthetic", "24"],
+        &[
+            ("FASTCULL_TRACE", "1"),
+            ("FASTCULL_CONFIG_DIR", dir.to_str().unwrap()),
+            ("FASTCULL_DRIVE", script),
+        ],
+        &out,
+    );
+    let file = dir.join("settings.toml");
+    assert!(
+        stderr.contains(&format!("FASTCULL_CONFIG_DIR={}", dir.display())),
+        "the config-dir override did not announce itself on stderr:\n{stderr}"
+    );
+    let start = qedump(&stderr, "start");
+    assert_eq!(
+        dump_field(start, "wash"),
+        "40",
+        "the file's wash was not read:\n{stderr}"
+    );
+    assert_eq!(
+        dump_field(start, "washprop"),
+        "0.400",
+        "the file's wash never reached the window:\n{stderr}"
+    );
+    // The path as the dump quotes it (Debug, so a Windows path's
+    // backslashes come doubled): its tail is enough to say which file.
+    assert!(
+        dump_text(start, "settingsfile").ends_with("settings.toml"),
+        "the dialog's file is not the scratch settings.toml:\n{stderr}"
+    );
+    assert_click_resolved(&stderr, "settings wash");
+    let committed = qedump(&stderr, "committed");
+    assert_eq!(
+        dump_field(committed, "wash"),
+        "15",
+        "the commit did not apply:\n{stderr}"
+    );
+    assert_eq!(
+        dump_field(committed, "washprop"),
+        "0.150",
+        "the commit reached the model but not the window's property:\n{stderr}"
+    );
+    let discarded = qedump(&stderr, "discarded");
+    assert_eq!(
+        dump_field(discarded, "settings"),
+        "false",
+        "Esc in the field did not close:\n{stderr}"
+    );
+    assert_eq!(
+        dump_field(discarded, "wash"),
+        "15",
+        "Esc COMMITTED the half-typed `2` instead of discarding it:\n{stderr}"
+    );
+    assert_eq!(
+        dump_field(discarded, "washprop"),
+        "0.150",
+        "Esc changed the window's wash:\n{stderr}"
+    );
+    assert_eq!(
+        mark_lines(&stderr, "settings written "),
+        1,
+        "the file was written other than once (once for the one commit):\n{stderr}"
+    );
+    let text = std::fs::read_to_string(&file).expect("settings.toml after the run");
+    for kept in [
+        "# my hand-written settings\n[ui]\n",
+        "selection_wash = 15 # too strong\n",
+        "[mine]\nkeep = \"me\"\n",
+        "auto_advance = true",
+        "loupe_memory = \"2 GB\"",
+    ] {
+        assert!(
+            text.contains(kept),
+            "the written file lacks {kept:?}:\n{text}"
+        );
+    }
+    std::fs::remove_dir_all(&dir).ok();
+}
+
+/// AC5 (settings.md, "Reading" and "Writing"): a file that does not parse
+/// gives the defaults, says so on stderr and on the status line, shows the
+/// whole error in the dialog's notice — and is never overwritten in place:
+/// the first commit moves it aside, byte for byte, to
+/// `settings.toml.broken`, writes a fresh file, and names where it went.
+///
+/// Mutant (2026-10-01): core's `write` overwriting a broken file instead of
+/// moving it aside → `settings.toml.broken` never exists and this goes red.
+#[test]
+fn a_malformed_settings_file_yields_defaults_and_is_moved_aside_on_the_first_write() {
+    if !has_display() {
+        eprintln!("screenshot smoke skipped: no display server");
+        return;
+    }
+    let _s = serial();
+    let broken = "[general\nauto_advance = false\n";
+    let dir = settings_scratch("broken", Some(broken));
+    let out = out_dir().join("settings-broken.jpg");
+    let script = "900:dump.start;1100:key:ctrl+,;1500:dump.opened;1700:key:right;\
+                  2100:click:settings wash;2400:key:ctrl+a;2600:key:1;2800:key:5;3000:key:return;\
+                  3400:dump.after;3700:key:escape;4100:dump.closed";
+    let stderr = shoot_env_stderr(
+        &["--synthetic", "24"],
+        &[
+            ("FASTCULL_TRACE", "1"),
+            ("FASTCULL_CONFIG_DIR", dir.to_str().unwrap()),
+            ("FASTCULL_DRIVE", script),
+        ],
+        &out,
+    );
+    let file = dir.join("settings.toml");
+    assert!(
+        stderr.contains(&format!(
+            "fastcull: {} could not be read (TOML parse error at line 1, column 9) — defaults in force",
+            file.display()
+        )),
+        "no stderr line naming the file and the error:\n{stderr}"
+    );
+    let start = qedump(&stderr, "start");
+    assert_eq!(
+        dump_field(start, "autoadvance"),
+        "true",
+        "the broken file's `false` was applied — the defaults must be in force:\n{stderr}"
+    );
+    assert!(
+        dump_text(start, "status")
+            .contains("⚠ settings.toml could not be read (defaults in force)"),
+        "the status line does not say the file could not be read: {start}"
+    );
+    let opened = qedump(&stderr, "opened");
+    let note = dump_text(opened, "settingsnote");
+    assert!(
+        note.contains("could not be read") && note.contains("invalid table header"),
+        "the notice does not show the whole error: {note:?}"
+    );
+    let after = qedump(&stderr, "after");
+    assert_eq!(dump_field(after, "wash"), "15");
+    let moved = "settings.toml rewritten — the file that would not read is settings.toml.broken";
+    assert_eq!(
+        dump_text(after, "settingsnote"),
+        moved,
+        "the notice does not name where it went"
+    );
+    assert!(
+        dump_text(qedump(&stderr, "closed"), "status").contains(moved),
+        "the status line does not name where the broken file went"
+    );
+    assert_eq!(
+        std::fs::read_to_string(dir.join("settings.toml.broken"))
+            .ok()
+            .as_deref(),
+        Some(broken),
+        "the broken file was not moved aside byte for byte — it was \
+         overwritten in place (brief 008 D5):\n{stderr}"
+    );
+    let fresh = std::fs::read_to_string(&file).expect("a fresh settings.toml");
+    assert!(
+        fresh.parse::<toml::Table>().is_ok() && fresh.contains("selection_wash = 15"),
+        "the fresh file does not parse or lacks the commit:\n{fresh}"
+    );
+    std::fs::remove_dir_all(&dir).ok();
+}
+
+/// AC6 (settings.md, "Writing" — hermetic): under FASTCULL_NO_CONFIG the
+/// dialog still works, in memory — the wash applies — writes nothing, and
+/// says `Not saved`.
+///
+/// Mutant (2026-10-01): the bridge's notice without its no-path arm →
+/// `settingsnote` is empty and this goes red.
+#[test]
+fn settings_under_no_config_applies_in_memory_and_writes_nothing() {
+    if !has_display() {
+        eprintln!("screenshot smoke skipped: no display server");
+        return;
+    }
+    let _s = serial();
+    let out = out_dir().join("settings-noconfig.jpg");
+    let script = "900:key:ctrl+,;1300:key:right;1700:click:settings wash;2000:key:ctrl+a;\
+                  2200:key:1;2400:key:5;2600:key:return;3000:dump.committed";
+    let stderr = shoot_env_stderr(
+        &["--synthetic", "24"],
+        &[("FASTCULL_TRACE", "1"), ("FASTCULL_DRIVE", script)],
+        &out,
+    );
+    let committed = qedump(&stderr, "committed");
+    assert_eq!(
+        dump_text(committed, "settingsfile"),
+        "none",
+        "a settings path resolved under NO_CONFIG"
+    );
+    assert_eq!(
+        dump_text(committed, "settingsnote"),
+        "Not saved: FASTCULL_NO_CONFIG is set",
+        "the dialog does not say it is not saving"
+    );
+    assert_eq!(
+        dump_field(committed, "wash"),
+        "15",
+        "the commit did not apply in memory:\n{stderr}"
+    );
+    assert_eq!(
+        dump_field(committed, "washprop"),
+        "0.150",
+        "the commit never reached the window:\n{stderr}"
+    );
+    assert!(
+        stderr.contains("settings not written: FASTCULL_NO_CONFIG is set"),
+        "the commit did not report that it was not written:\n{stderr}"
+    );
+    assert_eq!(
+        mark_lines(&stderr, "settings written "),
+        0,
+        "a file was written under NO_CONFIG"
+    );
+}
+
+/// AC7 (settings.md, "Environment precedence"): FASTCULL_MAX_READERS wins
+/// over the file's `max_readers`, the field shows the variable's value and
+/// cannot be changed — and an unparsable variable is ignored, the file
+/// governing. Two runs over the same file (`max_readers = 7`), one per
+/// value of the variable.
+///
+/// Mutant (2026-10-01): `resolve_max_readers` ignoring the environment →
+/// the first run reads `readers=limit:7` and this goes red.
+#[test]
+fn the_environment_wins_over_the_settings_file_for_read_workers() {
+    if !has_display() {
+        eprintln!("screenshot smoke skipped: no display server");
+        return;
+    }
+    let _s = serial();
+    let dir = settings_scratch("readers", Some("[performance]\nmax_readers = 7\n"));
+    let open = "900:key:ctrl+,;1300:key:ctrl+tab;1500:key:ctrl+tab;1900:dump.perf";
+    let run = |env: &str, script: &str, shot: &str| {
+        shoot_env_stderr(
+            &["--synthetic", "24"],
+            &[
+                ("FASTCULL_TRACE", "1"),
+                ("FASTCULL_CONFIG_DIR", dir.to_str().unwrap()),
+                ("FASTCULL_MAX_READERS", env),
+                ("FASTCULL_DRIVE", script),
+            ],
+            &out_dir().join(shot),
+        )
+    };
+    // The locked run also tries to type a limit into the field.
+    let typing = format!(
+        "{open};2200:click:settings readers-limit;2500:key:ctrl+a;2700:key:9;\
+         2900:key:return;3300:dump.typed"
+    );
+    let stderr = run("3", &typing, "settings-readers-env.jpg");
+    let perf = qedump(&stderr, "perf");
+    assert_eq!(
+        dump_field(perf, "settingstab"),
+        "2",
+        "not on the Performance tab:\n{stderr}"
+    );
+    assert_eq!(
+        dump_field(perf, "readers"),
+        "env:3",
+        "the file's 7 governs although FASTCULL_MAX_READERS=3 is set:\n{stderr}"
+    );
+    assert_eq!(dump_text(perf, "readersenv"), "3");
+    let typed = qedump(&stderr, "typed");
+    assert_eq!(
+        dump_field(typed, "readers"),
+        "env:3",
+        "the read-only field took a value while the environment governs it:\n{stderr}"
+    );
+    assert_eq!(
+        mark_lines(&stderr, "settings written "),
+        0,
+        "a read-only field wrote the file"
+    );
+
+    let stderr = run("abc", open, "settings-readers-abc.jpg");
+    let perf = qedump(&stderr, "perf");
+    assert_eq!(
+        dump_field(perf, "readers"),
+        "limit:7",
+        "an unparsable FASTCULL_MAX_READERS was not ignored — the file must govern:\n{stderr}"
+    );
+    assert_eq!(dump_text(perf, "readersenv"), "abc");
+    assert_eq!(
+        std::fs::read_to_string(dir.join("settings.toml")).unwrap(),
+        "[performance]\nmax_readers = 7\n",
+        "the file changed: the only run that typed was the locked one"
+    );
+    std::fs::remove_dir_all(&dir).ok();
+}
+
+/// AC8 (settings.md, "General › Auto-advance"; brief 008 D7): with
+/// auto-advance off, `Y` marks and the cursor STAYS, the selection left
+/// alone exactly as `U` would; under a filter that the mark takes the frame
+/// out of, the live-removal rule moves the cursor and that move ends the
+/// selection; turned back on, `Y` advances as it always has.
+///
+/// Mutant (2026-10-01): `advance` in the mark handler ignoring the setting
+/// → the first `Y` advances the cursor and collapses the selection, and
+/// this goes red.
+#[test]
+fn auto_advance_off_keeps_the_cursor_and_the_selection_like_u() {
+    if !has_display() {
+        eprintln!("screenshot smoke skipped: no display server");
+        return;
+    }
+    let _s = serial();
+    let out = out_dir().join("settings-autoadvance.jpg");
+    let script = "900:key:ctrl+space;1100:key:ctrl+right;1300:key:ctrl+space;1600:dump.sel;\
+                  1900:key:ctrl+,;2400:click:settings auto-advance;2800:key:escape;3200:dump.off;\
+                  3500:key:y;3900:dump.y;4200:filter:unmarked;4600:dump.filtered;\
+                  4900:key:y;5300:dump.removed;5600:filter:all;5900:key:ctrl+,;\
+                  6400:click:settings auto-advance;6800:key:escape;7100:key:ctrl+space;\
+                  7300:key:ctrl+right;7500:key:ctrl+space;7800:dump.on;8100:key:y;8500:dump.advanced";
+    let stderr = shoot_env_stderr(
+        &["--synthetic", "24"],
+        &[("FASTCULL_TRACE", "1"), ("FASTCULL_DRIVE", script)],
+        &out,
+    );
+    let sel = qedump(&stderr, "sel");
+    assert_eq!(
+        dump_field(sel, "selected"),
+        "2",
+        "the seed selection did not build:\n{stderr}"
+    );
+    assert_eq!(dump_field(sel, "cursor"), "1");
+    let off = qedump(&stderr, "off");
+    assert_eq!(
+        dump_field(off, "autoadvance"),
+        "false",
+        "auto-advance was not turned off:\n{stderr}"
+    );
+    assert_eq!(
+        dump_field(off, "selected"),
+        "2",
+        "opening Settings ended the selection:\n{stderr}"
+    );
+    let y = qedump(&stderr, "y");
+    assert!(
+        dump_text(y, "status").contains("★1 ✕0"),
+        "the Y did not mark: {y}"
+    );
+    assert_eq!(
+        dump_field(y, "cursor"),
+        "1",
+        "with auto-advance off the Y moved the cursor:\n{stderr}"
+    );
+    assert_eq!(
+        dump_field(y, "selected"),
+        "2",
+        "with auto-advance off the Y ended the selection — it must leave it \
+         alone exactly as U does:\n{stderr}"
+    );
+    // Under Unmarked the picked frame left the view and the filter change
+    // moved the cursor to a survivor (an engine move: the selection stays).
+    let filtered = qedump(&stderr, "filtered");
+    let survivor = dump_field(filtered, "cursor").to_string();
+    assert_ne!(
+        survivor, "1",
+        "the filter change kept the cursor on a hidden frame:\n{stderr}"
+    );
+    let removed = qedump(&stderr, "removed");
+    assert_ne!(
+        dump_field(removed, "cursor"),
+        survivor,
+        "the Y took the frame out of the view and the cursor did not move on \
+         (the live-removal exception):\n{stderr}"
+    );
+    assert_eq!(
+        dump_field(removed, "selected"),
+        "0",
+        "the live-removal move did not end the selection:\n{stderr}"
+    );
+    let on = qedump(&stderr, "on");
+    assert_eq!(
+        dump_field(on, "autoadvance"),
+        "true",
+        "auto-advance did not come back on:\n{stderr}"
+    );
+    let before = dump_field(on, "cursor").parse::<u32>().unwrap();
+    let advanced = qedump(&stderr, "advanced");
+    assert_eq!(
+        dump_field(advanced, "cursor").parse::<u32>().unwrap(),
+        before + 1,
+        "with auto-advance on the Y did not advance:\n{stderr}"
+    );
+    assert_eq!(
+        dump_field(advanced, "selected"),
+        "0",
+        "the advance did not end the selection:\n{stderr}"
+    );
+}
+
+/// AC10 (settings.md, "Performance › Loupe memory"): the figure committed in
+/// the dialog shows its hint at once and reaches the loupe engine at the
+/// NEXT folder open — the same folder is fine. The wait is on the engine's
+/// own mark with the exact budget, so a run whose engine started with any
+/// other number never satisfies it and fails loudly at the wait's cap.
+///
+/// Mutant (2026-10-01): `session.rs` starting the engine with
+/// `DEFAULT_BUDGET_BYTES` again → the second mark says 2147483648, the wait
+/// is never satisfied and the run exits 1 — red.
+#[test]
+fn loupe_memory_takes_effect_at_the_next_folder_open() {
+    if !has_display() {
+        eprintln!("screenshot smoke skipped: no display server");
+        return;
+    }
+    let _s = serial();
+    let dir = out_dir().join("settings-loupe");
+    std::fs::remove_dir_all(&dir).ok();
+    std::fs::create_dir_all(&dir).unwrap();
+    place_fixture(
+        &raws_dir().join("A1_full_compressed.ARW"),
+        &dir.join("one.ARW"),
+    );
+    let out = out_dir().join("settings-loupe.jpg");
+    let script = format!(
+        "1500:wait:load settled gen 0;1600:key:ctrl+,;1900:key:ctrl+tab;2100:key:ctrl+tab;\
+         2500:click:settings loupe-memory;2800:key:ctrl+a;3000:key:0;3200:key:.;3400:key:5;\
+         3600:key:return;4000:dump.set;4200:key:escape;4500:open:{dir};\
+         4600:wait:loupe engine started budget 536870912;4800:dump.after",
+        dir = dir.display()
+    );
+    let stderr = shoot_env_stderr(
+        &[dir.to_str().unwrap()],
+        &[("FASTCULL_TRACE", "1"), ("FASTCULL_DRIVE", script.as_str())],
+        &out,
+    );
+    assert!(
+        stderr.contains("loupe engine started budget 2147483648"),
+        "the first folder did not start the engine with the 2 GB default:\n{stderr}"
+    );
+    assert!(
+        stderr.contains("wait:loupe engine started budget 536870912 (satisfied"),
+        "the engine never started with the committed 0.5 GB:\n{stderr}"
+    );
+    assert_click_resolved(&stderr, "settings loupe-memory");
+    let set = qedump(&stderr, "set");
+    assert_eq!(
+        dump_field(set, "loupemem"),
+        "536870912",
+        "0.5 GB is not 2^29 bytes in force:\n{stderr}"
+    );
+    let hint = dump_text(set, "loupehint");
+    assert!(
+        hint.starts_with("= 512.0 MB") && hint.contains("≈ 3 A1 frames"),
+        "the hint does not show the figure in force and the A1 frames: {hint:?}"
+    );
+}
+
+/// AC12's driven half (settings.md, "Performance › Thumbnail cache"; brief
+/// 008 D13): every driven run is FASTCULL_NO_CACHE, so the row says the
+/// cache is off and Clear does nothing — the live clear is pinned in core
+/// (`cache::tests::clear_leaves_the_file_present_…`), and the worker,
+/// the `Clearing…` state and the re-measured readout are review-verified.
+///
+/// Mutant (2026-10-01): the readout ignoring FASTCULL_NO_CACHE → the row
+/// shows the real cache's size (a stat, nothing more) and this goes red.
+#[test]
+fn clear_cache_is_off_under_no_cache() {
+    if !has_display() {
+        eprintln!("screenshot smoke skipped: no display server");
+        return;
+    }
+    let _s = serial();
+    let out = out_dir().join("settings-clear-off.jpg");
+    let script = "900:key:ctrl+,;1300:key:ctrl+tab;1500:key:ctrl+tab;1900:dump.perf;\
+                  2200:click:settings clear-cache;2700:dump.clicked";
+    let stderr = shoot_env_stderr(
+        &["--synthetic", "24"],
+        &[("FASTCULL_TRACE", "1"), ("FASTCULL_DRIVE", script)],
+        &out,
+    );
+    let off = "Thumbnail cache: off (FASTCULL_NO_CACHE is set)";
+    assert_eq!(dump_text(qedump(&stderr, "perf"), "cachereadout"), off);
+    assert_click_resolved(&stderr, "settings clear-cache");
+    assert_eq!(dump_text(qedump(&stderr, "clicked"), "cachereadout"), off);
+    assert_eq!(
+        mark_lines(&stderr, "settings cache cleared"),
+        0,
+        "Clear ran with the cache off:\n{stderr}"
+    );
+}

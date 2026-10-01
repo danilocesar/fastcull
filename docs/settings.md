@@ -8,8 +8,9 @@ applies when you click it, a number applies when you press `Enter`, `Tab`
 or click elsewhere, and every change is saved to disk the moment you
 make it. `Esc` or **Close** closes the dialog; if you were halfway
 through typing a number, `Esc` throws that half-typed number away rather
-than applying it. **Reset to defaults** in the footer resets the tab you
-are looking at, nothing else.
+than applying it — clicking **Close** (or anywhere else) applies it.
+**Reset to defaults** in the footer resets the tab you are looking at,
+nothing else.
 
 While the dialog is open the grid is deaf: a stray `N` cannot reject the
 photo behind it, and `Esc` always closes the thing on top first. The
@@ -58,8 +59,9 @@ may keep on disk; the oldest thumbnails are dropped past it. Never below
 starts at 4 and grows while your storage keeps up — the right answer on a
 local disk. A **Limit** helps on a NAS or a slow card that thrashes when
 too many reads compete: `4` or less reads exactly that many files at a
-time; more than 4 is a ceiling the adaptive pool may grow up to. Takes
-effect at the next folder open. If `FASTCULL_MAX_READERS` is set in your
+time; more than 4 is a ceiling the adaptive pool may grow up to. Clearing
+*Adaptive* starts the limit at 4; type another number and press `Enter`.
+Takes effect at the next folder open. If `FASTCULL_MAX_READERS` is set in your
 environment it wins, and this row shows its value greyed out with a note
 saying so — unset the variable to change it here.
 

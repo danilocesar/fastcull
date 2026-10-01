@@ -60,6 +60,22 @@ fastcull-core.workspace = true
 #      would notice a new way to photograph twice.
 # Re-read the owner-invariant section of specs/modules/ui-grid.md before
 # raising this bound.
+# FOURTH CANARY (brief 008, the Settings dialog; same 1.17.1). Three
+# measured behaviours its keyboard stands on, none documented upstream
+# (read 2026-10-01 in i-slint-core window.rs `process_key_input` and
+# items/text.rs; ui-grid.md's Slint list):
+#   1. The WINDOW handles a Tab or Shift+Tab that the focused item and
+#      every ancestor scope ignored, by walking the WHOLE item tree to the
+#      next focusable item — surfaces hidden behind a scrim included. The
+#      Settings scope accepts both itself; that is the only reason the
+#      keyboard cannot walk out of the dialog into a hidden panel field.
+#   2. A focused item that has become invisible loses the keyboard at the
+#      NEXT key, and that key is delivered to nothing — why the dialog's
+#      tab bodies are permanent, toggled by `visible`, and a tab switch
+#      moves the keyboard to the strip BEFORE the old body hides.
+#   3. A `TextInput` ignores Tab, Escape and Ctrl+Tab (control
+#      characters), so all three bubble from a focused field to the
+#      dialog's scope: Esc in a field closes the dialog, Tab walks on.
 slint = { version = "1", default-features = false, features = [
     "std",
     "backend-winit",
@@ -74,8 +90,8 @@ zune-jpeg = "0.4"
 # no GTK system packages; native dialogs on Windows.
 rfd = { version = "0.15", default-features = false, features = ["xdg-portal", "async-std"] }
 # Remembered copy-dialog prefs (fileops.md: destination + template survive
-# across sessions) — same conventions as the core cache/templates paths.
-directories = "6"
+# across sessions). The directory is core's one config-dir resolver
+# (`settings::config_dir`, brief 008), so the app needs no `directories`.
 toml = "0.8"
 
 # AttachConsole(ATTACH_PARENT_PROCESS) at startup (issue #40): the crate is

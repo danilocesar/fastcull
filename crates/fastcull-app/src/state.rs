@@ -3,7 +3,7 @@
 //!
 //! # The shape
 //!
-//! `AppState` is eight groups and two survivors, not a flat field list.
+//! `AppState` is nine groups and two survivors, not a flat field list.
 //! Each group is the state of ONE thing, so a controller's footprint on the
 //! state is visible at a glance — `st.copy.…` is the copy dialog, and
 //! nothing else is:
@@ -18,10 +18,13 @@
 //! | [`IptcPanelState`] | the IPTC dock: its visibility, its model cache, the revert slot |
 //! | [`CopyState`] | the Copy Picks dialog: plan, destination, running worker, what was copied |
 //! | [`ClipState`] | the Export Frames as Video dialog: plan, destination, running writer |
+//! | [`SettingsState`] | the Settings dialog and the settings in force — the app's, not the folder's |
 //!
 //! The two survivors are not state at all: `cells` is the model the window
 //! is bound to, and `kitchen` is a worker thread. Both outlive every
-//! session; both say so at their declaration.
+//! session; both say so at their declaration. `settings` outlives every
+//! session too, and for a different reason: it is a fact about the app,
+//! not about any folder (see [`SettingsState`]).
 //!
 //! # The reset rule
 //!
@@ -88,18 +91,19 @@ pub(crate) const OVERLAY_HOLD_CAP: std::time::Duration = std::time::Duration::fr
 /// means cursor, and the two compose instead of competing.
 pub(crate) const SELECTION_WASH_RGB: [u8; 3] = [0x4d, 0xa3, 0xff];
 
-/// Selection wash strength (user decision 2026-07-28, chosen by eye on his own
-/// A1 frames against 12% and 18% renders). Held here rather than inlined in
-/// the UI because the user's stated plan is to promote it to a user setting —
-/// a settings pane then writes the `selection-wash-opacity` property and no
-/// other code changes. The `.slint` literals are inert fallbacks: Rust
-/// overwrites both properties at construction, so THIS is the one default.
-pub(crate) const SELECTION_WASH_OPACITY: f32 = 0.25;
+/// Selection wash strength's default (user decision 2026-07-28, chosen by
+/// eye on the user's own A1 frames against 12% and 18% renders) — since
+/// brief 008 the UI › Selection highlight setting, whose default is core's
+/// `settings::WASH_DEFAULT`; this is that number as an opacity, and the
+/// fallback [`clamp_wash_opacity`] answers a non-finite value with. The
+/// `.slint` literals are inert fallbacks: Rust overwrites both properties
+/// at construction.
+pub(crate) const SELECTION_WASH_OPACITY: f32 = fastcull_core::settings::WASH_DEFAULT as f32 / 100.0;
 
-/// Clamp for whatever eventually writes the wash strength. `with-alpha` has no
-/// defined behavior outside 0..=1, and the stated plan is to expose this to a
-/// settings pane — a stray 5.0 or -1 must not reach the renderer. Applied at
-/// the single write site so a future settings path inherits it for free.
+/// Clamp for whatever writes the wash strength. `with-alpha` has no
+/// defined behavior outside 0..=1 — a stray 5.0 or -1 must not reach the
+/// renderer. Applied at the single write site, which the Settings dialog
+/// (settings.md) goes through like the startup default does.
 pub(crate) fn clamp_wash_opacity(v: f32) -> f32 {
     if v.is_finite() {
         v.clamp(0.0, 1.0)
@@ -285,6 +289,62 @@ mod clip_state_tests {
     }
 }
 
+/// The Settings dialog (settings.md, brief 008) and the settings in force.
+///
+/// NOT a session group: the settings are the APP's, not a folder's, so a
+/// session swap keeps every field here and [`AppState::begin_session`]
+/// never touches it. The file is re-read when the dialog opens, not when a
+/// folder does; the folder open only READS the three Performance settings
+/// (the cache cap, the read workers, the loupe memory) from here.
+pub(crate) struct SettingsState {
+    /// What the last read of settings.toml found, with every commit since
+    /// applied — `loaded.settings` is what is in force.
+    pub(crate) loaded: fastcull_core::settings::Loaded,
+    /// The machine's total RAM, read once at startup (the loupe memory
+    /// percentage and its hint).
+    pub(crate) total_ram: Option<u64>,
+    /// Where a write moved the file that would not read: named on the
+    /// status line and the dialog's notice for the rest of the session.
+    pub(crate) moved_aside: Option<std::path::PathBuf>,
+    /// Why the last write failed, until one succeeds. While it stands the
+    /// commits live only in memory, so an open does NOT re-read the file
+    /// over them (settings.md, "Writing": nothing is silently lost).
+    pub(crate) write_error: Option<String>,
+    /// Clear cache is running on its worker; its outcome arrives here.
+    pub(crate) clear_rx: Option<std::sync::mpsc::Receiver<CacheCleared>>,
+    /// The Thumbnail cache row's text.
+    pub(crate) cache_readout: String,
+    /// The tab the dialog was last closed on: it reopens there.
+    pub(crate) last_tab: i32,
+}
+
+/// What the Clear cache worker reports back: the sizes on disk before and
+/// after, and the error if the clear failed.
+pub(crate) struct CacheCleared {
+    pub(crate) before: u64,
+    pub(crate) after: u64,
+    pub(crate) error: Option<String>,
+}
+
+impl SettingsState {
+    pub(crate) fn new(loaded: fastcull_core::settings::Loaded, total_ram: Option<u64>) -> Self {
+        Self {
+            loaded,
+            total_ram,
+            moved_aside: None,
+            write_error: None,
+            clear_rx: None,
+            cache_readout: String::new(),
+            last_tab: 0,
+        }
+    }
+
+    /// The settings in force.
+    pub(crate) fn current(&self) -> &fastcull_core::settings::Settings {
+        &self.loaded.settings
+    }
+}
+
 /// How long a refused-export explanation stays in the status line. Long
 /// enough to read after a keystroke that appeared to do nothing, short
 /// enough that it is gone before the next decision.
@@ -388,8 +448,11 @@ pub(crate) struct TextureStore {
     pub(crate) thumb_jpegs: HashMap<usize, Vec<u8>>,
     /// Decoded thumb textures, kept for the session (spec: thumbs are cheap).
     pub(crate) images: HashMap<usize, slint::Image>,
-    /// Images whose decode failed (the strip's failed badge).
-    pub(crate) failed: HashSet<usize>,
+    /// Images whose decode failed, with the reason (`Failed(reason)`'s
+    /// string): the Failed badge, its tooltip, and the status line's
+    /// ` · ⚠ failed: <reason>` while the cursor stands on one (ui-grid.md).
+    /// The FIRST reason is kept — the one that put the badge up.
+    pub(crate) failed: HashMap<usize, String>,
     /// Mid-rung textures (1616x1080, ~5 MB each) for intermediate zooms
     /// whose cells outgrow the 320 px thumb; pruned to the visible window.
     pub(crate) mids: HashMap<usize, slint::Image>,
@@ -859,6 +922,9 @@ pub(crate) struct AppState {
     pub(crate) copy: CopyState,
     /// The Export Frames as Video dialog's state (M9).
     pub(crate) clip: ClipState,
+    /// The Settings dialog and the settings in force (brief 008). Survives
+    /// every session swap: the settings are the app's, not the folder's.
+    pub(crate) settings: SettingsState,
     /// SURVIVOR: the one VecModel the window binds. It is not session
     /// data at all — replacing it would unbind the grid from the window,
     /// so refresh mutates it in place for the life of the process.
@@ -882,7 +948,11 @@ impl AppState {
     /// caller through `enter_loupe`, not through more constructor
     /// arguments: they are a request to enter a view, and the app already
     /// has a word for that.
-    pub(crate) fn new(cells: Rc<VecModel<CellData>>, kitchen: kitchen::Kitchen) -> Self {
+    pub(crate) fn new(
+        cells: Rc<VecModel<CellData>>,
+        kitchen: kitchen::Kitchen,
+        settings: SettingsState,
+    ) -> Self {
         Self {
             session: SessionState::default(),
             grid: GridViewState::default(),
@@ -892,6 +962,7 @@ impl AppState {
             iptc_panel: IptcPanelState::default(),
             copy: CopyState::default(),
             clip: ClipState::default(),
+            settings,
             cells,
             kitchen,
         }
@@ -927,6 +998,7 @@ impl AppState {
         self.iptc_panel.begin_session();
         self.copy.begin_session();
         self.clip.begin_session();
+        // `settings` is not touched: the app's, not the folder's.
         // SURVIVOR: the kitchen is a worker thread. Retargeting bumps its
         // generation so queued work is dropped and late completions are
         // orphaned, without paying to restart a thread per folder.

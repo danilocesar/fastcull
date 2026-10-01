@@ -49,7 +49,9 @@ their precedence is `fastcull-core`'s; the app binds (brief 008, 2026-10-01).
   `"0.5 GB"`, `"40%"`: the number as typed, one space, the unit (user
   decision 2026-10-01: "numbers are always expressed in GB, and percentage
   always total RAM"). `cache_cap` takes the GB form only; a `%` there is
-  garbage.
+  garbage. A percentage is a whole number, as the contract's
+  `Percent(u32)` says: `40.5%` is garbage, not rounded (developer
+  2026-10-01, brief 008 commit A — the spec was silent; for review).
 
 ### Reading
 
@@ -71,7 +73,10 @@ their precedence is `fastcull-core`'s; the app binds (brief 008, 2026-10-01).
   the dialog's hint says so; `cache_cap` bytes clamp to [256 MB, ∞) — 256 MB
   holds one large shoot's thumbnails (30–60 KB each), and below it the
   "second open is instant" promise of catalog-cache.md could not survive a
-  single big folder (senior-developer plan 2026-10-01).
+  single big folder (senior-developer plan 2026-10-01). Having no hint
+  beside its field, the cap also reads as 0.25 GB in the model, so the
+  field shows the value in force (developer 2026-10-01, brief 008 commit
+  A — the spec was silent; for review).
 - **A file that fails to parse is never overwritten in place** (brief 008
   D5: a hand-edited config is the user's data). The defaults are in
   force; both binaries print one stderr line naming the file and the
@@ -185,7 +190,10 @@ their precedence is `fastcull-core`'s; the app binds (brief 008, 2026-10-01).
   field shows the value IN FORCE — parsed, clamped, normalised — never the
   raw text; `Enter` keeps the keyboard in the field. There is no Apply, no
   OK, no Cancel and no unsaved state (persona 2026-10-01, MUST-HAVE at
-  this size).
+  this size). A click on Close, Reset, Clear or a checkbox is a click-away
+  like any other: the field's text commits first, so only `Esc` discards
+  (developer 2026-10-01, brief 008 commit B — the spec was silent on
+  Close; for review).
 
 ### The settings
 
@@ -243,7 +251,11 @@ their precedence is `fastcull-core`'s; the app binds (brief 008, 2026-10-01).
   checkbox and a **Limit** number field, enabled when the checkbox is off;
   a limit N has exactly `FASTCULL_MAX_READERS=N`'s meaning — N ≤ 4 pins
   exactly N readers, N > 4 is the ceiling above the floor of 4 — and no
-  ceiling of its own, as the variable has none. Core resolves
+  ceiling of its own, as the variable has none. Clearing Adaptive starts
+  a limit of 4 — the pool's floor and the fixed gate
+  `FASTCULL_MAX_READERS=4` restores; the setting is one integer, so the
+  box has to name some limit (developer 2026-10-01, brief 008 commit A —
+  the spec was silent; for review). Core resolves
   `(environment, setting) → the pool's configuration` in one pure
   function, `settings::resolve_max_readers`, that both binaries call where
   `pipeline.rs` read the variable. The environment override shows
@@ -308,24 +320,24 @@ their precedence is `fastcull-core`'s; the app binds (brief 008, 2026-10-01).
 `core:` a `fastcull-core` unit test beside the code; `app:` a driven
 `tests/screenshot.rs` test (real dispatched events, dumps and traces).
 
-- [ ] **AC1 — opening and closing.** File › Settings… and `Ctrl+,` open the
+- [x] **AC1 — opening and closing.** File › Settings… and `Ctrl+,` open the
       dialog; `Esc` and Close close it; the keyboard returns to the grid
       (`key:+` zooms afterwards); a scrim click does not close it —
       `settings_opens_from_the_chord_and_the_menu_and_closes_with_esc_keeping_the_keyboard`
       (its menu strand Linux-only, like About's).
-- [ ] **AC2 — containment.** Under the dialog `Y`/`N` mark nothing and
+- [x] **AC2 — containment.** Under the dialog `Y`/`N` mark nothing and
       `Ctrl+E`/`Ctrl+Shift+E` open nothing; About over it closes
       topmost-first; driven nav tokens are swallowed; the menu bar stays
       live — `settings_contains_every_grid_key_and_stacks_under_about`.
       `Ctrl+O`'s inertness is review-verified: the arm is the same scope
       rule, and a driven Ctrl+O that worked would open the native picker
       and hang the run.
-- [ ] **AC3 — the tabs.** Three tabs in order, switched by `Left`/`Right`
+- [x] **AC3 — the tabs.** Three tabs in order, switched by `Left`/`Right`
       on the strip and by `Ctrl+Tab`/`Ctrl+Shift+Tab` from a field; digits
       never switch; `Tab` walks the controls and never leaves the dialog;
       Reset resets the active tab only; every field carries its note —
       `settings_tabs_switch_by_keys_and_never_by_digits`.
-- [ ] **AC4 — the write.** Every commit writes `settings.toml` at once,
+- [x] **AC4 — the write.** Every commit writes `settings.toml` at once,
       preserving an unknown key and the user's comments; the field then
       shows the value in force; `Esc` discards an uncommitted field and
       closes — `a_settings_commit_writes_the_file_and_esc_discards_a_half_typed_field`
@@ -334,39 +346,39 @@ their precedence is `fastcull-core`'s; the app binds (brief 008, 2026-10-01).
       `a_write_preserves_unknown_keys_and_the_users_comments`,
       `a_created_key_carries_its_note_and_an_existing_key_keeps_its_comment`,
       `the_normalised_string_is_what_the_file_stores`.
-- [ ] **AC5 — a broken file.** A malformed file yields the defaults, a
+- [x] **AC5 — a broken file.** A malformed file yields the defaults, a
       status-line and a stderr warning naming the file and the error, and
       is never overwritten in place; the first write moves it aside under
       a reported name — core
       `a_malformed_file_yields_defaults_and_is_left_byte_identical`,
       `the_first_write_moves_a_broken_file_aside_and_writes_a_fresh_one`;
       app `a_malformed_settings_file_yields_defaults_and_is_moved_aside_on_the_first_write`.
-- [ ] **AC6 — hermetic.** `FASTCULL_NO_CONFIG=1` makes `settings.toml`
+- [x] **AC6 — hermetic.** `FASTCULL_NO_CONFIG=1` makes `settings.toml`
       unreachable for load and save and the dialog says `Not saved`; no
       test touches the real file — core
       `config_dir_honours_the_override_then_no_config`; app
       `settings_under_no_config_applies_in_memory_and_writes_nothing`;
       every driven run carries `FASTCULL_NO_CONFIG=1`, and the two that
       write set `FASTCULL_CONFIG_DIR` to their own scratch dir.
-- [ ] **AC7 — precedence.** With `FASTCULL_MAX_READERS` set the field is
+- [x] **AC7 — precedence.** With `FASTCULL_MAX_READERS` set the field is
       read-only with the environment's value and its note; unset, the
       file's value governs the pool; an unparsable value is ignored —
       core `the_environment_wins_over_the_file_for_max_readers`,
       `the_readers_resolution_feeds_the_pool_exactly_as_the_variable_did`
       (with `pipeline::tests::controller_override_caps_and_pins`); app
       `the_environment_wins_over_the_settings_file_for_read_workers`.
-- [ ] **AC8 — auto-advance off.** `Y`/`N` keep the cursor and leave the
+- [x] **AC8 — auto-advance off.** `Y`/`N` keep the cursor and leave the
       selection alone; the filter exception moves the cursor and ends the
       selection as `U` does; on, as today — core
       `filter::tests::mark_advances_exactly_one_image` (the off row, now
       fed from the setting); app
       `auto_advance_off_keeps_the_cursor_and_the_selection_like_u`.
-- [ ] **AC9 — the wash.** The committed percentage reaches the window's
+- [x] **AC9 — the wash.** The committed percentage reaches the window's
       `selection-wash-opacity` at once, 0–50 inclusive, clamped — in
       `a_settings_commit_writes_the_file_and_esc_discards_a_half_typed_field`
       (`washprop=` reads the window property, not the model); core
       `out_of_range_values_clamp_on_read`.
-- [ ] **AC10 — loupe memory.** GB and percentage forms parse, garbage is
+- [x] **AC10 — loupe memory.** GB and percentage forms parse, garbage is
       the default, the hint counts A1 frames, the floor and the total
       clamp, unknown RAM falls back and says so, and the engine starts
       with the bytes in force at the next folder open — core
@@ -375,14 +387,14 @@ their precedence is `fastcull-core`'s; the app binds (brief 008, 2026-10-01).
       `the_frames_hint_counts_a1_frames`, `parse_mem_total_reads_meminfo`;
       app `loupe_memory_takes_effect_at_the_next_folder_open` (waits on
       `loupe engine started budget <bytes>`).
-- [ ] **AC11 — the cache cap.** The file's cap is what
+- [x] **AC11 — the cache cap.** The file's cap is what
       `default_cache_path` enforces, app and CLI alike — core
       `defaults_are_the_specs_numbers` (the setting's default is
       `cache::DEFAULT_CAP_BYTES`) and
       `cache::tests::eviction_respects_cap_and_lru_order` (the eviction);
       the two call sites are review-verified, because every driven run
       is `FASTCULL_NO_CACHE` and the CLI's default cache is the real one.
-- [ ] **AC12 — Clear cache.** The readout is the db + `-wal` + `-shm`
+- [x] **AC12 — Clear cache.** The readout is the db + `-wal` + `-shm`
       size with the path; clearing empties the table and shrinks the
       file through a live connection and never unlinks it; the
       connection stays usable — core
@@ -396,19 +408,27 @@ their precedence is `fastcull-core`'s; the app binds (brief 008, 2026-10-01).
       the status line carries it when the cursor stands on the frame —
       ui-grid.md's ledger
       (`the_failed_badge_shows_its_reason_on_hover_and_in_the_status_line`).
-- [ ] **AC14 — the card.** The shortcuts card lists `Ctrl+,` and still
+      Open until brief 008's commit C, the tooltip and its test.
+- [x] **AC14 — the card.** The shortcuts card lists `Ctrl+,` and still
       fits whole at 1000×700 —
       `the_shortcuts_card_lists_every_binding_in_the_spec`,
       `shortcuts_card_is_a_two_column_sheet_that_fits_its_window`
       (ui-grid.md).
 - [ ] **AC15 — docs.** `docs/settings.md` exists, CLAUDE.md's page map
       names it, and `docs/culling.md` and `docs/faq.md` follow the
-      behaviour — review-verified.
+      behaviour — review-verified. Open until the senior developer's
+      review of brief 008 verifies it (no test pins prose).
 - [ ] **AC16 — no budget row moves** — `tests/perf_budgets.rs` green in
-      release on the idle seat (QE).
+      release on the idle seat (QE). Open until QE's run.
 
 ## History
 
+- 2026-10-01 — Implemented (brief 008 commits A and B): the file, the
+  precedence and the dialog; AC1–AC12 and AC14 ticked beside their tests.
+  Four details the spec had left open are recorded where they apply as
+  the developer's, for review: a whole-number percentage, the cache cap's
+  floor shown in the field, Close committing like a click-away, and a
+  cleared Adaptive starting at 4.
 - 2026-10-01 — Created (brief 008, issue #39; the Settings dialog, the
   file, the precedence rule and the five settings the specs had promised
   since 2026-07-25). ADR 0005 records the storage-and-precedence contract.

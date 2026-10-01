@@ -18,7 +18,7 @@
 //!
 //! | file | when you open it |
 //! |---|---|
-//! | `state.rs` | the state every controller borrows (seven groups), and the app constants |
+//! | `state.rs` | the state every controller borrows (nine groups), and the app constants |
 //! | `session.rs` | opening a folder, launch dispatch, templates, ui.toml prefs |
 //! | `nav.rs` | keyboard navigation, marks, filter/sort, cursor reveal |
 //! | `loupe_ctrl.rs` | pointer gestures, loupe geometry, the full-res ring |
@@ -27,6 +27,7 @@
 //! | `iptc_bridge.rs` | the IPTC panel |
 //! | `copy_bridge.rs` | the Copy Picks dialog (and burst regrouping) |
 //! | `clip_bridge.rs` | the Export Frames as Video dialog (M9) |
+//! | `settings_bridge.rs` | the Settings dialog and the settings file (brief 008) |
 //! | `focus.rs` | keyboard focus continuity |
 //! | `shutter.rs` | `--screenshot` readiness gate and shutdown |
 //! | `harness.rs` | the FASTCULL_DRIVE scripted-action interpreter |
@@ -58,13 +59,14 @@ mod nav;
 mod presenter;
 mod pump;
 mod session;
+mod settings_bridge;
 mod shutter;
 mod state;
 mod trace;
 
 use crate::presenter::refresh;
 use crate::session::Launch;
-use crate::state::{clamp_wash_opacity, AppState, SELECTION_WASH_OPACITY, SELECTION_WASH_RGB};
+use crate::state::{AppState, SettingsState, SELECTION_WASH_RGB};
 use crate::trace::trace_mark;
 use slint::{ComponentHandle, VecModel};
 
@@ -166,14 +168,26 @@ fn main() {
     );
     trace_mark(&format!("about version {about_version}"));
     window.set_about_version(about_version.into());
-    // Selection wash defaults. The UI only ever READS these two properties,
-    // so promoting the strength to a user setting later is a write here.
+    // settings.toml, read once here before anything else is timed
+    // (settings.md, "Reading"; 01-architecture.md's data flow): the wash
+    // and auto-advance apply at once, the Performance three at every
+    // folder open — the startup folder's included, which is why this
+    // precedes `session::dispatch`. A file that will not read says so on
+    // stderr (here) and on the status line (the presenter).
+    let settings = SettingsState::new(
+        fastcull_core::settings::load_default(),
+        fastcull_core::settings::total_ram(),
+    );
+    settings_bridge::trace_read(&settings);
+    // The selection wash. The UI only ever READS these two properties; the
+    // strength is the UI › Selection highlight setting, written through
+    // the one clamped site (`settings_bridge::apply_instant`).
     window.set_selection_wash(slint::Color::from_rgb_u8(
         SELECTION_WASH_RGB[0],
         SELECTION_WASH_RGB[1],
         SELECTION_WASH_RGB[2],
     ));
-    window.set_selection_wash_opacity(clamp_wash_opacity(SELECTION_WASH_OPACITY));
+    settings_bridge::apply_instant(&window, settings.current());
     let cells = Rc::new(VecModel::from(Vec::<CellData>::new()));
     window.set_cells(slint::ModelRc::from(Rc::clone(&cells)));
     let start_at_loupe = start_11 || start_loupe;
@@ -194,7 +208,7 @@ fn main() {
             .ok();
         }
     }));
-    let mut app = AppState::new(cells, kitchen);
+    let mut app = AppState::new(cells, kitchen, settings);
     // --start-loupe / --start-11: open directly at the loupe step, at fit
     // or pinned to 1:1. Everything else about the fresh state is the
     // sub-structs' own defaults.
@@ -214,6 +228,7 @@ fn main() {
     iptc_bridge::wire(&window, &state);
     copy_bridge::wire(&window, &state);
     clip_bridge::wire(&window, &state);
+    settings_bridge::wire(&window, &state);
     loupe_ctrl::wire(&window, &state);
     pump::wire(&window, &state);
     window.on_quit(|| {

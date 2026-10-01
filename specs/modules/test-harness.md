@@ -230,12 +230,15 @@ sidecars — scripts target throwaway copies of test data only.
   and process exit never trace it (xmp-sidecars.md).
 - **Focus**: `focus: <what> gained|lost` from the `changed has-focus`
   handlers of the main scope (`keys`), each `iptc field N`, the keyword
-  field, `copy dialog` and `clip dialog` — a `gained` with no matching
+  field, `copy dialog`, `clip dialog`, and since brief 008 `settings
+  dialog` and `settings strip` (the Settings dialog's scope and its tab
+  strip, where the keyboard lands on open) — a `gained` with no matching
   `lost` from the previous holder is the dangling-weak signature;
   `focus-keys (<reason>)` — a claim was MADE, tagged at every call site:
   `swap`, `panel-open`, `panel-close`, `modal`, `rebuild`, `deferred` (a
   queued claim has ARRIVED — not the same event as its queuing),
-  `copy-dialog`, `clip-dialog`, `cell-click`, `fit-click`, `overlay-click`,
+  `copy-dialog`, `clip-dialog`, `settings-dialog`, `settings-close`,
+  `cell-click`, `fit-click`, `overlay-click`,
   `template-apply`, `revert`, `field-clear`, `field-accepted`,
   `keyword-removed`, `keyword-accepted`, `keyword-init`, `keyword-watch`,
   the two behind-a-cover bounces, `row N (gen K)` (the rebuild reclaim; K is

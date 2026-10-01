@@ -138,21 +138,33 @@ fn load_folder(state: &Rc<RefCell<AppState>>, folder: &std::path::Path) -> Resul
     let (writer, errs) = fastcull_core::sidecar_writer::SidecarWriter::start();
     st.session.writer = Some(writer);
     st.session.sidecar_errs = Some(errs);
+    // The three Performance settings apply HERE, at every folder open
+    // (settings.md: "applies at the next folder open"): the cache cap the
+    // default cache is trimmed to, the read pool's override with the
+    // environment winning over the file, and the loupe's memory budget.
+    let settings = st.settings.current().clone();
     // FASTCULL_NO_CACHE: hermetic test runs must not touch the user's
     // real per-user cache DB (validator/QE finding).
     let cache_path = if std::env::var_os("FASTCULL_NO_CACHE").is_some() {
         None
     } else {
-        fastcull_core::cache::default_cache_path(fastcull_core::cache::DEFAULT_CAP_BYTES)
+        fastcull_core::cache::default_cache_path(settings.cache_cap_bytes())
     };
     let (pipeline, rx) = Pipeline::start(
         jobs,
         cache_path,
         std::thread::available_parallelism().map_or(4, |n| n.get()),
-        fastcull_core::settings::resolve_max_readers_from_env(0).override_for_pool(),
+        fastcull_core::settings::resolve_max_readers_from_env(settings.max_readers)
+            .override_for_pool(),
     );
-    let (loupe, loupe_rx) =
-        fastcull_core::loupe::LoupeEngine::start(paths, fastcull_core::loupe::DEFAULT_BUDGET_BYTES);
+    let (budget, _) = settings.loupe_memory_bytes(st.settings.total_ram);
+    let (loupe, loupe_rx) = fastcull_core::loupe::LoupeEngine::start(
+        paths,
+        usize::try_from(budget).unwrap_or(usize::MAX),
+    );
+    // The proof the loupe memory setting reached the engine
+    // (test-harness.md): a driven test waits on this exact budget.
+    crate::trace::trace_mark(&format!("loupe engine started budget {budget}"));
     st.session.pipeline = Some(pipeline);
     st.loupe_view.engine = Some(loupe);
     st.session.pipeline_rx = Some(rx);
@@ -309,17 +321,16 @@ pub(crate) fn reload_templates(st: &mut AppState) {
 
 /// Remembered UI preferences (fileops.md: destination and rename template
 /// survive across sessions). Tiny TOML in the fastcull config dir.
+///
+/// The directory is core's one resolver for every config file
+/// (`settings::config_dir`, brief 008 D11), and FASTCULL_NO_CONFIG is
+/// honoured there: hermetic test runs must never read or write the user's
+/// real ~/.config/fastcull/ui.toml (issue #13 gap, found by the issue #41
+/// sweep: a driven copy dialog displayed the user's real remembered
+/// destination — FASTCULL_NO_CACHE sandboxes only the cache). Gating the
+/// PATH covers both load and save in one place.
 fn ui_prefs_path() -> Option<std::path::PathBuf> {
-    // FASTCULL_NO_CONFIG: hermetic test runs must never read or write the
-    // user's real ~/.config/fastcull/ui.toml (issue #13 gap, found by the
-    // issue #41 sweep: a driven copy dialog displayed the user's real
-    // remembered destination — FASTCULL_NO_CACHE sandboxes only the
-    // cache). Gating the PATH covers both load and save in one place.
-    if std::env::var_os("FASTCULL_NO_CONFIG").is_some() {
-        return None;
-    }
-    let dirs = directories::ProjectDirs::from("org", "fastcull", "fastcull")?;
-    Some(dirs.config_dir().join("ui.toml"))
+    fastcull_core::settings::config_dir().map(|dir| dir.join("ui.toml"))
 }
 
 /// The remembered preferences as they are on disk, or an empty table.

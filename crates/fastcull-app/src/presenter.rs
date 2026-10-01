@@ -619,7 +619,7 @@ fn render_loupe_rung(win: &MainWindow, st: &mut AppState, pass: &Pass) -> i32 {
         has_sharp: sharp.is_some(),
         has_mid: mid.is_some(),
         has_thumb: thumb.is_some(),
-        cursor_failed: st.textures.failed.contains(&cursor),
+        cursor_failed: st.textures.failed.contains_key(&cursor),
         overlay_wanted: overlay,
         // The overlay's own visibility property IS the "were previous
         // pixels on screen" memory the hold arm consults.
@@ -831,7 +831,15 @@ fn fill_grid_cells(
             h: layout.cell_height,
             image: image.cloned().unwrap_or_default(),
             has_image: image.is_some(),
-            failed: st.textures.failed.contains(&index),
+            failed: st.textures.failed.contains_key(&index),
+            // The badge's tooltip text (ui-grid.md, "Visual language").
+            failed_reason: st
+                .textures
+                .failed
+                .get(&index)
+                .cloned()
+                .unwrap_or_default()
+                .into(),
             label: st
                 .session
                 .labels
@@ -1016,6 +1024,13 @@ fn write_status_and_chrome(
     } else {
         ""
     };
+    // The Failed badge's reason, for the keyboard (ui-grid.md: the status
+    // bar names a failed cursor's reason after the mark words; brief 008
+    // R12 — the badge's tooltip is the pointer's way to the same words).
+    let failed_note = match st.textures.failed.get(&cursor) {
+        Some(reason) if cursor_in_view => format!(" · ⚠ failed: {reason}"),
+        _ => String::new(),
+    };
     // Load progress (persona ask, issue #25): a bare "1847 thumbs loaded"
     // makes you hunt for the total to know whether to start now or get a
     // beer, and while the order is provisional the status bar is the only
@@ -1073,7 +1088,7 @@ fn write_status_and_chrome(
     // text reads as prose. The words and their order are exactly what they
     // were — only the paint changes.
     let head = format!(
-        "{} ({}/{}){}{}{}",
+        "{} ({}/{}){}{}{}{}",
         if cursor_in_view {
             st.session.labels.get(cursor).cloned().unwrap_or_default()
         } else {
@@ -1086,11 +1101,12 @@ fn write_status_and_chrome(
         // 3,100" — persona).
         view_len,
         mark_words,
+        failed_note,
         showing,
         burst_note,
     );
     let tail = format!(
-        " — {} — ★{} ✕{}{} — {} column{}{}",
+        " — {} — ★{} ✕{}{}{} — {} column{}{}",
         load_note,
         counts.picked,
         counts.rejected,
@@ -1099,6 +1115,7 @@ fn write_status_and_chrome(
         } else {
             String::new()
         },
+        crate::settings_bridge::status_note(&st.settings),
         layout.columns,
         if layout.columns == 1 { "" } else { "s" },
         clip_notice

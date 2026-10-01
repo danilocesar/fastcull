@@ -648,8 +648,10 @@ mis-marked frame costs one arrow back and a re-mark.
   2026-10-01 at 568 px; this sentence said "about 25 px of room" until
   then — so the next binding replaces a row or moves a section, as
   `Ctrl+,` did). Its height, 568 px on the development seat before brief
-  008 and 572 px after it (to be measured by the plan's commit: the
-  column swap adds one 23 px row to the shorter column),
+  008 and 572 px after it (measured 2026-10-01 by brief 008's commit, at
+  1440x900 and at 1000x700 alike, as the plan predicted: the column swap
+  put the one 23 px row in the shorter column; the floor now sits 31 px
+  above the status bar at 1000x700 against the test's 20),
   is a MEASUREMENT no test may pin: it is the sum of ~30 text line boxes
   and ranges from 491 (Liberation Sans) to 627 (Noto Sans Mono) across
   faces; the test pins only what is geometric — the width, inside the
@@ -1117,10 +1119,13 @@ into a hover (`builtins.slint`, `TooltipArea`, not user-facing).
       undrivable headlessly that half is recorded as review-verified in
       the test and here, never faked with a proxy). Open until the plan's
       commit lands.
-- [ ] `Ctrl+,` opens the Settings dialog, the dialog contains the
+- [x] `Ctrl+,` opens the Settings dialog, the dialog contains the
       keyboard like the copy dialog, auto-advance off keeps the cursor
       and the selection as `U` does — settings.md's AC1, AC2 and AC8 and
-      their tests. Open until the plan's commit lands.
+      their tests
+      (`settings_opens_from_the_chord_and_the_menu_and_closes_with_esc_keeping_the_keyboard`,
+      `settings_contains_every_grid_key_and_stacks_under_about`,
+      `auto_advance_off_keeps_the_cursor_and_the_selection_like_u`).
 - RETIRED 2026-09-17 (user decision): the per-release manual acceptance
   (a 5,000-file A1 folder at 60 fps; no perceived latency in the
   pick→auto-advance loop) — never recorded as run; the perf budgets, the

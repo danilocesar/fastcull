@@ -1506,7 +1506,6 @@ dependencies = [
 name = "fastcull-app"
 version = "0.14.0"
 dependencies = [
- "directories",
  "fast_image_resize",
  "fastcull-core",
  "jpeg-encoder",

@@ -240,13 +240,15 @@ fn handle_nav_inner(win: &MainWindow, state: &Rc<RefCell<AppState>>, key: &str) 
                 }
                 // Advance/removal composition (spec, persona G1): net
                 // movement is exactly one image. Auto-advance after Y/N
-                // (user decision 2026-07-25; future config option); U stays.
+                // (user decision 2026-07-25) is the General › Auto-advance
+                // setting since brief 008 (settings.md); U never advances.
+                let advance = key != "clear" && st.settings.current().auto_advance;
                 recompute_view(&mut st);
                 match fastcull_core::filter::cursor_after_mark(
                     cursor,
                     old_pos,
                     &st.grid.view,
-                    key != "clear",
+                    advance,
                 ) {
                     Some(id) => st.grid.cursor = id,
                     None => {
@@ -263,10 +265,12 @@ fn handle_nav_inner(win: &MainWindow, state: &Rc<RefCell<AppState>>, key: &str) 
                 // UNLESS its mark took the frame out of the filtered view
                 // and the live-removal rule moved the cursor on: that is a
                 // cursor move like any other, and "collapse = a cursor
-                // move" stays one rule. A mark that lands on nothing never
-                // reaches here — the guard above fails and nothing is
-                // touched.
-                if key != "clear" || st.grid.cursor != cursor {
+                // move" stays one rule. With auto-advance OFF, `Y`/`N` are
+                // `U` here exactly (brief 008 D7: a mark that does not move
+                // the cursor is not navigation). A mark that lands on
+                // nothing never reaches here — the guard above fails and
+                // nothing is touched.
+                if advance || st.grid.cursor != cursor {
                     st.grid.selection.collapse();
                 }
             }
