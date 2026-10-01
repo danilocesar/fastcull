@@ -197,7 +197,11 @@ sidecars — scripts target throwaway copies of test data only.
   be read: <error>` at startup and at every open; `settings opened` /
   `settings closed`; `settings committed <table>.<key> = <value>` then
   `settings written <path>` or `settings not written: <reason>`;
-  `settings moved aside <path>`; `settings reset <tab>`; `settings cache
+  `settings moved aside <path>`; `settings reset <tab>`; `settings
+  wash|loupe-memory|cache-cap|readers-limit shows <text>` whenever a number
+  field's text changes, typed or re-shown — what the field DISPLAYS, where
+  the dump's `wash=`, `loupemem=`, `cachecap=` and `readers=` are the
+  model's (senior-developer review F1 of brief 008); `settings cache
   cleared <before> -> <after>` (bytes); `loupe engine started budget
   <bytes>` at every folder open (the proof that the loupe memory setting
   reached the engine); `failed tooltip shown: <reason>` when the Failed

@@ -3270,6 +3270,16 @@ export component MainWindow inherits Window {
         // `settings-close` clears `settings-visible` before the keyboard
         // leaves the field and the blur reads it. After a commit every
         // field shows the value in force, never the raw text.
+        //
+        // A field commits only what the USER typed — its `dirty` flag, set
+        // by LineEdit's `edited` — never a text that merely differs from
+        // the value in force, and every blur re-shows the value in force.
+        // Both because of the fifth fact of Cargo.toml's fourth canary: a
+        // click on Reset commits the typed `35` (flush) and resets to 25 in
+        // ONE event-loop iteration, the field's `changed shown` re-sync
+        // sees 25 → 25 and never fires, and a blur that compared texts
+        // committed the stale `35` back over the Reset (senior-developer
+        // review F1, 2026-10-01).
         if root.settings-visible: Rectangle {
             y: 0; // missing-binding trap (issue #12)
             width: 100%;
@@ -3348,26 +3358,31 @@ export component MainWindow inherits Window {
                     self.go-to-tab(Math.mod(root.settings-tab + dir + root.settings-tabs.length,
                         root.settings-tabs.length));
                 }
-                // Commit the focused field NOW if its text is not the value
-                // in force, then show the value in force. Called wherever
-                // the keyboard is about to move on, so the commit never
-                // depends on when the deferred blur runs.
+                // Commit the focused field NOW if the user edited it into
+                // something other than the value in force, then show the
+                // value in force. Called wherever the keyboard is about to
+                // move on, so the commit never depends on when the deferred
+                // blur runs.
                 function flush() {
-                    if (set-wash.has-focus && set-wash.text != root.settings-wash) {
+                    if (set-wash.has-focus && set-wash.dirty && set-wash.text != root.settings-wash) {
                         root.settings-commit("selection_wash", set-wash.text);
                         set-wash.text = root.settings-wash;
+                        set-wash.dirty = false;
                     }
-                    if (set-loupe.has-focus && set-loupe.text != root.settings-loupe-memory) {
+                    if (set-loupe.has-focus && set-loupe.dirty && set-loupe.text != root.settings-loupe-memory) {
                         root.settings-commit("loupe_memory", set-loupe.text);
                         set-loupe.text = root.settings-loupe-memory;
+                        set-loupe.dirty = false;
                     }
-                    if (set-cache.has-focus && set-cache.text != root.settings-cache-cap) {
+                    if (set-cache.has-focus && set-cache.dirty && set-cache.text != root.settings-cache-cap) {
                         root.settings-commit("cache_cap", set-cache.text);
                         set-cache.text = root.settings-cache-cap;
+                        set-cache.dirty = false;
                     }
-                    if (set-limit.has-focus && set-limit.text != root.settings-readers-limit) {
+                    if (set-limit.has-focus && set-limit.dirty && set-limit.text != root.settings-readers-limit) {
                         root.settings-commit("max_readers", set-limit.text);
                         set-limit.text = root.settings-readers-limit;
+                        set-limit.dirty = false;
                     }
                 }
                 // Modal containment, topmost first (issue #42), and in the
@@ -3574,13 +3589,29 @@ export component MainWindow inherits Window {
                                     width: 80px;
                                     text: root.settings-wash;
                                     font-size: 13px;
+                                    // The user typed since the field last
+                                    // showed the value in force: the only
+                                    // text a commit ever takes (see APPLY
+                                    // ON COMMIT above). `edited` is the
+                                    // user's edit alone, never a write
+                                    // from here.
+                                    property <bool> dirty: false;
+                                    edited => { self.dirty = true; }
                                     // Re-shown when the value in force
                                     // changes behind it (a Reset, an open).
                                     property <string> shown: root.settings-wash;
-                                    changed shown => { self.text = root.settings-wash; }
+                                    changed shown => {
+                                        self.text = root.settings-wash;
+                                        self.dirty = false;
+                                    }
+                                    // What the field shows, for a driven
+                                    // run (test-harness.md): the dump's
+                                    // `wash=` is the model's.
+                                    changed text => { root.dbg-note("settings wash shows " + self.text); }
                                     accepted(text) => {
                                         root.settings-commit("selection_wash", text);
                                         self.text = root.settings-wash;
+                                        self.dirty = false;
                                     }
                                     changed has-focus => {
                                         if (self.has-focus) {
@@ -3590,11 +3621,19 @@ export component MainWindow inherits Window {
                                             if (root.about-visible || root.shortcuts-visible) {
                                                 settings-strip.focus();
                                             }
-                                        } else if (root.settings-visible && self.text != root.settings-wash) {
-                                            // Click-away commits; Esc closed
-                                            // the dialog first, so it does not.
-                                            root.settings-commit("selection_wash", self.text);
+                                        } else if (root.settings-visible) {
+                                            // Click-away commits what the user
+                                            // typed; Esc closed the dialog
+                                            // first, so it does not.
+                                            if (self.dirty && self.text != root.settings-wash) {
+                                                root.settings-commit("selection_wash", self.text);
+                                            }
+                                            // And the value in force, always:
+                                            // after a commit-then-Reset in one
+                                            // click `changed shown` cannot see
+                                            // the Reset.
                                             self.text = root.settings-wash;
+                                            self.dirty = false;
                                         }
                                     }
                                     init => {
@@ -3631,11 +3670,20 @@ export component MainWindow inherits Window {
                                     width: 110px;
                                     text: root.settings-loupe-memory;
                                     font-size: 13px;
+                                    // `dirty`, `shown`, the mark and the
+                                    // blur: as the wash field's.
+                                    property <bool> dirty: false;
+                                    edited => { self.dirty = true; }
                                     property <string> shown: root.settings-loupe-memory;
-                                    changed shown => { self.text = root.settings-loupe-memory; }
+                                    changed shown => {
+                                        self.text = root.settings-loupe-memory;
+                                        self.dirty = false;
+                                    }
+                                    changed text => { root.dbg-note("settings loupe-memory shows " + self.text); }
                                     accepted(text) => {
                                         root.settings-commit("loupe_memory", text);
                                         self.text = root.settings-loupe-memory;
+                                        self.dirty = false;
                                     }
                                     changed has-focus => {
                                         if (self.has-focus) {
@@ -3644,9 +3692,12 @@ export component MainWindow inherits Window {
                                             if (root.about-visible || root.shortcuts-visible) {
                                                 settings-strip.focus();
                                             }
-                                        } else if (root.settings-visible && self.text != root.settings-loupe-memory) {
-                                            root.settings-commit("loupe_memory", self.text);
+                                        } else if (root.settings-visible) {
+                                            if (self.dirty && self.text != root.settings-loupe-memory) {
+                                                root.settings-commit("loupe_memory", self.text);
+                                            }
                                             self.text = root.settings-loupe-memory;
+                                            self.dirty = false;
                                         }
                                     }
                                     init => {
@@ -3678,11 +3729,19 @@ export component MainWindow inherits Window {
                                     width: 110px;
                                     text: root.settings-cache-cap;
                                     font-size: 13px;
+                                    // As the wash field's.
+                                    property <bool> dirty: false;
+                                    edited => { self.dirty = true; }
                                     property <string> shown: root.settings-cache-cap;
-                                    changed shown => { self.text = root.settings-cache-cap; }
+                                    changed shown => {
+                                        self.text = root.settings-cache-cap;
+                                        self.dirty = false;
+                                    }
+                                    changed text => { root.dbg-note("settings cache-cap shows " + self.text); }
                                     accepted(text) => {
                                         root.settings-commit("cache_cap", text);
                                         self.text = root.settings-cache-cap;
+                                        self.dirty = false;
                                     }
                                     changed has-focus => {
                                         if (self.has-focus) {
@@ -3691,9 +3750,12 @@ export component MainWindow inherits Window {
                                             if (root.about-visible || root.shortcuts-visible) {
                                                 settings-strip.focus();
                                             }
-                                        } else if (root.settings-visible && self.text != root.settings-cache-cap) {
-                                            root.settings-commit("cache_cap", self.text);
+                                        } else if (root.settings-visible) {
+                                            if (self.dirty && self.text != root.settings-cache-cap) {
+                                                root.settings-commit("cache_cap", self.text);
+                                            }
                                             self.text = root.settings-cache-cap;
+                                            self.dirty = false;
                                         }
                                     }
                                     init => {
@@ -3751,11 +3813,19 @@ export component MainWindow inherits Window {
                                     text: root.settings-readers-limit;
                                     font-size: 13px;
                                     enabled: !root.settings-readers-adaptive && !root.settings-readers-locked;
+                                    // As the wash field's.
+                                    property <bool> dirty: false;
+                                    edited => { self.dirty = true; }
                                     property <string> shown: root.settings-readers-limit;
-                                    changed shown => { self.text = root.settings-readers-limit; }
+                                    changed shown => {
+                                        self.text = root.settings-readers-limit;
+                                        self.dirty = false;
+                                    }
+                                    changed text => { root.dbg-note("settings readers-limit shows " + self.text); }
                                     accepted(text) => {
                                         root.settings-commit("max_readers", text);
                                         self.text = root.settings-readers-limit;
+                                        self.dirty = false;
                                     }
                                     changed has-focus => {
                                         if (self.has-focus) {
@@ -3764,9 +3834,12 @@ export component MainWindow inherits Window {
                                             if (root.about-visible || root.shortcuts-visible) {
                                                 settings-strip.focus();
                                             }
-                                        } else if (root.settings-visible && self.text != root.settings-readers-limit) {
-                                            root.settings-commit("max_readers", self.text);
+                                        } else if (root.settings-visible) {
+                                            if (self.dirty && self.text != root.settings-readers-limit) {
+                                                root.settings-commit("max_readers", self.text);
+                                            }
                                             self.text = root.settings-readers-limit;
+                                            self.dirty = false;
                                         }
                                     }
                                     init => {

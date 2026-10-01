@@ -851,7 +851,12 @@ for settings.md; the copy and export scopes do not, a recorded gap); a
 focused item that has become invisible loses the keyboard at the next
 key; a `TextInput` ignores `Tab` and `Escape`, which is what lets an
 ancestor scope see them; the built-in `Tooltip` raises its popup 500 ms
-into a hover (`builtins.slint`, `TooltipArea`, not user-facing).
+into a hover (`builtins.slint`, `TooltipArea`, not user-facing); a
+`changed` handler fires only when the value differs from the one its
+tracker last stored, so a property that goes A → B → A inside one
+event-loop iteration fires nothing (`properties/change_tracker.rs`, read
+2026-10-01 for settings.md's fields: why they commit only what the user
+typed).
 
 ## Contracts
 

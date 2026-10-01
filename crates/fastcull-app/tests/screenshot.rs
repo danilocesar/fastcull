@@ -11205,6 +11205,127 @@ fn a_settings_commit_writes_the_file_and_esc_discards_a_half_typed_field() {
     std::fs::remove_dir_all(&dir).ok();
 }
 
+/// The labels of a run's trace marks, in the order they were emitted
+/// (`fastcull-trace: [<ms>] <label>`, the one emit site — `mark_lines`).
+fn mark_labels(stderr: &str) -> Vec<&str> {
+    stderr
+        .lines()
+        .filter_map(|l| l.strip_prefix("fastcull-trace: ["))
+        .filter_map(|r| r.split_once("] "))
+        .map(|(_, label)| label)
+        .collect()
+}
+
+/// AC3 and AC4 (settings.md, "Apply on commit"): a click on Reset is a
+/// click-away like any other, so the text the user was typing commits
+/// first — ONCE — and then the Reset resets the tab, that field included:
+/// the model, the window's wash and what the field SHOWS all end on the
+/// default. The UI tab with `35` typed into the wash field, then the
+/// Performance tab with `0.5` typed into the loupe memory, no Enter either
+/// time. What a field shows is read from its own `settings <field> shows`
+/// mark (test-harness.md); the dump's `wash=`/`loupemem=` are the model's.
+///
+/// RED on 3c0599a, the head before the fix (senior-developer review F1):
+/// the click commits 35 and resets, and then the wash field's deferred
+/// blur commits the flushed `35` a second time — its `changed shown`
+/// re-sync never fired, because the value in force went 25 → 35 → 25
+/// inside one event-loop iteration and a Slint `changed` handler fires
+/// only for a value that differs from the one it last saw (Cargo.toml,
+/// the fourth canary's fact 5) — so `dump.ui` read `wash=35`. When this
+/// fails that way it is that defect; do not quiet it.
+///
+/// Mutants (2026-10-01): the `self.dirty` test dropped from the wash
+/// field's blur → the stale `35` is committed again after the Reset and
+/// `dump.ui` reads `wash=35` — red; the blur's re-show of the value in
+/// force dropped → the model is 25 but the field still shows `35` — red
+/// on the `settings wash shows` mark.
+#[test]
+fn reset_with_a_half_typed_field_commits_it_then_resets() {
+    if !has_display() {
+        eprintln!("screenshot smoke skipped: no display server");
+        return;
+    }
+    let _s = serial();
+    let out = out_dir().join("settings-reset-typed.jpg");
+    let script = "900:key:ctrl+,;1300:key:right;1700:click:settings wash;2000:key:ctrl+a;\
+                  2200:key:3;2400:key:5;2800:click:settings reset;3300:dump.ui;\
+                  3600:key:ctrl+tab;4000:click:settings loupe-memory;4300:key:ctrl+a;\
+                  4500:key:0;4700:key:.;4900:key:5;5300:click:settings reset;5800:dump.perf";
+    let stderr = shoot_env_stderr(
+        &["--synthetic", "24"],
+        &[("FASTCULL_TRACE", "1"), ("FASTCULL_DRIVE", script)],
+        &out,
+    );
+    let labels = mark_labels(&stderr);
+    // What the field showed last before the dump `label`.
+    let shown_before = |field: &str, label: &str| -> Option<String> {
+        let dump = format!("QEDUMP {label} ");
+        let at = labels.iter().position(|l| l.starts_with(&dump))?;
+        let tag = format!("settings {field} shows ");
+        labels[..at]
+            .iter()
+            .rev()
+            .find_map(|l| l.strip_prefix(tag.as_str()))
+            .map(str::to_string)
+    };
+    for (tab, field, commit, reset, dump, model, in_force, default) in [
+        (
+            "UI",
+            "wash",
+            "settings committed ui.selection_wash = 35",
+            "settings reset ui",
+            "ui",
+            "wash",
+            "25",
+            "25",
+        ),
+        (
+            "Performance",
+            "loupe-memory",
+            "settings committed performance.loupe_memory = 0.5 GB",
+            "settings reset performance",
+            "perf",
+            "loupemem",
+            "2147483648",
+            "2 GB",
+        ),
+    ] {
+        assert_click_resolved(&stderr, &format!("settings {field}"));
+        let line = qedump(&stderr, dump);
+        assert_eq!(
+            dump_field(line, model),
+            in_force,
+            "Reset {tab} did not reset the {field} field the user was typing in — \
+             the half-typed text was committed AFTER the Reset (senior-developer \
+             review F1):\n{stderr}"
+        );
+        let commits = labels.iter().filter(|l| **l == commit).count();
+        assert_eq!(
+            commits, 1,
+            "`{commit}` was traced {commits} time(s): the click-away commit runs \
+             exactly once, before the Reset:\n{stderr}"
+        );
+        let committed_at = labels.iter().position(|l| *l == commit);
+        let reset_at = labels.iter().position(|l| *l == reset);
+        assert!(
+            reset_at.is_some() && committed_at < reset_at,
+            "`{commit}` must come before `{reset}` (the click commits first, \
+             then resets):\n{stderr}"
+        );
+        assert_eq!(
+            shown_before(field, dump).as_deref(),
+            Some(default),
+            "the {field} field does not show the value in force after the Reset \
+             (settings.md: a field shows the value in force, never stale text):\n{stderr}"
+        );
+    }
+    assert_eq!(
+        dump_field(qedump(&stderr, "ui"), "washprop"),
+        "0.250",
+        "the window's wash is not the default after Reset UI:\n{stderr}"
+    );
+}
+
 /// AC5 (settings.md, "Reading" and "Writing"): a file that does not parse
 /// gives the defaults, says so on stderr and on the status line, shows the
 /// whole error in the dialog's notice — and is never overwritten in place:

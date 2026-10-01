@@ -61,10 +61,10 @@ fastcull-core.workspace = true
 # Re-read the owner-invariant section of specs/modules/ui-grid.md before
 # raising this bound.
 # FOURTH CANARY (brief 008, the Settings dialog and the Failed badge's
-# tooltip; same 1.17.1). Four measured behaviours they stand on, none
+# tooltip; same 1.17.1). Five measured behaviours they stand on, none
 # documented upstream (read 2026-10-01 in i-slint-core window.rs
-# `process_key_input`, items/text.rs and items.rs; ui-grid.md's Slint
-# list):
+# `process_key_input`, items/text.rs, items.rs and
+# properties/change_tracker.rs; ui-grid.md's Slint list):
 #   1. The WINDOW handles a Tab or Shift+Tab that the focused item and
 #      every ancestor scope ignored, by walking the WHOLE item tree to the
 #      next focusable item — surfaces hidden behind a scrim included. The
@@ -84,6 +84,16 @@ fastcull-core.workspace = true
 #      popup's content is created at that moment — the `failed tooltip
 #      shown:` mark a driven test waits on — and the area forwards every
 #      press, so the cell under the badge still takes its click.
+#   5. A `changed` handler fires only when the value it re-evaluates
+#      DIFFERS from the one its tracker stored last time (i-slint-core
+#      properties/change_tracker.rs `evaluate`: `if new_value !=
+#      *inner_value`), and the trackers run deferred — so a property that
+#      goes A → B → A inside one event-loop iteration fires nothing. A
+#      click on Reset with `35` typed into a field commits 35 and resets
+#      to 25 in one iteration, and the field's `changed shown` re-sync
+#      never runs: why the Settings fields commit only what the user
+#      EDITED (`dirty`, set by LineEdit's `edited`) and re-show the value
+#      in force on every blur (senior-developer review F1, 2026-10-01).
 slint = { version = "1", default-features = false, features = [
     "std",
     "backend-winit",

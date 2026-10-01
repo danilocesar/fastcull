@@ -191,9 +191,13 @@ their precedence is `fastcull-core`'s; the app binds (brief 008, 2026-10-01).
   raw text; `Enter` keeps the keyboard in the field. There is no Apply, no
   OK, no Cancel and no unsaved state (persona 2026-10-01, MUST-HAVE at
   this size). A click on Close, Reset, Clear or a checkbox is a click-away
-  like any other: the field's text commits first, so only `Esc` discards
-  (developer 2026-10-01, brief 008 commit B — the spec was silent on
-  Close; for review).
+  like any other: the field's text commits first, then the click does its
+  own work — a Reset resets the very field it has just committed — so
+  only `Esc` discards (developer 2026-10-01, brief 008 commit B — the spec
+  was silent on Close; for review). A field commits only what the user
+  typed into it, never a text it is merely showing, and it shows the value
+  in force whenever the keyboard leaves it (senior-developer review F1,
+  2026-10-01).
 
 ### The settings
 
@@ -335,8 +339,11 @@ their precedence is `fastcull-core`'s; the app binds (brief 008, 2026-10-01).
 - [x] **AC3 — the tabs.** Three tabs in order, switched by `Left`/`Right`
       on the strip and by `Ctrl+Tab`/`Ctrl+Shift+Tab` from a field; digits
       never switch; `Tab` walks the controls and never leaves the dialog;
-      Reset resets the active tab only; every field carries its note —
-      `settings_tabs_switch_by_keys_and_never_by_digits`.
+      Reset resets the active tab only, the field being typed in included
+      (its text commits once, first, and the field then shows the
+      default); every field carries its note —
+      `settings_tabs_switch_by_keys_and_never_by_digits`,
+      `reset_with_a_half_typed_field_commits_it_then_resets`.
 - [x] **AC4 — the write.** Every commit writes `settings.toml` at once,
       preserving an unknown key and the user's comments; the field then
       shows the value in force; `Esc` discards an uncommitted field and
@@ -422,6 +429,11 @@ their precedence is `fastcull-core`'s; the app binds (brief 008, 2026-10-01).
 
 ## History
 
+- 2026-10-01 — Reset over a half-typed field (senior-developer review of
+  brief 008, F1): a Reset clicked while a field held typed text committed
+  the text, reset, and then let the field commit its stale text again; a
+  field now commits only what the user typed and re-shows the value in
+  force when the keyboard leaves it. AC3 gains its test.
 - 2026-10-01 — The Failed badge's tooltip (brief 008 commit C): AC13
   ticked beside its test.
 - 2026-10-01 — Implemented (brief 008 commits A and B): the file, the
