@@ -50,18 +50,61 @@ fn shoot_env_stderr_watching(
     args: &[&str],
     envs: &[(&str, &str)],
     out: &Path,
+    on_line: impl FnMut(&str) + Send + 'static,
+) -> String {
+    shoot_child(args, envs, out, on_line, false)
+}
+
+/// A run WITH the default thumbnail cache — and only in a sandbox: every
+/// other driven run is FASTCULL_NO_CACHE so the user's real cache is never
+/// touched, and this one may drop that only because the cache dir it
+/// resolves is inside the shots dir. It REFUSES to run unless `envs` points
+/// both `HOME` and `XDG_CACHE_HOME` under `out_dir()` (the `directories`
+/// crate resolves the cache dir from `XDG_CACHE_HOME`, then `$HOME/.cache`,
+/// on Linux — the one platform where this redirect exists; Windows asks its
+/// known-folder API, which ignores the environment).
+fn shoot_with_sandboxed_cache(args: &[&str], envs: &[(&str, &str)], out: &Path) -> String {
+    let sandbox = out_dir();
+    for var in ["HOME", "XDG_CACHE_HOME"] {
+        let inside = envs
+            .iter()
+            .find(|(k, _)| *k == var)
+            .is_some_and(|(_, v)| Path::new(v).is_absolute() && Path::new(v).starts_with(&sandbox));
+        assert!(
+            inside,
+            "refusing a run with the cache on: {var} must point under {} so the \
+             default cache resolves into the sandbox, never the user's real one",
+            sandbox.display()
+        );
+    }
+    shoot_child(args, envs, out, |_| {}, true)
+}
+
+/// The one body every app spawn goes through — the watchdog, the drain and
+/// the shutter check of `shoot_env_stderr_watching` — with the thumbnail
+/// cache off unless `with_cache` (only `shoot_with_sandboxed_cache` passes
+/// true).
+fn shoot_child(
+    args: &[&str],
+    envs: &[(&str, &str)],
+    out: &Path,
     mut on_line: impl FnMut(&str) + Send + 'static,
+    with_cache: bool,
 ) -> String {
     let bin = env!("CARGO_BIN_EXE_fastcull-app");
     let mut cmd = std::process::Command::new(bin);
-    cmd.args(args)
-        .arg("--screenshot")
-        .arg(out)
-        .env("FASTCULL_NO_CACHE", "1") // never touch the user's real cache
-        // Never read or write the user's real ui.toml either (issue #13
-        // gap, surfaced by the issue #41 sweep): a driven copy dialog
-        // otherwise shows the user's real remembered destination.
-        .env("FASTCULL_NO_CONFIG", "1")
+    cmd.args(args).arg("--screenshot").arg(out);
+    if with_cache {
+        // Any value of FASTCULL_NO_CACHE counts as set, so one inherited
+        // from the shell must go rather than be overridden.
+        cmd.env_remove("FASTCULL_NO_CACHE");
+    } else {
+        cmd.env("FASTCULL_NO_CACHE", "1"); // never touch the user's real cache
+    }
+    // Never read or write the user's real ui.toml either (issue #13 gap,
+    // surfaced by the issue #41 sweep): a driven copy dialog otherwise shows
+    // the user's real remembered destination.
+    cmd.env("FASTCULL_NO_CONFIG", "1")
         .stderr(std::process::Stdio::piped());
     for (k, v) in envs {
         cmd.env(k, v);
@@ -12405,4 +12448,191 @@ fn the_settings_card_fits_its_smallest_window_in_its_tallest_state() {
          seat's face is far taller than the ones it was measured on:\n{stderr}"
     );
     std::fs::remove_dir_all(&dir).ok();
+}
+
+/// AC11 and AC12, the app's half (settings.md, "Performance › Thumbnail
+/// cache cap" and "Performance › Thumbnail cache"; QE 2026-10-01, D24): a
+/// folder open trims the DEFAULT cache to the file's cap, and Clear empties
+/// that cache through a connection of its own, off the UI thread, never
+/// unlinking it — the row reading `Clearing…` meanwhile and the size
+/// re-measured from disk after. Every other driven run is FASTCULL_NO_CACHE;
+/// this one points the default cache into the shots dir through HOME and
+/// XDG_CACHE_HOME (`shoot_with_sandboxed_cache` refuses to run otherwise).
+/// That redirect exists on Linux only — Windows' known-folder lookup ignores
+/// the environment — so the test skips itself elsewhere, at run time, which
+/// keeps the `--list` halves the same on every runner; AC12's Windows half
+/// stays review-verified.
+///
+/// Two runs over one seeded cache (300 thumbnails of 1 MiB each) and one
+/// settings file (`cache_cap = "0.1"`, held at the 0.25 GB floor =
+/// 268,435,456 bytes, room for 256 of them):
+///   1. the folder open alone — afterwards at most 256 seeded rows remain
+///      (read after the run: the clear in run 2 empties the table);
+///   2. Settings › Performance › Clear — afterwards the table is empty and
+///      `previews.db` is the same file, its inode unchanged since the
+///      seeding; the row named `~/.cache/fastcull/previews.db` before and a
+///      re-measured size in KB after, never `0 B`; and on the one trace
+///      stream `settings cache clearing` (the `Clearing…` state) came before
+///      `settings cache cleared B -> A`, with A < B.
+///
+/// That the open session keeps its painted thumbs is review-verified: no
+/// dump field reads textures.
+///
+/// Mutants (2026-10-01): session.rs trimming the default cache to
+/// `DEFAULT_CAP_BYTES` → all 300 seeded rows survive run 1 — red; the
+/// clear worker unlinking the file and opening a fresh one → the inode
+/// changes — red.
+#[test]
+fn the_cache_cap_and_clear_cache_reach_the_default_cache() {
+    if !has_display() {
+        eprintln!("screenshot smoke skipped: no display server");
+        return;
+    }
+    if !cfg!(target_os = "linux") {
+        eprintln!("skipped: the default cache cannot be sandboxed off Linux");
+        return;
+    }
+    let _s = serial();
+    let home = out_dir().join("cache-home");
+    std::fs::remove_dir_all(&home).ok();
+    // The seeded cache is 300 MiB: gone however the test ends, a red run
+    // included — the shots dir is uploaded as CI's evidence, and the trace
+    // logs beside it are what a reader needs, not the database.
+    struct RemoveOnDrop(Vec<PathBuf>);
+    impl Drop for RemoveOnDrop {
+        fn drop(&mut self) {
+            for dir in &self.0 {
+                std::fs::remove_dir_all(dir).ok();
+            }
+        }
+    }
+    let _cleanup = RemoveOnDrop(vec![
+        home.clone(),
+        out_dir().join("settings-cachecap"),
+        out_dir().join("cache-folder"),
+    ]);
+    let cache_home = home.join(".cache");
+    let db = cache_home.join("fastcull").join("previews.db");
+    let mtime = Some(std::time::SystemTime::now());
+    let seeded = |i: usize| PathBuf::from(format!("/seed/{i:03}.ARW"));
+    {
+        let mut cache = fastcull_core::cache::PreviewCache::open(&db).expect("seed the cache");
+        let blob = vec![0u8; 1 << 20];
+        for i in 0..300 {
+            cache
+                .store(
+                    &seeded(i),
+                    1,
+                    mtime,
+                    &fastcull_core::exif::ExifSummary::default(),
+                    &blob,
+                )
+                .expect("seed a row");
+        }
+    }
+    let inode = || -> u64 {
+        #[cfg(unix)]
+        {
+            std::os::unix::fs::MetadataExt::ino(&std::fs::metadata(&db).expect("previews.db"))
+        }
+        #[cfg(not(unix))]
+        {
+            0
+        }
+    };
+    let seeded_inode = inode();
+    let config = settings_scratch("cachecap", Some("[performance]\ncache_cap = \"0.1\"\n"));
+    let folder = out_dir().join("cache-folder");
+    std::fs::remove_dir_all(&folder).ok();
+    std::fs::create_dir_all(&folder).unwrap();
+    place_fixture(
+        &raws_dir().join("A1_full_compressed.ARW"),
+        &folder.join("one.ARW"),
+    );
+    let run = |script: &str, shot: &str| {
+        shoot_with_sandboxed_cache(
+            &[folder.to_str().unwrap()],
+            &[
+                ("FASTCULL_TRACE", "1"),
+                ("HOME", home.to_str().unwrap()),
+                ("XDG_CACHE_HOME", cache_home.to_str().unwrap()),
+                ("FASTCULL_CONFIG_DIR", config.to_str().unwrap()),
+                ("FASTCULL_DRIVE", script),
+            ],
+            &out_dir().join(shot),
+        )
+    };
+
+    // 1 — the folder open trims the cache to the cap.
+    let stderr = run(
+        "1500:wait:load settled gen 0;1600:dump.loaded",
+        "settings-cache-cap.jpg",
+    );
+    assert!(
+        stderr.contains("wait:load settled gen 0 (satisfied"),
+        "the folder never settled:\n{stderr}"
+    );
+    let remaining = {
+        let mut cache = fastcull_core::cache::PreviewCache::open(&db).expect("reopen the cache");
+        (0..300)
+            .filter(|i| matches!(cache.lookup(&seeded(*i), 1, mtime), Ok(Some(_))))
+            .count()
+    };
+    assert!(
+        remaining <= 256,
+        "{remaining} of the 300 seeded 1 MiB thumbnails survived a folder open \
+         under a 0.25 GB cap — the cap was not enforced on the default cache:\n{stderr}"
+    );
+
+    // 2 — Clear.
+    let stderr = run(
+        "1500:wait:load settled gen 0;1600:key:ctrl+,;1900:key:ctrl+tab;2100:key:ctrl+tab;\
+         2500:dump.perf;2800:click:settings clear-cache;2900:wait:settings cache cleared;\
+         3300:dump.cleared",
+        "settings-cache-clear.jpg",
+    );
+    assert_click_resolved(&stderr, "settings clear-cache");
+    let before = dump_text(qedump(&stderr, "perf"), "cachereadout").to_string();
+    assert!(
+        before.starts_with("Thumbnail cache: ")
+            && before.ends_with(" in ~/.cache/fastcull/previews.db"),
+        "the row does not name the sandboxed default cache in the spec's `~/` \
+         form: {before:?}"
+    );
+    let labels = mark_labels(&stderr);
+    let clearing = labels.iter().position(|l| *l == "settings cache clearing");
+    let cleared = labels
+        .iter()
+        .position(|l| l.starts_with("settings cache cleared "));
+    assert!(
+        clearing.is_some() && cleared.is_some() && clearing < cleared,
+        "the trace does not show `settings cache clearing` (the `Clearing…` \
+         row) before `settings cache cleared`:\n{stderr}"
+    );
+    let (b, a) = cleared
+        .and_then(|i| labels[i].strip_prefix("settings cache cleared "))
+        .and_then(|s| s.split_once(" -> "))
+        .and_then(|(b, a)| Some((b.parse::<u64>().ok()?, a.parse::<u64>().ok()?)))
+        .unwrap_or_else(|| panic!("malformed `settings cache cleared` mark:\n{stderr}"));
+    assert!(a < b, "Clear did not shrink the cache: {b} -> {a} bytes");
+    let after = dump_text(qedump(&stderr, "cleared"), "cachereadout").to_string();
+    let size = after
+        .strip_prefix("Thumbnail cache: ")
+        .and_then(|s| s.strip_suffix(" KB in ~/.cache/fastcull/previews.db"))
+        .and_then(|n| n.parse::<f64>().ok());
+    assert!(
+        size.is_some_and(|kb| kb > 0.0),
+        "after Clear the row does not read a re-measured size in KB (an empty \
+         database's few tens of KB, never `0 B`): {after:?}"
+    );
+    let rows = fastcull_core::cache::PreviewCache::open(&db)
+        .and_then(|cache| cache.len())
+        .expect("reopen the cache");
+    assert_eq!(rows, 0, "Clear left rows in the table");
+    assert_eq!(
+        inode(),
+        seeded_inode,
+        "previews.db is a different file after Clear — it was unlinked and \
+         recreated under the live session (catalog-cache.md's lock rule)"
+    );
 }

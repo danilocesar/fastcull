@@ -483,8 +483,14 @@ their precedence is `fastcull-core`'s; the app binds (brief 008, 2026-10-01).
       `defaults_are_the_specs_numbers` (the setting's default is
       `cache::DEFAULT_CAP_BYTES`) and
       `cache::tests::eviction_respects_cap_and_lru_order` (the eviction);
-      the two call sites are review-verified, because every driven run
-      is `FASTCULL_NO_CACHE` and the CLI's default cache is the real one.
+      the app's call site is driven on Linux, where `HOME` and
+      `XDG_CACHE_HOME` redirect the default cache into a sandbox —
+      `the_cache_cap_and_clear_cache_reach_the_default_cache` (300 seeded
+      thumbnails of 1 MiB, at most 256 left after a folder open under the
+      0.25 GB floor) — and review-verified on Windows, whose known-folder
+      lookup ignores the environment; the CLI's call site is
+      review-verified (QE 2026-10-01, D24: "every driven run is
+      `FASTCULL_NO_CACHE`" had made both review-verified).
 - [x] **AC12 — Clear cache.** The readout is the db + `-wal` + `-shm`
       size with the path; clearing empties the table and shrinks the
       file through a live connection and never unlinks it; the
@@ -492,9 +498,17 @@ their precedence is `fastcull-core`'s; the app binds (brief 008, 2026-10-01).
       `cache::tests::size_on_disk_counts_the_wal_and_shm_files`,
       `cache::tests::clear_leaves_the_file_present_empty_and_smaller_and_the_connection_usable`
       (asserts the same inode on unix); app
-      `clear_cache_is_off_under_no_cache` (the disabled row). The worker
-      thread, the `Clearing…` state and the re-measured readout are
-      review-verified: a driven run cannot have a cache (OQ in the plan).
+      `clear_cache_is_off_under_no_cache` (the disabled row). The worker,
+      the `Clearing…` state (by order on the trace: `settings cache
+      clearing` before `settings cache cleared`) and the re-measured
+      readout are driven on Linux through the sandboxed default cache —
+      `the_cache_cap_and_clear_cache_reach_the_default_cache`: the table
+      emptied, the same inode, the row in KB after, never `0 B` — and
+      review-verified on Windows, whose known-folder lookup ignores the
+      environment; the open session keeping its painted thumbs is
+      review-verified on both, no dump field reading textures (QE
+      2026-10-01, D24: "a driven run cannot have a cache" holds on Windows
+      only; brief 008 D13 stands — no new variable).
 - [x] **AC13 — the Failed badge.** The badge shows the reason on hover and
       the status line carries it when the cursor stands on the frame —
       ui-grid.md's ledger
@@ -517,6 +531,10 @@ their precedence is `fastcull-core`'s; the app binds (brief 008, 2026-10-01).
 
 ## History
 
+- 2026-10-01 — QE round 1 of brief 008, the cache (D24): the app's cap
+  enforcement and Clear cache are driven on Linux through a sandboxed
+  default cache (`HOME`, `XDG_CACHE_HOME`), no new variable; AC11 and AC12
+  say what stays review-verified, and where (brief 008 D24).
 - 2026-10-01 — QE round 1 of brief 008, four promises with no test (D3,
   D4, D8, D9): the never-stack greying, the no-change write, Settings over
   a focused keyword field, and the card's fit in its tallest state each

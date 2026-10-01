@@ -659,6 +659,20 @@ setting.
   mark the app built from its own local — mutant M-i (the engine started
   with `DEFAULT_BUDGET_BYTES`, the mark untouched) stayed green. The mark
   now reads the engine's adopted figure, `LoupeEngine::budget()`.
+- D24 (2026-10-01, QE round 1 — spec correction D24; the senior
+  developer's test-integrity review, TP11, "the Manager's call under D13,
+  recommended": built under the Manager's ruling 8, the stage proceeding on
+  its best reading): AC11 and AC12 said a driven run cannot have a cache,
+  and on Linux it can, with no new variable — `HOME` and `XDG_CACHE_HOME`
+  pointed into a scratch dir redirect the `directories` crate's default
+  cache. QE measured there: the CLI at cap 0.25 GB evicted a seeded
+  300.1 MiB to 236.1 MiB, and with no file the 2 GB default kept 536 MiB;
+  the app at a folder open went 300 → 236 MiB; the driven Clear read
+  303.5 MB → `Clearing…` → 48.0 KB with the same inode and 0 rows, and the
+  session's thumbs stayed painted. "Cannot" holds on Windows only (the
+  known-folder lookup). D13 stands — no `FASTCULL_CACHE_DIR` — and the
+  app's half of AC11 and AC12 is now driven on Linux by
+  `the_cache_cap_and_clear_cache_reach_the_default_cache`.
 - D25 (2026-10-01, QE round 1 — defect D10 and spec correction D25; the
   senior developer's test-integrity review, T13): the Thumbnail cache
   cap's note promised "the most the thumbnail cache may keep on disk", and

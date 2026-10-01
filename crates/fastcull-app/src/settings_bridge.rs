@@ -183,6 +183,11 @@ pub(crate) fn wire(window: &MainWindow, state: &Rc<RefCell<AppState>>) {
             st.settings.clear_rx = Some(rx);
             st.settings.cache_readout = "Clearing…".to_string();
             present(&win, &st);
+            // The `Clearing…` state's witness (test-harness.md): a driven
+            // run proves it by ORDER on the one trace stream — this before
+            // `settings cache cleared` — rather than by a dump racing a
+            // sub-second VACUUM (QE 2026-10-01, D24).
+            trace_mark("settings cache clearing");
             // OFF the UI thread (settings.md: the VACUUM rewrites the file,
             // seconds on a big cache). Its own connection, through which the
             // clear runs — never an unlink (catalog-cache.md's lock rule).

@@ -29,8 +29,14 @@ explain itself on stderr.
   008, 2026-10-01; until then it covered `ui.toml` only, and every driven
   run read the user's real `templates.toml`); what `FASTCULL_NO_CACHE=1`
   does for `previews.db` (app-only; the CLI has `--no-cache`). The
-  screenshot harness sets both unconditionally. The Settings dialog still
-  works under it, in memory, and says `Not saved` (settings.md).
+  screenshot harness sets both on every run but one: the test that drives
+  the cache cap and Clear cache (settings.md AC11, AC12) runs without
+  `FASTCULL_NO_CACHE`, through `shoot_with_sandboxed_cache`, which refuses
+  to start unless `HOME` and `XDG_CACHE_HOME` both point inside the shots
+  dir — so the default cache resolves there, never to the user's; Linux
+  only, Windows' known-folder lookup ignoring the environment (QE
+  2026-10-01, D24). The Settings dialog still works under
+  `FASTCULL_NO_CONFIG`, in memory, and says `Not saved` (settings.md).
 - `FASTCULL_CONFIG_DIR=<dir>` — the config dir redirected to `<dir>`,
   winning over `FASTCULL_NO_CONFIG`, for the driven tests that must prove
   a file was written; announced once on stderr (`fastcull:
@@ -209,9 +215,11 @@ sidecars — scripts target throwaway copies of test data only.
   auto-advance|wash|loupe-memory|cache-cap|readers|clear-cache shows
   <text>` from each note Text itself, when the dialog creates it and
   whenever its text changes — what the note says, never what the bridge
-  meant it to (QE 2026-10-01, D22); `settings cache
-  cleared <before> -> <after>` (bytes); `loupe engine started budget
-  <bytes>` at every folder open — the budget the engine ADOPTED
+  meant it to (QE 2026-10-01, D22); `settings cache clearing` when the
+  row turns to `Clearing…` and `settings cache cleared <before> ->
+  <after>` (bytes) when the worker is done — the order of the two is the
+  driven proof of the `Clearing…` state (QE 2026-10-01, D24); `loupe
+  engine started budget <bytes>` at every folder open — the budget the engine ADOPTED
   (`LoupeEngine::budget()`, floored), the proof that the loupe memory
   setting reached the engine (QE 2026-10-01, D23); `failed tooltip shown:
   <reason>` when the Failed badge's tooltip popup is instantiated.

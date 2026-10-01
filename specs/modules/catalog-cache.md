@@ -139,7 +139,9 @@ reading a RAW.
       `-shm` files; a clear leaves the file present and the same inode,
       the table empty, the file smaller and the connection usable —
       `size_on_disk_counts_the_wal_and_shm_files`,
-      `clear_leaves_the_file_present_empty_and_smaller_and_the_connection_usable`.
+      `clear_leaves_the_file_present_empty_and_smaller_and_the_connection_usable`;
+      the app's half — the cap at a folder open, the clear worker, the
+      re-measured row — is settings.md's AC11 and AC12.
 
 ## History
 
