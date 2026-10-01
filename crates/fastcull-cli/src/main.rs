@@ -140,6 +140,22 @@ fn cull(
     Ok(())
 }
 
+/// Where the cache cap on the `cache:` line came from — the file only when
+/// one was read; it used to say "from settings.toml" with no file at all
+/// (QE 2026-10-01, D11). A missing file, an unreadable one and no config
+/// dir all leave the default in force, and each says why.
+fn cap_source(loaded: &fastcull_core::settings::Loaded) -> &'static str {
+    match (&loaded.path, &loaded.error) {
+        (None, _) if std::env::var_os(fastcull_core::settings::NO_CONFIG_VAR).is_some() => {
+            ", the default — FASTCULL_NO_CONFIG is set"
+        }
+        (None, _) => ", the default — this system has no config directory",
+        (Some(_), Some(_)) => ", the default — settings.toml could not be read",
+        (Some(path), None) if path.is_file() => " from settings.toml",
+        (Some(_), None) => ", the default — no settings.toml",
+    }
+}
+
 fn thumbs(
     folder: &std::path::Path,
     out: Option<PathBuf>,
@@ -158,7 +174,8 @@ fn thumbs(
     // The same settings file the app reads (settings.md, ADR 0005): the
     // cache cap and the read workers are knobs the two binaries share, so
     // the CLI honours them with no flag surface of its own.
-    let settings = fastcull_core::settings::load_default().settings;
+    let loaded = fastcull_core::settings::load_default();
+    let settings = &loaded.settings;
     let cache_path = if no_cache {
         None
     } else if let Some(explicit) = cache {
@@ -169,9 +186,10 @@ fn thumbs(
         let default = fastcull_core::cache::default_cache_path(settings.cache_cap_bytes());
         if let Some(p) = &default {
             println!(
-                "cache: {} (cap {} from settings.toml)",
+                "cache: {} (cap {}{})",
                 p.display(),
-                settings.cache_cap_text()
+                settings.cache_cap_text(),
+                cap_source(&loaded)
             );
         }
         default

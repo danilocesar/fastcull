@@ -291,9 +291,13 @@ their precedence is `fastcull-core`'s; the app binds (brief 008, 2026-10-01).
   `"<n> GB"`, default `"2 GB"`, floor 256 MB; enforced at the next folder
   open in the app and the next run of the CLI). `cache::default_cache_path`
   takes the cap and enforces it where it enforced the constant, so the
-  app and the CLI honour one number. Note: "The most the thumbnail cache
-  may keep on disk, in GB (default 2 GB, never below 0.25 GB; enforced
-  when a folder is next opened)."
+  app and the CLI honour one number. The cap bounds the thumbnails stored,
+  not the file: SQLite reuses the pages an eviction frees and the file
+  shrinks only at Clear's VACUUM (catalog-cache.md), so the Thumbnail
+  cache row can read above the cap until then (QE 2026-10-01, D10; brief
+  008 D25). Note: "The most the thumbnail cache may hold in thumbnails, in
+  GB (default 2 GB, never below 0.25 GB; enforced when a folder is next
+  opened). The file itself shrinks only when you Clear it."
 - **Performance › Read workers** (`performance.max_readers`, default 0 =
   adaptive; applies at the next folder open). An **Adaptive (recommended)**
   checkbox and a **Limit** number field, enabled when the checkbox is off;
@@ -489,6 +493,10 @@ their precedence is `fastcull-core`'s; the app binds (brief 008, 2026-10-01).
 
 ## History
 
+- 2026-10-01 — QE round 1 of brief 008, the cache cap's words (D10, D11):
+  the note says the cap bounds the thumbnails held, and that the file
+  shrinks only at Clear (brief 008 D25); the CLI names where the cap in
+  force came from.
 - 2026-10-01 — QE round 1 of brief 008, test proposal TP10 (the senior
   developer's recommendation B): a write decides from the file as it is
   NOW — one fixed by hand after a failed read is merged into, not moved

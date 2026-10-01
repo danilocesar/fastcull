@@ -647,6 +647,18 @@ setting.
   mark the app built from its own local — mutant M-i (the engine started
   with `DEFAULT_BUDGET_BYTES`, the mark untouched) stayed green. The mark
   now reads the engine's adopted figure, `LoupeEngine::budget()`.
+- D25 (2026-10-01, QE round 1 — defect D10 and spec correction D25; the
+  senior developer's test-integrity review, T13): the Thumbnail cache
+  cap's note promised "the most the thumbnail cache may keep on disk", and
+  the readout beside it said otherwise. QE ran the app sandboxed with
+  `cache_cap = "0.1"` (0.25 GB) over a seeded cache: at folder open the
+  stored thumbnails were evicted to 236 MiB while the dialog's own readout
+  (the `du` figure) said `Thumbnail cache: 303.5 MB` — SQLite reuses the
+  pages an eviction frees and gives them back only at a VACUUM, which
+  catalog-cache.md allows at Clear alone. Both behaviours are spec'd; the
+  note was the false one. Reworded in its one home, `Key::CacheCap::note()`
+  — the cap bounds the thumbnails held, and the file shrinks only when you
+  Clear it — and settings.md and docs/settings.md follow.
 - Directive candidate (2026-10-01): M9's cleanup command `cargo clean
   -p …` cleans the dev profile only — a `screen-rung` release binary
   from 2026-09-29 survived it and the persona ran it by mistake; the

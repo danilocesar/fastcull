@@ -204,9 +204,15 @@ impl Key {
                  folder open — File › Open Folder…, the same folder is fine). The app's \
                  footprint runs 1–2 GB above this number."
             }
+            // What the cap bounds is the thumbnails stored, not the file:
+            // SQLite reuses the pages an eviction frees and never gives them
+            // back without the VACUUM that only Clear runs (catalog-cache.md),
+            // so a readout above the cap beside a note promising an on-disk
+            // bound contradicted itself (QE 2026-10-01, D10; brief 008 D25).
             Key::CacheCap => {
-                "The most the thumbnail cache may keep on disk, in GB (default 2 GB, \
-                 never below 0.25 GB; enforced when a folder is next opened)."
+                "The most the thumbnail cache may hold in thumbnails, in GB (default 2 GB, \
+                 never below 0.25 GB; enforced when a folder is next opened). The file \
+                 itself shrinks only when you Clear it."
             }
             Key::MaxReaders => {
                 "Adaptive (recommended): 4 readers, growing while the storage keeps up. \

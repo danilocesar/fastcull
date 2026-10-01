@@ -56,8 +56,11 @@ at 1:1 decodes again the frames it had to let go — it never keeps
 decoding while you sit still.
 
 **Thumbnail cache cap** (2 GB). The most the thumbnail cache (see below)
-may keep on disk; the oldest thumbnails are dropped past it. Never below
-0.25 GB — one big shoot's worth. Enforced when a folder is next opened.
+may hold in thumbnails; past it the oldest are dropped when a folder is
+next opened. Never below 0.25 GB — one big shoot's worth. Dropping
+thumbnails does not shrink the cache's file — the database keeps the room
+for the thumbnails that come next — so the size the Thumbnail cache row
+reads can stay above the cap until you **Clear** the cache.
 
 **Read workers** (Adaptive). How many files are read at once. *Adaptive*
 starts at 4 and grows while your storage keeps up — the right answer on a
@@ -108,8 +111,9 @@ selection_wash = 25
 # — File › Open Folder…, the same folder is fine). The app's footprint runs
 # 1–2 GB above this number.
 loupe_memory = "2 GB"
-# The most the thumbnail cache may keep on disk, in GB (default 2 GB, never
-# below 0.25 GB; enforced when a folder is next opened).
+# The most the thumbnail cache may hold in thumbnails, in GB (default 2 GB,
+# never below 0.25 GB; enforced when a folder is next opened). The file itself
+# shrinks only when you Clear it.
 cache_cap = "2 GB"
 # Adaptive (recommended): 4 readers, growing while the storage keeps up. Limit
 # N: exactly N readers when N is 4 or less; above 4, at most N (default
