@@ -44,8 +44,9 @@ their precedence is `fastcull-core`'s; the app binds (brief 008, 2026-10-01).
 - A memory string is a decimal number, optional spaces, then `GB` (any
   case) or nothing for GB, or `%` for a share of the machine's total RAM:
   `2`, `2 GB`, `2GB`, `0.5 GB`, `40%`, `40 %` all parse; anything else —
-  an empty string, `abc`, a negative number, a `TB` — is garbage and reads
-  as the key's default. The file stores the normalised form, `"2 GB"`,
+  an empty string, `abc`, a negative number, a `TB`, a figure beyond what
+  a 64-bit float holds (309 digits or more; QE 2026-10-01, D7) — is
+  garbage and reads as the key's default. The file stores the normalised form, `"2 GB"`,
   `"0.5 GB"`, `"40%"`: the number as typed, one space, the unit (user
   decision 2026-10-01: "numbers are always expressed in GB, and percentage
   always total RAM"). `cache_cap` takes the GB form only; a `%` there is
@@ -114,7 +115,11 @@ their precedence is `fastcull-core`'s; the app binds (brief 008, 2026-10-01).
   line; unknown keys, tables and the user's other comments survive
   byte-for-byte (measured on toml_edit 0.22.27, 2026-10-01: `Table::insert`
   on an existing key drops its comment, replacing the value in place does
-  not — the plan names the call).
+  not — the plan names the call), and so do the file's line ends and a
+  UTF-8 byte-order mark: a CRLF file (Notepad's) is written back CRLF on
+  every line, an LF file LF, a mark is kept; a file written from nothing
+  is LF without a mark (QE 2026-10-01, D6; brief 008 D21: toml_edit writes
+  LF and drops the mark, so the writer restores both).
 - The FIRST write after a failed read moves the broken file aside before
   writing a fresh one: to `settings.toml.broken`, or `settings.toml.broken.N`
   (N from 1) when that exists, never over an existing file. The status
@@ -475,6 +480,11 @@ their precedence is `fastcull-core`'s; the app binds (brief 008, 2026-10-01).
 
 ## History
 
+- 2026-10-01 — QE round 1 of brief 008, the file (D6, D7): a write keeps
+  the file's CRLF line ends and its byte-order mark, which the "survive
+  byte-for-byte" sentence had promised without the writer doing it (brief
+  008 D21); a figure past a 64-bit float is garbage instead of being stored
+  as `inf GB`.
 - 2026-10-01 — QE round 1 of brief 008, the loupe memory (D1, D2): a
   budget below the prefetch window is legal and goes quiet when the user is
   idle (raw-pipeline.md's ring budget rule, brief 008 D20); AC10's driven

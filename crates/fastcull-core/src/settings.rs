@@ -274,7 +274,15 @@ pub fn parse_memory(text: &str) -> Option<MemorySpec> {
     }
     let unit = unit.trim();
     if unit.is_empty() || unit.eq_ignore_ascii_case("gb") {
-        number.parse::<f64>().ok().map(MemorySpec::Gb)
+        // Finite only: a figure of 309 digits or more is past f64 and
+        // parses as infinity, whose normal form `inf GB` this very parser
+        // refuses — written once, the file would read back as the default
+        // (QE 2026-10-01, D7). Garbage, like any other unreadable figure.
+        number
+            .parse::<f64>()
+            .ok()
+            .filter(|gb| gb.is_finite())
+            .map(MemorySpec::Gb)
     } else if unit == "%" {
         // A percentage is a whole number (`Percent(u32)`, settings.md's
         // contract): "40.5%" reads as garbage rather than being rounded.
@@ -782,8 +790,9 @@ impl WriteError {
 
 /// Write `settings` to `path` (settings.md, "Writing"), as a
 /// read-modify-write that keeps everything of the user's: unknown keys,
-/// unknown tables, comments, and an existing key's own comment above it
-/// and on its line. Every known key is emitted with its value; a key this
+/// unknown tables, comments, an existing key's own comment above it and on
+/// its line, and the file's line ends (CRLF or LF) and UTF-8 byte-order
+/// mark. Every known key is emitted with its value; a key this
 /// write CREATES gets its note above it as `#` lines, so the file
 /// documents itself.
 ///
@@ -806,10 +815,23 @@ pub fn write(
         Err(_) => Some(None),
     };
     let mut moved_aside = None;
+    // The shape of the file merged into — its line ends and a UTF-8
+    // byte-order mark — which toml_edit does not keep (it writes LF and
+    // drops the mark) and `restore_file_shape` puts back. A file moved
+    // aside, or none at all, is written fresh: LF, no mark.
+    let mut crlf = false;
+    let mut bom = false;
     let mut doc = match existing {
         None => toml_edit::DocumentMut::new(),
-        Some(text) => match text.and_then(|t| t.parse::<toml_edit::DocumentMut>().ok()) {
-            Some(doc) if !broken => doc,
+        Some(text) => match text
+            .as_deref()
+            .map(|t| (t, t.parse::<toml_edit::DocumentMut>()))
+        {
+            Some((t, Ok(doc))) if !broken => {
+                crlf = t.contains("\r\n");
+                bom = t.starts_with('\u{FEFF}');
+                doc
+            }
             _ => {
                 moved_aside = Some(move_aside(path).map_err(WriteError::MoveAside)?);
                 toml_edit::DocumentMut::new()
@@ -830,8 +852,37 @@ pub fn write(
     // A plain write, not temp-and-rename: a hand-managed config is often a
     // symlink into someone's dotfiles, and a rename would replace the link
     // with a file. `ui.toml` has always been written this way.
-    std::fs::write(path, doc.to_string()).map_err(failed)?;
+    std::fs::write(path, restore_file_shape(doc.to_string(), crlf, bom)).map_err(failed)?;
     Ok(moved_aside)
+}
+
+/// `out` — toml_edit's text, LF line ends and no byte-order mark — in the
+/// shape of the file it was merged into (settings.md, "Writing": the
+/// user's bytes survive, line ends and mark included; QE 2026-10-01, D6 —
+/// Notepad writes CRLF). With `crlf` every LF not already after a CR
+/// becomes CRLF, so a CR is never doubled; with `bom` the mark goes back in
+/// front, once. Neither: `out` as it is.
+fn restore_file_shape(out: String, crlf: bool, bom: bool) -> String {
+    if !crlf && !bom {
+        return out;
+    }
+    let mut shaped = String::with_capacity(out.len() + out.len() / 16 + 3);
+    if bom && !out.starts_with('\u{FEFF}') {
+        shaped.push('\u{FEFF}');
+    }
+    if !crlf {
+        shaped.push_str(&out);
+        return shaped;
+    }
+    let mut prev = '\0';
+    for c in out.chars() {
+        if c == '\n' && prev != '\r' {
+            shaped.push('\r');
+        }
+        shaped.push(c);
+        prev = c;
+    }
+    shaped
 }
 
 /// Rename the file at `path` to the first free `<name>.broken[.N]`.
@@ -1176,6 +1227,71 @@ mod tests {
         );
     }
 
+    /// The file's own shape survives a write (settings.md, "Writing"; QE
+    /// 2026-10-01, D6): a CRLF file — Notepad's — comes back CRLF on every
+    /// line, the user's and the ones the write adds, with no CR doubled and
+    /// none bare; a UTF-8 byte-order mark is kept; an LF file stays LF, and
+    /// a file written from nothing is LF with no mark.
+    ///
+    /// Mutant (2026-10-01): `restore_file_shape` not called in `write` (the
+    /// writer as it was) → the CRLF file comes back with no CR and no mark,
+    /// and this goes red.
+    #[test]
+    fn a_crlf_file_keeps_its_line_endings_and_its_bom() {
+        let users =
+            "\u{FEFF}# top\r\n[ui]\r\n# mine\r\nselection_wash = 40 # trailing\r\nkeep = 1\r\n";
+        let path = file_with("crlf", users);
+        let loaded = load(&path);
+        assert_eq!(loaded.error, None, "a CRLF file with a mark does not read");
+        assert_eq!(loaded.settings.selection_wash, 40);
+        let mut s = loaded.settings;
+        s.selection_wash = 15;
+        write(&path, &s, false).unwrap();
+        let out = std::fs::read_to_string(&path).unwrap();
+        assert!(
+            out.starts_with('\u{FEFF}'),
+            "the byte-order mark was dropped: {out:?}"
+        );
+        let unpaired = out.replace("\r\n", "");
+        assert!(
+            !unpaired.contains('\n') && !unpaired.contains('\r'),
+            "a line end of the CRLF file is not CRLF: {out:?}"
+        );
+        for kept in [
+            "# mine\r\nselection_wash = 15 # trailing\r\n",
+            "keep = 1\r\n",
+            // The blank line the writer puts above a table it adds.
+            "\r\n\r\n[general]\r\n",
+        ] {
+            assert!(out.contains(kept), "lost {kept:?}: {out:?}");
+        }
+        let again = load(&path);
+        assert_eq!(again.error, None, "the written file does not read");
+        assert_eq!(again.settings.selection_wash, 15);
+
+        // The same file in LF, with no mark: written back LF, no mark.
+        let lf = file_with("lf", &users.replace("\r\n", "\n").replace('\u{FEFF}', ""));
+        write(&lf, &s, false).unwrap();
+        let out = std::fs::read_to_string(&lf).unwrap();
+        assert!(
+            !out.contains('\r') && !out.starts_with('\u{FEFF}'),
+            "{out:?}"
+        );
+        // A file written from nothing: LF, no mark.
+        let fresh = scratch("fresh").join(FILE_NAME);
+        write(&fresh, &s, false).unwrap();
+        let out = std::fs::read_to_string(&fresh).unwrap();
+        assert!(
+            !out.contains('\r') && !out.starts_with('\u{FEFF}'),
+            "{out:?}"
+        );
+        // The restore never doubles a CR already there, nor the mark.
+        assert_eq!(
+            restore_file_shape("\u{FEFF}a\r\nb\n".to_string(), true, true),
+            "\u{FEFF}a\r\nb\r\n"
+        );
+    }
+
     /// A file that does not parse yields the defaults and the error, and a
     /// read leaves it exactly as it was (brief 008 D5).
     #[test]
@@ -1351,6 +1467,50 @@ mod tests {
         // Garbage in the file is the key's default.
         let path = file_with("garbage", "[performance]\nloupe_memory = \"lots\"\n");
         assert_eq!(load(&path).settings.loupe_memory, MemorySpec::Gb(2.0));
+
+        // A figure past f64 — 400 digits — is garbage too (QE 2026-10-01,
+        // D7): it parsed as infinity, whose normal form `inf GB` reads back
+        // as the default. Refused in the dialog, the default in the file.
+        let huge = format!("{} GB", "9".repeat(400));
+        assert_eq!(parse_memory(&huge), None, "a figure past f64 parsed");
+        let mut s = Settings::default();
+        assert!(s.set_from_text(Key::LoupeMemory, &huge).is_err());
+        assert!(s.set_from_text(Key::CacheCap, &huge).is_err());
+        assert_eq!(
+            s,
+            Settings::default(),
+            "a refused figure changed the setting"
+        );
+        let path = file_with(
+            "huge",
+            &format!("[performance]\nloupe_memory = \"{huge}\"\ncache_cap = \"{huge}\"\n"),
+        );
+        assert_eq!(load(&path).settings, Settings::default());
+        // Every figure the parser accepts writes back in a form it accepts
+        // and reads as the same figure — the largest finite one included
+        // (308 digits, printed in full).
+        let largest = format!("{} GB", "9".repeat(308));
+        let accepted = [
+            "2",
+            "2 GB",
+            "2GB",
+            "2 gb",
+            "0.5 GB",
+            " 12.4 Gb ",
+            "40%",
+            "40 %",
+            "0%",
+            "150%",
+        ];
+        for text in accepted.iter().copied().chain([largest.as_str()]) {
+            let spec = parse_memory(text).unwrap_or_else(|| panic!("{text:?} did not parse"));
+            assert_eq!(
+                parse_memory(&spec.to_string()),
+                Some(spec),
+                "{text:?} is stored as {:?}, which does not read back as itself",
+                spec.to_string()
+            );
+        }
     }
 
     /// A percentage needs the machine's total RAM; without it the default

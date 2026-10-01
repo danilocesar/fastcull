@@ -122,8 +122,10 @@ max_readers = 0
 
 A hand edit takes effect when you next open the dialog (the Performance
 rows still wait for their own moment). FastCull rewrites the file when
-you change something in the dialog, and keeps your own comments and any
-keys it does not know. A value out of range is held to the range (60 %
+you change something in the dialog, and keeps your own comments, any
+keys it does not know and the file's own line endings — a file saved
+with Windows line endings (Notepad's) comes back with them, and a
+byte-order mark stays where it was. A value out of range is held to the range (60 %
 reads as 50 %); a value it cannot read at all reads as the default.
 
 If the whole file will not parse — a stray bracket — FastCull does not

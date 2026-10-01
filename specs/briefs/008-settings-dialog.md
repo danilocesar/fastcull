@@ -630,6 +630,18 @@ setting.
   the window, which is an A1 number — a ~100 MP body's window is ~1.5 GB
   (M11). QE's correction D20 (retire the `0.5 GB` example until a fix
   lands) is answered by the fix.
+- D21 (2026-10-01, QE round 1 — defect D6 and spec correction D21; TP6):
+  settings.md promised that the user's comments and unknown entries
+  "survive byte-for-byte", and a CRLF file did not — toml_edit writes LF and
+  drops a UTF-8 byte-order mark. QE's 17-line CRLF fixture (a Unicode top
+  comment, comments above keys, trailing comments, an unknown key, an
+  unknown table, an array) came back 649 bytes with 0 CR after one commit,
+  byte-identical to the LF fixture's output; a BOM-prefixed file read
+  correctly and lost its mark at the first write. The spec and D5 decide
+  it — a hand-edited config is the user's data — so the WRITER changes:
+  it restores the file's CRLF line ends and its mark (QE's correction D21,
+  to weaken the sentence instead, is answered by the fix). Notepad saves
+  CRLF, which made this a Windows hazard.
 - D23 (2026-10-01, QE round 1 — defect D2 and spec correction D23; TP2):
   AC10's driven test waited on `loupe engine started budget <bytes>`, a
   mark the app built from its own local — mutant M-i (the engine started
