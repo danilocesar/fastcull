@@ -243,7 +243,13 @@ their precedence is `fastcull-core`'s; the app binds (brief 008, 2026-10-01).
   dialog, wrapping; a tab switch puts the keyboard on the strip. **Digits
   never switch tabs** — `1`–`5` are reserved (ui-grid.md) and in a dialog
   they are digits for a number field. Opening the dialog puts the keyboard
-  on the strip.
+  on the strip. `Tab` or `Shift+Tab` into a number field selects its text,
+  so what is typed replaces the value shown — what Slint's own Tab
+  navigation does on arrival (`TextInput` selects all only on a
+  `FocusReason::TabNavigation` focus, i-slint-core 1.17.1
+  `items/text.rs:1180`), which the dialog's ring must do itself because it
+  focuses by `focus()`; a click into a field places the caret, as a click
+  does anywhere (QE 2026-10-01, D33; Manager-accepted under M2).
 - **Apply on commit.** A checkbox applies on click or `Space`; a number
   field applies on `Enter`, on `Tab` and on click-away (focus leaving it
   while the dialog is up); `Esc` in a field discards its uncommitted text
@@ -427,7 +433,11 @@ their precedence is `fastcull-core`'s; the app binds (brief 008, 2026-10-01).
       Windows, whose menu bar is the OS's (QE 2026-10-01, D3).
 - [x] **AC3 — the tabs.** Three tabs in order, switched by `Left`/`Right`
       on the strip and by `Ctrl+Tab`/`Ctrl+Shift+Tab` from a field; digits
-      never switch; `Tab` walks the controls and never leaves the dialog;
+      never switch; `Tab` walks the controls and never leaves the dialog,
+      and selects a number field's text on arrival —
+      `a_number_typed_after_tab_replaces_the_value_in_the_field` (QE
+      2026-10-01, D33: every other test pressed Ctrl+A before typing, and a
+      typed number went in beside the value shown);
       Reset resets the active tab only, the field being typed in included
       (its text commits once, first, and the field then shows the
       default) — `settings_tabs_switch_by_keys_and_never_by_digits`,
@@ -580,6 +590,11 @@ their precedence is `fastcull-core`'s; the app binds (brief 008, 2026-10-01).
 
 ## History
 
+- 2026-10-01 — QE round 3 of brief 008, select on Tab (D33): the dialog's
+  ring focused a number field without selecting it, so a typed number went
+  in beside the value shown (Tab, 8, Enter on Loupe memory committed 82 GB);
+  "Keyboard" now says a field reached by `Tab` or `Shift+Tab` selects its
+  text, and AC3 names the test.
 - 2026-10-01 — QE round 2 of brief 008, bookkeeping (D29): AC6 says every
   test that reads or writes a settings file sets `FASTCULL_CONFIG_DIR`,
   where it said "the two that write".

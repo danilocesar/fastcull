@@ -775,6 +775,20 @@ setting.
   (#15, #24) will clamp the Settings card on wider faces. The fit test's
   20 px stays as it is — the plan forbids loosening it or pinning a height
   — and the next unit budgets for a taller card, not a wider margin.
+- D33 (2026-10-01, QE round 3 — defect D33, major; the senior developer's
+  test-integrity review, T1; a behaviour the spec was silent on, ruled under
+  M2 as the integrity review recommended and the Manager's hand-off carried
+  it): the dialog's Tab ring gave a number field the keyboard with
+  `focus()` from code, which Slint does not count as Tab navigation, so
+  nothing was selected and a typed number went in beside the value shown.
+  QE's repro on 13a904e, keyboard only: Tab to Loupe memory (`2 GB`), 8,
+  Enter committed `82 GB`, held at all 31.1 GB of the seat's RAM; Tab to
+  Selection highlight (25), 1, 0, Enter committed `1025`, clamped to 50 % —
+  each written to settings.toml at once. Every shipped Settings test had
+  pressed Ctrl+A before typing. The ring now selects the field it lands on,
+  as Slint's own Tab navigation and the IPTC panel do, and
+  `a_number_typed_after_tab_replaces_the_value_in_the_field` types the way a
+  user does — Tab in, no Ctrl+A.
 - Directive candidate (2026-10-01): M9's cleanup command `cargo clean
   -p …` cleans the dev profile only — a `screen-rung` release binary
   from 2026-09-29 survived it and the persona ran it by mistake; the

@@ -6,7 +6,8 @@ grey line under it saying what the setting does, what its default is, and
 when a change takes effect. There is no OK and no Cancel: a checkbox
 applies when you click it, a number applies when you press `Enter`, `Tab`
 or click elsewhere, and every change is saved to disk the moment you
-make it. `Esc` or **Close** closes the dialog; if you were halfway
+make it. `Tab` into a number field selects it, so you just type the new
+value. `Esc` or **Close** closes the dialog; if you were halfway
 through typing a number, `Esc` throws that half-typed number away rather
 than applying it — clicking **Close** (or anywhere else) applies it.
 **Reset to defaults** in the footer resets the tab you are looking at,

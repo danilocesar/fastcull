@@ -11387,6 +11387,115 @@ fn settings_tabs_switch_by_keys_and_never_by_digits() {
     );
 }
 
+/// AC3 (settings.md, "Keyboard"; QE 2026-10-01, D33): `Tab` or `Shift+Tab`
+/// into a number field SELECTS its text, so what is typed replaces the value
+/// the field shows — keyboard only, the way a user walks the dialog: no
+/// click into a field, no Ctrl+A anywhere. Four fields in turn: Selection
+/// highlight (shows 25, `1`,`0` → 10), Loupe memory (`2 GB`, `3` → 3 GB),
+/// Thumbnail cache cap (`2 GB`, `1` → 1 GB), the read workers' Limit (`4`,
+/// `2` → 2), and the wash field again reached BACKWARDS by Shift+Tab (`2`,`0`
+/// → 20). The one click is the Adaptive checkbox, which frees the Limit
+/// field; its `toggled` takes the keyboard (`self.focus()`), so ONE Tab then
+/// lands on Limit. Nothing is written: the harness's own FASTCULL_NO_CONFIG,
+/// no FASTCULL_CONFIG_DIR, and `settings written` never traced is the
+/// hermetic premise.
+///
+/// Slint's TextInput selects all only on a Tab-NAVIGATION focus (i-slint-core
+/// 1.17.1 `items/text.rs:1180`, `FocusReason::TabNavigation`), and the
+/// dialog's ring takes Tab itself and focuses each field with `focus()` from
+/// code — a programmatic focus, which selects nothing and leaves the caret
+/// where it was (Cargo.toml, the fourth canary's sixth fact). So the ring
+/// selects the field itself, in `focus-slot`, on arrival.
+///
+/// RED on 13a904e, the head before the fix (QE round 3 of brief 008, D33):
+/// nothing was selected and each typed digit went in at the caret, beside
+/// the value shown — the wash field showed `125` then `1025` and committed
+/// 50, the maximum; the loupe memory committed `32 GB` (loupemem=
+/// 33377808384, this seat's RAM, where the clamp held it); the cache cap
+/// `12 GB`; the Limit `24`; and the wash field reached by Shift+Tab showed
+/// `502`, `5020` and committed 50 again. Every other Settings test clicks a
+/// field and presses Ctrl+A before typing, which is why the suite could not
+/// see it. When this fails that way it is that defect; do not quiet it, and
+/// do not add a Ctrl+A to this script.
+///
+/// Mutant (2026-10-01): the four `select-all()` calls taken out of
+/// `focus-slot` — which IS 13a904e — → red on all five dumps.
+#[test]
+fn a_number_typed_after_tab_replaces_the_value_in_the_field() {
+    if !has_display() {
+        eprintln!("screenshot smoke skipped: no display server");
+        return;
+    }
+    let _s = serial();
+    let out = out_dir().join("settings-tab-typed.jpg");
+    let script = "400:key:ctrl+,;700:key:right;1000:key:tab;1200:key:1;1300:key:0;\
+                  1500:key:return;1800:dump.wash;2100:key:ctrl+tab;2400:key:tab;2600:key:3;\
+                  2800:key:return;3100:dump.loupe;3400:key:tab;3600:key:1;3800:key:return;\
+                  4100:dump.cap;4400:click:settings readers-adaptive;4700:key:tab;4900:key:2;\
+                  5100:key:return;5400:dump.limit;5700:key:ctrl+shift+tab;6000:key:shift+tab;\
+                  6200:key:shift+tab;6400:key:shift+tab;6600:key:2;6700:key:0;6900:key:return;\
+                  7200:dump.washrev";
+    let stderr = shoot_env_stderr(
+        &["--synthetic", "24"],
+        &[("FASTCULL_TRACE", "1"), ("FASTCULL_DRIVE", script)],
+        &out,
+    );
+    let wash = qedump(&stderr, "wash");
+    assert!(
+        dump_field(wash, "wash") == "10" && dump_field(wash, "washprop") == "0.100",
+        "Tab into Selection highlight (showing 25), then 1, 0, Enter did not commit \
+         10 — the typed number did not replace the value shown, so the field was \
+         not selected on arrival (QE 2026-10-01, D33): {wash}\n{stderr}"
+    );
+    // What the field SHOWED when the dump was taken (the dump's `wash=` is
+    // the model's): the last `settings wash shows` mark before the step.
+    let labels = mark_labels(&stderr);
+    let dump_at = labels
+        .iter()
+        .position(|l| *l == "drive: dump.wash")
+        .unwrap_or_else(|| panic!("no `drive: dump.wash` step in the trace:\n{stderr}"));
+    let shown = labels[..dump_at]
+        .iter()
+        .rev()
+        .find_map(|l| l.strip_prefix("settings wash shows "));
+    assert_eq!(
+        shown,
+        Some("10"),
+        "the wash field does not show 10 after Tab, 1, 0, Enter — what was typed \
+         did not replace the value shown:\n{stderr}"
+    );
+    assert_eq!(
+        dump_field(qedump(&stderr, "loupe"), "loupemem"),
+        "3221225472",
+        "Tab into Loupe memory (showing 2 GB), then 3, Enter did not commit 3 GB:\n{stderr}"
+    );
+    assert_eq!(
+        dump_field(qedump(&stderr, "cap"), "cachecap"),
+        "1073741824",
+        "Tab into the Thumbnail cache cap (showing 2 GB), then 1, Enter did not \
+         commit 1 GB:\n{stderr}"
+    );
+    assert_eq!(
+        dump_field(qedump(&stderr, "limit"), "readers"),
+        "limit:2",
+        "Tab into the read workers' Limit (showing 4), then 2, Enter did not commit \
+         a limit of 2:\n{stderr}"
+    );
+    assert_eq!(
+        dump_field(qedump(&stderr, "washrev"), "wash"),
+        "20",
+        "Shift+Tab back into Selection highlight (showing 10), then 2, 0, Enter did \
+         not commit 20 — the field is not selected when the ring arrives \
+         backwards:\n{stderr}"
+    );
+    assert_eq!(
+        mark_lines(&stderr, "settings written "),
+        0,
+        "a settings file was written by a run under FASTCULL_NO_CONFIG — the run is \
+         not hermetic:\n{stderr}"
+    );
+}
+
 /// AC4 and AC9 (settings.md, "Writing" and "Apply on commit"): a commit
 /// writes settings.toml at once, keeping the user's comment, the trailing
 /// comment on the key and an unknown table; the window's wash takes the

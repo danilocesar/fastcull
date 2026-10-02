@@ -61,7 +61,7 @@ fastcull-core.workspace = true
 # Re-read the owner-invariant section of specs/modules/ui-grid.md before
 # raising this bound.
 # FOURTH CANARY (brief 008, the Settings dialog and the Failed badge's
-# tooltip; same 1.17.1). Five measured behaviours they stand on, none
+# tooltip; same 1.17.1). Six measured behaviours they stand on, none
 # documented upstream (read 2026-10-01 in i-slint-core window.rs
 # `process_key_input`, items/text.rs, items.rs and
 # properties/change_tracker.rs; ui-grid.md's Slint list):
@@ -94,6 +94,12 @@ fastcull-core.workspace = true
 #      never runs: why the Settings fields commit only what the user
 #      EDITED (`dirty`, set by LineEdit's `edited`) and re-show the value
 #      in force on every blur (senior-developer review F1, 2026-10-01).
+#   6. A `focus()` called from code is not a Tab-navigation focus: a
+#      `TextInput` selects all only on `FocusReason::TabNavigation`
+#      (items/text.rs:1180, FocusIn), so a field the Settings ring focuses
+#      selects nothing and the caret stays where it was (at 0 the first
+#      time: Tab, 8, Enter put `82 GB`) — why `focus-slot` calls
+#      `select-all()` itself (QE 2026-10-01, D33).
 slint = { version = "1", default-features = false, features = [
     "std",
     "backend-winit",

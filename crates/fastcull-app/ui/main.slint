@@ -3277,7 +3277,7 @@ export component MainWindow inherits Window {
         // (they never stack with it) and BEFORE the Help popups, so About
         // and the shortcuts card render over it.
         //
-        // THE KEYBOARD (settings.md, "Keyboard"), and the three Slint facts
+        // THE KEYBOARD (settings.md, "Keyboard"), and the four Slint facts
         // it stands on (ui-grid.md's Slint list; Cargo.toml's fourth
         // canary):
         //   * Tab and Shift+Tab are handled HERE, in an explicit ring — the
@@ -3292,6 +3292,10 @@ export component MainWindow inherits Window {
         //     toggled by `visible`, and a tab switch puts the keyboard on
         //     the strip BEFORE the body it was in goes invisible: the field
         //     it leaves must stay alive long enough to commit.
+        //   * a field selects its text on Slint's OWN Tab navigation only,
+        //     never on a `focus()` from code — so the ring selects a number
+        //     field itself when it lands there (`focus-slot`; QE 2026-10-01,
+        //     D33).
         //
         // APPLY ON COMMIT (settings.md): a field commits on Enter, on Tab
         // and on a click anywhere else while the dialog is up — `flush()`
@@ -3349,15 +3353,22 @@ export component MainWindow inherits Window {
                     if (s == 5) { return root.settings-cache-clear-enabled; }
                     return true;
                 }
+                // A number field the ring lands on is SELECTED, so what is
+                // typed replaces the value shown (settings.md, "Keyboard";
+                // QE 2026-10-01, D33): Slint selects a field only on its own
+                // Tab navigation, and `focus()` from here is not that
+                // (Cargo.toml, the fourth canary's sixth fact) — without the
+                // `select-all()` a typed 8 landed in front of `2 GB` as 82 GB.
+                // The ring's arrival only: a click places the caret.
                 function focus-slot(s: int) {
                     self.slot = s;
                     if (s == 0) { settings-strip.focus(); return; }
                     if (root.settings-tab == 0 && s == 1) { set-auto-advance.focus(); return; }
-                    if (root.settings-tab == 1 && s == 1) { set-wash.focus(); return; }
-                    if (root.settings-tab == 2 && s == 1) { set-loupe.focus(); return; }
-                    if (root.settings-tab == 2 && s == 2) { set-cache.focus(); return; }
+                    if (root.settings-tab == 1 && s == 1) { set-wash.focus(); set-wash.select-all(); return; }
+                    if (root.settings-tab == 2 && s == 1) { set-loupe.focus(); set-loupe.select-all(); return; }
+                    if (root.settings-tab == 2 && s == 2) { set-cache.focus(); set-cache.select-all(); return; }
                     if (root.settings-tab == 2 && s == 3) { set-adaptive.focus(); return; }
-                    if (root.settings-tab == 2 && s == 4) { set-limit.focus(); return; }
+                    if (root.settings-tab == 2 && s == 4) { set-limit.focus(); set-limit.select-all(); return; }
                     if (root.settings-tab == 2 && s == 5) { set-clear.focus(); return; }
                     if (s == self.slot-count() - 2) { set-reset.focus(); return; }
                     set-close.focus();
