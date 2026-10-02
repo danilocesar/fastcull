@@ -952,17 +952,39 @@ fn merge_into(doc: &mut toml_edit::DocumentMut, settings: &Settings) {
             // Something that is not a table where this tab's table belongs
             // — an array of tables (`[[general]]`), a value — is REPLACED by
             // the table, in its place: TOML cannot hold both (settings.md,
-            // "Writing"; QE 2026-10-01, D35). An array's first header gives
-            // the table its spacing and its comment, so a file that began
-            // with `[[general]]` does not begin with a blank line now.
+            // "Writing"; QE 2026-10-01, D35). Its contents go; the user's
+            // comments around it stay with the table (brief 008 D40). An
+            // array's first header gives the table its spacing and its
+            // comment, so a file that began with `[[general]]` does not
+            // begin with a blank line now; a value gives the comment above
+            // its key line; either gives the comment on its line.
             let replaces = existing.is_some();
-            let header_prefix = existing
-                .and_then(toml_edit::Item::as_array_of_tables)
-                .and_then(|tables| tables.get(0))
-                .and_then(|first| first.decor().prefix())
-                .and_then(toml_edit::RawString::as_str)
-                .map(str::to_string);
+            let (header_prefix, on_line) = match existing {
+                Some(toml_edit::Item::ArrayOfTables(tables)) => {
+                    tables.get(0).map_or((None, None), |first| {
+                        let decor = first.decor();
+                        (
+                            decor
+                                .prefix()
+                                .and_then(toml_edit::RawString::as_str)
+                                .map(str::to_string),
+                            with_comment(decor.suffix()),
+                        )
+                    })
+                }
+                Some(toml_edit::Item::Value(value)) => (
+                    with_comment(
+                        root.key(tab.table())
+                            .and_then(|key| key.leaf_decor().prefix()),
+                    ),
+                    with_comment(value.decor().suffix()),
+                ),
+                _ => (None, None),
+            };
             let mut table = toml_edit::Table::new();
+            if let Some(comment) = on_line {
+                table.decor_mut().set_suffix(comment);
+            }
             if let Some(prefix) = header_prefix {
                 table.decor_mut().set_prefix(prefix);
             } else if !trailing.is_empty() && !replaces {
@@ -1002,15 +1024,25 @@ fn merge_into(doc: &mut toml_edit::DocumentMut, settings: &Settings) {
                 }
                 // A table or an array of tables where a value belongs
                 // (`[performance.loupe_memory]`): TOML cannot hold both, so
-                // the key becomes the value and the table goes, its contents
-                // and its header's comment with it (settings.md, "Writing";
-                // QE 2026-10-01, D35). The key's decor was the header's
-                // spacing, so it is reset to a key line's — `loupe_memory =`,
-                // not `loupe_memory=`.
+                // the key becomes the value and the table goes with its
+                // contents (settings.md, "Writing"; QE 2026-10-01, D35). The
+                // key's decor was the header's spacing, so it is reset to a
+                // key line's — `loupe_memory =`, not `loupe_memory=` — and
+                // the comment above the header, and the one on its line,
+                // are the table's own decor: they go above the key and on
+                // its line, or the user's note would go with the table
+                // (brief 008 D40; QE 2026-10-02, D42).
                 Some(other) => {
+                    let (above, on_line) = header_comments(other);
+                    if let Some(comment) = on_line {
+                        value.decor_mut().set_suffix(comment);
+                    }
                     *other = toml_edit::Item::Value(value);
                     if let Some(mut replaced) = table.key_mut(key.name()) {
                         replaced.leaf_decor_mut().clear();
+                        if let Some(comment) = above {
+                            replaced.leaf_decor_mut().set_prefix(comment);
+                        }
                     }
                 }
                 None => {
@@ -1030,6 +1062,30 @@ fn merge_into(doc: &mut toml_edit::DocumentMut, settings: &Settings) {
     if moved {
         doc.set_trailing("");
     }
+}
+
+/// The decor above a replaced table's header and after it on its line — an
+/// array of tables' FIRST header for an array — each only when it holds a
+/// comment (brief 008 D40): the writer carries them to the key that takes
+/// the table's place.
+fn header_comments(item: &toml_edit::Item) -> (Option<String>, Option<String>) {
+    let decor = match item {
+        toml_edit::Item::Table(table) => Some(table.decor()),
+        toml_edit::Item::ArrayOfTables(tables) => tables.get(0).map(toml_edit::Table::decor),
+        _ => None,
+    };
+    decor.map_or((None, None), |decor| {
+        (with_comment(decor.prefix()), with_comment(decor.suffix()))
+    })
+}
+
+/// A decor's text when it holds a comment — anything but spaces, tabs and
+/// line ends — and `None` when it is only spacing, which the writer's own
+/// spacing rules then decide.
+fn with_comment(raw: Option<&toml_edit::RawString>) -> Option<String> {
+    raw.and_then(toml_edit::RawString::as_str)
+        .filter(|text| !text.trim().is_empty())
+        .map(str::to_string)
 }
 
 /// The trailing comments `merge_into` moves in front of the first table it
@@ -1440,20 +1496,30 @@ mod tests {
     /// (settings.md, "Writing"; QE 2026-10-01, D35). Two cosmetics are
     /// pinned here and nowhere else: the replaced key reads `loupe_memory =`
     /// (its decor was the header's, `loupe_memory=`), and a file that began
-    /// with `[[general]]` begins with `[general]`, not a blank line.
+    /// with `[[general]]` begins with `[general]`, not a blank line. The
+    /// table's contents go, but the comment above its header stays above the
+    /// key that replaces it (brief 008 D40; QE 2026-10-02, D42).
+    ///
+    /// RED on a51705c, the writer before the carry: the subtable's `# my
+    /// sub-table, keep this note` was gone — it is the replaced table's own
+    /// decor, and it was dropped with the table. When this fails that way it
+    /// is that defect; do not quiet it.
     ///
     /// Mutants (2026-10-01): the replacement arm of `merge_into` taken out
     /// (`Some(other) => continue`) → the subtable stays, `foo = 1` with it,
     /// and `load` reads the default loupe memory — red; the key decor's
     /// reset taken out → `loupe_memory= "40%"` — red; the array header's
     /// spacing not carried → the file starts with a blank line — red.
+    /// Mutant (2026-10-02): the key arm clearing the replaced key's decor
+    /// without setting the comment above (the writer before D40) → the
+    /// subtable's comment is gone — red.
     #[test]
     fn a_table_or_an_array_at_a_known_name_is_replaced_and_the_file_still_parses() {
         let s = non_default();
         for (tag, users, pinned) in [
             (
                 "subtable",
-                "[performance.loupe_memory]\nfoo = 1\n",
+                "# my sub-table, keep this note\n[performance.loupe_memory]\nfoo = 1\n",
                 "loupe_memory = \"40%\"\n",
             ),
             ("aot", "[[general]]\nauto_advance = false\n", "[general]\n"),
@@ -1477,15 +1543,79 @@ mod tests {
                 "{tag}: the table's content stayed: {text:?}"
             );
             match tag {
-                "subtable" => assert!(
-                    text.contains(pinned),
-                    "{tag}: the replaced key does not read `{pinned}`: {text:?}"
-                ),
+                "subtable" => {
+                    assert!(
+                        text.contains(pinned),
+                        "{tag}: the replaced key does not read `{pinned}`: {text:?}"
+                    );
+                    assert!(
+                        text.contains("# my sub-table, keep this note\nloupe_memory = \"40%\"\n"),
+                        "{tag}: the comment above the replaced table's header is not above \
+                         the key that replaced it (brief 008 D40): {text:?}"
+                    );
+                }
                 _ => assert!(
                     text.starts_with(pinned),
                     "{tag}: the file does not start with `{pinned}`: {text:?}"
                 ),
             }
+        }
+    }
+
+    /// The comment ON a replaced header's line stays on the line of what
+    /// replaces it, and both comments of a plain value where a tab's table
+    /// belongs stay with the table: of every shape "Writing" says is
+    /// replaced, the contents go and the user's comments around it stay
+    /// (brief 008 D40: a hand-edited config is the user's data, D5).
+    ///
+    /// RED on a51705c, the writer before the carry: `# keep me` and `#
+    /// about general` on the header lines, and `# above general` and `#
+    /// five` around `general = 5`, were all gone. When this fails that way
+    /// it is that defect; do not quiet it.
+    ///
+    /// Mutants (2026-10-02), each alone: the key arm's comment on the line
+    /// not carried → `subtable-line` red; the array's header-line comment
+    /// not carried → `aot-line` red; the value's comment above not carried →
+    /// `value` red (`\n[general] # five`); the value's comment on its line not
+    /// carried → `value` red (`# above general\n[general]\n`).
+    #[test]
+    fn a_replaced_entrys_own_comments_stay_with_what_replaces_it() {
+        let s = non_default();
+        for (tag, users, kept) in [
+            (
+                "subtable-line",
+                "[performance.loupe_memory] # keep me\nfoo = 1\n",
+                "loupe_memory = \"40%\" # keep me\n",
+            ),
+            (
+                "aot-line",
+                "[[general]] # about general\nauto_advance = false\n",
+                "[general] # about general\n",
+            ),
+            (
+                "value",
+                "# above general\ngeneral = 5 # five\n[ui]\nselection_wash = 10\n",
+                "# above general\n[general] # five\n",
+            ),
+        ] {
+            let path = file_with(tag, users);
+            write(&path, &s).unwrap();
+            let text = std::fs::read_to_string(&path).unwrap();
+            assert!(
+                text.contains(kept),
+                "{tag}: the user's comment did not stay with what replaced the entry \
+                 (`{kept:?}` expected): {text:?}"
+            );
+            assert!(
+                text.parse::<toml::Table>().is_ok(),
+                "{tag}: the written file does not parse: {text:?}"
+            );
+            let reread = load(&path);
+            assert_eq!(reread.error, None, "{tag}: {text:?}");
+            assert_eq!(
+                reread.settings, s,
+                "{tag}: the file does not read back what was written: {text:?}"
+            );
         }
     }
 

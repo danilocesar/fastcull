@@ -135,12 +135,16 @@ their precedence is `fastcull-core`'s; the app binds (brief 008, 2026-10-01).
   they were", and a key the write adds to their table comes before them;
   the blank lines, QE 2026-10-02, D44; the one blank line, RR-F3: a comment
   with no final newline had none, one ending in a blank line had two). A
-  table where one of the five
-  keys belongs, or an array of tables or a plain value where a tab's table
-  belongs (`[performance.loupe_memory]`, `[[general]]`, `general = 5`), is
-  replaced by the key or the table, in its place — the shape is not one the
-  file can hold beside ours — and the write says nothing about it (QE
-  2026-10-01, D35).
+  table where one of the five keys belongs, or an array of tables or a
+  plain value where a tab's table belongs (`[performance.loupe_memory]`,
+  `[[general]]`, `general = 5`), is replaced by the key or the table, in
+  its place — the shape is not one the file can hold beside ours — and the
+  write says nothing about it: its contents go; the comment above its
+  header stays above the key or the table that replaces it, and a comment
+  on its header's line (on its own line, for a plain value) stays on the
+  replacing line (QE 2026-10-01, D35; brief 008 D40, QE 2026-10-02, D42: the
+  comment above a replaced sub-table was deleted with it, though the one
+  above a replaced `[[general]]` was kept).
 - A write that finds the file unparsable AT THAT MOMENT moves it aside
   before writing a fresh one, whatever the last read said — the first
   write after a failed read, or a hand edit that broke the file
@@ -490,7 +494,9 @@ their precedence is `fastcull-core`'s; the app binds (brief 008, 2026-10-01).
       `a_moved_comment_sits_one_blank_line_above_the_appended_table`
       (re-review RR-F3) and
       `a_table_or_an_array_at_a_known_name_is_replaced_and_the_file_still_parses`
-      (QE 2026-10-01, D35),
+      (QE 2026-10-01, D35; its comment above kept, brief 008 D40),
+      `a_replaced_entrys_own_comments_stay_with_what_replaces_it` (brief 008
+      D40),
       `a_created_key_carries_its_note_and_an_existing_key_keeps_its_comment`,
       `the_normalised_string_is_what_the_file_stores`; a write that fails
       keeps the commit in force and the next open does not re-read over it
@@ -660,6 +666,12 @@ their precedence is `fastcull-core`'s; the app binds (brief 008, 2026-10-01).
 
 ## History
 
+- 2026-10-02 — QE round 4 of brief 008, a replaced entry's comments (brief
+  008 D40; QE D42, re-review RR-F2): the comment above a table the writer
+  replaces, and the one on its header's line, stay with the key or table
+  that takes its place, for each of the three replaced shapes; the
+  exception sentence of "Writing" says its contents go and its comments
+  stay; AC4 names the tests.
 - 2026-10-02 — QE round 4 of brief 008, comments after the last entry
   (D44; re-review RR-F1, RR-F3, RR-F4): "Writing" says where the moved
   comments go exactly — after any key the write adds to their table, one

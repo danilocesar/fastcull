@@ -134,7 +134,9 @@ byte-order mark stays where it was. A value out of range is held to the range (6
 reads as 50 %); a value it cannot read at all reads as the default. One
 thing it cannot keep: a table you put where one of these settings or
 groups belongs (`[performance.loupe_memory]`, `[[general]]`) is replaced
-by the setting at the next change — the file cannot hold both.
+by the setting at the next change — the file cannot hold both. What was
+inside that table goes; a comment you wrote above it, or on its line,
+stays with the setting that takes its place.
 
 If the whole file will not parse — a stray bracket — FastCull does not
 touch it: it runs on the defaults, the terminal and the status bar say
