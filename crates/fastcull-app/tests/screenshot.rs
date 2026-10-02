@@ -11647,6 +11647,23 @@ fn mark_labels(stderr: &str) -> Vec<&str> {
 /// `dump.ui` reads `wash=35` — red; the blur's re-show of the value in
 /// force dropped → the model is 25 but the field still shows `35` — red
 /// on the `settings wash shows` mark.
+///
+/// Two more rows, appended (QE 2026-10-02, round 5: each field carries its
+/// own `dirty` test, and only the wash's had a guard): `1` typed into the
+/// Thumbnail cache cap (it shows `2 GB`), then Reset → `cachecap` back to 2
+/// GB and the field showing `2 GB`; Adaptive cleared, `6` typed into the
+/// Limit, then Reset → `readers=adaptive` and the field showing nothing —
+/// each commit traced once, before its tab's Reset. A row's commit and
+/// Reset are looked for after the dump before it: Performance's first
+/// Reset in the run is the loupe row's. Mutants (2026-10-02): `self.dirty
+/// &&` dropped from the cap's blur → the stale `1 GB` commits again after
+/// the Reset, `dump.cap` reads `cachecap=1073741824` — red; dropped from
+/// the Limit's blur → `max_readers = 6` traced twice, `dump.limit` reads
+/// `readers=limit:6` — red. (The Limit shows `4` before and nothing after,
+/// so its `changed shown` re-sync does fire — but Slint runs the trackers
+/// last-dirtied first, and the field's blur was dirtied after it, by the
+/// click's `focus()`: the blur reads the flushed `6` against the reset
+/// value and, without `dirty`, commits it.)
 #[test]
 fn reset_with_a_half_typed_field_commits_it_then_resets() {
     if !has_display() {
@@ -11658,7 +11675,11 @@ fn reset_with_a_half_typed_field_commits_it_then_resets() {
     let script = "900:key:ctrl+,;1300:key:right;1700:click:settings wash;2000:key:ctrl+a;\
                   2200:key:3;2400:key:5;2800:click:settings reset;3300:dump.ui;\
                   3600:key:ctrl+tab;4000:click:settings loupe-memory;4300:key:ctrl+a;\
-                  4500:key:0;4700:key:.;4900:key:5;5300:click:settings reset;5800:dump.perf";
+                  4500:key:0;4700:key:.;4900:key:5;5300:click:settings reset;5800:dump.perf;\
+                  6100:click:settings cache-cap;6400:key:ctrl+a;6600:key:1;\
+                  7000:click:settings reset;7500:dump.cap;7800:click:settings readers-adaptive;\
+                  8200:click:settings readers-limit;8500:key:ctrl+a;8700:key:6;\
+                  9100:click:settings reset;9600:dump.limit";
     let stderr = shoot_env_stderr(
         &["--synthetic", "24"],
         &[("FASTCULL_TRACE", "1"), ("FASTCULL_DRIVE", script)],
@@ -11676,7 +11697,11 @@ fn reset_with_a_half_typed_field_commits_it_then_resets() {
             .find_map(|l| l.strip_prefix(tag.as_str()))
             .map(str::to_string)
     };
-    for (tab, field, commit, reset, dump, model, in_force, default) in [
+    // `after`: the step a row's own commit and Reset are looked for after —
+    // the run's start for the first two; for the rows appended after them,
+    // the dump before, since the Performance tab's earlier Reset is the
+    // loupe row's.
+    for (tab, field, commit, reset, dump, model, in_force, default, after) in [
         (
             "UI",
             "wash",
@@ -11686,6 +11711,7 @@ fn reset_with_a_half_typed_field_commits_it_then_resets() {
             "wash",
             "25",
             "25",
+            None,
         ),
         (
             "Performance",
@@ -11696,6 +11722,29 @@ fn reset_with_a_half_typed_field_commits_it_then_resets() {
             "loupemem",
             "2147483648",
             "2 GB",
+            None,
+        ),
+        (
+            "Performance",
+            "cache-cap",
+            "settings committed performance.cache_cap = 1 GB",
+            "settings reset performance",
+            "cap",
+            "cachecap",
+            "2147483648",
+            "2 GB",
+            Some("drive: dump.perf"),
+        ),
+        (
+            "Performance",
+            "readers-limit",
+            "settings committed performance.max_readers = 6",
+            "settings reset performance",
+            "limit",
+            "readers",
+            "adaptive",
+            "",
+            Some("drive: dump.cap"),
         ),
     ] {
         assert_click_resolved(&stderr, &format!("settings {field}"));
@@ -11713,8 +11762,14 @@ fn reset_with_a_half_typed_field_commits_it_then_resets() {
             "`{commit}` was traced {commits} time(s): the click-away commit runs \
              exactly once, before the Reset:\n{stderr}"
         );
-        let committed_at = labels.iter().position(|l| *l == commit);
-        let reset_at = labels.iter().position(|l| *l == reset);
+        let base = after.map_or(0, |step| {
+            labels
+                .iter()
+                .position(|l| *l == step)
+                .unwrap_or_else(|| panic!("no `{step}` in the trace:\n{stderr}"))
+        });
+        let committed_at = labels[base..].iter().position(|l| *l == commit);
+        let reset_at = labels[base..].iter().position(|l| *l == reset);
         assert!(
             reset_at.is_some() && committed_at < reset_at,
             "`{commit}` must come before `{reset}` (the click commits first, \
@@ -11737,24 +11792,36 @@ fn reset_with_a_half_typed_field_commits_it_then_resets() {
 /// AC4 (settings.md, "Apply on commit"): every control that takes the
 /// keyboard from a number field holding typed, uncommitted text is a
 /// click-away — the field's text commits FIRST, exactly once, and then the
-/// control does its own work; only `Esc` discards. One launch per row, and
-/// the same dirty field in all but one (Loupe memory, showing `2 GB`, `3`
-/// typed, no Enter), so every row reads the same commit. The next unit's
-/// control joins by adding a row — on a tab that has a number field.
+/// control does its own work; only `Esc` discards. One launch per row. The
+/// controls run over one dirty field, Loupe memory (showing `2 GB`, `3`
+/// typed, no Enter), so those rows read one commit; and the three rules
+/// each field carries its OWN copy of — Close's commit (the field's arm of
+/// `flush()`), a click on the scrim's commit (the field's blur) and Esc's
+/// discard (its blur's `settings-visible` guard) — run over all four fields
+/// (QE 2026-10-02, round 5: the matrix read Loupe memory only, and taking
+/// any of the other three fields' copies out left the suite green). The
+/// next unit's control joins by adding a row — on a tab that has a number
+/// field — and its number field by adding the three.
 ///
 /// The rows are the matrix of the senior developer's diagnosis of QE round 4
-/// (brief 008 D39), numbered as there: 1 Close; 3 Clear (Linux only: the
-/// default cache sandboxed under HOME and XDG_CACHE_HOME, brief 008 D24);
-/// 4 the Adaptive checkbox; 4b the Adaptive checkbox with the Limit field
-/// dirty instead; 6 a click into another field; 7 a click on a tab; 8
-/// Ctrl+Tab; 9 Ctrl+Shift+Tab; 11 Tab; 12 Shift+Tab; 15 a click on the
-/// scrim; 16 About over the dialog by its token; 17 About and 18 the
+/// (brief 008 D39), numbered as there, with the field after a dash where it
+/// is not Loupe memory: 1 Close; 3 Clear (Linux only: the default cache
+/// sandboxed under HOME and XDG_CACHE_HOME, brief 008 D24); 4 the Adaptive
+/// checkbox; 4b the Adaptive checkbox with the Limit field dirty instead; 6
+/// a click into another field; 7 a click on a tab; 8 Ctrl+Tab; 9
+/// Ctrl+Shift+Tab; 11 Tab; 12 Shift+Tab; 14 Esc, the one discard; 15 a click
+/// on the scrim; 16 About over the dialog by its token; 17 About and 18 the
 /// shortcuts card from the Help menu, and 19 View › IPTC Panel (Linux only:
 /// the in-window menu bar, `menu_clicks_are_calibrated`); 20 a folder opened
-/// under the dialog. Pinned by other tests and not re-run here: 2 Reset
-/// (`reset_with_a_half_typed_field_commits_it_then_resets`), 13 Enter
-/// (`a_number_typed_after_tab_replaces_the_value_in_the_field`) and 14 Esc,
-/// the one discard (`a_settings_commit_writes_the_file_and_esc_discards_a_half_typed_field`).
+/// under the dialog; and per field 1-, 15- and 14-wash (Selection highlight,
+/// `3` typed over 25), -cap (the Thumbnail cache cap, `1` over `2 GB`) and
+/// -limit (the read workers' Limit: Adaptive cleared, a limit of 4, `6`
+/// typed — row 4b's setup). 14-wash is pinned too by
+/// `a_settings_commit_writes_the_file_and_esc_discards_a_half_typed_field`
+/// and kept here so the table has no hole. Pinned by other tests and not
+/// re-run here: 2 Reset (`reset_with_a_half_typed_field_commits_it_then_resets`,
+/// over all four fields) and 13 Enter
+/// (`a_number_typed_after_tab_replaces_the_value_in_the_field`).
 /// Unreachable today: 5, the auto-advance checkbox — General has no number
 /// field, and a field dirty on another tab is committed by the tab switch
 /// before General shows; its `toggled` reads its state before the flush as
@@ -11768,14 +11835,20 @@ fn reset_with_a_half_typed_field_commits_it_then_resets() {
 /// click-away rule covers it, source-verified (brief 008 D39).
 ///
 /// Each row reads: the commit, counted over the whole run by its EXACT mark
-/// (`= 4` must never match `= 40`) and placed after the control's first
-/// step; `loupemem=`; the row's own dump fields; and — where the matrix
-/// names one — an ORDER on the one trace stream after that step. The order is the guard wherever a `flush()` in the
-/// control's handler is what commits: without it the field's own deferred
-/// blur still commits, but one event-loop iteration later, after the
-/// gaining element's focus mark (Cargo.toml, the second canary's fact 1:
-/// the gainer's `changed has-focus` runs before the loser's). Every row
-/// runs even when one is red, and the test fails naming each red row.
+/// (`= 4` must never match `= 40`) — once and after the control's first
+/// step, or never for an Esc row; `loupemem=`; the row's own dump fields;
+/// and — where the matrix names one — an ORDER on the one trace stream after
+/// that step. The order is the guard wherever a `flush()` in the control's
+/// handler is what commits: without it the field's own deferred blur still
+/// commits, but one event-loop iteration later, after the gaining element's
+/// focus mark (Cargo.toml, the second canary's fact 1: the gainer's `changed
+/// has-focus` runs before the loser's). Every Esc row carries a PREMISE,
+/// checked first: the field's last `settings <field> shows` mark before the
+/// Esc is the typed text — without it an Esc row would be green when the
+/// typing never reached the field. With the dialog or a field deleted
+/// nothing of a row survives: its click finds no layout mark and the run
+/// aborts. Every row runs even when one is red, and the test fails naming
+/// each red row.
 ///
 /// RED on a377405, the head before the fix (QE round 4, D39, deterministic;
 /// reproduced by the senior developer 5/5 and 2/2): row 4 read
@@ -11808,6 +11881,16 @@ fn reset_with_a_half_typed_field_commits_it_then_resets() {
 /// - the Loupe memory field's own blur commit removed (the belt) → rows 6,
 ///   15, 16, 17, 18, 19 and 20, the commit traced 0 times: the rows the
 ///   belt alone guarantees.
+///
+/// Mutants (2026-10-02, QE round 5), the same way, each red on its row and
+/// no other, the commit's count the message: the wash's arm of `flush()`
+/// removed → 1-wash (0 times); the cap's (QE's S8) → 1-cap; the Limit's →
+/// 1-limit and 4b (Adaptive's own flush commits nothing either); the
+/// wash's, the cap's and the Limit's blur commit removed (S10, S11, S12) →
+/// 15-wash, 15-cap, 15-limit (0 times); the `settings-visible` guard on
+/// Loupe memory's blur (S9) → 14, `3 GB` committed (1 time, 0 expected);
+/// the same guard on the wash, the cap and the Limit → 14-wash, 14-cap,
+/// 14-limit, each commit traced once.
 #[test]
 fn every_control_that_leaves_a_dirty_settings_field_commits_it_first() {
     if !has_display() {
@@ -11847,8 +11930,14 @@ fn every_control_that_leaves_a_dirty_settings_field_commits_it_first() {
         /// The named elements the row clicks; each must resolve inside its
         /// rectangle.
         clicks: &'static [&'static str],
-        /// The dirty field's commit: exactly once, after `from`.
+        /// The dirty field's commit: traced `commits` times — once, after
+        /// `from`, or never for an `Esc` row.
         commit: &'static str,
+        commits: usize,
+        /// An `Esc` row's PREMISE: the dirty field and the text it showed
+        /// last before `from` — the typed text, or the discard proves
+        /// nothing.
+        typed: Option<(&'static str, &'static str)>,
         /// Other commits the row expects exactly once.
         once: &'static [&'static str],
         /// `loupemem=` at `dump.after`.
@@ -11869,7 +11958,28 @@ fn every_control_that_leaves_a_dirty_settings_field_commits_it_first() {
                                1000:click:settings loupe-memory;1300:key:ctrl+a;1500:key:3";
     const LOUPE_3GB: &str = "settings committed performance.loupe_memory = 3 GB";
     const GB3: &str = "3221225472";
+    const GB2: &str = "2147483648";
     const STRIP_GAINED: Mark = Mark::Is("focus: settings strip gained");
+    const DIALOG_GAINED: Mark = Mark::Is("focus: settings dialog gained");
+    const CLOSED: Mark = Mark::Is("settings closed");
+    // The field dimension (QE 2026-10-02, round 5): the same Close, scrim and
+    // Esc over the other three fields. Settings open on UI (Right from the
+    // strip), `3` typed into Selection highlight (it shows 25).
+    const DIRTY_WASH: &str = "400:key:ctrl+,;700:key:right;1000:click:settings wash;\
+                              1300:key:ctrl+a;1500:key:3";
+    const WASH_3: &str = "settings committed ui.selection_wash = 3";
+    // Settings open on Performance, `1` typed into the Thumbnail cache cap
+    // (it shows `2 GB`).
+    const DIRTY_CAP: &str = "400:key:ctrl+,;700:key:ctrl+shift+tab;\
+                             1000:click:settings cache-cap;1300:key:ctrl+a;1500:key:1";
+    const CAP_1GB: &str = "settings committed performance.cache_cap = 1 GB";
+    // Settings open on Performance, Adaptive cleared (a limit of 4), then
+    // `6` typed into the Limit field — row 4b's setup.
+    const DIRTY_LIMIT: &str = "400:key:ctrl+,;700:key:ctrl+shift+tab;\
+                               1000:click:settings readers-adaptive;\
+                               1400:click:settings readers-limit;1700:key:ctrl+a;1900:key:6";
+    const LIMIT_6: &str = "settings committed performance.max_readers = 6";
+    const LIMIT_4: &str = "settings committed performance.max_readers = 4";
     let row = |row: &'static str, control: &'static str, steps: String, from: Mark| Row {
         row,
         control,
@@ -11878,6 +11988,8 @@ fn every_control_that_leaves_a_dirty_settings_field_commits_it_first() {
         from,
         clicks: &["settings loupe-memory"],
         commit: LOUPE_3GB,
+        commits: 1,
+        typed: None,
         once: &[],
         loupemem: GB3,
         fields: &[],
@@ -11953,15 +12065,14 @@ fn every_control_that_leaves_a_dirty_settings_field_commits_it_first() {
         Row {
             // Adaptive cleared first (a limit of 4), then `6` typed into the
             // Limit field, then Adaptive clicked again to turn it back on.
-            setup: "400:key:ctrl+,;700:key:ctrl+shift+tab;1000:click:settings readers-adaptive;\
-                    1400:click:settings readers-limit;1700:key:ctrl+a;1900:key:6",
+            setup: DIRTY_LIMIT,
             clicks: &["settings readers-adaptive", "settings readers-limit"],
-            commit: "settings committed performance.max_readers = 6",
+            commit: LIMIT_6,
             once: &["settings committed performance.max_readers = 0"],
-            loupemem: "2147483648",
+            loupemem: GB2,
             fields: &[("readers", "adaptive")],
             order: &[(
-                Mark::Is("settings committed performance.max_readers = 6"),
+                Mark::Is(LIMIT_6),
                 Mark::Is("settings committed performance.max_readers = 0"),
             )],
             ..row(
@@ -12110,6 +12221,156 @@ fn every_control_that_leaves_a_dirty_settings_field_commits_it_first() {
                 Mark::Starts("drive: open:"),
             )
         },
+        // Esc over Loupe memory: the one discard.
+        Row {
+            commits: 0,
+            typed: Some(("loupe-memory", "3")),
+            loupemem: GB2,
+            fields: &[("settings", "false")],
+            ..row(
+                "14",
+                "Esc",
+                "1900:key:escape;2300:dump.after".into(),
+                Mark::Is("drive: key:escape"),
+            )
+        },
+        // The field dimension: Close, the scrim and Esc over the other three.
+        Row {
+            setup: DIRTY_WASH,
+            clicks: &["settings wash", "settings close"],
+            commit: WASH_3,
+            loupemem: GB2,
+            fields: &[("settings", "false"), ("wash", "3"), ("washprop", "0.030")],
+            order: &[(Mark::Is(WASH_3), CLOSED)],
+            ..row(
+                "1-wash",
+                "Close, Selection highlight dirty",
+                "1900:click:settings close;2300:dump.after".into(),
+                Mark::Is("drive: click:settings close"),
+            )
+        },
+        Row {
+            setup: DIRTY_WASH,
+            clicks: &["settings wash"],
+            commit: WASH_3,
+            loupemem: GB2,
+            fields: &[("settings", "true"), ("wash", "3")],
+            order: &[(DIALOG_GAINED, Mark::Is(WASH_3))],
+            ..row(
+                "15-wash",
+                "a click on the scrim, Selection highlight dirty",
+                "1900:click.20,300;2300:dump.after".into(),
+                Mark::Is("drive: click.20,300"),
+            )
+        },
+        Row {
+            setup: DIRTY_WASH,
+            clicks: &["settings wash"],
+            commit: WASH_3,
+            commits: 0,
+            typed: Some(("wash", "3")),
+            loupemem: GB2,
+            fields: &[("settings", "false"), ("wash", "25"), ("washprop", "0.250")],
+            ..row(
+                "14-wash",
+                "Esc, Selection highlight dirty",
+                "1900:key:escape;2300:dump.after".into(),
+                Mark::Is("drive: key:escape"),
+            )
+        },
+        Row {
+            setup: DIRTY_CAP,
+            clicks: &["settings cache-cap", "settings close"],
+            commit: CAP_1GB,
+            loupemem: GB2,
+            fields: &[("settings", "false"), ("cachecap", "1073741824")],
+            order: &[(Mark::Is(CAP_1GB), CLOSED)],
+            ..row(
+                "1-cap",
+                "Close, the cache cap dirty",
+                "1900:click:settings close;2300:dump.after".into(),
+                Mark::Is("drive: click:settings close"),
+            )
+        },
+        Row {
+            setup: DIRTY_CAP,
+            clicks: &["settings cache-cap"],
+            commit: CAP_1GB,
+            loupemem: GB2,
+            fields: &[("settings", "true"), ("cachecap", "1073741824")],
+            order: &[(DIALOG_GAINED, Mark::Is(CAP_1GB))],
+            ..row(
+                "15-cap",
+                "a click on the scrim, the cache cap dirty",
+                "1900:click.20,300;2300:dump.after".into(),
+                Mark::Is("drive: click.20,300"),
+            )
+        },
+        Row {
+            setup: DIRTY_CAP,
+            clicks: &["settings cache-cap"],
+            commit: CAP_1GB,
+            commits: 0,
+            typed: Some(("cache-cap", "1")),
+            loupemem: GB2,
+            fields: &[("settings", "false"), ("cachecap", GB2)],
+            ..row(
+                "14-cap",
+                "Esc, the cache cap dirty",
+                "1900:key:escape;2300:dump.after".into(),
+                Mark::Is("drive: key:escape"),
+            )
+        },
+        Row {
+            setup: DIRTY_LIMIT,
+            clicks: &[
+                "settings readers-adaptive",
+                "settings readers-limit",
+                "settings close",
+            ],
+            commit: LIMIT_6,
+            once: &[LIMIT_4],
+            loupemem: GB2,
+            fields: &[("settings", "false"), ("readers", "limit:6")],
+            order: &[(Mark::Is(LIMIT_6), CLOSED)],
+            ..row(
+                "1-limit",
+                "Close, the Limit dirty",
+                "2300:click:settings close;2700:dump.after".into(),
+                Mark::Is("drive: click:settings close"),
+            )
+        },
+        Row {
+            setup: DIRTY_LIMIT,
+            clicks: &["settings readers-adaptive", "settings readers-limit"],
+            commit: LIMIT_6,
+            once: &[LIMIT_4],
+            loupemem: GB2,
+            fields: &[("settings", "true"), ("readers", "limit:6")],
+            order: &[(DIALOG_GAINED, Mark::Is(LIMIT_6))],
+            ..row(
+                "15-limit",
+                "a click on the scrim, the Limit dirty",
+                "2300:click.20,300;2700:dump.after".into(),
+                Mark::Is("drive: click.20,300"),
+            )
+        },
+        Row {
+            setup: DIRTY_LIMIT,
+            clicks: &["settings readers-adaptive", "settings readers-limit"],
+            commit: LIMIT_6,
+            commits: 0,
+            typed: Some(("readers-limit", "6")),
+            once: &[LIMIT_4],
+            loupemem: GB2,
+            fields: &[("settings", "false"), ("readers", "limit:4")],
+            ..row(
+                "14-limit",
+                "Esc, the Limit dirty",
+                "2300:key:escape;2700:dump.after".into(),
+                Mark::Is("drive: key:escape"),
+            )
+        },
     ];
 
     let check = |row: &Row| {
@@ -12151,19 +12412,43 @@ fn every_control_that_leaves_a_dirty_settings_field_commits_it_first() {
             .iter()
             .rposition(|l| row.from.matches(l))
             .unwrap_or_else(|| panic!("no {:?} step in the trace: {trace}", row.from));
+        if let Some((field, typed)) = row.typed {
+            let tag = format!("settings {field} shows ");
+            let shown = labels[..from]
+                .iter()
+                .rev()
+                .find_map(|l| l.strip_prefix(tag.as_str()));
+            assert_eq!(
+                shown,
+                Some(typed),
+                "the premise: the {field} field did not show the typed `{typed}` when \
+                 the control acted — a discard of text that never reached the field \
+                 proves nothing; trace: {trace}"
+            );
+        }
         let commits = labels.iter().filter(|l| **l == row.commit).count();
         assert_eq!(
-            commits, 1,
-            "`{}` was traced {commits} time(s): the half-typed text commits exactly once \
-             when the control takes the keyboard from it; trace: {trace}",
-            row.commit
+            commits,
+            row.commits,
+            "`{}` was traced {commits} time(s), {} expected: {}; trace: {trace}",
+            row.commit,
+            row.commits,
+            if row.commits == 0 {
+                "Esc DISCARDS the half-typed text, it never commits"
+            } else {
+                "the half-typed text commits exactly once when the control takes the \
+                 keyboard from it"
+            }
         );
-        let committed = labels.iter().position(|l| *l == row.commit);
-        assert!(
-            committed > Some(from),
-            "`{}` came before the control acted — not a click-away commit; trace: {trace}",
-            row.commit
-        );
+        if row.commits == 1 {
+            let committed = labels.iter().position(|l| *l == row.commit);
+            assert!(
+                committed > Some(from),
+                "`{}` came before the control acted — not a click-away commit; trace: \
+                 {trace}",
+                row.commit
+            );
+        }
         let after = qedump(&stderr, "after");
         assert_eq!(
             dump_field(after, "loupemem"),
@@ -12226,9 +12511,9 @@ fn every_control_that_leaves_a_dirty_settings_field_commits_it_first() {
     }
     assert!(
         red.is_empty(),
-        "A CONTROL TOOK THE KEYBOARD FROM A HALF-TYPED FIELD WITHOUT COMMITTING IT FIRST \
-         (settings.md, \"Apply on commit\") — {} of {} rows red, each one's whole message \
-         printed above:\n{}",
+        "A CONTROL TOOK THE KEYBOARD FROM A HALF-TYPED FIELD WITHOUT COMMITTING IT FIRST, \
+         OR ESC COMMITTED WHAT IT MUST DISCARD (settings.md, \"Apply on commit\") — {} of \
+         {} rows red, each one's whole message printed above:\n{}",
         red.len(),
         rows.len(),
         red.join("\n")

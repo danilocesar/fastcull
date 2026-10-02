@@ -516,7 +516,9 @@ their precedence is `fastcull-core`'s; the app binds (brief 008, 2026-10-01).
       Reset resets the active tab only, the field being typed in included
       (its text commits once, first, and the field then shows the
       default) — `settings_tabs_switch_by_keys_and_never_by_digits`,
-      `reset_with_a_half_typed_field_commits_it_then_resets`; every field
+      `reset_with_a_half_typed_field_commits_it_then_resets`, over each of
+      the four number fields (the cap and the Limit since QE 2026-10-02,
+      round 5); every field
       carries its note, core's sentence byte for byte, read from the marks
       the notes emit themselves, and the notes are drawn (the loupe memory
       note's rectangle holds text at the shutter, against the bare card) —
@@ -550,15 +552,22 @@ their precedence is `fastcull-core`'s; the app binds (brief 008, 2026-10-01).
       `Ctrl+Tab`, `Ctrl+Shift+Tab`, the scrim, About or the shortcuts card
       over the dialog, a menu item, a folder opened under it — commits the
       field first, exactly once, then does its own work (the click-away
-      rule of "Apply on commit") — app
+      rule of "Apply on commit") — and `Esc` discards it — app
       `every_control_that_leaves_a_dirty_settings_field_commits_it_first`,
-      one launch per control (Reset, Enter and the `Esc` discard are the
-      tests named above and in AC3; Clear and the menu rows run on Linux
-      only, the default cache sandboxed, the menu bar in the window; the
-      auto-advance checkbox is review-verified until General has a number
-      field to leave half-typed) (QE 2026-10-02, D39, D40: the Adaptive
-      checkbox committed the field and undid its own click, and Close's
-      commit had no guard).
+      one launch per control, every control over Loupe memory, and Close,
+      the scrim and `Esc` over each of the four number fields — Selection
+      highlight, Loupe memory, the Thumbnail cache cap and the read
+      workers' Limit — the rules each field carries its own copy of; an
+      `Esc` row first checks that the field showed the typed text (Reset
+      and Enter are the tests named in AC3 and above; Clear and the menu
+      rows run on Linux only, the default cache sandboxed, the menu bar in
+      the window; the auto-advance checkbox is review-verified until
+      General has a number field to leave half-typed) (QE 2026-10-02, D39,
+      D40: the Adaptive checkbox committed the field and undid its own
+      click, and Close's commit had no guard; QE 2026-10-02, round 5: the
+      matrix drove Loupe memory alone, and taking out the other three
+      fields' copies of Close's commit, the scrim's and Esc's discard left
+      the suite green).
 - [x] **AC5 — a broken file.** A malformed file yields the defaults, a
       status-line and a stderr warning naming the file and the error, and
       is never overwritten in place; the first write moves it aside under
@@ -747,6 +756,9 @@ their precedence is `fastcull-core`'s; the app binds (brief 008, 2026-10-01).
 
 ## History
 
+- 2026-10-02 — QE round 5 of brief 008, the click-away matrix (SC-5): the
+  matrix drives Close, the scrim and Esc over all four number fields, and
+  the Reset test the cap and the Limit; AC3 and AC4 name what each covers.
 - 2026-10-02 — QE round 5 of brief 008, Clear cache (SC-2): the worker
   names its thread, the row and the Clear button report what they show,
   and a clear made to fail is driven; AC12 names what each proves and what
