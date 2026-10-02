@@ -537,7 +537,12 @@ their precedence is `fastcull-core`'s; the app binds (brief 008, 2026-10-01).
       field — `a_commit_that_leaves_the_value_in_force_unchanged_still_reshows_it`
       (QE 2026-10-02, round 5: the field's own `accepted` is the only
       re-show there, and taking it out of any field left the suite green);
-      core
+      a hand edit made while the dialog is closed is applied at its next
+      open — the window's wash takes it, not only the dialog's model, and
+      the reopen's own re-read is traced — app
+      `a_hand_edit_is_applied_when_the_dialog_next_opens` ("Reading"; QE
+      2026-10-02, round 5: with the open's apply taken out the grid kept its
+      old tint beside the new value, and the suite stayed green); core
       `a_written_file_round_trips_every_key`,
       `a_write_preserves_unknown_keys_and_the_users_comments`,
       `a_comment_only_files_comments_stay_at_the_top` (blank lines alone
@@ -763,6 +768,9 @@ their precedence is `fastcull-core`'s; the app binds (brief 008, 2026-10-01).
 
 ## History
 
+- 2026-10-02 — QE round 5 of brief 008, a hand edit applied at the reopen
+  ("Reading"): AC4 names the test that reads the window's wash after a
+  hand edit and a reopen.
 - 2026-10-02 — QE round 5 of brief 008, the value in force re-shown: a
   commit that changes nothing in force, or a refused value, leaves the
   field showing the value in force; AC4 names the test.

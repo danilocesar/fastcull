@@ -12725,6 +12725,99 @@ fn a_malformed_settings_file_yields_defaults_and_is_moved_aside_on_the_first_wri
     std::fs::remove_dir_all(&dir).ok();
 }
 
+/// AC4 and settings.md, "Reading": the file is read again at every open of
+/// the dialog and what it says is APPLIED at that open — docs/settings.md:
+/// "A hand edit takes effect when you next open the dialog". The file says
+/// `selection_wash = 40` at launch; the dialog is opened and closed; a
+/// helper thread then rewrites the file by hand to 10 — anchored on the
+/// app's own `settings closed` line (the issue #50 way, as the D26 test
+/// does), a second before the reopen — and the reopen applies it: the
+/// WINDOW's `selection-wash-opacity` reads 0.100 (`washprop=`), not only the
+/// model. `wash=10` at the reopen is the PREMISE that the re-read saw the
+/// edit, so a hand edit that lost its race fails on that, with its own
+/// message, never as a false pass; and the reopen traced `settings loaded
+/// from <path>` after its own `Ctrl+,` — the re-read happened (QE
+/// 2026-10-02, round 5: with the open's apply taken out, the grid kept its
+/// old tint beside the new value in the dialog, and the suite stayed
+/// green).
+///
+/// Mutant (2026-10-02): `apply_instant` taken out of the bridge's
+/// `on_settings_open` → `dump.reopened` reads `washprop=0.400` beside
+/// `wash=10` — red.
+#[test]
+fn a_hand_edit_is_applied_when_the_dialog_next_opens() {
+    if !has_display() {
+        eprintln!("screenshot smoke skipped: no display server");
+        return;
+    }
+    let _s = serial();
+    let dir = settings_scratch("reopen-edit", Some("[ui]\nselection_wash = 40\n"));
+    let file = dir.join("settings.toml");
+    // The helper waits for the drain thread's signal; when the run ends the
+    // sender goes with the drain thread, so a mark that never came ends the
+    // wait at once rather than at a timeout.
+    let (closed_tx, closed_rx) = std::sync::mpsc::channel::<()>();
+    let editor = {
+        let file = file.clone();
+        std::thread::spawn(move || {
+            if closed_rx.recv().is_ok() {
+                std::fs::write(&file, "[ui]\nselection_wash = 10\n").unwrap();
+            }
+        })
+    };
+    let out = out_dir().join("settings-reopen-edit.jpg");
+    let script = "900:key:ctrl+,;1300:dump.first;1600:key:escape;2600:key:ctrl+,;\
+                  3000:dump.reopened";
+    let mut signalled = false;
+    let stderr = shoot_env_stderr_watching(
+        &["--synthetic", "24"],
+        &[
+            ("FASTCULL_TRACE", "1"),
+            ("FASTCULL_CONFIG_DIR", dir.to_str().unwrap()),
+            ("FASTCULL_DRIVE", script),
+        ],
+        &out,
+        // The FIRST close only.
+        move |line| {
+            if !signalled && line.contains("] settings closed") {
+                signalled = true;
+                let _ = closed_tx.send(());
+            }
+        },
+    );
+    editor.join().unwrap();
+    let first = qedump(&stderr, "first");
+    assert!(
+        dump_field(first, "wash") == "40" && dump_field(first, "washprop") == "0.400",
+        "the file read at launch was not applied: {first}"
+    );
+    let reopened = qedump(&stderr, "reopened");
+    assert_eq!(
+        dump_field(reopened, "wash"),
+        "10",
+        "the premise: the reopen's re-read did not see the hand edit (it landed late, \
+         or not at all), so the window's wash below would prove nothing:\n{stderr}"
+    );
+    let labels = mark_labels(&stderr);
+    let reopen = labels
+        .iter()
+        .rposition(|l| *l == "drive: key:ctrl+,")
+        .unwrap_or_else(|| panic!("no second `drive: key:ctrl+,`:\n{stderr}"));
+    let loaded = format!("settings loaded from {}", file.display());
+    assert!(
+        labels[reopen..].contains(&loaded.as_str()),
+        "the reopen did not re-read the file — no `{loaded}` after its Ctrl+,:\n{stderr}"
+    );
+    assert_eq!(
+        dump_field(reopened, "washprop"),
+        "0.100",
+        "the hand edit reached the dialog's model but not the WINDOW — the grid kept \
+         its old tint (settings.md, \"Reading\": what the file says is applied at that \
+         open):\n{stderr}"
+    );
+    std::fs::remove_dir_all(&dir).ok();
+}
+
 /// AC5, a read error NEWER than the move-aside (settings.md, "Writing"; QE
 /// 2026-10-01, D26): a file broken at launch is moved aside by the first
 /// commit and a fresh one written; a hand edit then breaks the FRESH file
