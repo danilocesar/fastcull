@@ -12744,6 +12744,25 @@ fn templates_and_ui_prefs_are_read_from_the_one_config_dir() {
 /// dir now receives a written file (`= 4`, then `= 6`); the byte-equality
 /// check above concerns the OTHER dir.
 ///
+/// The locked run also reads the row's NOTE and clicks its Adaptive box
+/// (QE 2026-10-02, round 5: AC7's "and its note" had no reader, and the
+/// box's lock no guard — with the note presented empty, or the lock taken
+/// out of the box, the whole suite stayed green). The note is read from the
+/// mark its own Text emits when it is created, `settings note readers-env
+/// shows <text>` — once, before `dump.perf` — and compared with core's
+/// `environment_note`, whose wording `the_environment_note_is_the_specs_sentence`
+/// pins to the spec's sentence (this test, comparing with the same
+/// function, cannot see a reworded note; core can). The `abc` run, its
+/// variable ignored, shows no such line. And the Adaptive box is locked like
+/// the field: a click on it commits nothing — no `settings committed
+/// performance.max_readers`, no `settings written` — and the box does not
+/// end up flipped (no `settings readers-adaptive shows` after the click).
+/// It is a click because the Tab ring never lands on the locked box (its
+/// `slot-ok` skips the slot). `readers=env:3` at `dump.typed` is the
+/// PREMISE, not the guard: the dump resolves the environment over whatever
+/// the model holds, so it reads `env:3` even after a click that rewrote the
+/// file — what turns red is the commit, the write and the file.
+///
 /// A fourth run proves the environment never reaches the file (settings.md,
 /// "Writing"; the user, 2026-10-02, brief 008 D42: "make sure that
 /// environment variables don't rewrite settings"): under
@@ -12765,6 +12784,18 @@ fn templates_and_ui_prefs_are_read_from_the_one_config_dir() {
 /// 4's G2): the `!root.settings-readers-adaptive &&` term dropped from the
 /// Limit field's `enabled` → the first click focuses the field, `6` and
 /// Enter commit, and `dump.limitoff` reads `readers=limit:6` — red.
+/// Mutants (2026-10-02, QE round 5), each alone: the bridge's `present`
+/// writing an empty environment note → no `settings note readers-env shows`
+/// mark — red (traced 0 times); the warning Text taken out of `SettingRow`
+/// → the same — red; `enabled: !root.settings-readers-locked` taken out of
+/// the Adaptive box → the click commits `max_readers = 0`, `settings
+/// written` follows and the file reads `max_readers = 0` — red at the
+/// commit. Under that mutant no `shows` mark fires either way: the box goes
+/// false → true → false inside the click's one event-loop iteration (the
+/// commit re-presents the environment's state through `<=>`), which a
+/// `changed` handler cannot see (Cargo.toml, the fourth canary's fact 5) —
+/// so the `shows` check holds the box to its state only against a flip that
+/// STAYS, and the commit, the write and the file are the lock's guards.
 #[test]
 fn the_environment_wins_over_the_settings_file_for_read_workers() {
     if !has_display() {
@@ -12790,11 +12821,12 @@ fn the_environment_wins_over_the_settings_file_for_read_workers() {
             &out_dir().join(shot),
         )
     };
-    // The locked run also tries to type a limit into the field.
+    // The locked run also tries to type a limit into the field, and then
+    // clicks the Adaptive box.
     let typing = format!(
         "{open_folder};600:wait:read pool started floor 3 cap 3;{open};\
          2200:click:settings readers-limit;2500:key:ctrl+a;2700:key:9;\
-         2900:key:return;3300:dump.typed"
+         2900:key:return;3200:click:settings readers-adaptive;3600:dump.typed"
     );
     let stderr = run(&dir, "3", &typing, "settings-readers-env.jpg");
     assert!(
@@ -12814,11 +12846,50 @@ fn the_environment_wins_over_the_settings_file_for_read_workers() {
         "the file's 7 governs although FASTCULL_MAX_READERS=3 is set:\n{stderr}"
     );
     assert_eq!(dump_text(perf, "readersenv"), "3");
+    // The environment's note is ON SCREEN, core's sentence byte for byte:
+    // the row's own line reports itself when it is created, once per open.
+    let labels = mark_labels(&stderr);
+    let perf_at = labels
+        .iter()
+        .position(|l| *l == "drive: dump.perf")
+        .unwrap_or_else(|| panic!("no `drive: dump.perf` step:\n{stderr}"));
+    let note = format!(
+        "settings note readers-env shows {}",
+        fastcull_core::settings::environment_note(fastcull_core::settings::MAX_READERS_VAR)
+    );
+    let shown = labels[..perf_at].iter().filter(|l| **l == note).count();
+    assert_eq!(
+        shown, 1,
+        "the read workers row did not show the environment's note once before \
+         `dump.perf` — `{note}` traced {shown} time(s) (settings.md, \"Environment \
+         precedence\"):\n{stderr}"
+    );
     let typed = qedump(&stderr, "typed");
     assert_eq!(
         dump_field(typed, "readers"),
         "env:3",
         "the read-only field took a value while the environment governs it:\n{stderr}"
+    );
+    // The Adaptive box is locked too: its click resolved on the box, and
+    // the box neither flipped nor committed anything.
+    assert_click_resolved(&stderr, "settings readers-adaptive");
+    assert!(
+        !labels
+            .iter()
+            .any(|l| l.starts_with("settings committed performance.max_readers")),
+        "a read workers control committed while FASTCULL_MAX_READERS governs the row \
+         — the file's own `max_readers = 7` would be rewritten:\n{stderr}"
+    );
+    let clicked = labels
+        .iter()
+        .rposition(|l| *l == "drive: click:settings readers-adaptive")
+        .unwrap_or_else(|| panic!("no click on the Adaptive box:\n{stderr}"));
+    assert!(
+        !labels[clicked..]
+            .iter()
+            .any(|l| l.starts_with("settings readers-adaptive shows ")),
+        "the Adaptive box flipped under a click while FASTCULL_MAX_READERS governs \
+         the row:\n{stderr}"
     );
     assert_eq!(
         mark_lines(&stderr, "settings written "),
@@ -12845,6 +12916,12 @@ fn the_environment_wins_over_the_settings_file_for_read_workers() {
         "an unparsable FASTCULL_MAX_READERS was not ignored — the file must govern:\n{stderr}"
     );
     assert_eq!(dump_text(perf, "readersenv"), "abc");
+    assert!(
+        !mark_labels(&stderr)
+            .iter()
+            .any(|l| l.starts_with("settings note readers-env shows ")),
+        "the environment's note is on screen though the variable is ignored:\n{stderr}"
+    );
     assert_eq!(
         std::fs::read_to_string(dir.join("settings.toml")).unwrap(),
         "[performance]\nmax_readers = 7\n",

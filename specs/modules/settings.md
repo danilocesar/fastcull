@@ -632,6 +632,16 @@ their precedence is `fastcull-core`'s; the app binds (brief 008, 2026-10-01).
       app test's third run, a click and `6`, Enter, before and after
       clearing Adaptive (QE 2026-10-02, round 4 D41: with the Adaptive term
       dropped from the field's `enabled` the suite had stayed green); the
+      environment's note is on screen while the variable governs, core's
+      sentence byte for byte — the same app test reads the mark the note's
+      own Text emits, `settings note readers-env shows …`, in the first run
+      and its absence in the second, and core
+      `the_environment_note_is_the_specs_sentence` pins the wording — and the
+      Adaptive box is locked with the field: in the first run a click on it
+      commits nothing and writes nothing (QE 2026-10-02, round 5: with the
+      note presented empty, or the box's lock taken out — a click then
+      rewrote the file's own `max_readers = 7` to 0 — the suite had stayed
+      green); the
       environment never reaches the file — under `FASTCULL_MAX_READERS=3` a
       commit of another setting saves the file's own `max_readers = 7` —
       core `the_environment_never_reaches_the_settings_file` (a test binary
@@ -722,6 +732,10 @@ their precedence is `fastcull-core`'s; the app binds (brief 008, 2026-10-01).
 
 ## History
 
+- 2026-10-02 — QE round 5 of brief 008, the environment's row (SC-3): AC7's
+  note and the Adaptive box's lock under the variable get their guards —
+  the note reports itself, and AC7 names what reads it and the click that
+  proves the lock.
 - 2026-10-02 — QE round 5 of brief 008, bookkeeping (SC-1, SC-7) and the
   config dir's tail: AC16 ticked on QE's three idle release runs; "Read
   workers" and the Contracts name the wrapper both binaries call beside the

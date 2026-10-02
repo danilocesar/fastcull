@@ -225,7 +225,10 @@ sidecars — scripts target throwaway copies of test data only.
   auto-advance|wash|loupe-memory|cache-cap|readers|clear-cache shows
   <text>` from each note Text itself, when the dialog creates it and
   whenever its text changes — what the note says, never what the bridge
-  meant it to (QE 2026-10-01, D22); `settings cache clearing` when the
+  meant it to (QE 2026-10-01, D22) — and `settings note readers-env shows
+  <text>` likewise from the read workers row's environment line, which
+  exists only while `FASTCULL_MAX_READERS` governs the row (QE 2026-10-02,
+  round 5); `settings cache clearing` when the
   row turns to `Clearing…` and `settings cache cleared <before> ->
   <after>` (bytes) when the worker is done — the order of the two is the
   driven proof of the `Clearing…` state (QE 2026-10-01, D24); `loupe
@@ -466,6 +469,8 @@ shot 2.
 
 ## History
 
+- 2026-10-02 — QE round 5 of brief 008: `settings note readers-env shows`,
+  the environment's line on the read workers row.
 - 2026-10-02 — QE round 4 of brief 008 (D45; re-review RR-F6):
   `FASTCULL_CONFIG_DIR` is for every test that reads or writes a config
   file, as settings.md AC6 already said.

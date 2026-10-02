@@ -276,11 +276,19 @@ component SettingRow inherits VerticalLayout {
         }
         @children
     }
+    // The environment's line reports itself like the note below, under the
+    // row's name and `-env` (`settings note readers-env shows …`): it is
+    // created only while a variable governs the row, so its own `init` is
+    // the proof it is on screen (QE 2026-10-02, round 5: with the bridge
+    // presenting it empty the card lost the line and the suite stayed
+    // green).
     if root.warning != "": Text {
         text: root.warning;
         color: #ffb84d;
         font-size: 11px;
         wrap: word-wrap;
+        init => { root.note-shown(root.name + "-env", self.text); }
+        changed text => { root.note-shown(root.name + "-env", self.text); }
     }
     Text {
         text: root.note;

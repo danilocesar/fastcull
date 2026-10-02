@@ -2054,6 +2054,23 @@ mod tests {
         assert_eq!(parse_mem_total("MemTotal: lots kB\n"), None, "not a number");
     }
 
+    /// The read-only field's note is settings.md's sentence, byte for byte
+    /// ("Environment precedence") — the one home of the wording the dialog
+    /// shows while `FASTCULL_MAX_READERS` governs the row. The driven
+    /// read-workers test compares the note ON SCREEN with this function, so
+    /// a changed wording would pass there; here it cannot (QE 2026-10-02,
+    /// round 5).
+    ///
+    /// Mutant (2026-10-02): the format string's dash turned into a comma →
+    /// red.
+    #[test]
+    fn the_environment_note_is_the_specs_sentence() {
+        assert_eq!(
+            environment_note(MAX_READERS_VAR),
+            "Set by FASTCULL_MAX_READERS in your environment — unset it to change this here"
+        );
+    }
+
     /// The environment wins over the file; a value that is not an integer
     /// ≥ 1 is ignored and the file governs (settings.md, "Environment
     /// precedence").
