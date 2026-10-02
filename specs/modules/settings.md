@@ -279,7 +279,12 @@ their precedence is `fastcull-core`'s; the app binds (brief 008, 2026-10-01).
   was silent on Close; Manager-accepted under M2, senior-developer review
   2026-10-01). A field commits only what the user typed into it, never a
   text it is merely showing, and it shows the value in force whenever the
-  keyboard leaves it (senior-developer review F1, 2026-10-01).
+  keyboard leaves it (senior-developer review F1, 2026-10-01). A control
+  bound to its setting both ways — the two checkboxes — reads its own new
+  state before anything that can present the settings anew, the flush of a
+  half-typed field included, so the click's own work is the state the click
+  left, never the one a commit put back (QE 2026-10-02, D39: a checkbox
+  clicked over a half-typed field committed the field and undid the click).
 
 ### The settings
 
@@ -482,7 +487,20 @@ their precedence is `fastcull-core`'s; the app binds (brief 008, 2026-10-01).
       — app `a_failed_settings_write_keeps_the_commit_and_the_next_open_does_not_reread`;
       a commit or a Reset that changes nothing creates no file — app
       `a_no_change_commit_or_reset_never_creates_the_file` (QE 2026-10-01,
-      D4).
+      D4); every control that takes the keyboard from a half-typed field —
+      Close, Clear, a checkbox, another field, a tab, `Tab`, `Shift+Tab`,
+      `Ctrl+Tab`, `Ctrl+Shift+Tab`, the scrim, About or the shortcuts card
+      over the dialog, a menu item, a folder opened under it — commits the
+      field first, exactly once, then does its own work (the click-away
+      rule of "Apply on commit") — app
+      `every_control_that_leaves_a_dirty_settings_field_commits_it_first`,
+      one launch per control (Reset, Enter and the `Esc` discard are the
+      tests named above and in AC3; Clear and the menu rows run on Linux
+      only, the default cache sandboxed, the menu bar in the window; the
+      auto-advance checkbox is review-verified until General has a number
+      field to leave half-typed) (QE 2026-10-02, D39, D40: the Adaptive
+      checkbox committed the field and undid its own click, and Close's
+      commit had no guard).
 - [x] **AC5 — a broken file.** A malformed file yields the defaults, a
       status-line and a stderr warning naming the file and the error, and
       is never overwritten in place; the first write moves it aside under
@@ -628,6 +646,11 @@ their precedence is `fastcull-core`'s; the app binds (brief 008, 2026-10-01).
 
 ## History
 
+- 2026-10-02 — QE round 4 of brief 008, the click-away family (D39, D40;
+  brief 008 D39): a checkbox clicked over a half-typed field committed the
+  field and undid the click; "Apply on commit" says a control bound both
+  ways reads its own state before anything can present, and AC4 names the
+  one test that drives every control which leaves a half-typed field.
 - 2026-10-01 — QE round 3 of brief 008, the card with the cache on (D38):
   the tallest state counts the Thumbnail cache row showing a long path, the
   fit test runs it on Linux, and the box says what stays review-verified.

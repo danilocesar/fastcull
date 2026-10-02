@@ -3305,6 +3305,13 @@ export component MainWindow inherits Window {
         // leaves the field and the blur reads it. After a commit every
         // field shows the value in force, never the raw text.
         //
+        // A control bound to its setting both ways (`<=>`: the two
+        // checkboxes) reads its own state BEFORE anything that can present
+        // — `flush()` included: a commit writes every property from the
+        // model, and the binding carries the model's old value straight
+        // back into the control before its handler has committed the new
+        // one (Cargo.toml's fourth canary, fact 7; QE 2026-10-02, D39).
+        //
         // A field commits only what the USER typed — its `dirty` flag, set
         // by LineEdit's `edited` — never a text that merely differs from
         // the value in force, and every blur re-shows the value in force.
@@ -3601,9 +3608,28 @@ export component MainWindow inherits Window {
                                 set-auto-advance := CheckBox {
                                     checked <=> root.settings-auto-advance;
                                     toggled => {
+                                        // The click's own state, read BEFORE the
+                                        // flush: the flush's commit presents every
+                                        // property from the model, and through `<=>`
+                                        // that puts the state the model still holds
+                                        // back into `checked` — the CheckBox flips
+                                        // `checked` before it calls `toggled`
+                                        // (Cargo.toml, the fourth canary's fact 7) —
+                                        // so a handler that read it afterwards
+                                        // committed the state the click had just
+                                        // left (QE 2026-10-02, D39). The field
+                                        // commits first, then the click does its own
+                                        // work (settings.md, "Apply on commit").
+                                        let want = self.checked;
                                         settings-keys.flush();
                                         self.focus();
-                                        root.settings-commit("auto_advance", self.checked ? "true" : "false");
+                                        root.settings-commit("auto_advance", want ? "true" : "false");
+                                    }
+                                    // What the box SHOWS, for a driven run
+                                    // (test-harness.md): the dump's
+                                    // `autoadvance=` is the model's.
+                                    changed checked => {
+                                        root.dbg-note("settings auto-advance shows " + (self.checked ? "true" : "false"));
                                     }
                                     changed has-focus => {
                                         if (self.has-focus) {
@@ -3843,9 +3869,20 @@ export component MainWindow inherits Window {
                                     checked <=> root.settings-readers-adaptive;
                                     enabled: !root.settings-readers-locked;
                                     toggled => {
+                                        // Read before the flush, as the auto-advance
+                                        // box does and for its reason (QE
+                                        // 2026-10-02, D39: Loupe memory typed `3`,
+                                        // then a click here, committed 3 GB and then
+                                        // `max_readers = 0` — the click undone).
+                                        let want = self.checked;
                                         settings-keys.flush();
                                         self.focus();
-                                        root.settings-commit("readers_adaptive", self.checked ? "true" : "false");
+                                        root.settings-commit("readers_adaptive", want ? "true" : "false");
+                                    }
+                                    // What the box SHOWS (test-harness.md): the
+                                    // dump's `readers=` is the model's.
+                                    changed checked => {
+                                        root.dbg-note("settings readers-adaptive shows " + (self.checked ? "true" : "false"));
                                     }
                                     changed has-focus => {
                                         if (self.has-focus) {

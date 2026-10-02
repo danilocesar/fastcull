@@ -859,7 +859,12 @@ event-loop iteration fires nothing (`properties/change_tracker.rs`, read
 typed); a `TextInput` selects all only on a Tab-navigation focus, never on
 a `focus()` from code (`items/text.rs:1180`, read 2026-10-01 for
 settings.md's keyboard ring: why the ring selects a number field itself;
-QE D33).
+QE D33); the fluent `CheckBox` flips `checked` before it calls `toggled`,
+and a two-way binding carries a synchronous write of the bound property
+straight into the box, so a `toggled` handler that first re-presents
+that property reads the old state (`widgets/fluent/checkbox.slint`, read
+2026-10-02 for settings.md's checkboxes: why they read their state before
+the flush; QE D39).
 
 ## Contracts
 

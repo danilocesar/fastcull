@@ -11722,6 +11722,507 @@ fn reset_with_a_half_typed_field_commits_it_then_resets() {
     );
 }
 
+/// AC4 (settings.md, "Apply on commit"): every control that takes the
+/// keyboard from a number field holding typed, uncommitted text is a
+/// click-away — the field's text commits FIRST, exactly once, and then the
+/// control does its own work; only `Esc` discards. One launch per row, and
+/// the same dirty field in all but one (Loupe memory, showing `2 GB`, `3`
+/// typed, no Enter), so every row reads the same commit. The next unit's
+/// control joins by adding a row — on a tab that has a number field.
+///
+/// The rows are the matrix of the senior developer's diagnosis of QE round 4
+/// (brief 008 D39), numbered as there: 1 Close; 3 Clear (Linux only: the
+/// default cache sandboxed under HOME and XDG_CACHE_HOME, brief 008 D24);
+/// 4 the Adaptive checkbox; 4b the Adaptive checkbox with the Limit field
+/// dirty instead; 6 a click into another field; 7 a click on a tab; 8
+/// Ctrl+Tab; 9 Ctrl+Shift+Tab; 11 Tab; 12 Shift+Tab; 15 a click on the
+/// scrim; 16 About over the dialog by its token; 17 About and 18 the
+/// shortcuts card from the Help menu, and 19 View › IPTC Panel (Linux only:
+/// the in-window menu bar, `menu_clicks_are_calibrated`); 20 a folder opened
+/// under the dialog. Pinned by other tests and not re-run here: 2 Reset
+/// (`reset_with_a_half_typed_field_commits_it_then_resets`), 13 Enter
+/// (`a_number_typed_after_tab_replaces_the_value_in_the_field`) and 14 Esc,
+/// the one discard (`a_settings_commit_writes_the_file_and_esc_discards_a_half_typed_field`).
+/// Unreachable today: 5, the auto-advance checkbox — General has no number
+/// field, and a field dirty on another tab is committed by the tab switch
+/// before General shows; its `toggled` reads its state before the flush as
+/// the Adaptive box's does, review-verified by that shape until General
+/// gains a number field and the row can be added — and 10, Left/Right on
+/// the strip: the dirty field holds the keyboard, and the strip is reached
+/// only by row 12 or by a click, each of which commits first. Not shipped:
+/// a click on the strip's empty background, which reports no rectangle, so
+/// its point would be a coordinate measured on one platform (issue #70).
+/// Window deactivation with a dirty field cannot be driven; settings.md's
+/// click-away rule covers it, source-verified (brief 008 D39).
+///
+/// Each row reads: the commit, counted over the whole run by its EXACT mark
+/// (`= 4` must never match `= 40`) and placed after the control's first
+/// step; `loupemem=`; the row's own dump fields; and — where the matrix
+/// names one — an ORDER on the one trace stream after that step. The order is the guard wherever a `flush()` in the
+/// control's handler is what commits: without it the field's own deferred
+/// blur still commits, but one event-loop iteration later, after the
+/// gaining element's focus mark (Cargo.toml, the second canary's fact 1:
+/// the gainer's `changed has-focus` runs before the loser's). Every row
+/// runs even when one is red, and the test fails naming each red row.
+///
+/// RED on a377405, the head before the fix (QE round 4, D39, deterministic;
+/// reproduced by the senior developer 5/5 and 2/2): row 4 read
+/// `readers=adaptive`, the trace saying `settings committed
+/// performance.loupe_memory = 3 GB` and then `… max_readers = 0` — the
+/// click undone — and row 4b read `readers=limit:6` with `… max_readers =
+/// 6` traced twice. The fluent CheckBox flips `checked` and then calls
+/// `toggled`; the handler flushed first, the flush's commit ran
+/// `present()`, which wrote the model's old value into
+/// `settings-readers-adaptive`, and `checked <=>` carried it back into the
+/// box before the handler read `self.checked` (Cargo.toml, the fourth
+/// canary's fact 7). When row 4 or 4b fails that way it is that defect; do
+/// not quiet it.
+///
+/// Mutants (2026-10-02), each applied alone to main.slint, rebuilt, run and
+/// restored byte for byte:
+/// - both checkboxes reading `self.checked` after the flush again, no
+///   `want` (a377405's shape) → rows 4 and 4b red, as on a377405;
+/// - `flush()` out of Close's `clicked` → row 1: the commit traced 0
+///   times — `settings-close` hides the dialog before the blur runs, so the
+///   blur took the `Esc` path and discarded;
+/// - `flush()` out of `go-to-tab` → rows 7, 8 and 9, by order: the strip's
+///   `gained` first, the blur's late commit after it;
+/// - `flush()` out of `walk` → row 12, by order. Row 11 stays GREEN under
+///   it: the ring lands on a field, which traces no focus mark, and the
+///   field's blur commits 7 ms later with the same outcome — so row 11
+///   guards that Tab commits at all, and is red only with `walk`'s flush
+///   AND the field's blur commit both gone;
+/// - `flush()` out of Clear's `clicked` → row 3, by order;
+/// - the Loupe memory field's own blur commit removed (the belt) → rows 6,
+///   15, 16, 17, 18, 19 and 20, the commit traced 0 times: the rows the
+///   belt alone guarantees.
+#[test]
+fn every_control_that_leaves_a_dirty_settings_field_commits_it_first() {
+    if !has_display() {
+        eprintln!("screenshot smoke skipped: no display server");
+        return;
+    }
+    let _s = serial();
+
+    /// A trace mark, matched EXACTLY, or by its contractual prefix
+    /// (`load settled gen N: …`, whose tail is free to differ).
+    #[derive(Clone, Copy, Debug)]
+    enum Mark {
+        Is(&'static str),
+        Starts(&'static str),
+    }
+    impl Mark {
+        fn matches(self, label: &str) -> bool {
+            match self {
+                Mark::Is(mark) => label == mark,
+                Mark::Starts(mark) => label.starts_with(mark),
+            }
+        }
+    }
+    /// One control acted on while a number field holds typed text.
+    struct Row {
+        /// The row's number in the matrix (see the doc above).
+        row: &'static str,
+        control: &'static str,
+        /// The script up to the dirty field.
+        setup: &'static str,
+        /// The control's own steps, then `dump.after`.
+        steps: String,
+        /// The control's first step as the harness echoes it (its LAST
+        /// echo: a setup may hold the same step): the commit must come
+        /// after it, and every order is read after it.
+        from: Mark,
+        /// The named elements the row clicks; each must resolve inside its
+        /// rectangle.
+        clicks: &'static [&'static str],
+        /// The dirty field's commit: exactly once, after `from`.
+        commit: &'static str,
+        /// Other commits the row expects exactly once.
+        once: &'static [&'static str],
+        /// `loupemem=` at `dump.after`.
+        loupemem: &'static str,
+        /// The row's own fields at `dump.after`.
+        fields: &'static [(&'static str, &'static str)],
+        /// Marks that must come in this order after `from`, each pair.
+        order: &'static [(Mark, Mark)],
+        /// With the default thumbnail cache, sandboxed — Linux only.
+        cache: bool,
+        /// Through the in-window menu bar — Linux only.
+        menu: bool,
+    }
+
+    // Settings open on Performance, `3` typed into Loupe memory (it shows
+    // `2 GB`), no Enter.
+    const DIRTY_LOUPE: &str = "400:key:ctrl+,;700:key:ctrl+shift+tab;\
+                               1000:click:settings loupe-memory;1300:key:ctrl+a;1500:key:3";
+    const LOUPE_3GB: &str = "settings committed performance.loupe_memory = 3 GB";
+    const GB3: &str = "3221225472";
+    const STRIP_GAINED: Mark = Mark::Is("focus: settings strip gained");
+    let row = |row: &'static str, control: &'static str, steps: String, from: Mark| Row {
+        row,
+        control,
+        setup: DIRTY_LOUPE,
+        steps,
+        from,
+        clicks: &["settings loupe-memory"],
+        commit: LOUPE_3GB,
+        once: &[],
+        loupemem: GB3,
+        fields: &[],
+        order: &[],
+        cache: false,
+        menu: false,
+    };
+    let folder = out_dir().join("click-away-folder");
+    std::fs::remove_dir_all(&folder).ok();
+    std::fs::create_dir_all(&folder).unwrap();
+    place_fixture(
+        &raws_dir().join("A1_full_compressed.ARW"),
+        &folder.join("one.ARW"),
+    );
+    let home = out_dir().join("click-away-cache-home");
+    std::fs::remove_dir_all(&home).ok();
+    // Gone however the test ends, a red row included.
+    struct RemoveOnDrop(Vec<PathBuf>);
+    impl Drop for RemoveOnDrop {
+        fn drop(&mut self) {
+            for dir in &self.0 {
+                std::fs::remove_dir_all(dir).ok();
+            }
+        }
+    }
+    let _cleanup = RemoveOnDrop(vec![folder.clone(), home.clone()]);
+
+    let rows = vec![
+        Row {
+            clicks: &["settings loupe-memory", "settings close"],
+            fields: &[("settings", "false")],
+            order: &[(Mark::Is(LOUPE_3GB), Mark::Is("settings closed"))],
+            ..row(
+                "1",
+                "Close",
+                "1900:click:settings close;2300:dump.after".into(),
+                Mark::Is("drive: click:settings close"),
+            )
+        },
+        Row {
+            clicks: &["settings loupe-memory", "settings clear-cache"],
+            order: &[(Mark::Is(LOUPE_3GB), Mark::Is("settings cache clearing"))],
+            cache: true,
+            ..row(
+                "3",
+                "Clear",
+                "1900:click:settings clear-cache;2000:wait:settings cache cleared;2300:dump.after"
+                    .into(),
+                Mark::Is("drive: click:settings clear-cache"),
+            )
+        },
+        Row {
+            clicks: &["settings loupe-memory", "settings readers-adaptive"],
+            once: &["settings committed performance.max_readers = 4"],
+            fields: &[("readers", "limit:4")],
+            order: &[
+                (
+                    Mark::Is(LOUPE_3GB),
+                    Mark::Is("settings committed performance.max_readers = 4"),
+                ),
+                (
+                    Mark::Is("settings committed performance.max_readers = 4"),
+                    Mark::Is("settings readers-adaptive shows false"),
+                ),
+            ],
+            ..row(
+                "4",
+                "the Adaptive checkbox",
+                "1900:click:settings readers-adaptive;2300:dump.after".into(),
+                Mark::Is("drive: click:settings readers-adaptive"),
+            )
+        },
+        Row {
+            // Adaptive cleared first (a limit of 4), then `6` typed into the
+            // Limit field, then Adaptive clicked again to turn it back on.
+            setup: "400:key:ctrl+,;700:key:ctrl+shift+tab;1000:click:settings readers-adaptive;\
+                    1400:click:settings readers-limit;1700:key:ctrl+a;1900:key:6",
+            clicks: &["settings readers-adaptive", "settings readers-limit"],
+            commit: "settings committed performance.max_readers = 6",
+            once: &["settings committed performance.max_readers = 0"],
+            loupemem: "2147483648",
+            fields: &[("readers", "adaptive")],
+            order: &[(
+                Mark::Is("settings committed performance.max_readers = 6"),
+                Mark::Is("settings committed performance.max_readers = 0"),
+            )],
+            ..row(
+                "4b",
+                "the Adaptive checkbox, the Limit field dirty",
+                "2300:click:settings readers-adaptive;2700:dump.after".into(),
+                Mark::Is("drive: click:settings readers-adaptive"),
+            )
+        },
+        Row {
+            clicks: &["settings loupe-memory", "settings cache-cap"],
+            fields: &[("cachecap", "1073741824")],
+            ..row(
+                "6",
+                "a click into another field",
+                "1900:click:settings cache-cap;2200:key:ctrl+a;2400:key:1;2600:key:return;\
+                 2900:dump.after"
+                    .into(),
+                Mark::Is("drive: click:settings cache-cap"),
+            )
+        },
+        Row {
+            clicks: &["settings loupe-memory", "settings tab ui"],
+            fields: &[("settingstab", "1")],
+            order: &[(Mark::Is(LOUPE_3GB), STRIP_GAINED)],
+            ..row(
+                "7",
+                "a click on a tab",
+                "1900:click:settings tab ui;2300:dump.after".into(),
+                Mark::Is("drive: click:settings tab ui"),
+            )
+        },
+        Row {
+            fields: &[("settingstab", "0")],
+            order: &[(Mark::Is(LOUPE_3GB), STRIP_GAINED)],
+            ..row(
+                "8",
+                "Ctrl+Tab",
+                "1900:key:ctrl+tab;2300:dump.after".into(),
+                Mark::Is("drive: key:ctrl+tab"),
+            )
+        },
+        Row {
+            fields: &[("settingstab", "1")],
+            order: &[(Mark::Is(LOUPE_3GB), STRIP_GAINED)],
+            ..row(
+                "9",
+                "Ctrl+Shift+Tab",
+                "1900:key:ctrl+shift+tab;2300:dump.after".into(),
+                Mark::Is("drive: key:ctrl+shift+tab"),
+            )
+        },
+        Row {
+            // The ring lands on the Thumbnail cache cap and selects it, so
+            // the `1` replaces `2 GB`.
+            fields: &[("cachecap", "1073741824")],
+            ..row(
+                "11",
+                "Tab",
+                "1900:key:tab;2200:key:1;2400:key:return;2700:dump.after".into(),
+                Mark::Is("drive: key:tab"),
+            )
+        },
+        Row {
+            // Back to the strip; the Right that follows switches tabs.
+            fields: &[("settingstab", "0")],
+            order: &[(Mark::Is(LOUPE_3GB), STRIP_GAINED)],
+            ..row(
+                "12",
+                "Shift+Tab",
+                "1900:key:shift+tab;2200:key:right;2600:dump.after".into(),
+                Mark::Is("drive: key:shift+tab"),
+            )
+        },
+        Row {
+            // The scrim reports no rectangle; x 20 is outside the 560 px
+            // card on every window the app supports. The dialog's scope
+            // takes the keyboard (brief 008 D19) and the field's blur
+            // commits.
+            fields: &[("settings", "true")],
+            order: &[(
+                Mark::Is("focus: settings dialog gained"),
+                Mark::Is(LOUPE_3GB),
+            )],
+            ..row(
+                "15",
+                "a click on the scrim",
+                "1900:click.20,300;2300:dump.after".into(),
+                Mark::Is("drive: click.20,300"),
+            )
+        },
+        Row {
+            fields: &[("about", "true"), ("settings", "true")],
+            order: &[(STRIP_GAINED, Mark::Is(LOUPE_3GB))],
+            ..row(
+                "16",
+                "About over the dialog, by its token",
+                "1900:about;2300:dump.after".into(),
+                Mark::Is("drive: about"),
+            )
+        },
+        Row {
+            // Help at x 115 in the bar, About its second item: the menu's
+            // popup takes the keyboard first.
+            fields: &[("about", "true"), ("settings", "true")],
+            order: &[(Mark::Is(LOUPE_3GB), STRIP_GAINED)],
+            menu: true,
+            ..row(
+                "17",
+                "About from the Help menu",
+                "1900:click.115,19;2300:click.180,93;2700:dump.after".into(),
+                Mark::Is("drive: click.115,19"),
+            )
+        },
+        Row {
+            fields: &[("shortcuts", "true")],
+            menu: true,
+            ..row(
+                "18",
+                "the shortcuts card from the Help menu",
+                "1900:click.115,19;2300:click.180,61;2700:dump.after".into(),
+                Mark::Is("drive: click.115,19"),
+            )
+        },
+        Row {
+            // The panel opens under the modal: the menu bar is live by spec.
+            fields: &[("iptc", "true")],
+            menu: true,
+            ..row(
+                "19",
+                "View › IPTC Panel",
+                "1900:click.72,19;2300:click.130,125;2700:dump.after".into(),
+                Mark::Is("drive: click.72,19"),
+            )
+        },
+        Row {
+            fields: &[("settings", "true")],
+            order: &[(Mark::Is(LOUPE_3GB), Mark::Starts("load settled gen 1:"))],
+            ..row(
+                "20",
+                "a folder opened under the dialog",
+                format!(
+                    "1900:open:{};2000:wait:load settled gen 1;2300:dump.after",
+                    folder.display()
+                ),
+                Mark::Starts("drive: open:"),
+            )
+        },
+    ];
+
+    let check = |row: &Row| {
+        let script = format!("{};{}", row.setup, row.steps);
+        let shot = out_dir().join(format!("settings-click-away-row-{}.jpg", row.row));
+        let stderr = if row.cache {
+            let cache_home = home.join(".cache");
+            std::fs::create_dir_all(&cache_home).unwrap();
+            shoot_with_sandboxed_cache(
+                &["--synthetic", "24"],
+                &[
+                    ("FASTCULL_TRACE", "1"),
+                    ("HOME", home.to_str().unwrap()),
+                    ("XDG_CACHE_HOME", cache_home.to_str().unwrap()),
+                    ("FASTCULL_DRIVE", script.as_str()),
+                ],
+                &shot,
+            )
+        } else {
+            shoot_env_stderr(
+                &["--synthetic", "24"],
+                &[("FASTCULL_TRACE", "1"), ("FASTCULL_DRIVE", script.as_str())],
+                &shot,
+            )
+        };
+        let trace = shot.with_extension("trace.log");
+        let trace = trace.display();
+        for element in row.clicks {
+            assert_click_resolved(&stderr, element);
+        }
+        // The hermetic premise: the harness's own FASTCULL_NO_CONFIG.
+        assert_eq!(
+            mark_lines(&stderr, "settings written "),
+            0,
+            "a settings file was written by a run under FASTCULL_NO_CONFIG; trace: {trace}"
+        );
+        let labels = mark_labels(&stderr);
+        let from = labels
+            .iter()
+            .rposition(|l| row.from.matches(l))
+            .unwrap_or_else(|| panic!("no {:?} step in the trace: {trace}", row.from));
+        let commits = labels.iter().filter(|l| **l == row.commit).count();
+        assert_eq!(
+            commits, 1,
+            "`{}` was traced {commits} time(s): the half-typed text commits exactly once \
+             when the control takes the keyboard from it; trace: {trace}",
+            row.commit
+        );
+        let committed = labels.iter().position(|l| *l == row.commit);
+        assert!(
+            committed > Some(from),
+            "`{}` came before the control acted — not a click-away commit; trace: {trace}",
+            row.commit
+        );
+        let after = qedump(&stderr, "after");
+        assert_eq!(
+            dump_field(after, "loupemem"),
+            row.loupemem,
+            "the dirty field's value is not in force after the control: {after}\ntrace: {trace}"
+        );
+        for (field, want) in row.fields {
+            assert_eq!(
+                dump_field(after, field),
+                *want,
+                "`{field}=` after the control: {after}\ntrace: {trace}"
+            );
+        }
+        for commit in row.once {
+            let n = labels.iter().filter(|l| *l == commit).count();
+            assert_eq!(
+                n, 1,
+                "`{commit}` was traced {n} time(s), once expected; trace: {trace}"
+            );
+        }
+        let tail = &labels[from..];
+        for (first, second) in row.order {
+            let a = tail.iter().position(|l| first.matches(l));
+            let b = tail.iter().position(|l| second.matches(l));
+            assert!(
+                a.is_some() && b.is_some() && a < b,
+                "{first:?} (at {a:?}) must come before {second:?} (at {b:?}) after the \
+                 control's step; trace: {trace}"
+            );
+        }
+    };
+
+    let mut red = Vec::new();
+    for row in &rows {
+        if row.menu && !menu_clicks_are_calibrated() {
+            eprintln!(
+                "row {} ({}): skipped — the menu bar is the OS's here, outside the window",
+                row.row, row.control
+            );
+            continue;
+        }
+        if row.cache && !cfg!(target_os = "linux") {
+            eprintln!(
+                "row {} ({}): skipped — the default cache cannot be sandboxed off Linux",
+                row.row, row.control
+            );
+            continue;
+        }
+        // Every row runs, so one red row never hides another; each row's own
+        // message is printed above by the panic hook, whole.
+        if let Err(panic) = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| check(row))) {
+            let why = panic
+                .downcast_ref::<String>()
+                .cloned()
+                .or_else(|| panic.downcast_ref::<&str>().map(|s| s.to_string()))
+                .unwrap_or_default();
+            let first = why.lines().next().unwrap_or("").to_string();
+            red.push(format!("row {} ({}): {first}", row.row, row.control));
+        }
+    }
+    assert!(
+        red.is_empty(),
+        "A CONTROL TOOK THE KEYBOARD FROM A HALF-TYPED FIELD WITHOUT COMMITTING IT FIRST \
+         (settings.md, \"Apply on commit\") — {} of {} rows red, each one's whole message \
+         printed above:\n{}",
+        red.len(),
+        rows.len(),
+        red.join("\n")
+    );
+}
+
 /// AC5 (settings.md, "Reading" and "Writing"): a file that does not parse
 /// gives the defaults, says so on stderr and on the status line, shows the
 /// whole error in the dialog's notice — and is never overwritten in place:

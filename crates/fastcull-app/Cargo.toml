@@ -61,10 +61,11 @@ fastcull-core.workspace = true
 # Re-read the owner-invariant section of specs/modules/ui-grid.md before
 # raising this bound.
 # FOURTH CANARY (brief 008, the Settings dialog and the Failed badge's
-# tooltip; same 1.17.1). Six measured behaviours they stand on, none
+# tooltip; same 1.17.1). Seven measured behaviours they stand on, none
 # documented upstream (read 2026-10-01 in i-slint-core window.rs
 # `process_key_input`, items/text.rs, items.rs and
-# properties/change_tracker.rs; ui-grid.md's Slint list):
+# properties/change_tracker.rs, and 2026-10-02 in i-slint-compiler
+# widgets/fluent/checkbox.slint; ui-grid.md's Slint list):
 #   1. The WINDOW handles a Tab or Shift+Tab that the focused item and
 #      every ancestor scope ignored, by walking the WHOLE item tree to the
 #      next focusable item — surfaces hidden behind a scrim included. The
@@ -100,6 +101,15 @@ fastcull-core.workspace = true
 #      selects nothing and the caret stays where it was (at 0 the first
 #      time: Tab, 8, Enter put `82 GB`) — why `focus-slot` calls
 #      `select-all()` itself (QE 2026-10-01, D33).
+#   7. The fluent `CheckBox` flips `checked` and THEN calls `toggled`
+#      (widgets/fluent/checkbox.slint:96-101; Space and Enter go through
+#      the same `clicked`), and a two-way binding (`checked <=> root.…`)
+#      carries a synchronous write of the bound property straight into
+#      the box — so a `toggled` handler that first does anything which
+#      re-presents that property (the Settings flush's commit runs
+#      `present()`) then reads the OLD state from `self.checked`: why both
+#      Settings checkboxes read their state into `want` before the flush
+#      (QE 2026-10-02, D39).
 slint = { version = "1", default-features = false, features = [
     "std",
     "backend-winit",

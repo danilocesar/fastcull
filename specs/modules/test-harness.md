@@ -214,7 +214,11 @@ sidecars — scripts target throwaway copies of test data only.
   wash|loupe-memory|cache-cap|readers-limit shows <text>` whenever a number
   field's text changes, typed or re-shown — what the field DISPLAYS, where
   the dump's `wash=`, `loupemem=`, `cachecap=` and `readers=` are the
-  model's (senior-developer review F1 of brief 008); `settings note
+  model's (senior-developer review F1 of brief 008); `settings
+  auto-advance|readers-adaptive shows true|false` whenever a checkbox's
+  state changes, clicked or re-presented — what the box SHOWS, where the
+  dump's `autoadvance=` and `readers=` are the model's (QE 2026-10-02,
+  D39); `settings note
   auto-advance|wash|loupe-memory|cache-cap|readers|clear-cache shows
   <text>` from each note Text itself, when the dialog creates it and
   whenever its text changes — what the note says, never what the bridge
