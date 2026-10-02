@@ -293,10 +293,12 @@ their precedence is `fastcull-core`'s; the app binds (brief 008, 2026-10-01).
   on the strip. `Tab` or `Shift+Tab` into a number field selects its text,
   so what is typed replaces the value shown — what Slint's own Tab
   navigation does on arrival (`TextInput` selects all only on a
-  `FocusReason::TabNavigation` focus, i-slint-core 1.17.1
-  `items/text.rs:1180`), which the dialog's ring must do itself because it
-  focuses by `focus()`; a click into a field places the caret, as a click
-  does anywhere (QE 2026-10-01, D33; Manager-accepted under M2).
+  `FocusReason::TabNavigation` focus, and not on Apple targets, i-slint-core
+  1.17.1 `items/text.rs:1180`; macOS is not a supported seat — corrected
+  2026-10-02, re-review RR-F5: it read as universal), which the dialog's
+  ring must do itself because it focuses by `focus()`; a click into a field
+  places the caret, as a click does anywhere (QE 2026-10-01, D33;
+  Manager-accepted under M2).
 - **Apply on commit.** A checkbox applies on click or `Space`; a number
   field applies on `Enter`, on `Tab` and on click-away (focus leaving it
   while the dialog is up); `Esc` in a field discards its uncommitted text
@@ -697,6 +699,9 @@ their precedence is `fastcull-core`'s; the app binds (brief 008, 2026-10-01).
 
 ## History
 
+- 2026-10-02 — Bookkeeping (the senior developer's re-review RR-F5):
+  "Keyboard" says Slint's own select-on-Tab holds off Apple targets only,
+  as its source guards it; macOS is not a supported seat.
 - 2026-10-02 — The user's answer to QE's D28 (brief 008 D42): every save
   writes every setting as the saving window holds it, the last save wins,
   and a setting the environment governs is saved with its own value,

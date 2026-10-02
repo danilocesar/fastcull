@@ -41,11 +41,14 @@ explain itself on stderr.
   Settings dialog still works under `FASTCULL_NO_CONFIG`, in memory, and
   says `Not saved` (settings.md).
 - `FASTCULL_CONFIG_DIR=<dir>` — the config dir redirected to `<dir>`,
-  winning over `FASTCULL_NO_CONFIG`, for the driven tests that must prove
-  a file was written; announced once on stderr (`fastcull:
-  FASTCULL_CONFIG_DIR=<dir> — settings.toml, ui.toml and templates.toml are
-  read and written there`). Test plumbing in this family, not a setting
-  (brief 008 OQ1).
+  winning over `FASTCULL_NO_CONFIG`, for the tests that read or write a
+  config file in a scratch dir (settings.md AC6; corrected 2026-10-02, QE
+  D45 and the senior developer's re-review RR-F6: it said "the driven
+  tests that must prove a file was written", and the read-workers and the
+  templates/ui.toml tests set it to read); announced once on stderr
+  (`fastcull: FASTCULL_CONFIG_DIR=<dir> — settings.toml, ui.toml and
+  templates.toml are read and written there`). Test plumbing in this
+  family, not a setting (brief 008 OQ1).
 - `FASTCULL_KITCHEN_COOK_MS=N` — hold every kitchen cook for N ms before the
   pixel work: the pacing knob for the `open:PATH` session-swap test, which
   must catch the queue mid-flight in both profiles; default 0, off. Announced
@@ -463,6 +466,12 @@ shot 2.
 
 ## History
 
+- 2026-10-02 — QE round 4 of brief 008 (D45; re-review RR-F6):
+  `FASTCULL_CONFIG_DIR` is for every test that reads or writes a config
+  file, as settings.md AC6 already said.
+- 2026-10-02 — QE round 4 of brief 008 (D39): `settings
+  auto-advance|readers-adaptive shows`, what a checkbox shows (added with
+  the checkboxes' fix, 22cd5cb; this line follows it).
 - 2026-10-01 — QE round 3 of brief 008 (D38): a second run with the cache
   on, the Settings card's fit with a long cache path.
 - 2026-10-01 — QE round 3 of brief 008 (D37): `templates loaded from`,

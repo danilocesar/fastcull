@@ -96,8 +96,10 @@ fastcull-core.workspace = true
 #      EDITED (`dirty`, set by LineEdit's `edited`) and re-show the value
 #      in force on every blur (senior-developer review F1, 2026-10-01).
 #   6. A `focus()` called from code is not a Tab-navigation focus: a
-#      `TextInput` selects all only on `FocusReason::TabNavigation`
-#      (items/text.rs:1180, FocusIn), so a field the Settings ring focuses
+#      `TextInput` selects all only on `FocusReason::TabNavigation`, and
+#      not on Apple targets at all (items/text.rs:1180, FocusIn, guarded by
+#      `cfg!(not(target_vendor = "apple"))` — macOS is not a supported
+#      seat; re-review RR-F5), so a field the Settings ring focuses
 #      selects nothing and the caret stays where it was (at 0 the first
 #      time: Tab, 8, Enter put `82 GB`) — why `focus-slot` calls
 #      `select-all()` itself (QE 2026-10-01, D33).
