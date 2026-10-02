@@ -810,7 +810,7 @@ setting.
   `# another` came back at the END of the file, under `max_readers`; a
   comment after a file's last entry went the same way. toml_edit 0.22.27
   holds both as the document's trailing decor and prints it last; the
-  writer now moves that text in front of the first table it creates (the
+  writer now moves that text in front of the first table it appends (the
   integrity review's probe across seven shapes on toml_edit 0.22.27). Blank
   lines alone in the trailing decor stay at the end, as before: moved, a
   file of blank lines would have started with them (the developer's

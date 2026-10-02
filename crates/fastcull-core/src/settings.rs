@@ -1256,7 +1256,8 @@ mod tests {
     /// pushed below the tables the write creates (settings.md, "Writing";
     /// QE 2026-10-01, D35). toml_edit holds both as the document's trailing
     /// decor, which it prints after everything; the writer moves that text
-    /// in front of the first table it creates.
+    /// in front of the first table it APPENDS — never into one that replaces
+    /// an entry in place (the third fixture).
     ///
     /// RED on 13a904e, the writer before the fix: the two comment lines came
     /// back at the END of the file, under `max_readers`, and `# tail` under
