@@ -242,9 +242,12 @@ their precedence is `fastcull-core`'s; the app binds (brief 008, 2026-10-01).
   `Close`, and a notice line that is empty unless the file could not be
   read, could not be written, is not saved, or was moved aside. The
   Performance tab in its tallest state — the environment's note on the read
-  workers row, a read error's whole text on the notice line — fits whole at
-  1000×700, the smallest supported window (ui-grid.md), measured as slack
-  under the card, never pinned as a height (QE 2026-10-01, D9).
+  workers row, a read error's whole text on the notice line, and, with the
+  cache on, the Thumbnail cache row showing a long path in full (one of
+  about 90 characters, which wraps) — fits whole at 1000×700, the smallest
+  supported window (ui-grid.md), measured as slack under the card, never
+  pinned as a height (QE 2026-10-01, D9; the cache row, QE 2026-10-01,
+  D38).
 - **Keyboard.** `Tab`/`Shift+Tab` walk the strip and the active tab's
   controls in order — the strip, the controls top to bottom, Reset, Close
   — and never leave the dialog: the dialog's own key scope handles both,
@@ -610,7 +613,12 @@ their precedence is `fastcull-core`'s; the app binds (brief 008, 2026-10-01).
 - [x] **The Settings card fits its smallest window.** The Performance tab
       in its tallest state fits whole at 1000×700, Close and Reset inside
       the card — `the_settings_card_fits_its_smallest_window_in_its_tallest_state`
-      (slack measured, height never pinned; QE 2026-10-01, D9).
+      (slack measured, height never pinned; QE 2026-10-01, D9); its cache-on
+      run, the row showing a 91-character path over two lines, is driven on
+      Linux through the sandboxed default cache and review-verified on
+      Windows, whose known-folder lookup ignores the environment — Segoe UI
+      leaves 80 px of slack without the cache, and a real Windows cache path
+      of about 65 characters is two lines at most (QE 2026-10-01, D38).
 - [x] **AC15 — docs.** `docs/settings.md` exists, CLAUDE.md's page map
       names it, and `docs/culling.md` and `docs/faq.md` follow the
       behaviour — review-verified by the senior developer's review of
@@ -620,6 +628,9 @@ their precedence is `fastcull-core`'s; the app binds (brief 008, 2026-10-01).
 
 ## History
 
+- 2026-10-01 — QE round 3 of brief 008, the card with the cache on (D38):
+  the tallest state counts the Thumbnail cache row showing a long path, the
+  fit test runs it on Linux, and the box says what stays review-verified.
 - 2026-10-01 — QE round 3 of brief 008, shapes the file cannot keep (D35):
   a table where a key belongs, or an array of tables or a value where a
   tab's table belongs, is replaced in its place, and "Writing" names the

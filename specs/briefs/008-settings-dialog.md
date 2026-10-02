@@ -855,6 +855,29 @@ setting.
   it used (`templates loaded from`, `templates: … could not be read`, `ui
   prefs read from`), and `templates_and_ui_prefs_are_read_from_the_one_config_dir`
   reads them under FASTCULL_CONFIG_DIR and under FASTCULL_NO_CONFIG.
+- D38 (2026-10-01, QE round 3 — spec correction D38; the senior developer's
+  test-integrity review, T5; ruled under M1 as the integrity review
+  recommended and the Manager's hand-off carried it — adopt, in a wording
+  free of font metrics): settings.md "The card" called the Performance tab
+  with the environment note and a read error on the notice line its
+  tallest state, and every real session — all but the harness's — has the
+  cache on, where the Thumbnail cache row prints the real path and wraps.
+  The fit test now runs that state too, on Linux, through the sandboxed
+  default cache. Evidence (never Behaviour; the next row, #15 or #24,
+  budgets against it): the row is as tall as its Clear button until the
+  readout reaches three lines. This seat, Noto Sans, 1000×700: the card
+  541 px (47 px of slack) without the cache, 545 px (45 px) with the
+  strand's 91-character path over two lines, 563 px (35 px) with a
+  118-character path over three (the integrity review); QE: 45 px at 93
+  characters, 27 px at 150. CI at 13a904e: DejaVu Sans (ubuntu, release)
+  528 px, 53 px of slack; Segoe UI (windows, debug) 514 px, 80 px — QE's
+  "Windows has 40 px more room" is 33 px against Noto, 27 against DejaVu. A
+  path under 100 characters is two lines on Noto and DejaVu and never four
+  on any face, the one shape the 20 px margin could not take; the
+  four-line readout (a path over about 120 characters on a wide face) is
+  not pinned. QE's wording "over two lines" was refused: a line count is a
+  font metric. The strand's own mutant — the readout at 24 px — leaves the
+  cache-off run fitting (29 px) and clamps the cache-on run.
 - Directive candidate (2026-10-01): M9's cleanup command `cargo clean
   -p …` cleans the dev profile only — a `screen-rung` release binary
   from 2026-09-29 survived it and the persona ran it by mistake; the

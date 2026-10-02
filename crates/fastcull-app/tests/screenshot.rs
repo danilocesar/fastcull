@@ -13024,18 +13024,38 @@ fn settings_over_a_focused_keyword_field_commits_it_and_owns_the_keyboard() {
 
 /// settings.md, "The card": the Performance tab in its TALLEST state — the
 /// FASTCULL_MAX_READERS note on the read workers row, a read error's whole
-/// text on the notice line — fits whole in the smallest supported window,
-/// 1000x700 (ui-grid.md). Measured as SLACK, never as a height: the card is
-/// `min(content, layer − 40)`, so a clamped card sits exactly 20 px above
-/// the modal layer's floor (the status bar's top, `window − 26`) and an
+/// text on the notice line and, with the cache on, the Thumbnail cache row
+/// showing a long path in full — fits whole in the smallest supported
+/// window, 1000x700 (ui-grid.md). Measured as SLACK, never as a height: the
+/// card is `min(content, layer − 40)`, so a clamped card sits exactly 20 px
+/// above the modal layer's floor (the status bar's top, `window − 26`) and an
 /// unclamped one more; Close and Reset lie inside the card. The slack is
 /// printed in the failure, never asserted as a number — a height is a sum of
 /// text line boxes and belongs to the face (the rule ui-grid.md gives the
 /// shortcuts card). The premises are asserted, so the state really is the
 /// tallest: the tab, the environment's value, the long notice.
 ///
-/// Mutant (2026-10-01): the card layout's padding raised by 80 px → the card
-/// clamps, Close lands below its floor and the slack reads 20 — red.
+/// Two runs of the same script over the same broken settings file. The
+/// first is the harness's FASTCULL_NO_CACHE, where the cache row is one short
+/// line. The second (QE 2026-10-01, D38) has the cache ON, through
+/// `shoot_with_sandboxed_cache` — HOME and XDG_CACHE_HOME inside the shots
+/// dir, Linux only, Windows' known-folder lookup ignoring both (the rule of
+/// settings.md AC11/AC12), so it is skipped at run time elsewhere and the
+/// `--list` halves stay the same on every runner — with XDG_CACHE_HOME
+/// nested so the row prints a path of 85–100 characters,
+/// `~/.cache/nas-mount/…/fastcull/previews.db`, which wraps. Its one extra
+/// premise is that the row shows that path in full. Why 85–100 (evidence,
+/// brief 008 D38): the row is as tall as its Clear button until the readout
+/// reaches three lines; a path under 100 characters is two lines on Noto
+/// Sans and DejaVu Sans and never four on any face, the one shape the 20 px
+/// could not take — Noto at 1000x700 measured 47 px of slack without the
+/// cache, 45 px at 93 characters, 35 px at 118 (three lines), 27 px at 150.
+///
+/// Mutants (2026-10-01): the card layout's padding raised by 80 px → the
+/// card clamps, Close lands below its floor and the slack reads 20 — red;
+/// the cache row's readout at 24 px instead of 13 → the cache-off run still
+/// fits (575 px, 29 px of slack) while the cache-on run clamps at 594 with
+/// Close outside the card — red: the second run sees what the first cannot.
 #[test]
 fn the_settings_card_fits_its_smallest_window_in_its_tallest_state() {
     if !has_display() {
@@ -13044,9 +13064,57 @@ fn the_settings_card_fits_its_smallest_window_in_its_tallest_state() {
     }
     let _s = serial();
     let dir = settings_scratch("tallest", Some("[general\n"));
-    let out = out_dir().join("settings-tallest.jpg");
     let script = "200:resize:1000x700;600:wait:window geometry 1000x700;900:key:ctrl+,;\
                   1300:key:ctrl+tab;1600:key:ctrl+tab;2000:dump.perf";
+    // The premises and the fit, for one run.
+    let assert_fits = |stderr: &str, strand: &str| {
+        assert!(
+            stderr.contains("wait:window geometry 1000x700 (satisfied"),
+            "{strand}: the window never reached 1000x700 — the premise:\n{stderr}"
+        );
+        let perf = qedump(stderr, "perf");
+        assert_eq!(
+            dump_field(perf, "settingstab"),
+            "2",
+            "{strand}: not on Performance: {perf}"
+        );
+        assert_eq!(
+            dump_field(perf, "readers"),
+            "env:3",
+            "{strand}: the environment note row is not up: {perf}"
+        );
+        let note = dump_text(perf, "settingsnote");
+        assert!(
+            note.contains("could not be read") && note.contains("invalid table header"),
+            "{strand}: the notice is not the whole parse error — not the tallest \
+             state: {note:?}"
+        );
+        let (wx, wy) = (1000.0f32, 700.0f32);
+        let (cx, cy, cw, ch) = laid_out_at(stderr, "settings card", "perf");
+        for control in ["settings close", "settings reset"] {
+            let (x, y, w, h) = laid_out_at(stderr, control, "perf");
+            assert!(
+                x >= cx && x + w <= cx + cw + 0.5 && y >= cy && y + h <= cy + ch + 0.5,
+                "{strand}: {control} ({x},{y} {w}x{h}) is not inside the card ({cx},{cy} \
+                 {cw}x{ch}) at 1000x700 in the tallest state:\n{stderr}"
+            );
+        }
+        let floor = wy - 26.0;
+        assert!(
+            cx >= 0.0 && cx + cw <= wx && cy >= 0.0 && cy + ch <= floor,
+            "{strand}: the card ({cx},{cy} {cw}x{ch}) is not inside the modal layer of a \
+             1000x700 window (which ends at y={floor}, the status bar's top):\n{stderr}"
+        );
+        let slack = floor - (cy + ch);
+        assert!(
+            slack > 20.0,
+            "{strand}: THE SETTINGS CARD OUTGREW ITS SMALLEST WINDOW: {ch} px tall at \
+             1000x700 in its tallest state, leaving {slack} px above the status bar — the \
+             clamp's own 20 px, so the card is clamped and its content cut. A row was \
+             added, or this seat's face is far taller than the ones it was measured \
+             on:\n{stderr}"
+        );
+    };
     let stderr = shoot_env_stderr(
         &["--synthetic", "24"],
         &[
@@ -13055,52 +13123,70 @@ fn the_settings_card_fits_its_smallest_window_in_its_tallest_state() {
             ("FASTCULL_CONFIG_DIR", dir.to_str().unwrap()),
             ("FASTCULL_DRIVE", script),
         ],
-        &out,
+        &out_dir().join("settings-tallest.jpg"),
     );
-    assert!(
-        stderr.contains("wait:window geometry 1000x700 (satisfied"),
-        "the window never reached 1000x700 — the premise:\n{stderr}"
-    );
-    let perf = qedump(&stderr, "perf");
-    assert_eq!(
-        dump_field(perf, "settingstab"),
-        "2",
-        "not on Performance: {perf}"
-    );
-    assert_eq!(
-        dump_field(perf, "readers"),
-        "env:3",
-        "the environment note row is not up: {perf}"
-    );
-    let note = dump_text(perf, "settingsnote");
-    assert!(
-        note.contains("could not be read") && note.contains("invalid table header"),
-        "the notice is not the whole parse error — not the tallest state: {note:?}"
-    );
-    let (wx, wy) = (1000.0f32, 700.0f32);
-    let (cx, cy, cw, ch) = laid_out_at(&stderr, "settings card", "perf");
-    for control in ["settings close", "settings reset"] {
-        let (x, y, w, h) = laid_out_at(&stderr, control, "perf");
-        assert!(
-            x >= cx && x + w <= cx + cw + 0.5 && y >= cy && y + h <= cy + ch + 0.5,
-            "{control} ({x},{y} {w}x{h}) is not inside the card ({cx},{cy} {cw}x{ch}) at \
-             1000x700 in the tallest state:\n{stderr}"
+    assert_fits(&stderr, "cache off");
+
+    if !cfg!(target_os = "linux") {
+        eprintln!(
+            "skipped the cache-on strand: the default cache cannot be sandboxed off Linux \
+             (Windows' known-folder lookup ignores HOME and XDG_CACHE_HOME); the wrapped \
+             readout is review-verified there"
         );
+        std::fs::remove_dir_all(&dir).ok();
+        return;
     }
-    let floor = wy - 26.0;
-    assert!(
-        cx >= 0.0 && cx + cw <= wx && cy >= 0.0 && cy + ch <= floor,
-        "the card ({cx},{cy} {cw}x{ch}) is not inside the modal layer of a 1000x700 \
-         window (which ends at y={floor}, the status bar's top):\n{stderr}"
+    let home = out_dir().join("cache-home");
+    std::fs::remove_dir_all(&home).ok();
+    struct RemoveOnDrop(PathBuf);
+    impl Drop for RemoveOnDrop {
+        fn drop(&mut self) {
+            std::fs::remove_dir_all(&self.0).ok();
+        }
+    }
+    let _cleanup = RemoveOnDrop(home.clone());
+    let cache_home = home
+        .join(".cache")
+        .join("nas-mount")
+        .join("photo-studio")
+        .join("cull-sessions")
+        .join("a-cache-path-long-enough");
+    // The path the row prints, `~/` and all — 91 characters, in the band
+    // the evidence above sets.
+    let readout_path = format!(
+        "~/{}",
+        cache_home
+            .join("fastcull")
+            .join("previews.db")
+            .strip_prefix(&home)
+            .unwrap()
+            .display()
     );
-    let slack = floor - (cy + ch);
     assert!(
-        slack > 20.0,
-        "THE SETTINGS CARD OUTGREW ITS SMALLEST WINDOW: {ch} px tall at 1000x700 in \
-         its tallest state, leaving {slack} px above the status bar — the clamp's own \
-         20 px, so the card is clamped and its content cut. A row was added, or this \
-         seat's face is far taller than the ones it was measured on:\n{stderr}"
+        (85..=100).contains(&readout_path.chars().count()),
+        "the long path is {} characters, outside the 85–100 the strand is built for: \
+         {readout_path}",
+        readout_path.chars().count()
     );
+    let stderr = shoot_with_sandboxed_cache(
+        &["--synthetic", "24"],
+        &[
+            ("FASTCULL_TRACE", "1"),
+            ("FASTCULL_MAX_READERS", "3"),
+            ("FASTCULL_CONFIG_DIR", dir.to_str().unwrap()),
+            ("HOME", home.to_str().unwrap()),
+            ("XDG_CACHE_HOME", cache_home.to_str().unwrap()),
+            ("FASTCULL_DRIVE", script),
+        ],
+        &out_dir().join("settings-tallest-cache.jpg"),
+    );
+    let readout = dump_text(qedump(&stderr, "perf"), "cachereadout");
+    assert!(
+        readout.contains(&readout_path),
+        "the cache-on strand's row does not show the long path in full — not the \
+         long-path state (expected `{readout_path}`): {readout:?}"
+    );
+    assert_fits(&stderr, "cache on, a long path");
     std::fs::remove_dir_all(&dir).ok();
 }
 
@@ -13109,9 +13195,10 @@ fn the_settings_card_fits_its_smallest_window_in_its_tallest_state() {
 /// folder open trims the DEFAULT cache to the file's cap, and Clear empties
 /// that cache through a connection of its own, off the UI thread, never
 /// unlinking it — the row reading `Clearing…` meanwhile and the size
-/// re-measured from disk after. Every other driven run is FASTCULL_NO_CACHE;
-/// this one points the default cache into the shots dir through HOME and
-/// XDG_CACHE_HOME (`shoot_with_sandboxed_cache` refuses to run otherwise).
+/// re-measured from disk after. Every other driven run but one (the Settings
+/// card fit test's cache-on run) is FASTCULL_NO_CACHE; this one points the
+/// default cache into the shots dir through HOME and XDG_CACHE_HOME
+/// (`shoot_with_sandboxed_cache` refuses to run otherwise).
 /// That redirect exists on Linux only — Windows' known-folder lookup ignores
 /// the environment — so the test skips itself elsewhere, at run time, which
 /// keeps the `--list` halves the same on every runner; AC12's Windows half

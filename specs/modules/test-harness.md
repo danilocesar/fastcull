@@ -29,14 +29,17 @@ explain itself on stderr.
   008, 2026-10-01; until then it covered `ui.toml` only, and every driven
   run read the user's real `templates.toml`); what `FASTCULL_NO_CACHE=1`
   does for `previews.db` (app-only; the CLI has `--no-cache`). The
-  screenshot harness sets both on every run but one: the test that drives
-  the cache cap and Clear cache (settings.md AC11, AC12) runs without
-  `FASTCULL_NO_CACHE`, through `shoot_with_sandboxed_cache`, which refuses
-  to start unless `HOME` and `XDG_CACHE_HOME` both point inside the shots
-  dir — so the default cache resolves there, never to the user's; Linux
-  only, Windows' known-folder lookup ignoring the environment (QE
-  2026-10-01, D24). The Settings dialog still works under
-  `FASTCULL_NO_CONFIG`, in memory, and says `Not saved` (settings.md).
+  screenshot harness sets both on every run except three, in two tests —
+  the two runs of the test that drives the cache cap and Clear cache
+  (settings.md AC11, AC12) and the cache-on run of the Settings card's fit
+  test (settings.md, "The card"; QE 2026-10-01, D38; this sentence said
+  "every run but one" until then) — which run without `FASTCULL_NO_CACHE`,
+  through `shoot_with_sandboxed_cache`, which refuses to start unless
+  `HOME` and `XDG_CACHE_HOME` both point inside the shots dir — so the
+  default cache resolves there, never to the user's; Linux only, Windows'
+  known-folder lookup ignoring the environment (QE 2026-10-01, D24). The
+  Settings dialog still works under `FASTCULL_NO_CONFIG`, in memory, and
+  says `Not saved` (settings.md).
 - `FASTCULL_CONFIG_DIR=<dir>` — the config dir redirected to `<dir>`,
   winning over `FASTCULL_NO_CONFIG`, for the driven tests that must prove
   a file was written; announced once on stderr (`fastcull:
@@ -456,6 +459,8 @@ shot 2.
 
 ## History
 
+- 2026-10-01 — QE round 3 of brief 008 (D38): a second run with the cache
+  on, the Settings card's fit with a long cache path.
 - 2026-10-01 — QE round 3 of brief 008 (D37): `templates loaded from`,
   `templates: … could not be read`, `ui prefs read from` — the config reads
   name the path they used.
