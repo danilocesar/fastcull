@@ -57,8 +57,9 @@ Windows: `%LOCALAPPDATA%\fastcull\fastcull\cache\previews.db`) so the
 second open of a folder is instant. It's capped at 2 GB by default with
 least-recently-used eviction — the cap is a setting, and **File ›
 Settings… › Performance** shows the cache's size and path with a
-**Clear** button (see [Settings](settings.md)); clearing or deleting it is
-always safe — it just rebuilds thumbnails on the next open. After some
+**Clear** button (see [Settings](settings.md)); clearing it is always
+safe, and so is deleting the file by hand while FastCull is closed — it
+just rebuilds thumbnails on the next open. After some
 upgrades the app rebuilds it once by itself; the only cost is a slower
 first open.
 

@@ -737,7 +737,9 @@ setting.
   option — nothing changes in this unit — and put to the user: keep
   writing every key, or write only the keys a commit or a Reset changes
   (creating a missing key with its note), which QE and the developer
-  recommend.
+  recommend. ANSWERED 2026-10-02 by D42 (the user: option A, and the
+  environment never reaching the file) — no longer provisional, no longer
+  holding the merge.
 - D29 (2026-10-01, QE round 2 — spec correction D29): settings.md's AC6
   said "the two that write set `FASTCULL_CONFIG_DIR`"; seven driven tests
   set it on 6f20679, several of them read-only, and nine tests set it
@@ -921,7 +923,9 @@ setting.
   `clear()` mutant.
 - D41 (2026-10-02, Manager, M2, on QE round 4's defect D43): the status
   line mirrors the notice's order — a standing write error is the newest
-  event and wins: ` · ⚠ settings.toml could not be written` (with ` — the
+  event and wins: ` — ⚠ settings.toml could not be written` (the status
+  line's own separator; this entry said ` · ` until 2026-10-02 — the
+  developer's correction, what ships) (with ` — the
   file that would not read is <name>` when one was moved aside), the read
   error with "(defaults in force)" only while the read error is the
   newest event — which is exactly when it is true — then `rewritten`.
@@ -941,6 +945,22 @@ setting.
   pins the condition (environment 3, file 7, a commit of another key — the
   file still says 7; mutant: the in-force value written) and the driven
   read-workers test gains the strand.
+- D43 (2026-10-02, Manager, on the final round's developer report): the
+  D40 writer carries the comments of every shape the "Writing" exception
+  sentence names — the sub-table's comment above and on its header line,
+  `[[general]]`'s header-line comment, and both comments of `general = 5`
+  — because the narrowed sentence would be false for two of the three
+  shapes otherwise (the developer's flagged extension, each arm with its
+  fixture and red mutant; the senior developer judges the code). Matrix
+  row 11 (Tab from a dirty field to the next field) is red only when BOTH
+  `walk`'s flush and the blur commit are removed — no focus mark fires
+  when the ring lands on a field, so the blur commits 7 ms later with the
+  same outcome; the row guards that Tab commits at all, as its comment
+  says, and no new mark is added in a bounded round. QE's other ideas
+  outside the round (the `(40 %)` wrap, core's scratch dirs never removed,
+  "no cache yet") wait for QE round 5's one sweep. docs/faq.md's "deleting
+  it is always safe" gains "while FastCull is closed" (catalog-cache.md's
+  lock rule; a docs fixup by the Manager, outside the gate).
 - Directive candidates (2026-10-02, from the diagnosis): `.claude/agents/
   senior-developer.md` says the driven suite "is 87 tests" — it is 111 at
   a377405 (brief 008 added 24; the two halves run ~340 s each, over the
