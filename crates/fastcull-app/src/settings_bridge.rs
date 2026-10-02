@@ -407,15 +407,7 @@ fn notice(st: &SettingsState) -> String {
     // The write error first: it is always the NEWEST event, because no open
     // re-reads the file while one stands (settings.md, "Reading").
     if let Some(e) = &st.write_error {
-        // A moved-aside file is named for the rest of the session, a
-        // failed write after the move included (settings.md, "Writing").
-        return match &st.moved_aside {
-            Some(aside) => format!(
-                "Could not write {file}: {e} — the file that would not read is {}",
-                file_name(aside)
-            ),
-            None => format!("Could not write {file}: {e}"),
-        };
+        return format!("Could not write {file}: {e}{}", write_error_aside(st));
     }
     // A read error BEFORE `rewritten`: a read error standing after a move is
     // newer than the move — the open re-read a fresh file that a hand edit
@@ -453,13 +445,7 @@ pub(crate) fn status_note(st: &SettingsState) -> String {
         // failed read too, where "(defaults in force)" would be false (brief
         // 008 D41; QE 2026-10-02, D43). "Rewritten" never, while it is not
         // true (senior-developer review F4 of brief 008).
-        match &st.moved_aside {
-            Some(aside) => format!(
-                " — ⚠ {file} could not be written — the file that would not read is {}",
-                file_name(aside)
-            ),
-            None => format!(" — ⚠ {file} could not be written"),
-        }
+        format!(" — ⚠ {file} could not be written{}", write_error_aside(st))
     } else if st.loaded.error.is_some() {
         format!(
             " — ⚠ {file} could not be read (defaults in force){}",
@@ -473,6 +459,26 @@ pub(crate) fn status_note(st: &SettingsState) -> String {
     } else {
         String::new()
     }
+}
+
+/// What follows a standing write error, on both lines alike: where a
+/// broken file was moved aside, named for the rest of the session, a failed
+/// write after the move included (settings.md, "Writing"; senior-developer
+/// review F4 of brief 008) — unless a read error NEWER than that move still
+/// stands. Then this write moved nothing (a move that happens answers the
+/// read error, [`record_write`]), settings.toml itself is the file that
+/// would not read, and the aside is named as the earlier one, as the read
+/// error's own lines name it (QE 2026-10-02, round 5, D46: both lines
+/// called the earlier aside "the file that would not read", the notice
+/// right after saying that that file could not be moved aside).
+fn write_error_aside(st: &SettingsState) -> String {
+    if st.loaded.error.is_some() {
+        return earlier_aside(st);
+    }
+    st.moved_aside
+        .as_deref()
+        .map(|aside| format!(" — the file that would not read is {}", file_name(aside)))
+        .unwrap_or_default()
 }
 
 /// ` — the earlier one is settings.toml.broken` when a file was moved aside
@@ -828,6 +834,97 @@ mod tests {
         assert_eq!(
             status_note(&st),
             " — settings.toml rewritten — the file that would not read is settings.toml.broken"
+        );
+    }
+
+    /// A write that fails after a read error NEWER than the move-aside names
+    /// the aside as the EARLIER one (settings.md, "Writing"; QE 2026-10-02,
+    /// round 5, D46). The launch file would not read and the first write
+    /// moved it aside; a hand edit broke the fresh file and the open re-read
+    /// it; then the config dir turned read-only and a commit's write could
+    /// not move the new broken file aside. settings.toml itself is now the
+    /// file that would not read — the notice says exactly that file could
+    /// not be moved — so both lines name `settings.toml.broken` as the
+    /// earlier one, as the read error's own lines do; the write that then
+    /// succeeds moves the newer file aside and both say `rewritten` again,
+    /// naming it.
+    ///
+    /// RED on 7559db0, the head before the fix: both lines called the
+    /// earlier aside `the file that would not read`, the notice beside its
+    /// own `the file that would not read could not be moved aside` — a line
+    /// that contradicted itself. When this fails that way it is that
+    /// defect; do not quiet it.
+    ///
+    /// Mutant (2026-10-02): the write error's suffix without its newer-read-
+    /// error arm — 7559db0's wording — → red at step 3.
+    #[test]
+    fn a_failed_write_after_a_newer_read_error_names_the_earlier_aside_as_the_earlier_one() {
+        let path = std::path::PathBuf::from("/nowhere/fastcull/settings.toml");
+        // 1. The launch read failed; the first write moved the file aside
+        //    and wrote a fresh one.
+        let mut st = SettingsState::new(
+            settings::Loaded {
+                settings: Settings::default(),
+                error: Some("TOML parse error at line 1, column 4".to_string()),
+                path: Some(path.clone()),
+            },
+            None,
+        );
+        record_write(
+            &mut st,
+            &path,
+            Ok(Some(path.with_file_name("settings.toml.broken"))),
+        );
+        // 2. A hand edit broke the fresh file, and the open re-read it.
+        st.loaded = settings::Loaded {
+            settings: Settings::default(),
+            error: Some("TOML parse error at line 2, column 16".to_string()),
+            path: Some(path.clone()),
+        };
+        // 3. A commit, written to a config dir that turned read-only: the
+        //    newer broken file cannot be moved aside.
+        st.loaded.settings.selection_wash = 15;
+        record_write(
+            &mut st,
+            &path,
+            Err(settings::WriteError::MoveAside(std::io::Error::from(
+                std::io::ErrorKind::PermissionDenied,
+            ))),
+        );
+        assert!(
+            st.loaded.error.is_some(),
+            "the premise: this write moved nothing, so the newer read error still stands"
+        );
+        assert_eq!(
+            status_note(&st),
+            " — ⚠ settings.toml could not be written — the earlier one is settings.toml.broken",
+            "the status line calls the earlier aside the file that would not read, while \
+             settings.toml itself is that file now"
+        );
+        let line = notice(&st);
+        assert!(
+            line.starts_with(
+                "Could not write settings.toml: the file that would not read could not be \
+                 moved aside: "
+            ) && line.ends_with(" — the earlier one is settings.toml.broken"),
+            "the notice does not name the failed move and then the earlier aside as the \
+             earlier one: {line}"
+        );
+        // 4. The dir is writable again: the next write moves the newer file
+        //    aside too, and both lines say `rewritten`, naming it.
+        record_write(
+            &mut st,
+            &path,
+            Ok(Some(path.with_file_name("settings.toml.broken.1"))),
+        );
+        assert_eq!(
+            status_note(&st),
+            " — settings.toml rewritten — the file that would not read is \
+             settings.toml.broken.1"
+        );
+        assert_eq!(
+            notice(&st),
+            "settings.toml rewritten — the file that would not read is settings.toml.broken.1"
         );
     }
 

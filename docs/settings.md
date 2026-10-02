@@ -163,7 +163,9 @@ If the file cannot be written (a read-only config folder, a full disk),
 the change stays in force for this session, and the dialog's notice line
 and the status bar say so — even when the file had not read either: the
 status bar then says it could not be written, not that the defaults are
-in force, because your change is. Until a change can be saved again, reopening the dialog keeps
+in force, because your change is, and a file moved aside earlier is named
+as the earlier one, since the file that would not read is still
+`settings.toml` itself. Until a change can be saved again, reopening the dialog keeps
 what you set rather than re-reading the file, so nothing you chose is
 quietly taken back.
 

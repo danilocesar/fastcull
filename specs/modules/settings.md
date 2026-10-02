@@ -194,7 +194,15 @@ their precedence is `fastcull-core`'s; the app binds (brief 008, 2026-10-01).
   settings.toml could not be written — the file that would not read is
   settings.toml.broken`, until a write succeeds and it says `rewritten`
   again; after a move the next write starts a fresh file
-  (senior-developer review F4, 2026-10-01).
+  (senior-developer review F4, 2026-10-01). The one exception is a read
+  error NEWER than the move that still stands — the fresh file broken by
+  hand and re-read, and this write unable to move it aside: settings.toml
+  itself is then the file that would not read, and both lines name the
+  aside as the earlier one, ` — the earlier one is settings.toml.broken`,
+  as the read error's own lines do (QE 2026-10-02, round 5, D46: both
+  lines called the earlier aside "the file that would not read", the
+  notice beside its own "the file that would not read could not be moved
+  aside").
 - A read error NEWER than the move wins over `rewritten`: when the open's
   re-read fails after a file has been moved aside (a second hand edit broke
   the fresh file), the status line reads `⚠ settings.toml could not be read
@@ -569,7 +577,11 @@ their precedence is `fastcull-core`'s; the app binds (brief 008, 2026-10-01).
       on the status line, never `(defaults in force)` beside a commit in
       force — app unit
       `settings_bridge::tests::a_write_error_wins_over_a_read_error_on_the_status_line`
-      (brief 008 D41; QE 2026-10-02, D43).
+      (brief 008 D41; QE 2026-10-02, D43); a write that cannot move a NEWER
+      broken file aside names the earlier aside as the earlier one on both
+      lines — app unit
+      `settings_bridge::tests::a_failed_write_after_a_newer_read_error_names_the_earlier_aside_as_the_earlier_one`
+      (QE 2026-10-02, round 5, D46).
 - [x] **AC6 — hermetic.** `FASTCULL_NO_CONFIG=1` makes `settings.toml`
       unreachable for load and save and the dialog says `Not saved`; no
       test touches the real file — core
@@ -699,6 +711,11 @@ their precedence is `fastcull-core`'s; the app binds (brief 008, 2026-10-01).
 
 ## History
 
+- 2026-10-02 — QE round 5 of brief 008, the earlier aside (D46): a write
+  that could not move a newer broken file aside called the earlier aside
+  "the file that would not read" on both lines; the F4 sentence of
+  "Writing" names that one exception, both lines call it the earlier one,
+  and AC5 names the test.
 - 2026-10-02 — Bookkeeping (the senior developer's re-review RR-F5):
   "Keyboard" says Slint's own select-on-Tab holds off Apple targets only,
   as its source guards it; macOS is not a supported seat.

@@ -961,6 +961,24 @@ setting.
   "no cache yet") wait for QE round 5's one sweep. docs/faq.md's "deleting
   it is always safe" gains "while FastCull is closed" (catalog-cache.md's
   lock rule; a docs fixup by the Manager, outside the gate).
+- D44 (2026-10-02, QE round 5 — defect D46 and spec correction SC-6; the
+  senior developer's test-integrity review, D46 recommended now): after a
+  newer unreadable settings.toml could not be moved aside, both lines
+  named the EARLIER aside as "the file that would not read". QE's repro on
+  7559db0: a file broken at launch, moved aside to `settings.toml.broken`
+  by the first commit; a hand edit broke the fresh file and the reopen
+  re-read it (`… the earlier one is settings.toml.broken`, right); the
+  config dir then mode 555 and a wash commit of 15 — the status line read
+  `⚠ settings.toml could not be written — the file that would not read is
+  settings.toml.broken` and the notice `Could not write settings.toml: the
+  file that would not read could not be moved aside: Permission denied (os
+  error 13) — the file that would not read is settings.toml.broken`, while
+  on disk settings.toml held the unreadable text and `.broken` the earlier
+  file. The code had followed settings.md's F4 sentence ("any later one"),
+  so the sentence moved first: when a read error newer than the move still
+  stands, both lines name the aside as the earlier one, the wording of
+  D26. One helper words the write error's suffix for both lines, so they
+  cannot disagree.
 - Directive candidates (2026-10-02, from the diagnosis): `.claude/agents/
   senior-developer.md` says the driven suite "is 87 tests" — it is 111 at
   a377405 (brief 008 added 24; the two halves run ~340 s each, over the
