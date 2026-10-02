@@ -305,8 +305,11 @@ medium's measured behaviour:
   limit N in the file means exactly `FASTCULL_MAX_READERS=N`, 0 is
   adaptive, the variable wins over the file, an unparsable variable is
   ignored, and `settings::resolve_max_readers` is the one place the two
-  are reconciled before `Pipeline::start` receives the pool's override —
-  the pool itself no longer reads the environment.
+  are reconciled — both binaries reach it through
+  `settings::resolve_max_readers_from_env`, which hands it the process's
+  environment (QE 2026-10-02, round 5, SC-7) — before `Pipeline::start`
+  receives the pool's override; the pool itself no longer reads the
+  environment.
 - Every limit change is logged to stderr, the diagnostics channel:
   `fastcull: read pool N -> M workers (probe read X ms | read stalled for
   X ms; K reading)`, K being the reads actually in flight. Steady state
@@ -448,6 +451,9 @@ medium's measured behaviour:
 
 ## History
 
+- 2026-10-02 — QE round 5 of brief 008 (SC-7): the override paragraph
+  names the wrapper both binaries call, `resolve_max_readers_from_env`,
+  beside the pure function it calls.
 - 2026-10-01 — QE round 2 of brief 008 (D30): the prefetch window's size
   in the ring's budget rule is given in the app's binary units, ~712 MB,
   where it gave ~746 decimal megabytes.

@@ -395,9 +395,11 @@ their precedence is `fastcull-core`'s; the app binds (brief 008, 2026-10-01).
   box has to name some limit (developer 2026-10-01, brief 008 commit A —
   the spec was silent; Manager-accepted under M2, senior-developer review
   2026-10-01). Core resolves `(environment, setting) → the pool's
-  configuration` in one pure
-  function, `settings::resolve_max_readers`, that both binaries call where
-  `pipeline.rs` read the variable. The CLI prints `readers: floor F cap C
+  configuration` in one pure function, `settings::resolve_max_readers`,
+  and both binaries call it through `settings::resolve_max_readers_from_env`,
+  which hands it the process's own environment, where `pipeline.rs` read
+  the variable (corrected 2026-10-02, QE round 5, SC-7: it said both
+  binaries call the pure function itself). The CLI prints `readers: floor F cap C
   (<source>)` after its `cache:` line, the bounds read back from the pool
   (`Pipeline::read_pool_bounds`), the source worded as the `cache:` line's
   (QE 2026-10-01, D34). The environment override shows
@@ -441,7 +443,10 @@ their precedence is `fastcull-core`'s; the app binds (brief 008, 2026-10-01).
   MemorySource)`, `Settings::loupe_memory_bytes(total_ram)`,
   `Settings::cache_cap_bytes()`, `a1_frames(bytes)`,
   `resolve_max_readers(env, setting) -> Readers` (`Adaptive` |
-  `Limit(n)` | `Environment(n)`, with `override_for_pool()`),
+  `Limit(n)` | `Environment(n)`, with `override_for_pool()`) and
+  `resolve_max_readers_from_env(setting)`, the same against this process's
+  environment — the call both binaries make (QE 2026-10-02, round 5,
+  SC-7),
   `config_dir()` and its pure `config_dir_from(env)`, `total_ram()` and
   `parse_mem_total`.
 - Constants: `FILE_NAME`, `WASH_MAX` 50, `WASH_DEFAULT` 25,
@@ -585,7 +590,12 @@ their precedence is `fastcull-core`'s; the app binds (brief 008, 2026-10-01).
 - [x] **AC6 — hermetic.** `FASTCULL_NO_CONFIG=1` makes `settings.toml`
       unreachable for load and save and the dialog says `Not saved`; no
       test touches the real file — core
-      `config_dir_honours_the_override_then_no_config`; app
+      `config_dir_honours_the_override_then_no_config`, which also pins
+      the per-user dir "The file" names, with neither variable set — a
+      path ending `fastcull` on Linux and `fastcull\fastcull\config` on
+      Windows, computed, the filesystem untouched (QE 2026-10-02, round 5:
+      a resolver naming another dir would orphan every user's three files
+      at an upgrade, and nothing saw it); app
       `settings_under_no_config_applies_in_memory_and_writes_nothing`;
       every driven run carries `FASTCULL_NO_CONFIG=1`, and every test that
       reads or writes a settings file sets `FASTCULL_CONFIG_DIR` to its own
@@ -706,11 +716,17 @@ their precedence is `fastcull-core`'s; the app binds (brief 008, 2026-10-01).
       names it, and `docs/culling.md` and `docs/faq.md` follow the
       behaviour — review-verified by the senior developer's review of
       brief 008, 2026-10-01 (no test pins prose).
-- [ ] **AC16 — no budget row moves** — `tests/perf_budgets.rs` green in
-      release on the idle seat (QE). Open until QE's run.
+- [x] **AC16 — no budget row moves** — `tests/perf_budgets.rs` green in
+      release on the idle seat, every row in three runs (QE 2026-10-02,
+      round 5; the figures are brief 008 D45).
 
 ## History
 
+- 2026-10-02 — QE round 5 of brief 008, bookkeeping (SC-1, SC-7) and the
+  config dir's tail: AC16 ticked on QE's three idle release runs; "Read
+  workers" and the Contracts name the wrapper both binaries call beside the
+  pure function; AC6's test now pins the per-user dir's tail on Linux and
+  Windows.
 - 2026-10-02 — QE round 5 of brief 008, the earlier aside (D46): a write
   that could not move a newer broken file aside called the earlier aside
   "the file that would not read" on both lines; the F4 sentence of

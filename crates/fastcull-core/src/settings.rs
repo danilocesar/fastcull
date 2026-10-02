@@ -2125,9 +2125,23 @@ mod tests {
     /// The config-dir rule, with the environment injected — never the
     /// process's own, which every test in this binary shares.
     ///
+    /// With neither variable it is the per-user dir settings.md's "The
+    /// file" names — the one where every user's settings.toml, ui.toml and
+    /// templates.toml already live, so a resolver that named another would
+    /// orphan all three at an upgrade, with nothing on screen to say so
+    /// (QE 2026-10-02, round 5). Only the path's TAIL is pinned: its head
+    /// is the user's home (or `XDG_CONFIG_HOME`, or the roaming AppData
+    /// folder), and the `directories` crate only computes it — the
+    /// filesystem is never touched. On Linux and Windows a `None` here is
+    /// the resolver broken; other targets keep the old tolerance.
+    ///
     /// Mutant (2026-10-01): `FASTCULL_NO_CONFIG` checked before
     /// `FASTCULL_CONFIG_DIR` → the first row reads `Hermetic` and this
-    /// goes red.
+    /// goes red. Mutant (2026-10-02): the application name in the
+    /// `ProjectDirs::from` triple changed (`"fastcull"` → `"fastcul"`) →
+    /// the Linux path ends `fastcul` — red. On Linux the dir is the
+    /// application name alone (the `directories` crate's rule), so a
+    /// change to the organisation is red on Windows only.
     #[test]
     fn config_dir_honours_the_override_then_no_config() {
         let env = |pairs: &'static [(&'static str, &'static str)]| {
@@ -2159,10 +2173,29 @@ mod tests {
             Some(ConfigDir::Hermetic),
             "an empty override is no override"
         );
-        assert!(
-            matches!(config_dir_from(env(&[])), None | Some(ConfigDir::Real(_))),
-            "with neither variable the per-user dir (or none) is the answer"
-        );
+        let real = config_dir_from(env(&[]));
+        if cfg!(any(target_os = "linux", windows)) {
+            let Some(ConfigDir::Real(dir)) = &real else {
+                panic!("with neither variable the per-user config dir is the answer: {real:?}");
+            };
+            // `Path::ends_with` compares whole components.
+            let tail = if cfg!(windows) {
+                r"fastcull\fastcull\config"
+            } else {
+                "fastcull"
+            };
+            assert!(
+                dir.ends_with(tail),
+                "the per-user config dir {} does not end in {tail} — every user's \
+                 settings.toml, ui.toml and templates.toml would be left behind",
+                dir.display()
+            );
+        } else {
+            assert!(
+                matches!(real, None | Some(ConfigDir::Real(_))),
+                "with neither variable the per-user dir (or none) is the answer"
+            );
+        }
     }
 
     /// The comment wrapper keeps every word and every line inside 78

@@ -979,6 +979,22 @@ setting.
   stands, both lines name the aside as the earlier one, the wording of
   D26. One helper words the write error's suffix for both lines, so they
   cannot disagree.
+- D45 (2026-10-02, QE round 5 — spec corrections SC-1 and SC-7, M10
+  bookkeeping; the test-integrity review's T12): AC16 is ticked on QE's
+  measurement — `cargo test --release --locked -p fastcull-core --test
+  perf_budgets -- --test-threads=1` on the idle seat, three runs, all six
+  rows green each time: the folder scan 2.1–2.2 ms, the full-res decode
+  243–245 ms, the video export 466–517 ms. settings.md "Read workers" said
+  both binaries call `settings::resolve_max_readers`; both call
+  `resolve_max_readers_from_env(setting)` (app session.rs and the dialog's
+  bridge, fastcull-cli main.rs), the wrapper that hands the pure function
+  the process's environment — "Read workers", the Contracts and
+  raw-pipeline.md's override paragraph name both. And the per-user config
+  dir's tail is pinned in core (`…/fastcull` on Linux,
+  `…\fastcull\fastcull\config` on Windows): until now the core test
+  accepted any per-user dir or none, so a changed `ProjectDirs` triple would
+  have orphaned every user's three files at an upgrade with the whole suite
+  green.
 - Directive candidates (2026-10-02, from the diagnosis): `.claude/agents/
   senior-developer.md` says the driven suite "is 87 tests" — it is 111 at
   a377405 (brief 008 added 24; the two halves run ~340 s each, over the
