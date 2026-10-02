@@ -131,7 +131,10 @@ you change something in the dialog, and keeps your own comments, any
 keys it does not know and the file's own line endings — a file saved
 with Windows line endings (Notepad's) comes back with them, and a
 byte-order mark stays where it was. A value out of range is held to the range (60 %
-reads as 50 %); a value it cannot read at all reads as the default.
+reads as 50 %); a value it cannot read at all reads as the default. One
+thing it cannot keep: a table you put where one of these settings or
+groups belongs (`[performance.loupe_memory]`, `[[general]]`) is replaced
+by the setting at the next change — the file cannot hold both.
 
 If the whole file will not parse — a stray bracket — FastCull does not
 touch it: it runs on the defaults, the terminal and the status bar say

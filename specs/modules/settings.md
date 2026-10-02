@@ -124,9 +124,16 @@ their precedence is `fastcull-core`'s; the app binds (brief 008, 2026-10-01).
   is LF without a mark (QE 2026-10-01, D6; brief 008 D21: toml_edit writes
   LF and drops the mark, so the writer restores both). The comments of a
   file that holds no entries, and a comment that follows the last entry,
-  stay where they were — before the first table the write creates — rather
+  stay where they were — before the first table the write appends — rather
   than below the tables (QE 2026-10-01, D35: toml_edit keeps them as the
-  document's trailing decor and would print them last).
+  document's trailing decor and would print them last; corrected the same
+  day from "creates": a table that replaces an entry keeps that entry's
+  place, which may be the top of the file). A table where one of the five
+  keys belongs, or an array of tables or a plain value where a tab's table
+  belongs (`[performance.loupe_memory]`, `[[general]]`, `general = 5`), is
+  replaced by the key or the table, in its place — the shape is not one the
+  file can hold beside ours — and the write says nothing about it (QE
+  2026-10-01, D35).
 - A write that finds the file unparsable AT THAT MOMENT moves it aside
   before writing a fresh one, whatever the last read said — the first
   write after a failed read, or a hand edit that broke the file
@@ -463,7 +470,9 @@ their precedence is `fastcull-core`'s; the app binds (brief 008, 2026-10-01).
       (under `FASTCULL_CONFIG_DIR`); core
       `a_written_file_round_trips_every_key`,
       `a_write_preserves_unknown_keys_and_the_users_comments`,
-      `a_comment_only_files_comments_stay_at_the_top` (QE 2026-10-01, D35),
+      `a_comment_only_files_comments_stay_at_the_top` and
+      `a_table_or_an_array_at_a_known_name_is_replaced_and_the_file_still_parses`
+      (QE 2026-10-01, D35),
       `a_created_key_carries_its_note_and_an_existing_key_keeps_its_comment`,
       `the_normalised_string_is_what_the_file_stores`; a write that fails
       keeps the commit in force and the next open does not re-read over it
@@ -611,6 +620,11 @@ their precedence is `fastcull-core`'s; the app binds (brief 008, 2026-10-01).
 
 ## History
 
+- 2026-10-01 — QE round 3 of brief 008, shapes the file cannot keep (D35):
+  a table where a key belongs, or an array of tables or a value where a
+  tab's table belongs, is replaced in its place, and "Writing" names the
+  exception instead of promising every byte; the comment rule says
+  "appends".
 - 2026-10-01 — QE round 3 of brief 008, comments at the end of the file
   (D35): a comment-only file's comments, and a comment after the last
   entry, came back below the tables a write created; they stay where they

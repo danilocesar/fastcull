@@ -935,7 +935,7 @@ fn merge_into(doc: &mut toml_edit::DocumentMut, settings: &Settings) {
     // holds nothing but comments — are the document's TRAILING decor, which
     // toml_edit prints after everything else, so a table created below
     // would push them under the new tables. They go in front of the first
-    // table this write creates instead, where they were (settings.md,
+    // table this write appends instead, where they were (settings.md,
     // "Writing"; QE 2026-10-01, D35). Only a trailing decor that holds a
     // comment moves: blank lines alone stay at the end, as before — moved,
     // a file of blank lines would start with them.
@@ -946,10 +946,29 @@ fn merge_into(doc: &mut toml_edit::DocumentMut, settings: &Settings) {
     let mut moved = false;
     for tab in TABS {
         let root = doc.as_table_mut();
-        let is_table = root.get(tab.table()).is_some_and(|t| t.is_table_like());
+        let existing = root.get(tab.table());
+        let is_table = existing.is_some_and(|t| t.is_table_like());
         if !is_table {
+            // Something that is not a table where this tab's table belongs
+            // — an array of tables (`[[general]]`), a value — is REPLACED by
+            // the table, in its place: TOML cannot hold both (settings.md,
+            // "Writing"; QE 2026-10-01, D35). An array's first header gives
+            // the table its spacing and its comment, so a file that began
+            // with `[[general]]` does not begin with a blank line now.
+            let replaces = existing.is_some();
+            let header_prefix = existing
+                .and_then(toml_edit::Item::as_array_of_tables)
+                .and_then(|tables| tables.get(0))
+                .and_then(|first| first.decor().prefix())
+                .and_then(toml_edit::RawString::as_str)
+                .map(str::to_string);
             let mut table = toml_edit::Table::new();
-            if !trailing.is_empty() {
+            if let Some(prefix) = header_prefix {
+                table.decor_mut().set_prefix(prefix);
+            } else if !trailing.is_empty() && !replaces {
+                // Only into a table APPENDED at the end: one that replaces
+                // an entry keeps that entry's place, which may be the top
+                // of the file — measured, the footer moved there.
                 table
                     .decor_mut()
                     .set_prefix(format!("{}\n", std::mem::take(&mut trailing)));
@@ -981,10 +1000,19 @@ fn merge_into(doc: &mut toml_edit::DocumentMut, settings: &Settings) {
                     *value.decor_mut() = old.decor().clone();
                     *old = value;
                 }
-                // A table or an array where a value belongs: the key is
-                // ours, so it becomes the value; its comment (on the key)
-                // survives.
-                Some(other) => *other = toml_edit::Item::Value(value),
+                // A table or an array of tables where a value belongs
+                // (`[performance.loupe_memory]`): TOML cannot hold both, so
+                // the key becomes the value and the table goes, its contents
+                // and its header's comment with it (settings.md, "Writing";
+                // QE 2026-10-01, D35). The key's decor was the header's
+                // spacing, so it is reset to a key line's — `loupe_memory =`,
+                // not `loupe_memory=`.
+                Some(other) => {
+                    *other = toml_edit::Item::Value(value);
+                    if let Some(mut replaced) = table.key_mut(key.name()) {
+                        replaced.leaf_decor_mut().clear();
+                    }
+                }
                 None => {
                     table.insert(key.name(), toml_edit::Item::Value(value));
                     if notes_allowed {
@@ -1235,8 +1263,11 @@ mod tests {
     /// the last created table instead of under `auto_advance`. When this
     /// fails that way it is that defect; do not quiet it.
     ///
-    /// Mutant (2026-10-01): the trailing decor left where toml_edit keeps it
-    /// (the move taken out of `merge_into`, which IS 13a904e) → red.
+    /// Mutants (2026-10-01): the trailing decor left where toml_edit keeps it
+    /// (the move taken out of `merge_into`, which IS 13a904e) → red; the
+    /// move allowed into a table that REPLACES an entry (`&& !replaces`
+    /// dropped) → the third fixture's `# tail` lands at the top of the file,
+    /// before the `[general]` that took `general = 5`'s place — red.
     #[test]
     fn a_comment_only_files_comments_stay_at_the_top() {
         let path = file_with("comment-only", "# just a comment\n# another\n");
@@ -1272,6 +1303,84 @@ mod tests {
             s,
             "the written file does not read back"
         );
+
+        // The footer goes to a table the write APPENDS, never to one that
+        // replaces an entry in place: the `[general]` that replaces
+        // `general = 5` keeps that entry's place, at the top of the file.
+        let path = file_with(
+            "footer-replaced",
+            "general = 5\n[ui]\nselection_wash = 10\n# tail\n",
+        );
+        let s = load(&path).settings;
+        write(&path, &s).unwrap();
+        let text = std::fs::read_to_string(&path).unwrap();
+        assert!(
+            text.contains("selection_wash = 10\n# tail\n\n[performance]"),
+            "the comment after the last entry moved off it — to the table that \
+             replaced `general = 5`, at the top of the file: {text:?}"
+        );
+        assert_eq!(
+            load(&path).settings,
+            s,
+            "the written file does not read back"
+        );
+    }
+
+    /// A table where one of the five keys belongs, and an array of tables
+    /// where a tab's table belongs, are REPLACED by the key or the table —
+    /// TOML cannot hold `loupe_memory = "2 GB"` beside
+    /// `[performance.loupe_memory]`, nor `[general]` beside `[[general]]` —
+    /// and the file still parses and reads back exactly what was written
+    /// (settings.md, "Writing"; QE 2026-10-01, D35). Two cosmetics are
+    /// pinned here and nowhere else: the replaced key reads `loupe_memory =`
+    /// (its decor was the header's, `loupe_memory=`), and a file that began
+    /// with `[[general]]` begins with `[general]`, not a blank line.
+    ///
+    /// Mutants (2026-10-01): the replacement arm of `merge_into` taken out
+    /// (`Some(other) => continue`) → the subtable stays, `foo = 1` with it,
+    /// and `load` reads the default loupe memory — red; the key decor's
+    /// reset taken out → `loupe_memory= "40%"` — red; the array header's
+    /// spacing not carried → the file starts with a blank line — red.
+    #[test]
+    fn a_table_or_an_array_at_a_known_name_is_replaced_and_the_file_still_parses() {
+        let s = non_default();
+        for (tag, users, pinned) in [
+            (
+                "subtable",
+                "[performance.loupe_memory]\nfoo = 1\n",
+                "loupe_memory = \"40%\"\n",
+            ),
+            ("aot", "[[general]]\nauto_advance = false\n", "[general]\n"),
+        ] {
+            let path = file_with(tag, users);
+            write(&path, &s).unwrap();
+            let text = std::fs::read_to_string(&path).unwrap();
+            assert!(
+                text.parse::<toml::Table>().is_ok(),
+                "{tag}: the written file does not parse: {text:?}"
+            );
+            let reread = load(&path);
+            assert_eq!(reread.error, None, "{tag}: {text:?}");
+            assert_eq!(
+                reread.settings, s,
+                "{tag}: the file does not read back what was written: {text:?}"
+            );
+            // The line, not the substring: the notes say "footprint".
+            assert!(
+                !text.lines().any(|line| line.trim() == "foo = 1"),
+                "{tag}: the table's content stayed: {text:?}"
+            );
+            match tag {
+                "subtable" => assert!(
+                    text.contains(pinned),
+                    "{tag}: the replaced key does not read `{pinned}`: {text:?}"
+                ),
+                _ => assert!(
+                    text.starts_with(pinned),
+                    "{tag}: the file does not start with `{pinned}`: {text:?}"
+                ),
+            }
+        }
     }
 
     /// A key the write creates carries its note above it, wrapped inside

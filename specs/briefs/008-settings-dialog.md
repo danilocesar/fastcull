@@ -814,7 +814,22 @@ setting.
   integrity review's probe across seven shapes on toml_edit 0.22.27). Blank
   lines alone in the trailing decor stay at the end, as before: moved, a
   file of blank lines would have started with them (the developer's
-  measurement, sixteen shapes compared before and after).
+  measurement, sixteen shapes compared before and after). Two shapes QE
+  found the writer cannot keep — `[performance.loupe_memory]` with `foo =
+  1` inside, and `[[general]]` — are DOCUMENTED instead (T4b, M1 as
+  recommended): TOML cannot hold `loupe_memory = "2 GB"` beside a table of
+  that name, nor `[general]` beside `[[general]]`, so the key or the table
+  replaces them, in place, and the file still parses and reads back what
+  was written. The developer found a third shape of the same kind, a plain
+  value at a tab's name (`general = 5`), which the writer has always
+  replaced, and named it in the sentence; and a regression of the comment
+  fix in it — a table that REPLACES an entry keeps that entry's place, so a
+  footer moved into it would land at the top of the file — so the footer
+  goes to a table the write appends, never to one that replaces. The
+  cosmetics the integrity review allowed are made and pinned: the replaced
+  key reads `loupe_memory =` (its decor was the header's), and a table
+  replacing `[[general]]` carries that header's spacing and comment, so a
+  file that began with it does not begin with a blank line.
 - D36 (2026-10-01, QE round 3 — defect D36, minor; the senior developer's
   test-integrity review, no test change): the shortcuts card's MARK rows
   read `pick — and advance` and `reject — and advance`, and its footnote
