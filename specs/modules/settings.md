@@ -561,7 +561,11 @@ their precedence is `fastcull-core`'s; the app binds (brief 008, 2026-10-01).
       bounds: the file's 2 pins (2, 2), the environment's 3 wins over the
       file's 6, an ignored `abc` leaves the file's 6 (4, 6), no file is
       adaptive (QE 2026-10-01, D34: the same mutant on the CLI's call site
-      had left the suite green).
+      had left the suite green); the Limit field takes nothing while
+      Adaptive is ticked and takes a limit once it is cleared — the same
+      app test's third run, a click and `6`, Enter, before and after
+      clearing Adaptive (QE 2026-10-02, round 4 D41: with the Adaptive term
+      dropped from the field's `enabled` the suite had stayed green).
 - [x] **AC8 — auto-advance off.** `Y`/`N` keep the cursor and leave the
       selection alone; the filter exception moves the cursor and ends the
       selection as `U` does; on, as today — core
@@ -646,6 +650,9 @@ their precedence is `fastcull-core`'s; the app binds (brief 008, 2026-10-01).
 
 ## History
 
+- 2026-10-02 — QE round 4 of brief 008, the Limit field's gate (D41): a
+  Limit field enabled under Adaptive had no guard; AC7 names the strand
+  that clicks it before and after Adaptive is cleared.
 - 2026-10-02 — QE round 4 of brief 008, the click-away family (D39, D40;
   brief 008 D39): a checkbox clicked over a half-typed field committed the
   field and undid the click; "Apply on commit" says a control bound both

@@ -12728,12 +12728,31 @@ fn templates_and_ui_prefs_are_read_from_the_one_config_dir() {
 /// EMPTY, ignored like any unparsable value, so a shell's own
 /// FASTCULL_MAX_READERS cannot leak into it.
 ///
+/// The third run also proves the Limit field is a **Limit** only "when the
+/// checkbox is off" (settings.md, "Performance › Read workers"; brief 008
+/// R10): with Adaptive ticked, a click on the field and a typed `6` and
+/// Enter commit nothing and `readers=` stays adaptive — and, the control in
+/// the same run, the same click and keys commit `max_readers = 6` once
+/// Adaptive is cleared, so the inert half cannot pass because the click
+/// resolved to nothing or the field is gone. It is a click on purpose: the
+/// Tab ring never lands on the field while Adaptive is ticked (its own
+/// `slot-ok` skips the slot), so no keyboard test can see the gate. Green
+/// on a377405, a guard and not a bug fix (the senior developer measured
+/// `readers=adaptive`, no commit, no file, `focusowner=-1`: the click fell
+/// through to the dialog's scope, a disabled LineEdit being a disabled
+/// TextInput, widgets/common/lineedit-base.slint:11). That run's scratch
+/// dir now receives a written file (`= 4`, then `= 6`); the byte-equality
+/// check above concerns the OTHER dir.
+///
 /// Mutants (2026-10-01): `resolve_max_readers` ignoring the environment →
 /// the first run reads `readers=limit:7` and this goes red; session.rs
 /// passing `None` to `Pipeline::start` with the mark untouched → the pool
 /// starts adaptive, the first run's wait is never satisfied, the run exits
 /// 1 and this goes red (QE 2026-10-01, D27: until the mark read the pool,
-/// nothing did, and that mutant stayed green).
+/// nothing did, and that mutant stayed green). Mutant (2026-10-02, QE round
+/// 4's G2): the `!root.settings-readers-adaptive &&` term dropped from the
+/// Limit field's `enabled` → the first click focuses the field, `6` and
+/// Enter commit, and `dump.limitoff` reads `readers=limit:6` — red.
 #[test]
 fn the_environment_wins_over_the_settings_file_for_read_workers() {
     if !has_display() {
@@ -12821,13 +12840,75 @@ fn the_environment_wins_over_the_settings_file_for_read_workers() {
     );
 
     // No file, the variable ignored: the pool is adaptive — floor 4, the
-    // cap the core count (never pinned).
+    // cap the core count (never pinned). Then the Limit field, inert while
+    // Adaptive is ticked, and the control: live once it is cleared.
     let none = settings_scratch("readers-none", None);
-    let stderr = run(&none, "", &open_folder, "settings-readers-none.jpg");
+    let limit = format!(
+        "{open_folder};900:key:ctrl+,;1300:key:ctrl+tab;1500:key:ctrl+tab;\
+         1900:click:settings readers-limit;2200:key:6;2400:key:return;2800:dump.limitoff;\
+         3100:click:settings readers-adaptive;3500:click:settings readers-limit;\
+         3800:key:ctrl+a;4000:key:6;4200:key:return;4600:dump.limiton;4900:key:escape"
+    );
+    let stderr = run(&none, "", &limit, "settings-readers-none.jpg");
     assert!(
         stderr.contains("] read pool started floor 4 cap "),
         "with no settings file the read pool did not start adaptive (floor 4) \
          (QE 2026-10-01, D27):\n{stderr}"
+    );
+    // Both clicks on the field resolved inside it: the last through the
+    // shared check, the first by its own echo against the rectangle the
+    // app reported before it.
+    assert_click_resolved(&stderr, "settings readers-limit");
+    assert_click_resolved(&stderr, "settings readers-adaptive");
+    let first = stderr
+        .lines()
+        .find(|l| l.ends_with("] drive: click:settings readers-limit"))
+        .unwrap_or_else(|| panic!("no first click on the Limit field:\n{stderr}"));
+    let (x, y, w, h) = laid_out_rect(&stderr, "settings readers-limit", first);
+    let echo = stderr
+        .split_once(first)
+        .and_then(|(_, after)| {
+            after.lines().find(|l| {
+                l.contains("] drive ptr click ") && l.ends_with(" (settings readers-limit)")
+            })
+        })
+        .and_then(|l| l.split_once("drive ptr click "))
+        .and_then(|(_, at)| at.split_once(' '))
+        .and_then(|(xy, _)| xy.split_once(','))
+        .and_then(|(cx, cy)| Some((cx.parse::<f32>().ok()?, cy.parse::<f32>().ok()?)));
+    assert!(
+        echo.is_some_and(|(cx, cy)| cx >= x && cx <= x + w && cy >= y && cy <= y + h),
+        "the first click on the Limit field did not resolve inside it ({echo:?} against \
+         {x},{y} {w}x{h}) — the inert half below would prove nothing:\n{stderr}"
+    );
+    let labels = mark_labels(&stderr);
+    let limitoff = labels
+        .iter()
+        .position(|l| *l == "drive: dump.limitoff")
+        .unwrap_or_else(|| panic!("no `drive: dump.limitoff` step:\n{stderr}"));
+    assert_eq!(
+        dump_field(qedump(&stderr, "limitoff"), "readers"),
+        "adaptive",
+        "with Adaptive ticked the Limit field took a limit — it is a Limit only when \
+         the checkbox is off (settings.md, R10; QE round 4, D41):\n{stderr}"
+    );
+    assert!(
+        !labels[..limitoff]
+            .iter()
+            .any(|l| l.starts_with("settings committed performance.max_readers")),
+        "with Adaptive ticked a click and `6`, Enter on the Limit field committed a \
+         limit:\n{stderr}"
+    );
+    // The control: the same click and keys, Adaptive cleared, commit.
+    assert_eq!(
+        dump_field(qedump(&stderr, "limiton"), "readers"),
+        "limit:6",
+        "with Adaptive cleared the same click and `6`, Enter did not commit a limit of \
+         6 — the inert half above proves nothing:\n{stderr}"
+    );
+    assert!(
+        labels[limitoff..].contains(&"settings committed performance.max_readers = 6"),
+        "no `settings committed performance.max_readers = 6` after `dump.limitoff`:\n{stderr}"
     );
     std::fs::remove_dir_all(&dir).ok();
     std::fs::remove_dir_all(&none).ok();
