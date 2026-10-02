@@ -789,6 +789,18 @@ setting.
   as Slint's own Tab navigation and the IPTC panel do, and
   `a_number_typed_after_tab_replaces_the_value_in_the_field` types the way a
   user does — Tab in, no Ctrl+A.
+- D36 (2026-10-01, QE round 3 — defect D36, minor; the senior developer's
+  test-integrity review, no test change): the shortcuts card's MARK rows
+  read `pick — and advance` and `reject — and advance`, and its footnote
+  `the advance ends a selection` — true until this unit made auto-advance a
+  setting, false with it off (QE's probe: the cursor stayed at 0 for `Y`,
+  `P`, `Space` and `X`). The card now reads `pick — and advance (a
+  setting)`, `reject — and advance (a setting)` and `an advance ends a
+  selection`: 30 and 32 characters in a cell that holds 38, and the footnote
+  one shorter, so nothing wraps — the card measured 780×572 at 1440×900 and
+  1000×700 on this seat before and after. No spec sentence moves: ui-grid.md
+  does not carry the card's row texts and its keyboard map's `pick (take)`
+  is right; docs/culling.md already said "auto-advances — a setting".
 - Directive candidate (2026-10-01): M9's cleanup command `cargo clean
   -p …` cleans the dev profile only — a `screen-rung` release binary
   from 2026-09-29 survived it and the persona ran it by mistake; the

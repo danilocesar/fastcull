@@ -4250,9 +4250,14 @@ export component MainWindow inherits Window {
                             heading: "MARK";
                             // Auto-advance is this app's most surprising
                             // behaviour; docs/culling.md has always said it
-                            // and this card never did.
-                            KeyRow { k: "Y / P / Space"; a: "pick — and advance"; }
-                            KeyRow { k: "N / X"; a: "reject — and advance"; }
+                            // and this card never did. "(a setting)" since
+                            // brief 008 made it one (settings.md, General):
+                            // with it off, Y and N stay put, and a card that
+                            // said "and advance" unconditionally was false
+                            // (QE 2026-10-01, D36). 30 and 32 characters, in
+                            // the 38 the action cell holds on one line.
+                            KeyRow { k: "Y / P / Space"; a: "pick — and advance (a setting)"; }
+                            KeyRow { k: "N / X"; a: "reject — and advance (a setting)"; }
                             KeyRow { k: "U"; a: "clear the mark, stay put"; }
                             // Kept, not dropped: it is the answer to
                             // "I pressed 3 and nothing happened", and
@@ -4362,9 +4367,11 @@ export component MainWindow inherits Window {
                         }
                         // The rule ui-grid.md goes out of its way to state,
                         // and the one a user with a 40-frame burst selected
-                        // will otherwise get backwards.
+                        // will otherwise get backwards. "An advance", not
+                        // "the advance": with auto-advance off there is none
+                        // (QE 2026-10-01, D36).
                         Text {
-                            text: "Marks act on the cursor frame only; the advance ends a selection.";
+                            text: "Marks act on the cursor frame only; an advance ends a selection.";
                             color: #8a8a96;
                             font-size: 11px;
                             wrap: word-wrap;
