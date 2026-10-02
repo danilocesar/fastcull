@@ -11613,6 +11613,128 @@ fn a_settings_commit_writes_the_file_and_esc_discards_a_half_typed_field() {
     std::fs::remove_dir_all(&dir).ok();
 }
 
+/// AC4 (settings.md, "Apply on commit": "after a commit … the field shows
+/// the value IN FORCE — parsed, clamped, normalised — never the raw text"):
+/// a commit that leaves the value in force UNCHANGED, and a value the field
+/// refuses, re-show the value in force too. Four strands in one launch,
+/// each typed over a field and committed with Enter:
+///   - Selection highlight: 50 committed first (it shows 25), then `60` —
+///     clamped to 50, the value in force unchanged — and then `abc`, which
+///     the field refuses (`set_from_text` fails and the model is untouched);
+///   - Loupe memory and the Thumbnail cache cap: `2gb` over `2 GB` — the
+///     same 2 GB, normalised;
+///   - the read workers' Limit, Adaptive cleared (a limit of 4): `04` —
+///     the integer 4.
+///
+/// Each strand reads what the field SHOWED, from its own `settings <field>
+/// shows` mark: the raw text last before its Enter (the PREMISE that the
+/// typing reached the field) and the value in force last before its dump
+/// (the contract), with the model's value in the dump beside it. Only the
+/// field's own `accepted` handler can do this re-show: the value in force
+/// did not change, so `changed shown` does not fire, and the first
+/// keystroke broke the field's binding, so the bridge's `present` cannot
+/// reach it (QE 2026-10-02, round 5: with the re-show taken out of any
+/// field's `accepted`, the field went on showing `60`, `abc`, `2gb` or
+/// `04` after Enter, and the whole suite stayed green). No config dir: the
+/// harness's own FASTCULL_NO_CONFIG, `settings written` 0 the hermetic
+/// premise. With the dialog deleted the first field click finds no layout
+/// mark and the run aborts.
+///
+/// Mutants (2026-10-02), each alone: `self.text = root.settings-wash;` taken
+/// out of the wash field's `accepted` → the wash field shows `60` at
+/// `dump.wash` (and `abc` at `dump.refused`) — red; the same line out of
+/// Loupe memory's → it shows `2gb` — red; out of the cap's → `2gb` — red;
+/// out of the Limit's → `04` — red.
+#[test]
+fn a_commit_that_leaves_the_value_in_force_unchanged_still_reshows_it() {
+    if !has_display() {
+        eprintln!("screenshot smoke skipped: no display server");
+        return;
+    }
+    let _s = serial();
+    let out = out_dir().join("settings-reshow.jpg");
+    let script = "400:key:ctrl+,;700:key:right;1000:click:settings wash;1300:key:ctrl+a;\
+                  1500:key:5;1700:key:0;1900:key:return;2200:key:ctrl+a;2400:key:6;2600:key:0;\
+                  2800:key:return;3100:dump.wash;3400:key:ctrl+a;3600:key:a;3800:key:b;\
+                  4000:key:c;4200:key:return;4500:dump.refused;4800:key:ctrl+tab;\
+                  5200:click:settings loupe-memory;5500:key:ctrl+a;5700:key:2;5900:key:g;\
+                  6100:key:b;6300:key:return;6600:dump.loupe;6900:click:settings cache-cap;\
+                  7200:key:ctrl+a;7400:key:2;7600:key:g;7800:key:b;8000:key:return;\
+                  8300:dump.cap;8600:click:settings readers-adaptive;\
+                  9000:click:settings readers-limit;9300:key:ctrl+a;9500:key:0;9700:key:4;\
+                  9900:key:return;10200:dump.limit";
+    let stderr = shoot_env_stderr(
+        &["--synthetic", "24"],
+        &[("FASTCULL_TRACE", "1"), ("FASTCULL_DRIVE", script)],
+        &out,
+    );
+    for element in [
+        "settings wash",
+        "settings loupe-memory",
+        "settings cache-cap",
+        "settings readers-adaptive",
+        "settings readers-limit",
+    ] {
+        assert_click_resolved(&stderr, element);
+    }
+    assert_eq!(
+        mark_lines(&stderr, "settings written "),
+        0,
+        "a settings file was written by a run under FASTCULL_NO_CONFIG — the run is \
+         not hermetic:\n{stderr}"
+    );
+    let labels = mark_labels(&stderr);
+    // What the field showed last before position `at`.
+    let shown = |field: &str, at: usize| -> Option<&str> {
+        let tag = format!("settings {field} shows ");
+        labels[..at]
+            .iter()
+            .rev()
+            .find_map(|l| l.strip_prefix(tag.as_str()))
+    };
+    for (field, raw, dump, model, value, in_force) in [
+        ("wash", "60", "wash", "wash", "50", "50"),
+        ("wash", "abc", "refused", "wash", "50", "50"),
+        (
+            "loupe-memory",
+            "2gb",
+            "loupe",
+            "loupemem",
+            "2147483648",
+            "2 GB",
+        ),
+        ("cache-cap", "2gb", "cap", "cachecap", "2147483648", "2 GB"),
+        ("readers-limit", "04", "limit", "readers", "limit:4", "4"),
+    ] {
+        let step = format!("drive: dump.{dump}");
+        let at = labels
+            .iter()
+            .position(|l| *l == step)
+            .unwrap_or_else(|| panic!("no `{step}` in the trace:\n{stderr}"));
+        let enter = labels[..at]
+            .iter()
+            .rposition(|l| *l == "drive: key:return")
+            .unwrap_or_else(|| panic!("no Enter before `{step}`:\n{stderr}"));
+        assert_eq!(
+            shown(field, enter),
+            Some(raw),
+            "the premise: the {field} field did not show the typed `{raw}` when Enter \
+             was pressed, so the re-show below proves nothing:\n{stderr}"
+        );
+        assert_eq!(
+            dump_field(qedump(&stderr, dump), model),
+            value,
+            "`{model}=` is not the value in force after `{raw}` and Enter:\n{stderr}"
+        );
+        assert_eq!(
+            shown(field, at),
+            Some(in_force),
+            "after `{raw}` and Enter the {field} field still shows the raw text, not \
+             the value in force `{in_force}` (settings.md, \"Apply on commit\"):\n{stderr}"
+        );
+    }
+}
+
 /// The labels of a run's trace marks, in the order they were emitted
 /// (`fastcull-trace: [<ms>] <label>`, the one emit site — `mark_lines`).
 fn mark_labels(stderr: &str) -> Vec<&str> {

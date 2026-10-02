@@ -530,7 +530,14 @@ their precedence is `fastcull-core`'s; the app binds (brief 008, 2026-10-01).
       preserving an unknown key and the user's comments; the field then
       shows the value in force; `Esc` discards an uncommitted field and
       closes — `a_settings_commit_writes_the_file_and_esc_discards_a_half_typed_field`
-      (under `FASTCULL_CONFIG_DIR`); core
+      (under `FASTCULL_CONFIG_DIR`); the field shows the value in force
+      after a commit that leaves it unchanged — a clamp (`60` over 50 %),
+      another spelling (`2gb` over `2 GB`, `04` over a limit of 4) — and
+      after a value it refuses (`abc`), never the raw text, in every number
+      field — `a_commit_that_leaves_the_value_in_force_unchanged_still_reshows_it`
+      (QE 2026-10-02, round 5: the field's own `accepted` is the only
+      re-show there, and taking it out of any field left the suite green);
+      core
       `a_written_file_round_trips_every_key`,
       `a_write_preserves_unknown_keys_and_the_users_comments`,
       `a_comment_only_files_comments_stay_at_the_top` (blank lines alone
@@ -756,6 +763,9 @@ their precedence is `fastcull-core`'s; the app binds (brief 008, 2026-10-01).
 
 ## History
 
+- 2026-10-02 — QE round 5 of brief 008, the value in force re-shown: a
+  commit that changes nothing in force, or a refused value, leaves the
+  field showing the value in force; AC4 names the test.
 - 2026-10-02 — QE round 5 of brief 008, the click-away matrix (SC-5): the
   matrix drives Close, the scrim and Esc over all four number fields, and
   the Reset test the cap and the Limit; AC3 and AC4 name what each covers.

@@ -121,8 +121,11 @@ pub(crate) fn wire(window: &MainWindow, state: &Rc<RefCell<AppState>>) {
                         .set_readers_adaptive(text.as_str() == "true");
                     Some(Key::MaxReaders)
                 } else if let Some(key) = Key::from_name(name.as_str()) {
-                    // A refused value changes nothing; `present` below puts
-                    // the value in force back in the field.
+                    // A refused value changes nothing in the model. The field
+                    // is re-shown by its own `accepted` or blur (main.slint),
+                    // never by `present` below: the user's first keystroke
+                    // broke the field's binding to its property, and the value
+                    // in force did not change (QE 2026-10-02, round 5).
                     st.settings
                         .loaded
                         .settings
