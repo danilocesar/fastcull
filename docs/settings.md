@@ -156,8 +156,10 @@ read; a change made with the dialog still open is written into it, the
 values the dialog shows taking the place of the ones in the file.
 
 If the file cannot be written (a read-only config folder, a full disk),
-the change stays in force for this session and the dialog's notice line
-says so. Until a change can be saved again, reopening the dialog keeps
+the change stays in force for this session, and the dialog's notice line
+and the status bar say so — even when the file had not read either: the
+status bar then says it could not be written, not that the defaults are
+in force, because your change is. Until a change can be saved again, reopening the dialog keeps
 what you set rather than re-reading the file, so nothing you chose is
 quietly taken back.
 

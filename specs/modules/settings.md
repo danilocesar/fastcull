@@ -99,8 +99,8 @@ their precedence is `fastcull-core`'s; the app binds (brief 008, 2026-10-01).
   not be read (<error>) — defaults in force`; QE 2026-10-01, D31: the
   dialog's re-read had printed nothing), and the app's status line carries
   `⚠ settings.toml could not be read (defaults in force)` until the file
-  reads again or is moved aside. The dialog's notice line shows the whole
-  error.
+  reads again or is moved aside, or a write fails (below: a write error is
+  newer, and wins). The dialog's notice line shows the whole error.
 
 ### Writing
 
@@ -164,8 +164,15 @@ their precedence is `fastcull-core`'s; the app binds (brief 008, 2026-10-01).
   review, recommendation B).
 - A write that fails (a read-only config dir, a full disk) keeps the
   commit in force in memory, prints one stderr line and puts
-  `Could not write settings.toml: <error>` on the dialog's notice line;
-  nothing is silently lost on screen.
+  `Could not write settings.toml: <error>` on the dialog's notice line and
+  `⚠ settings.toml could not be written` on the status line, until a write
+  succeeds; nothing is silently lost on screen. A write error is the newest
+  event — no open re-reads the file while one stands — so on both lines it
+  wins over a read error that is still standing, and the status line says
+  `(defaults in force)` only while the read error is the newest event,
+  which is exactly when it is true (brief 008 D41; QE 2026-10-02, D43: a
+  commit whose move-aside had failed left the status line claiming the
+  defaults were in force beside the user's value).
 - Once the broken file has been moved aside, a write that fails — the
   very write that moved it, or any later one — still names where the file
   went: the notice reads `Could not write settings.toml: <error> — the file
@@ -541,7 +548,11 @@ their precedence is `fastcull-core`'s; the app binds (brief 008, 2026-10-01).
       `settings_bridge::tests::a_read_error_after_the_move_aside_is_shown_not_masked_by_rewritten`
       and app
       `a_hand_edit_that_breaks_the_fresh_file_is_shown_not_masked_by_rewritten`
-      (QE 2026-10-01, D26).
+      (QE 2026-10-01, D26); a write that fails after a failed read says so
+      on the status line, never `(defaults in force)` beside a commit in
+      force — app unit
+      `settings_bridge::tests::a_write_error_wins_over_a_read_error_on_the_status_line`
+      (brief 008 D41; QE 2026-10-02, D43).
 - [x] **AC6 — hermetic.** `FASTCULL_NO_CONFIG=1` makes `settings.toml`
       unreachable for load and save and the dialog says `Not saved`; no
       test touches the real file — core
@@ -666,6 +677,10 @@ their precedence is `fastcull-core`'s; the app binds (brief 008, 2026-10-01).
 
 ## History
 
+- 2026-10-02 — QE round 4 of brief 008, the status line after a failed
+  write (brief 008 D41; QE D43): a standing write error wins on the status
+  line as on the notice, so `(defaults in force)` is said only while it is
+  true; "Reading" and "Writing" say so, and AC5 names the test.
 - 2026-10-02 — QE round 4 of brief 008, a replaced entry's comments (brief
   008 D40; QE D42, re-review RR-F2): the comment above a table the writer
   replaces, and the one on its header's line, stay with the key or table

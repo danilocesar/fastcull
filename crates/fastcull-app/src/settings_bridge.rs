@@ -440,27 +440,34 @@ fn notice(st: &SettingsState) -> String {
 }
 
 /// The status line's piece of the same story (ui-grid.md's status bar;
-/// settings.md, "Reading" and "Writing"): a read failure until the file
-/// reads again or is moved aside, then where it went, for the session — a
-/// read failure that comes AFTER a move winning over `rewritten`, as in
-/// [`notice`].
+/// settings.md, "Reading" and "Writing"), in [`notice`]'s order, newest
+/// event first: a standing write error — no open re-reads the file while
+/// one stands — naming where a broken file went when one was moved aside;
+/// then a read failure, which says "defaults in force" only while it IS the
+/// newest event, the move it follows still named (a read failure AFTER a
+/// move wins over `rewritten`); then where the file went, for the session.
 pub(crate) fn status_note(st: &SettingsState) -> String {
     let file = settings::FILE_NAME;
-    if st.loaded.error.is_some() {
+    if st.write_error.is_some() {
+        // A commit is in force in memory and could not be saved: after a
+        // failed read too, where "(defaults in force)" would be false (brief
+        // 008 D41; QE 2026-10-02, D43). "Rewritten" never, while it is not
+        // true (senior-developer review F4 of brief 008).
+        match &st.moved_aside {
+            Some(aside) => format!(
+                " — ⚠ {file} could not be written — the file that would not read is {}",
+                file_name(aside)
+            ),
+            None => format!(" — ⚠ {file} could not be written"),
+        }
+    } else if st.loaded.error.is_some() {
         format!(
             " — ⚠ {file} could not be read (defaults in force){}",
             earlier_aside(st)
         )
     } else if let Some(aside) = &st.moved_aside {
-        // "Rewritten" only while it is true: a write can fail after the
-        // move (senior-developer review F4 of brief 008).
-        let state = if st.write_error.is_some() {
-            format!("⚠ {file} could not be written")
-        } else {
-            format!("{file} rewritten")
-        };
         format!(
-            " — {state} — the file that would not read is {}",
+            " — {file} rewritten — the file that would not read is {}",
             file_name(aside)
         )
     } else {
@@ -743,6 +750,84 @@ mod tests {
         assert_eq!(
             notice(&st),
             "settings.toml rewritten — the file that would not read is settings.toml.broken.1"
+        );
+    }
+
+    /// A standing write error is the NEWEST event — no open re-reads the file
+    /// while one stands — so it wins over a read error on the status line,
+    /// as it already did on the notice (settings.md, "Writing"; brief 008
+    /// D41). The file would not read, a commit is in force, and its write
+    /// failed at the move-aside (a read-only config dir): the status line
+    /// says the file could not be written, never "(defaults in force)" — the
+    /// user's value IS in force; the notice still names the failed move;
+    /// the write that then succeeds moves the file aside and both lines say
+    /// `rewritten`.
+    ///
+    /// RED on f80e2f0, the head before the fix (QE 2026-10-02, D43):
+    /// `status_note` asked about the read error first, so the status line
+    /// read `⚠ settings.toml could not be read (defaults in force)` beside a
+    /// committed wash of 20 in force. When this fails that way it is that
+    /// defect; do not quiet it.
+    ///
+    /// Mutant (2026-10-02): the old order — the write-error arm yielding to
+    /// a standing read error (`&& st.loaded.error.is_none()`) → the status
+    /// line reads `(defaults in force)` again — red.
+    #[test]
+    fn a_write_error_wins_over_a_read_error_on_the_status_line() {
+        let path = std::path::PathBuf::from("/nowhere/fastcull/settings.toml");
+        let mut st = SettingsState::new(
+            settings::Loaded {
+                settings: Settings::default(),
+                error: Some("TOML parse error at line 1, column 4".to_string()),
+                path: Some(path.clone()),
+            },
+            None,
+        );
+        // The read failed: the defaults are in force, and the line says so.
+        assert_eq!(
+            status_note(&st),
+            " — ⚠ settings.toml could not be read (defaults in force)"
+        );
+        // A commit, written to a dir the broken file cannot leave.
+        st.loaded.settings.selection_wash = 20;
+        record_write(
+            &mut st,
+            &path,
+            Err(settings::WriteError::MoveAside(std::io::Error::from(
+                std::io::ErrorKind::PermissionDenied,
+            ))),
+        );
+        assert!(
+            st.loaded.error.is_some(),
+            "nothing was moved, so the read error still stands"
+        );
+        assert_eq!(st.moved_aside, None);
+        let status = status_note(&st);
+        assert_eq!(
+            status, " — ⚠ settings.toml could not be written",
+            "the status line does not say the newest thing — the write failed"
+        );
+        assert!(
+            !status.contains("defaults in force"),
+            "the status line claims the defaults are in force beside a commit in force"
+        );
+        assert!(
+            notice(&st).starts_with(
+                "Could not write settings.toml: the file that would not read could not be \
+                 moved aside: "
+            ),
+            "the notice no longer names the failed move: {}",
+            notice(&st)
+        );
+        // The dir is writable again: the next write moves the file aside.
+        record_write(
+            &mut st,
+            &path,
+            Ok(Some(path.with_file_name("settings.toml.broken"))),
+        );
+        assert_eq!(
+            status_note(&st),
+            " — settings.toml rewritten — the file that would not read is settings.toml.broken"
         );
     }
 
