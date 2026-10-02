@@ -971,7 +971,7 @@ fn merge_into(doc: &mut toml_edit::DocumentMut, settings: &Settings) {
                 // of the file — measured, the footer moved there.
                 table
                     .decor_mut()
-                    .set_prefix(format!("{}\n", std::mem::take(&mut trailing)));
+                    .set_prefix(footer_prefix(std::mem::take(&mut trailing)));
                 moved = true;
             } else if !root.is_empty() {
                 // A blank line above every table that follows something.
@@ -1030,6 +1030,23 @@ fn merge_into(doc: &mut toml_edit::DocumentMut, settings: &Settings) {
     if moved {
         doc.set_trailing("");
     }
+}
+
+/// The trailing comments `merge_into` moves in front of the first table it
+/// appends, ending in exactly ONE blank line above that header: a last
+/// comment with no final newline gets its line end, and text that already
+/// ends in a blank line gets nothing more (the senior developer's re-review,
+/// RR-F3: `# tail\n[ui]` and `# tail\n\n\n[ui]` were both written). A CRLF
+/// file's blank line is `\r\n`, so `\n\r\n` counts as one; the `\n` added
+/// here becomes `\r\n` in `restore_file_shape`.
+fn footer_prefix(mut trailing: String) -> String {
+    if !trailing.ends_with('\n') {
+        trailing.push('\n');
+    }
+    if !(trailing.ends_with("\n\n") || trailing.ends_with("\n\r\n")) {
+        trailing.push('\n');
+    }
+    trailing
 }
 
 /// A note as `#` comment lines wrapped at [`NOTE_COLUMNS`], each ending in
@@ -1269,6 +1286,14 @@ mod tests {
     /// move allowed into a table that REPLACES an entry (`&& !replaces`
     /// dropped) → the third fixture's `# tail` lands at the top of the file,
     /// before the `[general]` that took `general = 5`'s place — red.
+    ///
+    /// The fourth fixture pins only the exception the writer makes for a
+    /// trailing decor of blank lines alone, which stays at the end (QE
+    /// 2026-10-02, D44; the senior developer's re-review RR-F1); the three
+    /// above pin the move itself. Mutant (2026-10-02): the `trim()` guard
+    /// taken out of `merge_into` → the blank lines become the appended
+    /// table's prefix (`selection_wash = 10\n\n\n[general]`) and the file
+    /// ends on `max_readers = 0\n` — red on the fourth fixture.
     #[test]
     fn a_comment_only_files_comments_stay_at_the_top() {
         let path = file_with("comment-only", "# just a comment\n# another\n");
@@ -1325,6 +1350,86 @@ mod tests {
             s,
             "the written file does not read back"
         );
+
+        // Blank lines alone after the last entry are not a comment to move:
+        // they stay at the end, and the first appended table keeps its one
+        // blank line above it.
+        let path = file_with("blank-tail", "[ui]\nselection_wash = 10\n\n\n");
+        let s = load(&path).settings;
+        write(&path, &s).unwrap();
+        let text = std::fs::read_to_string(&path).unwrap();
+        assert!(
+            text.contains("selection_wash = 10\n\n[general]\n"),
+            "the file's trailing blank lines moved in front of the first appended \
+             table: {text:?}"
+        );
+        assert!(
+            text.ends_with("max_readers = 0\n\n\n"),
+            "the file's trailing blank lines are no longer at its end: {text:?}"
+        );
+        assert_eq!(
+            load(&path).settings,
+            s,
+            "the written file does not read back"
+        );
+    }
+
+    /// The comments the writer moves in front of the first table it appends
+    /// sit ONE blank line above that header — never none, never two (the
+    /// senior developer's re-review of QE round 3, RR-F3): a last comment
+    /// with no final newline gets its line end and the blank line, and one
+    /// that already ends in a blank line gets nothing more — in an LF file and
+    /// in a CRLF one, where the blank line is `\r\n`.
+    ///
+    /// RED on c91f677, the writer before the fix (`format!("{}\n", …)`): the
+    /// first fixture read `# tail\n[ui]`, the second `# tail\n\n\n[ui]`, the
+    /// third `# tail\r\n\r\n\r\n[ui]`. When this fails that way it is that
+    /// defect; do not quiet it.
+    ///
+    /// Mutants (2026-10-02): `footer_prefix` without its CRLF arm (`\n\r\n`)
+    /// → the third fixture reads `# tail\r\n\r\n\r\n[ui]` — red; without the
+    /// line end it adds → the first fixture reads `# tail\n[ui]` — red.
+    #[test]
+    fn a_moved_comment_sits_one_blank_line_above_the_appended_table() {
+        for (tag, users, kept, doubled) in [
+            (
+                "no-final-newline",
+                "[general]\nauto_advance = true\n# tail",
+                "auto_advance = true\n# tail\n\n[ui]\n",
+                "",
+            ),
+            (
+                "blank-after",
+                "[general]\nauto_advance = true\n\n# tail\n\n",
+                "auto_advance = true\n\n# tail\n\n[ui]\n",
+                "# tail\n\n\n",
+            ),
+            (
+                "crlf-blank-after",
+                "[general]\r\nauto_advance = true\r\n# tail\r\n\r\n",
+                "auto_advance = true\r\n# tail\r\n\r\n[ui]\r\n",
+                "# tail\r\n\r\n\r\n",
+            ),
+        ] {
+            let path = file_with(tag, users);
+            let s = load(&path).settings;
+            write(&path, &s).unwrap();
+            let text = std::fs::read_to_string(&path).unwrap();
+            assert!(
+                text.contains(kept),
+                "{tag}: the moved comment is not one blank line above the first \
+                 appended table (`{kept:?}` expected): {text:?}"
+            );
+            assert!(
+                doubled.is_empty() || !text.contains(doubled),
+                "{tag}: two blank lines under the moved comment: {text:?}"
+            );
+            assert_eq!(
+                load(&path).settings,
+                s,
+                "{tag}: the written file does not read back: {text:?}"
+            );
+        }
     }
 
     /// A table where one of the five keys belongs, and an array of tables

@@ -124,11 +124,18 @@ their precedence is `fastcull-core`'s; the app binds (brief 008, 2026-10-01).
   is LF without a mark (QE 2026-10-01, D6; brief 008 D21: toml_edit writes
   LF and drops the mark, so the writer restores both). The comments of a
   file that holds no entries, and a comment that follows the last entry,
-  stay where they were — before the first table the write appends — rather
-  than below the tables (QE 2026-10-01, D35: toml_edit keeps them as the
-  document's trailing decor and would print them last; corrected the same
-  day from "creates": a table that replaces an entry keeps that entry's
-  place, which may be the top of the file). A table where one of the five
+  stay above the first table the write appends, one blank line above its
+  header — after any key the write adds to the table they followed —
+  rather than below the tables; blank lines alone after the last entry
+  stay at the end of the file, as they were (QE 2026-10-01, D35: toml_edit
+  keeps them as the document's trailing decor and would print them last;
+  corrected the same day from "creates": a table that replaces an entry
+  keeps that entry's place, which may be the top of the file; corrected
+  2026-10-02, the senior developer's re-review RR-F4: it said "stay where
+  they were", and a key the write adds to their table comes before them;
+  the blank lines, QE 2026-10-02, D44; the one blank line, RR-F3: a comment
+  with no final newline had none, one ending in a blank line had two). A
+  table where one of the five
   keys belongs, or an array of tables or a plain value where a tab's table
   belongs (`[performance.loupe_memory]`, `[[general]]`, `general = 5`), is
   replaced by the key or the table, in its place — the shape is not one the
@@ -478,7 +485,10 @@ their precedence is `fastcull-core`'s; the app binds (brief 008, 2026-10-01).
       (under `FASTCULL_CONFIG_DIR`); core
       `a_written_file_round_trips_every_key`,
       `a_write_preserves_unknown_keys_and_the_users_comments`,
-      `a_comment_only_files_comments_stay_at_the_top` and
+      `a_comment_only_files_comments_stay_at_the_top` (blank lines alone
+      stay at the end, QE 2026-10-02, D44),
+      `a_moved_comment_sits_one_blank_line_above_the_appended_table`
+      (re-review RR-F3) and
       `a_table_or_an_array_at_a_known_name_is_replaced_and_the_file_still_parses`
       (QE 2026-10-01, D35),
       `a_created_key_carries_its_note_and_an_existing_key_keeps_its_comment`,
@@ -650,6 +660,12 @@ their precedence is `fastcull-core`'s; the app binds (brief 008, 2026-10-01).
 
 ## History
 
+- 2026-10-02 — QE round 4 of brief 008, comments after the last entry
+  (D44; re-review RR-F1, RR-F3, RR-F4): "Writing" says where the moved
+  comments go exactly — after any key the write adds to their table, one
+  blank line above the first appended header — and that blank lines alone
+  stay at the end; the writer keeps that one blank line in LF and CRLF
+  files alike.
 - 2026-10-02 — QE round 4 of brief 008, the Limit field's gate (D41): a
   Limit field enabled under Adaptive had no guard; AC7 names the strand
   that clicks it before and after Adaptive is cleared.
