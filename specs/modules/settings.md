@@ -498,9 +498,14 @@ their precedence is `fastcull-core`'s; the app binds (brief 008, 2026-10-01).
       rule, and a driven Ctrl+O that worked would open the native picker
       and hang the run. The dialog and the export dialogs never stack —
       `settings_and_the_export_dialogs_never_stack`: `Ctrl+,` under Copy
-      Picks on every runner; the File menu's greying driven on Linux, each
+      Picks on every runner; the File menu's greying driven on Linux for
+      Copy Picks and for Export Frames as Video, both ways — each export
+      item greyed under Settings, Settings… greyed under each — the export
+      half on a real two-frame folder whose export is available, each
       greyed click checked against a control click, and review-verified on
-      Windows, whose menu bar is the OS's (QE 2026-10-01, D3).
+      Windows, whose menu bar is the OS's (QE 2026-10-01, D3; the export
+      half, QE 2026-10-02, round 5: until then only Copy Picks' greying was
+      driven, and taking either export term out left the suite green).
 - [x] **AC3 — the tabs.** Three tabs in order, switched by `Left`/`Right`
       on the strip and by `Ctrl+Tab`/`Ctrl+Shift+Tab` from a field; digits
       never switch; `Tab` walks the controls and never leaves the dialog,
@@ -732,6 +737,9 @@ their precedence is `fastcull-core`'s; the app binds (brief 008, 2026-10-01).
 
 ## History
 
+- 2026-10-02 — QE round 5 of brief 008, stacking (SC-4): the Export Frames
+  as Video item's greying under Settings, and Settings… greyed under the
+  export dialog, are driven; AC2 names both halves.
 - 2026-10-02 — QE round 5 of brief 008, the environment's row (SC-3): AC7's
   note and the Adaptive box's lock under the variable get their guards —
   the note reports itself, and AC7 names what reads it and the click that

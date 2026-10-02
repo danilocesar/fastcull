@@ -13473,10 +13473,29 @@ fn every_settings_note_is_the_core_text() {
 /// Picks opens with or without one — a synthetic session has no files to
 /// plan, and its summary says so.)
 ///
+/// The Export Frames as Video half, both ways, is a SECOND launch on the
+/// calibrated runners (QE 2026-10-02, round 5: only the Copy Picks and
+/// Settings items' greying was driven, and taking either export term out
+/// left the suite green). It needs a REAL folder: a `--synthetic` session
+/// has no files behind its cells, so its export item is greyed for that
+/// reason alone (presenter.rs, `clip_frames`). Two frames, both selected,
+/// make the export available — `clipavail=true` is read first, the premise.
+/// With Settings up, File › Export Frames as Video… is greyed; with the
+/// export dialog up, File › Settings… is greyed; each greyed click is
+/// followed by its control, the same click with nothing up opening that
+/// dialog. With the greying deleted the greyed dumps invert; a click that
+/// missed its item fails its control first — neither half can pass
+/// vacuously.
+///
 /// Mutant (2026-10-01): both `enabled:` conditions of the File menu's Copy
 /// Picks… and Settings… items set to `true` → Copy Picks opens over
 /// Settings (`dump.greyed1` reads `copy=true`) and Settings over Copy Picks
-/// (`dump.greyed2` reads `settings=true`) — red on Linux.
+/// (`dump.greyed2` reads `settings=true`) — red on Linux. Mutants
+/// (2026-10-02), each alone: `&& !root.settings-visible` taken out of the
+/// Export item → the export dialog opens over Settings, `dump.greyed3`
+/// reads `clip=true` — red; `!root.clip-visible` taken out of the Settings
+/// item → Settings opens over the export dialog, `dump.greyed4` reads
+/// `settings=true` — red.
 #[test]
 fn settings_and_the_export_dialogs_never_stack() {
     if !has_display() {
@@ -13552,6 +13571,89 @@ fn settings_and_the_export_dialogs_never_stack() {
     );
     assert_eq!(
         dump_field(qedump(&stderr, "ctrl2"), "settings"),
+        "true",
+        "CONTROL: the File › Settings… click opened nothing with nothing up — the \
+         coordinate missed the item, so the greyed check above is vacuous:\n{stderr}"
+    );
+
+    // The export half, both ways, on a REAL folder: a `--synthetic` session
+    // has no files behind its cells, so its Export Frames as Video item is
+    // greyed for that reason alone (presenter.rs, `clip_frames`) and could
+    // never show the greying under test. Two frames selected make the
+    // export available — the premise, read first.
+    let folder = out_dir().join("settings-never-stack-folder");
+    std::fs::remove_dir_all(&folder).ok();
+    std::fs::create_dir_all(&folder).unwrap();
+    struct RemoveOnDrop(PathBuf);
+    impl Drop for RemoveOnDrop {
+        fn drop(&mut self) {
+            std::fs::remove_dir_all(&self.0).ok();
+        }
+    }
+    let _cleanup = RemoveOnDrop(folder.clone());
+    for name in ["one.ARW", "two.ARW"] {
+        place_fixture(
+            &raws_dir().join("A1_full_compressed.ARW"),
+            &folder.join(name),
+        );
+    }
+    // File's items sit at y = 61 + 32k: Export Frames as Video… is the
+    // third (125), Settings… the fourth (157).
+    let script = "1500:wait:load settled gen 0;1600:key:ctrl+space;1800:key:ctrl+right;\
+                  2000:key:ctrl+space;2300:dump.avail;2500:key:ctrl+,;2900:click.22,19;\
+                  3300:click.80,125;3700:dump.greyed3;3900:key:escape;4200:key:escape;\
+                  4600:dump.closed3;4900:click.22,19;5300:click.80,125;5700:dump.ctrl3;\
+                  5900:key:escape;6300:key:ctrl+shift+e;6700:dump.clip;7000:click.22,19;\
+                  7400:click.80,157;7800:dump.greyed4;8000:key:escape;8300:key:escape;\
+                  8700:dump.closed4;9000:click.22,19;9400:click.80,157;9800:dump.ctrl4";
+    let stderr = shoot_env_stderr(
+        &[folder.to_str().unwrap()],
+        &[("FASTCULL_TRACE", "1"), ("FASTCULL_DRIVE", script)],
+        &out_dir().join("settings-never-stack-export.jpg"),
+    );
+    assert_eq!(
+        dump_field(qedump(&stderr, "avail"), "clipavail"),
+        "true",
+        "the premise: two frames selected on a real folder make Export Frames as \
+         Video available — without it the item below is greyed for another \
+         reason:\n{stderr}"
+    );
+    let greyed3 = qedump(&stderr, "greyed3");
+    assert!(
+        dump_field(greyed3, "settings") == "true" && dump_field(greyed3, "clip") == "false",
+        "File › Export Frames as Video… opened over the Settings dialog — it is \
+         greyed while Settings is up (brief 008 D12): {greyed3}"
+    );
+    assert_eq!(
+        dump_field(qedump(&stderr, "closed3"), "settings"),
+        "false",
+        "two Escs (the menu, then the dialog) did not close Settings:\n{stderr}"
+    );
+    assert_eq!(
+        dump_field(qedump(&stderr, "ctrl3"), "clip"),
+        "true",
+        "CONTROL: the File › Export Frames as Video… click opened nothing with \
+         nothing up — the coordinate missed the item, so the greyed check above is \
+         vacuous:\n{stderr}"
+    );
+    assert_eq!(
+        dump_field(qedump(&stderr, "clip"), "clip"),
+        "true",
+        "the premise: Ctrl+Shift+E did not open the export dialog:\n{stderr}"
+    );
+    let greyed4 = qedump(&stderr, "greyed4");
+    assert!(
+        dump_field(greyed4, "clip") == "true" && dump_field(greyed4, "settings") == "false",
+        "File › Settings… opened over the export dialog — it is greyed while \
+         Export Frames as Video is up (brief 008 D12): {greyed4}"
+    );
+    let closed4 = qedump(&stderr, "closed4");
+    assert!(
+        dump_field(closed4, "clip") == "false" && dump_field(closed4, "settings") == "false",
+        "two Escs (the menu, then the dialog) did not close the export dialog: {closed4}"
+    );
+    assert_eq!(
+        dump_field(qedump(&stderr, "ctrl4"), "settings"),
         "true",
         "CONTROL: the File › Settings… click opened nothing with nothing up — the \
          coordinate missed the item, so the greyed check above is vacuous:\n{stderr}"
