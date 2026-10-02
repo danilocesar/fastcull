@@ -335,7 +335,10 @@ their precedence is `fastcull-core`'s; the app binds (brief 008, 2026-10-01).
   2026-10-01). Core resolves `(environment, setting) → the pool's
   configuration` in one pure
   function, `settings::resolve_max_readers`, that both binaries call where
-  `pipeline.rs` read the variable. The environment override shows
+  `pipeline.rs` read the variable. The CLI prints `readers: floor F cap C
+  (<source>)` after its `cache:` line, the bounds read back from the pool
+  (`Pipeline::read_pool_bounds`), the source worded as the `cache:` line's
+  (QE 2026-10-01, D34). The environment override shows
   read-only as above. Note: "Adaptive (recommended): 4 readers, growing
   while the storage keeps up. Limit N: exactly N readers when N is 4 or
   less; above 4, at most N (default adaptive; applies at the next folder
@@ -510,7 +513,14 @@ their precedence is `fastcull-core`'s; the app binds (brief 008, 2026-10-01).
       third run's trace — are the pool's own bounds: env 3 pins (3, 3), an
       ignored `abc` over the file's 7 gives (4, 7), no file gives floor 4
       (QE 2026-10-01, D27: until then the app's call site was unproven —
-      mutant G1, `None` passed to `Pipeline::start`, stayed green).
+      mutant G1, `None` passed to `Pipeline::start`, stayed green); the
+      CLI's call site is pinned on both runners by
+      `settings_cap::the_cli_honours_the_files_read_workers_under_the_environment`,
+      which reads the `readers:` line the CLI builds from the pool's own
+      bounds: the file's 2 pins (2, 2), the environment's 3 wins over the
+      file's 6, an ignored `abc` leaves the file's 6 (4, 6), no file is
+      adaptive (QE 2026-10-01, D34: the same mutant on the CLI's call site
+      had left the suite green).
 - [x] **AC8 — auto-advance off.** `Y`/`N` keep the cursor and leave the
       selection alone; the filter exception moves the cursor and ends the
       selection as `U` does; on, as today — core
@@ -590,6 +600,9 @@ their precedence is `fastcull-core`'s; the app binds (brief 008, 2026-10-01).
 
 ## History
 
+- 2026-10-01 — QE round 3 of brief 008, the CLI's read workers (D34): the
+  CLI prints the bounds its read pool adopted, and a second CLI test pins
+  its call site; AC7 names it.
 - 2026-10-01 — QE round 3 of brief 008, select on Tab (D33): the dialog's
   ring focused a number field without selecting it, so a typed number went
   in beside the value shown (Tab, 8, Enter on Loupe memory committed 82 GB);

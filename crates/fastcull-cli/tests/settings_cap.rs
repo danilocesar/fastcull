@@ -1,6 +1,7 @@
 //! The CLI and the settings file (settings.md, "Performance › Thumbnail
-//! cache cap"; ADR 0005: a knob the two binaries share comes from the same
-//! file, with no flag surface of the CLI's own). The CLI's first test.
+//! cache cap" and "Performance › Read workers"; ADR 0005: a knob the two
+//! binaries share comes from the same file, with no flag surface of the
+//! CLI's own). The CLI's first tests.
 
 use std::ffi::OsStr;
 use std::io::Read;
@@ -236,5 +237,106 @@ fn the_cli_honours_the_files_cache_cap_and_says_where_it_came_from() {
         )),
         "a settings.toml that would not read was not named on stderr:\n{}",
         run.stderr
+    );
+}
+
+/// AC7's CLI half (settings.md, "Performance › Read workers" and
+/// "Environment precedence"): the CLI starts its read pool on the same
+/// resolution as the app — `FASTCULL_MAX_READERS` wins over the file's
+/// `max_readers`, an unparsable value is ignored and the file governs, no
+/// file is adaptive — and its `readers:` line reports the bounds the pool
+/// ADOPTED, read back from the pool (`Pipeline::read_pool_bounds`), never
+/// the CLI's own copy of the override, with where the configuration came
+/// from worded as the `cache:` line words it.
+///
+/// Every run is `thumbs <folder> --no-cache` over one RAW — no cache, so no
+/// sandbox is needed and the test runs on Windows too — with
+/// `FASTCULL_CONFIG_DIR` a fresh scratch dir per row. Four rows: the file's
+/// 2 pins (2, 2); the environment's 3 wins over the file's 6 (3, 3); an
+/// ignored `abc` leaves the file's 6 (4, 6); no file is adaptive (floor 4,
+/// the cap this machine's core count — read, never pinned).
+///
+/// Mutant (2026-10-01): main.rs passing `None` to `Pipeline::start` in
+/// place of `readers.override_for_pool()` → row 1 prints `floor 4 cap
+/// <cores>` — red (QE 2026-10-01, D34: until this test, that mutant left
+/// the suite green while a file limit of 2 grew the pool to 8 workers).
+#[test]
+fn the_cli_honours_the_files_read_workers_under_the_environment() {
+    let scratch = std::env::temp_dir().join(format!("fastcull-cli-readers-{}", std::process::id()));
+    std::fs::remove_dir_all(&scratch).ok();
+    struct RemoveOnDrop(PathBuf);
+    impl Drop for RemoveOnDrop {
+        fn drop(&mut self) {
+            std::fs::remove_dir_all(&self.0).ok();
+        }
+    }
+    let _cleanup = RemoveOnDrop(scratch.clone());
+    let folder = scratch.join("folder");
+    std::fs::create_dir_all(&folder).unwrap();
+    let raw = testdata("A1_full_compressed.ARW");
+    // A link where the platform has one: `thumbs` only reads the RAW.
+    #[cfg(unix)]
+    std::os::unix::fs::symlink(&raw, folder.join("one.ARW")).unwrap();
+    #[cfg(not(unix))]
+    std::fs::copy(&raw, folder.join("one.ARW")).unwrap();
+    let config = |tag: &str, text: Option<&str>| -> PathBuf {
+        let dir = scratch.join(format!("config-{tag}"));
+        std::fs::create_dir_all(&dir).unwrap();
+        if let Some(text) = text {
+            std::fs::write(dir.join("settings.toml"), text).unwrap();
+        }
+        dir
+    };
+    // The `readers:` line of one run, whole.
+    let readers = |config: &PathBuf, env: Option<&str>| -> String {
+        let mut envs: Vec<(&str, &OsStr)> = vec![("FASTCULL_CONFIG_DIR", config.as_os_str())];
+        if let Some(value) = env {
+            envs.push(("FASTCULL_MAX_READERS", OsStr::new(value)));
+        }
+        // An inherited FASTCULL_MAX_READERS would win over the file: it goes
+        // first, and a row that sets one sets it after.
+        let run = run_cli(
+            &["thumbs", folder.to_str().unwrap(), "--no-cache"],
+            &envs,
+            &["FASTCULL_MAX_READERS"],
+        );
+        assert!(
+            run.success,
+            "fastcull-cli thumbs failed:\n{}\n{}",
+            run.stdout, run.stderr
+        );
+        run.stdout
+            .lines()
+            .find(|l| l.starts_with("readers: "))
+            .unwrap_or_else(|| panic!("no `readers:` line:\n{}\n{}", run.stdout, run.stderr))
+            .to_string()
+    };
+    let limit_2 = config("limit-2", Some("[performance]\nmax_readers = 2\n"));
+    assert_eq!(
+        readers(&limit_2, None),
+        "readers: floor 2 cap 2 (max_readers = 2 from settings.toml)",
+        "the file's limit of 2 did not reach the CLI's read pool"
+    );
+    let limit_6 = config("limit-6", Some("[performance]\nmax_readers = 6\n"));
+    assert_eq!(
+        readers(&limit_6, Some("3")),
+        "readers: floor 3 cap 3 (FASTCULL_MAX_READERS=3)",
+        "FASTCULL_MAX_READERS=3 did not win over the file's 6"
+    );
+    assert_eq!(
+        readers(&limit_6, Some("abc")),
+        "readers: floor 4 cap 6 (max_readers = 6 from settings.toml)",
+        "an unparsable FASTCULL_MAX_READERS was not ignored in favour of the file's 6"
+    );
+    let empty = config("none", None);
+    let line = readers(&empty, None);
+    let cap = line
+        .strip_prefix("readers: floor 4 cap ")
+        .and_then(|rest| rest.strip_suffix(" (adaptive, the default — no settings.toml)"))
+        .and_then(|cap| cap.parse::<usize>().ok());
+    assert!(
+        cap.is_some_and(|cap| cap >= 4),
+        "with no settings.toml and no variable the pool is not adaptive (floor 4, a \
+         cap of at least 4): {line:?}"
     );
 }

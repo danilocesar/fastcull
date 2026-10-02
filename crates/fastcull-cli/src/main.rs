@@ -143,7 +143,8 @@ fn cull(
 /// Where the cache cap on the `cache:` line came from — the file only when
 /// one was read; it used to say "from settings.toml" with no file at all
 /// (QE 2026-10-01, D11). A missing file, an unreadable one and no config
-/// dir all leave the default in force, and each says why.
+/// dir all leave the default in force, and each says why. The `readers:`
+/// line words an adaptive pool the same way ([`readers_source`]).
 fn cap_source(loaded: &fastcull_core::settings::Loaded) -> &'static str {
     match (&loaded.path, &loaded.error) {
         (None, _) if std::env::var_os(fastcull_core::settings::NO_CONFIG_VAR).is_some() => {
@@ -153,6 +154,22 @@ fn cap_source(loaded: &fastcull_core::settings::Loaded) -> &'static str {
         (Some(_), Some(_)) => ", the default — settings.toml could not be read",
         (Some(path), None) if path.is_file() => " from settings.toml",
         (Some(_), None) => ", the default — no settings.toml",
+    }
+}
+
+/// Where the read pool's configuration on the `readers:` line came from
+/// (settings.md, "Performance › Read workers"): the environment, which wins;
+/// the file's limit; or adaptive, worded as the `cache:` line words the
+/// file it did or did not read.
+fn readers_source(
+    readers: fastcull_core::settings::Readers,
+    loaded: &fastcull_core::settings::Loaded,
+) -> String {
+    use fastcull_core::settings::{Readers, MAX_READERS_VAR};
+    match readers {
+        Readers::Environment(n) => format!("{MAX_READERS_VAR}={n}"),
+        Readers::Limit(n) => format!("max_readers = {n} from settings.toml"),
+        Readers::Adaptive => format!("adaptive{}", cap_source(loaded)),
     }
 }
 
@@ -219,6 +236,17 @@ fn thumbs(
         cache_path.clone(),
         threads,
         readers.override_for_pool(),
+    );
+    // The bounds the read pool ADOPTED, read back from the pool — never
+    // from `readers` above: a line that echoed the CLI's own resolution
+    // would stay true with the pool started on anything else (the app's
+    // `read pool started` mark has the same rule, brief 008 D23/D27).
+    // Until this line the call site above had no observable at all, and
+    // passing `None` there left the suite green (QE 2026-10-01, D34).
+    let (floor, cap) = pipeline.read_pool_bounds();
+    println!(
+        "readers: floor {floor} cap {cap} ({})",
+        readers_source(readers, &loaded)
     );
 
     let mut thumbs_done = 0usize;

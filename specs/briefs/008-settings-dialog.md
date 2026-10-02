@@ -789,6 +789,19 @@ setting.
   as Slint's own Tab navigation and the IPTC panel do, and
   `a_number_typed_after_tab_replaces_the_value_in_the_field` types the way a
   user does — Tab in, no Ctrl+A.
+- D34 (2026-10-01, QE round 3 — defect D34, minor; the senior developer's
+  test-integrity review, T2; the CLI's new output line ruled under M3 as the
+  integrity review recommended and the Manager's hand-off carried it): the
+  CLI's read-workers call site had no guard — ADR 0005 and settings.md
+  promise that the read workers, like the cache cap, come from the one file
+  in both binaries, and AC7's tests covered core and the app only. QE's
+  mutant on 13a904e, `readers.override_for_pool()` → `None` in the CLI's
+  `thumbs`, grew the pool to 8 workers under `max_readers = 2` while the
+  CLI's one test stayed green. The CLI now prints `readers: floor F cap C
+  (<source>)`, the bounds read back from the pool (D23's shape: never the
+  caller's own copy), and
+  `settings_cap::the_cli_honours_the_files_read_workers_under_the_environment`
+  reads it on both runners.
 - D36 (2026-10-01, QE round 3 — defect D36, minor; the senior developer's
   test-integrity review, no test change): the shortcuts card's MARK rows
   read `pick — and advance` and `reject — and advance`, and its footnote
