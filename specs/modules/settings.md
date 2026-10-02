@@ -698,17 +698,27 @@ their precedence is `fastcull-core`'s; the app binds (brief 008, 2026-10-01).
       `cache::tests::size_on_disk_counts_the_wal_and_shm_files`,
       `cache::tests::clear_leaves_the_file_present_empty_and_smaller_and_the_connection_usable`
       (asserts the same inode on unix); app
-      `clear_cache_is_off_under_no_cache` (the disabled row). The worker,
-      the `Clearing…` state (by order on the trace: `settings cache
-      clearing` before `settings cache cleared`) and the re-measured
-      readout are driven on Linux through the sandboxed default cache —
+      `clear_cache_is_off_under_no_cache` (the disabled row). Driven on
+      Linux through the sandboxed default cache —
       `the_cache_cap_and_clear_cache_reach_the_default_cache`: the table
-      emptied, the same inode, the row in KB after, never `0 B` — and
+      emptied, the same inode; the clear on its own worker thread, which
+      names itself on the trace (`settings cache clear ran on
+      settings-clear`); the row reading `Clearing…` and Clear disabled
+      until it is done, and after it Clear offered again and the row
+      showing the re-measured size in KB, never `0 B` — each read from the
+      mark the row's Text and the button emit themselves; and a clear that
+      fails, the database made read-only for the clear alone, saying so in
+      the row (`Thumbnail cache: could not be cleared (…) — … in …`) — and
       review-verified on Windows, whose known-folder lookup ignores the
-      environment; the open session keeping its painted thumbs is
-      review-verified on both, no dump field reading textures (QE
-      2026-10-01, D24: "a driven run cannot have a cache" holds on Windows
-      only; brief 008 D13 stands — no new variable).
+      environment. That the clear never BLOCKS the UI thread is
+      review-verified: the thread's name proves the worker, and a `join()`
+      right after the spawn would still report it. The open session
+      keeping its painted thumbs is review-verified on both, no dump field
+      reading textures (QE 2026-10-01, D24: "a driven run cannot have a
+      cache" holds on Windows only; brief 008 D13 stands — no new variable;
+      QE 2026-10-02, round 5: the worker, the `Clearing…` row, the disabled
+      button and a failed clear's wording had stood on the trace's order
+      alone, which proved none of them).
 - [x] **AC13 — the Failed badge.** The badge shows the reason on hover and
       the status line carries it when the cursor stands on the frame —
       ui-grid.md's ledger
@@ -737,6 +747,10 @@ their precedence is `fastcull-core`'s; the app binds (brief 008, 2026-10-01).
 
 ## History
 
+- 2026-10-02 — QE round 5 of brief 008, Clear cache (SC-2): the worker
+  names its thread, the row and the Clear button report what they show,
+  and a clear made to fail is driven; AC12 names what each proves and what
+  stays review-verified.
 - 2026-10-02 — QE round 5 of brief 008, stacking (SC-4): the Export Frames
   as Video item's greying under Settings, and Settings… greyed under the
   export dialog, are driven; AC2 names both halves.

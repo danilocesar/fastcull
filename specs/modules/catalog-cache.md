@@ -140,11 +140,16 @@ reading a RAW.
       the table empty, the file smaller and the connection usable —
       `size_on_disk_counts_the_wal_and_shm_files`,
       `clear_leaves_the_file_present_empty_and_smaller_and_the_connection_usable`;
-      the app's half — the cap at a folder open, the clear worker, the
-      re-measured row — is settings.md's AC11 and AC12.
+      the app's half — the cap at a folder open; the clear on its own
+      named worker thread; the `Clearing…` row and the disabled Clear
+      button; the re-measured row; a failed clear said in the row — is
+      settings.md's AC11 and AC12, which also say what stays
+      review-verified (QE 2026-10-02, round 5).
 
 ## History
 
+- 2026-10-02 — QE round 5 of brief 008: the Clear cache box names what
+  the app's half now proves (settings.md AC12).
 - 2026-10-01 — Brief 008: the cap reads the `performance.cache_cap`
   setting and is enforced at every folder open (the "at startup" claim
   corrected); Clear cache is the one VACUUM, through a live connection,

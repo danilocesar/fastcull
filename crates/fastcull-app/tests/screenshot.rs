@@ -64,6 +64,18 @@ fn shoot_env_stderr_watching(
 /// on Linux — the one platform where this redirect exists; Windows asks its
 /// known-folder API, which ignores the environment).
 fn shoot_with_sandboxed_cache(args: &[&str], envs: &[(&str, &str)], out: &Path) -> String {
+    shoot_with_sandboxed_cache_watching(args, envs, out, |_| {})
+}
+
+/// [`shoot_with_sandboxed_cache`] with [`shoot_env_stderr_watching`]'s live
+/// view of the trace: the same refusal, and `on_line` on the drain thread,
+/// which must not block.
+fn shoot_with_sandboxed_cache_watching(
+    args: &[&str],
+    envs: &[(&str, &str)],
+    out: &Path,
+    on_line: impl FnMut(&str) + Send + 'static,
+) -> String {
     let sandbox = out_dir();
     for var in ["HOME", "XDG_CACHE_HOME"] {
         let inside = envs
@@ -77,7 +89,7 @@ fn shoot_with_sandboxed_cache(args: &[&str], envs: &[(&str, &str)], out: &Path) 
             sandbox.display()
         );
     }
-    shoot_child(args, envs, out, |_| {}, true)
+    shoot_child(args, envs, out, on_line, true)
 }
 
 /// The one body every app spawn goes through — the watchdog, the drain and
@@ -14012,16 +14024,17 @@ fn the_settings_card_fits_its_smallest_window_in_its_tallest_state() {
 /// folder open trims the DEFAULT cache to the file's cap, and Clear empties
 /// that cache through a connection of its own, off the UI thread, never
 /// unlinking it — the row reading `Clearing…` meanwhile and the size
-/// re-measured from disk after. Every other driven run but one (the Settings
-/// card fit test's cache-on run) is FASTCULL_NO_CACHE; this one points the
-/// default cache into the shots dir through HOME and XDG_CACHE_HOME
-/// (`shoot_with_sandboxed_cache` refuses to run otherwise).
+/// re-measured from disk after. Every other driven run but two (the Settings
+/// card fit test's cache-on run and the click-away matrix's Clear row) is
+/// FASTCULL_NO_CACHE; these point the default cache into the shots dir
+/// through HOME and XDG_CACHE_HOME (`shoot_with_sandboxed_cache` refuses to
+/// run otherwise).
 /// That redirect exists on Linux only — Windows' known-folder lookup ignores
 /// the environment — so the test skips itself elsewhere, at run time, which
 /// keeps the `--list` halves the same on every runner; AC12's Windows half
 /// stays review-verified.
 ///
-/// Two runs over one seeded cache (300 thumbnails of 1 MiB each) and one
+/// Three runs over one seeded cache (300 thumbnails of 1 MiB each) and one
 /// settings file (`cache_cap = "0.1"`, held at the 0.25 GB floor =
 /// 268,435,456 bytes, room for 256 of them):
 ///   1. the folder open alone — afterwards at most 256 seeded rows remain
@@ -14031,15 +14044,52 @@ fn the_settings_card_fits_its_smallest_window_in_its_tallest_state() {
 ///      seeding; the row named `~/.cache/fastcull/previews.db` before and a
 ///      re-measured size in KB after, never `0 B`; and on the one trace
 ///      stream `settings cache clearing` (the `Clearing…` state) came before
-///      `settings cache cleared B -> A`, with A < B.
+///      `settings cache cleared B -> A`, with A < B. Between the two the
+///      worker says where it ran, `settings cache clear ran on
+///      settings-clear` (the thread's own name); and the ELEMENTS say what
+///      they showed: after the click and before `cleared` the row's
+///      `settings cache readout shows Clearing…` and `settings clear-cache
+///      enabled false` — the one visible guard against a second VACUUM —
+///      and after it `enabled true` and the row showing the re-measured KB.
+///      Those two marks cannot be hidden by a fast VACUUM: the click is a
+///      timer step, and Slint runs the change trackers right after the
+///      timers and before the worker's posted completion can land
+///      (Cargo.toml, the fourth canary's fact 8; measured: a 4 ms failed
+///      clear still traced both).
+///   3. Clear with the database made read-only — previews.db alone, its
+///      mode set by a helper thread when the app traces `settings opened`,
+///      1.2 s ahead of the click (the issue #50 anchoring), never before
+///      launch: the session opens, scans and stores as ever, its connection
+///      opened read-write before — and the row then says the clear failed:
+///      `Thumbnail cache: could not be cleared (…) — … KB in
+///      ~/.cache/fastcull/previews.db` (measured on this seat: `(cache
+///      database error: attempt to write a readonly database)`). Its
+///      premises come first, each with its own message: the row was fine
+///      before the click, and the table still holds the thumbnail the
+///      folder open stored — a chmod that lost its race would let the clear
+///      empty it and fail THERE, never as a false pass. The mode is restored
+///      before the table is read (QE 2026-10-02, round 5: the worker
+///      thread, the `Clearing…` row, the disabled button and a failed
+///      clear's wording had no guard — each taken out, the suite stayed
+///      green).
 ///
-/// That the open session keeps its painted thumbs is review-verified: no
-/// dump field reads textures.
+/// The name proves the WORKER, not that the UI thread never waits for it:
+/// a `join()` right after the spawn would block the UI and still trace
+/// `settings-clear`, so "never blocks" stays review-verified (settings.md
+/// AC12). That the open session keeps its painted thumbs is review-verified
+/// too: no dump field reads textures.
 ///
 /// Mutants (2026-10-01): session.rs trimming the default cache to
 /// `DEFAULT_CAP_BYTES` → all 300 seeded rows survive run 1 — red; the
 /// clear worker unlinking the file and opening a fresh one → the inode
-/// changes — red.
+/// changes — red. Mutants (2026-10-02), each alone: the clear's closure
+/// called inline instead of spawned → `settings cache clear ran on main` —
+/// red; the bridge's `Clearing…` assignment removed → no `settings cache
+/// readout shows Clearing…` — red; Clear enabled whenever the cache is on
+/// (`clear_rx.is_none()` dropped from `present`) → no `settings clear-cache
+/// enabled false` — red; the completion re-measuring with no error
+/// (`cache_readout(None)`) → run 3's row reads `Thumbnail cache: 92.3 KB
+/// in …` as if the clear had worked — red.
 #[test]
 fn the_cache_cap_and_clear_cache_reach_the_default_cache() {
     if !has_display() {
@@ -14167,6 +14217,53 @@ fn the_cache_cap_and_clear_cache_reach_the_default_cache() {
         "the trace does not show `settings cache clearing` (the `Clearing…` \
          row) before `settings cache cleared`:\n{stderr}"
     );
+    // The clear ran on its own named worker, between the two: a clear run
+    // inline on the UI thread reads `… ran on main`.
+    let ran = labels
+        .iter()
+        .position(|l| *l == "settings cache clear ran on settings-clear");
+    assert!(
+        ran.is_some() && clearing < ran && ran < cleared,
+        "the trace does not say the clear ran on the `settings-clear` worker between \
+         `settings cache clearing` and `settings cache cleared` (at {ran:?}; the \
+         clear's own line: {:?}):\n{stderr}",
+        labels
+            .iter()
+            .find(|l| l.starts_with("settings cache clear ran on "))
+    );
+    // What the ELEMENTS showed (their own marks): between the click and the
+    // worker's completion the row read `Clearing…` and Clear was disabled;
+    // after it, Clear was offered again and the row read the re-measured
+    // size.
+    let clicked = labels
+        .iter()
+        .rposition(|l| *l == "drive: click:settings clear-cache")
+        .unwrap_or_else(|| panic!("no click on Clear:\n{stderr}"));
+    let cleared_at = cleared.unwrap_or(labels.len());
+    let during = &labels[clicked.min(cleared_at)..cleared_at];
+    for mark in [
+        "settings cache readout shows Clearing…",
+        "settings clear-cache enabled false",
+    ] {
+        assert!(
+            during.contains(&mark),
+            "no `{mark}` between the click on Clear and `settings cache cleared` — the \
+             row did not say Clearing…, or Clear stayed offered while it ran:\n{stderr}"
+        );
+    }
+    let after_clear = &labels[cleared_at..];
+    assert!(
+        after_clear.contains(&"settings clear-cache enabled true"),
+        "Clear was not offered again after the clear:\n{stderr}"
+    );
+    assert!(
+        after_clear.iter().any(|l| {
+            l.strip_prefix("settings cache readout shows Thumbnail cache: ")
+                .and_then(|rest| rest.strip_suffix(" KB in ~/.cache/fastcull/previews.db"))
+                .is_some_and(|kb| kb.parse::<f64>().is_ok_and(|kb| kb > 0.0))
+        }),
+        "after the clear the row did not SHOW a re-measured size in KB:\n{stderr}"
+    );
     let (b, a) = cleared
         .and_then(|i| labels[i].strip_prefix("settings cache cleared "))
         .and_then(|s| s.split_once(" -> "))
@@ -14192,5 +14289,82 @@ fn the_cache_cap_and_clear_cache_reach_the_default_cache() {
         seeded_inode,
         "previews.db is a different file after Clear — it was unlinked and \
          recreated under the live session (catalog-cache.md's lock rule)"
+    );
+
+    // 3 — a clear that FAILS says so in the row. The database alone (never
+    // its -wal or -shm, never before launch: the session must open, scan
+    // and store as ever) is made read-only once the dialog is open — anchored
+    // on the app's own `settings opened` line, 1.2 s ahead of the click, the
+    // issue #50 way — so the clear's own connection cannot write and the
+    // session is untouched: its connection was opened read-write before.
+    let writable = std::fs::metadata(&db).expect("previews.db").permissions();
+    let (opened_tx, opened_rx) = std::sync::mpsc::channel::<()>();
+    let locker = {
+        let db = db.clone();
+        std::thread::spawn(move || {
+            if opened_rx.recv().is_ok() {
+                let mut readonly = std::fs::metadata(&db).unwrap().permissions();
+                readonly.set_readonly(true);
+                std::fs::set_permissions(&db, readonly).unwrap();
+            }
+        })
+    };
+    let mut signalled = false;
+    let stderr = shoot_with_sandboxed_cache_watching(
+        &[folder.to_str().unwrap()],
+        &[
+            ("FASTCULL_TRACE", "1"),
+            ("HOME", home.to_str().unwrap()),
+            ("XDG_CACHE_HOME", cache_home.to_str().unwrap()),
+            ("FASTCULL_CONFIG_DIR", config.to_str().unwrap()),
+            (
+                "FASTCULL_DRIVE",
+                "1500:wait:load settled gen 0;1600:key:ctrl+,;1900:key:ctrl+tab;\
+                 2100:key:ctrl+tab;2500:dump.perf;2800:click:settings clear-cache;\
+                 2900:wait:settings cache cleared;3300:dump.failed",
+            ),
+        ],
+        &out_dir().join("settings-cache-clear-fails.jpg"),
+        move |line| {
+            if !signalled && line.contains("] settings opened") {
+                signalled = true;
+                let _ = opened_tx.send(());
+            }
+        },
+    );
+    locker.join().unwrap();
+    // Writable again before anything reads it (the table check opens it).
+    std::fs::set_permissions(&db, writable).expect("previews.db writable again");
+    assert_click_resolved(&stderr, "settings clear-cache");
+    // The premises, each with its own message: the row was fine before the
+    // click — the failure is the clear's own — and the clear really was
+    // refused: the folder open stored one.ARW's thumbnail, and a chmod that
+    // lost the race would have let the clear empty the table.
+    let fine = dump_text(qedump(&stderr, "perf"), "cachereadout").to_string();
+    assert!(
+        fine.starts_with("Thumbnail cache: ") && !fine.contains("could not be cleared"),
+        "the row already said something was wrong before Clear: {fine:?}"
+    );
+    let rows = fastcull_core::cache::PreviewCache::open(&db)
+        .and_then(|cache| cache.len())
+        .expect("reopen the cache");
+    assert!(
+        rows >= 1,
+        "the clear emptied the table: the database was not read-only when it ran \
+         (the injection lost its race), so the row below would prove nothing:\n{stderr}"
+    );
+    // The contract (settings.md, "Thumbnail cache": a clear that fails says
+    // so in the row) — and the size beside it is still re-measured.
+    let failed = dump_text(qedump(&stderr, "failed"), "cachereadout").to_string();
+    assert!(
+        failed.starts_with("Thumbnail cache: could not be cleared (")
+            && failed.ends_with(" KB in ~/.cache/fastcull/previews.db"),
+        "a clear that failed does not say so in the row (settings.md, \"Thumbnail \
+         cache\"): {failed:?}"
+    );
+    assert_eq!(
+        inode(),
+        seeded_inode,
+        "previews.db is a different file after the failed clear"
     );
 }

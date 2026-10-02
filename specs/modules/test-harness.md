@@ -29,11 +29,14 @@ explain itself on stderr.
   008, 2026-10-01; until then it covered `ui.toml` only, and every driven
   run read the user's real `templates.toml`); what `FASTCULL_NO_CACHE=1`
   does for `previews.db` (app-only; the CLI has `--no-cache`). The
-  screenshot harness sets both on every run except three, in two tests —
-  the two runs of the test that drives the cache cap and Clear cache
-  (settings.md AC11, AC12) and the cache-on run of the Settings card's fit
-  test (settings.md, "The card"; QE 2026-10-01, D38; this sentence said
-  "every run but one" until then) — which run without `FASTCULL_NO_CACHE`,
+  screenshot harness sets both on every run except five, in three tests —
+  the three runs of the test that drives the cache cap and Clear cache
+  (settings.md AC11, AC12; the third a clear made to fail, QE 2026-10-02,
+  round 5), the cache-on run of the Settings card's fit test (settings.md,
+  "The card"; QE 2026-10-01, D38) and the Clear row of the click-away
+  matrix (settings.md AC4; QE 2026-10-02, round 4 D39) — this sentence
+  said "every run but one" until D38, and "three, in two tests" until
+  round 5, the matrix's row uncounted — which run without `FASTCULL_NO_CACHE`,
   through `shoot_with_sandboxed_cache`, which refuses to start unless
   `HOME` and `XDG_CACHE_HOME` both point inside the shots dir — so the
   default cache resolves there, never to the user's; Linux only, Windows'
@@ -230,8 +233,15 @@ sidecars — scripts target throwaway copies of test data only.
   exists only while `FASTCULL_MAX_READERS` governs the row (QE 2026-10-02,
   round 5); `settings cache clearing` when the
   row turns to `Clearing…` and `settings cache cleared <before> ->
-  <after>` (bytes) when the worker is done — the order of the two is the
-  driven proof of the `Clearing…` state (QE 2026-10-01, D24); `loupe
+  <after>` (bytes) when the worker is done (QE 2026-10-01, D24); between
+  the two, from the worker itself, `settings cache clear ran on <thread>`
+  — the thread's own name, `settings-clear` (QE 2026-10-02, round 5);
+  `settings cache readout shows <text>` from the Thumbnail cache row's
+  Text and `settings clear-cache enabled true|false` from the Clear
+  button, each when the dialog creates it and whenever it changes — what
+  the row SAYS (`Clearing…`, then the re-measured size or the failure)
+  and whether Clear is offered, where the dump's `cachereadout=` is the
+  bridge's (QE 2026-10-02, round 5); `loupe
   engine started budget <bytes>` at every folder open — the budget the engine ADOPTED
   (`LoupeEngine::budget()`, floored), the proof that the loupe memory
   setting reached the engine (QE 2026-10-01, D23); `read pool started
@@ -469,6 +479,10 @@ shot 2.
 
 ## History
 
+- 2026-10-02 — QE round 5 of brief 008: `settings cache clear ran on
+  <thread>`, `settings cache readout shows`, `settings clear-cache
+  enabled`; the cache test's third run, and the run count corrected to
+  five in three tests (the matrix's Clear row had gone uncounted).
 - 2026-10-02 — QE round 5 of brief 008: `settings note readers-env shows`,
   the environment's line on the read workers row.
 - 2026-10-02 — QE round 4 of brief 008 (D45; re-review RR-F6):

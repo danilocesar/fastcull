@@ -865,7 +865,13 @@ and a two-way binding carries a synchronous write of the bound property
 straight into the box, so a `toggled` handler that first re-presents
 that property reads the old state (`widgets/fluent/checkbox.slint`, read
 2026-10-02 for settings.md's checkboxes: why they read their state before
-the flush; QE D39).
+the flush; QE D39); each loop iteration runs the due timers and THEN the
+change trackers before it delivers an `invoke_from_event_loop` closure, so
+what a timer's callback writes is seen by the trackers before a worker's
+completion can overwrite it (`platform.rs` `update_timers_and_animations`,
+the winit backend's `new_events`, read 2026-10-02 for settings.md's Clear
+row: why its `Clearing…` state and disabled button can be proved by their
+own marks).
 
 ## Contracts
 
@@ -1150,6 +1156,11 @@ the flush; QE D39).
 
 ## History
 
+- 2026-10-02 — Brief 008, QE rounds 4 and 5: the Slint list gains the
+  fluent CheckBox's flip before `toggled` (D39; added by 22cd5cb, which
+  wrote no line here) and a loop iteration's order — the due timers, then
+  the change trackers, then the posted closures (round 5, the Clear row's
+  marks).
 - 2026-10-01 — QE round 2 of brief 008 (D27): the issue #49 box names the
   Settings dialog's scrim and its test.
 - 2026-10-01 — Brief 008 (issue #39): Settings… enabled with `Ctrl+,`;

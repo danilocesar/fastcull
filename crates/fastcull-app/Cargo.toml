@@ -61,11 +61,12 @@ fastcull-core.workspace = true
 # Re-read the owner-invariant section of specs/modules/ui-grid.md before
 # raising this bound.
 # FOURTH CANARY (brief 008, the Settings dialog and the Failed badge's
-# tooltip; same 1.17.1). Seven measured behaviours they stand on, none
+# tooltip; same 1.17.1). Eight measured behaviours they stand on, none
 # documented upstream (read 2026-10-01 in i-slint-core window.rs
 # `process_key_input`, items/text.rs, items.rs and
 # properties/change_tracker.rs, and 2026-10-02 in i-slint-compiler
-# widgets/fluent/checkbox.slint; ui-grid.md's Slint list):
+# widgets/fluent/checkbox.slint, i-slint-core platform.rs and
+# i-slint-backend-winit event_loop.rs; ui-grid.md's Slint list):
 #   1. The WINDOW handles a Tab or Shift+Tab that the focused item and
 #      every ancestor scope ignored, by walking the WHOLE item tree to the
 #      next focusable item — surfaces hidden behind a scrim included. The
@@ -112,6 +113,22 @@ fastcull-core.workspace = true
 #      `present()`) then reads the OLD state from `self.checked`: why both
 #      Settings checkboxes read their state into `want` before the flush
 #      (QE 2026-10-02, D39).
+#   8. The winit backend begins every loop iteration with `new_events`,
+#      which calls `update_timers_and_animations` — animations, then the
+#      due timers, then `run_change_handlers` (i-slint-core platform.rs
+#      :289-293; i-slint-backend-winit event_loop.rs :599-612) — and hands
+#      an `invoke_from_event_loop` closure over only later, in
+#      `user_event` (:546). So what a TIMER's callback writes — and every
+#      driven step is a timer — is seen by the change trackers before a
+#      worker's posted completion can overwrite it, however fast the
+#      worker: fact 5's A → B → A collapse needs both writes inside one run
+#      of the trackers, and these are two. (An input event from the OS
+#      runs after that iteration's trackers, so for a real click the same
+#      cannot be promised.) Why the Settings Clear row's `Clearing…` and
+#      its disabled button are proved by the marks the two elements emit
+#      themselves (QE 2026-10-02, round 5; the senior developer's
+#      test-integrity review, which first suspected a race here and
+#      refuted it in this source).
 slint = { version = "1", default-features = false, features = [
     "std",
     "backend-winit",

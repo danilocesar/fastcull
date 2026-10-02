@@ -188,10 +188,11 @@ pub(crate) fn wire(window: &MainWindow, state: &Rc<RefCell<AppState>>) {
             st.settings.clear_rx = Some(rx);
             st.settings.cache_readout = "Clearing…".to_string();
             present(&win, &st);
-            // The `Clearing…` state's witness (test-harness.md): a driven
-            // run proves it by ORDER on the one trace stream — this before
-            // `settings cache cleared` — rather than by a dump racing a
-            // sub-second VACUUM (QE 2026-10-01, D24).
+            // The clear has begun (test-harness.md; QE 2026-10-01, D24): the
+            // click-away matrix orders a field's commit before it. What the
+            // row SHOWS meanwhile, and whether Clear is offered, are the
+            // row's and the button's own marks (main.slint; QE 2026-10-02,
+            // round 5) — this mark's order alone proved neither.
             trace_mark("settings cache clearing");
             // OFF the UI thread (settings.md: the VACUUM rewrites the file,
             // seconds on a big cache). Its own connection, through which the
@@ -199,27 +200,53 @@ pub(crate) fn wire(window: &MainWindow, state: &Rc<RefCell<AppState>>) {
             // The window is woken through a callback, the `kitchen-ready`
             // pattern: the state is not `Send`, the receiver in it is the
             // way the outcome gets back.
+            //
+            // A NAMED thread, and the worker says on the trace where it ran
+            // (`settings cache clear ran on settings-clear`): a clear moved
+            // back onto the UI thread reads `… ran on main`, which a driven
+            // run sees (QE 2026-10-02, round 5). The name proves the worker,
+            // not that the UI thread never waits for it — a `join()` right
+            // after the spawn would block the UI and still report this name
+            // — so "never blocks" stays review-verified (settings.md AC12).
             let weak = win.as_weak();
-            std::thread::spawn(move || {
-                let before = fastcull_core::cache::size_on_disk(&db);
-                let error = fastcull_core::cache::PreviewCache::open(&db)
-                    .and_then(|mut cache| cache.clear())
-                    .err()
-                    .map(|e| e.to_string());
-                let after = fastcull_core::cache::size_on_disk(&db);
-                tx.send(CacheCleared {
-                    before,
-                    after,
-                    error,
-                })
-                .ok();
-                slint::invoke_from_event_loop(move || {
-                    if let Some(win) = weak.upgrade() {
-                        win.invoke_settings_cache_cleared();
-                    }
-                })
-                .ok();
-            });
+            let spawned = std::thread::Builder::new()
+                .name("settings-clear".into())
+                .spawn(move || {
+                    let before = fastcull_core::cache::size_on_disk(&db);
+                    let error = fastcull_core::cache::PreviewCache::open(&db)
+                        .and_then(|mut cache| cache.clear())
+                        .err()
+                        .map(|e| e.to_string());
+                    let after = fastcull_core::cache::size_on_disk(&db);
+                    // From the worker itself, before the outcome is sent: so
+                    // it lands between `settings cache clearing` and
+                    // `settings cache cleared`. `trace_mark` is safe off the
+                    // UI thread — one `eprintln!`, a whole line, and a mutex.
+                    trace_mark(&format!(
+                        "settings cache clear ran on {}",
+                        std::thread::current().name().unwrap_or("<unnamed>")
+                    ));
+                    tx.send(CacheCleared {
+                        before,
+                        after,
+                        error,
+                    })
+                    .ok();
+                    slint::invoke_from_event_loop(move || {
+                        if let Some(win) = weak.upgrade() {
+                            win.invoke_settings_cache_cleared();
+                        }
+                    })
+                    .ok();
+                });
+            if let Err(e) = spawned {
+                // No worker, so no clear: the row says so as a failed clear
+                // does, and Clear is offered again (settings.md: a clear
+                // that fails says so in the row).
+                st.settings.clear_rx = None;
+                st.settings.cache_readout = cache_readout(Some(&e.to_string()));
+                present(&win, &st);
+            }
         });
     }
     {

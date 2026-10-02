@@ -3968,6 +3968,19 @@ export component MainWindow inherits Window {
                                 spacing: 4px;
                                 HorizontalLayout {
                                     spacing: 12px;
+                                    // What the row SAYS and whether Clear is
+                                    // offered, each reported by the element
+                                    // itself (test-harness.md): `Clearing…`
+                                    // and a disabled button while the worker
+                                    // runs — the guard against a second VACUUM
+                                    // — then the size re-measured (QE
+                                    // 2026-10-02, round 5). A driven click is
+                                    // dispatched from a timer, and Slint runs
+                                    // the trackers right after the timers and
+                                    // before the worker's completion can
+                                    // arrive (Cargo.toml, the fourth canary's
+                                    // fact 8), so even a millisecond VACUUM
+                                    // cannot hide the two marks from a test.
                                     Text {
                                         text: root.settings-cache-readout;
                                         color: #e8e8f0;
@@ -3975,6 +3988,8 @@ export component MainWindow inherits Window {
                                         vertical-alignment: center;
                                         horizontal-stretch: 1;
                                         wrap: word-wrap;
+                                        init => { root.dbg-note("settings cache readout shows " + self.text); }
+                                        changed text => { root.dbg-note("settings cache readout shows " + self.text); }
                                     }
                                     set-clear := Button {
                                         text: "Clear";
@@ -3990,7 +4005,11 @@ export component MainWindow inherits Window {
                                                 settings-keys.slot = 5;
                                             }
                                         }
+                                        changed enabled => {
+                                            root.dbg-note("settings clear-cache enabled " + (self.enabled ? "true" : "false"));
+                                        }
                                         init => {
+                                            root.dbg-note("settings clear-cache enabled " + (self.enabled ? "true" : "false"));
                                             root.dbg-card-laid-out("settings clear-cache",
                                                 self.absolute-position.x, self.absolute-position.y,
                                                 self.width, self.height);
