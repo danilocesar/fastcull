@@ -12082,6 +12082,131 @@ fn settings_under_no_config_applies_in_memory_and_writes_nothing() {
     );
 }
 
+/// AC6 and brief 008 D11 (settings.md, "The file"; test-harness.md,
+/// `FASTCULL_NO_CONFIG` and `FASTCULL_CONFIG_DIR`): `templates.toml` and
+/// `ui.toml` are read through core's ONE config-dir resolver, the one
+/// `settings.toml` uses — `FASTCULL_CONFIG_DIR` moves both, and
+/// `FASTCULL_NO_CONFIG` hides both. Read off the marks each read emits from
+/// the very path it used (`templates loaded from <path>`, `templates: <path>
+/// could not be read: …`, `ui prefs read from <path>`; test-harness.md).
+///
+/// Run A points FASTCULL_CONFIG_DIR at a scratch dir holding a valid
+/// templates.toml (one template) and a ui.toml remembering a Copy Picks
+/// destination; `I` opens the IPTC panel (a templates read) and `Ctrl+E`
+/// Copy Picks (a ui.toml read) — every such mark must name the scratch dir,
+/// and each kind must appear. Run B is the same script under the harness's
+/// own FASTCULL_NO_CONFIG: no read, so no mark at all.
+///
+/// Why marks and not behaviour (QE 2026-10-01, D37): a revert of either
+/// path to the per-user dir stayed green by construction — the real config
+/// dir is empty on CI and on the development seat, so a run that read it
+/// looked exactly like a hermetic one, and every driven run would silently
+/// have read the user's real templates.toml again.
+///
+/// Mutants (2026-10-01), each run with XDG_CONFIG_HOME pointed into scratch
+/// so that even the mutant never reads the user's real config dir:
+/// `iptc::default_templates_path` resolving the `directories` crate's
+/// per-user dir itself → run A's templates mark names that dir — red;
+/// `session::ui_prefs_path` taking the per-user dir directly
+/// (`config_dir_from` with no environment) → run A's ui prefs mark names
+/// it, and run B emits one — red.
+#[test]
+fn templates_and_ui_prefs_are_read_from_the_one_config_dir() {
+    if !has_display() {
+        eprintln!("screenshot smoke skipped: no display server");
+        return;
+    }
+    let _s = serial();
+    let dir = settings_scratch("one-resolver", None);
+    let dest = dir.join("dest");
+    std::fs::create_dir_all(&dest).unwrap();
+    std::fs::write(
+        dir.join("templates.toml"),
+        "[templates.qe]\ntitle = \"one resolver\"\n",
+    )
+    .unwrap();
+    // A TOML string, escaped by the TOML crate: a Windows path's
+    // backslashes are escapes in a basic string.
+    std::fs::write(
+        dir.join("ui.toml"),
+        format!(
+            "copy_dest = {}\n",
+            toml::Value::String(dest.to_string_lossy().into_owned())
+        ),
+    )
+    .unwrap();
+    let script = "900:key:i;1400:key:ctrl+e;1900:dump.open";
+    let templates = dir.join("templates.toml").display().to_string();
+    let ui_prefs = dir.join("ui.toml").display().to_string();
+
+    // A — the config dir moved: both reads name it, and nothing else.
+    let stderr = shoot_env_stderr(
+        &["--synthetic", "24"],
+        &[
+            ("FASTCULL_TRACE", "1"),
+            ("FASTCULL_CONFIG_DIR", dir.to_str().unwrap()),
+            ("FASTCULL_DRIVE", script),
+        ],
+        &out_dir().join("one-resolver-moved.jpg"),
+    );
+    let labels = mark_labels(&stderr);
+    // The path a config-read mark names, or None for any other mark.
+    let named = |label: &str| -> Option<String> {
+        if let Some(path) = label.strip_prefix("templates loaded from ") {
+            return Some(path.to_string());
+        }
+        if let Some(rest) = label.strip_prefix("templates: ") {
+            return Some(
+                rest.split_once(" could not be read: ")
+                    .map_or(rest, |(path, _)| path)
+                    .to_string(),
+            );
+        }
+        label
+            .strip_prefix("ui prefs read from ")
+            .map(str::to_string)
+    };
+    let loaded = format!("templates loaded from {templates}");
+    let read = format!("ui prefs read from {ui_prefs}");
+    assert!(
+        labels.iter().any(|l| *l == loaded),
+        "no `{loaded}` mark — the IPTC panel's templates.toml read did not go \
+         through FASTCULL_CONFIG_DIR:\n{stderr}"
+    );
+    assert!(
+        labels.iter().any(|l| *l == read),
+        "no `{read}` mark — Copy Picks' ui.toml read did not go through \
+         FASTCULL_CONFIG_DIR:\n{stderr}"
+    );
+    for label in &labels {
+        if let Some(path) = named(label) {
+            assert!(
+                path == templates || path == ui_prefs,
+                "a config read named a file outside FASTCULL_CONFIG_DIR ({}): \
+                 `{label}` — that read bypassed the one resolver:\n{stderr}",
+                dir.display()
+            );
+        }
+    }
+
+    // B — FASTCULL_NO_CONFIG (the harness's own): no read, no mark.
+    let stderr = shoot_env_stderr(
+        &["--synthetic", "24"],
+        &[("FASTCULL_TRACE", "1"), ("FASTCULL_DRIVE", script)],
+        &out_dir().join("one-resolver-hidden.jpg"),
+    );
+    let reads: Vec<&str> = mark_labels(&stderr)
+        .into_iter()
+        .filter(|l| named(l).is_some())
+        .collect();
+    assert!(
+        reads.is_empty(),
+        "under FASTCULL_NO_CONFIG a config file was still read — {reads:?}; the \
+         resolver hides templates.toml and ui.toml as it hides settings.toml:\n{stderr}"
+    );
+    std::fs::remove_dir_all(&dir).ok();
+}
+
 /// AC7 (settings.md, "Environment precedence"): FASTCULL_MAX_READERS wins
 /// over the file's `max_readers`, the field shows the variable's value and
 /// cannot be changed — and an unparsable variable is ignored, the file

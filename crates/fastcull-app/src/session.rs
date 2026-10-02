@@ -313,6 +313,14 @@ pub(crate) fn open_folder_at(
 /// Re-read templates.toml (session open + panel toggle = the spec's
 /// read-on-open live-reload). Parse errors and CLEAR warnings both land in
 /// the panel warning strip.
+///
+/// The marks name the file this read used, from the very `path` it read
+/// (test-harness.md): the proof that templates.toml goes through core's one
+/// config-dir resolver, which a driven run could not otherwise see — the
+/// real config dir is empty on every seat, so a read of the per-user dir
+/// looked exactly like a hermetic one (QE 2026-10-01, D37). A missing file
+/// is an empty load, so it is "loaded from" too; under FASTCULL_NO_CONFIG
+/// there is no path and no mark.
 pub(crate) fn reload_templates(st: &mut AppState) {
     st.session.templates.clear();
     st.session.template_warnings.clear();
@@ -321,11 +329,20 @@ pub(crate) fn reload_templates(st: &mut AppState) {
     };
     match fastcull_core::iptc::load_templates(&path) {
         Ok(load) => {
+            crate::trace::trace_mark(&format!("templates loaded from {}", path.display()));
             st.session.templates = load.templates;
             st.session.template_warnings = load.entry_errors;
             st.session.template_warnings.extend(load.warnings);
         }
-        Err(e) => st.session.template_warnings.push(e.to_string()),
+        Err(e) => {
+            let error = e.to_string();
+            crate::trace::trace_mark(&format!(
+                "templates: {} could not be read: {}",
+                path.display(),
+                error.lines().next().unwrap_or("")
+            ));
+            st.session.template_warnings.push(error);
+        }
     }
 }
 
@@ -349,9 +366,18 @@ fn ui_prefs_path() -> Option<std::path::PathBuf> {
 /// preference one dialog never touches survives the other dialog saving
 /// (the video export's `clip_dest` used to be erased by any Copy Picks
 /// save, because that path rebuilt the whole file from two keys).
+///
+/// The mark names the file this read used, from the very `path` it reads
+/// (test-harness.md; QE 2026-10-01, D37 — as for templates.toml in
+/// [`reload_templates`]); under FASTCULL_NO_CONFIG there is no path, no
+/// read and no mark.
 fn read_ui_prefs() -> toml::Table {
-    ui_prefs_path()
-        .and_then(|p| std::fs::read_to_string(p).ok())
+    let Some(path) = ui_prefs_path() else {
+        return toml::Table::new();
+    };
+    crate::trace::trace_mark(&format!("ui prefs read from {}", path.display()));
+    std::fs::read_to_string(&path)
+        .ok()
         .and_then(|c| c.parse().ok())
         .unwrap_or_default()
 }

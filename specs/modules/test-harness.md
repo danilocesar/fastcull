@@ -228,6 +228,15 @@ sidecars — scripts target throwaway copies of test data only.
   open emits both before `harness::install`, so a `wait:` on either needs
   an `open:`; `failed tooltip shown: <reason>` when the Failed badge's
   tooltip popup is instantiated.
+- **Config reads** (brief 008 D11; QE 2026-10-01, D37): `templates loaded
+  from <path>` / `templates: <path> could not be read: <error>` at every
+  `templates.toml` read (the IPTC panel's open, every folder open; a missing
+  file loads empty, so it is "loaded from" too), and `ui prefs read from
+  <path>` at every `ui.toml` read (the copy and export dialogs, and the
+  read half of each save) — each built from the very path the read used,
+  so a driven run sees that both files go through the one config-dir
+  resolver; under `FASTCULL_NO_CONFIG` there is no path, no read and no
+  mark.
 - **`load settled gen N: cursor pos P, `** — the CONTRACTUAL PREFIX, the
   whole substring a `wait:` registers; the tail differs by zoom and is
   free to (the scroll correction above one column; `scroll X kept (one
@@ -447,6 +456,9 @@ shot 2.
 
 ## History
 
+- 2026-10-01 — QE round 3 of brief 008 (D37): `templates loaded from`,
+  `templates: … could not be read`, `ui prefs read from` — the config reads
+  name the path they used.
 - 2026-10-01 — QE round 2 of brief 008 (D27): `read pool started floor F
   cap C`, the read pool's adopted bounds, at every folder open.
 - 2026-10-01 — Brief 008: `FASTCULL_NO_CONFIG` covers the whole config dir

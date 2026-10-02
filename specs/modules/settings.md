@@ -499,7 +499,13 @@ their precedence is `fastcull-core`'s; the app binds (brief 008, 2026-10-01).
       every driven run carries `FASTCULL_NO_CONFIG=1`, and every test that
       reads or writes a settings file sets `FASTCULL_CONFIG_DIR` to its own
       scratch dir (corrected 2026-10-01, QE D29: it said "the two that
-      write", and seven tests set it then, several of them read-only).
+      write", and seven tests set it then, several of them read-only);
+      `templates.toml` and `ui.toml` go through the same resolver, moved
+      and hidden with it — app
+      `templates_and_ui_prefs_are_read_from_the_one_config_dir`, from the
+      marks each read emits with the path it used (QE 2026-10-01, D37: the
+      real config dir is empty on every seat, so a revert of either to the
+      per-user dir had stayed green).
 - [x] **AC7 — precedence.** With `FASTCULL_MAX_READERS` set the field is
       read-only with the environment's value and its note; unset, the
       file's value governs the pool; an unparsable value is ignored —
@@ -600,6 +606,9 @@ their precedence is `fastcull-core`'s; the app binds (brief 008, 2026-10-01).
 
 ## History
 
+- 2026-10-01 — QE round 3 of brief 008, the one resolver (D37): the
+  templates.toml and ui.toml reads name the path they used, and AC6 names
+  the test that pins both to the config-dir resolver.
 - 2026-10-01 — QE round 3 of brief 008, the CLI's read workers (D34): the
   CLI prints the bounds its read pool adopted, and a second CLI test pins
   its call site; AC7 names it.

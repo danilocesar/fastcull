@@ -814,6 +814,19 @@ setting.
   1000×700 on this seat before and after. No spec sentence moves: ui-grid.md
   does not carry the card's row texts and its keyboard map's `pick (take)`
   is right; docs/culling.md already said "auto-advances — a setting".
+- D37 (2026-10-01, QE round 3 — defect D37, minor; the senior developer's
+  test-integrity review, T3; test plumbing, no behaviour change): D11's one
+  config-dir resolver had a guard for settings.toml only. QE verified the
+  behaviour (a broken templates.toml in FASTCULL_CONFIG_DIR shows its own
+  parse error in the IPTC panel; a ui.toml there gives Copy Picks the
+  remembered destination), but a revert of `iptc::default_templates_path`
+  or `session::ui_prefs_path` to the per-user dir would have stayed green by
+  construction: the real config dir is empty on CI and on the development
+  seat, and the revert silently reopens the hole D11 closed — every driven
+  run reading the user's real templates.toml. Each read now traces the path
+  it used (`templates loaded from`, `templates: … could not be read`, `ui
+  prefs read from`), and `templates_and_ui_prefs_are_read_from_the_one_config_dir`
+  reads them under FASTCULL_CONFIG_DIR and under FASTCULL_NO_CONFIG.
 - Directive candidate (2026-10-01): M9's cleanup command `cargo clean
   -p …` cleans the dev profile only — a `screen-rung` release binary
   from 2026-09-29 survived it and the persona ran it by mistake; the
