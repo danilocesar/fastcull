@@ -908,7 +908,7 @@ setting.
   reason, the harness cannot drive it); no FocusScope wrapper per field.
   The next round contains exactly that and nothing more; QE is asked to
   list every remaining promise-without-a-guard in one sweep rather than
-  one per round. Awaiting the user's go.
+  one per round. The user's go: 2026-10-02.
 - D40 (2026-10-02, Manager, M1, on QE round 4's defect D42 and the
   re-review's F2): the writer CARRIES the comment above a table it
   replaces — `# my sub-table, keep this note` above `[performance.
@@ -928,6 +928,19 @@ setting.
   The "Writing" sentence gains it; a bridge unit test in the shape of
   `a_read_error_after_the_move_aside_is_shown_not_masked_by_rewritten`,
   mutant the old order.
+- D42 (2026-10-02, the user, on QE's D28 — the question that held the
+  merge): option (A) — every save writes every setting with the value the
+  saving window holds; two FastCull windows, or a hand edit made while the
+  dialog is open, lose to the last save, and settings.md and
+  docs/settings.md say so. The user's one condition, verbatim: "make sure
+  that environment variables don't rewrite settings" — a key the
+  environment governs (`performance.max_readers` under
+  `FASTCULL_MAX_READERS`) is written with the FILE's own value, never the
+  environment's: the environment reaches what is in force and the
+  read-only field, never the file. settings.md states both; a core test
+  pins the condition (environment 3, file 7, a commit of another key — the
+  file still says 7; mutant: the in-force value written) and the driven
+  read-workers test gains the strand.
 - Directive candidates (2026-10-02, from the diagnosis): `.claude/agents/
   senior-developer.md` says the driven suite "is 87 tests" — it is 111 at
   a377405 (brief 008 added 24; the two halves run ~340 s each, over the
