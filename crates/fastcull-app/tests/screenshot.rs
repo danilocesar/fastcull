@@ -12744,6 +12744,18 @@ fn templates_and_ui_prefs_are_read_from_the_one_config_dir() {
 /// dir now receives a written file (`= 4`, then `= 6`); the byte-equality
 /// check above concerns the OTHER dir.
 ///
+/// A fourth run proves the environment never reaches the file (settings.md,
+/// "Writing"; the user, 2026-10-02, brief 008 D42: "make sure that
+/// environment variables don't rewrite settings"): under
+/// FASTCULL_MAX_READERS=3, over its own file holding `max_readers = 7`, a
+/// commit of ANOTHER setting (the wash, 15) is saved with the file's own
+/// `max_readers = 7` beside it, never the 3 in force. Green before the
+/// commit that adds it — a guard. Mutants (2026-10-02): core's writer
+/// emitting the value in force for `max_readers` → the file reads
+/// `max_readers = 3` — red; the bridge's `save` writing a copy whose
+/// `max_readers` is the value in force → the same — red (the core test
+/// `the_environment_never_reaches_the_settings_file` cannot see this one).
+///
 /// Mutants (2026-10-01): `resolve_max_readers` ignoring the environment →
 /// the first run reads `readers=limit:7` and this goes red; session.rs
 /// passing `None` to `Pipeline::start` with the mark untouched → the pool
@@ -12910,6 +12922,50 @@ fn the_environment_wins_over_the_settings_file_for_read_workers() {
         labels[limitoff..].contains(&"settings committed performance.max_readers = 6"),
         "no `settings committed performance.max_readers = 6` after `dump.limitoff`:\n{stderr}"
     );
+
+    // The environment never reaches the file (settings.md, "Writing"; the
+    // user, brief 008 D42): under FASTCULL_MAX_READERS=3, a commit of
+    // ANOTHER setting saves the file's own `max_readers = 7`, never the 3
+    // in force. Its own dir: the first run's file must stay byte-identical.
+    let saved = settings_scratch("readers-env-save", Some("[performance]\nmax_readers = 7\n"));
+    let stderr = run(
+        &saved,
+        "3",
+        "900:key:ctrl+,;1300:key:right;1700:click:settings wash;2000:key:ctrl+a;2200:key:1;\
+         2400:key:5;2600:key:return;3000:dump.saved",
+        "settings-readers-env-save.jpg",
+    );
+    assert_click_resolved(&stderr, "settings wash");
+    let dump = qedump(&stderr, "saved");
+    assert_eq!(
+        dump_field(dump, "readers"),
+        "env:3",
+        "the premise: FASTCULL_MAX_READERS=3 governs what is in force:\n{stderr}"
+    );
+    assert_eq!(
+        dump_field(dump, "wash"),
+        "15",
+        "the other setting's commit did not apply:\n{stderr}"
+    );
+    assert_eq!(
+        mark_lines(&stderr, "settings written "),
+        1,
+        "the commit was not saved, once:\n{stderr}"
+    );
+    let text = std::fs::read_to_string(saved.join("settings.toml")).unwrap();
+    assert!(
+        text.lines().any(|line| line.trim() == "max_readers = 7")
+            && text
+                .lines()
+                .any(|line| line.trim() == "selection_wash = 15"),
+        "the save did not keep the file's own `max_readers = 7` beside the commit — \
+         the environment reached the file: {text:?}"
+    );
+    assert!(
+        !text.lines().any(|line| line.trim() == "max_readers = 3"),
+        "the environment's value was written to the file: {text:?}"
+    );
+    std::fs::remove_dir_all(&saved).ok();
     std::fs::remove_dir_all(&dir).ok();
     std::fs::remove_dir_all(&none).ok();
     std::fs::remove_dir_all(&photos).ok();

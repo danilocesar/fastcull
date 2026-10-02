@@ -126,7 +126,11 @@ max_readers = 0
 `max_readers = 0` is Adaptive, any other number is a Limit.)
 
 A hand edit takes effect when you next open the dialog (the Performance
-rows still wait for their own moment). FastCull rewrites the file when
+rows still wait for their own moment). Every change saved from the dialog
+writes every setting as that dialog holds it, so the last save wins: a
+hand edit made while the dialog is open, or a change saved from a second
+FastCull window, is replaced by the next change saved here — edit the
+file with the dialog closed. FastCull rewrites the file when
 you change something in the dialog, and keeps your own comments, any
 keys it does not know and the file's own line endings — a file saved
 with Windows line endings (Notepad's) comes back with them, and a
@@ -166,7 +170,10 @@ quietly taken back.
 ## Environment variables and settings
 
 Where an environment variable already governs a setting, the variable
-wins — today that is `FASTCULL_MAX_READERS` alone. The other variables
+wins — today that is `FASTCULL_MAX_READERS` alone. It wins without ever
+being written to the file: the file keeps your own value, and saving any
+other change writes that value back, never the variable's — unset the
+variable and your own setting is in force again. The other variables
 you may see mentioned (`FASTCULL_TRACE`, `FASTCULL_NO_CACHE`,
 `FASTCULL_NO_CONFIG`) are diagnostics for bug reports and tests, not
 settings; see the [FAQ](faq.md). No setting gets a new environment

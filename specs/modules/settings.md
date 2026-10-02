@@ -110,7 +110,9 @@ their precedence is `fastcull-core`'s; the app binds (brief 008, 2026-10-01).
   already exists (developer 2026-10-01, brief 008 commit B;
   Manager-accepted, senior-developer review F2). The write is a
   read-modify-write through `toml_edit`: every known key is emitted under
-  its table with its in-force value; a key the
+  its table with the setting's own value (below; corrected 2026-10-02 from
+  "its in-force value", which for a key the environment governs is the
+  environment's); a key the
   write CREATES is preceded by `#` comment lines carrying the field's
   note (`Key::note()`, wrapped at 78 columns over as many lines as it
   needs), so the file documents itself for hand editing; a key that already
@@ -145,6 +147,18 @@ their precedence is `fastcull-core`'s; the app binds (brief 008, 2026-10-01).
   replacing line (QE 2026-10-01, D35; brief 008 D40, QE 2026-10-02, D42: the
   comment above a replaced sub-table was deleted with it, though the one
   above a replaced `[[general]]` was kept).
+- Every save writes EVERY known key with the value the saving window
+  holds, so a second FastCull window, or a hand edit made while the
+  dialog is open, loses to the last save (the user, 2026-10-02, brief 008
+  D42 — option A of QE's D28, where a window opened before another's
+  commit wrote its own older wash back, and a hand fix made with the
+  dialog open was replaced). A key the environment governs
+  (`performance.max_readers` under `FASTCULL_MAX_READERS`) is written with
+  the setting's own value — the file's, or what a Reset of its tab made
+  it — never the environment's: the environment reaches what is in force
+  and the read-only field, never the file (the user, 2026-10-02, brief
+  008 D42: "make sure that environment variables don't rewrite
+  settings").
 - A write that finds the file unparsable AT THAT MOMENT moves it aside
   before writing a fresh one, whatever the last read said — the first
   write after a failed read, or a hand edit that broke the file
@@ -209,7 +223,8 @@ their precedence is `fastcull-core`'s; the app binds (brief 008, 2026-10-01).
   exists: `FASTCULL_MAX_READERS` ↔ `performance.max_readers`, with the
   semantics raw-pipeline.md records, unchanged. A variable whose value does
   not parse as an integer ≥ 1 is ignored — the file governs and the field
-  stays editable — exactly what `pipeline.rs` did with `parse().ok()`.
+  stays editable — exactly what `pipeline.rs` did with `parse().ok()`. The
+  variable never reaches the file ("Writing").
 - No new environment variable is introduced by a setting, and a future
   setting gets a variable only by its own recorded decision (user decision
   2026-10-01: "let's do it for the existing variables that make sense";
@@ -592,7 +607,12 @@ their precedence is `fastcull-core`'s; the app binds (brief 008, 2026-10-01).
       Adaptive is ticked and takes a limit once it is cleared — the same
       app test's third run, a click and `6`, Enter, before and after
       clearing Adaptive (QE 2026-10-02, round 4 D41: with the Adaptive term
-      dropped from the field's `enabled` the suite had stayed green).
+      dropped from the field's `enabled` the suite had stayed green); the
+      environment never reaches the file — under `FASTCULL_MAX_READERS=3` a
+      commit of another setting saves the file's own `max_readers = 7` —
+      core `the_environment_never_reaches_the_settings_file` (a test binary
+      of its own, because it sets the variable in its own process) and the
+      same app test's fourth run (the user, 2026-10-02, brief 008 D42).
 - [x] **AC8 — auto-advance off.** `Y`/`N` keep the cursor and leave the
       selection alone; the filter exception moves the cursor and ends the
       selection as `U` does; on, as today — core
@@ -677,6 +697,11 @@ their precedence is `fastcull-core`'s; the app binds (brief 008, 2026-10-01).
 
 ## History
 
+- 2026-10-02 — The user's answer to QE's D28 (brief 008 D42): every save
+  writes every setting as the saving window holds it, the last save wins,
+  and a setting the environment governs is saved with its own value,
+  never the variable's; "Writing" states both, and AC7 names the tests of
+  the second.
 - 2026-10-02 — QE round 4 of brief 008, the status line after a failed
   write (brief 008 D41; QE D43): a standing write error wins on the status
   line as on the notice, so `(defaults in force)` is said only while it is
