@@ -878,6 +878,61 @@ setting.
   not pinned. QE's wording "over two lines" was refused: a line count is a
   font metric. The strand's own mutant — the readout at 24 px — leaves the
   cache-off run fitting (29 px) and clamps the cache-on run.
+- D39 (2026-10-02, Manager, after the circuit breaker — three QE FAILs —
+  and the senior developer's diagnosis, `.qe-scratch/pipeline-008/
+  diagnosis.md`): the three majors were not one family. QE round 4's
+  defect D39 (a checkbox clicked over a half-typed field commits the
+  field but drops the click) and review F1 share one root — a control's
+  handler calls `flush()`, whose synchronous commit `present()`s every
+  dialog property from the model inside that handler, and a two-way
+  bound CheckBox has the state the click just left put back into its own
+  `checked` before the handler reads it (measured: `adaptive toggled:
+  checked false` → `present: readers-adaptive false -> true` → `adaptive
+  after flush: checked true`, one iteration, 5 of 5); QE round 3's D33
+  (Tab into a field did not select it) is the keyboard ring's, unrelated.
+  Four fixes were measured: (b) "present only what changed" and (d) "defer
+  the commit behind the handler" are refuted (the Limit field's own
+  commit re-presents the readers trio; a deferred commit undoes a
+  synchronous Reset — F1 returns); (a) "the control captures its intent
+  before `flush()`" and (g) a one-way binding with a `shown` tracker both
+  hold. Ruled: (a) on both checkboxes — the rule for every control bound
+  two-way is "read your own state before anything that can present",
+  recorded as canary fact 7 — plus the 20-row matrix test
+  `every_control_that_leaves_a_dirty_settings_field_commits_it_first`
+  (one launch per row over a table; 17 of 18 reachable rows already hold
+  on a377405 through `flush()` or the blur belt; rows 4/4b are the
+  old-red; the next unit's control joins by adding a line), the approved
+  tests for QE's D40, D41 and D44, and QE's spec corrections. Window
+  deactivation with a dirty field stays as settings.md says — the blur
+  commits like a click-away (source-verified: `FocusOut` lands for every
+  reason, the harness cannot drive it); no FocusScope wrapper per field.
+  The next round contains exactly that and nothing more; QE is asked to
+  list every remaining promise-without-a-guard in one sweep rather than
+  one per round. Awaiting the user's go.
+- D40 (2026-10-02, Manager, M1, on QE round 4's defect D42 and the
+  re-review's F2): the writer CARRIES the comment above a table it
+  replaces — `# my sub-table, keep this note` above `[performance.
+  loupe_memory]` becomes the comment above `loupe_memory = "2 GB"` — and
+  a comment on the header line too; D5 decides (a hand-edited config is
+  the user's data), and the code already carries it for a replaced
+  `[[general]]` array, so the sub-table arm was the inconsistency, not
+  the rule. The "Writing" exception sentence narrows to "its contents go;
+  the comment above its header stays above the key"; a core test with the
+  `clear()` mutant.
+- D41 (2026-10-02, Manager, M2, on QE round 4's defect D43): the status
+  line mirrors the notice's order — a standing write error is the newest
+  event and wins: ` · ⚠ settings.toml could not be written` (with ` — the
+  file that would not read is <name>` when one was moved aside), the read
+  error with "(defaults in force)" only while the read error is the
+  newest event — which is exactly when it is true — then `rewritten`.
+  The "Writing" sentence gains it; a bridge unit test in the shape of
+  `a_read_error_after_the_move_aside_is_shown_not_masked_by_rewritten`,
+  mutant the old order.
+- Directive candidates (2026-10-02, from the diagnosis): `.claude/agents/
+  senior-developer.md` says the driven suite "is 87 tests" — it is 111 at
+  a377405 (brief 008 added 24; the two halves run ~340 s each, over the
+  directive's 300 s); the tree's own `target/` reached 104 GB after four
+  QE rounds (303 GB free — not cleaned mid-unit, M9).
 - Directive candidate (2026-10-01): M9's cleanup command `cargo clean
   -p …` cleans the dev profile only — a `screen-rung` release binary
   from 2026-09-29 survived it and the persona ran it by mistake; the
