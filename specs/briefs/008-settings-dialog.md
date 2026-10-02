@@ -802,6 +802,19 @@ setting.
   caller's own copy), and
   `settings_cap::the_cli_honours_the_files_read_workers_under_the_environment`
   reads it on both runners.
+- D35 (2026-10-01, QE round 3 — defect D35, minor; the senior developer's
+  test-integrity review, T4a; ruled under M1 as the integrity review
+  recommended and the Manager's hand-off carried it — fix the writer):
+  settings.md promised the user's comments "survive byte-for-byte", and
+  QE refuted it end to end in a comment-only file — `# just a comment` and
+  `# another` came back at the END of the file, under `max_readers`; a
+  comment after a file's last entry went the same way. toml_edit 0.22.27
+  holds both as the document's trailing decor and prints it last; the
+  writer now moves that text in front of the first table it creates (the
+  integrity review's probe across seven shapes on toml_edit 0.22.27). Blank
+  lines alone in the trailing decor stay at the end, as before: moved, a
+  file of blank lines would have started with them (the developer's
+  measurement, sixteen shapes compared before and after).
 - D36 (2026-10-01, QE round 3 — defect D36, minor; the senior developer's
   test-integrity review, no test change): the shortcuts card's MARK rows
   read `pick — and advance` and `reject — and advance`, and its footnote

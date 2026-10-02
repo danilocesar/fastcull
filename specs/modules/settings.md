@@ -122,7 +122,11 @@ their precedence is `fastcull-core`'s; the app binds (brief 008, 2026-10-01).
   UTF-8 byte-order mark: a CRLF file (Notepad's) is written back CRLF on
   every line, an LF file LF, a mark is kept; a file written from nothing
   is LF without a mark (QE 2026-10-01, D6; brief 008 D21: toml_edit writes
-  LF and drops the mark, so the writer restores both).
+  LF and drops the mark, so the writer restores both). The comments of a
+  file that holds no entries, and a comment that follows the last entry,
+  stay where they were — before the first table the write creates — rather
+  than below the tables (QE 2026-10-01, D35: toml_edit keeps them as the
+  document's trailing decor and would print them last).
 - A write that finds the file unparsable AT THAT MOMENT moves it aside
   before writing a fresh one, whatever the last read said — the first
   write after a failed read, or a hand edit that broke the file
@@ -459,6 +463,7 @@ their precedence is `fastcull-core`'s; the app binds (brief 008, 2026-10-01).
       (under `FASTCULL_CONFIG_DIR`); core
       `a_written_file_round_trips_every_key`,
       `a_write_preserves_unknown_keys_and_the_users_comments`,
+      `a_comment_only_files_comments_stay_at_the_top` (QE 2026-10-01, D35),
       `a_created_key_carries_its_note_and_an_existing_key_keeps_its_comment`,
       `the_normalised_string_is_what_the_file_stores`; a write that fails
       keeps the commit in force and the next open does not re-read over it
@@ -606,6 +611,10 @@ their precedence is `fastcull-core`'s; the app binds (brief 008, 2026-10-01).
 
 ## History
 
+- 2026-10-01 — QE round 3 of brief 008, comments at the end of the file
+  (D35): a comment-only file's comments, and a comment after the last
+  entry, came back below the tables a write created; they stay where they
+  were now, and "Writing" says so.
 - 2026-10-01 — QE round 3 of brief 008, the one resolver (D37): the
   templates.toml and ui.toml reads name the path they used, and AC6 names
   the test that pins both to the config-dir resolver.

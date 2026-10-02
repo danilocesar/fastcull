@@ -931,13 +931,31 @@ fn move_aside(path: &Path) -> std::io::Result<PathBuf> {
 
 /// Put every known key's value into `doc`, touching nothing else.
 fn merge_into(doc: &mut toml_edit::DocumentMut, settings: &Settings) {
+    // The comments after the file's last entry — all of them, in a file that
+    // holds nothing but comments — are the document's TRAILING decor, which
+    // toml_edit prints after everything else, so a table created below
+    // would push them under the new tables. They go in front of the first
+    // table this write creates instead, where they were (settings.md,
+    // "Writing"; QE 2026-10-01, D35). Only a trailing decor that holds a
+    // comment moves: blank lines alone stay at the end, as before — moved,
+    // a file of blank lines would start with them.
+    let mut trailing = doc.trailing().as_str().unwrap_or("").to_string();
+    if trailing.trim().is_empty() {
+        trailing.clear();
+    }
+    let mut moved = false;
     for tab in TABS {
         let root = doc.as_table_mut();
         let is_table = root.get(tab.table()).is_some_and(|t| t.is_table_like());
         if !is_table {
             let mut table = toml_edit::Table::new();
-            // A blank line above every table that follows something.
-            if !root.is_empty() {
+            if !trailing.is_empty() {
+                table
+                    .decor_mut()
+                    .set_prefix(format!("{}\n", std::mem::take(&mut trailing)));
+                moved = true;
+            } else if !root.is_empty() {
+                // A blank line above every table that follows something.
                 table.decor_mut().set_prefix("\n");
             }
             root.insert(tab.table(), toml_edit::Item::Table(table));
@@ -979,6 +997,10 @@ fn merge_into(doc: &mut toml_edit::DocumentMut, settings: &Settings) {
                 }
             }
         }
+    }
+    // Moved, not copied: left in the trailing decor too it would print twice.
+    if moved {
+        doc.set_trailing("");
     }
 }
 
@@ -1199,6 +1221,57 @@ mod tests {
         assert_eq!(reread["general"]["my_unknown"].as_integer(), Some(1));
         assert_eq!(reread["extras"]["colour"].as_str(), Some("teal"));
         assert_eq!(load(&path).settings, s);
+    }
+
+    /// A file of comments and nothing else keeps them at the TOP, and a
+    /// comment after the file's last entry stays under that entry — not
+    /// pushed below the tables the write creates (settings.md, "Writing";
+    /// QE 2026-10-01, D35). toml_edit holds both as the document's trailing
+    /// decor, which it prints after everything; the writer moves that text
+    /// in front of the first table it creates.
+    ///
+    /// RED on 13a904e, the writer before the fix: the two comment lines came
+    /// back at the END of the file, under `max_readers`, and `# tail` under
+    /// the last created table instead of under `auto_advance`. When this
+    /// fails that way it is that defect; do not quiet it.
+    ///
+    /// Mutant (2026-10-01): the trailing decor left where toml_edit keeps it
+    /// (the move taken out of `merge_into`, which IS 13a904e) → red.
+    #[test]
+    fn a_comment_only_files_comments_stay_at_the_top() {
+        let path = file_with("comment-only", "# just a comment\n# another\n");
+        let s = load(&path).settings;
+        write(&path, &s).unwrap();
+        let text = std::fs::read_to_string(&path).unwrap();
+        assert!(
+            text.starts_with("# just a comment\n# another\n\n[general]\n"),
+            "the comment-only file's comments are not at the top: {text:?}"
+        );
+        let last = text.lines().rev().find(|l| !l.trim().is_empty()).unwrap();
+        assert!(
+            !last.starts_with('#') && last.contains(" = "),
+            "the file does not end on a `key = value` line — a comment was left \
+             below the tables: {text:?}"
+        );
+        assert_eq!(
+            load(&path).settings,
+            s,
+            "the written file does not read back"
+        );
+
+        let path = file_with("footer", "[general]\nauto_advance = true\n# tail\n");
+        let s = load(&path).settings;
+        write(&path, &s).unwrap();
+        let text = std::fs::read_to_string(&path).unwrap();
+        assert!(
+            text.contains("auto_advance = true\n# tail\n\n[ui]"),
+            "the comment after the last entry did not stay under it: {text:?}"
+        );
+        assert_eq!(
+            load(&path).settings,
+            s,
+            "the written file does not read back"
+        );
     }
 
     /// A key the write creates carries its note above it, wrapped inside
