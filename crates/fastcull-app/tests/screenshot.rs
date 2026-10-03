@@ -11921,6 +11921,21 @@ fn mark_labels(stderr: &str) -> Vec<&str> {
         .collect()
 }
 
+/// The `[<ms>]` stamps of a run's trace marks — milliseconds since the app
+/// began tracing (trace.rs `emit`) — in [`mark_labels`]'s order: the same
+/// marks, so an index into one is an index into the other.
+fn mark_stamps(stderr: &str) -> Vec<u64> {
+    stderr
+        .lines()
+        .filter_map(|l| l.strip_prefix("fastcull-trace: ["))
+        .filter_map(|r| r.split_once("] "))
+        .map(|(ms, label)| {
+            ms.parse()
+                .unwrap_or_else(|_| panic!("a trace mark with no `[<ms>]` stamp: {ms:?} {label:?}"))
+        })
+        .collect()
+}
+
 /// AC3 and AC4 (settings.md, "Apply on commit"): a click on Reset is a
 /// click-away like any other, so the text the user was typing commits
 /// first — ONCE — and then the Reset resets the tab, that field included:
@@ -16355,8 +16370,14 @@ fn below_the_minimum_window_the_settings_body_gives_before_the_footer() {
 ///      is on. One second into the hold `dump.during` answers — on the UI
 ///      thread, while the row reads `Clearing…` — and its line comes BEFORE
 ///      the worker's own `settings cache clear ran on settings-clear` on the
-///      one trace: the clear never blocks the UI thread. After `settings
-///      cache cleared`, `dump.cleared` counts as many thumb textures as
+///      one trace: the clear never blocks the UI thread. A dump after the
+///      worker's line is that verdict only if the row's own `settings cache
+///      readout shows Clearing…` mark — traced as soon as the Return's
+///      handler returns — came after the worker's line too; with that mark
+///      before it the UI thread was free and the drive step itself was
+///      late, which the run reports as such, red, with no verdict on the UI
+///      thread (the senior developer's review F2). After `settings cache
+///      cleared`, `dump.cleared` counts as many thumb textures as
 ///      `dump.perf` did: the open session keeps its painted thumbs.
 ///
 /// The worker's NAME (run 2) proves the worker, not that the UI thread never
@@ -16377,10 +16398,18 @@ fn below_the_minimum_window_the_settings_body_gives_before_the_footer() {
 /// (`cache_readout(None)`) → run 3's row reads `Thumbnail cache: 92.3 KB
 /// in …` as if the clear had worked — red. Mutants (2026-10-03, brief 010),
 /// each alone, on run 4: the UI thread `join()`ing the worker right after
-/// the spawn → `dump.during` lands after the worker's line — red; the
-/// session's thumb textures dropped when the clear completes
-/// (`st.textures.images.clear()` in `on_settings_cache_cleared`) →
-/// `thumbtex=0` at `dump.cleared` — red; Clear's ring slot never ok
+/// the spawn → `dump.during` lands after the worker's line, and the row's
+/// `Clearing…` mark after it too — red, THE CLEAR BLOCKED THE UI THREAD
+/// (re-shown at review F2: the worker's line 3001 ms after the Return, the
+/// row's mark after it at 3001–3002, the dump at 3009; a premise on the
+/// dump's delay alone, ≥ 3000 there, would have called this defect a late
+/// drive step); the premise's probe (review F2, never committed: the
+/// script's `dump.during` moved to 3.5 s after the Return) → the row's mark
+/// 1 ms after the Return, the dump after the worker's line — red, THE DRIVE
+/// STEP ITSELF WAS LATE, where the verdict alone had read THE CLEAR BLOCKED
+/// THE UI THREAD; the session's thumb textures dropped when the clear
+/// completes (`st.textures.images.clear()` in `on_settings_cache_cleared`)
+/// → `thumbtex=0` at `dump.cleared` — red; Clear's ring slot never ok
 /// (`slot-ok(5)` false) → the fourth Tab lands on Reset and the Return
 /// resets Performance instead — red.
 #[test]
@@ -16744,6 +16773,45 @@ fn the_cache_cap_and_clear_cache_reach_the_default_cache() {
         .iter()
         .position(|l| *l == "settings cache clear ran on settings-clear")
         .unwrap_or_else(|| panic!("run 4: the worker never said where it ran:\n{stderr}"));
+    // The premise of that verdict (the senior developer's review F2): a dump
+    // that comes after the worker's line convicts the UI thread only if the
+    // UI thread was silent from the Return to that line, and the dump's own
+    // delay cannot say so — a UI thread that waits for the worker makes the
+    // drive step late by the whole hold too (measured under the `join()`
+    // mutant: the dump 3009 ms after the Return, the worker's line at 3001).
+    // The witness is the row's own `settings cache readout shows Clearing…`
+    // mark: Slint traces it in the same loop turn, as soon as the timer
+    // callback that ran the Return has returned (Cargo.toml, the fourth
+    // canary's fact 8). It comes after the worker's line when that callback
+    // waited for the worker (the `join()` mutant: in the worker's own
+    // millisecond or the next, after its line), and about 3 s before it when
+    // the UI thread was free and only the dump's timer fired late (measured
+    // with the dump moved 3.5 s after the Return: 1 ms after the Return). So
+    // a dump after the worker's line with that mark before it is a late
+    // drive step — red, with no verdict on the UI thread. One shape this
+    // cannot name: a UI thread blocked by the clear LATER than the Return's
+    // handler (a blocking poll, say) shows that mark before the worker's
+    // line and is reported as a late drive step — red either way, as it
+    // would be under a premise on the dump's delay.
+    let stamps = mark_stamps(&stderr);
+    let after_return = |i: usize| stamps[i].saturating_sub(stamps[ret]);
+    let shown = labels[clearing..]
+        .iter()
+        .position(|l| *l == "settings cache readout shows Clearing…")
+        .map(|i| clearing + i);
+    assert!(
+        !(ran < during && shown.is_some_and(|shown| shown < ran)),
+        "run 4: THE DRIVE STEP ITSELF WAS LATE — no verdict on the UI thread. The dump due \
+         1000 ms after the Return came {} ms after it, after the worker's own line ({} ms \
+         after it); but the row's own `settings cache readout shows Clearing…` mark, which \
+         Slint traces as soon as the timer callback that ran the Return returns (Cargo.toml, \
+         the fourth canary's fact 8), came {} ms after the Return — before the worker's line, \
+         so the UI thread was free once the Return was handled and it was the drive's timer \
+         that fired late, not the clear that blocked:\n{stderr}",
+        after_return(during),
+        after_return(ran),
+        shown.map_or(0, after_return),
+    );
     assert!(
         clearing < during && during < ran,
         "THE CLEAR BLOCKED THE UI THREAD: the dump due one second into the worker's \
