@@ -998,12 +998,15 @@ their precedence is `fastcull-core`'s; the app binds (brief 008, 2026-10-01).
       re-read) (brief 010, 2026-10-03).
 - [x] **AC26 — the Limit has no ceiling of its own** ("Read workers"; brief
       010 R2). `set_from_text(MaxReaders, "64")` is 64 and `"4294967295"`
-      the type's own maximum, a file's `max_readers = 1000` reads 1000, and
-      the pool adopts `(4, 4, 1000)` — core
+      the type's own maximum — a figure past it holds at the type's maximum
+      (`"99999999999"` reads 4294967295) — a file's `max_readers = 1000`
+      reads 1000, and the pool adopts `(4, 4, 1000)` — core
       `the_readers_limit_has_no_ceiling_of_its_own` and a `(None, 1000,
       (4, 4, 1000))` row of
       `pipeline::tests::the_readers_resolution_feeds_the_pool_exactly_as_the_variable_did`
-      (brief 010, 2026-10-03).
+      (brief 010, 2026-10-03; the saturation clause added the same day by
+      the senior developer's review F3 — the test pinned it and this line
+      did not name it).
 - [x] **AC27 — `Ctrl+,` inert while a keyword field holds the keyboard**
       ("Opening and closing"; brief 010 R3). With the keyword field focused
       and typed into, `Ctrl+,` opens nothing and the field keeps the
@@ -1077,6 +1080,8 @@ their precedence is `fastcull-core`'s; the app binds (brief 008, 2026-10-01).
 
 ## History
 
+- 2026-10-03 — Brief 010, the senior developer's review F3: AC26 names the
+  saturation its test pins — a Limit past the type's maximum holds there.
 - 2026-10-03 — Brief 010, the senior developer's review F1: AC28 counts
   the active tab's accent rows in windows straddling its edges — the 3 px
   bands flush with its mark held one underline row of two on
