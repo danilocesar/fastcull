@@ -558,6 +558,9 @@ shot 2.
 
 ## History
 
+- 2026-10-03 — Brief 010 commit C: the number fields' creation `shows`
+  marks, `settings reset shows`, `FASTCULL_CLEAR_HOLD_MS` and the dump's
+  `thumbtex=` land as written above.
 - 2026-10-03 — Brief 010 agreed, spec first: `FASTCULL_CLEAR_HOLD_MS` (the
   held Clear worker, the never-blocks proof); the number fields' and the
   Reset button's creation marks, `settings reset shows`; the dump's

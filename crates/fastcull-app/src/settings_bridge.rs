@@ -209,12 +209,20 @@ pub(crate) fn wire(window: &MainWindow, state: &Rc<RefCell<AppState>>) {
             // back onto the UI thread reads `… ran on main`, which a driven
             // run sees (QE 2026-10-02, round 5). The name proves the worker,
             // not that the UI thread never waits for it — a `join()` right
-            // after the spawn would block the UI and still report this name
-            // — so "never blocks" stays review-verified (settings.md AC12).
+            // after the spawn would block the UI and still report this name.
+            // "Never blocks" is driven through the harness knob below: with
+            // the worker held, a `dump.` answers on the UI thread while the
+            // row reads `Clearing…` (settings.md AC12; brief 010).
             let weak = win.as_weak();
             let spawned = std::thread::Builder::new()
                 .name("settings-clear".into())
                 .spawn(move || {
+                    // FIRST, on the worker itself, before it opens its
+                    // connection: a hold here is the worker's time, never
+                    // the UI thread's (test-harness.md).
+                    if let Some(hold) = clear_hold() {
+                        std::thread::sleep(hold);
+                    }
                     let before = fastcull_core::cache::size_on_disk(&db);
                     let error = fastcull_core::cache::PreviewCache::open(&db)
                         .and_then(|mut cache| cache.clear())
@@ -364,6 +372,35 @@ fn record_write(
             st.write_error = Some(e);
         }
     }
+}
+
+/// The Clear worker's harness hold (test-harness.md): test plumbing in
+/// `FASTCULL_KITCHEN_COOK_MS`'s family, never a setting (brief 010 D3;
+/// brief 008 D13 and D42 stand).
+const CLEAR_HOLD_VAR: &str = "FASTCULL_CLEAR_HOLD_MS";
+
+/// `FASTCULL_CLEAR_HOLD_MS=N`: hold every cache clear N ms on its worker
+/// before it starts — the pacing knob for the proof that Clear never blocks
+/// the UI thread (settings.md AC12): a clear that takes a millisecond on a
+/// test cache leaves no window in which to ask the UI thread anything, and
+/// a held one leaves N ms. Read ONCE per process, and said out loud the
+/// first time, unconditionally: a leftover value in some environment makes
+/// every Clear mysteriously slow, and a knob that ships in release builds
+/// must be diagnosable from a bug report's stderr (the kitchen knob's
+/// reason). `None` — no hold, no cost — unset, 0 or unparsable.
+fn clear_hold() -> Option<std::time::Duration> {
+    static HOLD_MS: std::sync::OnceLock<u64> = std::sync::OnceLock::new();
+    let ms = *HOLD_MS.get_or_init(|| {
+        let ms = std::env::var(CLEAR_HOLD_VAR)
+            .ok()
+            .and_then(|v| v.parse().ok())
+            .unwrap_or(0);
+        if ms > 0 {
+            eprintln!("fastcull: {CLEAR_HOLD_VAR}={ms} — every cache clear is held");
+        }
+        ms
+    });
+    (ms > 0).then(|| std::time::Duration::from_millis(ms))
 }
 
 /// Is the thumbnail cache switched off for this run?
