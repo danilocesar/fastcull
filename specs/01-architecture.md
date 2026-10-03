@@ -57,14 +57,20 @@ terminal tool. CI asserts both PE subsystem fields on every Windows build
 | iptc | `iptc.rs` | IPTC model, templates, variable expansion | iptc-templates |
 | fileops | `fileops.rs` | copy/rename engine with sidecar lockstep, the clash question | fileops |
 | clip | `clip.rs`, `clip/qt.rs` | export frames as video: cadence from capture timestamps, Motion JPEG `.mov` muxer (in-tree), derived-output contract (ADR 0004) | video-export |
+| settings | `settings.rs` | the settings file: its model, defaults, parser, writer and clamps; the memory grammar; the environment precedence and the read-pool resolution; the config-dir resolver; total RAM (ADR 0005) | settings |
 
 (The table listed 11 of 19 files until 2026-09-17 — `exif`, `loupe`, `viewassets`,
 `zoompan`, `pointer`, `grid`, `selection` and `sidecar_writer` had no row — and
-described `raw/` as a "rawler wrapper", which it stopped being on 2026-07-27.)
+described `raw/` as a "rawler wrapper", which it stopped being on 2026-07-27;
+`settings.rs` is the twentieth file, brief 008, 2026-10-01.)
 
 ## Data flow
 
 ```
+startup (app and CLI)
+  └─ settings: read settings.toml, the environment winning per knob ──► the
+       wash and auto-advance at once; the cache cap, the read-pool override
+       and the loupe budget at the next folder open (ADR 0005)
 folder open
   └─ catalog: scan dir entries (instant) ──► session with placeholder records
        └─ pipeline: for each file (priority-ordered)
@@ -72,6 +78,8 @@ folder open
             └─ miss: raw: read preview bytes ─► decode ─► resize ─► cache ─► UI
 user input (pick/IPTC edit)
   └─ session mutation ──► xmp: debounced sidecar write (≤1 s after last change)
+settings dialog commit
+  └─ settings: apply ──► write settings.toml (read-modify-write, UI thread)
 copy picks
   └─ fileops: plan (rename template) ─► copy RAW+sidecar ─► verify ─► report
 ```
@@ -79,6 +87,11 @@ copy picks
 ## Threading model
 
 - **Main/UI thread**: Slint event loop only. Never blocks on I/O or decode —
+  with one recorded exception, the two ~1 KB config writes on an explicit
+  user action inside a dialog, `ui.toml` and `settings.toml` (ADR 0005;
+  this bullet said "never" while `ui.toml` had been written here since M6
+  — corrected 2026-10-01, brief 008; the cache clear's VACUUM runs on a
+  worker) —
   and as of the user decision 2026-08-02, **"decode" includes ALL pixel
   work**: JPEG decoding, full-frame copies into texture buffers, and
   downscaling. The M2-era deviations that budgeted such work per refresh

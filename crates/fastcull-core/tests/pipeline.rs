@@ -75,7 +75,7 @@ fn tmp() -> PathBuf {
 
 #[test]
 fn a1_files_produce_320px_thumbs_and_metadata() {
-    let (pipeline, rx) = Pipeline::start(a1_specs(), None, 4);
+    let (pipeline, rx) = Pipeline::start(a1_specs(), None, 4, None);
     let events = collect_events(&rx, 6); // 3x MetadataReady + 3x ThumbReady
     assert_no_more_events(&rx);
     drop(pipeline);
@@ -127,7 +127,7 @@ fn corrupt_file_fails_alone_others_complete() {
     let mut jobs = a1_specs();
     jobs.insert(1, spec_for(garbage));
 
-    let (pipeline, rx) = Pipeline::start(jobs, None, 2);
+    let (pipeline, rx) = Pipeline::start(jobs, None, 2, None);
     // 3 good files x 2 events + 1 Failed.
     let events = collect_events(&rx, 7);
     assert_no_more_events(&rx);
@@ -166,7 +166,7 @@ fn second_run_serves_from_cache_without_touching_raws() {
         })
         .collect();
     let jobs: Vec<JobSpec> = copies.iter().cloned().map(spec_for).collect();
-    let (pipeline, rx) = Pipeline::start(jobs.clone(), Some(db.clone()), 2);
+    let (pipeline, rx) = Pipeline::start(jobs.clone(), Some(db.clone()), 2, None);
     collect_events(&rx, 6);
     drop(pipeline);
 
@@ -179,7 +179,7 @@ fn second_run_serves_from_cache_without_touching_raws() {
             std::fs::set_permissions(p, std::fs::Permissions::from_mode(0o000)).unwrap();
         }
     }
-    let (pipeline, rx) = Pipeline::start(jobs, Some(db), 2);
+    let (pipeline, rx) = Pipeline::start(jobs, Some(db), 2, None);
     let events = collect_events(&rx, 6);
     drop(pipeline);
     for event in &events {
@@ -209,7 +209,7 @@ fn second_run_serves_from_cache_without_touching_raws() {
 #[test]
 fn unusable_cache_path_degrades_gracefully() {
     let bad_db = PathBuf::from("/dev/null/not-a-dir/cache.db");
-    let (pipeline, rx) = Pipeline::start(a1_specs(), Some(bad_db), 2);
+    let (pipeline, rx) = Pipeline::start(a1_specs(), Some(bad_db), 2, None);
     let events = collect_events(&rx, 6);
     drop(pipeline);
     let thumbs = events
@@ -234,7 +234,7 @@ fn promoted_jobs_finish_before_background_bulk() {
     // 30 jobs over the same 3 files keeps the queue saturated long enough
     // for the promotion to matter on a 2-thread pool.
     let jobs: Vec<JobSpec> = a1_specs().into_iter().cycle().take(30).collect();
-    let (pipeline, rx) = Pipeline::start(jobs, None, 2);
+    let (pipeline, rx) = Pipeline::start(jobs, None, 2, None);
     pipeline.set_visible(24..27);
     pipeline.promote(20..22, Priority::Prefetch);
 
@@ -267,7 +267,7 @@ fn existing_sidecars_are_reported_at_load() {
     std::fs::copy(testdata("A1_full_compressed.ARW"), &raw).unwrap();
     fastcull_core::xmp::write_pick(&raw, fastcull_core::catalog::PickState::Rejected).unwrap();
 
-    let (pipeline, rx) = Pipeline::start(vec![spec_for(raw)], None, 1);
+    let (pipeline, rx) = Pipeline::start(vec![spec_for(raw)], None, 1, None);
     let mut got_sidecar = false;
     let mut terminal = false;
     while !terminal {
@@ -306,7 +306,7 @@ fn jpeg_source_produces_thumb_and_metadata() {
     let jpg = dir.join("solo.jpg");
     std::fs::write(&jpg, &bytes).unwrap();
 
-    let (pipeline, rx) = Pipeline::start(vec![spec_for(jpg)], None, 2);
+    let (pipeline, rx) = Pipeline::start(vec![spec_for(jpg)], None, 2, None);
     let events = collect_events(&rx, 2);
     let mut thumb_ok = false;
     let mut meta_ok = false;

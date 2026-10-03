@@ -106,7 +106,8 @@ pub(crate) fn reassert_owner_deferred(win: &MainWindow, why: &'static str) {
         let covered = win.get_about_visible()
             || win.get_shortcuts_visible()
             || win.get_copy_visible()
-            || win.get_clip_visible();
+            || win.get_clip_visible()
+            || win.get_settings_visible();
         let panel_editor = win.get_iptc_visible() && !covered && win.get_session_gen() == queued_at;
         if panel_editor && (1..=FIELD_ROWS).contains(&owner) {
             win.invoke_dbg_focus_claim(format!("{why} -> row {}", owner - 1).into());

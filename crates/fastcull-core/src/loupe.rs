@@ -12,9 +12,11 @@
 //! actually travel (`set_view`; issue #46): an id-space ring on a
 //! capture-sorted multi-body folder warmed frames no arrow could reach
 //! while every real neighbor stayed cold. A byte-budget LRU (default
-//! 2 GiB) evicts the least recently focused images, never the focused one.
+//! 2 GiB) evicts the least recently focused images, never the focused one,
+//! and a ring member it evicts is not asked for again until the focus
+//! moves (`LoupeState::evicted_under_focus`).
 
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 use std::path::PathBuf;
 use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::sync::mpsc::{Receiver, Sender};
@@ -24,8 +26,13 @@ use crate::raw::{find_embedded_jpegs, read_jpeg};
 
 /// Neighbors prefetched on each side of the focused image.
 pub const PREFETCH: usize = 2;
-/// Default decoded-pixels budget (bytes of RGB kept in the LRU).
+/// Default decoded-pixels budget (bytes of RGB kept in the LRU) — the
+/// loupe memory setting's default (settings.md).
 pub const DEFAULT_BUDGET_BYTES: usize = 2 * 1024 * 1024 * 1024;
+/// The budget's floor: room for at least one decoded A1 full-res frame
+/// (149 MB). The loupe memory setting is clamped to it (settings.md), and
+/// `start` enforces it whatever it is handed.
+pub const BUDGET_FLOOR_BYTES: usize = 200 * 1024 * 1024;
 /// Asset ladder rule (user decision): a loaded asset serves any display up
 /// to 25% larger than itself; beyond that the next rung is cooked.
 pub const UPSCALE_THRESHOLD: f32 = 1.25;
@@ -98,7 +105,27 @@ struct LoupeState {
     cached_bytes: usize,
     /// Indexes that failed to decode: never re-queued (a corrupt file must
     /// not be re-attempted on every focus — validator finding).
-    failed: std::collections::HashSet<usize>,
+    failed: HashSet<usize>,
+    /// Frames the budget evicted while the focus rested where it is now:
+    /// `focus()` does not ask for them again until the focus moves to
+    /// another frame or its target escalates — the two moments
+    /// `note_focus` already treats as new work, and where this is cleared.
+    ///
+    /// Without it a budget smaller than the ±PREFETCH window (five decoded
+    /// A1 frames, ~746 MB) never went quiet: each landing evicted a ring
+    /// member, and the app's re-focus — `presenter::refresh` calls
+    /// `focus()` on every landing — queued that member again, which
+    /// evicted the next, for as long as the cursor rested (QE 2026-10-01,
+    /// brief 008 D20; raw-pipeline.md's ring budget rule). The fixed
+    /// 2 GiB budget hid it until the loupe memory became a setting.
+    ///
+    /// The invariant: a frame evicted while the focus rests on F at
+    /// target T is never re-requested by `focus(F, T')` for any T' ≤ T.
+    /// A small budget therefore costs a re-decode on the next step, never
+    /// a loop. The focused frame itself is never evicted (see `focused`),
+    /// so this never holds it; grid wants (`want()`, mid rungs) are not
+    /// held back either — they are the visible cells' own requests.
+    evicted_under_focus: HashSet<usize>,
     /// The image the user is looking at: never evicted, even over-budget —
     /// evicting it after decode would strand the loupe forever (found by
     /// the tight-budget integration test).
@@ -228,7 +255,7 @@ impl LoupeEngine {
             events: tx,
             shutdown: AtomicBool::new(false),
             stamp: AtomicU64::new(0),
-            budget: budget.max(200 * 1024 * 1024), // room for at least one A1
+            budget: budget.max(BUDGET_FLOOR_BYTES),
         });
         // Two backlog workers plus ONE focus-reserved worker (see
         // next_job/FOCUS_DEBOUNCE/note_focus): the reserved thread only
@@ -247,6 +274,16 @@ impl LoupeEngine {
             })
             .collect();
         (Self { shared, workers }, rx)
+    }
+
+    /// The budget this engine ADOPTED, in bytes: what `start` was handed,
+    /// floored at [`BUDGET_FLOOR_BYTES`]. The app's `loupe engine started
+    /// budget` trace mark reads it from here, never from the figure it
+    /// passed in, so the mark proves what the engine holds (QE 2026-10-01,
+    /// brief 008 D23: a mark from the caller's own local stayed true with
+    /// the engine started on the default).
+    pub fn budget(&self) -> usize {
+        self.shared.budget
     }
 
     /// The user is looking at `index` on a display whose longest edge is
@@ -422,7 +459,13 @@ fn revive_deferred(state: &mut LoupeState, index: usize, target: u32, stamp: u64
             (Some(a), Some(b)) => a.abs_diff(b) <= PREFETCH,
             _ => false,
         });
-    if !in_ring || state.failed.contains(&index) || sufficient_cached(state, index, target, stamp) {
+    // A frame the budget evicted under this focus stays out until the
+    // focus moves, a revival included (see `evicted_under_focus`).
+    if !in_ring
+        || state.failed.contains(&index)
+        || state.evicted_under_focus.contains(&index)
+        || sufficient_cached(state, index, target, stamp)
+    {
         return false;
     }
     state.queue.retain(|(q, _, _)| *q != index);
@@ -465,6 +508,14 @@ fn schedule(state: &mut LoupeState, index: usize, target: u32, stamp: u64, origi
     if sufficient_cached(state, index, target, stamp) || state.failed.contains(&index) {
         return false;
     }
+    // AFTER `sufficient_cached`, whose stamp refresh a cached member still
+    // gets: a ring member the budget evicted under this very focus is not
+    // asked for again until the focus moves — asking re-decodes it, which
+    // evicts the next member, which the next landing's re-focus asks for…
+    // (see `evicted_under_focus`).
+    if origin == Origin::Focus && state.evicted_under_focus.contains(&index) {
+        return false;
+    }
     if state.in_flight.contains(&index) {
         let e = state.deferred.entry(index).or_insert(0);
         *e = (*e).max(target);
@@ -498,6 +549,10 @@ fn schedule(state: &mut LoupeState, index: usize, target: u32, stamp: u64, origi
 /// work must survive the debounce regardless of how long the focus has
 /// rested. A same-or-smaller target (render-cadence re-focus, zoom out)
 /// never resets.
+///
+/// The same two moments end the budget's hold on what it evicted
+/// (`evicted_under_focus`): a step, or a bigger target, is new work, and
+/// the window it asks for is asked for whole.
 fn note_focus(state: &mut LoupeState, index: usize, display_long: u32, now: std::time::Instant) {
     // The app's real intent, before any transit capping, so the settle
     // knows what to climb to.
@@ -525,9 +580,11 @@ fn note_focus(state: &mut LoupeState, index: usize, display_long: u32, now: std:
         state.focused = Some(index);
         state.focused_at = Some(now);
         state.focused_target = display_long;
+        state.evicted_under_focus.clear();
     } else if display_long > state.focused_target {
         state.focused_at = Some(now);
         state.focused_target = display_long;
+        state.evicted_under_focus.clear();
     }
 }
 
@@ -1042,6 +1099,9 @@ fn evict_to_budget(state: &mut LoupeState, budget: usize) {
         if let Some((img, _)) = state.cache.remove(&victim) {
             state.cached_bytes -= img.rgb.len();
         }
+        // Held out until the focus moves: re-requesting it under this
+        // focus is the loop (see `evicted_under_focus`).
+        state.evicted_under_focus.insert(victim);
     }
 }
 
@@ -1766,6 +1826,14 @@ mod tests {
         assert_eq!((w, h), (48, 64), "orientation 6 swaps the sides");
     }
 
+    /// `budget()` is what the engine adopted: the figure it was handed,
+    /// floored. No paths, so no worker ever decodes anything.
+    #[test]
+    fn the_engine_reports_the_budget_it_adopted() {
+        assert_eq!(LoupeEngine::start(vec![], 1).0.budget(), BUDGET_FLOOR_BYTES);
+        assert_eq!(LoupeEngine::start(vec![], 3 << 30).0.budget(), 3 << 30);
+    }
+
     #[test]
     fn eviction_keeps_newest_and_at_least_one() {
         let mut state = LoupeState::default();
@@ -1782,5 +1850,84 @@ mod tests {
         assert!(state.cache.len() <= 2 && state.cache.contains_key(&3));
         evict_to_budget(&mut state, 0);
         assert_eq!(state.cache.len(), 1, "never evicts the last image");
+    }
+
+    /// The budget's hold on what it evicted (`evicted_under_focus`;
+    /// raw-pipeline.md, the ring's budget rule): a frame evicted while the
+    /// focus rests on F is not queued again by a re-focus of F at the same
+    /// or a smaller target — the app re-focuses on every landing, and
+    /// queueing it there was the loop — nor revived as a deferred upgrade;
+    /// a grid want is the visible cell's own request and is never held;
+    /// and a step, or an escalation, asks for it again. The engine-level
+    /// proof with real decodes is `tests/loupe.rs::a_budget_below_the_
+    /// prefetch_window_goes_quiet_when_idle`.
+    ///
+    /// Mutants (2026-10-01): the hold check taken out of `schedule` → the
+    /// re-focus queues 5 again and the first assertion goes red; the two
+    /// clearings taken out of `note_focus` → the step to 7 still refuses 5
+    /// and the step assertion goes red.
+    #[test]
+    fn a_frame_evicted_under_a_settled_focus_waits_for_the_next_step() {
+        let full = |stamp: u64| {
+            (
+                FullImage {
+                    rgb: Arc::new(vec![0; 100]),
+                    width: 8640,
+                    height: 5760,
+                },
+                stamp,
+            )
+        };
+        let now = std::time::Instant::now();
+        let mut state = LoupeState::default();
+        note_focus(&mut state, 6, 8640, now);
+        // The focused 6 and two neighbours; room for two, so 5 (the
+        // oldest) goes.
+        for (i, stamp) in [(5usize, 1u64), (8, 2), (6, 3)] {
+            state.cached_bytes += 100;
+            state.cache.insert(i, full(stamp));
+        }
+        evict_to_budget(&mut state, 250);
+        assert!(!state.cache.contains_key(&5) && state.cache.contains_key(&6));
+
+        // The app's re-focus of the same frame, at the same target and at
+        // a smaller one: 5 is not asked for again.
+        note_focus(&mut state, 6, 8640, now);
+        assert!(
+            !schedule(&mut state, 5, 8640, 4, Origin::Focus),
+            "the re-focus queued the frame the budget had just evicted — the loop"
+        );
+        note_focus(&mut state, 6, 4000, now);
+        assert!(!schedule(&mut state, 5, 4000, 5, Origin::Focus));
+        assert!(
+            !revive_deferred(&mut state, 5, 8640, 6),
+            "a deferred upgrade revived the evicted frame under the same focus"
+        );
+        assert!(state.queue.is_empty());
+        // A grid want is never held back.
+        assert!(schedule(&mut state, 5, 1616, 7, Origin::Grid));
+        state.queue.clear();
+
+        // A step is new work: the new window is asked for whole.
+        note_focus(&mut state, 7, 8640, now);
+        assert!(
+            schedule(&mut state, 5, 8640, 8, Origin::Focus),
+            "after a step the frame evicted under the old focus is still held out"
+        );
+        state.queue.clear();
+
+        // So is an escalation of the same frame's target.
+        state.cached_bytes += 100;
+        state.cache.insert(5, full(9));
+        state.cached_bytes += 100;
+        state.cache.insert(7, full(10));
+        evict_to_budget(&mut state, 250); // 8 now oldest: out
+        assert!(!state.cache.contains_key(&8));
+        assert!(!schedule(&mut state, 8, 8640, 11, Origin::Focus));
+        note_focus(&mut state, 7, u32::MAX, now);
+        assert!(
+            schedule(&mut state, 8, u32::MAX, 12, Origin::Focus),
+            "an escalated target did not ask for the evicted frame again"
+        );
     }
 }

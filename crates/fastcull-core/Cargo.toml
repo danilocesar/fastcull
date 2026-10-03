@@ -29,6 +29,19 @@ unicode-normalization = "0.1"
 blake3 = "1"
 fs2 = "0.4"
 zune-jpeg = "0.4"
+# The settings file (settings.md, ADR 0005): a read-modify-write that keeps
+# the user's comments and unknown keys, which `toml`'s serde round trip
+# cannot. Already in the tree under `toml` 0.8 (same version, same
+# licence), so this adds a dependency edge, not a crate.
+toml_edit = "0.22"
+
+# Total RAM on Windows, for the loupe memory setting's percentage
+# (`settings::total_ram`): core's ONE `unsafe` block, `GlobalMemoryStatusEx`
+# (Manager ruling 2026-09-26). windows-sys 0.61 is already in the lock
+# through the app; this adds a feature, not a crate. `MEMORYSTATUSEX`
+# derives `Default` there, which the probe's zeroed struct relies on.
+[target.'cfg(windows)'.dependencies]
+windows-sys = { version = "0.61", features = ["Win32_System_SystemInformation"] }
 
 [dev-dependencies]
 criterion = "0.5"

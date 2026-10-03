@@ -46,7 +46,11 @@ reading a RAW.
 
 ### The cache
 
-- One SQLite database per user in the config dir, resolved by
+- One SQLite database per user in the CACHE dir — the `directories`
+  crate's `cache_dir()`, `~/.cache/fastcull/previews.db` on Linux (this
+  sentence said "config dir" until 2026-10-01, while `cache.rs` has used
+  the cache dir since M1 and docs/faq.md named `~/.cache/fastcull/`;
+  corrected under M10 at brief 008's persona gate) — resolved by
   `cache::default_cache_path()` at CLI and app startup; tests pass an
   explicit path. Table `previews(path TEXT PRIMARY KEY, size, mtime_ns,
   exif_json, thumb_jpeg BLOB, last_used)`, schema version in `PRAGMA
@@ -64,11 +68,22 @@ reading a RAW.
   than re-reading the RAW each session.
 - Reopening a folder paints entirely from cache with zero RAW reads; the
   pipeline test asserts it (the reads belong to the pipeline module).
-- **Size cap**, default 2 GiB, enforced by LRU eviction on `last_used` (1 s
-  resolution, path tie-break) when the default database is resolved at
-  startup. Caller-provided paths are uncapped in v1, and one long session
-  may exceed the cap until the next start. The cap bounds thumb bytes; the
-  file itself plateaus at its high-water mark — no VACUUM, pages are reused.
+- **Size cap** — the `performance.cache_cap` setting, default 2 GiB, floor
+  256 MB (settings.md; brief 008, 2026-10-01; a constant until then) —
+  enforced by LRU eviction on `last_used` (1 s resolution, path tie-break)
+  whenever the default database is resolved: at every folder open in the
+  app and every run of the CLI, both through `cache::default_cache_path
+  (cap_bytes)` (this sentence said "at startup" until 2026-10-01; the app
+  has resolved it per folder open since M5's Open Folder). Caller-provided
+  paths are uncapped in v1, and one long session may exceed the cap until
+  the next folder open. The cap bounds thumb bytes; the file itself
+  plateaus at its high-water mark — no VACUUM in normal operation, pages
+  are reused. The one exception is the dialog's **Clear cache**
+  (settings.md): `PreviewCache::clear` deletes every row, VACUUMs and
+  truncates the WAL through a live connection of its own, on a worker
+  thread, and never unlinks the file — the lock rule below is why (brief
+  008 D5). The readout beside it is `cache::size_on_disk`: the database
+  plus its `-wal` and `-shm` files, what `du` shows.
 - **Concurrency**: WAL mode; `synchronous=NORMAL` (FULL's fsync-heavy
   commits held write locks past the busy timeout on Windows CI; the worst
   case on power loss is losing recent rows, which cost a re-extract); a 5 s
@@ -91,6 +106,10 @@ reading a RAW.
   `IptcData` at load (xmp-sidecars.md).
 - `FASTCULL_NO_CACHE` (app) and `--no-cache` (CLI) run without the
   database; the screenshot suite sets the former (test-harness.md).
+- `cache::default_cache_file()` is the per-user path with no open and no
+  eviction (the dialog's readout); `cache::default_cache_path(cap_bytes)`
+  opens, creates and enforces; `cache::size_on_disk(db)`;
+  `PreviewCache::clear()` (brief 008).
 
 ## Acceptance criteria
 
@@ -116,9 +135,27 @@ reading a RAW.
 - [x] Sidecar-at-open: existing `.ARW.xmp` files yield Sidecar events with
       their pick state — `tests/pipeline.rs::existing_sidecars_are_reported_at_load`;
       keywords and IPTC fields ride the same event since M5.
+- [x] Clear cache (brief 008): the on-disk size counts the `-wal` and
+      `-shm` files; a clear leaves the file present and the same inode,
+      the table empty, the file smaller and the connection usable —
+      `size_on_disk_counts_the_wal_and_shm_files`,
+      `clear_leaves_the_file_present_empty_and_smaller_and_the_connection_usable`;
+      the app's half — the cap at a folder open; the clear on its own
+      named worker thread; the `Clearing…` row and the disabled Clear
+      button; the re-measured row; a failed clear said in the row — is
+      settings.md's AC11 and AC12, which also say what stays
+      review-verified (QE 2026-10-02, round 5).
 
 ## History
 
+- 2026-10-02 — QE round 5 of brief 008: the Clear cache box names what
+  the app's half now proves (settings.md AC12).
+- 2026-10-01 — Brief 008: the cap reads the `performance.cache_cap`
+  setting and is enforced at every folder open (the "at startup" claim
+  corrected); Clear cache is the one VACUUM, through a live connection,
+  never an unlink; `size_on_disk`, `default_cache_file`.
+- 2026-10-01 — The cache's directory corrected: the cache dir, not the
+  config dir (M10; found at brief 008's persona gate against `cache.rs`).
 - 2026-09-17 — Rewritten (brief 007); folder watching dropped from v1 (the
   user). The pre-rewrite text is `specs/history/catalog-cache.md`.
 - 2026-08-30 — The folder-scan clock moved to the perf budgets (issue #59);

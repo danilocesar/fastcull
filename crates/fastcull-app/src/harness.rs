@@ -356,6 +356,22 @@ fn dispatch(win: &MainWindow, state: &Rc<RefCell<AppState>>, key: &str, layout: 
         trace_mark_unobserved(&format!("{key} toggled to {visible}"));
         return;
     }
+    if key == "settings" {
+        // The Settings dialog's toggle (brief 008, test-harness.md): the
+        // menu item's own body — `settings-open`, which re-reads the file,
+        // presents every field and claims the keyboard — when it is
+        // closed, `settings-close` when it is open. The same fidelity
+        // caveat as `about`: it does not exercise the MenuBar's focus
+        // restore, which the click-driven strand covers.
+        let visible = !win.get_settings_visible();
+        if visible {
+            win.invoke_settings_open();
+        } else {
+            win.invoke_settings_close();
+        }
+        trace_mark_unobserved(&format!("settings toggled to {visible}"));
+        return;
+    }
     if let Some(at) = key.strip_prefix("dblclick:") {
         // dblclick:X,Y (view-area logical px) — replays Slint's
         // REAL dispatch order for a double-click above fit: a
@@ -611,6 +627,33 @@ fn dispatch(win: &MainWindow, state: &Rc<RefCell<AppState>>, key: &str, layout: 
         trace_mark_unobserved(&format!("drive ptr click {cx:.0},{cy:.0} ({element})"));
         return;
     }
+    if let Some(element) = key.strip_prefix("hover:") {
+        // hover:<element> — a REAL pointer MOVE to the centre of a named
+        // rectangle, no press (brief 008: how a tooltip is raised, the
+        // Failed badge's first). Resolved like `click:<element>`, with the
+        // same loud abort for a name with no mark — a hover over nothing
+        // would otherwise leave a tooltip test waiting on a popup no
+        // pointer ever asked for.
+        let element = element.trim();
+        let rect = layout.borrow().get(element).copied();
+        let Some((x, y, w, h)) = rect else {
+            trace_mark_unobserved(&format!(
+                "drive: hover: no layout mark for {element} — abandoning the run"
+            ));
+            eprintln!(
+                "fastcull: FASTCULL_DRIVE hover: no layout mark for {element} \
+                 — abandoning the run"
+            );
+            std::process::exit(1);
+        };
+        let (cx, cy) = (x + w / 2.0, y + h / 2.0);
+        use slint::platform::WindowEvent;
+        win.window().dispatch_event(WindowEvent::PointerMoved {
+            position: slint::LogicalPosition::new(cx, cy),
+        });
+        trace_mark_unobserved(&format!("drive ptr hover {cx:.0},{cy:.0} ({element})"));
+        return;
+    }
     if let Some(at) = key.strip_prefix("click.") {
         // click.X,Y — a REAL pointer move + press + release at
         // window-logical coordinates, hit-tested by Slint like
@@ -733,7 +776,7 @@ fn dispatch(win: &MainWindow, state: &Rc<RefCell<AppState>>, key: &str, layout: 
                          clip={} clipstate={} clipavail={} clipsummary={:?} clipskipped={:?} \
                          cliperror={:?} clipreport={:?} clipconfirm={:?} clipprogress={:?} \
                          cliphint={:?} exported={} curexported={} \
-                         cursor={} selected={} vpy={:.1} focusowner={}",
+                         cursor={} selected={} vpy={:.1} focusowner={} {}",
             win.get_dbg_keys_focus(),
             win.get_one2one(),
             st.grid.zoom,
@@ -846,6 +889,11 @@ fn dispatch(win: &MainWindow, state: &Rc<RefCell<AppState>>, key: &str, layout: 
             // main scope, 1..=N a panel field row, N+1 the
             // keyword field, -1 a dialog's own scope.
             win.get_focus_owner(),
+            // The Settings block (brief 008, test-harness.md's order):
+            // the dialog, the file, the settings in force — and
+            // `washprop`, the WINDOW's wash opacity, which is what proves
+            // a commit reached the renderer and not only the model.
+            crate::settings_bridge::dump_fields(win, &st),
         ));
         return;
     }
@@ -865,8 +913,10 @@ fn dispatch(win: &MainWindow, state: &Rc<RefCell<AppState>>, key: &str, layout: 
     // (issue #23): a driven nav action must die exactly like
     // a real keypress while a popup is up — the FocusScope
     // guard only sees real keyboard events, and without this
-    // mirror the containment tests would test nothing.
-    if win.get_about_visible() || win.get_shortcuts_visible() {
+    // mirror the containment tests would test nothing. The
+    // Settings dialog contains real keys by holding the keyboard
+    // in its own scope (brief 008), so it is mirrored here too.
+    if win.get_about_visible() || win.get_shortcuts_visible() || win.get_settings_visible() {
         trace_mark_unobserved(&format!("drive swallowed by modal: {key}"));
         return;
     }

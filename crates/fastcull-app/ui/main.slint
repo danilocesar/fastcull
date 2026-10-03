@@ -1,4 +1,4 @@
-import { LineEdit, ComboBox, Button, Palette, ScrollView } from "std-widgets.slint";
+import { LineEdit, ComboBox, Button, CheckBox, Palette, ScrollView } from "std-widgets.slint";
 
 // FastCull main window: virtualized zoomable grid (specs/modules/ui-grid.md).
 // The Rust side owns all layout math; `cells` contains ONLY the visible
@@ -14,6 +14,10 @@ export struct CellData {
     image: image,
     has-image: bool,
     failed: bool,
+    // Why it failed — `Failed(reason)`'s string, the Failed badge's
+    // tooltip (ui-grid.md, "Visual language"; brief 008 R12). Empty when
+    // `failed` is false.
+    failed-reason: string,
     label: string,
     is-cursor: bool,
     selected: bool,
@@ -236,6 +240,108 @@ component KeySection inherits VerticalLayout {
         }
     }
     @children
+}
+
+// ONE ROW OF THE SETTINGS DIALOG (settings.md, "The card"): a label in a
+// fixed-width cell beside its control, and under them the note — what the
+// setting does, its default and when it takes effect — in the shortcuts
+// card's dim style (the `G` row's grey line: #8a8a96, 11 px). The label
+// cell is a constant for the reason KeyRow's 104 px is: every control on
+// every tab starts at the same x, whatever the face. `warning` is the
+// environment's line (settings.md, "Environment precedence"), amber, above
+// the note, and only when there is one.
+//
+// The note reports itself — what it shows and where it was laid out — so a
+// driven run can prove every row carries core's sentence and that it is
+// drawn (test-harness.md; QE 2026-10-01, D22: no dump field or mark read
+// the notes, and deleting them all left the suite green). `name` is the
+// row's control name, the one its `click:` mark uses.
+component SettingRow inherits VerticalLayout {
+    in property <string> label;
+    in property <string> note;
+    in property <string> warning;
+    in property <string> name;
+    callback note-shown(string, string);
+    callback note-laid-out(string, length, length, length, length);
+    spacing: 4px;
+    HorizontalLayout {
+        spacing: 12px;
+        Text {
+            text: root.label;
+            width: 160px;
+            color: #e8e8f0;
+            font-size: 13px;
+            vertical-alignment: center;
+            wrap: word-wrap;
+        }
+        @children
+    }
+    // The environment's line reports itself like the note below, under the
+    // row's name and `-env` (`settings note readers-env shows …`): it is
+    // created only while a variable governs the row, so its own `init` is
+    // the proof it is on screen (QE 2026-10-02, round 5: with the bridge
+    // presenting it empty the card lost the line and the suite stayed
+    // green).
+    if root.warning != "": Text {
+        text: root.warning;
+        color: #ffb84d;
+        font-size: 11px;
+        wrap: word-wrap;
+        init => { root.note-shown(root.name + "-env", self.text); }
+        changed text => { root.note-shown(root.name + "-env", self.text); }
+    }
+    Text {
+        text: root.note;
+        color: #8a8a96;
+        font-size: 11px;
+        wrap: word-wrap;
+        init => {
+            root.note-shown(root.name, self.text);
+            root.note-laid-out(root.name, self.absolute-position.x, self.absolute-position.y,
+                self.width, self.height);
+        }
+        changed text => { root.note-shown(root.name, self.text); }
+        changed absolute-position => {
+            root.note-laid-out(root.name, self.absolute-position.x, self.absolute-position.y,
+                self.width, self.height);
+        }
+        changed width => {
+            root.note-laid-out(root.name, self.absolute-position.x, self.absolute-position.y,
+                self.width, self.height);
+        }
+        changed height => {
+            root.note-laid-out(root.name, self.absolute-position.x, self.absolute-position.y,
+                self.width, self.height);
+        }
+    }
+}
+
+// THE APP'S TOOLTIP (ui-grid.md, "Visual language"; brief 008 D8): what
+// Slint's built-in `Tooltip` shows, in the house card's colours — the
+// About and shortcuts cards' #202028 with a 1 px #3a3a44 border. Reusable
+// by construction: `Tooltip { FcTooltip { text: …; } }` on any element.
+// The built-in does the rest — it raises its popup 500 ms into a hover,
+// hides it when the pointer leaves, and observes the pointer without
+// taking it (a TooltipArea forwards every press; i-slint-core 1.17.1
+// items.rs). The Failed badge is its first user.
+component FcTooltip inherits Rectangle {
+    in property <string> text;
+    background: #202028;
+    border-color: #3a3a44;
+    border-width: 1px;
+    border-radius: 6px;
+    VerticalLayout {
+        padding-left: 10px;
+        padding-right: 10px;
+        padding-top: 6px;
+        padding-bottom: 6px;
+        Text {
+            text: root.text;
+            color: #e8e8f0;
+            font-size: 12px;
+            wrap: word-wrap;
+        }
+    }
 }
 
 // Modal scaffolding shared by the Help > Shortcuts and About popups:
@@ -546,6 +652,43 @@ export component MainWindow inherits Window {
     // enabled state; the KEY still works and explains itself in the
     // status line (video-export.md: never a silent grey item).
     in property <bool> clip-available: false;
+    // THE SETTINGS DIALOG (settings.md, brief 008). Every value is
+    // written by Rust's `settings_bridge::present` from the settings in
+    // force — parsed, clamped, normalised — and a field shows nothing
+    // else; the two checkboxes bind theirs two-way because a CheckBox
+    // writes its own `checked`. `settings-tab` is the strip's: 0 General,
+    // 1 UI, 2 Performance, in the order of `settings-tabs`, which Rust
+    // fills from core's `settings::TABS` (the literal here is an inert
+    // fallback, like the wash's).
+    in-out property <bool> settings-visible: false;
+    in-out property <int> settings-tab: 0;
+    in property <[string]> settings-tabs: ["General", "UI", "Performance"];
+    in-out property <bool> settings-auto-advance: true;
+    in property <string> settings-wash: "25";
+    in property <string> settings-loupe-memory: "2 GB";
+    in property <string> settings-loupe-hint: "";
+    in property <string> settings-cache-cap: "2 GB";
+    in-out property <bool> settings-readers-adaptive: true;
+    in property <string> settings-readers-limit: "";
+    // FASTCULL_MAX_READERS governs the read workers: their controls are
+    // read-only, showing the variable's value, with its note above theirs.
+    in property <bool> settings-readers-locked: false;
+    in property <string> settings-readers-env-note: "";
+    in property <string> settings-cache-readout: "";
+    in property <bool> settings-cache-clear-enabled: false;
+    // Empty unless the file could not be read, could not be written, is
+    // not saved, or was moved aside.
+    in property <string> settings-notice: "";
+    // The notes: core's `Key::note()`, their one home.
+    in property <string> settings-note-auto-advance: "";
+    in property <string> settings-note-wash: "";
+    in property <string> settings-note-loupe-memory: "";
+    in property <string> settings-note-cache-cap: "";
+    in property <string> settings-note-readers: "";
+    in property <string> settings-note-clear-cache: "";
+    // Raised by `focus-keys()` while the dialog is up: the dialog claims
+    // the keyboard for its strip (the copy dialog's watch pattern).
+    in-out property <bool> settings-claim-focus: false;
     in property <string> copy-error: "";
     in property <bool> copy-ready: false;
     in property <string> copy-progress: "";
@@ -595,6 +738,11 @@ export component MainWindow inherits Window {
             root.focus-owner = -1;
         } else if (root.copy-visible) {
             root.copy-claim-focus = true;
+            root.focus-owner = -1;
+        } else if (root.settings-visible) {
+            // The Settings dialog never stacks with the two above
+            // (settings.md, "Stacking"), so this order costs nothing.
+            root.settings-claim-focus = true;
             root.focus-owner = -1;
         } else {
             keys.focus();
@@ -718,7 +866,8 @@ export component MainWindow inherits Window {
     // twice. These two say who holds it and who asked for it:
     //
     //   dbg-focus-changed("keys"|"iptc field N"|"keyword field"|
-    //                     "copy dialog"|"clip dialog", gained)
+    //                     "copy dialog"|"clip dialog"|"settings dialog"|
+    //                     "settings strip", gained)
     //   dbg-focus-claim("swap"|"cell-click"|…)  — a claim was MADE, which
     //   is not the same as a claim that landed and stayed.
     //
@@ -835,6 +984,18 @@ export component MainWindow inherits Window {
     callback clip-cancel();
     callback clip-close();
     callback clip-open-dest-folder();
+    // Settings (brief 008): open re-reads the file and presents every
+    // field; commit(key, text) is a value typed or clicked — core parses,
+    // clamps and writes it, then every field is presented again; reset
+    // takes the ACTIVE tab's index. `settings-cache-cleared` is plumbing,
+    // the `kitchen-ready` pattern: Clear cache's worker wakes the event
+    // loop through it when the database has been vacuumed.
+    callback settings-open();
+    callback settings-close();
+    callback settings-commit(string, string);
+    callback settings-reset(int);
+    callback settings-clear-cache();
+    callback settings-cache-cleared();
 
     changed vp-y => { root.viewport-changed(); }
     // Alias kept for the Rust G4 paths; routes like focus-keys so no
@@ -884,6 +1045,9 @@ export component MainWindow inherits Window {
             }
             MenuItem {
                 title: "Copy Picks… (Ctrl+E)";
+                // Never over the Settings dialog, and it never over this
+                // (settings.md, "Stacking").
+                enabled: !root.settings-visible;
                 activated => { root.menu-activated(); root.copy-open(); }
             }
             MenuItem {
@@ -891,13 +1055,16 @@ export component MainWindow inherits Window {
                 title: "Export Frames as Video… (Ctrl+Shift+E)";
                 // Greyed when there is nothing to export — but the
                 // keystroke still answers, with the reason, in the status
-                // line (video-export.md).
-                enabled: root.clip-available;
+                // line (video-export.md) — and while Settings is up.
+                enabled: root.clip-available && !root.settings-visible;
                 activated => { root.menu-activated(); root.clip-open(); }
             }
             MenuItem {
-                title: "Settings… (soon)";
-                enabled: false;
+                // The Settings dialog (settings.md; brief 008). Greyed while
+                // either export dialog is up: the three never stack.
+                title: "Settings… (Ctrl+,)";
+                enabled: !root.copy-visible && !root.clip-visible;
+                activated => { root.menu-activated(); root.settings-open(); }
             }
             MenuItem {
                 title: "Quit";
@@ -1031,6 +1198,12 @@ export component MainWindow inherits Window {
                         if (event.text == "]") { root.nav("ctrl-burst-next"); return accept; }
                         if (event.text == " ") { root.nav("select-toggle"); return accept; }
                     }
+                    // Ctrl+, : the Settings dialog (settings.md; brief 008 —
+                    // GNOME's, VS Code's and macOS's chord). The comma
+                    // arrives as its own character with the modifier, like
+                    // Ctrl+`]`. In THIS scope, so it is inert while a field
+                    // or another dialog holds the keyboard.
+                    if (event.text == ",") { root.settings-open(); return accept; }
                     return reject;
                 }
                 if (event.modifiers.shift) {
@@ -1333,6 +1506,13 @@ export component MainWindow inherits Window {
                         border-color: #4da3ff;
                         background: transparent;
                     }
+                    // The Failed badge, and on hover its reason
+                    // (ui-grid.md, "Visual language": promised since M2,
+                    // built in brief 008 — the keyboard's way to the same
+                    // words is the status line). It reports where it is,
+                    // so a driven test can hover it BY NAME
+                    // (`hover:failed badge <id>`); failed cells are a
+                    // handful, so the marks cost nothing.
                     if cell.failed: Rectangle {
                         x: parent.width - 22px;
                         y: 4px;
@@ -1340,6 +1520,16 @@ export component MainWindow inherits Window {
                         height: 18px;
                         border-radius: 9px;
                         background: #c03030;
+                        init => {
+                            root.dbg-card-laid-out("failed badge " + cell.id,
+                                self.absolute-position.x, self.absolute-position.y,
+                                self.width, self.height);
+                        }
+                        changed absolute-position => {
+                            root.dbg-card-laid-out("failed badge " + cell.id,
+                                self.absolute-position.x, self.absolute-position.y,
+                                self.width, self.height);
+                        }
                         Text {
                             text: "!";
                             color: white;
@@ -1348,6 +1538,16 @@ export component MainWindow inherits Window {
                             vertical-alignment: center;
                             width: 100%;
                             height: 100%;
+                        }
+                        Tooltip {
+                            FcTooltip {
+                                text: cell.failed-reason;
+                                // The tooltip's popup exists only while it
+                                // shows: this is the mark a test waits on.
+                                init => {
+                                    root.dbg-note("failed tooltip shown: " + cell.failed-reason);
+                                }
+                            }
                         }
                     }
                 }
@@ -1891,7 +2091,7 @@ export component MainWindow inherits Window {
                                         // and which row to give it back
                                         // to.
                                         root.focus-owner = i + 1;
-                                        if (root.about-visible || root.shortcuts-visible || root.copy-visible || root.clip-visible) {
+                                        if (root.about-visible || root.shortcuts-visible || root.copy-visible || root.clip-visible || root.settings-visible) {
                                             // Focus continuity (#41 D2):
                                             // an editor must never hold
                                             // the keyboard behind a
@@ -2100,7 +2300,7 @@ export component MainWindow inherits Window {
                             // but it dies with the panel, and the token
                             // has to name it either way.
                             root.focus-owner = root.iptc-fields.length + 1;
-                            if (root.about-visible || root.shortcuts-visible || root.copy-visible || root.clip-visible) {
+                            if (root.about-visible || root.shortcuts-visible || root.copy-visible || root.clip-visible || root.settings-visible) {
                                 // Focus continuity (#41 D2): bounce a
                                 // focus gain that arrives behind a
                                 // covering surface — same rule and
@@ -3069,6 +3269,870 @@ export component MainWindow inherits Window {
             }
         }
 
+        // THE SETTINGS DIALOG (settings.md, "The dialog"; brief 008):
+        // File › Settings… or Ctrl+, opens it; Esc or Close closes it; a
+        // click on the scrim does NOT (a form, like Copy Picks, not a
+        // popup like About). Three tabs — the strip is a `for` over
+        // `settings-tabs`, so the next unit adds a tab by adding an entry
+        // and a body, AND the body's controls to the keyboard ring's hand
+        // lists below (`slot-count`, `slot-ok`, `focus-slot`, and `flush`
+        // for a number field), or Tab silently never reaches them — and
+        // under the strip the active tab's rows.
+        //
+        // The fifth hand-rolled scrim, for the copy dialog's reason: the
+        // key scope must WRAP the card, and `ModalScrim` takes its
+        // children inside the card. Declared after the export dialogs
+        // (they never stack with it) and BEFORE the Help popups, so About
+        // and the shortcuts card render over it.
+        //
+        // THE KEYBOARD (settings.md, "Keyboard"), and the four Slint facts
+        // it stands on (ui-grid.md's Slint list; Cargo.toml's fourth
+        // canary):
+        //   * Tab and Shift+Tab are handled HERE, in an explicit ring — the
+        //     strip, the active tab's controls top to bottom, Reset, Close —
+        //     because the WINDOW handles a Tab no scope accepted by walking
+        //     the whole item tree, hidden surfaces included, which would
+        //     carry the keyboard out of the dialog.
+        //   * a TextInput ignores Tab and Escape, so both reach this scope
+        //     from inside a field; Ctrl+Tab too.
+        //   * a focused item that becomes invisible loses the keyboard at
+        //     the next key — which is why the three bodies are PERMANENT,
+        //     toggled by `visible`, and a tab switch puts the keyboard on
+        //     the strip BEFORE the body it was in goes invisible: the field
+        //     it leaves must stay alive long enough to commit.
+        //   * a field selects its text on Slint's OWN Tab navigation only,
+        //     never on a `focus()` from code — so the ring selects a number
+        //     field itself when it lands there (`focus-slot`; QE 2026-10-01,
+        //     D33).
+        //
+        // APPLY ON COMMIT (settings.md): a field commits on Enter, on Tab
+        // and on a click anywhere else while the dialog is up — `flush()`
+        // first, synchronously, wherever the keyboard is about to move on,
+        // and the field's own blur as the belt; Esc DISCARDS, because
+        // `settings-close` clears `settings-visible` before the keyboard
+        // leaves the field and the blur reads it. After a commit every
+        // field shows the value in force, never the raw text.
+        //
+        // A control bound to its setting both ways (`<=>`: the two
+        // checkboxes) reads its own state BEFORE anything that can present
+        // — `flush()` included: a commit writes every property from the
+        // model, and the binding carries the model's old value straight
+        // back into the control before its handler has committed the new
+        // one (Cargo.toml's fourth canary, fact 7; QE 2026-10-02, D39).
+        //
+        // A field commits only what the USER typed — its `dirty` flag, set
+        // by LineEdit's `edited` — never a text that merely differs from
+        // the value in force, and every blur re-shows the value in force.
+        // Both because of the fifth fact of Cargo.toml's fourth canary: a
+        // click on Reset commits the typed `35` (flush) and resets to 25 in
+        // ONE event-loop iteration, the field's `changed shown` re-sync
+        // sees 25 → 25 and never fires, and a blur that compared texts
+        // committed the stale `35` back over the Reset (senior-developer
+        // review F1, 2026-10-01).
+        if root.settings-visible: Rectangle {
+            y: 0; // missing-binding trap (issue #12)
+            width: 100%;
+            height: parent.height - statusbar.height;
+            background: #000000aa;
+            TouchArea {
+                // Clicks swallowed WITHOUT dismissing; the wheel swallowed
+                // too (issue #49), so the grid behind never scrolls.
+                scroll-event(e) => { return accept; }
+            }
+            settings-keys := FocusScope {
+                // ANCESTOR of the whole card: key events bubble only up the
+                // focused element's ancestor chain.
+                width: 100%;
+                height: 100%;
+                // Which slot of the ring holds the keyboard: 0 the strip,
+                // then the active tab's controls, then Reset, then Close.
+                property <int> slot: 0;
+                // The scope itself holds the keyboard only after a press on
+                // the scrim or on the card outside any control (a FocusScope
+                // takes focus on a click); the open lands on the strip.
+                changed has-focus => {
+                    root.dbg-focus-changed("settings dialog", self.has-focus);
+                    if (self.has-focus) { root.focus-owner = -1; }
+                }
+                function slot-count() -> int {
+                    return root.settings-tab == 2 ? 8 : 4;
+                }
+                // A slot the ring may land on: the disabled ones are
+                // skipped (the read workers under FASTCULL_MAX_READERS, the
+                // Limit field while Adaptive is on, Clear while it runs or
+                // with no cache).
+                function slot-ok(s: int) -> bool {
+                    if (root.settings-tab != 2) { return true; }
+                    if (s == 3) { return !root.settings-readers-locked; }
+                    if (s == 4) { return !root.settings-readers-adaptive && !root.settings-readers-locked; }
+                    if (s == 5) { return root.settings-cache-clear-enabled; }
+                    return true;
+                }
+                // A number field the ring lands on is SELECTED, so what is
+                // typed replaces the value shown (settings.md, "Keyboard";
+                // QE 2026-10-01, D33): Slint selects a field only on its own
+                // Tab navigation, and `focus()` from here is not that
+                // (Cargo.toml, the fourth canary's sixth fact) — without the
+                // `select-all()` a typed 8 landed in front of `2 GB` as 82 GB.
+                // The ring's arrival only: a click places the caret.
+                function focus-slot(s: int) {
+                    self.slot = s;
+                    if (s == 0) { settings-strip.focus(); return; }
+                    if (root.settings-tab == 0 && s == 1) { set-auto-advance.focus(); return; }
+                    if (root.settings-tab == 1 && s == 1) { set-wash.focus(); set-wash.select-all(); return; }
+                    if (root.settings-tab == 2 && s == 1) { set-loupe.focus(); set-loupe.select-all(); return; }
+                    if (root.settings-tab == 2 && s == 2) { set-cache.focus(); set-cache.select-all(); return; }
+                    if (root.settings-tab == 2 && s == 3) { set-adaptive.focus(); return; }
+                    if (root.settings-tab == 2 && s == 4) { set-limit.focus(); set-limit.select-all(); return; }
+                    if (root.settings-tab == 2 && s == 5) { set-clear.focus(); return; }
+                    if (s == self.slot-count() - 2) { set-reset.focus(); return; }
+                    set-close.focus();
+                }
+                // One step of the ring, wrapping, past at most four
+                // disabled slots in a row (the most the Performance tab can
+                // have is three).
+                function walk(dir: int) {
+                    self.flush();
+                    let n = self.slot-count();
+                    let s1 = Math.mod(self.slot + dir + n, n);
+                    if (self.slot-ok(s1)) { self.focus-slot(s1); return; }
+                    let s2 = Math.mod(s1 + dir + n, n);
+                    if (self.slot-ok(s2)) { self.focus-slot(s2); return; }
+                    let s3 = Math.mod(s2 + dir + n, n);
+                    if (self.slot-ok(s3)) { self.focus-slot(s3); return; }
+                    let s4 = Math.mod(s3 + dir + n, n);
+                    if (self.slot-ok(s4)) { self.focus-slot(s4); return; }
+                    self.focus-slot(0);
+                }
+                // A tab switch: commit what the keyboard leaves, put the
+                // keyboard on the strip WHILE the old body is still visible,
+                // then switch.
+                function go-to-tab(i: int) {
+                    self.flush();
+                    settings-strip.focus();
+                    self.slot = 0;
+                    root.settings-tab = i;
+                }
+                function switch-tab(dir: int) {
+                    self.go-to-tab(Math.mod(root.settings-tab + dir + root.settings-tabs.length,
+                        root.settings-tabs.length));
+                }
+                // Commit the focused field NOW if the user edited it into
+                // something other than the value in force, then show the
+                // value in force. Called wherever the keyboard is about to
+                // move on, so the commit never depends on when the deferred
+                // blur runs.
+                function flush() {
+                    if (set-wash.has-focus && set-wash.dirty && set-wash.text != root.settings-wash) {
+                        root.settings-commit("selection_wash", set-wash.text);
+                        set-wash.text = root.settings-wash;
+                        set-wash.dirty = false;
+                    }
+                    if (set-loupe.has-focus && set-loupe.dirty && set-loupe.text != root.settings-loupe-memory) {
+                        root.settings-commit("loupe_memory", set-loupe.text);
+                        set-loupe.text = root.settings-loupe-memory;
+                        set-loupe.dirty = false;
+                    }
+                    if (set-cache.has-focus && set-cache.dirty && set-cache.text != root.settings-cache-cap) {
+                        root.settings-commit("cache_cap", set-cache.text);
+                        set-cache.text = root.settings-cache-cap;
+                        set-cache.dirty = false;
+                    }
+                    if (set-limit.has-focus && set-limit.dirty && set-limit.text != root.settings-readers-limit) {
+                        root.settings-commit("max_readers", set-limit.text);
+                        set-limit.text = root.settings-readers-limit;
+                        set-limit.dirty = false;
+                    }
+                }
+                // Modal containment, topmost first (issue #42), and in the
+                // CAPTURE phase: About or the shortcuts card over this
+                // dialog owns every key before any control in it sees one —
+                // a strip that switched tabs, or a checkbox that toggled,
+                // under About would be keys acting behind a modal.
+                capture-key-pressed(event) => {
+                    if (root.about-visible || root.shortcuts-visible) {
+                        if (event.text == Key.Escape) {
+                            if (root.about-visible) {
+                                root.about-visible = false;
+                            } else {
+                                root.shortcuts-visible = false;
+                            }
+                        }
+                        // `?`/F1 closes the shortcuts card here too, as in
+                        // the copy and export scopes; About keeps Esc only.
+                        if ((event.text == "?" || event.text == Key.F1) && !root.about-visible) {
+                            root.shortcuts-visible = false;
+                        }
+                        return accept;
+                    }
+                    reject
+                }
+                key-pressed(event) => {
+                    if (event.text == Key.Tab || event.text == Key.Backtab) {
+                        let back = event.modifiers.shift || event.text == Key.Backtab;
+                        if (event.modifiers.control) {
+                            self.switch-tab(back ? -1 : 1);
+                        } else {
+                            self.walk(back ? -1 : 1);
+                        }
+                        return accept;
+                    }
+                    if (event.text == Key.Escape) {
+                        root.settings-close();
+                        return accept;
+                    }
+                    // Everything else dies here — digits included: they
+                    // never switch tabs (1–5 are reserved, settings.md).
+                    reject
+                }
+            Rectangle {
+                x: (parent.width - self.width) / 2;
+                y: (parent.height - self.height) / 2;
+                width: min(560px, parent.width - 40px);
+                // Content-driven, clamped to the window; the Performance
+                // tab is the tallest and fits whole at 1000x700 in its
+                // tallest state (the environment note, a long notice) —
+                // `the_settings_card_fits_its_smallest_window_in_its_
+                // tallest_state` measures the slack (settings.md).
+                height: min(settings-card-layout.preferred-height, parent.height - 40px);
+                border-radius: 8px;
+                background: #202028;
+                border-width: 1px;
+                border-color: #3a3a44;
+                clip: true;
+                init => {
+                    root.dbg-card-laid-out("settings card", self.absolute-position.x,
+                        self.absolute-position.y, self.width, self.height);
+                }
+                changed absolute-position => {
+                    root.dbg-card-laid-out("settings card", self.absolute-position.x,
+                        self.absolute-position.y, self.width, self.height);
+                }
+                changed height => {
+                    root.dbg-card-laid-out("settings card", self.absolute-position.x,
+                        self.absolute-position.y, self.width, self.height);
+                }
+                settings-card-layout := VerticalLayout {
+                    padding: 18px;
+                    spacing: 12px;
+                    Text {
+                        text: "Settings";
+                        color: #ffffff;
+                        font-size: 16px;
+                    }
+                    // THE STRIP: the keyboard's home in this dialog. Left
+                    // and Right switch tabs (wrapping); a click on a tab
+                    // switches to it.
+                    settings-strip := FocusScope {
+                        height: 32px;
+                        changed has-focus => {
+                            root.dbg-focus-changed("settings strip", self.has-focus);
+                            if (self.has-focus) {
+                                root.focus-owner = -1;
+                                settings-keys.slot = 0;
+                            }
+                        }
+                        key-pressed(event) => {
+                            if (event.text == Key.LeftArrow) {
+                                settings-keys.switch-tab(-1);
+                                return accept;
+                            }
+                            if (event.text == Key.RightArrow) {
+                                settings-keys.switch-tab(1);
+                                return accept;
+                            }
+                            reject
+                        }
+                        HorizontalLayout {
+                            spacing: 2px;
+                            alignment: start;
+                            for title[i] in root.settings-tabs: Rectangle {
+                                property <bool> active: root.settings-tab == i;
+                                width: tab-label.preferred-width + 28px;
+                                height: 32px;
+                                border-radius: 4px;
+                                // The keyboard is on the strip: a ring
+                                // around the active tab says where.
+                                border-width: self.active && settings-strip.has-focus ? 1px : 0px;
+                                border-color: #4da3ff;
+                                init => {
+                                    root.dbg-card-laid-out("settings tab " + title.to-lowercase(),
+                                        self.absolute-position.x, self.absolute-position.y,
+                                        self.width, self.height);
+                                }
+                                changed absolute-position => {
+                                    root.dbg-card-laid-out("settings tab " + title.to-lowercase(),
+                                        self.absolute-position.x, self.absolute-position.y,
+                                        self.width, self.height);
+                                }
+                                tab-label := Text {
+                                    text: title;
+                                    // The active tab is the brighter label
+                                    // over the accent underline.
+                                    color: parent.active ? #ffffff : #8a8a96;
+                                    font-size: 13px;
+                                    font-weight: parent.active ? 600 : 400;
+                                    horizontal-alignment: center;
+                                    vertical-alignment: center;
+                                    width: 100%;
+                                    height: 100%;
+                                }
+                                Rectangle {
+                                    y: parent.height - self.height;
+                                    height: 2px;
+                                    width: 100%;
+                                    background: parent.active ? #4da3ff : transparent;
+                                }
+                                TouchArea {
+                                    clicked => { settings-keys.go-to-tab(i); }
+                                }
+                            }
+                        }
+                    }
+                    Rectangle {
+                        height: 1px;
+                        background: #3a3a44;
+                    }
+                    // THE BODIES — permanent, stacked, one visible (see the
+                    // keyboard note above); the host is as tall as the
+                    // active one.
+                    Rectangle {
+                        height: root.settings-tab == 0 ? general-body.preferred-height
+                            : root.settings-tab == 1 ? ui-body.preferred-height
+                            : perf-body.preferred-height;
+                        general-body := VerticalLayout {
+                            x: 0;
+                            y: 0;
+                            width: parent.width;
+                            height: self.preferred-height;
+                            visible: root.settings-tab == 0;
+                            spacing: 14px;
+                            SettingRow {
+                                label: "Auto-advance after Y/N";
+                                note: root.settings-note-auto-advance;
+                                name: "auto-advance";
+                                note-shown(n, s) => { root.dbg-note("settings note " + n + " shows " + s); }
+                                note-laid-out(n, x, y, w, h) => { root.dbg-card-laid-out("settings note " + n, x, y, w, h); }
+                                set-auto-advance := CheckBox {
+                                    checked <=> root.settings-auto-advance;
+                                    toggled => {
+                                        // The click's own state, read BEFORE the
+                                        // flush: the flush's commit presents every
+                                        // property from the model, and through `<=>`
+                                        // that puts the state the model still holds
+                                        // back into `checked` — the CheckBox flips
+                                        // `checked` before it calls `toggled`
+                                        // (Cargo.toml, the fourth canary's fact 7) —
+                                        // so a handler that read it afterwards
+                                        // committed the state the click had just
+                                        // left (QE 2026-10-02, D39). The field
+                                        // commits first, then the click does its own
+                                        // work (settings.md, "Apply on commit").
+                                        let want = self.checked;
+                                        settings-keys.flush();
+                                        self.focus();
+                                        root.settings-commit("auto_advance", want ? "true" : "false");
+                                    }
+                                    // What the box SHOWS, for a driven run
+                                    // (test-harness.md): the dump's
+                                    // `autoadvance=` is the model's.
+                                    changed checked => {
+                                        root.dbg-note("settings auto-advance shows " + (self.checked ? "true" : "false"));
+                                    }
+                                    changed has-focus => {
+                                        if (self.has-focus) {
+                                            root.focus-owner = -1;
+                                            settings-keys.slot = 1;
+                                        }
+                                    }
+                                    init => {
+                                        root.dbg-card-laid-out("settings auto-advance",
+                                            self.absolute-position.x, self.absolute-position.y,
+                                            self.width, self.height);
+                                    }
+                                    changed absolute-position => {
+                                        root.dbg-card-laid-out("settings auto-advance",
+                                            self.absolute-position.x, self.absolute-position.y,
+                                            self.width, self.height);
+                                    }
+                                }
+                                Rectangle { horizontal-stretch: 1; }
+                            }
+                        }
+                        ui-body := VerticalLayout {
+                            x: 0;
+                            y: 0;
+                            width: parent.width;
+                            height: self.preferred-height;
+                            visible: root.settings-tab == 1;
+                            spacing: 14px;
+                            SettingRow {
+                                label: "Selection highlight";
+                                note: root.settings-note-wash;
+                                name: "wash";
+                                note-shown(n, s) => { root.dbg-note("settings note " + n + " shows " + s); }
+                                note-laid-out(n, x, y, w, h) => { root.dbg-card-laid-out("settings note " + n, x, y, w, h); }
+                                set-wash := LineEdit {
+                                    width: 80px;
+                                    text: root.settings-wash;
+                                    font-size: 13px;
+                                    // The user typed since the field last
+                                    // showed the value in force: the only
+                                    // text a commit ever takes (see APPLY
+                                    // ON COMMIT above). `edited` is the
+                                    // user's edit alone, never a write
+                                    // from here.
+                                    property <bool> dirty: false;
+                                    edited => { self.dirty = true; }
+                                    // Re-shown when the value in force
+                                    // changes behind it (a Reset, an open).
+                                    property <string> shown: root.settings-wash;
+                                    changed shown => {
+                                        self.text = root.settings-wash;
+                                        self.dirty = false;
+                                    }
+                                    // What the field shows, for a driven
+                                    // run (test-harness.md): the dump's
+                                    // `wash=` is the model's.
+                                    changed text => { root.dbg-note("settings wash shows " + self.text); }
+                                    accepted(text) => {
+                                        root.settings-commit("selection_wash", text);
+                                        self.text = root.settings-wash;
+                                        self.dirty = false;
+                                    }
+                                    changed has-focus => {
+                                        if (self.has-focus) {
+                                            root.focus-owner = -1;
+                                            settings-keys.slot = 1;
+                                            // Never behind a Help popup.
+                                            if (root.about-visible || root.shortcuts-visible) {
+                                                settings-strip.focus();
+                                            }
+                                        } else if (root.settings-visible) {
+                                            // Click-away commits what the user
+                                            // typed; Esc closed the dialog
+                                            // first, so it does not.
+                                            if (self.dirty && self.text != root.settings-wash) {
+                                                root.settings-commit("selection_wash", self.text);
+                                            }
+                                            // And the value in force, always:
+                                            // after a commit-then-Reset in one
+                                            // click `changed shown` cannot see
+                                            // the Reset.
+                                            self.text = root.settings-wash;
+                                            self.dirty = false;
+                                        }
+                                    }
+                                    init => {
+                                        root.dbg-card-laid-out("settings wash",
+                                            self.absolute-position.x, self.absolute-position.y,
+                                            self.width, self.height);
+                                    }
+                                    changed absolute-position => {
+                                        root.dbg-card-laid-out("settings wash",
+                                            self.absolute-position.x, self.absolute-position.y,
+                                            self.width, self.height);
+                                    }
+                                }
+                                Text {
+                                    text: "%";
+                                    color: #c8c8d0;
+                                    font-size: 13px;
+                                    vertical-alignment: center;
+                                }
+                                Rectangle { horizontal-stretch: 1; }
+                            }
+                        }
+                        perf-body := VerticalLayout {
+                            x: 0;
+                            y: 0;
+                            width: parent.width;
+                            height: self.preferred-height;
+                            visible: root.settings-tab == 2;
+                            spacing: 14px;
+                            SettingRow {
+                                label: "Loupe memory";
+                                note: root.settings-note-loupe-memory;
+                                name: "loupe-memory";
+                                note-shown(n, s) => { root.dbg-note("settings note " + n + " shows " + s); }
+                                note-laid-out(n, x, y, w, h) => { root.dbg-card-laid-out("settings note " + n, x, y, w, h); }
+                                set-loupe := LineEdit {
+                                    width: 110px;
+                                    text: root.settings-loupe-memory;
+                                    font-size: 13px;
+                                    // `dirty`, `shown`, the mark and the
+                                    // blur: as the wash field's.
+                                    property <bool> dirty: false;
+                                    edited => { self.dirty = true; }
+                                    property <string> shown: root.settings-loupe-memory;
+                                    changed shown => {
+                                        self.text = root.settings-loupe-memory;
+                                        self.dirty = false;
+                                    }
+                                    changed text => { root.dbg-note("settings loupe-memory shows " + self.text); }
+                                    accepted(text) => {
+                                        root.settings-commit("loupe_memory", text);
+                                        self.text = root.settings-loupe-memory;
+                                        self.dirty = false;
+                                    }
+                                    changed has-focus => {
+                                        if (self.has-focus) {
+                                            root.focus-owner = -1;
+                                            settings-keys.slot = 1;
+                                            if (root.about-visible || root.shortcuts-visible) {
+                                                settings-strip.focus();
+                                            }
+                                        } else if (root.settings-visible) {
+                                            if (self.dirty && self.text != root.settings-loupe-memory) {
+                                                root.settings-commit("loupe_memory", self.text);
+                                            }
+                                            self.text = root.settings-loupe-memory;
+                                            self.dirty = false;
+                                        }
+                                    }
+                                    init => {
+                                        root.dbg-card-laid-out("settings loupe-memory",
+                                            self.absolute-position.x, self.absolute-position.y,
+                                            self.width, self.height);
+                                    }
+                                    changed absolute-position => {
+                                        root.dbg-card-laid-out("settings loupe-memory",
+                                            self.absolute-position.x, self.absolute-position.y,
+                                            self.width, self.height);
+                                    }
+                                }
+                                // The value in force beside the field, and
+                                // what it holds in A1 frames.
+                                Text {
+                                    text: root.settings-loupe-hint;
+                                    color: #c8c8d0;
+                                    font-size: 12px;
+                                    vertical-alignment: center;
+                                    horizontal-stretch: 1;
+                                    wrap: word-wrap;
+                                }
+                            }
+                            SettingRow {
+                                label: "Thumbnail cache cap";
+                                note: root.settings-note-cache-cap;
+                                name: "cache-cap";
+                                note-shown(n, s) => { root.dbg-note("settings note " + n + " shows " + s); }
+                                note-laid-out(n, x, y, w, h) => { root.dbg-card-laid-out("settings note " + n, x, y, w, h); }
+                                set-cache := LineEdit {
+                                    width: 110px;
+                                    text: root.settings-cache-cap;
+                                    font-size: 13px;
+                                    // As the wash field's.
+                                    property <bool> dirty: false;
+                                    edited => { self.dirty = true; }
+                                    property <string> shown: root.settings-cache-cap;
+                                    changed shown => {
+                                        self.text = root.settings-cache-cap;
+                                        self.dirty = false;
+                                    }
+                                    changed text => { root.dbg-note("settings cache-cap shows " + self.text); }
+                                    accepted(text) => {
+                                        root.settings-commit("cache_cap", text);
+                                        self.text = root.settings-cache-cap;
+                                        self.dirty = false;
+                                    }
+                                    changed has-focus => {
+                                        if (self.has-focus) {
+                                            root.focus-owner = -1;
+                                            settings-keys.slot = 2;
+                                            if (root.about-visible || root.shortcuts-visible) {
+                                                settings-strip.focus();
+                                            }
+                                        } else if (root.settings-visible) {
+                                            if (self.dirty && self.text != root.settings-cache-cap) {
+                                                root.settings-commit("cache_cap", self.text);
+                                            }
+                                            self.text = root.settings-cache-cap;
+                                            self.dirty = false;
+                                        }
+                                    }
+                                    init => {
+                                        root.dbg-card-laid-out("settings cache-cap",
+                                            self.absolute-position.x, self.absolute-position.y,
+                                            self.width, self.height);
+                                    }
+                                    changed absolute-position => {
+                                        root.dbg-card-laid-out("settings cache-cap",
+                                            self.absolute-position.x, self.absolute-position.y,
+                                            self.width, self.height);
+                                    }
+                                }
+                                Rectangle { horizontal-stretch: 1; }
+                            }
+                            SettingRow {
+                                label: "Read workers";
+                                note: root.settings-note-readers;
+                                name: "readers";
+                                note-shown(n, s) => { root.dbg-note("settings note " + n + " shows " + s); }
+                                note-laid-out(n, x, y, w, h) => { root.dbg-card-laid-out("settings note " + n, x, y, w, h); }
+                                warning: root.settings-readers-env-note;
+                                set-adaptive := CheckBox {
+                                    text: "Adaptive (recommended)";
+                                    font-size: 13px;
+                                    checked <=> root.settings-readers-adaptive;
+                                    enabled: !root.settings-readers-locked;
+                                    toggled => {
+                                        // Read before the flush, as the auto-advance
+                                        // box does and for its reason (QE
+                                        // 2026-10-02, D39: Loupe memory typed `3`,
+                                        // then a click here, committed 3 GB and then
+                                        // `max_readers = 0` — the click undone).
+                                        let want = self.checked;
+                                        settings-keys.flush();
+                                        self.focus();
+                                        root.settings-commit("readers_adaptive", want ? "true" : "false");
+                                    }
+                                    // What the box SHOWS (test-harness.md): the
+                                    // dump's `readers=` is the model's.
+                                    changed checked => {
+                                        root.dbg-note("settings readers-adaptive shows " + (self.checked ? "true" : "false"));
+                                    }
+                                    changed has-focus => {
+                                        if (self.has-focus) {
+                                            root.focus-owner = -1;
+                                            settings-keys.slot = 3;
+                                        }
+                                    }
+                                    init => {
+                                        root.dbg-card-laid-out("settings readers-adaptive",
+                                            self.absolute-position.x, self.absolute-position.y,
+                                            self.width, self.height);
+                                    }
+                                    changed absolute-position => {
+                                        root.dbg-card-laid-out("settings readers-adaptive",
+                                            self.absolute-position.x, self.absolute-position.y,
+                                            self.width, self.height);
+                                    }
+                                }
+                                Text {
+                                    text: "Limit";
+                                    color: root.settings-readers-adaptive || root.settings-readers-locked ? #8a8a96 : #c8c8d0;
+                                    font-size: 13px;
+                                    vertical-alignment: center;
+                                }
+                                set-limit := LineEdit {
+                                    width: 70px;
+                                    text: root.settings-readers-limit;
+                                    font-size: 13px;
+                                    enabled: !root.settings-readers-adaptive && !root.settings-readers-locked;
+                                    // As the wash field's.
+                                    property <bool> dirty: false;
+                                    edited => { self.dirty = true; }
+                                    property <string> shown: root.settings-readers-limit;
+                                    changed shown => {
+                                        self.text = root.settings-readers-limit;
+                                        self.dirty = false;
+                                    }
+                                    changed text => { root.dbg-note("settings readers-limit shows " + self.text); }
+                                    accepted(text) => {
+                                        root.settings-commit("max_readers", text);
+                                        self.text = root.settings-readers-limit;
+                                        self.dirty = false;
+                                    }
+                                    changed has-focus => {
+                                        if (self.has-focus) {
+                                            root.focus-owner = -1;
+                                            settings-keys.slot = 4;
+                                            if (root.about-visible || root.shortcuts-visible) {
+                                                settings-strip.focus();
+                                            }
+                                        } else if (root.settings-visible) {
+                                            if (self.dirty && self.text != root.settings-readers-limit) {
+                                                root.settings-commit("max_readers", self.text);
+                                            }
+                                            self.text = root.settings-readers-limit;
+                                            self.dirty = false;
+                                        }
+                                    }
+                                    init => {
+                                        root.dbg-card-laid-out("settings readers-limit",
+                                            self.absolute-position.x, self.absolute-position.y,
+                                            self.width, self.height);
+                                    }
+                                    changed absolute-position => {
+                                        root.dbg-card-laid-out("settings readers-limit",
+                                            self.absolute-position.x, self.absolute-position.y,
+                                            self.width, self.height);
+                                    }
+                                }
+                                Rectangle { horizontal-stretch: 1; }
+                            }
+                            // Clear cache: the row's own words are the
+                            // readout (size and real path), then the button.
+                            VerticalLayout {
+                                spacing: 4px;
+                                HorizontalLayout {
+                                    spacing: 12px;
+                                    // What the row SAYS and whether Clear is
+                                    // offered, each reported by the element
+                                    // itself (test-harness.md): `Clearing…`
+                                    // and a disabled button while the worker
+                                    // runs — the guard against a second VACUUM
+                                    // — then the size re-measured (QE
+                                    // 2026-10-02, round 5). A driven click is
+                                    // dispatched from a timer, and Slint runs
+                                    // the trackers right after the timers and
+                                    // before the worker's completion can
+                                    // arrive (Cargo.toml, the fourth canary's
+                                    // fact 8), so even a millisecond VACUUM
+                                    // cannot hide the two marks from a test.
+                                    Text {
+                                        text: root.settings-cache-readout;
+                                        color: #e8e8f0;
+                                        font-size: 13px;
+                                        vertical-alignment: center;
+                                        horizontal-stretch: 1;
+                                        wrap: word-wrap;
+                                        init => { root.dbg-note("settings cache readout shows " + self.text); }
+                                        changed text => { root.dbg-note("settings cache readout shows " + self.text); }
+                                    }
+                                    set-clear := Button {
+                                        text: "Clear";
+                                        enabled: root.settings-cache-clear-enabled;
+                                        clicked => {
+                                            settings-keys.flush();
+                                            self.focus();
+                                            root.settings-clear-cache();
+                                        }
+                                        changed has-focus => {
+                                            if (self.has-focus) {
+                                                root.focus-owner = -1;
+                                                settings-keys.slot = 5;
+                                            }
+                                        }
+                                        changed enabled => {
+                                            root.dbg-note("settings clear-cache enabled " + (self.enabled ? "true" : "false"));
+                                        }
+                                        init => {
+                                            root.dbg-note("settings clear-cache enabled " + (self.enabled ? "true" : "false"));
+                                            root.dbg-card-laid-out("settings clear-cache",
+                                                self.absolute-position.x, self.absolute-position.y,
+                                                self.width, self.height);
+                                        }
+                                        changed absolute-position => {
+                                            root.dbg-card-laid-out("settings clear-cache",
+                                                self.absolute-position.x, self.absolute-position.y,
+                                                self.width, self.height);
+                                        }
+                                    }
+                                }
+                                // A plain Text, not a SettingRow's note, so it
+                                // reports itself here — the same two marks.
+                                Text {
+                                    text: root.settings-note-clear-cache;
+                                    color: #8a8a96;
+                                    font-size: 11px;
+                                    wrap: word-wrap;
+                                    init => {
+                                        root.dbg-note("settings note clear-cache shows " + self.text);
+                                        root.dbg-card-laid-out("settings note clear-cache",
+                                            self.absolute-position.x, self.absolute-position.y,
+                                            self.width, self.height);
+                                    }
+                                    changed text => {
+                                        root.dbg-note("settings note clear-cache shows " + self.text);
+                                    }
+                                    changed absolute-position => {
+                                        root.dbg-card-laid-out("settings note clear-cache",
+                                            self.absolute-position.x, self.absolute-position.y,
+                                            self.width, self.height);
+                                    }
+                                    changed height => {
+                                        root.dbg-card-laid-out("settings note clear-cache",
+                                            self.absolute-position.x, self.absolute-position.y,
+                                            self.width, self.height);
+                                    }
+                                }
+                            }
+                        }
+                    }
+                    if root.settings-notice != "": Text {
+                        text: root.settings-notice;
+                        color: #ffb84d;
+                        font-size: 12px;
+                        wrap: word-wrap;
+                    }
+                    HorizontalLayout {
+                        spacing: 8px;
+                        set-reset := Button {
+                            // The ACTIVE tab's settings only.
+                            text: "Reset " + root.settings-tabs[root.settings-tab] + " to defaults";
+                            clicked => {
+                                settings-keys.flush();
+                                self.focus();
+                                root.settings-reset(root.settings-tab);
+                            }
+                            changed has-focus => {
+                                if (self.has-focus) {
+                                    root.focus-owner = -1;
+                                    settings-keys.slot = settings-keys.slot-count() - 2;
+                                }
+                            }
+                            init => {
+                                root.dbg-card-laid-out("settings reset",
+                                    self.absolute-position.x, self.absolute-position.y,
+                                    self.width, self.height);
+                            }
+                            changed absolute-position => {
+                                root.dbg-card-laid-out("settings reset",
+                                    self.absolute-position.x, self.absolute-position.y,
+                                    self.width, self.height);
+                            }
+                        }
+                        Rectangle { horizontal-stretch: 1; }
+                        set-close := Button {
+                            text: "Close";
+                            // A field's text commits as the dialog closes —
+                            // a click on Close is a click-away; only Esc
+                            // discards (settings.md, "Apply on commit").
+                            clicked => {
+                                settings-keys.flush();
+                                root.settings-close();
+                            }
+                            changed has-focus => {
+                                if (self.has-focus) {
+                                    root.focus-owner = -1;
+                                    settings-keys.slot = settings-keys.slot-count() - 1;
+                                }
+                            }
+                            init => {
+                                root.dbg-card-laid-out("settings close",
+                                    self.absolute-position.x, self.absolute-position.y,
+                                    self.width, self.height);
+                            }
+                            changed absolute-position => {
+                                root.dbg-card-laid-out("settings close",
+                                    self.absolute-position.x, self.absolute-position.y,
+                                    self.width, self.height);
+                            }
+                        }
+                    }
+                }
+            }
+            }
+            // The keyboard to the strip on open (settings.md: "Opening the
+            // dialog puts the keyboard on the strip"), and the owner token
+            // from `init` too, for the reason recorded on the copy
+            // dialog's init (issue #63 F5).
+            init => {
+                settings-strip.focus();
+                root.focus-owner = -1;
+                root.settings-claim-focus = false;
+            }
+            property <bool> claim-focus: root.settings-claim-focus;
+            changed claim-focus => {
+                if (self.claim-focus) {
+                    settings-strip.focus();
+                    root.settings-claim-focus = false;
+                }
+            }
+        }
+
         // MODAL POPUPS — declared AFTER the IPTC panel and the two export
         // dialogs on purpose (validator M1, issue #23): later elements
         // render on top, and the scrims must cover EVERY layer — the
@@ -3204,7 +4268,7 @@ export component MainWindow inherits Window {
                     spacing: 0px;
 
                     // LEFT COLUMN — the frame under the cursor: reach it,
-                    // mark it, or get to it with the mouse.
+                    // mark it; then the File menu's chords.
                     //
                     // Both columns take HALF of what is left after the
                     // gutter, explicitly. Two stretch factors would split
@@ -3250,27 +4314,35 @@ export component MainWindow inherits Window {
                             heading: "MARK";
                             // Auto-advance is this app's most surprising
                             // behaviour; docs/culling.md has always said it
-                            // and this card never did.
-                            KeyRow { k: "Y / P / Space"; a: "pick — and advance"; }
-                            KeyRow { k: "N / X"; a: "reject — and advance"; }
+                            // and this card never did. "(a setting)" since
+                            // brief 008 made it one (settings.md, General):
+                            // with it off, Y and N stay put, and a card that
+                            // said "and advance" unconditionally was false
+                            // (QE 2026-10-01, D36). 30 and 32 characters, in
+                            // the 38 the action cell holds on one line.
+                            KeyRow { k: "Y / P / Space"; a: "pick — and advance (a setting)"; }
+                            KeyRow { k: "N / X"; a: "reject — and advance (a setting)"; }
                             KeyRow { k: "U"; a: "clear the mark, stay put"; }
                             // Kept, not dropped: it is the answer to
                             // "I pressed 3 and nothing happened", and
                             // ratings are marks.
                             KeyRow { k: "1–5, 0"; a: "reserved for star ratings (v2)"; dim: true; }
                         }
-                        // MOUSE is its own section because a card titled
-                        // "Keyboard shortcuts" that files Wheel and
-                        // Double-click among the keys is lying — and
-                        // because the heading is what shrinks
-                        // "Wheel in loupe" to "Wheel", which is most of
-                        // what makes a fixed key column possible.
+                        // Named after the menu, character for character,
+                        // ellipses included, so a mouse user learns where
+                        // the five chords live for free. In the LEFT column
+                        // since brief 008 (2026-10-01): the `Ctrl+,` row
+                        // arrived and the left column was the shorter by
+                        // 19 px, so FILE MENU and MOUSE swapped columns
+                        // rather than grow the taller one (ui-grid.md,
+                        // "Window chrome", the card).
                         KeySection {
-                            heading: "MOUSE";
-                            KeyRow { k: "Wheel"; a: "grid: scroll · loupe: zoom at pointer"; }
-                            KeyRow { k: "Drag"; a: "grid: scroll · loupe: pan above fit"; }
-                            KeyRow { k: "Click"; a: "loupe above fit: centre there"; }
-                            KeyRow { k: "Double-click"; a: "grid: open in loupe · loupe: 1:1 there"; }
+                            heading: "FILE MENU";
+                            KeyRow { k: "Ctrl+O"; a: "Open Folder…"; }
+                            KeyRow { k: "Ctrl+E"; a: "Copy Picks…"; }
+                            KeyRow { k: "Ctrl+Shift+E"; a: "Export Frames as Video…"; }
+                            KeyRow { k: "Ctrl+,"; a: "Settings…"; }
+                            KeyRow { k: "Ctrl+Q"; a: "Quit"; }
                         }
                     }
 
@@ -3294,8 +4366,8 @@ export component MainWindow inherits Window {
                         }
                     }
 
-                    // RIGHT COLUMN — the view, and working on several at
-                    // once: select, caption, export.
+                    // RIGHT COLUMN — the view and the pointer, and working
+                    // on several at once: select, caption.
                     VerticalLayout {
                         width: (parent.width - 28px) / 2;
                         spacing: 16px;
@@ -3305,20 +4377,34 @@ export component MainWindow inherits Window {
                             KeyRow { k: "+ / -"; a: "zoom in / out, one stop"; }
                             KeyRow { k: "Z"; a: "fit ⇄ 1:1 (grid: straight to 1:1)"; }
                         }
+                        // MOUSE is its own section because a card titled
+                        // "Keyboard shortcuts" that files Wheel and
+                        // Double-click among the keys is lying — and
+                        // because the heading is what shrinks
+                        // "Wheel in loupe" to "Wheel", which is most of
+                        // what makes a fixed key column possible. In the
+                        // right column since brief 008 (the swap above).
+                        KeySection {
+                            heading: "MOUSE";
+                            KeyRow { k: "Wheel"; a: "grid: scroll · loupe: zoom at pointer"; }
+                            KeyRow { k: "Drag"; a: "grid: scroll · loupe: pan above fit"; }
+                            KeyRow { k: "Click"; a: "loupe above fit: centre there"; }
+                            KeyRow { k: "Double-click"; a: "grid: open in loupe · loupe: 1:1 there"; }
+                        }
                         // SELECT sits here rather than under MARK, where
                         // the cull loop would put it, because the card is
-                        // a fixed-height sheet at 1000x700 — the columns
-                        // are 19 px apart and the left one may not grow.
-                        // Moving SELECT back costs 27 px on the left and
-                        // clamps the card on a Noto Sans seat (ui-grid.md,
-                        // "Seven sections").
+                        // a fixed-height sheet at 1000x700 and the two
+                        // columns end within a few px of each other since
+                        // brief 008's swap: moving SELECT left would grow
+                        // the card by most of its height and clamp it
+                        // (ui-grid.md, "Window chrome", the card).
                         KeySection {
                             heading: "SELECT";
                             // "page keys too" carries the map's
                             // Shift+PgUp/PgDn/Home/End without a row of its
-                            // own — the card has ~26 px of height headroom
-                            // and a row costs 23 (ui-grid.md, "Seven
-                            // sections").
+                            // own — a row costs 23 px, and the card's room
+                            // at 1000x700 is measured in ui-grid.md
+                            // ("Window chrome", the card).
                             KeyRow { k: "Shift+arrows"; a: "extend the selection (page keys too)"; }
                             KeyRow { k: "Shift+[ / ]"; a: "extend it by whole bursts"; }
                             KeyRow { k: "Ctrl+Shift+B"; a: "add the burst under the cursor"; }
@@ -3343,21 +4429,13 @@ export component MainWindow inherits Window {
                             KeyRow { k: "I"; a: "IPTC panel"; }
                             KeyRow { k: "K"; a: "keyword field (opens the panel)"; }
                         }
-                        // Named after the menu, character for character,
-                        // ellipses included, so a mouse user learns where
-                        // the four chords live for free.
-                        KeySection {
-                            heading: "FILE MENU";
-                            KeyRow { k: "Ctrl+O"; a: "Open Folder…"; }
-                            KeyRow { k: "Ctrl+E"; a: "Copy Picks…"; }
-                            KeyRow { k: "Ctrl+Shift+E"; a: "Export Frames as Video…"; }
-                            KeyRow { k: "Ctrl+Q"; a: "Quit"; }
-                        }
                         // The rule ui-grid.md goes out of its way to state,
                         // and the one a user with a 40-frame burst selected
-                        // will otherwise get backwards.
+                        // will otherwise get backwards. "An advance", not
+                        // "the advance": with auto-advance off there is none
+                        // (QE 2026-10-01, D36).
                         Text {
-                            text: "Marks act on the cursor frame only; the advance ends a selection.";
+                            text: "Marks act on the cursor frame only; an advance ends a selection.";
                             color: #8a8a96;
                             font-size: 11px;
                             wrap: word-wrap;

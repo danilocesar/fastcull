@@ -60,6 +60,75 @@ fastcull-core.workspace = true
 #      would notice a new way to photograph twice.
 # Re-read the owner-invariant section of specs/modules/ui-grid.md before
 # raising this bound.
+# FOURTH CANARY (brief 008, the Settings dialog and the Failed badge's
+# tooltip; same 1.17.1). Eight measured behaviours they stand on, none
+# documented upstream (read 2026-10-01 in i-slint-core window.rs
+# `process_key_input`, items/text.rs, items.rs and
+# properties/change_tracker.rs, and 2026-10-02 in i-slint-compiler
+# widgets/fluent/checkbox.slint, i-slint-core platform.rs and
+# i-slint-backend-winit event_loop.rs; ui-grid.md's Slint list):
+#   1. The WINDOW handles a Tab or Shift+Tab that the focused item and
+#      every ancestor scope ignored, by walking the WHOLE item tree to the
+#      next focusable item — surfaces hidden behind a scrim included. The
+#      Settings scope accepts both itself; that is the only reason the
+#      keyboard cannot walk out of the dialog into a hidden panel field.
+#   2. A focused item that has become invisible loses the keyboard at the
+#      NEXT key, and that key is delivered to nothing — why the dialog's
+#      tab bodies are permanent, toggled by `visible`, and a tab switch
+#      moves the keyboard to the strip BEFORE the old body hides.
+#   3. A `TextInput` ignores Tab, Escape and Ctrl+Tab (control
+#      characters), so all three bubble from a focused field to the
+#      dialog's scope: Esc in a field closes the dialog, Tab walks on.
+#   4. The built-in `Tooltip` (the Failed badge's, `FcTooltip`) is lowered
+#      to a `TooltipArea` that observes the pointer without taking it and
+#      raises a popup 500 ms into a hover (i-slint-compiler
+#      passes/lower_tooltips.rs, i-slint-core items.rs `TooltipArea`). The
+#      popup's content is created at that moment — the `failed tooltip
+#      shown:` mark a driven test waits on — and the area forwards every
+#      press, so the cell under the badge still takes its click.
+#   5. A `changed` handler fires only when the value it re-evaluates
+#      DIFFERS from the one its tracker stored last time (i-slint-core
+#      properties/change_tracker.rs `evaluate`: `if new_value !=
+#      *inner_value`), and the trackers run deferred — so a property that
+#      goes A → B → A inside one event-loop iteration fires nothing. A
+#      click on Reset with `35` typed into a field commits 35 and resets
+#      to 25 in one iteration, and the field's `changed shown` re-sync
+#      never runs: why the Settings fields commit only what the user
+#      EDITED (`dirty`, set by LineEdit's `edited`) and re-show the value
+#      in force on every blur (senior-developer review F1, 2026-10-01).
+#   6. A `focus()` called from code is not a Tab-navigation focus: a
+#      `TextInput` selects all only on `FocusReason::TabNavigation`, and
+#      not on Apple targets at all (items/text.rs:1180, FocusIn, guarded by
+#      `cfg!(not(target_vendor = "apple"))` — macOS is not a supported
+#      seat; re-review RR-F5), so a field the Settings ring focuses
+#      selects nothing and the caret stays where it was (at 0 the first
+#      time: Tab, 8, Enter put `82 GB`) — why `focus-slot` calls
+#      `select-all()` itself (QE 2026-10-01, D33).
+#   7. The fluent `CheckBox` flips `checked` and THEN calls `toggled`
+#      (widgets/fluent/checkbox.slint:96-101; Space and Enter go through
+#      the same `clicked`), and a two-way binding (`checked <=> root.…`)
+#      carries a synchronous write of the bound property straight into
+#      the box — so a `toggled` handler that first does anything which
+#      re-presents that property (the Settings flush's commit runs
+#      `present()`) then reads the OLD state from `self.checked`: why both
+#      Settings checkboxes read their state into `want` before the flush
+#      (QE 2026-10-02, D39).
+#   8. The winit backend begins every loop iteration with `new_events`,
+#      which calls `update_timers_and_animations` — animations, then the
+#      due timers, then `run_change_handlers` (i-slint-core platform.rs
+#      :289-293; i-slint-backend-winit event_loop.rs :599-612) — and hands
+#      an `invoke_from_event_loop` closure over only later, in
+#      `user_event` (:546). So what a TIMER's callback writes — and every
+#      driven step is a timer — is seen by the change trackers before a
+#      worker's posted completion can overwrite it, however fast the
+#      worker: fact 5's A → B → A collapse needs both writes inside one run
+#      of the trackers, and these are two. (An input event from the OS
+#      runs after that iteration's trackers, so for a real click the same
+#      cannot be promised.) Why the Settings Clear row's `Clearing…` and
+#      its disabled button are proved by the marks the two elements emit
+#      themselves (QE 2026-10-02, round 5; the senior developer's
+#      test-integrity review, which first suspected a race here and
+#      refuted it in this source).
 slint = { version = "1", default-features = false, features = [
     "std",
     "backend-winit",
@@ -74,8 +143,8 @@ zune-jpeg = "0.4"
 # no GTK system packages; native dialogs on Windows.
 rfd = { version = "0.15", default-features = false, features = ["xdg-portal", "async-std"] }
 # Remembered copy-dialog prefs (fileops.md: destination + template survive
-# across sessions) — same conventions as the core cache/templates paths.
-directories = "6"
+# across sessions). The directory is core's one config-dir resolver
+# (`settings::config_dir`, brief 008), so the app needs no `directories`.
 toml = "0.8"
 
 # AttachConsole(ATTACH_PARENT_PROCESS) at startup (issue #40): the crate is

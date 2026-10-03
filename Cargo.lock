@@ -1506,7 +1506,6 @@ dependencies = [
 name = "fastcull-app"
 version = "0.14.0"
 dependencies = [
- "directories",
  "fast_image_resize",
  "fastcull-core",
  "jpeg-encoder",
@@ -1545,7 +1544,9 @@ dependencies = [
  "serde_json",
  "thiserror 2.0.19",
  "toml 0.8.23",
+ "toml_edit 0.22.27",
  "unicode-normalization",
+ "windows-sys 0.61.2",
  "zune-jpeg 0.4.21",
 ]
 

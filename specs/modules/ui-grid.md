@@ -363,7 +363,10 @@ scrolling.
   VISIBILITY WINS; the cursor itself never moves; a reveal marks its
   geometry consumed so corrections never stack.
 - The status bar always names the cursor image (filename, position N/M)
-  and its mark in words (`· ★ picked / · ✕ rejected / · unmarked`).
+  and its mark in words (`· ★ picked / · ✕ rejected / · unmarked`) — and,
+  when the frame failed to decode, ` · ⚠ failed: <reason>` after the mark
+  words (brief 008, 2026-10-01: the Failed badge's tooltip for the
+  keyboard).
 - **The untouched-cursor rule** (issue #4; narrowed 2026-07-31): from
   session open until the user's first interaction the cursor is "the first
   image of the view", not a pinned id, and a folder never opens with the
@@ -444,13 +447,23 @@ scrolling.
   overlap.
 - **Exported** (`▶`, issue #56): video-export.md owns the contract; the
   memory is session-only and reads, never decides. **Burst** (`×N` badge,
-  the optional strip): burst-grouping.md. **Failed**: a warning badge and a
-  tooltip with the reason.
+  the optional strip): burst-grouping.md. **Failed**: a warning badge — a
+  red disc with `!`, top-right of the cell — and, on hover, a tooltip
+  with the reason (`Failed(reason)`'s string) in the house card's colours:
+  the app's first tooltip, a reusable component on Slint's built-in
+  `Tooltip` (brief 008 D8). The keyboard path is the status line, which
+  names the reason while the cursor stands on the frame (below). The
+  tooltip had been promised here since M2 while `main.slint` drew a bare
+  `!` with none, found at brief 008's gate (M10) and built on 2026-10-01
+  (the user).
 - **The selection wash** (2026-07-28, persona MUST-HAVE): a translucent
-  accent-blue wash over the whole cell, 25 % (chosen by eye against 12 %
-  and 18 %; a property, `selection-wash`/`selection-wash-opacity`, destined
-  to become a setting — above ~15 % the tint can shift colour judgement on
-  a final scan, accepted knowingly), plus the accent outline. The wash
+  accent-blue wash over the whole cell, 25 % by default (chosen by eye
+  against 12 % and 18 %; since 2026-10-01 the UI › Selection highlight
+  setting, 0–50 %, written to `selection-wash-opacity` through the app's
+  one clamped site — settings.md, brief 008; until then "a property
+  destined to become a setting" — and above ~15 % the tint can shift
+  colour judgement on a final scan, which the setting's note says), plus
+  the accent outline. The wash
   renders on EVERY selected cell, the cursor cell included; GRID ONLY,
   never in the loupe at fit or above (gated on `at-fit`/`one2one`);
   painted above the image and the reject dim, BELOW the badges. Filled =
@@ -478,7 +491,10 @@ scrolling.
      zoom; whether or not the move changed the cursor (a Right at the last
      frame still clears; an arrow under a filter that matches nothing still
      clears). `U` stays put and leaves the selection alone unless its mark
-     removed the frame from the view and the cursor moved on. Not
+     removed the frame from the view and the cursor moved on — and with
+     auto-advance off (settings.md) `Y`/`N` behave exactly as `U` does
+     (brief 008 D7, 2026-10-01: a mark that does not move the cursor is
+     not navigation). Not
      navigation, never touching the selection: the zoom keys, the wheel and
      the scrollbar, a modal's Esc, the IPTC panel, the export, and every
      cursor move the ENGINE makes (the load-settled re-sort, a filter or a
@@ -549,6 +565,7 @@ the binding in prose, in that test's own short list.
 | `Ctrl+Q` | Quit (persona accelerator gap, provisional) |
 | `Ctrl+E` (menu: Copy picks…) | open copy dialog (`Ctrl+C` stays clipboard-idle: user decision after persona review — never repurpose it) |
 | `Ctrl+Shift+E` (menu: Export Frames as Video…) | open the video export dialog (M9, video-export.md). A CHORD, not a bare letter, so it cannot fire from a fat finger mid `]`/`N` (persona 2026-08-27); it is matched BEFORE `Ctrl+E` because with Shift held the event still arrives as the letter plus modifiers. Disabled — with its reason in the status line, never silently — when there is neither a selection nor a burst under the cursor |
+| `Ctrl+,` | open the Settings dialog (settings.md; brief 008, 2026-10-01 — GNOME's, VS Code's and macOS's chord, free in this map). A chord in the main key scope matched like `Ctrl+E`, so it is inert while a field or another dialog holds the keyboard; the comma arrives as its own character with the modifier, like Ctrl+`]`. `Esc` or the Close button closes the dialog, a scrim click does not; under it every grid key is swallowed (settings.md, "The dialog") |
 | `?` / `F1` | open the keyboard-shortcuts card — and, while it is up, close it again (2026-09-04; the persona's finding was that the keyboard help of a keyboard-first app could be opened only with the mouse). `?` reaches the app as the shifted character on most layouts, so it is matched both with and without a reported Shift modifier, and `/`-with-Shift is matched too for layouts that report the unshifted key. The opener lives in the MAIN key scope beside the other bare letters, which is what keeps it from firing while an IPTC field, the keyword field or a dialog's own field holds the keyboard; the close arm is mirrored in the copy and export scopes (issue #42's topmost-first rule). About keeps `Esc` as its only key. **Both keys are therefore inert while a field or a dialog holds the keyboard, and for `F1` that is a decision, not a consequence** (2026-09-04): for `?` it is forced — the key is a typed character, and a help card that opened instead of typing a question mark into a keyword would be a defect — while `F1` is not a character and could have been given a scope of its own. It was not, because the help it opens is the GRID's help: none of its 29 rows applies while a text field has the keyboard, and a modal that appeared over a half-typed keyword would have to decide what happens to the edit. Esc leaves the field first; F1 works there |
 | `1`–`5`, `0` | reserved (star ratings, v2) — must not conflict |
 
@@ -558,13 +575,17 @@ Picking (`Y`) or rejecting (`N`) auto-advances the cursor to the next image
 at EVERY zoom level, grid and loupe alike (user decision 2026-07-25);
 clearing (`U`) does not advance. The advance is a cursor move and collapses
 the selection like an arrow (Lightroom's auto-advance does; an exemption
-would make `Y` and Right disagree). It becomes a configuration option
-(default on) with the settings dialog; until then it is always on. When a
-mark removes the image from the active filtered view, the live-removal
-cursor rule IS the advance — auto-advance never applies on top of it — so
-net cursor movement per mark is exactly one image, always (persona gap G1:
-the rule that keeps the inbox-zero loop honest). There is no undo stack in
-v1: a mis-marked frame costs one arrow back and a re-mark.
+would make `Y` and Right disagree). It is a setting — General ›
+Auto-advance after Y/N, default on (settings.md; brief 008, 2026-10-01 —
+until then this sentence promised "a configuration option with the
+settings dialog" and it was always on). Off, `Y`/`N` mark and the cursor
+STAYS, the selection untouched, exactly as `U` behaves, with `U`'s one
+exception below (brief 008 D7). When a mark removes the image from the
+active filtered view, the live-removal cursor rule IS the advance —
+auto-advance never applies on top of it, on or off — so net cursor
+movement per mark is exactly one image, always (persona gap G1: the rule
+that keeps the inbox-zero loop honest). There is no undo stack in v1: a
+mis-marked frame costs one arrow back and a re-mark.
 
 ### Window chrome
 
@@ -580,10 +601,12 @@ v1: a mis-marked frame costs one arrow back and a re-mark.
 - **File**: Open Folder… (native picker via `rfd`), Copy Picks… (`Ctrl+E`),
   Export Frames as Video… (`Ctrl+Shift+E`, greyed when there is nothing to
   export while the keystroke explains itself in the status line), Settings…
-  (placeholder, disabled until a settings dialog exists — post-v1), Quit.
-  **View**: Zoom In/Out (`+`/`-`), IPTC Panel (`I`), Filter Bar. **Help**:
-  Keyboard Shortcuts (the card below), About. Opening a folder via the menu
-  behaves identically to the CLI argument.
+  (`Ctrl+,`, the dialog of settings.md; greyed while Copy Picks or the
+  export dialog is up, as those two are greyed while it is up — until
+  2026-10-01 a disabled placeholder reading "Settings… (soon)", brief 008),
+  Quit. **View**: Zoom In/Out (`+`/`-`), IPTC Panel (`I`), Filter Bar.
+  **Help**: Keyboard Shortcuts (the card below), About. Opening a folder via
+  the menu behaves identically to the CLI argument.
 - **The keyboard-shortcuts card** (rebuilt 2026-09-04 after the user's
   verdict on the old one: "awful and cramped"): every row is a `KeyRow` — a
   **104 px** right-aligned key cell (13 px, weight 600, `#e8e8f0`), a 14 px
@@ -599,6 +622,14 @@ v1: a mis-marked frame costs one arrow back and a re-mark.
   heading), a 1 px hairline between the columns; MOUSE is its own section
   because a card headed "Keyboard shortcuts" that files `wheel` among the
   keys is lying; FILE MENU echoes the File menu character for character.
+  The columns are MOVE, MARK, FILE MENU down the left and ZOOM, MOUSE,
+  SELECT, PANELS down the right (brief 008, 2026-10-01: FILE MENU and
+  MOUSE swapped columns when the `Ctrl+,` row arrived, because the right
+  column was the taller by 19 px — measured as 461 against 442 on the
+  development seat — and a fifth FILE MENU row on the right would have
+  grown the card by 23 px where the swap grows it by 4; until then the
+  sentence above read "MOVE, MARK, MOUSE down the left; ZOOM, SELECT,
+  PANELS, FILE MENU down the right").
   An action text fits ONE line of the 240 px action cell (38 characters at
   13 px fit, 40 do not). The card GROUPS AND PARAPHRASES the map and lists
   every binding in it (one map row may become four, two may share one;
@@ -612,9 +643,16 @@ v1: a mis-marked frame costs one arrow back and a re-mark.
   its own. **780 px wide, content-driven
   tall**: `min(780px, window − 48px)` by `ModalScrim`'s `card-fits-content`
   clamped to `window − 40px`; it fits whole at 1000x700, the smallest
-  supported window (about 25 px of room there — the next binding replaces
-  a row or moves a section). Its height, 568 px on the development seat,
-  is a MEASUREMENT no test may pin: it is the sum of ~29 text line boxes
+  supported window (the card's floor sits 33 px above the status bar
+  there on the development seat against the test's 20 — measured
+  2026-10-01 at 568 px; this sentence said "about 25 px of room" until
+  then — so the next binding replaces a row or moves a section, as
+  `Ctrl+,` did). Its height, 568 px on the development seat before brief
+  008 and 572 px after it (measured 2026-10-01 by brief 008's commit, at
+  1440x900 and at 1000x700 alike, as the plan predicted: the column swap
+  put the one 23 px row in the shorter column; the floor now sits 31 px
+  above the status bar at 1000x700 against the test's 20),
+  is a MEASUREMENT no test may pin: it is the sum of ~30 text line boxes
   and ranges from 491 (Liberation Sans) to 627 (Noto Sans Mono) across
   faces; the test pins only what is geometric — the width, inside the
   layer, fits whole at 1000x700 (measured as slack, not as a ceiling), the
@@ -668,13 +706,16 @@ v1: a mis-marked frame costs one arrow back and a re-mark.
   closes it and EVERY other key is swallowed — driven NAV keys identically.
   The popups are declared last in the tree so their scrims render above
   every layer; opening a modal steals the keyboard back to the main key
-  scope; ALL FOUR scrims swallow the wheel (issue #49 — Copy Picks and the
-  export dialog are hand-rolled copies of `ModalScrim`, because their focus
-  scope must WRAP the card, and a hand-rolled scrim must carry the
-  `scroll-event` arm); the menu bar stays live under a modal (File > Quit
-  works). **Esc closes the TOPMOST modal only** (issue #42): About over the
-  live copy dialog takes two Esc presses, the dialog's plan and destination
-  survive the first, and both key scopes contain modals identically.
+  scope; ALL FIVE scrims swallow the wheel (issue #49 — Copy Picks, the
+  export dialog and, since brief 008, the Settings dialog are hand-rolled
+  copies of `ModalScrim`, because their focus scope must WRAP the card,
+  and a hand-rolled scrim must carry the `scroll-event` arm); the menu bar
+  stays live under a modal (File > Quit works). **Esc closes the TOPMOST
+  modal only** (issue #42): About over the live copy dialog takes two Esc
+  presses, the dialog's plan and destination survive the first, and every
+  dialog key scope — the copy, export and settings scopes — contains
+  modals identically. The Settings dialog is contained like the copy
+  dialog and never stacks with it (settings.md, "The dialog").
 
 ### The filter and sort bar (M5)
 
@@ -710,7 +751,8 @@ v1: a mis-marked frame costs one arrow back and a re-mark.
 - **The guarantee**: whenever the focused editor is DESTROYED (the panel
   closed by any route, a session swap, the field rows rebuilt) or COVERED
   (About or the shortcuts card over the panel or the copy dialog; the copy
-  dialog over a focused field), keyboard focus deterministically returns
+  dialog, the export dialog or the Settings dialog over a focused field),
+  keyboard focus deterministically returns
   to the topmost surface's key scope — never a dead keyboard, never keys
   eaten by an invisible editor (pre-fix, closing the panel from the menu
   left focus on NO element, and a modal over a focused field was
@@ -800,7 +842,36 @@ interactive: false }` forwards non-wheel pointer events and handles the
 wheel; a repeated timer re-arms BEFORE its callback runs; `quit_event_loop`
 is a user event that Wayland's loop delivers one dispatch later; a
 Flickable's fling binding survives programmatic sets; the software
-renderer's source offsets are `Fixed<u16, 4>`.
+renderer's source offsets are `Fixed<u16, 4>`; the WINDOW handles `Tab`
+and `Shift+Tab` only after the focused item and every ancestor scope have
+ignored them, and then walks the whole item tree — surfaces hidden behind
+a scrim included — so a dialog that must contain the keyboard accepts
+both in its own scope (`window.rs` `process_key_input`, read 2026-10-01
+for settings.md; the copy and export scopes do not, a recorded gap); a
+focused item that has become invisible loses the keyboard at the next
+key; a `TextInput` ignores `Tab` and `Escape`, which is what lets an
+ancestor scope see them; the built-in `Tooltip` raises its popup 500 ms
+into a hover (`builtins.slint`, `TooltipArea`, not user-facing); a
+`changed` handler fires only when the value differs from the one its
+tracker last stored, so a property that goes A → B → A inside one
+event-loop iteration fires nothing (`properties/change_tracker.rs`, read
+2026-10-01 for settings.md's fields: why they commit only what the user
+typed); a `TextInput` selects all only on a Tab-navigation focus, never on
+a `focus()` from code, and not on Apple targets (`items/text.rs:1180`,
+read 2026-10-01 for
+settings.md's keyboard ring: why the ring selects a number field itself;
+QE D33); the fluent `CheckBox` flips `checked` before it calls `toggled`,
+and a two-way binding carries a synchronous write of the bound property
+straight into the box, so a `toggled` handler that first re-presents
+that property reads the old state (`widgets/fluent/checkbox.slint`, read
+2026-10-02 for settings.md's checkboxes: why they read their state before
+the flush; QE D39); each loop iteration runs the due timers and THEN the
+change trackers before it delivers an `invoke_from_event_loop` closure, so
+what a timer's callback writes is seen by the trackers before a worker's
+completion can overwrite it (`platform.rs` `update_timers_and_animations`,
+the winit backend's `new_events`, read 2026-10-02 for settings.md's Clear
+row: why its `Clearing…` state and disabled button can be proved by their
+own marks).
 
 ## Contracts
 
@@ -815,7 +886,7 @@ renderer's source offsets are `Fixed<u16, 4>`.
   `TRANSIT_BEHIND`/`TRANSIT_AHEAD` 2/8, `MID_RUNG_MAX_LONG` 2048,
   `UPSCALE_THRESHOLD` 1.25, 60 logical px per wheel notch,
   `pointer::OPTIMISTIC_MAX`, `CELL_ASPECT` 3:2, the 300 px panel, the 25 %
-  wash, `#4da3ff`.
+  wash default (a setting since brief 008, settings.md), `#4da3ff`.
 - The marks and dump fields this module emits are test-harness.md's.
 - The keyboard-map table above is parsed by
   `the_shortcuts_card_lists_every_binding_in_the_spec`.
@@ -956,13 +1027,16 @@ renderer's source offsets are `Fixed<u16, 4>`.
       off a tag a `-devel-` suffix is MANDATORY (CI checks out shallow, so
       it is always off-tag), an 8-digit date when present, a bare hex hash
       otherwise — `about_dialog_renders_and_contains_the_keyboard`.
-- [x] No modal scrolls the grid behind it (issue #49) — the two hand-rolled
-      scrims and `ModalScrim`, each test wheeling the grid before, under and
-      after the modal, and over a CHILD of the card —
+- [x] No modal scrolls the grid behind it (issue #49) — the THREE
+      hand-rolled scrims and `ModalScrim`, each test wheeling the grid
+      before, under and after the modal, and over a CHILD of the card —
       `a_wheel_over_the_copy_dialog_never_scrolls_the_grid_behind_it`,
       `a_wheel_over_the_export_dialog_never_scrolls_the_grid_behind_it`,
-      `a_wheel_over_the_help_popups_never_scrolls_the_grid_behind_them`
-      (red with the `scroll-event` arm removed: `vpy=-360` against `-180`).
+      `a_wheel_over_the_help_popups_never_scrolls_the_grid_behind_them`,
+      `a_wheel_over_the_settings_dialog_never_scrolls_the_grid_behind_it`
+      (red with the `scroll-event` arm removed: `vpy=-360` against `-180`;
+      QE 2026-10-01, D27: the Settings scrim had no test and mutant W
+      stayed green).
 - [x] Focus continuity, red-run-verified against the pre-fix build: panel
       close from the menu keeps the keyboard at 1:1 and in the grid; a
       modal over a focused field owns the keyboard and writes nothing; a
@@ -1060,6 +1134,21 @@ renderer's source offsets are `Fixed<u16, 4>`.
 - [x] The shutter fires exactly once per run; the 60 s readiness cap is
       margin again in a debug build — test-harness.md and
       01-architecture.md ("Build profiles").
+- [x] The Failed badge shows its reason on hover and the status line
+      carries it while the cursor stands on the frame (brief 008 R12) —
+      `the_failed_badge_shows_its_reason_on_hover_and_in_the_status_line`
+      (the hover half raised by `hover:failed badge <id>` and read from
+      the `failed tooltip shown:` mark — the popup proved drivable
+      headlessly, so neither half is review-verified; the reason is
+      compared with the pipeline's own for the same bytes, and a click on
+      the badge still reaches the cell under it).
+- [x] `Ctrl+,` opens the Settings dialog, the dialog contains the
+      keyboard like the copy dialog, auto-advance off keeps the cursor
+      and the selection as `U` does — settings.md's AC1, AC2 and AC8 and
+      their tests
+      (`settings_opens_from_the_chord_and_the_menu_and_closes_with_esc_keeping_the_keyboard`,
+      `settings_contains_every_grid_key_and_stacks_under_about`,
+      `auto_advance_off_keeps_the_cursor_and_the_selection_like_u`).
 - RETIRED 2026-09-17 (user decision): the per-release manual acceptance
   (a 5,000-file A1 folder at 60 fps; no perceived latency in the
   pick→auto-advance loop) — never recorded as run; the perf budgets, the
@@ -1067,6 +1156,19 @@ renderer's source offsets are `Fixed<u16, 4>`.
 
 ## History
 
+- 2026-10-02 — Brief 008, QE rounds 4 and 5: the Slint list gains the
+  fluent CheckBox's flip before `toggled` (D39; added by 22cd5cb, which
+  wrote no line here) and a loop iteration's order — the due timers, then
+  the change trackers, then the posted closures (round 5, the Clear row's
+  marks).
+- 2026-10-01 — QE round 2 of brief 008 (D27): the issue #49 box names the
+  Settings dialog's scrim and its test.
+- 2026-10-01 — Brief 008 (issue #39): Settings… enabled with `Ctrl+,`;
+  auto-advance and the wash strength become settings (settings.md); the
+  Failed badge's promised tooltip built and the status line names the
+  reason; FILE MENU and MOUSE swap columns on the card for the new row;
+  the Settings dialog joins the contained modals; the Tab-navigation and
+  tooltip facts added to the Slint list.
 - 2026-09-17 — Rewritten (brief 007); the harness section moved to
   test-harness.md; the manual acceptance retired (the user). One stale
   sentence — that the dialog answer rows report no rectangle — was dropped

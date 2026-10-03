@@ -22,10 +22,36 @@ explain itself on stderr.
   decides what is printed, not what the app observes about itself; every
   test that waits traces anyway, because the failure is a trace line.
 - `FASTCULL_DRIVE="6000:one2one;9000:grid;12000:quit"` — the drive script.
-- `FASTCULL_NO_CONFIG=1` — `ui.toml` (the remembered copy and clip
-  destinations, the template) unreachable for load and save; what
-  `FASTCULL_NO_CACHE=1` does for `previews.db` (app-only; the CLI has
-  `--no-cache`). The screenshot harness sets both unconditionally.
+- `FASTCULL_NO_CONFIG=1` — the whole config dir unreachable for load and
+  save: `ui.toml` (the remembered copy and clip destinations, the
+  template), `templates.toml` and `settings.toml`, through the one
+  resolver `settings::config_dir()`, in the app and the CLI alike (brief
+  008, 2026-10-01; until then it covered `ui.toml` only, and every driven
+  run read the user's real `templates.toml`); what `FASTCULL_NO_CACHE=1`
+  does for `previews.db` (app-only; the CLI has `--no-cache`). The
+  screenshot harness sets both on every run except five, in three tests —
+  the three runs of the test that drives the cache cap and Clear cache
+  (settings.md AC11, AC12; the third a clear made to fail, QE 2026-10-02,
+  round 5), the cache-on run of the Settings card's fit test (settings.md,
+  "The card"; QE 2026-10-01, D38) and the Clear row of the click-away
+  matrix (settings.md AC4; QE 2026-10-02, round 4 D39) — this sentence
+  said "every run but one" until D38, and "three, in two tests" until
+  round 5, the matrix's row uncounted — which run without `FASTCULL_NO_CACHE`,
+  through `shoot_with_sandboxed_cache`, which refuses to start unless
+  `HOME` and `XDG_CACHE_HOME` both point inside the shots dir — so the
+  default cache resolves there, never to the user's; Linux only, Windows'
+  known-folder lookup ignoring the environment (QE 2026-10-01, D24). The
+  Settings dialog still works under `FASTCULL_NO_CONFIG`, in memory, and
+  says `Not saved` (settings.md).
+- `FASTCULL_CONFIG_DIR=<dir>` — the config dir redirected to `<dir>`,
+  winning over `FASTCULL_NO_CONFIG`, for the tests that read or write a
+  config file in a scratch dir (settings.md AC6; corrected 2026-10-02, QE
+  D45 and the senior developer's re-review RR-F6: it said "the driven
+  tests that must prove a file was written", and the read-workers and the
+  templates/ui.toml tests set it to read); announced once on stderr
+  (`fastcull: FASTCULL_CONFIG_DIR=<dir> — settings.toml, ui.toml and
+  templates.toml are read and written there`). Test plumbing in this
+  family, not a setting (brief 008 OQ1).
 - `FASTCULL_KITCHEN_COOK_MS=N` — hold every kitchen cook for N ms before the
   pixel work: the pacing knob for the `open:PATH` session-swap test, which
   must catch the queue mid-flight in both profiles; default 0, off. Announced
@@ -33,7 +59,9 @@ explain itself on stderr.
   stderr when set (`fastcull: FASTCULL_KITCHEN_COOK_MS=N — every texture
   cook is held`); with tracing, the retarget reports how many queued jobs
   it dropped.
-- `FASTCULL_MAX_READERS=N` — the read pool override (raw-pipeline.md).
+- `FASTCULL_MAX_READERS=N` — the read pool override (raw-pipeline.md);
+  wins over the `performance.max_readers` setting, whose field the dialog
+  then shows read-only (settings.md).
 - `--screenshot <out>` — forces the software renderer (`take_snapshot`
   yields black frames on the GPU renderer), so the suite does not exercise
   the shipping femtovg renderer; snapshots are JPEG q92 whatever the
@@ -61,7 +89,11 @@ sidecars — scripts target throwaway copies of test data only.
   toggles: the menu item's `activated` body — the visibility flag plus
   `modal-opened` — and nothing else; they do not force focus and cannot
   exercise the MenuBar's focus restore, which the click-driven tests
-  cover); `resize:WxH` in logical px — a REQUEST, gated with `wait:window
+  cover); `settings` (the Settings dialog's toggle, brief 008: the menu
+  item's body — `settings-open`, which re-reads the file, presents every
+  field and claims the keyboard — when it is closed, `settings-close`
+  when it is open; the same fidelity caveat as `about`); `resize:WxH` in
+  logical px — a REQUEST, gated with `wait:window
   geometry WxH`; `scroll:N` — browse the grid to offset N without claiming
   the cursor, what the wheel does natively; `open:PATH` — the Open Folder
   action minus the native dialog (session swap, kitchen retarget,
@@ -87,7 +119,12 @@ sidecars — scripts target throwaway copies of test data only.
   and scrims are drivable. `click:<element>` — the same click at the CENTRE
   of the rectangle the app last reported for a self-reporting element
   (`iptc field N`, `copy card`, `copy buttons`, `copy answer N|B|O|Esc`,
-  `clip card`, `clip buttons`), resolved at dispatch time from a table the
+  `clip card`, `clip buttons`, and since brief 008 `settings card`,
+  `settings tab general|ui|performance`, `settings auto-advance`,
+  `settings wash`, `settings loupe-memory`, `settings cache-cap`,
+  `settings readers-adaptive`, `settings readers-limit`,
+  `settings clear-cache`, `settings reset`, `settings close`,
+  `failed badge <id>`), resolved at dispatch time from a table the
   layout marks write unconditionally; it echoes `drive ptr click X,Y
   (<element>)`, which a test reads to assert the click landed inside the
   rectangle. A name with no mark yet aborts the run loudly (`drive: click:
@@ -104,7 +141,10 @@ sidecars — scripts target throwaway copies of test data only.
   separately schedulable steps, carrying real inter-event timing, which is
   what makes a drag a drag (the issue #46 fling was one). `press.` dispatches
   a move first; scripts pair press and release themselves — an unpaired
-  press is a stuck button, by design.
+  press is a stuck button, by design. `hover:<element>` — a real pointer
+  MOVE to the centre of a named rectangle, no press, echoing `drive ptr
+  hover X,Y (<element>)`; how a tooltip is raised (brief 008: the Failed
+  badge's), with the same loud abort as `click:` for a name with no mark.
 - `wheel.X,Y,DY` — a real scroll event, `DY` in logical px (60 = one
   notch-equivalent; positive = up), preceded by a move. `delta_x` is always
   0: horizontal scroll is undrivable, and nothing consumes it.
@@ -163,7 +203,63 @@ sidecars — scripts target throwaway copies of test data only.
   is up, the card being centred); `copy answer N|B|O|Esc laid out …`; `copy
   body scrolled to Y` / `clip body scrolled to Y` (0 at the top, negative
   going down, on change); `shortcuts card laid out …`; `status selected
-  laid out …` / `status head laid out …`.
+  laid out …` / `status head laid out …`; since brief 008 `settings card
+  laid out …`, `settings tab <name> laid out …`, `settings <control> laid
+  out …` for every control named under `click:` above, `settings note
+  <name> laid out …` for each row's one-line note (the names below), and
+  `failed badge <id> laid out …` (failed cells only, a handful).
+- **Settings** (brief 008, settings.md): `settings loaded from <path>` /
+  `settings: no file (defaults in force)` / `settings: <path> could not
+  be read: <error>` at startup and at every open — except an open while a
+  write error stands, which reads nothing and traces `settings: not
+  re-read (a write failed and none has succeeded since)` (senior-developer
+  review F5 of brief 008); `settings opened` /
+  `settings closed`; `settings committed <table>.<key> = <value>` then
+  `settings written <path>` or `settings not written: <reason>`;
+  `settings moved aside <path>`; `settings reset <tab>`; `settings
+  wash|loupe-memory|cache-cap|readers-limit shows <text>` whenever a number
+  field's text changes, typed or re-shown — what the field DISPLAYS, where
+  the dump's `wash=`, `loupemem=`, `cachecap=` and `readers=` are the
+  model's (senior-developer review F1 of brief 008); `settings
+  auto-advance|readers-adaptive shows true|false` whenever a checkbox's
+  state changes, clicked or re-presented — what the box SHOWS, where the
+  dump's `autoadvance=` and `readers=` are the model's (QE 2026-10-02,
+  D39); `settings note
+  auto-advance|wash|loupe-memory|cache-cap|readers|clear-cache shows
+  <text>` from each note Text itself, when the dialog creates it and
+  whenever its text changes — what the note says, never what the bridge
+  meant it to (QE 2026-10-01, D22) — and `settings note readers-env shows
+  <text>` likewise from the read workers row's environment line, which
+  exists only while `FASTCULL_MAX_READERS` governs the row (QE 2026-10-02,
+  round 5); `settings cache clearing` when the
+  row turns to `Clearing…` and `settings cache cleared <before> ->
+  <after>` (bytes) when the worker is done (QE 2026-10-01, D24); between
+  the two, from the worker itself, `settings cache clear ran on <thread>`
+  — the thread's own name, `settings-clear` (QE 2026-10-02, round 5);
+  `settings cache readout shows <text>` from the Thumbnail cache row's
+  Text and `settings clear-cache enabled true|false` from the Clear
+  button, each when the dialog creates it and whenever it changes — what
+  the row SAYS (`Clearing…`, then the re-measured size or the failure)
+  and whether Clear is offered, where the dump's `cachereadout=` is the
+  bridge's (QE 2026-10-02, round 5); `loupe
+  engine started budget <bytes>` at every folder open — the budget the engine ADOPTED
+  (`LoupeEngine::budget()`, floored), the proof that the loupe memory
+  setting reached the engine (QE 2026-10-01, D23); `read pool started
+  floor <F> cap <C>` at every folder open — the bounds the read pool
+  ADOPTED (`Pipeline::read_pool_bounds()`), the proof that the read workers
+  setting reached the pool (QE 2026-10-01, D27); a launch folder's own
+  open emits both before `harness::install`, so a `wait:` on either needs
+  an `open:`; `failed tooltip shown: <reason>` when the Failed badge's
+  tooltip popup is instantiated.
+- **Config reads** (brief 008 D11; QE 2026-10-01, D37): `templates loaded
+  from <path>` / `templates: <path> could not be read: <error>` at every
+  `templates.toml` read (the IPTC panel's open, every folder open; a missing
+  file loads empty, so it is "loaded from" too), and `ui prefs read from
+  <path>` at every `ui.toml` read (the copy and export dialogs, and the
+  read half of each save) — each built from the very path the read used,
+  so a driven run sees that both files go through the one config-dir
+  resolver; under `FASTCULL_NO_CONFIG` there is no path, no read and no
+  mark.
 - **`load settled gen N: cursor pos P, `** — the CONTRACTUAL PREFIX, the
   whole substring a `wait:` registers; the tail differs by zoom and is
   free to (the scroll correction above one column; `scroll X kept (one
@@ -192,12 +288,27 @@ sidecars — scripts target throwaway copies of test data only.
   and process exit never trace it (xmp-sidecars.md).
 - **Focus**: `focus: <what> gained|lost` from the `changed has-focus`
   handlers of the main scope (`keys`), each `iptc field N`, the keyword
-  field, `copy dialog` and `clip dialog` — a `gained` with no matching
-  `lost` from the previous holder is the dangling-weak signature;
+  field, `copy dialog`, `clip dialog`, and since brief 008 `settings
+  dialog` and `settings strip` — a `gained` with no matching `lost` from
+  the previous holder is the dangling-weak signature. `settings dialog` is
+  the Settings dialog's own scope: `gained` when a press on the scrim, or
+  on the card outside any control, hands it the keyboard (a FocusScope
+  takes focus on a click), `lost` when the keyboard moves on from there.
+  `settings strip` is its tab strip: `lost` when a control or the scope
+  takes the keyboard and when the dialog closes, `gained` when the
+  keyboard comes back to it from elsewhere in the dialog (a tab switch
+  from a control, `Tab`/`Shift+Tab` round the ring) — NEVER at the open
+  itself, though that is where the keyboard lands: the open's claim is
+  made in the dialog's `init`, before the strip's tracker exists, so the
+  landing is the tracker's baseline (Cargo.toml's second canary, fact 5),
+  and a test proves it by `focusowner=-1` and a `key:right` that switches
+  tabs (corrected 2026-10-01, senior-developer review F3: this sentence
+  said both marks fired where the keyboard lands on open);
   `focus-keys (<reason>)` — a claim was MADE, tagged at every call site:
   `swap`, `panel-open`, `panel-close`, `modal`, `rebuild`, `deferred` (a
   queued claim has ARRIVED — not the same event as its queuing),
-  `copy-dialog`, `clip-dialog`, `cell-click`, `fit-click`, `overlay-click`,
+  `copy-dialog`, `clip-dialog`, `settings-dialog`, `settings-close`,
+  `cell-click`, `fit-click`, `overlay-click`,
   `template-apply`, `revert`, `field-clear`, `field-accepted`,
   `keyword-removed`, `keyword-accepted`, `keyword-init`, `keyword-watch`,
   the two behind-a-cover bounces, `row N (gen K)` (the rebuild reclaim; K is
@@ -248,8 +359,18 @@ line, the last surviving into the report), `copyerror=`; the clip block —
 `cliperror=`, `clipreport=`, `clipconfirm=`, `clipprogress=` (the export's
 running line, the twin of `copyprogress=`), `cliphint=`, `exported=`,
 `curexported=`; and `vpy=`, the grid Flickable's offset in Slint's sign (0
-at the top, negative going down). New fields are APPENDED; `dump_field`
-finds `name=` by prefix.
+at the top, negative going down); then the settings block (brief 008) —
+`settings=` (the dialog's visibility), `settingstab=` (0 General, 1 UI, 2
+Performance), `settingsfile=` (the path, or `none`), `settingsnote=` (the
+dialog's notice line), `autoadvance=`, `wash=` (the model's percent),
+`washprop=` (the WINDOW's `selection-wash-opacity`, `{:.3}` — the field
+that proves a commit reached the renderer, not the model),
+`loupemem=` (bytes in force), `loupehint=` (the hint text), `cachecap=`
+(bytes), `readers=` (`adaptive`, `limit:N` or `env:N`), `readersenv=`
+(the variable's raw value or empty), `cachereadout=` (the row's text).
+New fields are APPENDED; `dump_field` finds `name=` by prefix. The
+nav-token swallow mirror (`drive swallowed by modal`) covers the Settings
+dialog like About and the card.
 
 ### The shutter
 
@@ -358,6 +479,29 @@ shot 2.
 
 ## History
 
+- 2026-10-02 — QE round 5 of brief 008: `settings cache clear ran on
+  <thread>`, `settings cache readout shows`, `settings clear-cache
+  enabled`; the cache test's third run, and the run count corrected to
+  five in three tests (the matrix's Clear row had gone uncounted).
+- 2026-10-02 — QE round 5 of brief 008: `settings note readers-env shows`,
+  the environment's line on the read workers row.
+- 2026-10-02 — QE round 4 of brief 008 (D45; re-review RR-F6):
+  `FASTCULL_CONFIG_DIR` is for every test that reads or writes a config
+  file, as settings.md AC6 already said.
+- 2026-10-02 — QE round 4 of brief 008 (D39): `settings
+  auto-advance|readers-adaptive shows`, what a checkbox shows (added with
+  the checkboxes' fix, 22cd5cb; this line follows it).
+- 2026-10-01 — QE round 3 of brief 008 (D38): a second run with the cache
+  on, the Settings card's fit with a long cache path.
+- 2026-10-01 — QE round 3 of brief 008 (D37): `templates loaded from`,
+  `templates: … could not be read`, `ui prefs read from` — the config reads
+  name the path they used.
+- 2026-10-01 — QE round 2 of brief 008 (D27): `read pool started floor F
+  cap C`, the read pool's adopted bounds, at every folder open.
+- 2026-10-01 — Brief 008: `FASTCULL_NO_CONFIG` covers the whole config dir
+  (`templates.toml` and `settings.toml` too); `FASTCULL_CONFIG_DIR`; the
+  `settings` and `hover:` tokens; the settings and failed-badge marks and
+  the settings dump block.
 - 2026-09-17 — Moved out of ui-grid.md and reshaped (brief 007). The
   section as moved, with every measurement, is
   `specs/history/test-harness.md`.

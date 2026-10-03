@@ -13,7 +13,10 @@ build's menu bar ever looks empty on a light desktop).
    is still loading* below for the one exception.
 2. Click the **Unmarked** filter chip (or leave **All** on).
 3. Walk with the arrows. `Y` picks, `N` rejects — both auto-advance to
-   the next frame. `U` clears a mark (and doesn't advance).
+   the next frame. `U` clears a mark (and doesn't advance). (Auto-advance
+   is a setting — **File › Settings… › General**, or `Ctrl+,` — if you
+   would rather stay on the frame you just marked; see
+   [Settings](settings.md).)
 4. When the Unmarked view is empty, you're done — the empty-state
    message shows your final counts.
 
@@ -33,10 +36,15 @@ In the order the in-app card lists them, reading down its left column and then i
 | `[` / `]` | previous / next burst (see below) — ends any selection |
 | `G` | back to the grid at your previous grid zoom, selection kept — *at a grid zoom it clears the selection instead* |
 | `Esc` | back to the grid, **and the selection is cleared** — from anywhere but a text field |
-| `Y`, `P` or `Space` | pick (auto-advances) |
-| `N` or `X` | reject (auto-advances) |
+| `Y`, `P` or `Space` | pick (auto-advances — a setting) |
+| `N` or `X` | reject (auto-advances — a setting) |
 | `U` | clear mark (stays put) |
 | `1`–`5`, `0` | reserved for star ratings (v2) — they do nothing yet |
+| `Ctrl+O` | Open Folder… |
+| `Ctrl+E` | Copy Picks… |
+| `Ctrl+Shift+E` | Export Frames as Video… |
+| `Ctrl+,` | Settings… |
+| `Ctrl+Q` | quit |
 | `+` / `-` | zoom in / out, one stop: grid columns → loupe fit → ×1.5 steps → 1:1 |
 | `Z` | fit → 1:1; from 1:1 *or any zoom* → back to fit (from the grid: straight to 1:1) |
 | Shift+arrows | extend the selection — Shift+PgUp/PgDn and Shift+Home/End extend the same way |
@@ -47,16 +55,12 @@ In the order the in-app card lists them, reading down its left column and then i
 | Ctrl+Space | add or remove the photo under the cursor |
 | `I` | IPTC panel |
 | `K` | jump to the keyword field (opens the panel if needed) |
-| `Ctrl+O` | Open Folder… |
-| `Ctrl+E` | Copy Picks… |
-| `Ctrl+Shift+E` | Export Frames as Video… |
-| `Ctrl+Q` | quit |
 | `?` or `F1` | the shortcuts card — press either again to close it |
 
 The same map lives in **Help > Keyboard Shortcuts** inside the app — or
 press **`?`** (or `F1`), which is quicker and does not need the mouse. The
-card groups these under MOVE, MARK and MOUSE down the left and ZOOM,
-SELECT, PANELS and FILE MENU down the right, with every key in one aligned
+card groups these under MOVE, MARK and FILE MENU down the left and ZOOM,
+MOUSE, SELECT and PANELS down the right, with every key in one aligned
 column so you can run your eye down them; `Esc`, `?`, `F1` or a click
 anywhere closes it. On Windows those menus are the system menu bar Windows
 draws for the window, not a bar inside it — the same menus either way.
@@ -293,15 +297,18 @@ with nothing selected, the burst under the cursor is the selection.
 
 **Marks are not batched.** `Y`, `N` and `U` always act on the single photo
 under the cursor, even with fifty photos selected — one keystroke, one
-photo (`Y`/`N` then advance; `U` stays put, as everywhere else). That's
-deliberate: marking is a one-at-a-time rhythm, and there is no sensible
-place to advance to after marking fifty frames at once.
+photo (`Y`/`N` then advance; `U` stays put, as everywhere else — and with
+auto-advance turned off in [Settings](settings.md), `Y`/`N` stay put
+too). That's deliberate: marking is a one-at-a-time rhythm, and there is
+no sensible place to advance to after marking fifty frames at once.
 
 A plain click **clears** the selection outright — the tint disappears and
 the `· N selected` counter goes with it, leaving you on the photo you
 clicked. **So does any plain move**: an arrow, PgUp/PgDn, Home/End,
 `[`/`]`, and the advance after `Y`/`N` all end the selection and leave you
-on one photo, the way a file manager does. To walk *without* dropping it,
+on one photo, the way a file manager does (with auto-advance off, `Y`/`N`
+do not move and leave the selection alone, like `U`). To walk *without*
+dropping it,
 hold Ctrl — Ctrl+arrows (and Ctrl+PgUp/PgDn/Home/End, Ctrl+`[`/`]`) move
 the cursor with the selection kept — and Ctrl+Space adds or removes the
 photo under the cursor. A Shift+arrow span that starts after a plain move
@@ -312,8 +319,9 @@ loupe as well, where nothing is tinted — and it is the clear that leaves
 the cursor where it is. Two places `Esc` does something else first: while
 you are typing in an IPTC field it does nothing (click the grid or press
 `Tab` out first), and while a dialog is open — Copy Picks, Export Frames
-as Video, About, the shortcuts card — the first `Esc` closes the dialog
-and the selection survives it; the next `Esc`, on the grid, clears it.
+as Video, Settings, About, the shortcuts card — the first `Esc` closes
+the dialog and the selection survives it; the next `Esc`, on the grid,
+clears it.
 `G` from the loupe keeps the selection (so you can go back to the grid
 and look at it — the first plain move there ends it); at a grid zoom `G`
 clears it like `Esc`. `U` leaves the selection alone: it clears a mark
@@ -345,10 +353,10 @@ You never have to zoom out to check a frame's state:
   one. An unmarked frame shows no badge — and the **status bar always
   spells it out** (`· ★ picked / · ✕ rejected / · unmarked`), so
   "no badge" is never ambiguous.
-- The badge always belongs to the frame on screen. Auto-advance means
-  the frame you just marked is one step behind you; when you arrow
-  back to compare candidates in a burst, the badge tells you instantly
-  which one you already took.
+- The badge always belongs to the frame on screen. Auto-advance (on
+  unless you turned it off in Settings) means the frame you just marked
+  is one step behind you; when you arrow back to compare candidates in a
+  burst, the badge tells you instantly which one you already took.
 - A rejected frame is **never dimmed in the loupe** (unlike its grid
   thumbnail): if you're reconsidering a reject, you get full
   brightness to judge it.

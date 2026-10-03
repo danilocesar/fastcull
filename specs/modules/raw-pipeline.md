@@ -131,9 +131,19 @@ BACKLOG workers and one FOCUS-RESERVED lane.
   since transit never escalates a target, and a trap for any future
   widening. A dropped upgrade loses nothing: the next refresh re-requests
   it (`focus()` at the loupe, `want()`/`ensure()` for grid cells).
-- A byte-budget LRU (default 2 GiB) evicts the least recently focused
-  images, never the focused one. The app's view-distance eviction of
-  full-res TEXTURES is `transit::evict_fullres` (ui-grid.md).
+- A byte-budget LRU (the loupe memory setting, default 2 GiB, floored at
+  `BUDGET_FLOOR_BYTES`, 200 MB — settings.md) evicts the least recently
+  focused images, never the focused one. The app's view-distance eviction
+  of full-res TEXTURES is `transit::evict_fullres` (ui-grid.md).
+- A ring member evicted to make room for another is not re-requested while
+  the focus rests on the same frame and its target does not grow: each
+  member is decoded at most once per settled focus, and a step or a bigger
+  target asks for the new window whole. So a budget smaller than the
+  ±`PREFETCH` window (five A1 frames, ~712 MB — 0.7 GB in the app's binary
+  units) costs a re-decode on the next step, never a loop while the user is
+  idle (QE 2026-10-01, D1; brief 008 D20; the window's size corrected
+  2026-10-01, QE D30 — it read ~746 MB, decimal megabytes, where the app's
+  byte formatter and settings.md's GB are binary).
 - turbojpeg DCT scaling is a recorded future optimization only (~35–45 %
   off the cook; the ladder already hides that latency).
 - The lane's three rules each answer a starvation that shipped once: a
@@ -290,7 +300,16 @@ medium's measured behaviour:
   32 cores — useful for saturating a high-latency NAS, self-inflicted
   otherwise). An env var, not a CLI flag, so the app and the CLI honour the
   same knob; unset is fully adaptive (`FASTCULL_NO_CACHE`, by contrast, is
-  app-only; the CLI has `--no-cache`).
+  app-only; the CLI has `--no-cache`). Since 2026-10-01 the same knob is
+  also the `performance.max_readers` setting (settings.md, brief 008): a
+  limit N in the file means exactly `FASTCULL_MAX_READERS=N`, 0 is
+  adaptive, the variable wins over the file, an unparsable variable is
+  ignored, and `settings::resolve_max_readers` is the one place the two
+  are reconciled — both binaries reach it through
+  `settings::resolve_max_readers_from_env`, which hands it the process's
+  environment (QE 2026-10-02, round 5, SC-7) — before `Pipeline::start`
+  receives the pool's override; the pool itself no longer reads the
+  environment.
 - Every limit change is logged to stderr, the diagnostics channel:
   `fastcull: read pool N -> M workers (probe read X ms | read stalled for
   X ms; K reading)`, K being the reads actually in flight. Steady state
@@ -322,18 +341,35 @@ medium's measured behaviour:
 - Thumbs: unbounded (≈ 200 KB each; 5,000 images ≈ 1 GB worst case —
   acceptable; the SQLite cache lets us evict and reload cheaply if this
   ever pinches; issue #2 is the residency-window request).
-- Full-res decodes: the engine's byte-budget LRU, 2 GiB by default;
-  mid-rung textures count toward it.
+- Full-res decodes: the engine's byte-budget LRU — the
+  `performance.loupe_memory` setting, 2 GiB by default, a GB figure or a
+  share of total RAM, floored at `loupe::BUDGET_FLOOR_BYTES` (200 MB) and
+  capped at total RAM, handed to `LoupeEngine::start` at the next folder
+  open (settings.md; brief 008, 2026-10-01 — "configurable" was a promise
+  with no path until then, and the budget was `DEFAULT_BUDGET_BYTES` at
+  every start); mid-rung textures count toward it. The app's footprint
+  runs 1–2 GB above the budget because textures sit outside it (issue #3,
+  2026-07-31), which the setting's note says.
 
 ## Contracts
 
 - `LoupeEngine`: `focus(index, display_long)`, `want(range, cell_width)`,
-  `set_view` (deferred revival is internal); events `Ready` (with the `terminal` flag)
+  `set_view` (deferred revival is internal), `budget()` (the budget the
+  engine adopted, floored — what the app's `loupe engine started budget`
+  mark reports); events `Ready` (with the `terminal` flag)
   and `Failed`; constants `PREFETCH = 2`, `TRANSIT_BEHIND = 2`,
   `TRANSIT_AHEAD = 8`, `FOCUS_DEBOUNCE` (~250 ms), `MID_RUNG_MAX_LONG =
   2048`, `UPSCALE_THRESHOLD = 1.25`.
 - `loupe::decode_oriented` is the perf-budget target; `raw/mod.rs` holds
-  `MAX_EMBEDDED_JPEG_LEN`, `MAX_DECODED_PIXELS` and `GRID_SOURCE_MAX_PIXELS`.
+  `MAX_EMBEDDED_JPEG_LEN`, `MAX_DECODED_PIXELS` and `GRID_SOURCE_MAX_PIXELS`;
+  `loupe::DEFAULT_BUDGET_BYTES` and `loupe::BUDGET_FLOOR_BYTES` are the
+  loupe memory setting's default and floor (settings.md).
+- `Pipeline::start(jobs, cache_path, threads, max_readers: Option<usize>)`
+  — the fourth argument is the resolved read-pool override, `None` for
+  adaptive (brief 008; the pool read `FASTCULL_MAX_READERS` itself until
+  2026-10-01). `Pipeline::read_pool_bounds() -> (floor, cap)` reports the
+  bounds the pool ADOPTED from it — what the app's `read pool started` mark
+  reads (QE 2026-10-01, D27).
 - `ExifSummary` (`exif.rs`): make, model, serial, capture time, subsec, the
   Sony sequence number; `sort_key()` normalizes subseconds to three digits.
 - The budget rows of 01-architecture.md bind this module: open+EXIF < 1 ms,
@@ -377,6 +413,13 @@ medium's measured behaviour:
 - [x] `set_visible` promotion: with a saturated queue a newly visible
       image's thumb arrives before ≥ 90 % of background items —
       `tests/pipeline.rs::promoted_jobs_finish_before_background_bulk`.
+- [x] **A budget below the prefetch window goes quiet** — settled at 512
+      MiB (three A1 frames against a window of five), each frame of the
+      window is decoded once and an idle engine decodes nothing more; a
+      step asks for the new window whole, the frames the budget evicted
+      included, each once — `tests/loupe.rs::a_budget_below_the_prefetch_window_goes_quiet_when_idle`
+      (the app's refresh simulated: a re-focus on every landing),
+      `loupe::tests::a_frame_evicted_under_a_settled_focus_waits_for_the_next_step`.
 - [x] The budgets of 01-architecture.md are enforced by release-mode tests —
       `tests/perf_budgets.rs`: `budget_open_exif_under_1ms`,
       `budget_grid_thumb_under_25ms`, `budget_fullres_decode_under_350ms`,
@@ -408,6 +451,24 @@ medium's measured behaviour:
 
 ## History
 
+- 2026-10-02 — QE round 5 of brief 008 (SC-7): the override paragraph
+  names the wrapper both binaries call, `resolve_max_readers_from_env`,
+  beside the pure function it calls.
+- 2026-10-01 — QE round 2 of brief 008 (D30): the prefetch window's size
+  in the ring's budget rule is given in the app's binary units, ~712 MB,
+  where it gave ~746 decimal megabytes.
+- 2026-10-01 — QE round 2 of brief 008 (D27): `Pipeline::read_pool_bounds()`
+  reports the read pool's adopted bounds, so a test can see the read
+  workers setting reach the pool rather than the caller's copy of it.
+- 2026-10-01 — QE round 1 of brief 008 (D1): a budget below the prefetch
+  window looped at 1:1 — every landing evicted a ring member that the
+  app's re-focus asked for again — once the loupe memory setting let a
+  budget that small through; an evicted member now waits for the next step
+  (brief 008 D20). `LoupeEngine::budget()` reports the adopted budget (D23).
+- 2026-10-01 — Brief 008: the loupe budget and the read-pool override
+  become settings (settings.md); `Pipeline::start` takes the resolved
+  override and the pool stops reading the environment; `BUDGET_FLOOR_BYTES`
+  named.
 - 2026-09-17 — Rewritten (brief 007); the seven M1-era boxes had been
   ticked the same day against the tests that hold them. The old text's
   "decoded with turbojpeg" for the full-res source was wrong — zune-jpeg

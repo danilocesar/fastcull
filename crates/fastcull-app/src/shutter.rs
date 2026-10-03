@@ -112,7 +112,7 @@ pub(crate) fn arm(
                     let fit = !at_loupe
                         || st.session.synthetic
                         || st.grid.view.is_empty()
-                        || st.textures.failed.contains(&st.grid.cursor)
+                        || st.textures.failed.contains_key(&st.grid.cursor)
                         || st
                             .textures
                             .fullres

@@ -138,20 +138,43 @@ fn load_folder(state: &Rc<RefCell<AppState>>, folder: &std::path::Path) -> Resul
     let (writer, errs) = fastcull_core::sidecar_writer::SidecarWriter::start();
     st.session.writer = Some(writer);
     st.session.sidecar_errs = Some(errs);
+    // The three Performance settings apply HERE, at every folder open
+    // (settings.md: "applies at the next folder open"): the cache cap the
+    // default cache is trimmed to, the read pool's override with the
+    // environment winning over the file, and the loupe's memory budget.
+    let settings = st.settings.current().clone();
     // FASTCULL_NO_CACHE: hermetic test runs must not touch the user's
     // real per-user cache DB (validator/QE finding).
     let cache_path = if std::env::var_os("FASTCULL_NO_CACHE").is_some() {
         None
     } else {
-        fastcull_core::cache::default_cache_path()
+        fastcull_core::cache::default_cache_path(settings.cache_cap_bytes())
     };
     let (pipeline, rx) = Pipeline::start(
         jobs,
         cache_path,
         std::thread::available_parallelism().map_or(4, |n| n.get()),
+        fastcull_core::settings::resolve_max_readers_from_env(settings.max_readers)
+            .override_for_pool(),
     );
-    let (loupe, loupe_rx) =
-        fastcull_core::loupe::LoupeEngine::start(paths, fastcull_core::loupe::DEFAULT_BUDGET_BYTES);
+    // The proof the read workers setting reached the read pool
+    // (test-harness.md): a driven test waits on these exact bounds. Read
+    // back FROM the pipeline, never from the override passed above — a mark
+    // built from the caller's own value stays true with the pool started on
+    // anything else, as the loupe's did (QE 2026-10-01, D27; brief 008 D23).
+    let (floor, cap) = pipeline.read_pool_bounds();
+    crate::trace::trace_mark(&format!("read pool started floor {floor} cap {cap}"));
+    let (budget, _) = settings.loupe_memory_bytes(st.settings.total_ram);
+    let (loupe, loupe_rx) = fastcull_core::loupe::LoupeEngine::start(
+        paths,
+        usize::try_from(budget).unwrap_or(usize::MAX),
+    );
+    // The proof the loupe memory setting reached the engine
+    // (test-harness.md): a driven test waits on this exact budget. Read
+    // back FROM the engine, never from `budget` above — a mark built from
+    // the local stayed true with the engine started on the default (QE
+    // 2026-10-01, brief 008 D23).
+    crate::trace::trace_mark(&format!("loupe engine started budget {}", loupe.budget()));
     st.session.pipeline = Some(pipeline);
     st.loupe_view.engine = Some(loupe);
     st.session.pipeline_rx = Some(rx);
@@ -290,6 +313,14 @@ pub(crate) fn open_folder_at(
 /// Re-read templates.toml (session open + panel toggle = the spec's
 /// read-on-open live-reload). Parse errors and CLEAR warnings both land in
 /// the panel warning strip.
+///
+/// The marks name the file this read used, from the very `path` it read
+/// (test-harness.md): the proof that templates.toml goes through core's one
+/// config-dir resolver, which a driven run could not otherwise see — the
+/// real config dir is empty on every seat, so a read of the per-user dir
+/// looked exactly like a hermetic one (QE 2026-10-01, D37). A missing file
+/// is an empty load, so it is "loaded from" too; under FASTCULL_NO_CONFIG
+/// there is no path and no mark.
 pub(crate) fn reload_templates(st: &mut AppState) {
     st.session.templates.clear();
     st.session.template_warnings.clear();
@@ -298,27 +329,35 @@ pub(crate) fn reload_templates(st: &mut AppState) {
     };
     match fastcull_core::iptc::load_templates(&path) {
         Ok(load) => {
+            crate::trace::trace_mark(&format!("templates loaded from {}", path.display()));
             st.session.templates = load.templates;
             st.session.template_warnings = load.entry_errors;
             st.session.template_warnings.extend(load.warnings);
         }
-        Err(e) => st.session.template_warnings.push(e.to_string()),
+        Err(e) => {
+            let error = e.to_string();
+            crate::trace::trace_mark(&format!(
+                "templates: {} could not be read: {}",
+                path.display(),
+                error.lines().next().unwrap_or("")
+            ));
+            st.session.template_warnings.push(error);
+        }
     }
 }
 
 /// Remembered UI preferences (fileops.md: destination and rename template
 /// survive across sessions). Tiny TOML in the fastcull config dir.
+///
+/// The directory is core's one resolver for every config file
+/// (`settings::config_dir`, brief 008 D11), and FASTCULL_NO_CONFIG is
+/// honoured there: hermetic test runs must never read or write the user's
+/// real ~/.config/fastcull/ui.toml (issue #13 gap, found by the issue #41
+/// sweep: a driven copy dialog displayed the user's real remembered
+/// destination — FASTCULL_NO_CACHE sandboxes only the cache). Gating the
+/// PATH covers both load and save in one place.
 fn ui_prefs_path() -> Option<std::path::PathBuf> {
-    // FASTCULL_NO_CONFIG: hermetic test runs must never read or write the
-    // user's real ~/.config/fastcull/ui.toml (issue #13 gap, found by the
-    // issue #41 sweep: a driven copy dialog displayed the user's real
-    // remembered destination — FASTCULL_NO_CACHE sandboxes only the
-    // cache). Gating the PATH covers both load and save in one place.
-    if std::env::var_os("FASTCULL_NO_CONFIG").is_some() {
-        return None;
-    }
-    let dirs = directories::ProjectDirs::from("org", "fastcull", "fastcull")?;
-    Some(dirs.config_dir().join("ui.toml"))
+    fastcull_core::settings::config_dir().map(|dir| dir.join("ui.toml"))
 }
 
 /// The remembered preferences as they are on disk, or an empty table.
@@ -327,9 +366,18 @@ fn ui_prefs_path() -> Option<std::path::PathBuf> {
 /// preference one dialog never touches survives the other dialog saving
 /// (the video export's `clip_dest` used to be erased by any Copy Picks
 /// save, because that path rebuilt the whole file from two keys).
+///
+/// The mark names the file this read used, from the very `path` it reads
+/// (test-harness.md; QE 2026-10-01, D37 — as for templates.toml in
+/// [`reload_templates`]); under FASTCULL_NO_CONFIG there is no path, no
+/// read and no mark.
 fn read_ui_prefs() -> toml::Table {
-    ui_prefs_path()
-        .and_then(|p| std::fs::read_to_string(p).ok())
+    let Some(path) = ui_prefs_path() else {
+        return toml::Table::new();
+    };
+    crate::trace::trace_mark(&format!("ui prefs read from {}", path.display()));
+    std::fs::read_to_string(&path)
+        .ok()
         .and_then(|c| c.parse().ok())
         .unwrap_or_default()
 }

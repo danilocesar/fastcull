@@ -80,6 +80,7 @@ const CARD_ROWS_FOR: &[(&str, &[&str])] = &[
         "`Ctrl+Shift+E` (menu: Export Frames as Video…)",
         &["Ctrl+Shift+E"],
     ),
+    ("`Ctrl+,`", &["Ctrl+,"]),
     ("`?` / `F1`", &[]),
     ("`1`–`5`, `0`", &["1–5, 0"]),
 ];

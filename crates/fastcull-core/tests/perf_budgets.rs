@@ -273,7 +273,7 @@ fn budget_pipeline_throughput_over_60_per_sec() {
         .collect();
     let total = jobs.len();
     let t = Instant::now();
-    let (pipeline, rx) = Pipeline::start(jobs, None, threads);
+    let (pipeline, rx) = Pipeline::start(jobs, None, threads, None);
     let mut done = 0;
     while done < total {
         match rx.recv_timeout(Duration::from_secs(60)).unwrap() {

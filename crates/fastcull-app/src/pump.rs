@@ -76,8 +76,10 @@ pub(crate) fn start(window: &MainWindow, state: &Rc<RefCell<AppState>>) -> slint
                                 // read already happened (issue #50).
                                 trace_mark_with(|| format!("thumb bytes idx {index}"));
                             }
-                            SessionEvent::Failed { index, .. } => {
-                                st.textures.failed.insert(index);
+                            SessionEvent::Failed { index, reason } => {
+                                // The reason rides to the badge's tooltip and
+                                // the status line (ui-grid.md, brief 008 R12).
+                                st.textures.failed.entry(index).or_insert(reason);
                                 st.session.thumbs_done += 1;
                                 dirty = true;
                             }
@@ -321,8 +323,10 @@ pub(crate) fn start(window: &MainWindow, state: &Rc<RefCell<AppState>>) -> slint
                                 }
                                 dirty = true;
                             }
-                            fastcull_core::loupe::LoupeEvent::Failed { index, .. } => {
-                                st.textures.failed.insert(index); // badge; core won't retry
+                            fastcull_core::loupe::LoupeEvent::Failed { index, reason } => {
+                                // Badge; core won't retry. A thumb failure
+                                // that came first keeps its reason.
+                                st.textures.failed.entry(index).or_insert(reason);
                                 dirty = true;
                             }
                         }
