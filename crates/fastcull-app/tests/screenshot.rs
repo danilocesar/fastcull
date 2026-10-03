@@ -9952,8 +9952,8 @@ const PIN_WINDOW: &str = "200:resize:1440x900";
 /// card of height H spans y `40 + (834 - H) / 2` .. that plus H:
 /// Copy Picks (480) y 217..697, the export dialog (260) y 327..587,
 /// the shortcuts popup (549) y 182..731, About (348) y 283..631, and the
-/// Settings dialog on General (266, content-driven, measured 2026-10-01)
-/// y 324..590.
+/// Settings dialog (506 on every tab — one height per open, its tallest
+/// tab's, brief 009; measured 2026-10-03) y 204..710.
 /// Cards are 560 px wide, 480 for About, and 780 for the shortcuts popup,
 /// centred in 1440.
 ///
@@ -10294,8 +10294,10 @@ fn a_wheel_over_the_help_popups_never_scrolls_the_grid_behind_them() {
 }
 
 /// The centre of the Settings dialog's wash field on its UI tab at the
-/// pinned 1440x900: `settings wash laid out at 630,433 size 80x32`,
-/// measured on this seat (Noto Sans, 2026-10-01). The x is arithmetic — the
+/// pinned 1440x900: `settings wash laid out at 630,313 size 80x32`,
+/// measured on this seat (Noto Sans, 2026-10-03; it was 630,433 until brief
+/// 009 gave the card one height per open, its tallest tab's, which put the
+/// card's top 120 px higher on every tab). The x is arithmetic — the
 /// 560 px card centred in 1440, then the padding and the 160 px label
 /// column — but the y sits under the title and the tab strip, whose heights
 /// are font metrics: the strand that uses this runs only where
@@ -10303,7 +10305,7 @@ fn a_wheel_over_the_help_popups_never_scrolls_the_grid_behind_them() {
 /// before it wheels that the point really is on the field. The wheel has no
 /// by-name token; this is the only coordinate the test needs, and the
 /// click at it is that check, not a way to reach a named control.
-const SETTINGS_WASH_FIELD: (u32, u32) = (670, 449);
+const SETTINGS_WASH_FIELD: (u32, u32) = (670, 329);
 
 /// The Settings dialog, the fifth scrim (ui-grid.md: "ALL FIVE scrims
 /// swallow the wheel"; issue #49): a wheel over the card's centre, over bare
@@ -10312,8 +10314,9 @@ const SETTINGS_WASH_FIELD: (u32, u32) = (670, 449);
 /// `--synthetic 300` for the copy test's reason: the contract is about the
 /// scrim, and 300 cells leave the grid room to scroll. At 1440x900 the card
 /// is centred in the area under the menu bar (`settings card laid out at
-/// 440,324 size 560x266` on General, measured here), so (700,400) is on the
-/// card and (100,400) is bare scrim whatever the face.
+/// 440,204 size 560x506` on every tab since brief 009, the notice line
+/// reserved — measured here), so (700,400) is on the card and (100,400) is
+/// bare scrim whatever the face.
 ///
 /// The child strand is the copy test's rename-field shape, gated for its
 /// reason (the field's y is a font metric): UI tab, a click at the field's
@@ -14355,7 +14358,11 @@ fn settings_over_a_focused_keyword_field_commits_it_and_owns_the_keyboard() {
 /// FASTCULL_MAX_READERS note on the read workers row, a read error's whole
 /// text on the notice line and, with the cache on, the Thumbnail cache row
 /// showing a long path in full — fits whole in the smallest supported
-/// window, 1000x700 (ui-grid.md). Measured as SLACK, never as a height: the
+/// window, 1000x700 (ui-grid.md). Since brief 009 the card has one height
+/// per open, its tallest tab's (settings.md, "The card holds still"), so
+/// this "tallest state" is every tab's state: the run still opens on
+/// Performance, where the long cache row lives, and the fit it measures
+/// holds on every tab (AC20). Measured as SLACK, never as a height: the
 /// card is `min(content, layer − 40)`, so a clamped card sits exactly 20 px
 /// above the modal layer's floor (the status bar's top, `window − 26`) and an
 /// unclamped one more; Close and Reset lie inside the card. The slack is
@@ -14519,16 +14526,1030 @@ fn the_settings_card_fits_its_smallest_window_in_its_tallest_state() {
     std::fs::remove_dir_all(&dir).ok();
 }
 
+/// How many marks whose label starts with `mark` lie in `labels[from..to]`
+/// — a stretch of [`mark_labels`] between two anchors the caller located.
+/// Counted as emitted lines: a relayout of the Settings card emits its mark
+/// twice (`changed absolute-position` and `changed height`), so a count is
+/// a count of layouts plus their echoes, never a substring tally.
+fn marks_between(labels: &[&str], from: usize, to: usize, mark: &str) -> usize {
+    labels[from..to]
+        .iter()
+        .filter(|l| l.starts_with(mark))
+        .count()
+}
+
+/// Where each `label` sits in [`mark_labels`], in order — the anchors of
+/// [`marks_between`].
+fn label_positions(labels: &[&str], label: &str) -> Vec<usize> {
+    labels
+        .iter()
+        .enumerate()
+        .filter(|(_, l)| **l == label)
+        .map(|(i, _)| i)
+        .collect()
+}
+
+/// settings.md, "The card holds still" (brief 009 R1–R5; AC17, AC18's first
+/// half, AC19). The user, 2026-10-03: "The settings screen is bumping
+/// depending on its size … get its size fixed." At each open the card takes
+/// ONE height — its TALLEST tab's — and a tab switch moves nothing: no edge,
+/// no button, no label.
+///
+/// Three launches of one script: open on General, `Ctrl+Tab` through UI and
+/// Performance back to General with a dump on each tab, on to Performance,
+/// `Esc`, and reopen there (it reopens on the tab it closed on):
+///   1. the harness's FASTCULL_NO_CONFIG — the notice line says `Not saved`
+///      from the open's first frame;
+///   2. FASTCULL_CONFIG_DIR into an empty scratch dir — no file, no notice;
+///   3. a broken file (`[general`) and FASTCULL_MAX_READERS=3 — the whole
+///      parse error, two lines, on the notice line and the environment's
+///      line on Read workers, both there at the open.
+///
+/// Each launch asserts, from the app's own layout marks (test-harness.md):
+/// exactly ONE `settings card laid out` mark from each `Ctrl+,` to the close
+/// or the run's end — the open's `init`, whose geometry is already final —
+/// counted as lines, never read off Close (its `init` mark is a 32x32
+/// placeholder); the card one height at every dump, and an open on General
+/// as tall as the reopen on Performance (R1: the tallest tab is the height);
+/// Close and Reset at one x,y at all four dumps of the walk (R2 — Reset's
+/// WIDTH follows its label, "Reset General…" against "Reset Performance…",
+/// and is not compared); every tab's x and width the same at all four (R4);
+/// and the body host ending above Reset (the slack is empty card); the
+/// active tab's first control starting at the body's top at every dump (R2:
+/// the body is laid out from the top under the rule); and, to the pixel, no
+/// new layout mark from the card, the body host, the notice line, the
+/// footer or a tab between the first switch and the close. Across
+/// launches 1 and 2 the card and the notice line are the same height (R3:
+/// the line is reserved, so a notice moves nothing). Every comparison is
+/// between two measurements on one seat; no height is pinned.
+///
+/// RED on bef5b5e, the head before brief 009 (the brief's table, measured
+/// again 2026-10-03, debug, this seat): launch 1's first open laid the card
+/// out 13 times — 238 px at `init`, 267 two milliseconds later, in the same
+/// key event, when the notice line (then an `if`) was created — three
+/// marks, nothing painted short — then two marks per switch, 266 / 506 /
+/// 267 / 266 / 506 — Close at y 526 → 540 → 660 → 540, the tabs 458/78 →
+/// 458/76, 538/42 → 536/43, 582/108 → 580/111; launch 2 11 times (238 / 237
+/// / 477 / 238 / 237 / 477); launch 3 13 times — 238 → 283 at the open, the
+/// two-line notice created after the card's `init` read its height, and 477
+/// → 541 at the reopen on Performance, the environment's line created after
+/// it too (each in the same key event as the `init`, never painted short).
+/// When this fails that way it is that defect; do not quiet it.
+///
+/// Mutants (2026-10-03), each alone: the body host's height back to the
+/// ACTIVE body's (bef5b5e's rule) → launch 1 lays the card out 3 times, the
+/// growth on the switch to Performance — red; the notice line back to an
+/// `if` → 3 card marks at launch 1's open — red; the active tab's
+/// `font-weight` back → "the ui tab moved from x 538 width 42 at the open to
+/// x 536 width 43 at dump.ui" — red; the environment's line back to an `if`
+/// → 3 card marks at launch 3's open, launches 1 and 2 green — red; the
+/// notice line kept but 0 px when blank → each launch holds still on its
+/// own, and the card is 17 px shorter without a notice than with one — red
+/// at the comparison across launches 1 and 2. And (the test-integrity
+/// review, 2026-10-03; QE D3) General's body centred in the host, `y:
+/// (parent.height - self.height) / 2` → "the active tab's first control
+/// starts 119 px below the body's top at dump.open" — red, where T3, the
+/// tabs test and the open/close test all stayed green.
+#[test]
+fn the_settings_card_holds_still_across_its_tabs() {
+    if !has_display() {
+        eprintln!("screenshot smoke skipped: no display server");
+        return;
+    }
+    let _s = serial();
+    let script = "900:key:ctrl+,;1400:dump.open;1700:key:ctrl+tab;2100:dump.ui;\
+                  2400:key:ctrl+tab;2800:dump.perf;3100:key:ctrl+tab;3500:dump.general;\
+                  3800:key:ctrl+tab;4100:key:ctrl+tab;4400:key:escape;4800:key:ctrl+,;\
+                  5300:dump.reopened";
+    let walk = ["open", "ui", "perf", "general"];
+    let run = |extra: &[(&str, &str)], shot: &str| {
+        let mut envs = vec![("FASTCULL_TRACE", "1"), ("FASTCULL_DRIVE", script)];
+        envs.extend_from_slice(extra);
+        shoot_env_stderr(&["--synthetic", "24"], &envs, &out_dir().join(shot))
+    };
+    // The claims of one launch, the premises first.
+    let assert_still = |stderr: &str, strand: &str| {
+        for (label, tab) in [
+            ("open", "0"),
+            ("ui", "1"),
+            ("perf", "2"),
+            ("general", "0"),
+            ("reopened", "2"),
+        ] {
+            assert_eq!(
+                dump_field(qedump(stderr, label), "settingstab"),
+                tab,
+                "{strand}: dump.{label} is not on tab {tab} — the walk did not happen:\n{stderr}"
+            );
+        }
+        let labels = mark_labels(stderr);
+        assert_eq!(
+            label_positions(&labels, "drive: key:ctrl+tab").len(),
+            5,
+            "{strand}: the five Ctrl+Tab steps did not all run:\n{stderr}"
+        );
+        // R5: the card is laid out once per open. The anchors are the two
+        // `Ctrl+,` steps and the close between them.
+        let opens = label_positions(&labels, "drive: key:ctrl+,");
+        let closed = labels
+            .iter()
+            .position(|l| *l == "settings closed")
+            .unwrap_or_else(|| panic!("{strand}: the dialog never closed:\n{stderr}"));
+        assert!(
+            opens.len() == 2 && opens[0] < closed && closed < opens[1],
+            "{strand}: not one open, a close and a reopen, in that order:\n{stderr}"
+        );
+        let card = "settings card laid out at ";
+        let first = marks_between(&labels, opens[0], closed, card);
+        assert_eq!(
+            first, 1,
+            "{strand}: THE SETTINGS CARD LAID OUT {first} TIMES in an open that switched \
+             tabs four times — it takes one height per open, its tallest tab's, and \
+             neither a line created after the card's `init` nor a switch may change it \
+             (settings.md, \"The card holds still\"; brief 009):\n{stderr}"
+        );
+        let second = marks_between(&labels, opens[1], labels.len(), card);
+        assert_eq!(
+            second, 1,
+            "{strand}: the card laid out {second} times at the reopen on Performance — \
+             once per open:\n{stderr}"
+        );
+        // R1: one height, every tab; the open on General is as tall as the
+        // reopen on Performance, the tallest body.
+        let height = |label: &str| laid_out_at(stderr, "settings card", label).3;
+        for label in walk {
+            assert_eq!(
+                height(label),
+                height("open"),
+                "{strand}: the card is {} px tall at dump.{label} and {} px at the open — \
+                 a tab switch changed its height:\n{stderr}",
+                height(label),
+                height("open")
+            );
+        }
+        assert_eq!(
+            height("reopened"),
+            height("open"),
+            "{strand}: the card opened {} px tall on General and {} px on Performance — \
+             its height is not the tallest tab's:\n{stderr}",
+            height("open"),
+            height("reopened")
+        );
+        // R2: the footer is pinned. x AND y, at every dump of the walk.
+        for control in ["settings close", "settings reset"] {
+            let (x0, y0, _, _) = laid_out_at(stderr, control, "open");
+            for label in walk {
+                let (x, y, _, _) = laid_out_at(stderr, control, label);
+                assert!(
+                    x == x0 && y == y0,
+                    "{strand}: {control} moved from {x0},{y0} at the open to {x},{y} at \
+                     dump.{label} — the footer is not pinned (brief 009 R2):\n{stderr}"
+                );
+            }
+        }
+        // R4: the strip holds still.
+        for tab in ["general", "ui", "performance"] {
+            let what = format!("settings tab {tab}");
+            let (x0, _, w0, _) = laid_out_at(stderr, &what, "open");
+            for label in walk {
+                let (x, _, w, _) = laid_out_at(stderr, &what, label);
+                assert!(
+                    x == x0 && w == w0,
+                    "{strand}: the {tab} tab moved from x {x0} width {w0} at the open to x {x} \
+                     width {w} at dump.{label} — the strip shifted on a switch (brief 009 \
+                     R4):\n{stderr}"
+                );
+            }
+        }
+        // The slack between the body and the footer is empty card.
+        for label in walk {
+            let (_, by, _, bh) = laid_out_at(stderr, "settings body", label);
+            let (_, ry, _, _) = laid_out_at(stderr, "settings reset", label);
+            assert!(
+                by + bh <= ry,
+                "{strand}: the body host ends at {} but Reset starts at {ry} at \
+                 dump.{label}:\n{stderr}",
+                by + bh
+            );
+        }
+        // R2's other half: the active body is laid out from the top under the
+        // rule, so the tab's first control starts at the body's top. Bounded
+        // by the control's OWN height, never by a pixel figure: on every face
+        // measured the two are equal (Noto Sans 313 = 313 on this seat; DejaVu
+        // Sans 314 = 314 and Segoe UI 302 = 302 on PR #102's runners), but a
+        // face whose label is taller than the control may seat the control
+        // lower in its row — by less than the control's own height. A body
+        // centred in the host, or one left scrolled, is out by far more.
+        for (label, control) in [
+            ("open", "settings auto-advance"),
+            ("ui", "settings wash"),
+            ("perf", "settings loupe-memory"),
+            ("general", "settings auto-advance"),
+            ("reopened", "settings loupe-memory"),
+        ] {
+            let (_, top, _, _) = laid_out_at(stderr, "settings body", label);
+            let (_, y, _, h) = laid_out_at(stderr, control, label);
+            assert!(
+                y >= top && y - top < h,
+                "{strand}: the active tab's first control starts {} px below the body's \
+                 top at dump.{label} ({control} at y {y}, {h} px tall; the body at y \
+                 {top}) — the body is not laid out from the top (settings.md, \"The \
+                 card holds still\"):\n{stderr}",
+                y - top
+            );
+        }
+        // And nothing moved AT ALL from the first switch to the close: no new
+        // mark from the card, the body host, the notice line, Reset, Close or
+        // a tab. Exact where the comparisons above are not: a mark prints its
+        // position rounded half to even, so a 1 px move from y 660.5 to 659.5
+        // prints `660` both times (measured under the body-host mutant in
+        // `the_settings_card_never_shrinks_while_it_is_open`'s doc).
+        let first_switch = label_positions(&labels, "drive: key:ctrl+tab")[0];
+        for mark in [
+            card,
+            "settings body laid out at ",
+            "settings notice laid out at ",
+            "settings reset laid out at ",
+            "settings close laid out at ",
+            "settings tab ",
+        ] {
+            let moved = marks_between(&labels, first_switch, closed, mark);
+            assert_eq!(
+                moved, 0,
+                "{strand}: `{mark}…` reported {moved} new layout(s) during the tab walk — \
+                 a switch moved it (brief 009 R2, R4):\n{stderr}"
+            );
+        }
+    };
+
+    let notice = run(&[], "settings-still-notice.jpg");
+    let said = dump_text(qedump(&notice, "open"), "settingsnote").to_string();
+    assert!(
+        said.starts_with("Not saved"),
+        "launch 1 has no notice at the open, so it proves nothing about one: {said:?}"
+    );
+    assert_still(&notice, "a notice at the open");
+
+    let empty = settings_scratch("still-quiet", None);
+    let quiet = run(
+        &[("FASTCULL_CONFIG_DIR", empty.to_str().unwrap())],
+        "settings-still-quiet.jpg",
+    );
+    assert_eq!(
+        dump_text(qedump(&quiet, "open"), "settingsnote"),
+        "",
+        "launch 2 has a notice — it must have none:\n{quiet}"
+    );
+    assert_still(&quiet, "no notice");
+    // R3: the notice line is reserved — the same card, and the same line,
+    // with and without a notice.
+    let notice_line = |stderr: &str| laid_out_at(stderr, "settings notice", "open").3;
+    let card_h = |stderr: &str| laid_out_at(stderr, "settings card", "open").3;
+    assert_eq!(
+        card_h(&notice),
+        card_h(&quiet),
+        "the card is {} px tall with a notice and {} px without one — the notice \
+         line is not reserved (brief 009 R3)",
+        card_h(&notice),
+        card_h(&quiet)
+    );
+    assert_eq!(
+        notice_line(&notice),
+        notice_line(&quiet),
+        "the notice line is {} px saying `Not saved` and {} px blank — a blank \
+         line must reserve its one line (brief 009 R3)",
+        notice_line(&notice),
+        notice_line(&quiet)
+    );
+
+    let broken = settings_scratch("still-tallest", Some("[general\n"));
+    let tallest = run(
+        &[
+            ("FASTCULL_CONFIG_DIR", broken.to_str().unwrap()),
+            ("FASTCULL_MAX_READERS", "3"),
+        ],
+        "settings-still-tallest.jpg",
+    );
+    // The premises: the environment governs Read workers and its line is on
+    // screen at the open's first layout, and the notice is the parse error,
+    // taller than launch 1's one line — it wraps.
+    let open = qedump(&tallest, "open");
+    assert_eq!(
+        dump_field(open, "readers"),
+        "env:3",
+        "launch 3: the environment does not govern Read workers: {open}"
+    );
+    assert!(
+        dump_text(open, "settingsnote").contains("could not be read"),
+        "launch 3: the notice is not the read error: {open}"
+    );
+    let (_, _, _, env_h) = laid_out_at(&tallest, "settings note readers-env", "open");
+    assert!(
+        env_h > 0.0,
+        "launch 3: the environment's line on Read workers is 0 px at the open:\n{tallest}"
+    );
+    assert!(
+        notice_line(&tallest) > notice_line(&notice),
+        "launch 3: the read error's notice ({} px) is not taller than a one-line \
+         notice ({} px) — it must wrap, or this launch is not the two-line \
+         case:\n{tallest}",
+        notice_line(&tallest),
+        notice_line(&notice)
+    );
+    assert_still(&tallest, "a two-line notice and the environment's line");
+    std::fs::remove_dir_all(&empty).ok();
+    std::fs::remove_dir_all(&broken).ok();
+}
+
+/// settings.md, "The card holds still" (brief 009 R1; AC18's second half):
+/// while the dialog is open its height is a HIGH-WATER MARK — a text that
+/// grows grows the card, and nothing shrinks it. The text of launches 1 and
+/// 2 is Loupe memory's hint: `100` is clamped to this machine's RAM and the
+/// hint reads `= 31.1 GB (all of this machine's RAM) ≈ 223 A1 frames`,
+/// which wraps to a second line in its cell on every face measured; `2`
+/// puts back the one-line `= 2.0 GB of … ≈ 14 A1 frames`. The wrapped hint
+/// moves the card only where its two lines are TALLER than the 32 px field
+/// beside them: Noto Sans, this seat (two 12 px lines, 33 px). On DejaVu
+/// Sans (28 px) and Segoe UI they fit the field's row, and on PR #102's
+/// runners the card stayed 497 px (ubuntu) and 483 px (windows) through both
+/// commits (QE 2026-10-03, D2). Three launches:
+///   1. open on the defaults, commit `100`, then `2`: after the second commit
+///      the card stays the height the wrap gave it, Close does not move, and
+///      no `settings card laid out` mark lies between the second Enter and
+///      the dump;
+///   2. open on a file that already says `loupe_memory = "100 GB"` — the
+///      hint is wrapped in the open's first layout — and commit `2`: the
+///      card keeps the height it OPENED with, again with no card mark. This
+///      is the launch that reaches the open's own capture of the mark (the
+///      card's `init`): in launch 1 the content grows before it shrinks, and
+///      the `changed` handler alone would hold it. Then the GROWTH, across
+///      the two launches (the test-integrity review, 2026-10-03; QE D1): a
+///      commit that wraps the hint while the dialog is open grows the card
+///      to the height an open already in that state takes — launch 1's card
+///      at `wrapped` equals launch 2's at its open. Two measurements on one
+///      seat, no height pinned; the notice line is reserved, so launch 1's
+///      `Not saved` and launch 2's blank line measure the same (R3, pinned
+///      by `the_settings_card_holds_still_across_its_tabs`);
+///   3. Linux only — the cache strand, the one with power on the ubuntu
+///      runner's face (the test-integrity review, 2026-10-03; QE D2). The
+///      default cache is sandboxed under the shots dir through HOME and
+///      XDG_CACHE_HOME (`shoot_with_sandboxed_cache`, which refuses to run
+///      otherwise; Windows' known-folder lookup ignores both variables, so
+///      the strand skips itself there AT RUN TIME and the `--list` stays the
+///      same on every runner), nested so the Thumbnail cache row prints a
+///      path of 221 characters in hyphenated words,
+///      `~/.cache/<63>/<63>/<63>/fastcull/previews.db`: four lines on every
+///      face QE measured (rows of 71, 61 and 63 px on Noto Sans, DejaVu Sans
+///      and Selawik, Segoe UI's open twin), where the fit test's
+///      91-character path is two lines and the row stays as tall as its
+///      Clear button. Clear turns the row into the one-line `Clearing…`, and
+///      the content shrinks by the difference — the shrink the card must not
+///      follow: between `settings cache clearing` and `settings cache
+///      cleared` the card, the body host, the notice line, Reset and Close
+///      report NO new layout, and the card at `dump.cleared` is at least as
+///      tall as at `dump.perf`. A driven click is a timer step, and Slint
+///      runs the change trackers right after the timers, before the clear
+///      worker's posted completion can land (Cargo.toml, the fourth canary's
+///      fact 8), so a card that followed the shrink would report it inside
+///      that window however fast the clear. The window ends at `cleared` on
+///      purpose: the row then shows the path again with a re-measured size,
+///      and a longer figure may grow the card once, as a text that grows
+///      does.
+///
+/// Growth at `100` is NOT asserted within launch 1 (`≥`, never `>`):
+/// whether the wrapped hint outgrows its field is the face's business. So
+/// launches 1 and 2, and the growth check across them, go red under the
+/// mutants below only where it does — Noto Sans, this seat — and are green
+/// but powerless on both runners' faces: their verdict does not depend on
+/// the seat, their power does. Launch 3 is what gives the ubuntu runner
+/// power on the never-shrinks rule; growth has its own launch, with power
+/// on every face, in
+/// `the_settings_card_grows_by_a_write_error_that_wraps_while_it_is_open`.
+/// The premises are asserted: the click resolved on the field, both commits
+/// traced, and the hint said the clamp's words at the wrapped dump and not
+/// at the other — read from its text, never from a height. (A machine with
+/// 100 GB of RAM or more would not clamp, and the premise says so loudly.)
+/// After each commit the body host and the footer report NO new layout: a
+/// mark prints its position rounded half to even, so comparing printed y
+/// values cannot see a 1 px move between two halves. Launch 3's premises:
+/// the click on Clear resolved; at `dump.perf` the row showed the long path
+/// in full and was taller than its one-line Clear button (the button's cell
+/// stretches with its row, so its reported height is the row's — the path
+/// wrapped); and `settings cache clearing` and the row's `Clearing…` came
+/// between the click and `settings cache cleared`.
+///
+/// RED on bef5b5e (2026-10-03, debug, this seat): launch 1 went 506 → 507 →
+/// 506, the card re-laid out twice after the second Enter; launch 2 opened
+/// at 478 and fell to 477.
+///
+/// Mutants (2026-10-03), each alone: the card's height without the mark
+/// (`min(self.content, …)`) → launch 1, "THE CARD SHRANK WHILE OPEN — 506
+/// px after `2` against 507 px after `100`" — red; the card's `changed
+/// content` handler deleted → the same — red; the open's capture
+/// (`self.high-water = self.content` in the card's `init`) deleted → launch
+/// 1 GREEN and launch 2 "THE CARD SHRANK BELOW THE HEIGHT IT OPENED WITH —
+/// 506 px … against 507 px" — red, which is why launch 2 exists; the body
+/// host's `min-height` made a bound `height` (a fixed cell, which cannot
+/// take the slack) → the card holds 507, the host falls to 306 and the
+/// notice, Reset and Close rise 1 px, Close's mark printing `660` before
+/// and after (660.5 and 659.5) — the y comparison green, the no-new-layout
+/// check red: "`settings body laid out at …` reported 2 new layout(s)".
+/// Mutants (the test-integrity review, 2026-10-03), each alone: the card's
+/// `changed content` handler deleted AND its height `min(self.high-water,
+/// …)` — a card that never grows → launches 1 and 2 green, the growth check
+/// red, "THE CARD DID NOT FOLLOW A TEXT THAT GREW WHILE OPEN — 506 px after
+/// the commit of `100` … against 507 px" — and on DejaVu Sans (the ubuntu
+/// runner's face, through `SLINT_DEFAULT_FONT`) the whole test GREEN, 497 =
+/// 497: the power limit above, which is why the growth has its own test;
+/// the card's height without the mark (`min(self.content, …)`) on DejaVu
+/// Sans → launches 1 and 2 green, launch 3 red, "`settings card laid out at
+/// …` reported 2 new layout(s) while the row read `Clearing…`" (526 → 497
+/// px inside the window, back to 526 after `cleared`) — on Noto Sans the
+/// same mutant is red at launch 1, above.
+#[test]
+fn the_settings_card_never_shrinks_while_it_is_open() {
+    if !has_display() {
+        eprintln!("screenshot smoke skipped: no display server");
+        return;
+    }
+    let _s = serial();
+    let clamped = "all of this machine's RAM";
+    let card = "settings card laid out at ";
+
+    let script = "900:key:ctrl+,;1300:key:ctrl+tab;1600:key:ctrl+tab;2000:dump.perf;\
+                  2300:click:settings loupe-memory;2600:key:ctrl+a;2800:key:1;3000:key:0;\
+                  3200:key:0;3400:key:return;3900:dump.wrapped;4200:key:ctrl+a;4400:key:2;\
+                  4600:key:return;5100:dump.unwrapped";
+    let stderr = shoot_env_stderr(
+        &["--synthetic", "24"],
+        &[("FASTCULL_TRACE", "1"), ("FASTCULL_DRIVE", script)],
+        &out_dir().join("settings-never-shrinks.jpg"),
+    );
+    assert_click_resolved(&stderr, "settings loupe-memory");
+    let labels = mark_labels(&stderr);
+    let committed = |value: &str| {
+        let mark = format!("settings committed performance.loupe_memory = {value}");
+        labels.iter().position(|l| *l == mark)
+    };
+    assert!(
+        matches!((committed("100 GB"), committed("2 GB")), (Some(a), Some(b)) if a < b),
+        "launch 1: Loupe memory was not committed as 100 GB and then 2 GB:\n{stderr}"
+    );
+    let hint =
+        |stderr: &str, label: &str| dump_text(qedump(stderr, label), "loupehint").contains(clamped);
+    assert!(
+        hint(&stderr, "wrapped") && !hint(&stderr, "unwrapped"),
+        "launch 1: the hint did not read the clamp at `wrapped` and the plain figure at \
+         `unwrapped` — the premise:\n{stderr}"
+    );
+    let height = |stderr: &str, label: &str| laid_out_at(stderr, "settings card", label).3;
+    assert!(
+        height(&stderr, "wrapped") >= height(&stderr, "perf"),
+        "launch 1: the card SHRANK at a commit that can only grow it:\n{stderr}"
+    );
+    assert_eq!(
+        height(&stderr, "unwrapped"),
+        height(&stderr, "wrapped"),
+        "launch 1: THE CARD SHRANK WHILE OPEN — {} px after `2` against {} px after \
+         `100`; its height is a high-water mark for the open (settings.md, \"The card \
+         holds still\"; brief 009 R1):\n{stderr}",
+        height(&stderr, "unwrapped"),
+        height(&stderr, "wrapped")
+    );
+    let enters = label_positions(&labels, "drive: key:return");
+    let dumped = labels
+        .iter()
+        .position(|l| l.starts_with("QEDUMP unwrapped "))
+        .unwrap_or_else(|| panic!("no `dump.unwrapped` mark:\n{stderr}"));
+    assert_eq!(enters.len(), 2, "launch 1: not two Enters:\n{stderr}");
+    let after = marks_between(&labels, enters[1], dumped, card);
+    assert_eq!(
+        after, 0,
+        "launch 1: the card laid out {after} time(s) after the commit of `2` — it \
+         moved when it must hold still:\n{stderr}"
+    );
+    let close_y = |stderr: &str, label: &str| laid_out_at(stderr, "settings close", label).1;
+    assert_eq!(
+        close_y(&stderr, "unwrapped"),
+        close_y(&stderr, "wrapped"),
+        "launch 1: Close moved after the commit of `2`:\n{stderr}"
+    );
+    // The footer held still to the pixel: the slack the shrink left went to
+    // the body host, which keeps its height. Read as "no new mark", because a
+    // mark prints a rounded position — under the mutant that binds the host's
+    // height the footer rose 1 px, 660.5 → 659.5, and both print `660`.
+    let footer = [
+        "settings body laid out at ",
+        "settings notice laid out at ",
+        "settings reset laid out at ",
+        "settings close laid out at ",
+    ];
+    for mark in footer {
+        let moved = marks_between(&labels, enters[1], dumped, mark);
+        assert_eq!(
+            moved, 0,
+            "launch 1: `{mark}…` reported {moved} new layout(s) after the commit of `2` \
+             — the footer moved while the card held (the slack goes to the body host, \
+             brief 009 R2):\n{stderr}"
+        );
+    }
+
+    // Launch 1's trace, kept for the growth check after launch 2.
+    let launch1 = stderr;
+
+    let dir = settings_scratch(
+        "never-shrinks",
+        Some("[performance]\nloupe_memory = \"100 GB\"\n"),
+    );
+    let script = "900:key:ctrl+,;1300:key:ctrl+tab;1600:key:ctrl+tab;2000:dump.perf;\
+                  2300:click:settings loupe-memory;2600:key:ctrl+a;2800:key:2;\
+                  3000:key:return;3500:dump.unwrapped";
+    let stderr = shoot_env_stderr(
+        &["--synthetic", "24"],
+        &[
+            ("FASTCULL_TRACE", "1"),
+            ("FASTCULL_CONFIG_DIR", dir.to_str().unwrap()),
+            ("FASTCULL_DRIVE", script),
+        ],
+        &out_dir().join("settings-never-shrinks-opened-wrapped.jpg"),
+    );
+    assert_click_resolved(&stderr, "settings loupe-memory");
+    let labels = mark_labels(&stderr);
+    let enter = label_positions(&labels, "drive: key:return");
+    assert!(
+        enter.len() == 1
+            && labels[enter[0]..].contains(&"settings committed performance.loupe_memory = 2 GB"),
+        "launch 2: Loupe memory was not committed as 2 GB:\n{stderr}"
+    );
+    assert!(
+        hint(&stderr, "perf") && !hint(&stderr, "unwrapped"),
+        "launch 2: the hint did not open on the clamp and end on the plain figure — \
+         the premise:\n{stderr}"
+    );
+    assert_eq!(
+        height(&stderr, "unwrapped"),
+        height(&stderr, "perf"),
+        "launch 2: THE CARD SHRANK BELOW THE HEIGHT IT OPENED WITH — {} px after `2` \
+         against {} px at the open; the open's own height is the mark's start (brief \
+         009 R1):\n{stderr}",
+        height(&stderr, "unwrapped"),
+        height(&stderr, "perf")
+    );
+    let dumped = labels
+        .iter()
+        .position(|l| l.starts_with("QEDUMP unwrapped "))
+        .unwrap_or_else(|| panic!("no `dump.unwrapped` mark:\n{stderr}"));
+    let after = marks_between(&labels, enter[0], dumped, card);
+    assert_eq!(
+        after, 0,
+        "launch 2: the card laid out {after} time(s) after the commit of `2`:\n{stderr}"
+    );
+    assert_eq!(
+        close_y(&stderr, "unwrapped"),
+        close_y(&stderr, "perf"),
+        "launch 2: Close moved after the commit of `2`:\n{stderr}"
+    );
+    for mark in footer {
+        let moved = marks_between(&labels, enter[0], dumped, mark);
+        assert_eq!(
+            moved, 0,
+            "launch 2: `{mark}…` reported {moved} new layout(s) after the commit of `2` \
+             — the footer moved while the card held:\n{stderr}"
+        );
+    }
+    std::fs::remove_dir_all(&dir).ok();
+    // The growth, across launches 1 and 2 (QE 2026-10-03, D1): the commit of
+    // `100` grows the card to the height an open with the hint already
+    // wrapped takes. Powerless where the wrapped hint fits its field (the doc
+    // above), never false there.
+    assert_eq!(
+        height(&launch1, "wrapped"),
+        height(&stderr, "perf"),
+        "THE CARD DID NOT FOLLOW A TEXT THAT GREW WHILE OPEN — {} px after the commit \
+         of `100` wrapped the hint (launch 1) against {} px for an open with the hint \
+         already wrapped (launch 2); a commit that grows the content grows the card to \
+         the height an open in that state takes (settings.md, \"The card holds still\"; \
+         brief 009 R1). The two traces: settings-never-shrinks.trace.log and \
+         settings-never-shrinks-opened-wrapped.trace.log in {}",
+        height(&launch1, "wrapped"),
+        height(&stderr, "perf"),
+        out_dir().display()
+    );
+
+    // 3 — the cache strand: Linux only, decided at run time (the doc above).
+    if !cfg!(target_os = "linux") {
+        eprintln!(
+            "skipped the cache strand: the default cache cannot be sandboxed off Linux \
+             (Windows' known-folder lookup ignores HOME and XDG_CACHE_HOME, and \
+             shoot_with_sandboxed_cache refuses without the sandbox); launches 1 and 2 ran"
+        );
+        return;
+    }
+    let home = out_dir().join("cache-home-never-shrinks");
+    std::fs::remove_dir_all(&home).ok();
+    struct RemoveOnDrop(PathBuf);
+    impl Drop for RemoveOnDrop {
+        fn drop(&mut self) {
+            std::fs::remove_dir_all(&self.0).ok();
+        }
+    }
+    let _cleanup = RemoveOnDrop(home.clone());
+    // Three directory names of 63 characters each, in hyphenated words — the
+    // row's word wrap breaks after a hyphen, never inside a word — so the
+    // path the row prints is 221 characters: four lines on every face
+    // measured.
+    let cache_home = home
+        .join(".cache")
+        .join("nas-mount-of-the-photo-studio-holding-every-cull-of-this-season")
+        .join("weddings-and-sports-and-wildlife-sessions-shot-on-the-a1-bodies")
+        .join("a-cache-path-long-enough-to-wrap-the-row-to-four-lines-anywhere");
+    let readout_path = format!(
+        "~/{}",
+        cache_home
+            .join("fastcull")
+            .join("previews.db")
+            .strip_prefix(&home)
+            .unwrap()
+            .display()
+    );
+    let script = "900:key:ctrl+,;1200:key:ctrl+tab;1400:key:ctrl+tab;1700:dump.perf;\
+                  1900:click:settings clear-cache;2000:wait:settings cache cleared;\
+                  3000:dump.cleared";
+    let stderr = shoot_with_sandboxed_cache(
+        &["--synthetic", "24"],
+        &[
+            ("FASTCULL_TRACE", "1"),
+            ("HOME", home.to_str().unwrap()),
+            ("XDG_CACHE_HOME", cache_home.to_str().unwrap()),
+            ("FASTCULL_DRIVE", script),
+        ],
+        &out_dir().join("settings-never-shrinks-clearing.jpg"),
+    );
+    // The premises: the click landed on Clear, and the row was the wrapped
+    // path — shown in full, its row taller than the one-line button whose
+    // cell stretches with it — so `Clearing…` shrinks the content.
+    assert_click_resolved(&stderr, "settings clear-cache");
+    let readout = dump_text(qedump(&stderr, "perf"), "cachereadout");
+    assert!(
+        readout.contains(&readout_path),
+        "launch 3: the row does not show the long path in full — not the wrapped \
+         state (expected `{readout_path}`): {readout:?}"
+    );
+    let (_, _, _, row) = laid_out_at(&stderr, "settings clear-cache", "perf");
+    assert!(
+        row > 32.0,
+        "launch 3: the Clear row is {row} px tall at dump.perf, no taller than its \
+         one-line button — the path did not wrap, so `Clearing…` shrinks nothing and \
+         this launch would prove nothing:\n{stderr}"
+    );
+    let labels = mark_labels(&stderr);
+    let clicked = labels
+        .iter()
+        .rposition(|l| *l == "drive: click:settings clear-cache")
+        .unwrap_or_else(|| panic!("launch 3: no click on Clear:\n{stderr}"));
+    let clearing = labels.iter().position(|l| *l == "settings cache clearing");
+    let cleared = labels
+        .iter()
+        .position(|l| l.starts_with("settings cache cleared "));
+    let (clearing, cleared) = match (clearing, cleared) {
+        (Some(a), Some(b)) if clicked < a && a < b => (a, b),
+        _ => panic!(
+            "launch 3: the trace does not show the click, then `settings cache clearing` \
+             (the `Clearing…` row), then `settings cache cleared`:\n{stderr}"
+        ),
+    };
+    assert!(
+        labels[clicked..cleared].contains(&"settings cache readout shows Clearing…"),
+        "launch 3: the row never read `Clearing…` between the click on Clear and \
+         `settings cache cleared`, so nothing shrank:\n{stderr}"
+    );
+    // The claim: while the row read `Clearing…` the card held still.
+    for mark in [
+        card,
+        "settings body laid out at ",
+        "settings notice laid out at ",
+        "settings reset laid out at ",
+        "settings close laid out at ",
+    ] {
+        let moved = marks_between(&labels, clearing, cleared, mark);
+        assert_eq!(
+            moved, 0,
+            "launch 3: `{mark}…` reported {moved} new layout(s) while the row read \
+             `Clearing…` — THE CARD FOLLOWED A TEXT THAT SHRANK WHILE OPEN; its height is \
+             a high-water mark for the open (settings.md, \"The card holds still\"; \
+             brief 009 R1):\n{stderr}"
+        );
+    }
+    assert!(
+        height(&stderr, "cleared") >= height(&stderr, "perf"),
+        "launch 3: THE CARD SHRANK WHILE OPEN — {} px after the clear against {} px \
+         before it:\n{stderr}",
+        height(&stderr, "cleared"),
+        height(&stderr, "perf")
+    );
+}
+
+/// settings.md, "The card holds still" (brief 009 R1 and R3; AC18): while
+/// the dialog is open the card GROWS when a text that affects its height
+/// changes — here a write error arriving — by exactly the notice line's
+/// extra lines, once (the test-integrity review, 2026-10-03; QE D1: with the
+/// card made never to grow, a two-line write error on Performance pushed the
+/// Clear note out of the visible body, and every test stayed green).
+///
+/// One launch over a scratch config dir holding a broken file (`[general`):
+/// the first open's click on Auto-advance commits and writes — the broken
+/// file goes aside as `settings.toml.broken`, a fresh `settings.toml` is
+/// written — and `Esc` closes; on the app's own `settings closed` line a
+/// helper thread makes the fresh file read-only (the issue #50 anchoring,
+/// as the cache test's run 3 does: the drain thread only signals, through
+/// an unbounded channel, and never waits; a full second ahead of the
+/// reopen on the script's clock, and the verdict does not lean on it). The
+/// reopen reads the fresh file and says `settings.toml rewritten — the
+/// file that would not read is settings.toml.broken`, one line on every
+/// face measured (14 px on both runners in PR #102's traces, 17 here); the
+/// second click commits, the write fails, and the notice becomes `Could not
+/// write settings.toml: <the OS's words> — the file that would not read is
+/// settings.toml.broken`, 117 characters (116 on Windows, whose OS says
+/// `Access is denied. (os error 5)`) that wrap in the 524 px cell at 12 px
+/// on every face by width. The card's growth between `dump.before` and
+/// `dump.after` must equal the notice's, in whole rounded pixels: two
+/// measurements on one seat, no height pinned. Close's move is NOT pinned —
+/// the card is centred, so a growth moves it by half (brief 009's plan,
+/// residual 1).
+///
+/// The premises, each loud: both clicks reached the box (two pointer echoes
+/// on it) and committed (`settings committed general.auto_advance = false`,
+/// then `= true`); the first open's commit moved the broken file aside (the
+/// notice says `rewritten`); the notice at `dump.after` says the write
+/// failed (a chmod that lost its race, or a seat whose read-only file is
+/// still writable, fails THERE, never as a false pass); and that notice is
+/// TALLER than the one at `dump.before` — it wrapped, or the launch proves
+/// nothing. The file is made writable again before anything is removed:
+/// Windows will not delete a read-only file.
+///
+/// GREEN on bef5b5e, said plainly: a content-driven card grows with its
+/// notice too, so this launch guards one sentence inside the high-water
+/// design — a card that grows when a text grows — not the unit, which
+/// `the_settings_card_holds_still_across_its_tabs`, the never-shrinks test
+/// and the below-the-minimum test pin.
+///
+/// Mutant (2026-10-03): the card's `changed content` handler deleted AND its
+/// height `min(self.high-water, …)` — a card that never grows → "THE CARD
+/// DID NOT GROW BY THE NOTICE'S EXTRA LINE: the card went 506 → 506 px while
+/// the notice line went 17 → 33 px" — red on Noto Sans; and 497 → 497
+/// against 14 → 28 on DejaVu Sans (the ubuntu runner's face, through
+/// `SLINT_DEFAULT_FONT`), where the never-shrinks test stays green under it.
+#[test]
+fn the_settings_card_grows_by_a_write_error_that_wraps_while_it_is_open() {
+    if !has_display() {
+        eprintln!("screenshot smoke skipped: no display server");
+        return;
+    }
+    let _s = serial();
+    let dir = settings_scratch("grows", Some("[general\n"));
+    let file = dir.join("settings.toml");
+    // The helper waits for the drain thread's signal; when the run ends the
+    // sender goes with the drain thread, so a mark that never came ends the
+    // wait at once rather than at a timeout. It hands back the permissions
+    // it replaced, so the test can restore them.
+    let (closed_tx, closed_rx) = std::sync::mpsc::channel::<()>();
+    let locker = {
+        let file = file.clone();
+        std::thread::spawn(move || -> Option<std::fs::Permissions> {
+            closed_rx.recv().ok()?;
+            let writable = std::fs::metadata(&file).ok()?.permissions();
+            let mut readonly = writable.clone();
+            readonly.set_readonly(true);
+            std::fs::set_permissions(&file, readonly).ok()?;
+            Some(writable)
+        })
+    };
+    let script = "900:key:ctrl+,;1300:click:settings auto-advance;1700:dump.first;\
+                  2000:key:escape;3000:key:ctrl+,;3400:dump.before;\
+                  3700:click:settings auto-advance;4100:dump.after";
+    let mut signalled = false;
+    let stderr = shoot_env_stderr_watching(
+        &["--synthetic", "24"],
+        &[
+            ("FASTCULL_TRACE", "1"),
+            ("FASTCULL_CONFIG_DIR", dir.to_str().unwrap()),
+            ("FASTCULL_DRIVE", script),
+        ],
+        &out_dir().join("settings-grows.jpg"),
+        // The FIRST close only.
+        move |line| {
+            if !signalled && line.contains("] settings closed") {
+                signalled = true;
+                let _ = closed_tx.send(());
+            }
+        },
+    );
+    if let Some(writable) = locker.join().unwrap() {
+        std::fs::set_permissions(&file, writable).expect("settings.toml writable again");
+    }
+    // The premises.
+    assert_click_resolved(&stderr, "settings auto-advance");
+    let labels = mark_labels(&stderr);
+    let clicks = labels
+        .iter()
+        .filter(|l| l.starts_with("drive ptr click ") && l.ends_with(" (settings auto-advance)"))
+        .count();
+    let committed = |value: &str| {
+        let mark = format!("settings committed general.auto_advance = {value}");
+        labels.iter().position(|l| *l == mark)
+    };
+    assert!(
+        clicks == 2
+            && matches!((committed("false"), committed("true")), (Some(a), Some(b)) if a < b),
+        "the two clicks on Auto-advance did not both land and commit (`false`, then \
+         `true`) — {clicks} pointer echo(es):\n{stderr}"
+    );
+    let notice = |label: &str| dump_text(qedump(&stderr, label), "settingsnote").to_string();
+    assert!(
+        notice("first").starts_with("settings.toml rewritten"),
+        "the first commit did not move the broken file aside, so the write error below \
+         would not name it and would not wrap: {:?}",
+        notice("first")
+    );
+    assert!(
+        notice("after").starts_with("Could not write settings.toml: "),
+        "the second commit's write did not fail — the file was not read-only when it ran \
+         (the injection lost its race, or this seat ignores the mode), so nothing below is \
+         about a write error: {:?}\n{stderr}",
+        notice("after")
+    );
+    let line = |label: &str| laid_out_at(&stderr, "settings notice", label).3;
+    let card = |label: &str| laid_out_at(&stderr, "settings card", label).3;
+    assert!(
+        line("after") > line("before"),
+        "the write error's notice ({} px) is no taller than the one before it ({} px) — it \
+         did not wrap, so this launch proves nothing about a growth: {:?}\n{stderr}",
+        line("after"),
+        line("before"),
+        notice("after")
+    );
+    // The claim.
+    assert_eq!(
+        card("after") - card("before"),
+        line("after") - line("before"),
+        "THE CARD DID NOT GROW BY THE NOTICE'S EXTRA LINE: the card went {} → {} px while \
+         the notice line went {} → {} px; a text that grows while the dialog is open grows \
+         the card by exactly its growth (settings.md, \"The card holds still\"; brief 009 \
+         R1, R3):\n{stderr}",
+        card("before"),
+        card("after"),
+        line("before"),
+        line("after")
+    );
+    std::fs::remove_dir_all(&dir).ok();
+}
+
+/// settings.md, "The card holds still", its last rule (brief 009 D4 and D5,
+/// the senior developer's call; AC22): below the supported minimum window
+/// the BODY gives, never the footer. At 1000x400 — under the 1000x700 floor
+/// — in the tallest state (a broken file's two-line notice, the
+/// FASTCULL_MAX_READERS line on Read workers), on Performance:
+///   * the card is clamped inside the window's modal layer, and Close and
+///     Reset lie inside the card at the open and after a wheel;
+///   * a wheel over the body scrolls it: the Loupe memory field's mark
+///     rises by the wheel's 180 px or less (the body's floor may stop it
+///     short), while the grid behind holds `vpy=0.0`. The same wheel moving
+///     the body is the control: the grid's stillness is the scrim's
+///     containment, not a wheel that went nowhere;
+///   * a tab switch puts the body back at its top: on General the
+///     auto-advance box is at or below the body's top edge again.
+///
+/// The wheel is the one coordinate step — the harness has no by-name wheel
+/// — so (500,200) is asserted inside the body's own reported rectangle
+/// before anything is read from it, loudly. `--synthetic 300` gives the
+/// grid room to scroll, so its `vpy=0.0` is a claim and not a floor. The
+/// window's landing is its own mark (`wait:window geometry 1000x400`), and
+/// the layer is the window less the 26 px status bar, its top read as 0 so
+/// the bound holds on Windows, whose menu bar is outside the client area.
+///
+/// RED on bef5b5e (2026-10-03, debug, this seat): the card clamps to
+/// `220,60 560x294` while Close is laid out at `700,551`, 197 px below the
+/// card's bottom edge, and the wheel moves nothing — the host was as tall
+/// as the active body and could not give.
+///
+/// Mutants (2026-10-03), each alone: the host's `min-height: 0px` back to
+/// `self.preferred-height` → Close outside the card at `dump.perf` — red;
+/// the Flickable made a clipping Rectangle (and the viewport reset with it)
+/// → the wheel moves nothing — red; the viewport reset taken out of
+/// `go-to-tab` → General shows its auto-advance box 180 px above the body's
+/// top — red.
+#[test]
+fn below_the_minimum_window_the_settings_body_gives_before_the_footer() {
+    if !has_display() {
+        eprintln!("screenshot smoke skipped: no display server");
+        return;
+    }
+    let _s = serial();
+    let dir = settings_scratch("below-minimum", Some("[general\n"));
+    let script = "200:resize:1000x400;600:wait:window geometry 1000x400;900:key:ctrl+,;\
+                  1300:key:ctrl+tab;1600:key:ctrl+tab;2000:dump.perf;\
+                  2300:wheel.500,200,-180;2800:dump.wheeled;3100:key:ctrl+tab;\
+                  3500:dump.general";
+    let stderr = shoot_env_stderr(
+        &["--synthetic", "300"],
+        &[
+            ("FASTCULL_TRACE", "1"),
+            ("FASTCULL_MAX_READERS", "3"),
+            ("FASTCULL_CONFIG_DIR", dir.to_str().unwrap()),
+            ("FASTCULL_DRIVE", script),
+        ],
+        &out_dir().join("settings-below-minimum.jpg"),
+    );
+    // The premises: the window landed, the tab and the tallest state.
+    assert!(
+        stderr.contains("wait:window geometry 1000x400 (satisfied"),
+        "the window never reached 1000x400 — the premise:\n{stderr}"
+    );
+    let perf = qedump(&stderr, "perf");
+    assert_eq!(
+        dump_field(perf, "settingstab"),
+        "2",
+        "not on Performance: {perf}"
+    );
+    assert_eq!(
+        dump_field(perf, "readers"),
+        "env:3",
+        "the environment's line is not up: {perf}"
+    );
+    assert!(
+        dump_text(perf, "settingsnote").contains("could not be read"),
+        "the notice is not the read error — not the tallest state: {perf}"
+    );
+    // The card in the layer, and the footer in the card — at the open, then
+    // again after the wheel.
+    let (wx, floor) = (1000.0f32, 400.0f32 - 26.0);
+    let (cx, cy, cw, ch) = laid_out_at(&stderr, "settings card", "perf");
+    assert!(
+        cx >= 0.0 && cx + cw <= wx && cy >= 0.0 && cy + ch <= floor,
+        "the card ({cx},{cy} {cw}x{ch}) is not inside the modal layer of a 1000x400 \
+         window (which ends at y={floor}):\n{stderr}"
+    );
+    let footer_inside = |label: &str| {
+        let (cx, cy, cw, ch) = laid_out_at(&stderr, "settings card", label);
+        for control in ["settings close", "settings reset"] {
+            let (x, y, w, h) = laid_out_at(&stderr, control, label);
+            assert!(
+                x >= cx && x + w <= cx + cw + 0.5 && y >= cy && y + h <= cy + ch + 0.5,
+                "dump.{label}: {control} ({x},{y} {w}x{h}) is not inside the card \
+                 ({cx},{cy} {cw}x{ch}) at 1000x400 — the footer gave instead of the \
+                 body (brief 009 D4):\n{stderr}"
+            );
+        }
+    };
+    footer_inside("perf");
+    let (bx, by, bw, bh) = laid_out_at(&stderr, "settings body", "perf");
+    assert!(
+        (bx..=bx + bw).contains(&500.0) && (by..=by + bh).contains(&200.0),
+        "the wheel's point (500,200) is not over the body ({bx},{by} {bw}x{bh}), so \
+         the wheel below would test something else:\n{stderr}"
+    );
+    footer_inside("wheeled");
+    // The wheel scrolled the body, and only the body.
+    let (_, before, _, _) = laid_out_at(&stderr, "settings loupe-memory", "perf");
+    let (_, after, _, _) = laid_out_at(&stderr, "settings loupe-memory", "wheeled");
+    let rose = before - after;
+    assert!(
+        rose > 0.0 && rose <= 180.0,
+        "a 180 px wheel over the clamped body moved the Loupe memory field by {rose} px \
+         ({before} → {after}) — the body does not scroll, so what no longer fits is \
+         out of reach:\n{stderr}"
+    );
+    assert_eq!(
+        dump_field(qedump(&stderr, "wheeled"), "vpy"),
+        "0.0",
+        "the wheel over the Settings body scrolled the grid behind the dialog:\n{stderr}"
+    );
+    // A switch puts the body back at its top.
+    assert_eq!(
+        dump_field(qedump(&stderr, "general"), "settingstab"),
+        "0",
+        "the Ctrl+Tab after the wheel did not wrap to General:\n{stderr}"
+    );
+    let (_, top, _, _) = laid_out_at(&stderr, "settings body", "general");
+    let (_, first, _, _) = laid_out_at(&stderr, "settings auto-advance", "general");
+    assert!(
+        first >= top,
+        "General's first row is at y {first}, above the body's top at {top} — the body \
+         kept the scroll from Performance and hides the tab it switched to:\n{stderr}"
+    );
+    std::fs::remove_dir_all(&dir).ok();
+}
+
 /// AC11 and AC12, the app's half (settings.md, "Performance › Thumbnail
 /// cache cap" and "Performance › Thumbnail cache"; QE 2026-10-01, D24): a
 /// folder open trims the DEFAULT cache to the file's cap, and Clear empties
 /// that cache through a connection of its own, off the UI thread, never
 /// unlinking it — the row reading `Clearing…` meanwhile and the size
-/// re-measured from disk after. Every other driven run but two (the Settings
-/// card fit test's cache-on run and the click-away matrix's Clear row) is
-/// FASTCULL_NO_CACHE; these point the default cache into the shots dir
-/// through HOME and XDG_CACHE_HOME (`shoot_with_sandboxed_cache` refuses to
-/// run otherwise).
+/// re-measured from disk after. Every other driven run but three (the
+/// Settings card fit test's cache-on run, the click-away matrix's Clear row
+/// and the never-shrinks test's cache strand) is FASTCULL_NO_CACHE; these
+/// point the default cache into the shots dir through HOME and
+/// XDG_CACHE_HOME (`shoot_with_sandboxed_cache` refuses to run otherwise).
 /// That redirect exists on Linux only — Windows' known-folder lookup ignores
 /// the environment — so the test skips itself elsewhere, at run time, which
 /// keeps the `--list` halves the same on every runner; AC12's Windows half

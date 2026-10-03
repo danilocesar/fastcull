@@ -715,7 +715,10 @@ mis-marked frame costs one arrow back and a re-mark.
   presses, the dialog's plan and destination survive the first, and every
   dialog key scope — the copy, export and settings scopes — contains
   modals identically. The Settings dialog is contained like the copy
-  dialog and never stacks with it (settings.md, "The dialog").
+  dialog and never stacks with it (settings.md, "The dialog"); its card is
+  content-driven tall like the shortcuts card's, the content being its
+  TALLEST tab — one height per open, every tab (settings.md, "The card
+  holds still", brief 009).
 
 ### The filter and sort bar (M5)
 
@@ -871,7 +874,39 @@ what a timer's callback writes is seen by the trackers before a worker's
 completion can overwrite it (`platform.rs` `update_timers_and_animations`,
 the winit backend's `new_events`, read 2026-10-02 for settings.md's Clear
 row: why its `Clearing…` state and disabled button can be proved by their
-own marks).
+own marks); `visible: false` is lowered to a `Clip` wrapper around the
+element (`i-slint-compiler passes/visible.rs`, `clip: !visible`), which
+keeps its geometry and its layout constraints — an invisible child of a
+layout still takes its space, and its `preferred-height` is live and
+exact (read and measured 2026-10-03 for settings.md's card: why the
+three hidden tab bodies can be measured and the tallest taken); a
+conditional (`if`) or repeated child is created by the generated
+`ensure_instantiated()` (`generator/rust.rs` :1687), which `ensure_updated`
+(`model/repeater.rs` :579–591) runs AFTER its parent instance's `init` and
+then recurses into (`ensure_children_instantiated`), so a layout's
+`preferred-height` read in an `init` does not count a conditional child;
+`ensure_tree_instantiated` (`window.rs` :648–666) loops that instantiation
+and the change handlers to a fixed point at the end of `process_key_input`
+(:1172) and before every paint in `draw_contents` (:1554), so the grown
+height is reported by the layout marks — three per open — and painted in
+the same frame: the growth reaches an `init`-time capture and a mark, never
+the eye (measured 2026-10-03 on PR #96's ubuntu trace: 229 px at [901], 255
+at [903], one key event; corrected at brief 009's test-integrity review —
+the spec commit said "one frame late" and "grows one frame after it
+appears": why the Settings notice line and the environment's line are
+permanent elements, blank when silent — the one mark per open and the
+high-water mark's exact start, not a painted twitch); an empty
+`Text` is one line tall — `textlayout/sharedparley.rs` `text_size` lays
+out one empty line and the renderers return its height (measured
+2026-10-03 on FemtoVG and the software renderer alike: why a blank notice
+line reserves its height without a probe glyph); in a box layout the
+slack of a parent taller than its content goes to the children with a
+positive stretch, in proportion (`layout.rs` `adjust_items::<Grow>`) — a
+`Text` and a fluent `Button` have stretch 0, a `Rectangle` or `Flickable`
+1 — and a child with a `height` binding is fixed, so a child given
+`preferred-height`, `min-height` and `vertical-stretch: 1` instead is the
+one that takes it (read 2026-10-03 for settings.md's card: why the body
+host, not the footer, absorbs the high-water mark's extra height).
 
 ## Contracts
 
@@ -1156,6 +1191,12 @@ own marks).
 
 ## History
 
+- 2026-10-03 — Brief 009: the modal-containment paragraph points at
+  settings.md's one height per open, and the Slint list gains four facts
+  the Settings card stands on (3c1ca29, which wrote no line here); the
+  conditional-child fact corrected at the test-integrity review — the
+  child and the change handlers run in one pass before any paint, so the
+  growth was never painted ("one frame late" retracted).
 - 2026-10-02 — Brief 008, QE rounds 4 and 5: the Slint list gains the
   fluent CheckBox's flip before `toggled` (D39; added by 22cd5cb, which
   wrote no line here) and a loop iteration's order — the due timers, then

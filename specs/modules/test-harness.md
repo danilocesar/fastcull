@@ -29,20 +29,22 @@ explain itself on stderr.
   008, 2026-10-01; until then it covered `ui.toml` only, and every driven
   run read the user's real `templates.toml`); what `FASTCULL_NO_CACHE=1`
   does for `previews.db` (app-only; the CLI has `--no-cache`). The
-  screenshot harness sets both on every run except five, in three tests —
+  screenshot harness sets both on every run except six, in four tests —
   the three runs of the test that drives the cache cap and Clear cache
   (settings.md AC11, AC12; the third a clear made to fail, QE 2026-10-02,
   round 5), the cache-on run of the Settings card's fit test (settings.md,
-  "The card"; QE 2026-10-01, D38) and the Clear row of the click-away
-  matrix (settings.md AC4; QE 2026-10-02, round 4 D39) — this sentence
-  said "every run but one" until D38, and "three, in two tests" until
-  round 5, the matrix's row uncounted — which run without `FASTCULL_NO_CACHE`,
-  through `shoot_with_sandboxed_cache`, which refuses to start unless
-  `HOME` and `XDG_CACHE_HOME` both point inside the shots dir — so the
-  default cache resolves there, never to the user's; Linux only, Windows'
-  known-folder lookup ignoring the environment (QE 2026-10-01, D24). The
-  Settings dialog still works under `FASTCULL_NO_CONFIG`, in memory, and
-  says `Not saved` (settings.md).
+  "The card"; QE 2026-10-01, D38), the Clear row of the click-away
+  matrix (settings.md AC4; QE 2026-10-02, round 4 D39) and the cache
+  strand of the Settings card's never-shrinks test (settings.md AC18; QE
+  2026-10-03, D2) — this sentence said "every run but one" until D38,
+  "three, in two tests" until round 5, the matrix's row uncounted, and
+  "five, in three tests" until brief 009's test-integrity review — which
+  run without `FASTCULL_NO_CACHE`, through `shoot_with_sandboxed_cache`,
+  which refuses to start unless `HOME` and `XDG_CACHE_HOME` both point
+  inside the shots dir — so the default cache resolves there, never to
+  the user's; Linux only, Windows' known-folder lookup ignoring the
+  environment (QE 2026-10-01, D24). The Settings dialog still works under
+  `FASTCULL_NO_CONFIG`, in memory, and says `Not saved` (settings.md).
 - `FASTCULL_CONFIG_DIR=<dir>` — the config dir redirected to `<dir>`,
   winning over `FASTCULL_NO_CONFIG`, for the tests that read or write a
   config file in a scratch dir (settings.md AC6; corrected 2026-10-02, QE
@@ -207,7 +209,26 @@ sidecars — scripts target throwaway copies of test data only.
   laid out …`, `settings tab <name> laid out …`, `settings <control> laid
   out …` for every control named under `click:` above, `settings note
   <name> laid out …` for each row's one-line note (the names below), and
-  `failed badge <id> laid out …` (failed cells only, a handful).
+  `failed badge <id> laid out …` (failed cells only, a handful). Since
+  brief 009 (settings.md, "The card holds still") `settings card laid out
+  …` fires exactly ONCE per open and never on a tab switch — the card has
+  one height per open — and again only when the card grows (a text that
+  affects its height changed) or the window is resized; a switch that
+  commits a typed field carries such a growth when the commit changes a
+  height-affecting text (settings.md, "The card holds still"; QE
+  2026-10-03, D5); the strip's
+  `settings tab <name>` marks likewise fire at the open and not on a
+  switch; and three marks join them: `settings body laid out …` (the host
+  of the three tab bodies, as tall as the tallest, from `init`, `changed
+  height` and `changed absolute-position`), `settings notice laid out …`
+  (the reserved notice line — one line tall when blank — the same three
+  handlers) and `settings note <name>-env laid out …` (a row's environment
+  line, `init` and `changed height` — every row has one, the line being
+  `SettingRow`'s, so `auto-advance-env`, `wash-env`, `loupe-memory-env`,
+  `cache-cap-env` and `readers-env`; 0 px tall unless a variable governs
+  the row, which today only `FASTCULL_MAX_READERS` does, on Read workers;
+  corrected 2026-10-03, brief 009's implementation: it named `readers-env`
+  alone).
 - **Settings** (brief 008, settings.md): `settings loaded from <path>` /
   `settings: no file (defaults in force)` / `settings: <path> could not
   be read: <error>` at startup and at every open — except an open while a
@@ -230,8 +251,12 @@ sidecars — scripts target throwaway copies of test data only.
   whenever its text changes — what the note says, never what the bridge
   meant it to (QE 2026-10-01, D22) — and `settings note readers-env shows
   <text>` likewise from the read workers row's environment line, which
-  exists only while `FASTCULL_MAX_READERS` governs the row (QE 2026-10-02,
-  round 5); `settings cache clearing` when the
+  reports itself only while `FASTCULL_MAX_READERS` governs the row (QE
+  2026-10-02, round 5; corrected 2026-10-03, brief 009: it said "exists
+  only while" — the line is a permanent 0 px cell when blank now, no
+  longer a conditional element, so the first layout counts it, and its
+  `shows` mark is emitted only for a non-empty text — the absence a test
+  reads without the variable still holds); `settings cache clearing` when the
   row turns to `Clearing…` and `settings cache cleared <before> ->
   <after>` (bytes) when the worker is done (QE 2026-10-01, D24); between
   the two, from the worker itself, `settings cache clear ran on <thread>`
@@ -425,11 +450,15 @@ shot 2.
   delta. `keysfocus` counts are seat-sensitive context, never a verdict.
 - The menu-click strands are Linux-only (`menu_clicks_are_calibrated()` is
   `!cfg!(windows)`): no dispatched pointer event reaches an OS menu bar.
-- The suite drives nine geometries — 640x300, 900x800, 1000x700, 1024x768,
-  1200x800, 1440x700, 1440x900, 1500x800, 1600x800 — plus the 1440x900 the
-  app opens at, inside the Linux runner's pinned `1920x1200x24` xvfb
-  screen; a test that drives past that raises the screen in the same
-  commit.
+- The suite drives eleven geometries — 640x300, 900x800, 1000x400 (brief
+  009, the Settings body giving before its footer), 1000x700, 1010x520
+  (the shortcuts card clamped), 1024x768, 1200x800, 1440x700, 1440x900,
+  1500x800, 1600x800 — plus the 1440x900 the app opens at, inside the
+  Linux runner's pinned `1920x1200x24` xvfb screen; a test that drives past
+  that raises the screen in the same commit (corrected 2026-10-03, brief
+  009 commit B: it said ten, and nine before brief 009 — 1010x520, driven
+  since 2026-09-04, was never counted; `grep -o 'resize:[0-9]*x[0-9]*'
+  crates/fastcull-app/tests/screenshot.rs | sort -u` lists them).
 - CI facts: a pull request's runs share one concurrency group per ref with
   `cancel-in-progress` (a run that vanishes without a verdict is a cancel,
   not a hang); every other event gets its own group; the job cap is 90
@@ -479,6 +508,20 @@ shot 2.
 
 ## History
 
+- 2026-10-03 — Brief 009's test-integrity review: a sixth run, in a
+  fourth test, drops `FASTCULL_NO_CACHE` through the sandbox — the
+  never-shrinks test's Linux cache strand.
+- 2026-10-03 — Brief 009 commit B: the suite drives eleven geometries,
+  1000x400 joining and 1010x520 (driven since 2026-09-04) counted at last.
+- 2026-10-03 — Brief 009's implementation: the environment line's layout
+  mark is every row's, `settings note <name>-env laid out`, not
+  `readers-env`'s alone (the line is `SettingRow`'s).
+- 2026-10-03 — Brief 009 agreed, spec first: `settings card laid out` and
+  the `settings tab` marks fire once per open and never on a tab switch;
+  `settings body laid out`, `settings notice laid out` and `settings note
+  readers-env laid out` added; the environment line's `shows` sentence
+  corrected (a permanent cell, reporting only when it speaks); 1000x400
+  joins the geometries.
 - 2026-10-02 — QE round 5 of brief 008: `settings cache clear ran on
   <thread>`, `settings cache readout shows`, `settings clear-cache
   enabled`; the cache test's third run, and the run count corrected to

@@ -249,7 +249,7 @@ component KeySection inherits VerticalLayout {
 // cell is a constant for the reason KeyRow's 104 px is: every control on
 // every tab starts at the same x, whatever the face. `warning` is the
 // environment's line (settings.md, "Environment precedence"), amber, above
-// the note, and only when there is one.
+// the note — a 0 px cell when there is none.
 //
 // The note reports itself — what it shows and where it was laid out — so a
 // driven run can prove every row carries core's sentence and that it is
@@ -276,42 +276,73 @@ component SettingRow inherits VerticalLayout {
         }
         @children
     }
-    // The environment's line reports itself like the note below, under the
-    // row's name and `-env` (`settings note readers-env shows …`): it is
-    // created only while a variable governs the row, so its own `init` is
-    // the proof it is on screen (QE 2026-10-02, round 5: with the bridge
-    // presenting it empty the card lost the line and the suite stayed
-    // green).
-    if root.warning != "": Text {
-        text: root.warning;
-        color: #ffb84d;
-        font-size: 11px;
-        wrap: word-wrap;
-        init => { root.note-shown(root.name + "-env", self.text); }
-        changed text => { root.note-shown(root.name + "-env", self.text); }
-    }
-    Text {
-        text: root.note;
-        color: #8a8a96;
-        font-size: 11px;
-        wrap: word-wrap;
-        init => {
-            root.note-shown(root.name, self.text);
-            root.note-laid-out(root.name, self.absolute-position.x, self.absolute-position.y,
-                self.width, self.height);
+    // The environment's line and the note, in a column of their own with no
+    // spacing, so the row has the same two children whether the line speaks
+    // or not: silent, it is a 0 px cell and the note sits where it always
+    // did; speaking, it is its text plus its own 4 px gap above the note.
+    //
+    // PERMANENT, never an `if` (settings.md, "The card holds still"; brief
+    // 009): Slint creates a conditional element AFTER its parent's `init`
+    // has run (ui-grid.md's Slint facts; Cargo.toml, the fifth canary), so
+    // a conditional line was missing from the height the card's `init`
+    // read — the Performance body 19 px short, the card laid out three
+    // times per open, never painted short: the growth lands in the same
+    // pass. A permanent cell is in the first layout.
+    //
+    // The line reports itself like the note, under the row's name and `-env`
+    // (`settings note readers-env shows …`), and only when it has something
+    // to say — a test reads the mark's absence without the variable (QE
+    // 2026-10-02, round 5: with the bridge presenting it empty the card lost
+    // the line and the suite stayed green). `laid out` is unconditional:
+    // its height, 0 or not, is what says whether the line is on screen.
+    VerticalLayout {
+        spacing: 0px;
+        env-line := Text {
+            text: root.warning;
+            color: #ffb84d;
+            font-size: 11px;
+            wrap: word-wrap;
+            height: root.warning == "" ? 0px : self.preferred-height + 4px;
+            init => {
+                if (self.text != "") {
+                    root.note-shown(root.name + "-env", self.text);
+                }
+                root.note-laid-out(root.name + "-env", self.absolute-position.x,
+                    self.absolute-position.y, self.width, self.height);
+            }
+            changed text => {
+                if (self.text != "") {
+                    root.note-shown(root.name + "-env", self.text);
+                }
+            }
+            changed height => {
+                root.note-laid-out(root.name + "-env", self.absolute-position.x,
+                    self.absolute-position.y, self.width, self.height);
+            }
         }
-        changed text => { root.note-shown(root.name, self.text); }
-        changed absolute-position => {
-            root.note-laid-out(root.name, self.absolute-position.x, self.absolute-position.y,
-                self.width, self.height);
-        }
-        changed width => {
-            root.note-laid-out(root.name, self.absolute-position.x, self.absolute-position.y,
-                self.width, self.height);
-        }
-        changed height => {
-            root.note-laid-out(root.name, self.absolute-position.x, self.absolute-position.y,
-                self.width, self.height);
+        Text {
+            text: root.note;
+            color: #8a8a96;
+            font-size: 11px;
+            wrap: word-wrap;
+            init => {
+                root.note-shown(root.name, self.text);
+                root.note-laid-out(root.name, self.absolute-position.x, self.absolute-position.y,
+                    self.width, self.height);
+            }
+            changed text => { root.note-shown(root.name, self.text); }
+            changed absolute-position => {
+                root.note-laid-out(root.name, self.absolute-position.x, self.absolute-position.y,
+                    self.width, self.height);
+            }
+            changed width => {
+                root.note-laid-out(root.name, self.absolute-position.x, self.absolute-position.y,
+                    self.width, self.height);
+            }
+            changed height => {
+                root.note-laid-out(root.name, self.absolute-position.x, self.absolute-position.y,
+                    self.width, self.height);
+            }
         }
     }
 }
@@ -3406,11 +3437,15 @@ export component MainWindow inherits Window {
                 }
                 // A tab switch: commit what the keyboard leaves, put the
                 // keyboard on the strip WHILE the old body is still visible,
-                // then switch.
+                // then switch — with the bodies' host back at its top, in
+                // the same event, so no frame shows the new tab scrolled
+                // (the host only scrolls below the minimum window; see THE
+                // BODIES below).
                 function go-to-tab(i: int) {
                     self.flush();
                     settings-strip.focus();
                     self.slot = 0;
+                    settings-body.viewport-y = 0px;
                     root.settings-tab = i;
                 }
                 function switch-tab(dir: int) {
@@ -3489,18 +3524,43 @@ export component MainWindow inherits Window {
                 x: (parent.width - self.width) / 2;
                 y: (parent.height - self.height) / 2;
                 width: min(560px, parent.width - 40px);
-                // Content-driven, clamped to the window; the Performance
-                // tab is the tallest and fits whole at 1000x700 in its
-                // tallest state (the environment note, a long notice) —
-                // `the_settings_card_fits_its_smallest_window_in_its_
-                // tallest_state` measures the slack (settings.md).
-                height: min(settings-card-layout.preferred-height, parent.height - 40px);
+                // ONE HEIGHT PER OPEN (settings.md, "The card holds still";
+                // brief 009, the user: "get its size fixed"). `content` is
+                // the layout's preferred height, whose body host is as tall
+                // as the TALLEST of the three bodies, so it is the same on
+                // every tab and a switch moves no edge, button or label.
+                // `high-water` makes it a high-water mark for this open: it
+                // starts at the content in `init` (before the mark, so the
+                // mark carries it), `changed content` raises it, and nothing
+                // lowers it — a text that shrinks the content (`Clearing…`
+                // over a wrapped path, a hint that un-wraps) leaves the card
+                // as it was, the slack going to the body host, the one
+                // stretch-1 child, so the footer stays at the bottom. The
+                // `max` grows the card in the very evaluation that grows the
+                // content; the `changed` handler runs afterwards, in Slint's
+                // change-tracker pass, and only records it. The dialog is an
+                // `if root.settings-visible` element, created anew at every
+                // open, so each open starts its own mark: one `settings card
+                // laid out` per open, from `init`, and again only when the
+                // card grows or the window resizes. Clamped to the window as
+                // before; Performance's tallest state fits whole at 1000x700
+                // — `the_settings_card_fits_its_smallest_window_in_its_
+                // tallest_state` measures the slack.
+                property <length> content: settings-card-layout.preferred-height;
+                property <length> high-water: 0px;
+                changed content => {
+                    if (self.content > self.high-water) {
+                        self.high-water = self.content;
+                    }
+                }
+                height: min(max(self.content, self.high-water), parent.height - 40px);
                 border-radius: 8px;
                 background: #202028;
                 border-width: 1px;
                 border-color: #3a3a44;
                 clip: true;
                 init => {
+                    self.high-water = self.content;
                     root.dbg-card-laid-out("settings card", self.absolute-position.x,
                         self.absolute-position.y, self.width, self.height);
                 }
@@ -3568,10 +3628,15 @@ export component MainWindow inherits Window {
                                 tab-label := Text {
                                     text: title;
                                     // The active tab is the brighter label
-                                    // over the accent underline.
+                                    // over the accent underline — never a
+                                    // weight change: the cell is as wide as
+                                    // its label, a bold label is a few px
+                                    // wider or narrower by face and word, and
+                                    // the strip shifted 1–3 px at every
+                                    // switch (settings.md, "The card"; brief
+                                    // 009).
                                     color: parent.active ? #ffffff : #8a8a96;
                                     font-size: 13px;
-                                    font-weight: parent.active ? 600 : 400;
                                     horizontal-alignment: center;
                                     vertical-alignment: center;
                                     width: 100%;
@@ -3594,12 +3659,49 @@ export component MainWindow inherits Window {
                         background: #3a3a44;
                     }
                     // THE BODIES — permanent, stacked, one visible (see the
-                    // keyboard note above); the host is as tall as the
-                    // active one.
-                    Rectangle {
-                        height: root.settings-tab == 0 ? general-body.preferred-height
-                            : root.settings-tab == 1 ? ui-body.preferred-height
-                            : perf-body.preferred-height;
+                    // keyboard note above). The host is as tall as the
+                    // TALLEST of the three, whichever is showing (settings.md,
+                    // "The card holds still"; brief 009): a hidden body still
+                    // measures, because `visible: false` is lowered to a Clip
+                    // wrapper that keeps the element's geometry and layout
+                    // constraints (ui-grid.md's Slint facts; Cargo.toml, the
+                    // fifth canary). A preferred height and a stretch, never a
+                    // `height:` — a bound height is a fixed cell, and this is
+                    // the cell that must take the high-water mark's slack so
+                    // the footer stays at the card's bottom. The active body
+                    // sits at its top.
+                    //
+                    // BELOW THE MINIMUM WINDOW THE BODY GIVES, NOT THE FOOTER
+                    // (settings.md, "The card holds still"; brief 009 D4/D5):
+                    // `min-height: 0px` lets the clamped card take its
+                    // deficit here, and `Flickable { interactive: false }` —
+                    // the shortcuts card's safety valve, for its reasons
+                    // (below, at its body) — clips what no longer fits and
+                    // scrolls it on the wheel, while Reset and Close stay
+                    // inside the card. At every supported size it never
+                    // engages: the card fits whole at 1000x700. `go-to-tab`
+                    // puts it back at its top, or a body scrolled on
+                    // Performance would show General scrolled out of sight.
+                    settings-body := Flickable {
+                        interactive: false;
+                        viewport-width: self.width;
+                        viewport-height: self.preferred-height;
+                        preferred-height: max(general-body.preferred-height,
+                            ui-body.preferred-height, perf-body.preferred-height);
+                        min-height: 0px;
+                        vertical-stretch: 1;
+                        init => {
+                            root.dbg-card-laid-out("settings body", self.absolute-position.x,
+                                self.absolute-position.y, self.width, self.height);
+                        }
+                        changed height => {
+                            root.dbg-card-laid-out("settings body", self.absolute-position.x,
+                                self.absolute-position.y, self.width, self.height);
+                        }
+                        changed absolute-position => {
+                            root.dbg-card-laid-out("settings body", self.absolute-position.x,
+                                self.absolute-position.y, self.width, self.height);
+                        }
                         general-body := VerticalLayout {
                             x: 0;
                             y: 0;
@@ -4051,11 +4153,35 @@ export component MainWindow inherits Window {
                             }
                         }
                     }
-                    if root.settings-notice != "": Text {
+                    // THE NOTICE LINE, RESERVED (settings.md, "The card holds
+                    // still"; brief 009 R3): a permanent Text, one line tall
+                    // when it is blank — Slint lays an empty Text out as one
+                    // empty line (ui-grid.md's Slint facts; Cargo.toml, the
+                    // fifth canary) — so a notice appearing or clearing moves
+                    // nothing, and no probe glyph is needed. It was an `if`,
+                    // created after the card's `init` had read its layout:
+                    // the card's `init` read a height 29 px short of the one
+                    // painted, and every open with something to say laid the
+                    // card out three times — never painted short, but the
+                    // `init`-time capture and the one-mark contract need the
+                    // line in place.
+                    settings-notice-line := Text {
                         text: root.settings-notice;
                         color: #ffb84d;
                         font-size: 12px;
                         wrap: word-wrap;
+                        init => {
+                            root.dbg-card-laid-out("settings notice", self.absolute-position.x,
+                                self.absolute-position.y, self.width, self.height);
+                        }
+                        changed height => {
+                            root.dbg-card-laid-out("settings notice", self.absolute-position.x,
+                                self.absolute-position.y, self.width, self.height);
+                        }
+                        changed absolute-position => {
+                            root.dbg-card-laid-out("settings notice", self.absolute-position.x,
+                                self.absolute-position.y, self.width, self.height);
+                        }
                     }
                     HorizontalLayout {
                         spacing: 8px;

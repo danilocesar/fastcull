@@ -1,7 +1,8 @@
 # Settings — File › Settings… or `Ctrl+,`
 
 A small dialog with three tabs — **General**, **UI**, **Performance** —
-one row per setting. Every row shows the value that is in force and a
+the same size on every tab, so **Close** and **Reset** stay where they are
+while you switch, with one row per setting. Every row shows the value that is in force and a
 grey line under it saying what the setting does, what its default is, and
 when a change takes effect. There is no OK and no Cancel: a checkbox
 applies when you click it, a number applies when you press `Enter`, `Tab`
