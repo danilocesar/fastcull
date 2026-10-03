@@ -14380,18 +14380,41 @@ fn rect_variance(shot: &Path, (x, y, w, h): (f32, f32, f32, f32)) -> f64 {
     region_stats(shot, x / sw, y / sh, (x + w) / sw, (y + h) / sh).1
 }
 
-/// The mean (B − R) inside a window-logical rectangle `(x, y, w, h)` of a
-/// shot taken at scale factor 1 — [`region_blue_bias`] over the rectangle,
-/// as [`rect_variance`] is `region_stats` over one.
-fn rect_blue_bias(shot: &Path, (x, y, w, h): (f32, f32, f32, f32)) -> f64 {
-    let (sw, sh, _) = analyze(shot);
+/// How many pixel ROWS of a window-logical rectangle `(x, y, w, h)` of a
+/// shot taken at scale factor 1 read as blue: rows whose mean (B − R)
+/// across the rectangle's width is above `floor` — the blue bias
+/// [`region_blue_bias`] measures, one row at a time.
+///
+/// Rows are counted, never averaged into one band, because a `laid out at`
+/// mark is its position rounded to whole px and the pixels can sit a row
+/// off it (test-harness.md, "Layout"): a 3 px band flush with a mark's edge
+/// held both rows of a 2 px line on one runner and one of them on another,
+/// where a window that straddles the edge holds the same rows on both.
+fn blue_rows(shot: &Path, (x, y, w, h): (f32, f32, f32, f32), floor: f64) -> usize {
+    let bytes = std::fs::read(shot).expect("snapshot file");
+    let mut dec = zune_jpeg::JpegDecoder::new(&bytes);
+    let px = dec.decode().expect("decode snapshot");
+    let (sw, sh) = dec.dimensions().expect("dims");
     assert_eq!(
         sw, 1440,
-        "rect_blue_bias assumes scale factor 1 (a 1440 px shot of the 1440 px window); got {sw} px"
+        "blue_rows assumes scale factor 1 (a 1440 px shot of the 1440 px window); got {sw} px"
     );
-    let (sw, sh) = (sw as f64, sh as f64);
-    let (x, y, w, h) = (f64::from(x), f64::from(y), f64::from(w), f64::from(h));
-    region_blue_bias(shot, x / sw, y / sh, (x + w) / sw, (y + h) / sh)
+    // The marks print whole px (`{:.0}`), so these casts drop nothing; a
+    // rectangle past the shot's floor is cut at it.
+    let (x0, x1) = (x as usize, ((x + w) as usize).min(sw));
+    let (y0, y1) = (y as usize, ((y + h) as usize).min(sh));
+    assert!(x0 < x1, "blue_rows: an empty rectangle {x},{y} {w}x{h}");
+    (y0..y1)
+        .filter(|&row| {
+            let bias: f64 = (x0..x1)
+                .map(|col| {
+                    let i = (row * sw + col) * 3;
+                    f64::from(px[i + 2]) - f64::from(px[i])
+                })
+                .sum();
+            bias / (x1 - x0) as f64 > floor
+        })
+        .count()
 }
 
 /// AC3, the notes (settings.md, "The card"; QE 2026-10-01, D22): every row
@@ -14413,21 +14436,37 @@ fn rect_blue_bias(shot: &Path, (x, y, w, h): (f32, f32, f32, f32)) -> f64 {
 /// card": the active tab is marked by a 2 px accent underline — brief 010
 /// R3, AC28; the underline only, the integrity review having refused a check
 /// of the label's brightness). Each tab cell's rectangle comes from its own
-/// `settings tab <name>` mark at `dump.perf`, and three bands of 3 px are
-/// read through their mean blue bias (B − R; the accent `#4da3ff` is
-/// strongly blue, the card `#202028` hardly): the BOTTOM band of the active
-/// Performance cell, where the underline lies, stands far above the
-/// inactive cells' bottom bands — and above its OWN TOP band. That last
-/// comparison is the one only the underline can pass: while the strip holds
-/// the keyboard the active cell also wears a 1 px accent ring on every edge,
-/// so a bottom band with the underline gone still reads blue from the
-/// ring's bottom edge (measured 2026-10-03, this seat: bottom 121, its top
-/// 65, the inactive bottoms 8; with the underline transparent, bottom 65 =
-/// top). Each band is inset 3 px from the cell's sides. Two bands of one
-/// shot compared, no font metric: the cell is 32 px tall by the code, and
-/// its label is centred far from both bands. Mutant (2026-10-03): the
-/// underline's `background` always `transparent` → bottom 65 against top 65
-/// — red at the bottom-over-top comparison.
+/// `settings tab <name>` mark at `dump.perf`, and the shot's pixel ROWS are
+/// counted: a row reads as the accent when its mean blue bias (B − R; the
+/// accent `#4da3ff` is strongly blue, the card `#202028` hardly) across the
+/// cell, inset 3 px from its sides, is above 100. In a window of six rows
+/// straddling the active Performance cell's BOTTOM edge there are at least
+/// 2 — the 2 px underline; in the same window at its TOP edge at most 1 —
+/// the 1 px accent ring the strip draws on every edge of the active cell
+/// while it holds the keyboard, whose bottom edge shares the underline's
+/// lower row, so with the underline gone the bottom edge holds that one row
+/// and no more; at the inactive cells' bottom edges none. The windows
+/// straddle the edges because a mark is its position rounded to whole px
+/// and the pixels can sit a row off it (test-harness.md, "Layout").
+/// Measured 2026-10-03, the accent rows reading 176–179 and every other row
+/// in the windows 5–14:
+///   * windows-latest (CI run 37150692393, debug; the mark `578,244 size
+///     103x32`): the ring's top at y+1, the underline at y+h−1 and y+h —
+///     the cell drawn one row below its mark;
+///   * ubuntu-latest (the same run, release, DejaVu Sans; `584,258 size
+///     111x32`) and this seat (Noto Sans; `580,256 size 108x32`): the
+///     ring's top at y, the underline at y+h−2 and y+h−1.
+///
+/// Rows of one shot counted against the cell's own mark, no font metric:
+/// the cell is 32 px tall by the code and its label is centred far from
+/// both windows. Mutants (2026-10-03), each alone: the underline's
+/// `background` always `transparent` → the bottom window holds the ring's
+/// row alone, 1 — red; always `#4da3ff`, an underline under every tab →
+/// the inactive cells' bottom windows hold `[2, 2]` — red.
+/// Until the senior developer's review F1 (2026-10-03) the strand averaged
+/// 3 px bands flush with the mark's edges, which held both underline rows
+/// on this seat and only one on windows-latest: red there on a correct
+/// tree (the bottom band 65.0 against the top band's 65.1).
 #[test]
 fn every_settings_note_is_the_core_text() {
     if !has_display() {
@@ -14487,28 +14526,42 @@ fn every_settings_note_is_the_core_text() {
          variance {drawn:.1} against {empty:.1} for the card's padding: the \
          note is bound but not drawn:\n{stderr}"
     );
-    // The active tab's accent underline (AC28): the bottom 3 px band of each
-    // tab cell, inset 3 px from its sides, and the active cell's top band.
-    let band = |tab: &str, bottom: bool| {
+    // The active tab's accent underline (AC28), counted in accent ROWS: a
+    // row of a tab cell, inset 3 px from its sides (clear of the ring's side
+    // edges and rounded corners), whose mean blue bias is above 100 — the
+    // accent reads 176–179 there, the card and the labels 5–14. Each window
+    // is six rows straddling one edge of the cell, so a cell drawn a row
+    // off its mark (windows-latest) holds the same rows as one drawn inside
+    // it (this seat).
+    let accent = |tab: &str, at_top: bool| {
         let (x, y, w, h) = laid_out_at(&stderr, &format!("settings tab {tab}"), "perf");
-        let top = if bottom { y + h - 3.0 } else { y };
-        rect_blue_bias(&out, (x + 3.0, top, w - 6.0, 3.0))
+        let from = if at_top { y - 2.0 } else { y + h - 4.0 };
+        blue_rows(&out, (x + 3.0, from, w - 6.0, 6.0), 100.0)
     };
-    let active = band("performance", true);
-    let active_top = band("performance", false);
-    let inactive = [band("general", true), band("ui", true)];
-    assert!(
-        active >= 50.0 && inactive.iter().all(|b| active - b >= 40.0),
-        "the active tab's bottom band (blue bias {active:.1}) does not stand above the \
-         inactive tabs' ({inactive:?}) as the accent underline does (settings.md, \"The \
-         card\"; measured on this seat 121 against 8):\n{stderr}"
+    let inactive = [accent("general", false), accent("ui", false)];
+    assert_eq!(
+        inactive,
+        [0, 0],
+        "an INACTIVE tab's bottom edge holds accent rows (General, UI) — the underline \
+         marks the active tab alone (settings.md, \"The card\"):\n{stderr}"
     );
+    // The premise of the count below: the ring the strip draws on every edge
+    // of the active cell while it holds the keyboard is 1 px, so its bottom
+    // edge accounts for at most ONE accent row there.
+    let ring = accent("performance", true);
     assert!(
-        active - active_top >= 30.0,
-        "THE ACTIVE TAB HAS NO ACCENT UNDERLINE: its bottom band (blue bias {active:.1}) \
-         reads no bluer than its own top band ({active_top:.1}) — what blue there is comes \
-         from the focus ring on every edge, not from an underline (settings.md, \"The \
-         card\"; measured on this seat 121 against 65):\n{stderr}"
+        ring <= 1,
+        "the active tab's TOP edge holds {ring} accent rows — more than the 1 px focus \
+         ring, so the rows at its bottom edge could be a thicker ring rather than the \
+         underline, and the count below proves nothing:\n{stderr}"
+    );
+    let underline = accent("performance", false);
+    assert!(
+        underline >= 2,
+        "THE ACTIVE TAB HAS NO ACCENT UNDERLINE: its bottom edge holds {underline} accent \
+         row(s) where the 2 px underline makes 2 — one row there is the focus ring's \
+         bottom edge alone (settings.md, \"The card\"; measured 2 on this seat, on \
+         ubuntu-latest and on windows-latest, 1 with the underline transparent):\n{stderr}"
     );
 }
 

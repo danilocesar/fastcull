@@ -256,7 +256,18 @@ sidecars — scripts target throwaway copies of test data only.
   above does not; the failed-cursor test gates its first dump on it (brief
   010, 2026-10-03, issue #101: on a slow runner the failing decode landed
   2.3 s after the first End, and the second End's dump had read a cursor
-  the app did not yet know had failed, 1 of 13 Windows debug runs).
+  the app did not yet know had failed, 1 of 13 Windows debug runs). A
+  `laid out at` mark prints its position rounded to whole px (`{:.0}`,
+  harness.rs), and a pixel read at the mark's edge can be one row off what
+  was drawn: on windows-latest (2026-10-03) the Settings tab cell's ring
+  and underline sat one row below its mark, where on this seat and on
+  ubuntu-latest they sit inside it — so a pixel strand reads a window that
+  straddles an edge, or counts rows, never a band flush with a mark (brief
+  010, the senior developer's review F1: a 3 px band flush with the tab
+  cell's bottom edge held one underline row of two there and went red on
+  a correct tree; the likeliest mechanism, a fractional layout position
+  rounded one way by the mark and the other by the renderer, is
+  unconfirmed without a Windows seat).
 - **Settings** (brief 008, settings.md): `settings loaded from <path>` /
   `settings: no file (defaults in force)` / `settings: <path> could not
   be read: <error>` at startup and at every open — except an open while a
@@ -561,6 +572,9 @@ shot 2.
 
 ## History
 
+- 2026-10-03 — Brief 010, the senior developer's review F1: a `laid out
+  at` mark's edge can be one row off the drawn pixels (windows-latest), so
+  a pixel strand straddles the edge or counts rows.
 - 2026-10-03 — Brief 010 commit F: the suite's size measured — 120
   tests, three thirds of 327 s + 280 s + 325 s in debug on the idle seat.
 - 2026-10-03 — Brief 010 commit C: the number fields' creation `shows`

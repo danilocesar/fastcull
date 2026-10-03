@@ -1013,19 +1013,26 @@ their precedence is `fastcull-core`'s; the app binds (brief 008, 2026-10-01).
       integrity review set — a measured red mutant — is the plan's
       measurement; without one this line records the deferral instead).
 - [x] **AC28 — the active tab's accent underline** ("The card"; brief 010
-      R3). At the notes test's shutter on Performance, the bottom 3 px band
-      of the active tab's cell reads as the accent — its blue bias far
-      above the inactive cells' bands, which read as the card, and above
-      the active cell's own top band, which carries only the 1 px focus
-      ring the strip draws on every edge while it holds the keyboard — the
-      underline only, never a label's weight or brightness —
-      `every_settings_note_is_the_core_text`'s pixel strand (brief 010,
-      2026-10-03; measured on this seat: mean RGB (62,119,183), blue bias
-      121, against (32,32,40), bias 8, and the active top band 65;
-      corrected at brief 010's implementation the same day — it read "blue
-      bias 92", which those means do not give, and named the inactive
-      cells alone, against which a band with the underline transparent
-      still read 65 from the ring's bottom edge and stayed green).
+      R3). At the notes test's shutter on Performance, a window of six
+      pixel rows straddling the active tab's bottom edge holds at least 2
+      accent rows — the 2 px underline — where the same window at its top
+      edge holds at most 1 (the 1 px focus ring the strip draws on every
+      edge while it holds the keyboard, whose bottom edge shares the
+      underline's lower row) and the inactive cells' bottom edges none; a
+      row is the accent when its mean blue bias across the cell, inset 3 px
+      from its sides, is above 100 — the underline only, never a label's
+      weight or brightness — `every_settings_note_is_the_core_text`'s
+      pixel strand (brief 010, 2026-10-03; measured the same day on
+      windows-latest, ubuntu-latest and this seat: the accent rows 176–179,
+      every other row in the windows 5–14, the windows-latest cell drawn one
+      row below its mark — test-harness.md, "Layout"; corrected the same day
+      by the senior developer's review F1 — the strand averaged 3 px bands
+      flush with the mark's edges, which on windows-latest held one
+      underline row of two, read no bluer than the top band and went red on
+      a correct tree; and before that at the implementation — it read "blue
+      bias 92", which its means do not give, and named the inactive cells
+      alone, against which a band with the underline transparent still read
+      65 from the ring's bottom edge and stayed green).
 - [x] **AC29 — Reset names the active tab** ("The card"; brief 010 R3).
       `Reset General to defaults` on General, `Reset UI to defaults` on UI,
       `Reset Performance to defaults` on Performance, read from the
@@ -1070,6 +1077,11 @@ their precedence is `fastcull-core`'s; the app binds (brief 008, 2026-10-01).
 
 ## History
 
+- 2026-10-03 — Brief 010, the senior developer's review F1: AC28 counts
+  the active tab's accent rows in windows straddling its edges — the 3 px
+  bands flush with its mark held one underline row of two on
+  windows-latest, where the cell is drawn one row below its mark, and went
+  red on a correct tree.
 - 2026-10-03 — Brief 010, the scratch-dir guard: core's unit tests hold a
   guard that removes their scratch dir when they end and keeps it for a
   red test; AC31 ticked beside its test.
