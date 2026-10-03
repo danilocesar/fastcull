@@ -115,7 +115,18 @@ their precedence is `fastcull-core`'s; the app binds (brief 008, 2026-10-01).
   environment's); a key the
   write CREATES is preceded by `#` comment lines carrying the field's
   note (`Key::note()`, wrapped at 78 columns over as many lines as it
-  needs), so the file documents itself for hand editing; a key that already
+  needs), so the file documents itself for hand editing — except a key
+  created inside an INLINE table the user wrote by hand (`performance = {
+  cache_cap = "2 GB" }`), which TOML cannot comment: the key is added
+  inside the braces with no note, and the braces stay the user's shape
+  (brief 010, 2026-10-03, on QE 2026-10-02 D47 — this sentence had
+  promised a note on every created key; measured on toml_edit 0.22.27 the
+  same day: expanding the inline table into a `[performance]` table would
+  move the group to the end of the file, and `into_table()` wrote an
+  unparsable header, so under D5 the shape stays and the note goes); a key
+  created under a dotted key (`performance.cache_cap = "2 GB"`) carries
+  its note, a dotted table being a table (measured the same day); a key
+  that already
   exists keeps the user's own comment above it and any comment on its
   line; unknown keys, tables and the user's other comments survive
   byte-for-byte (measured on toml_edit 0.22.27, 2026-10-01: `Table::insert`
@@ -146,7 +157,15 @@ their precedence is `fastcull-core`'s; the app binds (brief 008, 2026-10-01).
   on its header's line (on its own line, for a plain value) stays on the
   replacing line (QE 2026-10-01, D35; brief 008 D40, QE 2026-10-02, D42: the
   comment above a replaced sub-table was deleted with it, though the one
-  above a replaced `[[general]]` was kept).
+  above a replaced `[[general]]` was kept). An array of tables with
+  SEVERAL elements keeps every element's comments: the comments above
+  each element, in the elements' order, and a later element's header-line
+  comment as a line of its own after that element's comments, all above
+  the key or the table that replaces the array, whose own header line
+  keeps the first element's header-line comment (brief 010, 2026-10-03;
+  corrected from a first-element-only carry — QE 2026-10-02, D48: a
+  two-element `[[general]]` kept only its first header's comments, the
+  second's went with the table).
 - Every save writes EVERY known key with the value the saving window
   holds, so a second FastCull window, or a hand edit made while the
   dialog is open, loses to the last save (the user, 2026-10-02, brief 008
@@ -202,7 +221,19 @@ their precedence is `fastcull-core`'s; the app binds (brief 008, 2026-10-01).
   as the read error's own lines do (QE 2026-10-02, round 5, D46: both
   lines called the earlier aside "the file that would not read", the
   notice beside its own "the file that would not read could not be moved
-  aside").
+  aside"). The same holds when the write fails at the move-aside with NO
+  read error standing — the fresh file broken by hand while the dialog was
+  open, so no open re-read it, and the config dir unwritable when the user
+  commits: settings.toml is the file that would not read there too, the
+  notice reads `Could not write settings.toml: the file that would not
+  read could not be moved aside: <error> — the earlier one is
+  settings.toml.broken` and the status line ` — ⚠ settings.toml could not
+  be written — the earlier one is settings.toml.broken`; the bridge decides
+  by the write error's KIND (`WriteError::MoveAside`), never by its text
+  (brief 010, 2026-10-03; corrected — the developer, 2026-10-02, in issue
+  #100: both lines named the earlier aside as "the file that would not
+  read" beside the notice's own words that that file could not be moved
+  aside).
 - A read error NEWER than the move wins over `rewritten`: when the open's
   re-read fails after a file has been moved aside (a second hand edit broke
   the fresh file), the status line reads `⚠ settings.toml could not be read
@@ -698,7 +729,7 @@ their precedence is `fastcull-core`'s; the app binds (brief 008, 2026-10-01).
       marks each read emits with the path it used (QE 2026-10-01, D37: the
       real config dir is empty on every seat, so a revert of either to the
       per-user dir had stayed green).
-- [x] **AC7 — precedence.** With `FASTCULL_MAX_READERS` set the field is
+- [ ] **AC7 — precedence.** With `FASTCULL_MAX_READERS` set the field is
       read-only with the environment's value and its note; unset, the
       file's value governs the pool; an unparsable value is ignored —
       core `the_environment_wins_over_the_file_for_max_readers`,
@@ -738,9 +769,12 @@ their precedence is `fastcull-core`'s; the app binds (brief 008, 2026-10-01).
       core `the_environment_never_reaches_the_settings_file` (a test binary
       of its own, because it sets the variable in its own process) and the
       same app test's fourth run (the user, 2026-10-02, brief 008 D42).
-      The field's SHOWN value under the variable (the environment's) is
-      read by no test yet — a deferred guard, issue #100 (QE 2026-10-02,
-      SC-3; the box holds for what its tests prove).
+      The field's SHOWN value under the variable is the environment's —
+      the same app test's first run reads the Limit field's own `settings
+      readers-limit shows 3` mark, emitted when the dialog creates the
+      field, before `dump.perf`, where the file says 7 (brief 010,
+      2026-10-03; a deferred guard until then, issue #100, QE 2026-10-02
+      SC-3 — the box re-opened for it and ticks with the strand).
 - [x] **AC8 — auto-advance off.** `Y`/`N` keep the cursor and leave the
       selection alone; the filter exception moves the cursor and ends the
       selection as `U` does; on, as today — core
@@ -780,7 +814,7 @@ their precedence is `fastcull-core`'s; the app binds (brief 008, 2026-10-01).
       `settings_cap::the_cli_honours_the_files_cache_cap_and_says_where_it_came_from`
       (the same sandbox and seed, and the four wordings of where the cap
       came from) and review-verified on Windows (QE 2026-10-01, D27).
-- [x] **AC12 — Clear cache.** The readout is the db + `-wal` + `-shm`
+- [ ] **AC12 — Clear cache.** The readout is the db + `-wal` + `-shm`
       size with the path; clearing empties the table and shrinks the
       file through a live connection and never unlinks it; the
       connection stays usable — core
@@ -799,18 +833,33 @@ their precedence is `fastcull-core`'s; the app binds (brief 008, 2026-10-01).
       fails, the database made read-only for the clear alone, saying so in
       the row (`Thumbnail cache: could not be cleared (…) — … in …`) — and
       review-verified on Windows, whose known-folder lookup ignores the
-      environment. That the clear never BLOCKS the UI thread is
-      review-verified: the thread's name proves the worker, and a `join()`
-      right after the spawn would still report it. The open session
-      keeping its painted thumbs is review-verified on both, no dump field
-      reading textures (QE 2026-10-01, D24: "a driven run cannot have a
-      cache" holds on Windows only; brief 008 D13 stands — no new variable;
-      QE 2026-10-02, round 5: the worker, the `Clearing…` row, the disabled
+      environment. That the clear never BLOCKS the UI thread is driven on
+      Linux by the same test's fourth run: with the worker held by the
+      harness knob `FASTCULL_CLEAR_HOLD_MS` (test-harness.md), the UI
+      thread answers a `dump.` WHILE the hold stands — the dump's line
+      before the worker's own `settings cache clear ran on settings-clear`
+      line on the one trace — and the row reads `Clearing…` in that dump;
+      a `join()` after the spawn puts the dump after the worker's line
+      (brief 010, 2026-10-03; review-verified until then: the thread's name
+      proves the worker, and a `join()` right after the spawn would still
+      report it). The open session keeps its painted thumbs — the dump's
+      `thumbtex=` count of decoded thumb textures is the same before and
+      after the clear, and at least 1 — in the same run (brief 010;
+      review-verified until then, no dump field reading textures); and
+      the Tab ring reaches Clear when the cache is on — four Tabs from the
+      strip on Performance land on it, and Return starts the clear — in
+      the same run (brief 010); all three review-verified on Windows (QE
+      2026-10-01, D24: "a driven run cannot have a cache" holds on Windows
+      only; brief 008 D13 stands — no new variable for a setting; QE
+      2026-10-02, round 5: the worker, the `Clearing…` row, the disabled
       button and a failed clear's wording had stood on the trace's order
       alone, which proved none of them).
-      The button's DISABLED state under `FASTCULL_NO_CACHE` is read by no
-      test yet — a deferred guard, issue #100 (QE 2026-10-02, SC-4; the
-      box holds for what its tests prove).
+      Under `FASTCULL_NO_CACHE` the button is DISABLED, read from its own
+      `settings clear-cache enabled false` mark at the open and none
+      reading `true` after it — `clear_cache_is_off_under_no_cache` (brief
+      010, 2026-10-03; a deferred guard until then, issue #100, QE
+      2026-10-02 SC-4 — the box re-opened for it and ticks with the
+      strands).
 - [x] **AC13 — the Failed badge.** The badge shows the reason on hover and
       the status line carries it when the cursor stands on the frame —
       ui-grid.md's ledger
@@ -842,7 +891,7 @@ their precedence is `fastcull-core`'s; the app binds (brief 008, 2026-10-01).
       height of an open on General equals the height of a reopen on
       Performance — `the_settings_card_holds_still_across_its_tabs`, each
       of its three launches (brief 009, 2026-10-03).
-- [x] **AC18 — the footer pinned, the notice reserved** (brief 009 AC2).
+- [ ] **AC18 — the footer pinned, the notice reserved** (brief 009 AC2).
       Close and Reset keep their x and y at every dump of the walk, and
       neither they, the notice line, the body host nor a tab reports a new
       layout from the first switch to the close; the active tab's first
@@ -879,7 +928,14 @@ their precedence is `fastcull-core`'s; the app binds (brief 008, 2026-10-01).
       notice, arriving while the dialog is open, grows the card by exactly
       the notice's extra line on every runner's face —
       `the_settings_card_grows_by_a_write_error_that_wraps_while_it_is_open`
-      (QE 2026-10-03, D1).
+      (QE 2026-10-03, D1) — and the card so grown KEEPS that height when a
+      later write succeeds and the notice un-wraps to the one-line
+      `rewritten`: the same test's third commit, the file writable again,
+      with no new layout from the card, the body host, the notice line,
+      Reset or Close after it — the never-shrinks rule with power on every
+      face, Windows' included, where the Loupe memory strand has none
+      (brief 010, 2026-10-03, brief 009's TP-1 in issue #100; the box
+      re-opened for it and ticks with the strand).
 - [x] **AC19 — the strip holds still** (brief 009 AC3). Every tab's x and
       width are the same at every dump of the walk —
       `the_settings_card_holds_still_across_its_tabs` (brief 009,
@@ -903,9 +959,113 @@ their precedence is `fastcull-core`'s; the app binds (brief 008, 2026-10-01).
       while the grid behind holds `vpy=0.0`, and a tab switch puts the
       body back at its top —
       `below_the_minimum_window_the_settings_body_gives_before_the_footer`
-      (brief 009, 2026-10-03).
+      (brief 009, 2026-10-03); its premise names a reverted window as
+      such: between the geometry wait's echo and the last dump no `window
+      geometry WxH` other than `1000x400` is traced, the WxH prefix
+      compared only — diagnostic quality, a revert is red either way
+      (brief 009's TP-3, to land with brief 010, 2026-10-03).
+- [ ] **AC23 — a plain failed write's status line** (brief 010 R2). With no
+      read error standing and no file moved aside, a write that fails puts
+      ` — ⚠ settings.toml could not be written` on the status line — no
+      `rewritten`, no `(defaults in force)` — app unit
+      `settings_bridge::tests::a_plain_failed_write_says_so_on_the_status_line`
+      and the driven
+      `a_failed_settings_write_keeps_the_commit_and_the_next_open_does_not_reread`,
+      whose `committed` and `reopened` dumps read the status line (brief
+      010, 2026-10-03; issue #100's first NOW guard).
+- [ ] **AC24 — `Space` commits a checkbox** ("Apply on commit"; brief 010
+      R2). `Space` on the Auto-advance box reached by `Tab` from the strip,
+      and on the Adaptive box reached by three `Tab`s on Performance, each
+      commits its setting once and the box shows the new state —
+      `a_number_typed_after_tab_replaces_the_value_in_the_field`'s Space
+      strand, read from `settings committed …` and the boxes' own `shows`
+      marks (brief 010, 2026-10-03).
+- [ ] **AC25 — a hand edit made while the dialog is open loses to the next
+      save** ("Writing", brief 008 D42 option A; brief 010 R2). The file
+      says `selection_wash = 40` at launch and the open reads it
+      (`wash=40`); a hand edit anchored on the app's own `settings opened`
+      line rewrites the file to `selection_wash = 10` and adds `hand_edit =
+      1`; a commit of ANOTHER setting then saves every key as the dialog
+      holds it — the written file reads `selection_wash = 40` beside the
+      surviving `hand_edit = 1`, and the model never saw 10 — app
+      `a_hand_edit_made_while_the_dialog_is_open_loses_to_the_next_save`
+      (the `edited` premise: `hand_edit = 1` in the written file proves the
+      edit preceded the write, `wash=40` at the open that it followed the
+      re-read) (brief 010, 2026-10-03).
+- [ ] **AC26 — the Limit has no ceiling of its own** ("Read workers"; brief
+      010 R2). `set_from_text(MaxReaders, "64")` is 64 and `"4294967295"`
+      the type's own maximum, a file's `max_readers = 1000` reads 1000, and
+      the pool adopts `(4, 4, 1000)` — core
+      `the_readers_limit_has_no_ceiling_of_its_own` and a `(None, 1000,
+      (4, 4, 1000))` row of
+      `pipeline::tests::the_readers_resolution_feeds_the_pool_exactly_as_the_variable_did`
+      (brief 010, 2026-10-03).
+- [ ] **AC27 — `Ctrl+,` inert while a keyword field holds the keyboard**
+      ("Opening and closing"; brief 010 R3). With the keyword field focused
+      and typed into, `Ctrl+,` opens nothing and the field keeps the
+      keyboard (`focusowner=` its token) and its text —
+      `settings_over_a_focused_keyword_field_commits_it_and_owns_the_keyboard`'s
+      strand before its open (brief 010, 2026-10-03; the condition the
+      integrity review set — a measured red mutant — is the plan's
+      measurement; without one this line records the deferral instead).
+- [ ] **AC28 — the active tab's accent underline** ("The card"; brief 010
+      R3). At the notes test's shutter on Performance, the bottom 3 px band
+      of the active tab's cell reads as the accent — its blue bias far
+      above the inactive cells' bands, which read as the card — the
+      underline only, never a label's weight or brightness —
+      `every_settings_note_is_the_core_text`'s pixel strand (brief 010,
+      2026-10-03; measured on this seat: mean RGB (62,119,183), blue bias
+      92, against (32,32,40), bias 8, the label band's bias 6).
+- [ ] **AC29 — Reset names the active tab** ("The card"; brief 010 R3).
+      `Reset General to defaults` on General, `Reset UI to defaults` on UI,
+      `Reset Performance to defaults` on Performance, read from the
+      button's own `settings reset shows` mark at each tab's dump —
+      `settings_tabs_switch_by_keys_and_never_by_digits` (brief 010,
+      2026-10-03).
+- [ ] **AC30 — auto-advance off holds in the loupe at 1:1** ("General ›
+      Auto-advance"; brief 010 R3). At 1:1 on a real folder with
+      auto-advance off, `Y` marks and the cursor stays, `one2one` stays; on,
+      `Y` advances at 1:1 too — app
+      `auto_advance_off_holds_the_cursor_in_the_loupe_at_one_to_one`, a
+      launch of its own (the integrity review's shape; brief 010,
+      2026-10-03). The mark path has no zoom branch today, so its only red
+      mutant is the grid test's: this pins "at every zoom" against a future
+      one.
+- [ ] **AC31 — core's test scratch dirs go on `Drop`, a red test's kept**
+      (brief 010 R3). `testutil::scratch_dir` returns a guard that removes
+      the directory when the test ends and keeps it when the test is
+      panicking — core
+      `testutil::tests::a_scratch_dir_goes_on_drop_and_stays_for_a_panicking_test`
+      (brief 010, 2026-10-03; measured on this seat: 1,086 `fastcull-*`
+      dirs, 36 MB, left in `/tmp`, a 16 GB tmpfs).
+- [ ] **AC32 — the two hand-edited writer shapes** ("Writing"; brief 010
+      R4). A key created inside an inline table carries no note and the
+      braces stay — core
+      `a_key_created_inside_an_inline_table_carries_no_note_and_the_braces_stay`
+      (QE 2026-10-02, D47); every element's comments of a multi-element
+      array stay above what replaces it, in order, a later header-line
+      comment as a line of its own — core
+      `every_elements_comments_of_a_replaced_array_stay_above_what_replaces_it`,
+      over `[[general]]` and `[[performance.loupe_memory]]` (QE 2026-10-02,
+      D48).
+- [ ] **AC33 — a failed move-aside with no read error standing** ("Writing";
+      brief 010 R6). The notice reads `Could not write settings.toml: the
+      file that would not read could not be moved aside: … — the earlier
+      one is settings.toml.broken` and the status line ` — ⚠ settings.toml
+      could not be written — the earlier one is settings.toml.broken` — app
+      unit
+      `settings_bridge::tests::a_failed_move_aside_with_no_read_error_standing_names_the_earlier_aside_as_the_earlier_one`
+      (brief 010, 2026-10-03; the developer's 2026-10-02 finding in issue
+      #100).
 
 ## History
+
+- 2026-10-03 — Brief 010 agreed, spec first: "Writing" states the
+  inline-table exception (QE D47), the every-element carry for a
+  multi-element array (QE D48) and the failed move-aside with no read error
+  standing (the developer's finding, issue #100); AC7, AC12 and AC18
+  re-opened for the shown Limit, the Clear guards and brief 009's TP-1;
+  AC22 names TP-3; AC23–AC33 opened for the guards of issue #100.
 
 - 2026-10-03 — Brief 009's test-integrity review: AC18 names the
   never-shrinks test's growth check and Linux cache strand, the

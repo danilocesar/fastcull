@@ -990,7 +990,14 @@ host, not the footer, absorbs the high-water mark's extra height).
       second End-jump — failure known, texture in hand — must not render
       the rescue; both landing orders are correct product behaviour and
       neither is asserted; its preconditions `cursor=11`, `zf=inf` and the
-      `(decode failed)` drop are asserted, not reasoned).
+      `(decode failed)` drop are asserted, not reasoned; since brief 010
+      the "failure known" premise is gated on the app's own `failed badge
+      11 laid out` mark before the first dump — the first observable
+      consequence of the failure whatever the overlay's state
+      (test-harness.md) — because on a slow runner the failing decode
+      landed 2.3 s after the first End and the second End's dump read a
+      cursor the app did not yet know had failed, 1 of 13 Windows debug
+      runs, issue #101; the assertions are unchanged).
 - [x] The wheel: one stop per notch through the restructured wiring, the
       notch size pinned (59 px nothing, 60 px one stop), residue carried, a
       full notch down at fit inert —

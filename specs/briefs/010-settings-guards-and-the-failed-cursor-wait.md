@@ -196,3 +196,23 @@ clock guess.
   user asked for the issues to be worked, not triaged — with the suite
   economy rule R8 keeping the cost down; a guard whose approved shape has
   a condition that cannot be met is recorded, not forced.
+- D5 (2026-10-03, Manager, on the senior developer's plan): D47 is the
+  exception sentence — a key created inside a hand-written inline table
+  carries no note and the braces stay the user's shape — because the
+  alternative, expanding the table, produced an unparsable file and moved
+  the group in the measurement (toml_edit 0.22.27, `into_table()`), and
+  D5 of brief 008 (a hand-edited config is the user's data) weighs a
+  rewritten line heavier than a missing comment; no code change, a
+  pinning test. AC30 (auto-advance off holds at 1:1 — "at every zoom") and
+  AC31 (the core tests' scratch dirs removed on `Drop`, keeping a red
+  test's evidence; 1,086 leftover dirs measured on the seat) are IN. The
+  #101 gate is `wait:failed badge 11 laid out` in front of `dump.t1`, not
+  the overlay-drop mark, which is emitted only while the overlay is up
+  and would have hung the run that went red; the race did not reproduce
+  on this seat under load (0 of 10 on either binary), so the recorded
+  Windows trace is the old-red. The driven suite runs as thirds re-split
+  from `--list` on this seat (118 tests, 910 s) — a directive candidate
+  for the agent files' stale "87 tests, 318 s + 288 s", not a rule
+  change. AC22 stays ticked with TP-3's clause (the claim is pinned; TP-3
+  improves the premise). AC27 is the strand in the keyword test. The
+  harness hold knob `FASTCULL_CLEAR_HOLD_MS` is test plumbing (D3).
