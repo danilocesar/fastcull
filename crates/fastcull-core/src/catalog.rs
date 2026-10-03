@@ -222,12 +222,14 @@ fn has_jpeg_extension(path: &Path) -> bool {
 mod tests {
     use super::*;
 
-    /// A fixture directory that cleans itself up even when an assertion
-    /// panics — restoring permissions first, because the 1,000-entry test
-    /// denies itself read access on purpose and must not leave a pile of
-    /// unreadable stubs in the scratch directory.
+    /// A fixture directory whose stubs are readable again however the test
+    /// ends — the 1,000-entry test denies itself read access on purpose and
+    /// must not leave a pile of unreadable stubs in the scratch directory.
+    /// The directory itself goes with its guard, which keeps it for a red
+    /// test (brief 010, AC31) — readable, because the permissions are
+    /// restored first.
     struct Fixture {
-        dir: PathBuf,
+        dir: crate::testutil::ScratchDir,
     }
 
     impl Drop for Fixture {
@@ -245,11 +247,11 @@ mod tests {
                     }
                 }
             }
-            std::fs::remove_dir_all(&self.dir).ok();
+            // The removal is the guard's, which runs after this.
         }
     }
 
-    fn make_folder(files: &[&str]) -> PathBuf {
+    fn make_folder(files: &[&str]) -> crate::testutil::ScratchDir {
         let dir = crate::testutil::scratch_dir("catalog");
         for f in files {
             std::fs::write(dir.join(f), b"stub").unwrap();

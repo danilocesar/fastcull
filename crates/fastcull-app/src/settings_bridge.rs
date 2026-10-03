@@ -209,12 +209,20 @@ pub(crate) fn wire(window: &MainWindow, state: &Rc<RefCell<AppState>>) {
             // back onto the UI thread reads `… ran on main`, which a driven
             // run sees (QE 2026-10-02, round 5). The name proves the worker,
             // not that the UI thread never waits for it — a `join()` right
-            // after the spawn would block the UI and still report this name
-            // — so "never blocks" stays review-verified (settings.md AC12).
+            // after the spawn would block the UI and still report this name.
+            // "Never blocks" is driven through the harness knob below: with
+            // the worker held, a `dump.` answers on the UI thread while the
+            // row reads `Clearing…` (settings.md AC12; brief 010).
             let weak = win.as_weak();
             let spawned = std::thread::Builder::new()
                 .name("settings-clear".into())
                 .spawn(move || {
+                    // FIRST, on the worker itself, before it opens its
+                    // connection: a hold here is the worker's time, never
+                    // the UI thread's (test-harness.md).
+                    if let Some(hold) = clear_hold() {
+                        std::thread::sleep(hold);
+                    }
                     let before = fastcull_core::cache::size_on_disk(&db);
                     let error = fastcull_core::cache::PreviewCache::open(&db)
                         .and_then(|mut cache| cache.clear())
@@ -359,9 +367,40 @@ fn record_write(
                 st.moved_aside = Some(aside.to_path_buf());
                 st.loaded.error = None;
             }
-            st.write_error = Some(e.to_string());
+            // Kept whole: its KIND decides how the lines name an earlier
+            // aside (`write_error_aside`), its Display is the notice's words.
+            st.write_error = Some(e);
         }
     }
+}
+
+/// The Clear worker's harness hold (test-harness.md): test plumbing in
+/// `FASTCULL_KITCHEN_COOK_MS`'s family, never a setting (brief 010 D3;
+/// brief 008 D13 and D42 stand).
+const CLEAR_HOLD_VAR: &str = "FASTCULL_CLEAR_HOLD_MS";
+
+/// `FASTCULL_CLEAR_HOLD_MS=N`: hold every cache clear N ms on its worker
+/// before it starts — the pacing knob for the proof that Clear never blocks
+/// the UI thread (settings.md AC12): a clear that takes a millisecond on a
+/// test cache leaves no window in which to ask the UI thread anything, and
+/// a held one leaves N ms. Read ONCE per process, and said out loud the
+/// first time, unconditionally: a leftover value in some environment makes
+/// every Clear mysteriously slow, and a knob that ships in release builds
+/// must be diagnosable from a bug report's stderr (the kitchen knob's
+/// reason). `None` — no hold, no cost — unset, 0 or unparsable.
+fn clear_hold() -> Option<std::time::Duration> {
+    static HOLD_MS: std::sync::OnceLock<u64> = std::sync::OnceLock::new();
+    let ms = *HOLD_MS.get_or_init(|| {
+        let ms = std::env::var(CLEAR_HOLD_VAR)
+            .ok()
+            .and_then(|v| v.parse().ok())
+            .unwrap_or(0);
+        if ms > 0 {
+            eprintln!("fastcull: {CLEAR_HOLD_VAR}={ms} — every cache clear is held");
+        }
+        ms
+    });
+    (ms > 0).then(|| std::time::Duration::from_millis(ms))
 }
 
 /// Is the thumbnail cache switched off for this run?
@@ -494,15 +533,22 @@ pub(crate) fn status_note(st: &SettingsState) -> String {
 /// What follows a standing write error, on both lines alike: where a
 /// broken file was moved aside, named for the rest of the session, a failed
 /// write after the move included (settings.md, "Writing"; senior-developer
-/// review F4 of brief 008) — unless a read error NEWER than that move still
-/// stands. Then this write moved nothing (a move that happens answers the
-/// read error, [`record_write`]), settings.toml itself is the file that
-/// would not read, and the aside is named as the earlier one, as the read
-/// error's own lines name it (QE 2026-10-02, round 5, D46: both lines
-/// called the earlier aside "the file that would not read", the notice
-/// right after saying that that file could not be moved aside).
+/// review F4 of brief 008) — unless settings.toml ITSELF is now the file
+/// that would not read, which is so in two states: a read error NEWER than
+/// that move still stands (this write moved nothing — a move that happens
+/// answers the read error, [`record_write`]; QE 2026-10-02, round 5, D46),
+/// or this write failed AT THE MOVE-ASIDE with no read error standing — the
+/// fresh file broken by hand while the dialog was open, so no open re-read
+/// it, and the dir unwritable (brief 010 R6; the developer's finding of
+/// 2026-10-02 in issue #100). Then the aside is named as the earlier one,
+/// as the read error's own lines name it: in both states the notice says,
+/// right before, that "the file that would not read could not be moved
+/// aside", and both lines used to call the earlier aside that very file.
+/// The second state is read off the error's KIND, `WriteError::MoveAside`,
+/// never off its words.
 fn write_error_aside(st: &SettingsState) -> String {
-    if st.loaded.error.is_some() {
+    let failed_at_the_move = matches!(st.write_error, Some(settings::WriteError::MoveAside(_)));
+    if st.loaded.error.is_some() || failed_at_the_move {
         return earlier_aside(st);
     }
     st.moved_aside
@@ -688,7 +734,12 @@ mod tests {
         );
         assert_eq!(st.moved_aside.as_deref(), Some(aside.as_path()));
         assert_eq!(st.loaded.error, None, "the move answered the read error");
-        assert_eq!(st.write_error.as_deref(), Some("No space left on device"));
+        // The error is kept whole since brief 010 (its kind decides the
+        // wording); its words are its Display.
+        assert_eq!(
+            st.write_error.as_ref().map(ToString::to_string).as_deref(),
+            Some("No space left on device")
+        );
         assert_eq!(
             status_note(&st),
             " — ⚠ settings.toml could not be written — the file that would not read is \
@@ -701,7 +752,7 @@ mod tests {
         );
         // The next write succeeds: now it is a rewrite, and still named.
         record_write(&mut st, &path, Ok(None));
-        assert_eq!(st.write_error, None);
+        assert!(st.write_error.is_none());
         assert_eq!(
             status_note(&st),
             " — settings.toml rewritten — the file that would not read is settings.toml.broken"
@@ -955,6 +1006,143 @@ mod tests {
         assert_eq!(
             notice(&st),
             "settings.toml rewritten — the file that would not read is settings.toml.broken.1"
+        );
+    }
+
+    /// A write that fails AT THE MOVE-ASIDE with NO read error standing
+    /// names the earlier aside as the earlier one too (settings.md,
+    /// "Writing"; brief 010 R6 — the developer's 2026-10-02 finding in issue
+    /// #100). The launch file would not read and the first write moved it
+    /// aside; a hand edit then broke the fresh file while the dialog was
+    /// OPEN, so no open re-read it and no read error stands; the config dir
+    /// turned read-only and a commit's write could not move the newly broken
+    /// file aside. settings.toml is the file that would not read here too —
+    /// the notice says that file could not be moved — so both lines call
+    /// `settings.toml.broken` the earlier one. The bridge decides by the
+    /// write error's KIND, `WriteError::MoveAside`, never by its text.
+    ///
+    /// RED on f771f6f, the bridge before the fix: both lines read `— the
+    /// file that would not read is settings.toml.broken` beside the notice's
+    /// own `the file that would not read could not be moved aside`. When
+    /// this fails that way it is that defect; do not quiet it.
+    ///
+    /// Mutant (2026-10-03): the suffix decided by `moved_aside` alone — the
+    /// `MoveAside` term taken out of `write_error_aside`, the old wording →
+    /// red at step 3.
+    #[test]
+    fn a_failed_move_aside_with_no_read_error_standing_names_the_earlier_aside_as_the_earlier_one()
+    {
+        let path = std::path::PathBuf::from("/nowhere/fastcull/settings.toml");
+        // 1. The launch read failed; the first write moved the file aside
+        //    and wrote a fresh one, answering the read error.
+        let mut st = SettingsState::new(
+            settings::Loaded {
+                settings: Settings::default(),
+                error: Some("TOML parse error at line 1, column 4".to_string()),
+                path: Some(path.clone()),
+            },
+            None,
+        );
+        record_write(
+            &mut st,
+            &path,
+            Ok(Some(path.with_file_name("settings.toml.broken"))),
+        );
+        // 2. A hand edit broke the fresh file while the dialog stayed open:
+        //    nothing re-read it, so no read error stands.
+        assert_eq!(st.loaded.error, None, "the premise: no read error stands");
+        // 3. A commit, written to a config dir that turned read-only: the
+        //    newly broken file cannot be moved aside.
+        st.loaded.settings.selection_wash = 15;
+        record_write(
+            &mut st,
+            &path,
+            Err(settings::WriteError::MoveAside(std::io::Error::from(
+                std::io::ErrorKind::PermissionDenied,
+            ))),
+        );
+        assert_eq!(
+            st.loaded.error, None,
+            "the premise: still no read error after the failed write"
+        );
+        assert_eq!(
+            status_note(&st),
+            " — ⚠ settings.toml could not be written — the earlier one is settings.toml.broken",
+            "the status line calls the earlier aside the file that would not read, while \
+             settings.toml itself is that file now"
+        );
+        let line = notice(&st);
+        assert!(
+            line.starts_with(
+                "Could not write settings.toml: the file that would not read could not be \
+                 moved aside: "
+            ) && line.ends_with(" — the earlier one is settings.toml.broken"),
+            "the notice does not name the failed move and then the earlier aside as the \
+             earlier one: {line}"
+        );
+        // 4. The dir is writable again: the next write moves the newer file
+        //    aside, and both lines say `rewritten`, naming it.
+        record_write(
+            &mut st,
+            &path,
+            Ok(Some(path.with_file_name("settings.toml.broken.1"))),
+        );
+        assert_eq!(
+            status_note(&st),
+            " — settings.toml rewritten — the file that would not read is \
+             settings.toml.broken.1"
+        );
+        assert_eq!(
+            notice(&st),
+            "settings.toml rewritten — the file that would not read is settings.toml.broken.1"
+        );
+    }
+
+    /// A PLAIN failed write — no read error standing, no file moved aside,
+    /// a full disk or a read-only file — says so on the status line, and
+    /// says nothing else: ` — ⚠ settings.toml could not be written`, never
+    /// `rewritten`, never `(defaults in force)` (settings.md, "Writing";
+    /// brief 010 R2, issue #100's first NOW guard). The notice carries the
+    /// error's own words. The driven half is
+    /// `a_failed_settings_write_keeps_the_commit_and_the_next_open_does_not_reread`,
+    /// whose dumps read the same line off the window.
+    ///
+    /// Mutant (2026-10-03): the write-error arm of `status_note` taken out
+    /// (`if false && …`) → the status line is empty — red.
+    #[test]
+    fn a_plain_failed_write_says_so_on_the_status_line() {
+        let path = std::path::PathBuf::from("/nowhere/fastcull/settings.toml");
+        let mut st = SettingsState::new(
+            settings::Loaded {
+                settings: Settings::default(),
+                error: None,
+                path: Some(path.clone()),
+            },
+            None,
+        );
+        st.loaded.settings.selection_wash = 15;
+        record_write(
+            &mut st,
+            &path,
+            Err(settings::WriteError::Io {
+                source: std::io::Error::other("Read-only file system"),
+                moved_aside: None,
+            }),
+        );
+        assert_eq!(st.moved_aside, None, "the premise: nothing was moved aside");
+        let status = status_note(&st);
+        assert_eq!(
+            status, " — ⚠ settings.toml could not be written",
+            "a plain failed write does not say so on the status line"
+        );
+        assert!(
+            !status.contains("rewritten") && !status.contains("defaults in force"),
+            "the status line claims a rewrite or the defaults beside a commit in force: \
+             {status}"
+        );
+        assert_eq!(
+            notice(&st),
+            "Could not write settings.toml: Read-only file system"
         );
     }
 

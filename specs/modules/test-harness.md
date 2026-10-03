@@ -29,16 +29,19 @@ explain itself on stderr.
   008, 2026-10-01; until then it covered `ui.toml` only, and every driven
   run read the user's real `templates.toml`); what `FASTCULL_NO_CACHE=1`
   does for `previews.db` (app-only; the CLI has `--no-cache`). The
-  screenshot harness sets both on every run except six, in four tests —
-  the three runs of the test that drives the cache cap and Clear cache
+  screenshot harness sets both on every run except seven, in four tests —
+  the four runs of the test that drives the cache cap and Clear cache
   (settings.md AC11, AC12; the third a clear made to fail, QE 2026-10-02,
-  round 5), the cache-on run of the Settings card's fit test (settings.md,
+  round 5; the fourth the held clear, the kept thumbs and the Tab ring
+  reaching Clear, brief 010, 2026-10-03), the cache-on run of the Settings
+  card's fit test (settings.md,
   "The card"; QE 2026-10-01, D38), the Clear row of the click-away
   matrix (settings.md AC4; QE 2026-10-02, round 4 D39) and the cache
   strand of the Settings card's never-shrinks test (settings.md AC18; QE
   2026-10-03, D2) — this sentence said "every run but one" until D38,
-  "three, in two tests" until round 5, the matrix's row uncounted, and
-  "five, in three tests" until brief 009's test-integrity review — which
+  "three, in two tests" until round 5, the matrix's row uncounted,
+  "five, in three tests" until brief 009's test-integrity review, and
+  "six, in four tests" until brief 010 — which
   run without `FASTCULL_NO_CACHE`, through `shoot_with_sandboxed_cache`,
   which refuses to start unless `HOME` and `XDG_CACHE_HOME` both point
   inside the shots dir — so the default cache resolves there, never to
@@ -61,6 +64,16 @@ explain itself on stderr.
   stderr when set (`fastcull: FASTCULL_KITCHEN_COOK_MS=N — every texture
   cook is held`); with tracing, the retarget reports how many queued jobs
   it dropped.
+- `FASTCULL_CLEAR_HOLD_MS=N` — hold the Clear cache worker for N ms, on
+  the worker itself, before it opens its connection and clears: the pacing
+  knob for the "Clear never blocks the UI thread" proof (settings.md AC12)
+  — with the worker held, a `dump.` step fires on the UI thread while the
+  row still reads `Clearing…`, and its line comes before the worker's own
+  `settings cache clear ran on settings-clear` on the one trace, where a
+  `join()` after the spawn puts it after; default 0, off. Announced once
+  on stderr when set (`fastcull: FASTCULL_CLEAR_HOLD_MS=N — every cache
+  clear is held`). Test plumbing in `FASTCULL_KITCHEN_COOK_MS`'s family,
+  not a setting (brief 010 D3, 2026-10-03; brief 008 D13 and D42 stand).
 - `FASTCULL_MAX_READERS=N` — the read pool override (raw-pipeline.md);
   wins over the `performance.max_readers` setting, whose field the dialog
   then shows read-only (settings.md).
@@ -188,7 +201,12 @@ sidecars — scripts target throwaway copies of test data only.
   every pan of the same frame, so it answers "has this frame gone sharp
   yet", never "again". Also `loupe hold …` and `loupe overlay dropped …
   (hold cap)` / `(decode failed)` — the excuse-less `(no rung in hand)`
-  form is outlawed (ui-grid.md).
+  form is outlawed (ui-grid.md). The `(decode failed)` drop fires only
+  when the overlay was UP and wanted at the moment the failure landed:
+  a failure that lands after a `(hold cap)` drop, with no rung re-raised,
+  emits no drop line at all, so it is not the gate for "the app knows this
+  frame failed" — the badge's layout mark below is (brief 010, 2026-10-03,
+  issue #101).
 - **Thumbs**: `thumb bytes idx N` (the pipeline read the embedded JPEG, at
   scan time) and `thumb landed idx N` (the kitchen decoded it into a
   texture — only for cells near the view, and nothing evicts it within a
@@ -228,7 +246,17 @@ sidecars — scripts target throwaway copies of test data only.
   `cache-cap-env` and `readers-env`; 0 px tall unless a variable governs
   the row, which today only `FASTCULL_MAX_READERS` does, on Read workers;
   corrected 2026-10-03, brief 009's implementation: it named `readers-env`
-  alone).
+  alone). `failed badge <id> laid out …` is also the gate for "the app
+  knows `<id>` failed": the badge is created in the refresh that sees
+  `<id>` enter the failed set, with the cursor's cell laid out — a failure
+  on the cursor drops the overlay in that same refresh and the badge
+  follows it by a few milliseconds (3–11 ms measured idle and under load,
+  this seat, 2026-10-03) — so it fires whatever the overlay's state, where
+  the `(decode failed)` drop
+  above does not; the failed-cursor test gates its first dump on it (brief
+  010, 2026-10-03, issue #101: on a slow runner the failing decode landed
+  2.3 s after the first End, and the second End's dump had read a cursor
+  the app did not yet know had failed, 1 of 13 Windows debug runs).
 - **Settings** (brief 008, settings.md): `settings loaded from <path>` /
   `settings: no file (defaults in force)` / `settings: <path> could not
   be read: <error>` at startup and at every open — except an open while a
@@ -239,9 +267,16 @@ sidecars — scripts target throwaway copies of test data only.
   `settings written <path>` or `settings not written: <reason>`;
   `settings moved aside <path>`; `settings reset <tab>`; `settings
   wash|loupe-memory|cache-cap|readers-limit shows <text>` whenever a number
-  field's text changes, typed or re-shown — what the field DISPLAYS, where
+  field's text changes, typed or re-shown, and once when the dialog
+  creates the field (brief 010, 2026-10-03: the locked Limit's shown value
+  — the environment's — is read from its creation mark; until then a
+  field showed its first text without a mark) — what the field DISPLAYS,
+  where
   the dump's `wash=`, `loupemem=`, `cachecap=` and `readers=` are the
-  model's (senior-developer review F1 of brief 008); `settings
+  model's (senior-developer review F1 of brief 008); `settings reset
+  shows <text>` from the Reset button's own label, when the dialog creates
+  it and whenever it changes — `Reset General to defaults` on General,
+  the active tab's title in it (brief 010, 2026-10-03); `settings
   auto-advance|readers-adaptive shows true|false` whenever a checkbox's
   state changes, clicked or re-presented — what the box SHOWS, where the
   dump's `autoadvance=` and `readers=` are the model's (QE 2026-10-02,
@@ -392,7 +427,11 @@ dialog's notice line), `autoadvance=`, `wash=` (the model's percent),
 that proves a commit reached the renderer, not the model),
 `loupemem=` (bytes in force), `loupehint=` (the hint text), `cachecap=`
 (bytes), `readers=` (`adaptive`, `limit:N` or `env:N`), `readersenv=`
-(the variable's raw value or empty), `cachereadout=` (the row's text).
+(the variable's raw value or empty), `cachereadout=` (the row's text);
+then `thumbtex=` (brief 010, 2026-10-03), the number of decoded thumb
+textures the session holds (`TextureStore.images`) — what "the open
+session keeps its painted thumbs" after Clear is read from (settings.md
+AC12).
 New fields are APPENDED; `dump_field` finds `name=` by prefix. The
 nav-token swallow mirror (`drive swallowed by modal`) covers the Settings
 dialog like About and the card.
@@ -423,7 +462,11 @@ shot 2.
   dropped or misspelled token puts a script back on the clock in silence —
   and, where order matters, the byte-offset ORDERING (`stderr.find(mark) <
   stderr.find("drive: …")`), since the echo proves a wait ran, not that it
-  ran first.
+  ran first. The mark a wait gates on is the first observable consequence
+  of the STATE the assertion reads, and one that fires whatever else the
+  view is doing: a mark conditional on a second state (the `(decode
+  failed)` drop needs the overlay up) can leave the wait hanging on a run
+  that is otherwise correct (brief 010, 2026-10-03, issue #101).
 - Positional navigation waits on `load settled gen N`: the view is in
   provisional filename order until the settle re-sorts it. A shot that reads
   RENDERED pixels waits on the textures it reads (`thumb landed idx N`),
@@ -459,6 +502,16 @@ shot 2.
   009 commit B: it said ten, and nine before brief 009 — 1010x520, driven
   since 2026-09-04, was never counted; `grep -o 'resize:[0-9]*x[0-9]*'
   crates/fastcull-app/tests/screenshot.rs | sort -u` lists them).
+- The suite's size: 120 driven tests after brief 010, 118 at its start
+  (`cargo test -p fastcull-app --test screenshot -- --list`, 2026-10-03).
+  They no longer fit one 600 s foreground call in debug on the development
+  seat and run there as three `--exact` thirds split from that list:
+  327 s + 280 s + 325 s, 932 s, in debug on the idle seat at brief 010's
+  commit E (326 s + 271 s + 311 s, 908 s, for the 118 at its start);
+  halves would run some 470 s each, too near the cap (brief 010 R8 and
+  D5; this sentence said two halves and left the figures to be measured
+  until brief 010's implementation; the "87 tests, 318 s + 288 s" of the
+  agent files dates from 2026-09-12, before briefs 008–009 added 31).
 - CI facts: a pull request's runs share one concurrency group per ref with
   `cancel-in-progress` (a run that vanishes without a verdict is a cancel,
   not a hang); every other event gets its own group; the job cap is 90
@@ -508,6 +561,18 @@ shot 2.
 
 ## History
 
+- 2026-10-03 — Brief 010 commit F: the suite's size measured — 120
+  tests, three thirds of 327 s + 280 s + 325 s in debug on the idle seat.
+- 2026-10-03 — Brief 010 commit C: the number fields' creation `shows`
+  marks, `settings reset shows`, `FASTCULL_CLEAR_HOLD_MS` and the dump's
+  `thumbtex=` land as written above.
+- 2026-10-03 — Brief 010 agreed, spec first: `FASTCULL_CLEAR_HOLD_MS` (the
+  held Clear worker, the never-blocks proof); the number fields' and the
+  Reset button's creation marks, `settings reset shows`; the dump's
+  `thumbtex=`; `failed badge <id> laid out` named as the known-failed gate
+  and the `(decode failed)` drop's condition recorded (issue #101); a
+  seventh run without `FASTCULL_NO_CACHE`; the script-author rule on
+  conditional marks; the suite's size recorded for re-measurement.
 - 2026-10-03 — Brief 009's test-integrity review: a sixth run, in a
   fourth test, drops `FASTCULL_NO_CACHE` through the sandbox — the
   never-shrinks test's Linux cache strand.

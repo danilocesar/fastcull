@@ -233,7 +233,7 @@ mod tests {
     use super::*;
     use crate::xmp::{read_sidecar, sidecar_path};
 
-    fn tmp() -> PathBuf {
+    fn tmp() -> crate::testutil::ScratchDir {
         crate::testutil::scratch_dir("scw")
     }
 

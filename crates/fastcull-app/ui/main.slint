@@ -3825,7 +3825,16 @@ export component MainWindow inherits Window {
                                             self.dirty = false;
                                         }
                                     }
+                                    // And once when the dialog creates the
+                                    // field: `changed text` fires only on
+                                    // a change, and every open creates the
+                                    // field already showing the value in
+                                    // force — the locked Limit the
+                                    // environment's — so without this the
+                                    // first text it showed had no reader
+                                    // (test-harness.md; brief 010, AC7).
                                     init => {
+                                        root.dbg-note("settings wash shows " + self.text);
                                         root.dbg-card-laid-out("settings wash",
                                             self.absolute-position.x, self.absolute-position.y,
                                             self.width, self.height);
@@ -3893,6 +3902,9 @@ export component MainWindow inherits Window {
                                         }
                                     }
                                     init => {
+                                        // The creation mark: as the wash
+                                        // field's.
+                                        root.dbg-note("settings loupe-memory shows " + self.text);
                                         root.dbg-card-laid-out("settings loupe-memory",
                                             self.absolute-position.x, self.absolute-position.y,
                                             self.width, self.height);
@@ -3954,6 +3966,9 @@ export component MainWindow inherits Window {
                                         }
                                     }
                                     init => {
+                                        // The creation mark: as the wash
+                                        // field's.
+                                        root.dbg-note("settings cache-cap shows " + self.text);
                                         root.dbg-card-laid-out("settings cache-cap",
                                             self.absolute-position.x, self.absolute-position.y,
                                             self.width, self.height);
@@ -4052,6 +4067,9 @@ export component MainWindow inherits Window {
                                         }
                                     }
                                     init => {
+                                        // The creation mark: as the wash
+                                        // field's.
+                                        root.dbg-note("settings readers-limit shows " + self.text);
                                         root.dbg-card-laid-out("settings readers-limit",
                                             self.absolute-position.x, self.absolute-position.y,
                                             self.width, self.height);
@@ -4188,6 +4206,14 @@ export component MainWindow inherits Window {
                         set-reset := Button {
                             // The ACTIVE tab's settings only.
                             text: "Reset " + root.settings-tabs[root.settings-tab] + " to defaults";
+                            // What the button SAYS, for a driven run
+                            // (test-harness.md; brief 010, AC29): the
+                            // label names the active tab, read from the
+                            // button itself, once at creation and at every
+                            // change a tab switch makes.
+                            changed text => {
+                                root.dbg-note("settings reset shows " + self.text);
+                            }
                             clicked => {
                                 settings-keys.flush();
                                 self.focus();
@@ -4200,6 +4226,7 @@ export component MainWindow inherits Window {
                                 }
                             }
                             init => {
+                                root.dbg-note("settings reset shows " + self.text);
                                 root.dbg-card-laid-out("settings reset",
                                     self.absolute-position.x, self.absolute-position.y,
                                     self.width, self.height);

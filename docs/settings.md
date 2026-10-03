@@ -141,7 +141,12 @@ thing it cannot keep: a table you put where one of these settings or
 groups belongs (`[performance.loupe_memory]`, `[[general]]`) is replaced
 by the setting at the next change — the file cannot hold both. What was
 inside that table goes; a comment you wrote above it, or on its line,
-stays with the setting that takes its place.
+stays with the setting that takes its place — the comments above every
+one of them, if you wrote the group twice as `[[general]]`. If you wrote
+a group as an inline table on one line — `performance = { cache_cap =
+"2 GB" }` — the other settings are added inside the braces without their
+comment lines (TOML has no room for a comment inside braces), and the
+line stays yours.
 
 If the whole file will not parse — a stray bracket — FastCull does not
 touch it: it runs on the defaults, the terminal and the status bar say
