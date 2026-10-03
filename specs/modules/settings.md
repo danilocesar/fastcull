@@ -964,7 +964,7 @@ their precedence is `fastcull-core`'s; the app binds (brief 008, 2026-10-01).
       geometry WxH` other than `1000x400` is traced, the WxH prefix
       compared only — diagnostic quality, a revert is red either way
       (brief 009's TP-3, to land with brief 010, 2026-10-03).
-- [ ] **AC23 — a plain failed write's status line** (brief 010 R2). With no
+- [x] **AC23 — a plain failed write's status line** (brief 010 R2). With no
       read error standing and no file moved aside, a write that fails puts
       ` — ⚠ settings.toml could not be written` on the status line — no
       `rewritten`, no `(defaults in force)` — app unit
@@ -1048,7 +1048,7 @@ their precedence is `fastcull-core`'s; the app binds (brief 008, 2026-10-01).
       `every_elements_comments_of_a_replaced_array_stay_above_what_replaces_it`,
       over `[[general]]` and `[[performance.loupe_memory]]` (QE 2026-10-02,
       D48).
-- [ ] **AC33 — a failed move-aside with no read error standing** ("Writing";
+- [x] **AC33 — a failed move-aside with no read error standing** ("Writing";
       brief 010 R6). The notice reads `Could not write settings.toml: the
       file that would not read could not be moved aside: … — the earlier
       one is settings.toml.broken` and the status line ` — ⚠ settings.toml
@@ -1060,6 +1060,11 @@ their precedence is `fastcull-core`'s; the app binds (brief 008, 2026-10-01).
 
 ## History
 
+- 2026-10-03 — Brief 010 commit B: the bridge keeps a failed write's error
+  whole and names an earlier aside as the earlier one when the write
+  failed at the move-aside with no read error standing (red on f771f6f);
+  a plain failed write's status line pinned, unit and driven; AC23 and
+  AC33 ticked beside their tests.
 - 2026-10-03 — Brief 010 commit A: the writer carries every element's
   comments of a replaced multi-element array (QE D48, red on f771f6f); the
   inline-table shape (QE D47) and the Limit's missing ceiling of its own

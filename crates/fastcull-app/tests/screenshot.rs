@@ -12960,6 +12960,14 @@ fn a_hand_edit_that_breaks_the_fresh_file_is_shown_not_masked_by_rewritten() {
 /// else-branch mark taken out → no `settings: not re-read` line — red
 /// (senior-developer review F5 of brief 008: the open used to trace
 /// `settings loaded from <path>` there).
+///
+/// The STATUS LINE of this plain failed write — no read error standing,
+/// nothing moved aside — reads ` — ⚠ settings.toml could not be written`
+/// at both dumps, and never `rewritten` nor `(defaults in force)`
+/// (settings.md, "Writing"; brief 010 R2, AC23: the line had no driven
+/// reader). Mutant (2026-10-03): the write-error arm of the bridge's
+/// `status_note` taken out → the status line carries no settings words at
+/// `dump.committed` — red.
 #[test]
 fn a_failed_settings_write_keeps_the_commit_and_the_next_open_does_not_reread() {
     if !has_display() {
@@ -13021,6 +13029,21 @@ fn a_failed_settings_write_keeps_the_commit_and_the_next_open_does_not_reread() 
         dump_text(reopened, "settingsnote").starts_with("Could not write settings.toml: "),
         "the notice stopped naming the write error at the second open: {reopened}"
     );
+    // The status line says the write failed, and nothing it is not
+    // (settings.md, "Writing"; AC23): the commit is in force, so never
+    // `(defaults in force)`, and nothing was rewritten.
+    for (label, dump) in [("committed", committed), ("reopened", reopened)] {
+        let status = dump_text(dump, "status");
+        assert!(
+            status.contains(" — ⚠ settings.toml could not be written"),
+            "dump.{label}: the status line does not say the write failed: {status:?}"
+        );
+        assert!(
+            !status.contains("rewritten") && !status.contains("defaults in force"),
+            "dump.{label}: the status line claims a rewrite or the defaults beside a \
+             commit in force: {status:?}"
+        );
+    }
     // Startup and the first open read the file; the second open did not,
     // and says so.
     assert_eq!(
