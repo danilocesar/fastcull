@@ -673,6 +673,9 @@ their precedence is `fastcull-core`'s; the app binds (brief 008, 2026-10-01).
       core `the_environment_never_reaches_the_settings_file` (a test binary
       of its own, because it sets the variable in its own process) and the
       same app test's fourth run (the user, 2026-10-02, brief 008 D42).
+      The field's SHOWN value under the variable (the environment's) is
+      read by no test yet — a deferred guard, issue #100 (QE 2026-10-02,
+      SC-3; the box holds for what its tests prove).
 - [x] **AC8 — auto-advance off.** `Y`/`N` keep the cursor and leave the
       selection alone; the filter exception moves the cursor and ends the
       selection as `U` does; on, as today — core
@@ -740,6 +743,9 @@ their precedence is `fastcull-core`'s; the app binds (brief 008, 2026-10-01).
       QE 2026-10-02, round 5: the worker, the `Clearing…` row, the disabled
       button and a failed clear's wording had stood on the trace's order
       alone, which proved none of them).
+      The button's DISABLED state under `FASTCULL_NO_CACHE` is read by no
+      test yet — a deferred guard, issue #100 (QE 2026-10-02, SC-4; the
+      box holds for what its tests prove).
 - [x] **AC13 — the Failed badge.** The badge shows the reason on hover and
       the status line carries it when the cursor stands on the frame —
       ui-grid.md's ledger
@@ -768,6 +774,9 @@ their precedence is `fastcull-core`'s; the app binds (brief 008, 2026-10-01).
 
 ## History
 
+- 2026-10-02 — Merged (PR #96). AC7 and AC12 narrowed to what their tests
+  prove; the guards QE's closing sweep listed and two hand-edited writer
+  shapes (D47, D48) deferred to issue #100 (brief 008 D46).
 - 2026-10-02 — QE round 5 of brief 008, a hand edit applied at the reopen
   ("Reading"): AC4 names the test that reads the window's wash after a
   hand edit and a reopen.

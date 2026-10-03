@@ -995,6 +995,23 @@ setting.
   accepted any per-user dir or none, so a changed `ProjectDirs` triple would
   have orphaned every user's three files at an upgrade with the whole suite
   green.
+- D46 (2026-10-02, Manager, at the merge): QE round 5 PASS (one minor,
+  QE's D46, fixed: a newer unreadable file whose move-aside fails names
+  the earlier aside as the earlier one) and, after the small round the
+  integrity review ranked NOW, QE round 5.2 PASS with two minors in
+  hand-edited shapes nobody writes — QE's D47 (a key created inside an
+  inline table carries no note) and D48 (a two-element `[[general]]`
+  keeps only its first header's comments). Both are deferred, with the
+  guards the integrity review approved (six ranked NOW, eight
+  DEFERRABLE), the spec sentences SC-1/SC-2 that move with them, and the
+  developer's contrived move-aside wording, to issue #100 — the unit's
+  explicit deferrals, which the re-review's minor asked to be recorded.
+  settings.md's AC7 and AC12 are narrowed to what their tests prove (QE's
+  SC-3 and SC-4, M10). Merged on green at 59619ef plus this commit: both
+  runners green at 59619ef (ubuntu 31m59s, windows 1h15m46s). Follow-up
+  issues opened: #97 (the UI-thread cache eviction at folder open, D16),
+  #98 (Tab out of the copy and export scopes, D16), #99 (the prefetch
+  ring shrinking to the loupe budget, D20), #100 (the deferrals above).
 - Directive candidates (2026-10-02, from the diagnosis): `.claude/agents/
   senior-developer.md` says the driven suite "is 87 tests" — it is 111 at
   a377405 (brief 008 added 24; the two halves run ~340 s each, over the
