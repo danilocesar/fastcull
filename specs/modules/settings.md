@@ -992,7 +992,7 @@ their precedence is `fastcull-core`'s; the app binds (brief 008, 2026-10-01).
       (the `edited` premise: `hand_edit = 1` in the written file proves the
       edit preceded the write, `wash=40` at the open that it followed the
       re-read) (brief 010, 2026-10-03).
-- [ ] **AC26 — the Limit has no ceiling of its own** ("Read workers"; brief
+- [x] **AC26 — the Limit has no ceiling of its own** ("Read workers"; brief
       010 R2). `set_from_text(MaxReaders, "64")` is 64 and `"4294967295"`
       the type's own maximum, a file's `max_readers = 1000` reads 1000, and
       the pool adopts `(4, 4, 1000)` — core
@@ -1038,7 +1038,7 @@ their precedence is `fastcull-core`'s; the app binds (brief 008, 2026-10-01).
       `testutil::tests::a_scratch_dir_goes_on_drop_and_stays_for_a_panicking_test`
       (brief 010, 2026-10-03; measured on this seat: 1,086 `fastcull-*`
       dirs, 36 MB, left in `/tmp`, a 16 GB tmpfs).
-- [ ] **AC32 — the two hand-edited writer shapes** ("Writing"; brief 010
+- [x] **AC32 — the two hand-edited writer shapes** ("Writing"; brief 010
       R4). A key created inside an inline table carries no note and the
       braces stay — core
       `a_key_created_inside_an_inline_table_carries_no_note_and_the_braces_stay`
@@ -1060,6 +1060,11 @@ their precedence is `fastcull-core`'s; the app binds (brief 008, 2026-10-01).
 
 ## History
 
+- 2026-10-03 — Brief 010 commit A: the writer carries every element's
+  comments of a replaced multi-element array (QE D48, red on f771f6f); the
+  inline-table shape (QE D47) and the Limit's missing ceiling of its own
+  pinned, no code change for either; AC26 and AC32 ticked beside their
+  tests.
 - 2026-10-03 — Brief 010 agreed, spec first: "Writing" states the
   inline-table exception (QE D47), the every-element carry for a
   multi-element array (QE D48) and the failed move-aside with no read error
