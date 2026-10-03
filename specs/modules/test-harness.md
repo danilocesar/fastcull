@@ -213,7 +213,10 @@ sidecars — scripts target throwaway copies of test data only.
   brief 009 (settings.md, "The card holds still") `settings card laid out
   …` fires exactly ONCE per open and never on a tab switch — the card has
   one height per open — and again only when the card grows (a text that
-  affects its height changed) or the window is resized; the strip's
+  affects its height changed) or the window is resized; a switch that
+  commits a typed field carries such a growth when the commit changes a
+  height-affecting text (settings.md, "The card holds still"; QE
+  2026-10-03, D5); the strip's
   `settings tab <name>` marks likewise fire at the open and not on a
   switch; and three marks join them: `settings body laid out …` (the host
   of the three tab bodies, as tall as the tallest, from `init`, `changed

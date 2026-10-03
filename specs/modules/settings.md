@@ -312,7 +312,13 @@ their precedence is `fastcull-core`'s; the app binds (brief 008, 2026-10-01).
   it never shrinks (a `Clearing…` row replacing a wrapped path, a hint
   that un-wraps after a second commit) and grows only when a text that
   affects it changes — a write error arriving, a notice that wraps —
-  never on a tab switch; below the 600 px window width the 560 px card
+  never because of a tab switch: a switch that commits a typed field
+  (Apply on commit) changes the card exactly as that commit would,
+  inside the switch's own event (QE 2026-10-03, D5: a `100` typed into
+  Loupe memory and committed by Ctrl+Tab grew the card 506 → 507 px on
+  Noto Sans, and a write error so committed 506 → 522, its top 204 →
+  196 and Close 660 → 668; this sentence said "never on a tab switch"
+  until then); below the 600 px window width the 560 px card
   needs, far under the supported 1000, a narrowed window re-wraps the
   texts and the card keeps that height until the next open (brief 009
   R1; the narrowed window, QE 2026-10-03, D4). The active body is laid
@@ -332,7 +338,8 @@ their precedence is `fastcull-core`'s; the app binds (brief 008, 2026-10-01).
   height is in place before the card's first frame — the bridge presents
   every field before the dialog becomes visible — so an open lays the
   card out ONCE: exactly one `settings card laid out … size` mark per
-  open and none on a switch (test-harness.md; brief 009 R5). The two
+  open and none on a switch that commits nothing (QE 2026-10-03, D5;
+  test-harness.md; brief 009 R5). The two
   reserved lines are permanent elements, never conditional ones, because
   Slint creates a conditional element after its parent's `init` has run:
   the height that `init` reads — the high-water mark's start and the one

@@ -216,6 +216,35 @@ Gaps for the user: none.
   it, the persona was indifferent — relayed to the user as a decision
   taken; the strip can measure both weights per tab if the user wants the
   bold back.
+- D6 (2026-10-03, Manager, at the merge): review APPROVED (three nits,
+  fixed with the integrity round's commit f3317e1), QE PASS twice — round
+  1 with four minors answered in f3317e1 (the growth rule guarded on
+  every face, the never-shrinks rule given power on the ubuntu runner's
+  font, the body pinned to its top, the "one frame late" claim retracted
+  to what was measured), round 2 with two minors: QE's D5 — a tab switch
+  that commits a half-typed field grows the card inside the switch when
+  the commit changes a height-affecting text (a `100` typed into Loupe
+  memory and committed by Ctrl+Tab: 506 → 507 px; a write error so
+  committed: 506 → 522, Close 660 → 668), which R1 allows (the growth is
+  the commit's, as on Enter) and two spec sentences over-promised against
+  ("never on a tab switch", "none on a switch") — corrected here as QE
+  wrote them; and QE's D6 — the growth test's doc says "GREEN on
+  bef5b5e" where the test is RED there for a missing mark while the
+  behaviour holds (267 → 283 px). Deferred, recorded on issue #100: the
+  integrity review's TP-1 (the never-shrinks rule guarded on every face
+  and on the Windows runner inside the growth test's first open — the
+  round cap stopped the small round that would have landed it; the
+  behaviour is measured right, the guard's power on Windows is what is
+  missing) and TP-3 (T3's premise cannot tell a reverted window from a
+  held one under heavy load — the review's F1; diagnostic quality only, a
+  revert reads red either way), and D6's doc wording, which TP-1 fixes.
+  Two confirmations the roles put to the user are M2 decisions kept as
+  shipped: the active tab marked by its white label and the accent
+  underline, no bold (D5); one reserved notice line, so a write error
+  that wraps grows the card by one line once per open and moves Close
+  ~8 px (the persona accepted it; two reserved lines would be an empty
+  band on every open). CI green on both runners at f3317e1 (ubuntu
+  20m42s, windows 40m32s); merged with this commit after its own run.
 - D6 (2026-10-03, the senior developer's test-integrity review, QE's
   question 3 and defects D1–D4): the table's open "twitch" was a mark
   sequence inside one key event — 229 px at [901], 255 px at [903] on PR
