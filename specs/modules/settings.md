@@ -312,10 +312,13 @@ their precedence is `fastcull-core`'s; the app binds (brief 008, 2026-10-01).
   it never shrinks (a `Clearing…` row replacing a wrapped path, a hint
   that un-wraps after a second commit) and grows only when a text that
   affects it changes — a write error arriving, a notice that wraps —
-  never on a tab switch (brief 009 R1). The active body is laid out from
-  the top under the rule; the footer — the notice line, then Reset and
-  Close — sits at the card's bottom on every tab, and the slack between
-  the body and the footer is empty card; Close and Reset keep one
+  never on a tab switch; below the 600 px window width the 560 px card
+  needs, far under the supported 1000, a narrowed window re-wraps the
+  texts and the card keeps that height until the next open (brief 009
+  R1; the narrowed window, QE 2026-10-03, D4). The active body is laid
+  out from the top under the rule; the footer — the notice line, then
+  Reset and Close — sits at the card's bottom on every tab, and the slack
+  between the body and the footer is empty card; Close and Reset keep one
   position across every switch, Reset's width following its label as
   before (brief 009 R2, D3: a footer floating under the rows was what the
   persona would read as broken). The notice line is RESERVED: one line
@@ -331,9 +334,14 @@ their precedence is `fastcull-core`'s; the app binds (brief 008, 2026-10-01).
   card out ONCE: exactly one `settings card laid out … size` mark per
   open and none on a switch (test-harness.md; brief 009 R5). The two
   reserved lines are permanent elements, never conditional ones, because
-  Slint creates a conditional element one frame after the layout that
-  should have counted it (ui-grid.md, "Slint facts"; senior-developer
-  plan 2026-10-03). Below the supported minimum window the body gives
+  Slint creates a conditional element after its parent's `init` has run:
+  the height that `init` reads — the high-water mark's start and the one
+  layout mark — would not count it, and the open would lay the card out
+  three times (ui-grid.md, "Slint facts"; corrected 2026-10-03 at the
+  test-integrity review, QE's question: it said "one frame after", but
+  the child and the change handlers that report the grown height run in
+  the same pass as the `init`, before any frame is painted — the growth
+  was never on screen). Below the supported minimum window the body gives
   before the footer: the three bodies live in a `Flickable { interactive:
   false }` like the shortcuts card's, so the footer stays inside the
   clamped card, the body clips and scrolls on the wheel, and a tab switch
@@ -830,22 +838,41 @@ their precedence is `fastcull-core`'s; the app binds (brief 008, 2026-10-01).
 - [x] **AC18 — the footer pinned, the notice reserved** (brief 009 AC2).
       Close and Reset keep their x and y at every dump of the walk, and
       neither they, the notice line, the body host nor a tab reports a new
-      layout from the first switch to the close; the
+      layout from the first switch to the close; the active tab's first
+      control starts at the body's top, within its own height, at every
+      dump (QE 2026-10-03, D3); the
       card under `FASTCULL_NO_CONFIG` (a notice at open) is as tall as
       the card with no notice (`FASTCULL_CONFIG_DIR` into an empty scratch
       dir), and the notice line is one line tall in both — the same test's
       second launch; with a two-line notice and the environment's line both
       present at open (a broken file, `FASTCULL_MAX_READERS=3`) the card
       still lays out once — its third launch; and the card never shrinks
-      while open — Loupe memory committed as `100` (the hint wraps to a
-      second line on the measured seats) and then `2` leaves the height
-      where the wrap put it, no card mark after the second commit, and a
-      card that opened with the hint already wrapped (a file saying `100
-      GB`) keeps its opening height after `2`, the body host and the footer
-      reporting no new layout after either commit —
+      while open — Loupe memory committed as `100` (the wrapped hint is
+      taller than its 32 px field on Noto Sans, this seat; on DejaVu Sans
+      and on Segoe UI's metrics the two lines fit the field's row and the
+      strand cannot go red — corrected, QE 2026-10-03, D2: it read "the
+      hint wraps to a second line on the measured seats", and the hint
+      wraps on DejaVu Sans too, inside its row) and then `2` leaves the
+      height where the wrap put it, no card mark after the second commit,
+      and a card that opened with the hint already wrapped (a file saying
+      `100 GB`) keeps its opening height after `2`, the body host and the
+      footer reporting no new layout after either commit, and the commit
+      of `100` grows the card to the height an open with the hint already
+      wrapped takes (QE 2026-10-03, D1); with the cache on — Linux only,
+      the default cache sandboxed through `HOME` and `XDG_CACHE_HOME`,
+      which Windows ignores — a Thumbnail cache row printing a path of
+      about 220 characters, four lines, that Clear replaces with
+      `Clearing…` leaves the card, the body host, the notice line, Reset
+      and Close without a new layout until the clear completes: the strand
+      with power on the ubuntu runner's face (QE 2026-10-03, D2) —
       `the_settings_card_never_shrinks_while_it_is_open` (brief 009,
       2026-10-03; its second launch and the no-new-layout checks,
-      developer 2026-10-03).
+      developer 2026-10-03; the growth check and the cache strand, the
+      test-integrity review 2026-10-03); and a write error that wraps the
+      notice, arriving while the dialog is open, grows the card by exactly
+      the notice's extra line on every runner's face —
+      `the_settings_card_grows_by_a_write_error_that_wraps_while_it_is_open`
+      (QE 2026-10-03, D1).
 - [x] **AC19 — the strip holds still** (brief 009 AC3). Every tab's x and
       width are the same at every dump of the walk —
       `the_settings_card_holds_still_across_its_tabs` (brief 009,
@@ -855,10 +882,10 @@ their precedence is `fastcull-core`'s; the app binds (brief 008, 2026-10-01).
       unchanged in its assertions — its "tallest state" is every state now,
       and it still opens on Performance where the long cache row lives
       (brief 009, 2026-10-03: green with the rule in place).
-- [ ] **AC21 — spec and docs** (brief 009 AC5). This section and
+- [x] **AC21 — spec and docs** (brief 009 AC5). This section and
       `docs/settings.md` say the card is the same size on every tab —
-      review-verified at the senior developer's review of brief 009 (open:
-      the review has not run).
+      review-verified (senior developer 2026-10-03, the review and the
+      test-integrity review).
 - [x] **AC22 — below the minimum window the body gives before the footer**
       (brief 009 D4, the senior developer's call). At 1000×400 Close and
       Reset lie inside the clamped card, a wheel over the body scrolls it
@@ -873,6 +900,13 @@ their precedence is `fastcull-core`'s; the app binds (brief 008, 2026-10-01).
 
 ## History
 
+- 2026-10-03 — Brief 009's test-integrity review: AC18 names the
+  never-shrinks test's growth check and Linux cache strand, the
+  body-from-the-top check and the write-error growth test, and its power
+  condition is corrected (QE D2); the permanence sentence corrected — a
+  conditional element is created after its parent's `init`, in the same
+  pass, never painted short; a window narrowed below 600 px recorded (QE
+  D4); AC21 ticked, review-verified.
 - 2026-10-03 — Brief 009 commit B: the bodies' host is a `Flickable {
   interactive: false }` that gives below the minimum window and goes back
   to its top on a tab switch; AC22 ticked beside its test, its wheel

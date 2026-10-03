@@ -29,20 +29,22 @@ explain itself on stderr.
   008, 2026-10-01; until then it covered `ui.toml` only, and every driven
   run read the user's real `templates.toml`); what `FASTCULL_NO_CACHE=1`
   does for `previews.db` (app-only; the CLI has `--no-cache`). The
-  screenshot harness sets both on every run except five, in three tests —
+  screenshot harness sets both on every run except six, in four tests —
   the three runs of the test that drives the cache cap and Clear cache
   (settings.md AC11, AC12; the third a clear made to fail, QE 2026-10-02,
   round 5), the cache-on run of the Settings card's fit test (settings.md,
-  "The card"; QE 2026-10-01, D38) and the Clear row of the click-away
-  matrix (settings.md AC4; QE 2026-10-02, round 4 D39) — this sentence
-  said "every run but one" until D38, and "three, in two tests" until
-  round 5, the matrix's row uncounted — which run without `FASTCULL_NO_CACHE`,
-  through `shoot_with_sandboxed_cache`, which refuses to start unless
-  `HOME` and `XDG_CACHE_HOME` both point inside the shots dir — so the
-  default cache resolves there, never to the user's; Linux only, Windows'
-  known-folder lookup ignoring the environment (QE 2026-10-01, D24). The
-  Settings dialog still works under `FASTCULL_NO_CONFIG`, in memory, and
-  says `Not saved` (settings.md).
+  "The card"; QE 2026-10-01, D38), the Clear row of the click-away
+  matrix (settings.md AC4; QE 2026-10-02, round 4 D39) and the cache
+  strand of the Settings card's never-shrinks test (settings.md AC18; QE
+  2026-10-03, D2) — this sentence said "every run but one" until D38,
+  "three, in two tests" until round 5, the matrix's row uncounted, and
+  "five, in three tests" until brief 009's test-integrity review — which
+  run without `FASTCULL_NO_CACHE`, through `shoot_with_sandboxed_cache`,
+  which refuses to start unless `HOME` and `XDG_CACHE_HOME` both point
+  inside the shots dir — so the default cache resolves there, never to
+  the user's; Linux only, Windows' known-folder lookup ignoring the
+  environment (QE 2026-10-01, D24). The Settings dialog still works under
+  `FASTCULL_NO_CONFIG`, in memory, and says `Not saved` (settings.md).
 - `FASTCULL_CONFIG_DIR=<dir>` — the config dir redirected to `<dir>`,
   winning over `FASTCULL_NO_CONFIG`, for the tests that read or write a
   config file in a scratch dir (settings.md AC6; corrected 2026-10-02, QE
@@ -503,6 +505,9 @@ shot 2.
 
 ## History
 
+- 2026-10-03 — Brief 009's test-integrity review: a sixth run, in a
+  fourth test, drops `FASTCULL_NO_CACHE` through the sandbox — the
+  never-shrinks test's Linux cache strand.
 - 2026-10-03 — Brief 009 commit B: the suite drives eleven geometries,
   1000x400 joining and 1010x520 (driven since 2026-09-04) counted at last.
 - 2026-10-03 — Brief 009's implementation: the environment line's layout

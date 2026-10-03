@@ -282,11 +282,12 @@ component SettingRow inherits VerticalLayout {
     // did; speaking, it is its text plus its own 4 px gap above the note.
     //
     // PERMANENT, never an `if` (settings.md, "The card holds still"; brief
-    // 009): Slint creates a conditional element one frame AFTER the layout
-    // that should have counted it (ui-grid.md's Slint facts; Cargo.toml, the
-    // fifth canary), so a conditional line grew the Performance body 19 px
-    // one frame into the open and the card laid out twice. A permanent cell
-    // is in the first layout.
+    // 009): Slint creates a conditional element AFTER its parent's `init`
+    // has run (ui-grid.md's Slint facts; Cargo.toml, the fifth canary), so
+    // a conditional line was missing from the height the card's `init`
+    // read — the Performance body 19 px short, the card laid out three
+    // times per open, never painted short: the growth lands in the same
+    // pass. A permanent cell is in the first layout.
     //
     // The line reports itself like the note, under the row's name and `-env`
     // (`settings note readers-env shows …`), and only when it has something
@@ -3535,15 +3536,16 @@ export component MainWindow inherits Window {
                 // over a wrapped path, a hint that un-wraps) leaves the card
                 // as it was, the slack going to the body host, the one
                 // stretch-1 child, so the footer stays at the bottom. The
-                // `max` grows the card in the same layout as the content —
-                // the `changed` handler runs deferred, a frame late. The
-                // dialog is an `if root.settings-visible` element, created
-                // anew at every open, so each open starts its own mark: one
-                // `settings card laid out` per open, from `init`, and again
-                // only when the card grows or the window resizes. Clamped to
-                // the window as before; Performance's tallest state fits
-                // whole at 1000x700 — `the_settings_card_fits_its_smallest_
-                // window_in_its_tallest_state` measures the slack.
+                // `max` grows the card in the very evaluation that grows the
+                // content; the `changed` handler runs afterwards, in Slint's
+                // change-tracker pass, and only records it. The dialog is an
+                // `if root.settings-visible` element, created anew at every
+                // open, so each open starts its own mark: one `settings card
+                // laid out` per open, from `init`, and again only when the
+                // card grows or the window resizes. Clamped to the window as
+                // before; Performance's tallest state fits whole at 1000x700
+                // — `the_settings_card_fits_its_smallest_window_in_its_
+                // tallest_state` measures the slack.
                 property <length> content: settings-card-layout.preferred-height;
                 property <length> high-water: 0px;
                 changed content => {
@@ -4157,9 +4159,12 @@ export component MainWindow inherits Window {
                     // empty line (ui-grid.md's Slint facts; Cargo.toml, the
                     // fifth canary) — so a notice appearing or clearing moves
                     // nothing, and no probe glyph is needed. It was an `if`,
-                    // and the notice an open presents was created a frame
-                    // after the card's first layout: the card twitched 29 px
-                    // one frame into every open that had something to say.
+                    // created after the card's `init` had read its layout:
+                    // the card's `init` read a height 29 px short of the one
+                    // painted, and every open with something to say laid the
+                    // card out three times — never painted short, but the
+                    // `init`-time capture and the one-mark contract need the
+                    // line in place.
                     settings-notice-line := Text {
                         text: root.settings-notice;
                         color: #ffb84d;

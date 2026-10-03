@@ -216,3 +216,23 @@ Gaps for the user: none.
   it, the persona was indifferent — relayed to the user as a decision
   taken; the strip can measure both weights per tab if the user wants the
   bold back.
+- D6 (2026-10-03, the senior developer's test-integrity review, QE's
+  question 3 and defects D1–D4): the table's open "twitch" was a mark
+  sequence inside one key event — 229 px at [901], 255 px at [903] on PR
+  #96's ubuntu trace — never a painted frame: Slint creates a conditional
+  child after its parent's `init` and runs the change handlers in the
+  same pass, before any paint. The permanence of the notice line and the
+  environment's line stands on R5 (one mark per open) and on the
+  high-water mark's exact start in the card's `init`; the "one frame
+  late" sentences are corrected (settings.md, ui-grid.md's Slint facts,
+  the fifth canary, the comments). The never-shrinks test's power is Noto
+  Sans only — on PR #102's run 37104836260 the card was 497 px on ubuntu
+  (DejaVu Sans) and 483 px on windows (Segoe UI), unchanged through `100`
+  and `2` (D2) — so a Linux cache strand of that test, a path of about
+  220 characters that `Clearing…` replaces, gives CI's ubuntu runner
+  power on the never-shrinks rule; growth is guarded by a check in the
+  same test (Noto only) and by a write-error test whose notice wraps on
+  every face (D1); the body laid out from the top by a check in the
+  holds-still test (D3). A window narrowed below the 600 px the card needs
+  re-wraps the texts and the card keeps that height until the next open:
+  recorded in the spec, not a defect at a supported size (D4).

@@ -136,15 +136,19 @@ fastcull-core.workspace = true
 #   1. A conditional (`if`) or repeated child is created by the generated
 #      `ensure_instantiated()` from the item-tree traversal
 #      (i-slint-compiler generator/rust.rs :1687-1693, i-slint-core
-#      model/repeater.rs :579 `ensure_updated`) — AFTER a layout's
-#      `preferred-height`, read in an `init`, has been evaluated without
-#      it. A layout counts such a child one frame late and a card sized
-#      from it grows a frame after it appears: why the Settings notice
-#      line and the environment's line on a SettingRow are PERMANENT
-#      elements, blank when silent. If Slint ever instantiates them before
-#      the first layout, the permanence is merely unneeded; if it starts
-#      creating PERMANENT children late, the card lays out twice per open
-#      and `the_settings_card_holds_still_across_its_tabs` says so.
+#      model/repeater.rs :579 `ensure_updated`) — AFTER its parent's
+#      `init` has run, so a layout's `preferred-height` read in that
+#      `init` does not count it; the child and the change handlers that
+#      report the grown height run in the same `ensure_tree_instantiated`
+#      pass (window.rs :648, at the end of `process_key_input` :1172 and
+#      before every paint :1554), so the growth is never painted — it
+#      reaches an `init`-time capture and the layout marks (three per
+#      open) only: why the Settings notice line and the environment's
+#      line on a SettingRow are PERMANENT elements, blank when silent. If
+#      Slint ever instantiates them before the first layout, the
+#      permanence is merely unneeded; if it starts creating PERMANENT
+#      children late, the card lays out twice per open and
+#      `the_settings_card_holds_still_across_its_tabs` says so.
 #   2. An empty `Text` is one line tall: `text_size`
 #      (i-slint-core textlayout/sharedparley.rs :1514) lays out one empty
 #      line and the software and FemtoVG renderers both return its height
