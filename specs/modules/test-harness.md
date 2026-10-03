@@ -445,12 +445,15 @@ shot 2.
   delta. `keysfocus` counts are seat-sensitive context, never a verdict.
 - The menu-click strands are Linux-only (`menu_clicks_are_calibrated()` is
   `!cfg!(windows)`): no dispatched pointer event reaches an OS menu bar.
-- The suite drives ten geometries — 640x300, 900x800, 1000x400 (brief
-  009, the Settings body giving before its footer), 1000x700, 1024x768,
-  1200x800, 1440x700, 1440x900, 1500x800, 1600x800 — plus the 1440x900 the
-  app opens at, inside the Linux runner's pinned `1920x1200x24` xvfb
-  screen; a test that drives past that raises the screen in the same
-  commit.
+- The suite drives eleven geometries — 640x300, 900x800, 1000x400 (brief
+  009, the Settings body giving before its footer), 1000x700, 1010x520
+  (the shortcuts card clamped), 1024x768, 1200x800, 1440x700, 1440x900,
+  1500x800, 1600x800 — plus the 1440x900 the app opens at, inside the
+  Linux runner's pinned `1920x1200x24` xvfb screen; a test that drives past
+  that raises the screen in the same commit (corrected 2026-10-03, brief
+  009 commit B: it said ten, and nine before brief 009 — 1010x520, driven
+  since 2026-09-04, was never counted; `grep -o 'resize:[0-9]*x[0-9]*'
+  crates/fastcull-app/tests/screenshot.rs | sort -u` lists them).
 - CI facts: a pull request's runs share one concurrency group per ref with
   `cancel-in-progress` (a run that vanishes without a verdict is a cancel,
   not a hang); every other event gets its own group; the job cap is 90
@@ -500,6 +503,8 @@ shot 2.
 
 ## History
 
+- 2026-10-03 — Brief 009 commit B: the suite drives eleven geometries,
+  1000x400 joining and 1010x520 (driven since 2026-09-04) counted at last.
 - 2026-10-03 — Brief 009's implementation: the environment line's layout
   mark is every row's, `settings note <name>-env laid out`, not
   `readers-env`'s alone (the line is `SettingRow`'s).

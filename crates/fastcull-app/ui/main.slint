@@ -3436,11 +3436,15 @@ export component MainWindow inherits Window {
                 }
                 // A tab switch: commit what the keyboard leaves, put the
                 // keyboard on the strip WHILE the old body is still visible,
-                // then switch.
+                // then switch — with the bodies' host back at its top, in
+                // the same event, so no frame shows the new tab scrolled
+                // (the host only scrolls below the minimum window; see THE
+                // BODIES below).
                 function go-to-tab(i: int) {
                     self.flush();
                     settings-strip.focus();
                     self.slot = 0;
+                    settings-body.viewport-y = 0px;
                     root.settings-tab = i;
                 }
                 function switch-tab(dir: int) {
@@ -3659,15 +3663,30 @@ export component MainWindow inherits Window {
                     // measures, because `visible: false` is lowered to a Clip
                     // wrapper that keeps the element's geometry and layout
                     // constraints (ui-grid.md's Slint facts; Cargo.toml, the
-                    // fifth canary). A preferred and a minimum height and a
-                    // stretch, never a `height:` — a bound height is a fixed
-                    // cell, and this is the cell that must take the
-                    // high-water mark's slack so the footer stays at the
-                    // card's bottom. The active body sits at its top.
-                    settings-body := Rectangle {
+                    // fifth canary). A preferred height and a stretch, never a
+                    // `height:` — a bound height is a fixed cell, and this is
+                    // the cell that must take the high-water mark's slack so
+                    // the footer stays at the card's bottom. The active body
+                    // sits at its top.
+                    //
+                    // BELOW THE MINIMUM WINDOW THE BODY GIVES, NOT THE FOOTER
+                    // (settings.md, "The card holds still"; brief 009 D4/D5):
+                    // `min-height: 0px` lets the clamped card take its
+                    // deficit here, and `Flickable { interactive: false }` —
+                    // the shortcuts card's safety valve, for its reasons
+                    // (below, at its body) — clips what no longer fits and
+                    // scrolls it on the wheel, while Reset and Close stay
+                    // inside the card. At every supported size it never
+                    // engages: the card fits whole at 1000x700. `go-to-tab`
+                    // puts it back at its top, or a body scrolled on
+                    // Performance would show General scrolled out of sight.
+                    settings-body := Flickable {
+                        interactive: false;
+                        viewport-width: self.width;
+                        viewport-height: self.preferred-height;
                         preferred-height: max(general-body.preferred-height,
                             ui-body.preferred-height, perf-body.preferred-height);
-                        min-height: self.preferred-height;
+                        min-height: 0px;
                         vertical-stretch: 1;
                         init => {
                             root.dbg-card-laid-out("settings body", self.absolute-position.x,

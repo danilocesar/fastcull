@@ -459,11 +459,13 @@ jobs:
       # reasons about this seat, and a seat the specs reason about must
       # not change under them because a runner image bumped a default.
       # 1920x1200 contains every geometry the suite drives with room
-      # over -- NINE distinct ones, not the two this comment used to
+      # over -- ELEVEN distinct ones, not the two this comment used to
       # list (`grep -o 'resize:[0-9]*x[0-9]*'
       # crates/fastcull-app/tests/screenshot.rs | sort -u`): 640x300,
-      # 900x800, 1000x700, 1024x768, 1200x800, 1440x700, 1440x900,
-      # 1500x800, 1600x800, plus the 1440x900 the app opens at
+      # 900x800, 1000x400, 1000x700, 1010x520, 1024x768, 1200x800,
+      # 1440x700, 1440x900, 1500x800, 1600x800 (it said NINE until
+      # 2026-10-03: 1010x520 had never been counted, and brief 009 added
+      # 1000x400), plus the 1440x900 the app opens at
       # (`preferred-width`/`preferred-height`, main.slint). Widest 1600,
       # tallest 900. Depth 24 is true colour, so the uploaded JPEGs are
       # not read through a quantised palette.

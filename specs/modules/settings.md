@@ -859,16 +859,24 @@ their precedence is `fastcull-core`'s; the app binds (brief 008, 2026-10-01).
       `docs/settings.md` say the card is the same size on every tab —
       review-verified at the senior developer's review of brief 009 (open:
       the review has not run).
-- [ ] **AC22 — below the minimum window the body gives before the footer**
+- [x] **AC22 — below the minimum window the body gives before the footer**
       (brief 009 D4, the senior developer's call). At 1000×400 Close and
       Reset lie inside the clamped card, a wheel over the body scrolls it
-      (a control's mark moves by the wheel's distance) while the grid
-      behind holds `vpy=0.0`, and a tab switch puts the body back at its
-      top — `below_the_minimum_window_the_settings_body_gives_before_the_footer`
-      (open: the plan's test, not yet written — brief 009 in progress).
+      (a control's mark rises by the wheel's distance or less, never by
+      nothing — the body's end may stop it short; corrected 2026-10-03,
+      brief 009 commit B: it read "moves by the wheel's distance", which
+      the plan's test does not pin, the stop being a sum of text heights)
+      while the grid behind holds `vpy=0.0`, and a tab switch puts the
+      body back at its top —
+      `below_the_minimum_window_the_settings_body_gives_before_the_footer`
+      (brief 009, 2026-10-03).
 
 ## History
 
+- 2026-10-03 — Brief 009 commit B: the bodies' host is a `Flickable {
+  interactive: false }` that gives below the minimum window and goes back
+  to its top on a tab switch; AC22 ticked beside its test, its wheel
+  distance worded as the test proves it.
 - 2026-10-03 — Brief 009, the rule landed: the card's height a high-water
   mark over its layout, the body host as tall as the tallest body, the
   notice line and every row's environment line permanent, the strip at one

@@ -15024,6 +15024,142 @@ fn the_settings_card_never_shrinks_while_it_is_open() {
     std::fs::remove_dir_all(&dir).ok();
 }
 
+/// settings.md, "The card holds still", its last rule (brief 009 D4 and D5,
+/// the senior developer's call; AC22): below the supported minimum window
+/// the BODY gives, never the footer. At 1000x400 — under the 1000x700 floor
+/// — in the tallest state (a broken file's two-line notice, the
+/// FASTCULL_MAX_READERS line on Read workers), on Performance:
+///   * the card is clamped inside the window's modal layer, and Close and
+///     Reset lie inside the card at the open and after a wheel;
+///   * a wheel over the body scrolls it: the Loupe memory field's mark
+///     rises by the wheel's 180 px or less (the body's floor may stop it
+///     short), while the grid behind holds `vpy=0.0`. The same wheel moving
+///     the body is the control: the grid's stillness is the scrim's
+///     containment, not a wheel that went nowhere;
+///   * a tab switch puts the body back at its top: on General the
+///     auto-advance box is at or below the body's top edge again.
+///
+/// The wheel is the one coordinate step — the harness has no by-name wheel
+/// — so (500,200) is asserted inside the body's own reported rectangle
+/// before anything is read from it, loudly. `--synthetic 300` gives the
+/// grid room to scroll, so its `vpy=0.0` is a claim and not a floor. The
+/// window's landing is its own mark (`wait:window geometry 1000x400`), and
+/// the layer is the window less the 26 px status bar, its top read as 0 so
+/// the bound holds on Windows, whose menu bar is outside the client area.
+///
+/// RED on bef5b5e (2026-10-03, debug, this seat): the card clamps to
+/// `220,60 560x294` while Close is laid out at `700,551`, 197 px below the
+/// card's bottom edge, and the wheel moves nothing — the host was as tall
+/// as the active body and could not give.
+///
+/// Mutants (2026-10-03), each alone: the host's `min-height: 0px` back to
+/// `self.preferred-height` → Close outside the card at `dump.perf` — red;
+/// the Flickable made a clipping Rectangle (and the viewport reset with it)
+/// → the wheel moves nothing — red; the viewport reset taken out of
+/// `go-to-tab` → General shows its auto-advance box 180 px above the body's
+/// top — red.
+#[test]
+fn below_the_minimum_window_the_settings_body_gives_before_the_footer() {
+    if !has_display() {
+        eprintln!("screenshot smoke skipped: no display server");
+        return;
+    }
+    let _s = serial();
+    let dir = settings_scratch("below-minimum", Some("[general\n"));
+    let script = "200:resize:1000x400;600:wait:window geometry 1000x400;900:key:ctrl+,;\
+                  1300:key:ctrl+tab;1600:key:ctrl+tab;2000:dump.perf;\
+                  2300:wheel.500,200,-180;2800:dump.wheeled;3100:key:ctrl+tab;\
+                  3500:dump.general";
+    let stderr = shoot_env_stderr(
+        &["--synthetic", "300"],
+        &[
+            ("FASTCULL_TRACE", "1"),
+            ("FASTCULL_MAX_READERS", "3"),
+            ("FASTCULL_CONFIG_DIR", dir.to_str().unwrap()),
+            ("FASTCULL_DRIVE", script),
+        ],
+        &out_dir().join("settings-below-minimum.jpg"),
+    );
+    // The premises: the window landed, the tab and the tallest state.
+    assert!(
+        stderr.contains("wait:window geometry 1000x400 (satisfied"),
+        "the window never reached 1000x400 — the premise:\n{stderr}"
+    );
+    let perf = qedump(&stderr, "perf");
+    assert_eq!(
+        dump_field(perf, "settingstab"),
+        "2",
+        "not on Performance: {perf}"
+    );
+    assert_eq!(
+        dump_field(perf, "readers"),
+        "env:3",
+        "the environment's line is not up: {perf}"
+    );
+    assert!(
+        dump_text(perf, "settingsnote").contains("could not be read"),
+        "the notice is not the read error — not the tallest state: {perf}"
+    );
+    // The card in the layer, and the footer in the card — at the open, then
+    // again after the wheel.
+    let (wx, floor) = (1000.0f32, 400.0f32 - 26.0);
+    let (cx, cy, cw, ch) = laid_out_at(&stderr, "settings card", "perf");
+    assert!(
+        cx >= 0.0 && cx + cw <= wx && cy >= 0.0 && cy + ch <= floor,
+        "the card ({cx},{cy} {cw}x{ch}) is not inside the modal layer of a 1000x400 \
+         window (which ends at y={floor}):\n{stderr}"
+    );
+    let footer_inside = |label: &str| {
+        let (cx, cy, cw, ch) = laid_out_at(&stderr, "settings card", label);
+        for control in ["settings close", "settings reset"] {
+            let (x, y, w, h) = laid_out_at(&stderr, control, label);
+            assert!(
+                x >= cx && x + w <= cx + cw + 0.5 && y >= cy && y + h <= cy + ch + 0.5,
+                "dump.{label}: {control} ({x},{y} {w}x{h}) is not inside the card \
+                 ({cx},{cy} {cw}x{ch}) at 1000x400 — the footer gave instead of the \
+                 body (brief 009 D4):\n{stderr}"
+            );
+        }
+    };
+    footer_inside("perf");
+    let (bx, by, bw, bh) = laid_out_at(&stderr, "settings body", "perf");
+    assert!(
+        (bx..=bx + bw).contains(&500.0) && (by..=by + bh).contains(&200.0),
+        "the wheel's point (500,200) is not over the body ({bx},{by} {bw}x{bh}), so \
+         the wheel below would test something else:\n{stderr}"
+    );
+    footer_inside("wheeled");
+    // The wheel scrolled the body, and only the body.
+    let (_, before, _, _) = laid_out_at(&stderr, "settings loupe-memory", "perf");
+    let (_, after, _, _) = laid_out_at(&stderr, "settings loupe-memory", "wheeled");
+    let rose = before - after;
+    assert!(
+        rose > 0.0 && rose <= 180.0,
+        "a 180 px wheel over the clamped body moved the Loupe memory field by {rose} px \
+         ({before} → {after}) — the body does not scroll, so what no longer fits is \
+         out of reach:\n{stderr}"
+    );
+    assert_eq!(
+        dump_field(qedump(&stderr, "wheeled"), "vpy"),
+        "0.0",
+        "the wheel over the Settings body scrolled the grid behind the dialog:\n{stderr}"
+    );
+    // A switch puts the body back at its top.
+    assert_eq!(
+        dump_field(qedump(&stderr, "general"), "settingstab"),
+        "0",
+        "the Ctrl+Tab after the wheel did not wrap to General:\n{stderr}"
+    );
+    let (_, top, _, _) = laid_out_at(&stderr, "settings body", "general");
+    let (_, first, _, _) = laid_out_at(&stderr, "settings auto-advance", "general");
+    assert!(
+        first >= top,
+        "General's first row is at y {first}, above the body's top at {top} — the body \
+         kept the scroll from Performance and hides the tab it switched to:\n{stderr}"
+    );
+    std::fs::remove_dir_all(&dir).ok();
+}
+
 /// AC11 and AC12, the app's half (settings.md, "Performance › Thumbnail
 /// cache cap" and "Performance › Thumbnail cache"; QE 2026-10-01, D24): a
 /// folder open trims the DEFAULT cache to the file's cap, and Clear empties
