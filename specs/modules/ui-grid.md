@@ -715,7 +715,10 @@ mis-marked frame costs one arrow back and a re-mark.
   presses, the dialog's plan and destination survive the first, and every
   dialog key scope — the copy, export and settings scopes — contains
   modals identically. The Settings dialog is contained like the copy
-  dialog and never stacks with it (settings.md, "The dialog").
+  dialog and never stacks with it (settings.md, "The dialog"); its card is
+  content-driven tall like the shortcuts card's, the content being its
+  TALLEST tab — one height per open, every tab (settings.md, "The card
+  holds still", brief 009).
 
 ### The filter and sort bar (M5)
 
@@ -871,7 +874,30 @@ what a timer's callback writes is seen by the trackers before a worker's
 completion can overwrite it (`platform.rs` `update_timers_and_animations`,
 the winit backend's `new_events`, read 2026-10-02 for settings.md's Clear
 row: why its `Clearing…` state and disabled button can be proved by their
-own marks).
+own marks); `visible: false` is lowered to a `Clip` wrapper around the
+element (`i-slint-compiler passes/visible.rs`, `clip: !visible`), which
+keeps its geometry and its layout constraints — an invisible child of a
+layout still takes its space, and its `preferred-height` is live and
+exact (read and measured 2026-10-03 for settings.md's card: why the
+three hidden tab bodies can be measured and the tallest taken); a
+conditional (`if`) or repeated child is created by the generated
+`ensure_instantiated()` from the item-tree traversal (`generator/rust.rs`,
+`model/repeater.rs` `ensure_updated`), AFTER a layout's `preferred-height`
+read in an `init` has been evaluated, so a layout counts a conditional
+child one frame late and a card sized from it grows one frame after it
+appears (measured 2026-10-03: why the Settings notice line and the
+environment's line are permanent elements, blank when silent); an empty
+`Text` is one line tall — `textlayout/sharedparley.rs` `text_size` lays
+out one empty line and the renderers return its height (measured
+2026-10-03 on FemtoVG and the software renderer alike: why a blank notice
+line reserves its height without a probe glyph); in a box layout the
+slack of a parent taller than its content goes to the children with a
+positive stretch, in proportion (`layout.rs` `adjust_items::<Grow>`) — a
+`Text` and a fluent `Button` have stretch 0, a `Rectangle` or `Flickable`
+1 — and a child with a `height` binding is fixed, so a child given
+`preferred-height`, `min-height` and `vertical-stretch: 1` instead is the
+one that takes it (read 2026-10-03 for settings.md's card: why the body
+host, not the footer, absorbs the high-water mark's extra height).
 
 ## Contracts
 

@@ -202,3 +202,17 @@ Gaps for the user: none.
   giving before the footer below 1000×700 is the senior developer's
   call, not a requirement; "Reset <tab> to defaults" keeps its per-tab
   width.
+- D5 (2026-10-03, Manager, on the senior developer's plan): the body
+  gives before the footer below the minimum window — the senior developer
+  took D4's call and measured it cheap (a `Flickable { interactive:
+  false }` host, six lines; at 1000×400 Close stays inside the clamped
+  card and the wheel scrolls the body while the grid holds) — so it is in
+  the unit as commit B with its test. The harness's `--screenshot`
+  forcing the software renderer (a three-line patch would honour a preset
+  `SLINT_BACKEND` and make FemtoVG measurable) is separate bookkeeping,
+  not this unit. The brief's AC1–AC5 are settings.md's AC17–AC22, where
+  the ledger continues. The active tab loses its bold — the spec says
+  "never a weight change", the white label and the accent underline mark
+  it, the persona was indifferent — relayed to the user as a decision
+  taken; the strip can measure both weights per tab if the user wants the
+  bold back.

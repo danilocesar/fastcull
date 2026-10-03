@@ -207,7 +207,19 @@ sidecars — scripts target throwaway copies of test data only.
   laid out …`, `settings tab <name> laid out …`, `settings <control> laid
   out …` for every control named under `click:` above, `settings note
   <name> laid out …` for each row's one-line note (the names below), and
-  `failed badge <id> laid out …` (failed cells only, a handful).
+  `failed badge <id> laid out …` (failed cells only, a handful). Since
+  brief 009 (settings.md, "The card holds still") `settings card laid out
+  …` fires exactly ONCE per open and never on a tab switch — the card has
+  one height per open — and again only when the card grows (a text that
+  affects its height changed) or the window is resized; the strip's
+  `settings tab <name>` marks likewise fire at the open and not on a
+  switch; and three marks join them: `settings body laid out …` (the host
+  of the three tab bodies, as tall as the tallest, from `init`, `changed
+  height` and `changed absolute-position`), `settings notice laid out …`
+  (the reserved notice line — one line tall when blank — the same three
+  handlers) and `settings note readers-env laid out …` (the Read workers
+  row's environment line, 0 px tall unless `FASTCULL_MAX_READERS` governs
+  the row; `init` and `changed height`).
 - **Settings** (brief 008, settings.md): `settings loaded from <path>` /
   `settings: no file (defaults in force)` / `settings: <path> could not
   be read: <error>` at startup and at every open — except an open while a
@@ -230,8 +242,12 @@ sidecars — scripts target throwaway copies of test data only.
   whenever its text changes — what the note says, never what the bridge
   meant it to (QE 2026-10-01, D22) — and `settings note readers-env shows
   <text>` likewise from the read workers row's environment line, which
-  exists only while `FASTCULL_MAX_READERS` governs the row (QE 2026-10-02,
-  round 5); `settings cache clearing` when the
+  reports itself only while `FASTCULL_MAX_READERS` governs the row (QE
+  2026-10-02, round 5; corrected 2026-10-03, brief 009: it said "exists
+  only while" — the line is a permanent 0 px cell when blank now, no
+  longer a conditional element, so the first layout counts it, and its
+  `shows` mark is emitted only for a non-empty text — the absence a test
+  reads without the variable still holds); `settings cache clearing` when the
   row turns to `Clearing…` and `settings cache cleared <before> ->
   <after>` (bytes) when the worker is done (QE 2026-10-01, D24); between
   the two, from the worker itself, `settings cache clear ran on <thread>`
@@ -425,7 +441,8 @@ shot 2.
   delta. `keysfocus` counts are seat-sensitive context, never a verdict.
 - The menu-click strands are Linux-only (`menu_clicks_are_calibrated()` is
   `!cfg!(windows)`): no dispatched pointer event reaches an OS menu bar.
-- The suite drives nine geometries — 640x300, 900x800, 1000x700, 1024x768,
+- The suite drives ten geometries — 640x300, 900x800, 1000x400 (brief
+  009, the Settings body giving before its footer), 1000x700, 1024x768,
   1200x800, 1440x700, 1440x900, 1500x800, 1600x800 — plus the 1440x900 the
   app opens at, inside the Linux runner's pinned `1920x1200x24` xvfb
   screen; a test that drives past that raises the screen in the same
@@ -479,6 +496,12 @@ shot 2.
 
 ## History
 
+- 2026-10-03 — Brief 009 agreed, spec first: `settings card laid out` and
+  the `settings tab` marks fire once per open and never on a tab switch;
+  `settings body laid out`, `settings notice laid out` and `settings note
+  readers-env laid out` added; the environment line's `shows` sentence
+  corrected (a permanent cell, reporting only when it speaks); 1000x400
+  joins the geometries.
 - 2026-10-02 — QE round 5 of brief 008: `settings cache clear ran on
   <thread>`, `settings cache readout shows`, `settings clear-cache
   enabled`; the cache test's third run, and the run count corrected to

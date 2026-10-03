@@ -263,12 +263,20 @@ their precedence is `fastcull-core`'s; the app binds (brief 008, 2026-10-01).
   dialog is up (senior-developer plan 2026-10-01: one fewer stacking order
   to get wrong; the menu bar stays live for everything else).
 - **The card** is the house style — `ModalScrim`'s card: `#202028`, 1 px
-  `#3a3a44`, 8 px radius, 560 px wide, its height following its content,
-  the scrim swallowing the wheel as every modal's does (issue #49's rule,
-  ui-grid.md, whose ledger names this dialog's test) — with a tab strip
-  across the top:
+  `#3a3a44`, 8 px radius, 560 px wide, its height following its TALLEST
+  tab — one height per open, the same on every tab, the rules below
+  (corrected 2026-10-03, brief 009: it read "its height following its
+  content", the active tab's, and the card jumped by the difference
+  between UI and Performance at every switch, Close under the mouse with
+  it) — the scrim swallowing the wheel as every modal's does (issue #49's
+  rule, ui-grid.md, whose ledger names this dialog's test) — with a tab
+  strip across the top:
   **General | UI | Performance**, in that order, the active tab marked
-  (brighter label, a 2 px accent underline). The tabs are a LIST — one
+  (brighter label, a 2 px accent underline — never a weight change: a bold
+  label is a few pixels wider or narrower than its regular self, by face
+  and by word, and a strip whose cells follow their labels would shift at
+  every switch; brief 009, 2026-10-03, the persona indifferent to which
+  mark goes as long as the labels hold still). The tabs are a LIST — one
   entry per tab on the Slint side, `settings::TABS` on the core side — so
   the next unit adds a tab by adding an entry and a body, and the body's
   controls to the dialog's keyboard ring, whose lists are kept by hand
@@ -288,7 +296,49 @@ their precedence is `fastcull-core`'s; the app binds (brief 008, 2026-10-01).
   about 90 characters, which wraps) — fits whole at 1000×700, the smallest
   supported window (ui-grid.md), measured as slack under the card, never
   pinned as a height (QE 2026-10-01, D9; the cache row, QE 2026-10-01,
-  D38).
+  D38) — and since the card has one height, so does every tab (brief 009,
+  2026-10-03).
+- **The card holds still** (the user, 2026-10-03: "get its size fixed";
+  brief 009, persona-validated — D1: fixed on a given machine, sized to
+  its tallest tab, never a literal pixel height, which on another face is
+  dead space or a scrolling settings page). At each open the card takes
+  ONE height: the title row, the strip, the rule, the TALLEST of the three
+  bodies' preferred heights — hidden bodies count, wrapped texts count
+  (the environment's line on Read workers, a long cache path on the
+  readout row, a two-line hint) — the reserved notice line and the
+  footer, clamped to `window − 40 px` as before; the same height on every
+  tab, so a tab switch never changes it and never moves an edge, a button
+  or a label. While the dialog is open the height is a high-water mark:
+  it never shrinks (a `Clearing…` row replacing a wrapped path, a hint
+  that un-wraps after a second commit) and grows only when a text that
+  affects it changes — a write error arriving, a notice that wraps —
+  never on a tab switch (brief 009 R1). The active body is laid out from
+  the top under the rule; the footer — the notice line, then Reset and
+  Close — sits at the card's bottom on every tab, and the slack between
+  the body and the footer is empty card; Close and Reset keep one
+  position across every switch, Reset's width following its label as
+  before (brief 009 R2, D3: a footer floating under the rows was what the
+  persona would read as broken). The notice line is RESERVED: one line
+  tall, blank when there is nothing to say, so a notice appearing or
+  clearing moves nothing; a notice that wraps grows the card by its extra
+  lines, once, under the high-water rule (brief 009 R3). The
+  environment's line on the Read workers row is reserved the same way — a
+  0 px cell unless `FASTCULL_MAX_READERS` governs the row, its own gap
+  above the note when it speaks — so the first layout counts it (brief
+  009 R5, senior-developer plan 2026-10-03). Every text that affects the
+  height is in place before the card's first frame — the bridge presents
+  every field before the dialog becomes visible — so an open lays the
+  card out ONCE: exactly one `settings card laid out … size` mark per
+  open and none on a switch (test-harness.md; brief 009 R5). The two
+  reserved lines are permanent elements, never conditional ones, because
+  Slint creates a conditional element one frame after the layout that
+  should have counted it (ui-grid.md, "Slint facts"; senior-developer
+  plan 2026-10-03). Below the supported minimum window the body gives
+  before the footer: the three bodies live in a `Flickable { interactive:
+  false }` like the shortcuts card's, so the footer stays inside the
+  clamped card, the body clips and scrolls on the wheel, and a tab switch
+  puts the body back at its top (brief 009 D4, the senior developer's
+  call, 2026-10-03).
 - **Keyboard.** `Tab`/`Shift+Tab` walk the strip and the active tab's
   controls in order — the strip, the controls top to bottom, Reset, Close
   — and never leave the dialog: the dialog's own key scope handles both,
@@ -771,8 +821,56 @@ their precedence is `fastcull-core`'s; the app binds (brief 008, 2026-10-01).
 - [x] **AC16 — no budget row moves** — `tests/perf_budgets.rs` green in
       release on the idle seat, every row in three runs (QE 2026-10-02,
       round 5; the figures are brief 008 D45).
+- [ ] **AC17 — one height per open, every tab** (brief 009 AC1). Exactly
+      one `settings card laid out` mark per open, none on any of the
+      switches of a General → UI → Performance → General walk, and the
+      height of an open on General equals the height of a reopen on
+      Performance — `the_settings_card_holds_still_across_its_tabs`, its
+      first launch (open: the plan's test, not yet written — brief 009 in
+      progress).
+- [ ] **AC18 — the footer pinned, the notice reserved** (brief 009 AC2).
+      Close and Reset keep their x and y at every dump of the walk; the
+      card under `FASTCULL_NO_CONFIG` (a notice at open) is as tall as
+      the card with no notice (`FASTCULL_CONFIG_DIR` into an empty scratch
+      dir), and the notice line is one line tall in both — the same test's
+      second launch; with a two-line notice and the environment's line both
+      present at open (a broken file, `FASTCULL_MAX_READERS=3`) the card
+      still lays out once — its third launch; and the card never shrinks
+      while open — Loupe memory committed as `100` (the hint wraps to a
+      second line on the measured seats) and then `2` leaves the height
+      where the wrap put it, no card mark after the second commit —
+      `the_settings_card_never_shrinks_while_it_is_open` (open: the plan's
+      tests, not yet written — brief 009 in progress).
+- [ ] **AC19 — the strip holds still** (brief 009 AC3). Every tab's x and
+      width are the same at every dump of the walk —
+      `the_settings_card_holds_still_across_its_tabs` (open: not yet
+      written — brief 009 in progress).
+- [ ] **AC20 — fits at 1000×700 on every tab** (brief 009 AC4). The
+      existing fit test, `the_settings_card_fits_its_smallest_window_in_its_tallest_state`,
+      unchanged in its assertions — its "tallest state" is every state now,
+      and it still opens on Performance where the long cache row lives
+      (open until the brief 009 commits land: the test exists, the rule it
+      pins does not yet).
+- [ ] **AC21 — spec and docs** (brief 009 AC5). This section and
+      `docs/settings.md` say the card is the same size on every tab —
+      review-verified at the senior developer's review of brief 009 (open:
+      the review has not run).
+- [ ] **AC22 — below the minimum window the body gives before the footer**
+      (brief 009 D4, the senior developer's call). At 1000×400 Close and
+      Reset lie inside the clamped card, a wheel over the body scrolls it
+      (a control's mark moves by the wheel's distance) while the grid
+      behind holds `vpy=0.0`, and a tab switch puts the body back at its
+      top — `below_the_minimum_window_the_settings_body_gives_before_the_footer`
+      (open: the plan's test, not yet written — brief 009 in progress).
 
 ## History
+
+- 2026-10-03 — Brief 009 agreed, spec first (the user: "The settings
+  screen is bumping depending on its size … get its size fixed"): the card
+  takes one height per open sized to its tallest tab, the footer is pinned
+  to the bottom, the notice line and the environment's line are reserved,
+  the strip keeps one weight; "The card" corrected, "The card holds still"
+  added, AC17–AC22 opened for the plan's tests.
 
 - 2026-10-02 — Merged (PR #96). AC7 and AC12 narrowed to what their tests
   prove; the guards QE's closing sweep listed and two hand-edited writer
