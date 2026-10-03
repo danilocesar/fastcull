@@ -729,7 +729,7 @@ their precedence is `fastcull-core`'s; the app binds (brief 008, 2026-10-01).
       marks each read emits with the path it used (QE 2026-10-01, D37: the
       real config dir is empty on every seat, so a revert of either to the
       per-user dir had stayed green).
-- [ ] **AC7 — precedence.** With `FASTCULL_MAX_READERS` set the field is
+- [x] **AC7 — precedence.** With `FASTCULL_MAX_READERS` set the field is
       read-only with the environment's value and its note; unset, the
       file's value governs the pool; an unparsable value is ignored —
       core `the_environment_wins_over_the_file_for_max_readers`,
@@ -814,7 +814,7 @@ their precedence is `fastcull-core`'s; the app binds (brief 008, 2026-10-01).
       `settings_cap::the_cli_honours_the_files_cache_cap_and_says_where_it_came_from`
       (the same sandbox and seed, and the four wordings of where the cap
       came from) and review-verified on Windows (QE 2026-10-01, D27).
-- [ ] **AC12 — Clear cache.** The readout is the db + `-wal` + `-shm`
+- [x] **AC12 — Clear cache.** The readout is the db + `-wal` + `-shm`
       size with the path; clearing empties the table and shrinks the
       file through a live connection and never unlinks it; the
       connection stays usable — core
@@ -891,7 +891,7 @@ their precedence is `fastcull-core`'s; the app binds (brief 008, 2026-10-01).
       height of an open on General equals the height of a reopen on
       Performance — `the_settings_card_holds_still_across_its_tabs`, each
       of its three launches (brief 009, 2026-10-03).
-- [ ] **AC18 — the footer pinned, the notice reserved** (brief 009 AC2).
+- [x] **AC18 — the footer pinned, the notice reserved** (brief 009 AC2).
       Close and Reset keep their x and y at every dump of the walk, and
       neither they, the notice line, the body host nor a tab reports a new
       layout from the first switch to the close; the active tab's first
@@ -931,11 +931,15 @@ their precedence is `fastcull-core`'s; the app binds (brief 008, 2026-10-01).
       (QE 2026-10-03, D1) — and the card so grown KEEPS that height when a
       later write succeeds and the notice un-wraps to the one-line
       `rewritten`: the same test's third commit, the file writable again,
-      with no new layout from the card, the body host, the notice line,
-      Reset or Close after it — the never-shrinks rule with power on every
-      face, Windows' included, where the Loupe memory strand has none
-      (brief 010, 2026-10-03, brief 009's TP-1 in issue #100; the box
-      re-opened for it and ticks with the strand).
+      the card as tall as with the write error, Close where it was, and no
+      new layout from the card, Reset or Close after it — the notice line,
+      which shrinks, and the body host, which takes the slack, report
+      theirs by design — the never-shrinks rule with power on every face,
+      Windows' included, where the Loupe memory strand has none (brief 010,
+      2026-10-03, brief 009's TP-1 in issue #100; corrected at brief 010's
+      implementation the same day: it named the body host and the notice
+      line among the silent, which the correct card contradicts — measured,
+      the notice 33 → 17 px and the host 306 → 322 px at the third commit).
 - [x] **AC19 — the strip holds still** (brief 009 AC3). Every tab's x and
       width are the same at every dump of the walk —
       `the_settings_card_holds_still_across_its_tabs` (brief 009,
@@ -963,7 +967,7 @@ their precedence is `fastcull-core`'s; the app binds (brief 008, 2026-10-01).
       such: between the geometry wait's echo and the last dump no `window
       geometry WxH` other than `1000x400` is traced, the WxH prefix
       compared only — diagnostic quality, a revert is red either way
-      (brief 009's TP-3, to land with brief 010, 2026-10-03).
+      (brief 009's TP-3, landed with brief 010, 2026-10-03).
 - [x] **AC23 — a plain failed write's status line** (brief 010 R2). With no
       read error standing and no file moved aside, a write that fails puts
       ` — ⚠ settings.toml could not be written` on the status line — no
@@ -973,14 +977,14 @@ their precedence is `fastcull-core`'s; the app binds (brief 008, 2026-10-01).
       `a_failed_settings_write_keeps_the_commit_and_the_next_open_does_not_reread`,
       whose `committed` and `reopened` dumps read the status line (brief
       010, 2026-10-03; issue #100's first NOW guard).
-- [ ] **AC24 — `Space` commits a checkbox** ("Apply on commit"; brief 010
+- [x] **AC24 — `Space` commits a checkbox** ("Apply on commit"; brief 010
       R2). `Space` on the Auto-advance box reached by `Tab` from the strip,
       and on the Adaptive box reached by three `Tab`s on Performance, each
       commits its setting once and the box shows the new state —
       `a_number_typed_after_tab_replaces_the_value_in_the_field`'s Space
       strand, read from `settings committed …` and the boxes' own `shows`
       marks (brief 010, 2026-10-03).
-- [ ] **AC25 — a hand edit made while the dialog is open loses to the next
+- [x] **AC25 — a hand edit made while the dialog is open loses to the next
       save** ("Writing", brief 008 D42 option A; brief 010 R2). The file
       says `selection_wash = 40` at launch and the open reads it
       (`wash=40`); a hand edit anchored on the app's own `settings opened`
@@ -1000,7 +1004,7 @@ their precedence is `fastcull-core`'s; the app binds (brief 008, 2026-10-01).
       (4, 4, 1000))` row of
       `pipeline::tests::the_readers_resolution_feeds_the_pool_exactly_as_the_variable_did`
       (brief 010, 2026-10-03).
-- [ ] **AC27 — `Ctrl+,` inert while a keyword field holds the keyboard**
+- [x] **AC27 — `Ctrl+,` inert while a keyword field holds the keyboard**
       ("Opening and closing"; brief 010 R3). With the keyword field focused
       and typed into, `Ctrl+,` opens nothing and the field keeps the
       keyboard (`focusowner=` its token) and its text —
@@ -1008,21 +1012,27 @@ their precedence is `fastcull-core`'s; the app binds (brief 008, 2026-10-01).
       strand before its open (brief 010, 2026-10-03; the condition the
       integrity review set — a measured red mutant — is the plan's
       measurement; without one this line records the deferral instead).
-- [ ] **AC28 — the active tab's accent underline** ("The card"; brief 010
+- [x] **AC28 — the active tab's accent underline** ("The card"; brief 010
       R3). At the notes test's shutter on Performance, the bottom 3 px band
       of the active tab's cell reads as the accent — its blue bias far
-      above the inactive cells' bands, which read as the card — the
+      above the inactive cells' bands, which read as the card, and above
+      the active cell's own top band, which carries only the 1 px focus
+      ring the strip draws on every edge while it holds the keyboard — the
       underline only, never a label's weight or brightness —
       `every_settings_note_is_the_core_text`'s pixel strand (brief 010,
       2026-10-03; measured on this seat: mean RGB (62,119,183), blue bias
-      92, against (32,32,40), bias 8, the label band's bias 6).
-- [ ] **AC29 — Reset names the active tab** ("The card"; brief 010 R3).
+      121, against (32,32,40), bias 8, and the active top band 65;
+      corrected at brief 010's implementation the same day — it read "blue
+      bias 92", which those means do not give, and named the inactive
+      cells alone, against which a band with the underline transparent
+      still read 65 from the ring's bottom edge and stayed green).
+- [x] **AC29 — Reset names the active tab** ("The card"; brief 010 R3).
       `Reset General to defaults` on General, `Reset UI to defaults` on UI,
       `Reset Performance to defaults` on Performance, read from the
       button's own `settings reset shows` mark at each tab's dump —
       `settings_tabs_switch_by_keys_and_never_by_digits` (brief 010,
       2026-10-03).
-- [ ] **AC30 — auto-advance off holds in the loupe at 1:1** ("General ›
+- [x] **AC30 — auto-advance off holds in the loupe at 1:1** ("General ›
       Auto-advance"; brief 010 R3). At 1:1 on a real folder with
       auto-advance off, `Y` marks and the cursor stays, `one2one` stays; on,
       `Y` advances at 1:1 too — app
@@ -1060,6 +1070,16 @@ their precedence is `fastcull-core`'s; the app binds (brief 008, 2026-10-01).
 
 ## History
 
+- 2026-10-03 — Brief 010 commit D: the driven guards of issue #100 —
+  Clear disabled under FASTCULL_NO_CACHE, the locked Limit's shown value,
+  Space on both checkboxes, a hand edit made while the dialog is open,
+  `Ctrl+,` inert over the keyword field, the underline, Reset's label, the
+  held Clear (never blocking, the thumbs kept, the Tab ring to Clear),
+  brief 009's TP-1 and TP-3, auto-advance off at 1:1; AC7, AC12, AC18,
+  AC24, AC25, AC27, AC28, AC29 and AC30 ticked beside their tests, AC22's
+  TP-3 clause landed; AC18's TP-1 sentence (it called the body host and
+  the notice line silent at the third commit, where both report by
+  design) and AC28's measurement corrected.
 - 2026-10-03 — Brief 010 commit B: the bridge keeps a failed write's error
   whole and names an earlier aside as the earlier one when the write
   failed at the move-aside with no read error standing (red on f771f6f);
