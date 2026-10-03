@@ -356,7 +356,7 @@ mod tests {
     use super::*;
     use std::path::PathBuf;
 
-    fn tmp() -> PathBuf {
+    fn tmp() -> crate::testutil::ScratchDir {
         crate::testutil::scratch_dir("cache")
     }
 

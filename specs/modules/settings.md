@@ -1041,7 +1041,7 @@ their precedence is `fastcull-core`'s; the app binds (brief 008, 2026-10-01).
       2026-10-03). The mark path has no zoom branch today, so its only red
       mutant is the grid test's: this pins "at every zoom" against a future
       one.
-- [ ] **AC31 — core's test scratch dirs go on `Drop`, a red test's kept**
+- [x] **AC31 — core's test scratch dirs go on `Drop`, a red test's kept**
       (brief 010 R3). `testutil::scratch_dir` returns a guard that removes
       the directory when the test ends and keeps it when the test is
       panicking — core
@@ -1070,6 +1070,9 @@ their precedence is `fastcull-core`'s; the app binds (brief 008, 2026-10-01).
 
 ## History
 
+- 2026-10-03 — Brief 010, the scratch-dir guard: core's unit tests hold a
+  guard that removes their scratch dir when they end and keeps it for a
+  red test; AC31 ticked beside its test.
 - 2026-10-03 — Brief 010 commit D: the driven guards of issue #100 —
   Clear disabled under FASTCULL_NO_CACHE, the locked Limit's shown value,
   Space on both checkboxes, a hand edit made while the dialog is open,

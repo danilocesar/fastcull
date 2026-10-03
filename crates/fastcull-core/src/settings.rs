@@ -1224,15 +1224,37 @@ mod tests {
 
     const GIB: u64 = 1 << 30;
 
-    fn scratch(tag: &str) -> PathBuf {
+    fn scratch(tag: &str) -> crate::testutil::ScratchDir {
         crate::testutil::scratch_dir(&format!("settings-{tag}"))
     }
 
-    /// A file holding `text`, in a fresh scratch dir; returns its path.
-    fn file_with(tag: &str, text: &str) -> PathBuf {
-        let path = scratch(tag).join(FILE_NAME);
+    /// A settings file in a scratch dir of its own: it reads as the file's
+    /// path, and holds the dir's guard for as long as the path is held, so
+    /// the dir goes with it (brief 010, AC31) — or stays, for a red test.
+    struct ScratchFile {
+        path: PathBuf,
+        _dir: crate::testutil::ScratchDir,
+    }
+
+    impl std::ops::Deref for ScratchFile {
+        type Target = Path;
+        fn deref(&self) -> &Path {
+            &self.path
+        }
+    }
+
+    impl AsRef<Path> for ScratchFile {
+        fn as_ref(&self) -> &Path {
+            &self.path
+        }
+    }
+
+    /// A file holding `text`, in a fresh scratch dir.
+    fn file_with(tag: &str, text: &str) -> ScratchFile {
+        let dir = scratch(tag);
+        let path = dir.join(FILE_NAME);
         std::fs::write(&path, text).unwrap();
-        path
+        ScratchFile { path, _dir: dir }
     }
 
     fn non_default() -> Settings {
@@ -1275,7 +1297,8 @@ mod tests {
     /// a default.
     #[test]
     fn a_written_file_round_trips_every_key() {
-        let path = scratch("roundtrip").join(FILE_NAME);
+        let dir = scratch("roundtrip");
+        let path = dir.join(FILE_NAME);
         let s = non_default();
         assert_eq!(write(&path, &s).unwrap(), None);
         let loaded = load(&path);
@@ -1295,7 +1318,8 @@ mod tests {
     /// of the parsed value → the file holds `"2gb"` and this goes red.
     #[test]
     fn the_normalised_string_is_what_the_file_stores() {
-        let path = scratch("normalised").join(FILE_NAME);
+        let dir = scratch("normalised");
+        let path = dir.join(FILE_NAME);
         let mut s = Settings::default();
         s.set_from_text(Key::LoupeMemory, "8gb").unwrap();
         s.set_from_text(Key::CacheCap, " 0.50 GB").unwrap();
@@ -2014,7 +2038,8 @@ mod tests {
             "{out:?}"
         );
         // A file written from nothing: LF, no mark.
-        let fresh = scratch("fresh").join(FILE_NAME);
+        let fresh_dir = scratch("fresh");
+        let fresh = fresh_dir.join(FILE_NAME);
         write(&fresh, &s).unwrap();
         let out = std::fs::read_to_string(&fresh).unwrap();
         assert!(
