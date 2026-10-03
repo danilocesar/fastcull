@@ -821,15 +821,16 @@ their precedence is `fastcull-core`'s; the app binds (brief 008, 2026-10-01).
 - [x] **AC16 — no budget row moves** — `tests/perf_budgets.rs` green in
       release on the idle seat, every row in three runs (QE 2026-10-02,
       round 5; the figures are brief 008 D45).
-- [ ] **AC17 — one height per open, every tab** (brief 009 AC1). Exactly
+- [x] **AC17 — one height per open, every tab** (brief 009 AC1). Exactly
       one `settings card laid out` mark per open, none on any of the
       switches of a General → UI → Performance → General walk, and the
       height of an open on General equals the height of a reopen on
-      Performance — `the_settings_card_holds_still_across_its_tabs`, its
-      first launch (open: the plan's test, not yet written — brief 009 in
-      progress).
-- [ ] **AC18 — the footer pinned, the notice reserved** (brief 009 AC2).
-      Close and Reset keep their x and y at every dump of the walk; the
+      Performance — `the_settings_card_holds_still_across_its_tabs`, each
+      of its three launches (brief 009, 2026-10-03).
+- [x] **AC18 — the footer pinned, the notice reserved** (brief 009 AC2).
+      Close and Reset keep their x and y at every dump of the walk, and
+      neither they, the notice line, the body host nor a tab reports a new
+      layout from the first switch to the close; the
       card under `FASTCULL_NO_CONFIG` (a notice at open) is as tall as
       the card with no notice (`FASTCULL_CONFIG_DIR` into an empty scratch
       dir), and the notice line is one line tall in both — the same test's
@@ -838,19 +839,22 @@ their precedence is `fastcull-core`'s; the app binds (brief 008, 2026-10-01).
       still lays out once — its third launch; and the card never shrinks
       while open — Loupe memory committed as `100` (the hint wraps to a
       second line on the measured seats) and then `2` leaves the height
-      where the wrap put it, no card mark after the second commit —
-      `the_settings_card_never_shrinks_while_it_is_open` (open: the plan's
-      tests, not yet written — brief 009 in progress).
-- [ ] **AC19 — the strip holds still** (brief 009 AC3). Every tab's x and
+      where the wrap put it, no card mark after the second commit, and a
+      card that opened with the hint already wrapped (a file saying `100
+      GB`) keeps its opening height after `2`, the body host and the footer
+      reporting no new layout after either commit —
+      `the_settings_card_never_shrinks_while_it_is_open` (brief 009,
+      2026-10-03; its second launch and the no-new-layout checks,
+      developer 2026-10-03).
+- [x] **AC19 — the strip holds still** (brief 009 AC3). Every tab's x and
       width are the same at every dump of the walk —
-      `the_settings_card_holds_still_across_its_tabs` (open: not yet
-      written — brief 009 in progress).
-- [ ] **AC20 — fits at 1000×700 on every tab** (brief 009 AC4). The
+      `the_settings_card_holds_still_across_its_tabs` (brief 009,
+      2026-10-03).
+- [x] **AC20 — fits at 1000×700 on every tab** (brief 009 AC4). The
       existing fit test, `the_settings_card_fits_its_smallest_window_in_its_tallest_state`,
       unchanged in its assertions — its "tallest state" is every state now,
       and it still opens on Performance where the long cache row lives
-      (open until the brief 009 commits land: the test exists, the rule it
-      pins does not yet).
+      (brief 009, 2026-10-03: green with the rule in place).
 - [ ] **AC21 — spec and docs** (brief 009 AC5). This section and
       `docs/settings.md` say the card is the same size on every tab —
       review-verified at the senior developer's review of brief 009 (open:
@@ -865,6 +869,11 @@ their precedence is `fastcull-core`'s; the app binds (brief 008, 2026-10-01).
 
 ## History
 
+- 2026-10-03 — Brief 009, the rule landed: the card's height a high-water
+  mark over its layout, the body host as tall as the tallest body, the
+  notice line and every row's environment line permanent, the strip at one
+  weight; AC17–AC20 ticked beside their tests, AC18 naming the
+  never-shrinks test's second launch.
 - 2026-10-03 — Brief 009 agreed, spec first (the user: "The settings
   screen is bumping depending on its size … get its size fixed"): the card
   takes one height per open sized to its tallest tab, the footer is pinned

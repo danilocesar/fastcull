@@ -217,9 +217,13 @@ sidecars — scripts target throwaway copies of test data only.
   of the three tab bodies, as tall as the tallest, from `init`, `changed
   height` and `changed absolute-position`), `settings notice laid out …`
   (the reserved notice line — one line tall when blank — the same three
-  handlers) and `settings note readers-env laid out …` (the Read workers
-  row's environment line, 0 px tall unless `FASTCULL_MAX_READERS` governs
-  the row; `init` and `changed height`).
+  handlers) and `settings note <name>-env laid out …` (a row's environment
+  line, `init` and `changed height` — every row has one, the line being
+  `SettingRow`'s, so `auto-advance-env`, `wash-env`, `loupe-memory-env`,
+  `cache-cap-env` and `readers-env`; 0 px tall unless a variable governs
+  the row, which today only `FASTCULL_MAX_READERS` does, on Read workers;
+  corrected 2026-10-03, brief 009's implementation: it named `readers-env`
+  alone).
 - **Settings** (brief 008, settings.md): `settings loaded from <path>` /
   `settings: no file (defaults in force)` / `settings: <path> could not
   be read: <error>` at startup and at every open — except an open while a
@@ -496,6 +500,9 @@ shot 2.
 
 ## History
 
+- 2026-10-03 — Brief 009's implementation: the environment line's layout
+  mark is every row's, `settings note <name>-env laid out`, not
+  `readers-env`'s alone (the line is `SettingRow`'s).
 - 2026-10-03 — Brief 009 agreed, spec first: `settings card laid out` and
   the `settings tab` marks fire once per open and never on a tab switch;
   `settings body laid out`, `settings notice laid out` and `settings note

@@ -129,6 +129,33 @@ fastcull-core.workspace = true
 #      themselves (QE 2026-10-02, round 5; the senior developer's
 #      test-integrity review, which first suspected a race here and
 #      refuted it in this source).
+# FIFTH CANARY (brief 009, the Settings card holds still; same 1.17.1).
+# Three measured behaviours the card's one height per open stands on, none
+# documented upstream (read 2026-10-03 by the senior developer, and each
+# one is in ui-grid.md's "Slint facts this module depends on"):
+#   1. A conditional (`if`) or repeated child is created by the generated
+#      `ensure_instantiated()` from the item-tree traversal
+#      (i-slint-compiler generator/rust.rs :1687-1693, i-slint-core
+#      model/repeater.rs :579 `ensure_updated`) — AFTER a layout's
+#      `preferred-height`, read in an `init`, has been evaluated without
+#      it. A layout counts such a child one frame late and a card sized
+#      from it grows a frame after it appears: why the Settings notice
+#      line and the environment's line on a SettingRow are PERMANENT
+#      elements, blank when silent. If Slint ever instantiates them before
+#      the first layout, the permanence is merely unneeded; if it starts
+#      creating PERMANENT children late, the card lays out twice per open
+#      and `the_settings_card_holds_still_across_its_tabs` says so.
+#   2. An empty `Text` is one line tall: `text_size`
+#      (i-slint-core textlayout/sharedparley.rs :1514) lays out one empty
+#      line and the software and FemtoVG renderers both return its height
+#      (17 px at 12 px Noto Sans) — why a blank notice line reserves its
+#      line without a probe glyph, and the notice can appear or clear
+#      without moving the card.
+#   3. `visible: false` is lowered to a `Clip` wrapper around the element
+#      (i-slint-compiler passes/visible.rs, `clip: !visible`), which keeps
+#      its geometry and its layout constraints, so a hidden element's
+#      `preferred-height` is live and exact — why the card can take the
+#      TALLEST of the three tab bodies while two of them are hidden.
 slint = { version = "1", default-features = false, features = [
     "std",
     "backend-winit",
