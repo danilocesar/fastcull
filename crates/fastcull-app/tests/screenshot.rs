@@ -5856,6 +5856,45 @@ fn overlay_wheel_still_zooms_one_stop_per_notch() {
 /// that cost away (see the M1 test above and 01-architecture.md, "Build
 /// profiles"). Measured in debug before the lift: 10 of 10 idle runs
 /// green and 3 of 3 under the #76 load recipe.
+///
+/// THE KNOWN-FAILED PREMISE IS GATED ON THE APP'S OWN MARK (issue #101,
+/// brief 010 R1; test-harness.md, "Rules for script authors"). Everything
+/// after `dump.t1` reads a cursor the app KNOWS has failed — the first
+/// End's decode failure must have arrived before the second End — and
+/// until brief 010 nothing in the script waited for it: `dump.t1` stood on
+/// the clock 250 ms after the first End. On a slow runner the failing
+/// decode landed 2.3 s after that End, after the second End and its dump
+/// (Windows debug, run 37086089258, 1 of 13 runs: `dump.t2` at 17152, the
+/// `(decode failed)` drop at 17295, the badge at 17374 — the thumb
+/// rendered at the second End because the failure was not yet known, and
+/// the count below read 1). Now `wait:failed badge 11 laid out` stands in
+/// front of `dump.t1`, and the steps after it keep the gaps they had,
+/// rebased on the moment the app knows; no step moved, none added but the
+/// wait, no assertion changed.
+///
+/// Why the badge's mark and not the drop's: `failed badge <id> laid out` is
+/// emitted in the refresh that sees `<id>` enter the failed set, whatever
+/// the overlay's state (a few ms after the drop, measured idle and under
+/// load), while `loupe overlay dropped idx 11 (decode failed)` fires only
+/// when the overlay was UP and wanted when the failure landed — a failure
+/// that lands after a `(hold cap)` drop emits none, and a wait on it would
+/// have hung the very run that went red (the idle trace shows `loupe hold
+/// idx 11 …` 26 ms after the first End). Its `(satisfied` echo and its
+/// ORDER before `QEDUMP t1` are asserted.
+///
+/// The race, forced: under the senior developer's load recipe (`taskset
+/// -c 0,1`, six pinned spinners, rebuild loops) it reproduced 0 of 10 on
+/// either script, the failure landing 60–170 ms after the End (the plan's
+/// record, 2026-10-03). Deterministically (2026-10-03, brief 010's
+/// implementation): with the loupe worker's `Failed` event held 2.5 s
+/// before it is sent (a probe, never committed) the script without the
+/// wait went red with #101's own message — `left: 1, right: 0`, `dump.t2`
+/// at 17151 and the drop at 17543 — and the script with it is green under
+/// the same probe. The residual the load recipe showed is not this test's
+/// race and is left as it is: under that recipe the `thumb landed idx 11`
+/// wait spent 15–17 s of its 30 s cap and ran past it 2 of 20, the
+/// kitchen's thumb cook queued behind idx 0's full-res cook after `home` —
+/// a forcing artefact, never seen on CI.
 #[test]
 fn a_decode_failed_cursor_drops_to_fit_instead_of_masking_the_badge() {
     if !has_display() {
@@ -5914,7 +5953,7 @@ fn a_decode_failed_cursor_drops_to_fit_instead_of_masking_the_badge() {
             ("FASTCULL_TRACE", "1"),
             (
                 "FASTCULL_DRIVE",
-                "15000:end;15250:dump.t1;16000:home;\
+                "15000:end;15050:wait:failed badge 11 laid out;15250:dump.t1;16000:home;\
                  16500:wait:thumb landed idx 11;17000:end;17150:dump.t2;18000:home",
             ),
         ],
@@ -5928,6 +5967,25 @@ fn a_decode_failed_cursor_drops_to_fit_instead_of_masking_the_badge() {
         },
     );
     corrupter.join().unwrap();
+    // The known-failed premise was gated on the app's own mark (issue
+    // #101): the wait fired, and the first badge mark — the first End's
+    // failure — came before the dump everything after it reads. Anchored on
+    // the mark's own line (`] failed badge 11 laid out at`): the wait's
+    // echo quotes the same words.
+    assert!(
+        stderr.contains("wait:failed badge 11 laid out (satisfied"),
+        "the `wait:failed badge 11 laid out` step never fired — `dump.t1` and \
+         the second End were not gated on the app knowing idx 11 failed \
+         (issue #101):\n{stderr}"
+    );
+    let known = stderr.find("] failed badge 11 laid out at ");
+    let t1 = stderr.find("] QEDUMP t1 ");
+    assert!(
+        known.is_some() && t1.is_some() && known < t1,
+        "the first `failed badge 11 laid out` mark (at byte {known:?}) does not come \
+         before `QEDUMP t1` (at byte {t1:?}) — the dump read a cursor the app did not \
+         yet know had failed (issue #101):\n{stderr}"
+    );
     // The gate was really in force: a `wait:` reports when it fires, so
     // this is the difference between "the token held the second End" and
     // "the token was a typo the parser dropped".
