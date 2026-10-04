@@ -387,17 +387,21 @@ sidecars — scripts target throwaway copies of test data only.
 - **Focus**: `focus: <what> gained|lost` from the `changed has-focus`
   handlers of the main scope (`keys`), each `iptc field N`, the keyword
   field, `copy dialog`, `clip dialog`, since brief 008 `settings
-  dialog` and `settings strip`, and since brief 011 the two export
-  dialogs' ring controls — `copy choose`, `copy template`, `copy
-  open-dest`, `copy cancel`, `copy copy-close`, `clip choose`, `clip
-  open-folder`, `clip cancel`, `clip export-close` — each from its own
-  `changed has-focus`, so a ring's landing is the control's `gained` and
-  the dialog scope's own `gained` is the keyboard back at its home (the
-  export dialog's two Cancel buttons, the plan state's and the running
-  state's, share `clip cancel`: they never coexist; a button a state
-  change destroys emits no `lost`, the dangling-weak shape, which is why
-  the state change refocuses the scope) — a `gained` with no matching
-  `lost` from the previous holder is the dangling-weak signature.
+  dialog` and `settings strip`, and since brief 011 the Copy Picks and
+  Export dialogs' ring controls (QE 2026-10-04, D2: this said "the two
+  export dialogs'", and Copy Picks is not one) — `copy choose`, `copy
+  template`, `copy open-dest`, `copy cancel`, `copy copy-close`, `clip
+  choose`, `clip open-folder`, `clip cancel`, `clip export-close` — each
+  from its own `changed has-focus`, so a ring's landing is the control's
+  `gained` and the dialog scope's own `gained` is the keyboard back at its
+  home (the export dialog's two Cancel buttons, the plan state's and the
+  running state's, share `clip cancel`: they never coexist; a focused
+  button that a state change destroys would emit no `lost` — the
+  dangling-weak shape — so the dialog brings the keyboard home first and
+  the button's `lost` lands with the scope's `gained`; QE 2026-10-04, D1:
+  this said the destroyed button emits no `lost`, which holds only with
+  that refocus removed) — a `gained` with no matching `lost` from the
+  previous holder is the dangling-weak signature.
   `settings dialog` is
   the Settings dialog's own scope: `gained` when a press on the scrim, or
   on the card outside any control, hands it the keyboard (a FocusScope
@@ -611,6 +615,13 @@ shot 2.
 
 ## History
 
+- 2026-10-04 — Brief 011, QE's spec corrections D1 and D2 (its defect
+  D6): the Focus bullet said a button a state change destroys emits no
+  `lost` — on the shipped dialogs it does, beside the scope's `gained`,
+  because the keyboard goes home before the button goes (`copy finished
+  run 1` → `focus: copy dialog gained` + `focus: copy cancel lost`, driven
+  since QE's P3), and the no-`lost` shape is the refocus removed; and it
+  called Copy Picks an export dialog.
 - 2026-10-04 — Brief 011, QE's test proposal P3 (the senior developer's
   Shape A), spec first: `FASTCULL_COPY_HOLD_MS` and `FASTCULL_CLIP_HOLD_MS`
   hold the copy worker and the export writer before their first file,

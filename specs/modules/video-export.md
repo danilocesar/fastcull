@@ -564,12 +564,14 @@ Windows runner too. `core:` = a `fastcull-core` unit test, `muxer:` =
 - [x] The keyboard ring (brief 011, AC2): `Tab`/`Shift+Tab` walk Choose…,
       Cancel and Export, then Open folder and Close on the report,
       wrapping and skipping the greyed Export (the third launch; QE
-      2026-10-04, D4); `Ctrl+Tab` and `Ctrl+Shift+Tab` move nothing (QE
-      2026-10-04, P2); `focusowner` stays `-1`; a `Y` on a focused
-      button marks nothing and keeps the selection; `Space` on the
-      focused Cancel closes; `Enter` on the focused Export then `B` on
-      the question exports; `Esc` with the keyboard on Open folder
-      closes — app
+      2026-10-04, D4); Cancel alone while the export runs, and the run's
+      end — the writer's finish, or `Space` on that Cancel — brings the
+      keyboard home (QE 2026-10-04, P3); `Ctrl+Tab` and `Ctrl+Shift+Tab`
+      move nothing (QE 2026-10-04, P2); `focusowner` stays `-1`; a `Y` on
+      a focused button marks nothing and keeps the selection, the running
+      Cancel included; `Space` on the focused Cancel closes; `Enter` on
+      the focused Export then `B` on the question exports; `Esc` with the
+      keyboard on Open folder closes — app
       `export_tab_walks_its_own_controls_and_never_leaves_the_dialog`
       (red on the pre-fix build at the fourth `Tab`, `focusowner=0`: the
       keyboard on the grid, where brief 011 D3 measured a `Y` marking the
@@ -584,6 +586,11 @@ Windows runner too. `core:` = a `fastcull-core` unit test, `muxer:` =
 
 ## History
 
+- 2026-10-04 — Brief 011, QE's test proposal P3: the ring's box gains the
+  running state — Cancel alone while the export runs, and the run's end
+  bringing the keyboard home — which the export test's fourth and fifth
+  launches drive with the writer held; until then the finish refocus was
+  review-verified only.
 - 2026-10-04 — Brief 011, QE's test proposal P3 (the senior developer's
   Shape A), spec first: the driven suite's contract gains
   `FASTCULL_CLIP_HOLD_MS` and core's `execute_held`, so a test can reach

@@ -688,9 +688,12 @@ dialog with real key events.
       issue #10; spaces and Unicode in paths are covered.
 - [x] The keyboard ring (brief 011, AC1 and AC3): `Tab`/`Shift+Tab` walk
       Choose…, the rename field and Copy, then Open destination and Close
-      on the report, wrapping and skipping the greyed Copy; `Ctrl+Tab`
-      and `Ctrl+Shift+Tab` move nothing (QE 2026-10-04, P2); `focusowner`
-      stays `-1`; a `Y` on a focused button marks nothing; the field
+      on the report, wrapping and skipping the greyed Copy; Cancel alone
+      while the copy runs, and the run's end — the worker's finish, or
+      `Space` on that Cancel — brings the keyboard home (QE 2026-10-04,
+      P3); `Ctrl+Tab` and `Ctrl+Shift+Tab` move nothing (QE 2026-10-04,
+      P2); `focusowner` stays `-1`; a `Y` on a focused button marks
+      nothing, the running Cancel included; the field
       entered by `Tab` is selected and the next letter replaces its text;
       `Enter` in the rename field puts the keyboard home and the next
       `Tab` starts at Choose… (QE 2026-10-04, P4); `Enter` on the focused
@@ -709,6 +712,11 @@ dialog with real key events.
 
 ## History
 
+- 2026-10-04 — Brief 011, QE's test proposal P3: the ring's box gains the
+  running state — Cancel alone while the copy runs, and the run's end
+  bringing the keyboard home — which the copy test's fourth and fifth
+  launches drive with the worker held; until then the finish refocus was
+  review-verified only.
 - 2026-10-04 — Brief 011, QE's test proposal P3 (the senior developer's
   Shape A), spec first: the driven suite's contract gains
   `FASTCULL_COPY_HOLD_MS` and core's `execute_held`, so a test can reach

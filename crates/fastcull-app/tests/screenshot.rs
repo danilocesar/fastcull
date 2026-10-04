@@ -6992,6 +6992,55 @@ fn last_gained_before<'a>(labels: &[&'a str], echo: &str) -> &'a str {
         .unwrap_or_else(|| panic!("no `focus: … gained` before `{echo}`: {labels:?}"))
 }
 
+/// The first scripted step dispatched after the trace mark at `from`: the
+/// index of its `drive:` echo (brief 011, QE's P3). A `wait:`'s own
+/// "(satisfied …)" line is narration, not a step, and is passed over: it
+/// can be traced in the same timer pass as the mark it waited for, AHEAD of
+/// the change handlers that pass set off — Slint fires every due timer and
+/// only then runs the change handlers (`update_timers_and_animations`,
+/// i-slint-core 1.17.1 `platform.rs`) — so the refocus a run's finish makes
+/// may be traced after the wait's line and before the next real step.
+fn next_step_after(labels: &[&str], from: usize) -> usize {
+    labels[from + 1..]
+        .iter()
+        .position(|l| l.starts_with("drive: ") && !l.starts_with("drive: wait:"))
+        .map(|p| from + 1 + p)
+        .unwrap_or_else(|| panic!("no scripted step after `{}`: {labels:?}", labels[from]))
+}
+
+/// A run that ends with the keyboard on its running Cancel brings the
+/// keyboard home (ui-grid.md, "Modal keyboard containment": every state
+/// change of a dialog puts it back on the dialog's scope; brief 011, QE's
+/// P3): between `finished` — the run's finished-run mark, emitted once —
+/// and the next scripted step, the scope's `focus: <dialog> dialog gained`
+/// AND the destroyed Cancel's `focus: <dialog> cancel lost`. The `lost` is
+/// traced only because the keyboard leaves Cancel before Cancel is
+/// destroyed (test-harness.md, Focus): with the refocus gone there is
+/// neither mark, and the next key is delivered to nothing.
+fn assert_the_finish_brings_the_keyboard_home(stderr: &str, finished: &str, dialog: &str) {
+    let labels = mark_labels(stderr);
+    let at = label_positions(&labels, finished);
+    assert_eq!(
+        at.len(),
+        1,
+        "`{finished}` is not exactly one mark of this run:\n{stderr}"
+    );
+    let next = next_step_after(&labels, at[0]);
+    for mark in [
+        format!("focus: {dialog} dialog gained"),
+        format!("focus: {dialog} cancel lost"),
+    ] {
+        assert!(
+            marks_between(&labels, at[0], next, &mark) > 0,
+            "after `{finished}` no `{mark}` before the next step: the run's \
+             end destroyed the focused Cancel without bringing the keyboard \
+             home first, and every key after it goes nowhere (ui-grid.md, \
+             \"Modal keyboard containment\"; brief 011, QE's P3). When this \
+             fails this way it is that defect; do not quiet it:\n{stderr}"
+        );
+    }
+}
+
 /// AC1 and AC3 of brief 011 (issue #98; ui-grid.md "Modal keyboard
 /// containment", fileops.md "The keyboard ring"): in the Copy Picks dialog
 /// `Tab` and `Shift+Tab` walk the dialog's own controls in visible order,
@@ -7002,7 +7051,7 @@ fn last_gained_before<'a>(labels: &[&'a str], echo: &str) -> &'a str {
 ///
 /// One folder of three 2 KB fakes, `a` and `b` picked and the cursor left
 /// on the unpicked `c`, so a key that reached the grid behind the scrim
-/// would show in the status line: a `Y` would pick `c`. Three launches:
+/// would show in the status line: a `Y` would pick `c`. Five launches:
 ///   1. No destination, so Copy is greyed — the old-red's own shape (brief
 ///      011 D3). Ctrl+Tab and Ctrl+Shift+Tab first: neither moves the
 ///      keyboard (ui-grid.md: "`Ctrl+Tab` does nothing unless a dialog's
@@ -7039,18 +7088,40 @@ fn last_gained_before<'a>(labels: &[&'a str], echo: &str) -> &'a str {
 ///      Close, Open destination, Close — past the disabled Choose… and
 ///      field and the absent Cancel — and Space on the focused Close closes
 ///      the dialog.
+///   4. The running state (QE's P3): an empty destination, and the worker
+///      held 3 s before its first file (`FASTCULL_COPY_HOLD_MS`,
+///      test-harness.md), so a 2 KB copy is still running while the keys
+///      land. Enter from the dialog's home starts it; Tab lands on Cancel,
+///      the one control a running copy shows, with the dump reading the
+///      running state and its `Starting…` line; a `Y` there marks nothing,
+///      and the dump after it still reads the running state. The finish
+///      brings the keyboard home: after `copy finished run 1`, before the
+///      next step, the scope's `focus: copy dialog gained` and the
+///      destroyed Cancel's `focus: copy cancel lost`
+///      ([`assert_the_finish_brings_the_keyboard_home`]); the next Tab
+///      walks the report from Open destination, and Esc closes.
+///   5. The same start, then Space on the running Cancel: the copy ends
+///      cancelled before its first file, the report says "cancelled —
+///      finished files remain", the keyboard comes home the same way, the
+///      next Tab lands on Open destination, Esc closes, and nothing is left
+///      at the destination.
 ///
 /// No script lands Enter or Space on Choose… or Open destination, and none
 /// would under any mutant below: they open the native folder picker and the
 /// file manager. That is why the home strand sits in launch 2 — after the
 /// report, a ring that landed one control off would put launch 3's closing
-/// Space on Open destination.
+/// Space on Open destination. Launch 5's Space reaches the running Cancel
+/// only by launch 4's own path, Enter from home and one Tab, which launch 4
+/// has asserted; under a ring that loses the running Cancel (the M14 mutant
+/// below) that Tab goes nowhere and the Space lands on the dialog's home,
+/// which ignores it.
 ///
 /// Each press that activates a button has its premise read at the press
 /// itself (the senior developer's review F3, [`last_gained_before`]): the
-/// keyboard on Copy when the Return goes, on Close when the Space goes
-/// (shown red by a script mutant: an Esc slipped in before the Space closes
-/// the dialog under it, and the premise reads `focus: keys gained`). What
+/// keyboard on Copy when launch 3's Return goes, on Close when its Space
+/// goes (shown red by a script mutant: an Esc slipped in before the Space
+/// closes the dialog under it, and the premise reads `focus: keys
+/// gained`), and on the running Cancel when launch 5's Space goes. What
 /// no assertion can do: that exposure is a RUN-TIME one. Were Close to drop
 /// out of `slot-ok` in the report state alone, launch 3's closing Space
 /// would land on Open destination — the file manager — before any assertion
@@ -7087,13 +7158,22 @@ fn last_gained_before<'a>(labels: &[&'a str], echo: &str) -> &'a str {
 /// → red at dump.g3, no landing; `select-all()` removed → dump.z reads
 /// `zx.{ext}`, the letter typed in at the caret; `copy-keys.focus()` removed
 /// from the Copy button's `clicked` (review F1) → red after the click, no
-/// `copy choose lost`; the `changed state` refocus removed → red on 841bb1d
-/// through Enter-on-Copy (no focus at all after the Return, the Tab on the
-/// question on `keys`, the run dead at `wait:copy finished run 1`), GREEN
-/// since F1, which sends the keyboard home from Copy's own `clicked`: it
-/// guards the worker-finish path only — a run ending under a focused
-/// Cancel — which no fixture holds long enough to Tab onto Cancel (2 KB
-/// fakes finish in milliseconds): review-verified; the home start removed
+/// `copy choose lost`; the `changed state` refocus removed (QE's mutant M5)
+/// → red on 841bb1d through Enter-on-Copy (no focus at all after the
+/// Return, the Tab on the question on `keys`, the run dead at `wait:copy
+/// finished run 1`); since F1, which sends the keyboard home from Copy's
+/// own `clicked`, it guards the worker-finish path — a run ending under a
+/// focused Cancel — which launch 4 drives with the held worker: red at
+/// launch 4's dump.f1, `focusowner=0`, the Tab after the finish on `keys`
+/// behind the scrim, and neither `copy dialog gained` nor `copy cancel
+/// lost` after `copy finished run 1` (corrected 2026-10-04, QE D5: this
+/// said no fixture holds a copy long enough to Tab onto Cancel and called
+/// that path review-verified — a held worker does); the running Cancel
+/// left out of `slot-ok` (`if (s == 3) { return false; }`, QE's mutant
+/// M14) → red at launch 4's dump.run, the Tab landing nowhere, and launch
+/// 5's script driven alone against that build has its Space land on the
+/// dialog's home, where it is ignored, and the copy runs to "2 copied";
+/// the home start removed
 /// (`slot + dir` from -1) → the first Shift+Tab lands on the field, red at
 /// dump.home; `slot-ok` approving the greyed Copy → the ring's `focus()` on
 /// it walks on to `keys` behind the scrim, red at dump.g3, `focusowner=0`;
@@ -7120,7 +7200,10 @@ fn copy_picks_tab_walks_its_own_controls_and_never_leaves_the_dialog() {
     let src = out_dir().join("tabring-copy-src");
     let dest = out_dir().join("tabring-copy-dest");
     let dest2 = out_dir().join("tabring-copy-dest2");
-    for d in [&src, &dest, &dest2] {
+    // Launches 4 and 5 copy for real, each into its own empty folder.
+    let dest3 = out_dir().join("tabring-copy-dest3");
+    let dest4 = out_dir().join("tabring-copy-dest4");
+    for d in [&src, &dest, &dest2, &dest3, &dest4] {
         std::fs::remove_dir_all(d).ok();
         std::fs::create_dir_all(d).unwrap();
     }
@@ -7132,6 +7215,23 @@ fn copy_picks_tab_walks_its_own_controls_and_never_leaves_the_dialog() {
         shoot_env_stderr(
             &[src.to_str().unwrap()],
             &[("FASTCULL_TRACE", "1"), ("FASTCULL_DRIVE", script)],
+            &out_dir().join(shot),
+        )
+    };
+    // Launches 4 and 5: the worker held 3 s before its first file
+    // (test-harness.md, `FASTCULL_COPY_HOLD_MS`), so the run is still
+    // running when their keys land. Their in-run strand ends 1 s after the
+    // Return, which leaves 2 s before the finish; a premise that reads red
+    // on a slow runner is answered with a longer hold, never a later key
+    // and never a dropped premise.
+    let run_held = |shot: &str, script: &str| -> String {
+        shoot_env_stderr(
+            &[src.to_str().unwrap()],
+            &[
+                ("FASTCULL_TRACE", "1"),
+                ("FASTCULL_COPY_HOLD_MS", "3000"),
+                ("FASTCULL_DRIVE", script),
+            ],
             &out_dir().join(shot),
         )
     };
@@ -7485,7 +7585,146 @@ fn copy_picks_tab_walks_its_own_controls_and_never_leaves_the_dialog() {
         "Space on the focused Close did not close the dialog and hand the \
          keyboard back: {end}"
     );
-    for d in [&src, &dest, &dest2] {
+
+    // --- 4. the running ring and the finish (QE's P3) ---------------------
+    let running = run_held(
+        "tabring-copy-run.jpg",
+        &format!(
+            "1500:wait:load settled gen 0;1700:key:y;1900:key:y;2100:copydest:{dest3};\
+             2300:key:ctrl+e;2700:dump.plan4;\
+             2900:key:return;3100:key:tab;3400:dump.run;3600:key:y;3900:dump.inrun;\
+             4100:wait:copy finished run 1;4400:dump.fin;\
+             4600:key:tab;4900:dump.f1;5100:key:escape;5400:dump.closed4",
+            dest3 = dest3.display()
+        ),
+    );
+    held(&running, &["plan4", "run", "inrun", "fin", "f1"]);
+    assert!(
+        running.contains("fastcull: FASTCULL_COPY_HOLD_MS=3000 — every copy is held"),
+        "the copy worker's hold was not read, so this launch's run is not the \
+         held one it is about:\n{running}"
+    );
+    let plan4 = qedump(&running, "plan4");
+    assert!(
+        dump_field(plan4, "copystate") == "0"
+            && dump_text(plan4, "summary").contains(" to copy · ")
+            && dump_text(plan4, "copyerror").is_empty(),
+        "the premise is a clean plan, where Return from home copies: {plan4}"
+    );
+    // The launch's premise (QE's P3): the copy is still running — held
+    // before its first file — when the Tab lands, and the Tab lands on its
+    // Cancel. A run that outran the Tab fails HERE, loudly.
+    let run4 = qedump(&running, "run");
+    assert_eq!(
+        (
+            dump_field(run4, "copystate"),
+            dump_text(run4, "copyprogress")
+        ),
+        ("1", "Starting…"),
+        "the copy was not running, held before its first file, when the Tab \
+         landed: {run4}"
+    );
+    landings(&running, &[("run", "tab", "copy cancel")]);
+    // A Y with the keyboard on the running Cancel marks nothing, and the
+    // dump after it still reads the running state: a Y that arrived after
+    // the finish would be swallowed at home and pass for the wrong reason.
+    let inrun = qedump(&running, "inrun");
+    assert_eq!(
+        (
+            dump_field(inrun, "copystate"),
+            dump_text(inrun, "status"),
+            dump_field(inrun, "cursor")
+        ),
+        ("1", dump_text(plan4, "status"), dump_field(plan4, "cursor")),
+        "the Y on the running Cancel reached the grid, or the run had ended \
+         before it:\n{running}"
+    );
+    assert_eq!(
+        landing(&mark_labels(&running), "inrun"),
+        ("drive: key:y", Vec::new()),
+        "the Y moved the keyboard:\n{running}"
+    );
+    assert!(
+        running.contains("wait:copy finished run 1 (satisfied"),
+        "the copy never finished — the report dump was timed, not gated:\n{running}"
+    );
+    let fin = qedump(&running, "fin");
+    assert!(
+        dump_field(fin, "copystate") == "2" && dump_text(fin, "report").contains("2 copied"),
+        "the held copy did not finish with both picks copied: {fin}"
+    );
+    assert_the_finish_brings_the_keyboard_home(&running, "copy finished run 1", "copy");
+    landings(&running, &[("f1", "tab", "copy open-dest")]);
+    let closed4 = qedump(&running, "closed4");
+    assert_eq!(
+        (
+            dump_field(closed4, "copy"),
+            dump_field(closed4, "focusowner")
+        ),
+        ("false", "0"),
+        "Esc with the keyboard on Open destination did not close the report: {closed4}"
+    );
+
+    // --- 5. Space on the running Cancel (QE's P3) --------------------------
+    // Cancel is reached by launch 4's own path, Return from home then Tab,
+    // which launch 4 has asserted: the Space can only press Cancel.
+    let cancelling = run_held(
+        "tabring-copy-cancel.jpg",
+        &format!(
+            "1500:wait:load settled gen 0;1700:key:y;1900:key:y;2100:copydest:{dest4};\
+             2300:key:ctrl+e;2700:dump.plan5;\
+             2900:key:return;3100:key:tab;3400:dump.runb;3600:key:space;\
+             3700:wait:copy finished run 1;4000:dump.cancelled;\
+             4200:key:tab;4500:dump.cb1;4700:key:escape;5000:dump.closed5",
+            dest4 = dest4.display()
+        ),
+    );
+    held(&cancelling, &["plan5", "runb", "cancelled", "cb1"]);
+    let runb = qedump(&cancelling, "runb");
+    assert_eq!(
+        (
+            dump_field(runb, "copystate"),
+            dump_text(runb, "copyprogress")
+        ),
+        ("1", "Starting…"),
+        "the copy was not running, held before its first file, when the Tab \
+         landed: {runb}"
+    );
+    landings(&cancelling, &[("runb", "tab", "copy cancel")]);
+    assert_eq!(
+        last_gained_before(&mark_labels(&cancelling), "drive: key:space"),
+        "focus: copy cancel gained",
+        "the Space was not dispatched with the keyboard on the running Cancel \
+         — the outcome read after it is not that press's:\n{cancelling}"
+    );
+    assert!(
+        cancelling.contains("wait:copy finished run 1 (satisfied"),
+        "the cancelled copy never put its report up — the dump was timed, \
+         not gated:\n{cancelling}"
+    );
+    let cancelled = qedump(&cancelling, "cancelled");
+    assert!(
+        dump_field(cancelled, "copystate") == "2"
+            && dump_text(cancelled, "report").contains("cancelled — finished files remain"),
+        "Space on the running Cancel did not cancel the copy: {cancelled}"
+    );
+    assert_the_finish_brings_the_keyboard_home(&cancelling, "copy finished run 1", "copy");
+    landings(&cancelling, &[("cb1", "tab", "copy open-dest")]);
+    let closed5 = qedump(&cancelling, "closed5");
+    assert_eq!(
+        (
+            dump_field(closed5, "copy"),
+            dump_field(closed5, "focusowner")
+        ),
+        ("false", "0"),
+        "Esc with the keyboard on Open destination did not close the report: {closed5}"
+    );
+    assert_eq!(
+        std::fs::read_dir(&dest4).map(|d| d.count()).unwrap_or(0),
+        0,
+        "a copy cancelled during its hold left files at the destination"
+    );
+    for d in [&src, &dest, &dest2, &dest3, &dest4] {
         std::fs::remove_dir_all(d).ok();
     }
 }
@@ -8913,7 +9152,7 @@ fn the_video_export_asks_before_replacing_a_file() {
 /// Three synthetic 400×300 frames, all selected, the cursor on `a`, so a
 /// key that reached the grid behind the scrim would show: a `Y` would pick
 /// `a`, move the cursor and collapse the selection the dialog is about to
-/// export. The destination holds another day's `a-c.mov`. Three launches:
+/// export. The destination holds another day's `a-c.mov`. Five launches:
 ///   1. The plan state. Ctrl+Tab and Ctrl+Shift+Tab first: neither moves
 ///      the keyboard (QE's P2; the copy test says why the ring's guard is
 ///      the one thing this pins). About next, over the dialog: a Tab under
@@ -8945,6 +9184,21 @@ fn the_video_export_asks_before_replacing_a_file() {
 ///      Choose… marks nothing and keeps the selection; Shift+Tab, Shift+Tab
 ///      land on Cancel and Choose…; Esc closes. No Enter or Space anywhere
 ///      in this launch: Choose… opens the native folder picker.
+///   4. The running state (QE's P3, the copy test's launch 4): an empty
+///      destination, the writer held 3 s before its first frame
+///      (`FASTCULL_CLIP_HOLD_MS`, test-harness.md). Enter from home starts
+///      it; Tab lands on Cancel, the one control while it runs, with the
+///      dump reading the running state and its `Starting…` line; a `Y`
+///      there marks nothing and keeps the selection, the run still running
+///      at the dump after it; the finish brings the keyboard home — `focus:
+///      clip dialog gained` and `focus: clip cancel lost` after `clip
+///      export finished run 1`, before the next step — and the next Tab
+///      walks the report from Open folder; Esc closes, the selection kept.
+///   5. The same start, then Space on the running Cancel: the export ends
+///      before its first frame, the report says "Cancelled — nothing was
+///      written", the keyboard comes home the same way, the next Tab lands
+///      on Open folder, Esc closes, and the destination stays empty — not
+///      even the hidden temp file.
 ///
 /// Launches 1 and 2 split what the plan had as one launch, so that no
 /// Space or Enter is pressed before the plan-state ring has been asserted:
@@ -8954,11 +9208,13 @@ fn the_video_export_asks_before_replacing_a_file() {
 /// Export only by the Tabs launch 1 has asserted — from home, and from
 /// Choose… onward — which no ring that passed launch 1 can turn onto
 /// Choose…, and the report takes Esc, never Enter or Space on Open folder
-/// (xdg-open).
+/// (xdg-open). Launch 5's Space reaches the running Cancel only by launch
+/// 4's own path, Enter from home and one Tab, which launch 4 has asserted.
 ///
 /// Each press that activates a button has its premise read at the press
 /// itself (review F3, the copy test's [`last_gained_before`]): the keyboard
-/// on Cancel when the Space goes, on Export when the Return goes. As in the
+/// on Cancel when launch 2's Space goes, on Export when its Return goes,
+/// and on the running Cancel when launch 5's Space goes. As in the
 /// copy test that check runs after the run, and the exposure is a RUN-TIME
 /// one: a ring regression that showed only after the reopen, or only after
 /// the mixed path's Esc, could send the Return to Choose… — the native
@@ -8990,18 +9246,26 @@ fn the_video_export_asks_before_replacing_a_file() {
 /// the Tab lands on Export; the wrap removed (`clamp` for `Math.mod` in
 /// `walk`) → red at dump.t4, no landing; `clip-keys.focus()` removed from
 /// the Export button's `clicked` (review F1) → red after the click, no
-/// `clip choose lost`; the `changed state` refocus removed → red on 841bb1d
-/// through Enter-on-Export (no focus at all after the Return, the Tab on
-/// the question on `keys`, `qtab` 0, the run dead at `wait:clip export
-/// finished run 1`), GREEN since F1, which sends the keyboard home from
-/// Export's own `clicked`: it guards the writer-finish path only — a run
-/// ending under a focused Cancel — which no fixture holds long enough to
-/// Tab onto Cancel (three 400×300 frames export in milliseconds):
-/// review-verified; the home start removed (`slot + dir` from -1) →
-/// red at dump.rhome, the first Shift+Tab on the report landing on Open
-/// folder instead of Close; the ring's arm moved ahead of the dialog's
-/// About containment → the Tab under About lands on Choose…, red at
-/// dump.abtab; `slot-ok` approving the greyed Export (QE's mutant E9,
+/// `clip choose lost`; the `changed state` refocus removed (QE's mutant
+/// E4) → red on 841bb1d through Enter-on-Export (no focus at all after the
+/// Return, the Tab on the question on `keys`, `qtab` 0, the run dead at
+/// `wait:clip export finished run 1`); since F1, which sends the keyboard
+/// home from Export's own `clicked`, it guards the writer-finish path — a
+/// run ending under a focused Cancel — which launch 4 drives with the held
+/// writer: red at launch 4's dump.f1, `focusowner=0`, the Tab after the
+/// finish on `keys` behind the scrim, and neither `clip dialog gained` nor
+/// `clip cancel lost` after `clip export finished run 1` (corrected
+/// 2026-10-04, QE D5: this said no fixture holds an export long enough to
+/// Tab onto Cancel and called that path review-verified — a held writer
+/// does); the running Cancel left out of `slot-ok` (`if (s == 2) { return
+/// root.clip-state == 0; }`, QE's mutant E8) → red at launch 4's dump.run,
+/// the Tab landing nowhere, and launch 5's script driven alone against that
+/// build has its Space land on the dialog's home, where it is ignored, and
+/// the export runs to its verified file; the home start removed (`slot +
+/// dir` from -1) → red at dump.rhome, the first Shift+Tab on the report
+/// landing on Open folder instead of Close; the ring's arm moved ahead of
+/// the dialog's About containment → the Tab under About lands on Choose…,
+/// red at dump.abtab; `slot-ok` approving the greyed Export (QE's mutant E9,
 /// `if (s == 3) { return root.clip-state == 0 || root.clip-state == 2; }`)
 /// → the ring's `focus()` on the disabled Export walks on in tree order to
 /// the grid behind the scrim (the fourth canary's fact 10), red at launch
@@ -9021,7 +9285,10 @@ fn export_tab_walks_its_own_controls_and_never_leaves_the_dialog() {
     let dest = out_dir().join("tabring-clip-dest");
     // Launch 3's destination: a FILE, which the plan refuses.
     let dest_file = out_dir().join("tabring-clip-dest-file");
-    for d in [&src, &dest] {
+    // Launches 4 and 5 export for real, each into its own empty folder.
+    let dest3 = out_dir().join("tabring-clip-dest3");
+    let dest4 = out_dir().join("tabring-clip-dest4");
+    for d in [&src, &dest, &dest3, &dest4] {
         std::fs::remove_dir_all(d).ok();
         std::fs::create_dir_all(d).unwrap();
     }
@@ -9039,6 +9306,22 @@ fn export_tab_walks_its_own_controls_and_never_leaves_the_dialog() {
         shoot_env_stderr(
             &[src.to_str().unwrap()],
             &[("FASTCULL_TRACE", "1"), ("FASTCULL_DRIVE", script.as_str())],
+            &out_dir().join(shot),
+        )
+    };
+    // Launches 4 and 5: the writer held 3 s before its first frame
+    // (test-harness.md, `FASTCULL_CLIP_HOLD_MS`) — the copy test's hold, for
+    // the same reason and with the same rule: a premise that reads red on a
+    // slow runner is answered with a longer hold, never a later key. Their
+    // own scripts in full: the shared prefix carries the clashing folder.
+    let run_held = |shot: &str, script: &str| -> String {
+        shoot_env_stderr(
+            &[src.to_str().unwrap()],
+            &[
+                ("FASTCULL_TRACE", "1"),
+                ("FASTCULL_CLIP_HOLD_MS", "3000"),
+                ("FASTCULL_DRIVE", script),
+            ],
             &out_dir().join(shot),
         )
     };
@@ -9403,7 +9686,157 @@ fn export_tab_walks_its_own_controls_and_never_leaves_the_dialog() {
         "Esc with the keyboard on Choose… did not close the dialog, hand the \
          keyboard back and keep the selection: {gclosed}"
     );
-    for d in [&src, &dest] {
+
+    // --- 4. the running ring and the finish (QE's P3) ---------------------
+    let running = run_held(
+        "tabring-clip-run.jpg",
+        &format!(
+            "1400:wait:load settled gen 0;1500:select-all;1700:clipdest:{dest3};\
+             1900:key:ctrl+shift+e;2300:dump.plan4;\
+             2500:key:return;2700:key:tab;3000:dump.run;3200:key:y;3500:dump.inrun;\
+             3700:wait:clip export finished run 1;4000:dump.fin;\
+             4200:key:tab;4500:dump.f1;4700:key:escape;5000:dump.closed4",
+            dest3 = dest3.display()
+        ),
+    );
+    held(&running, &["plan4", "run", "inrun", "fin", "f1"]);
+    assert!(
+        running.contains("fastcull: FASTCULL_CLIP_HOLD_MS=3000 — every video export is held"),
+        "the writer's hold was not read, so this launch's run is not the held \
+         one it is about:\n{running}"
+    );
+    let plan4 = qedump(&running, "plan4");
+    assert!(
+        dump_field(plan4, "clipstate") == "0"
+            && dump_field(plan4, "selected") == "3"
+            && dump_text(plan4, "clipsummary").starts_with("3 frames · 400×300 ·")
+            && dump_text(plan4, "cliperror").is_empty(),
+        "the premise is a clean plan, where Return from home exports: {plan4}"
+    );
+    // The launch's premise (the copy test's): still running, held before
+    // its first frame, when the Tab lands — and the Tab on its Cancel.
+    let run4 = qedump(&running, "run");
+    assert_eq!(
+        (
+            dump_field(run4, "clipstate"),
+            dump_text(run4, "clipprogress")
+        ),
+        ("1", "Starting…"),
+        "the export was not running, held before its first frame, when the \
+         Tab landed: {run4}"
+    );
+    landings(&running, &[("run", "tab", "clip cancel")]);
+    // A Y on the running Cancel marks nothing, moves nothing and keeps the
+    // selection, with the run still running at the dump after it.
+    let inrun = qedump(&running, "inrun");
+    assert_eq!(
+        (
+            dump_field(inrun, "clipstate"),
+            dump_text(inrun, "status"),
+            dump_field(inrun, "cursor"),
+            dump_field(inrun, "selected")
+        ),
+        (
+            "1",
+            dump_text(plan4, "status"),
+            dump_field(plan4, "cursor"),
+            dump_field(plan4, "selected")
+        ),
+        "the Y on the running Cancel reached the grid, or the run had ended \
+         before it:\n{running}"
+    );
+    assert_eq!(
+        landing(&mark_labels(&running), "inrun"),
+        ("drive: key:y", Vec::new()),
+        "the Y moved the keyboard:\n{running}"
+    );
+    assert!(
+        running.contains("wait:clip export finished run 1 (satisfied"),
+        "the export never finished — the report dump was timed, not gated:\n{running}"
+    );
+    let fin = qedump(&running, "fin");
+    assert!(
+        dump_field(fin, "clipstate") == "2"
+            && dump_text(fin, "clipreport").contains("a-c.mov")
+            && dump_text(fin, "clipreport").contains("all checksums verified"),
+        "the held export did not finish with its file verified: {fin}"
+    );
+    assert_the_finish_brings_the_keyboard_home(&running, "clip export finished run 1", "clip");
+    landings(&running, &[("f1", "tab", "clip open-folder")]);
+    let closed4 = qedump(&running, "closed4");
+    assert_eq!(
+        (
+            dump_field(closed4, "clip"),
+            dump_field(closed4, "focusowner"),
+            dump_field(closed4, "selected")
+        ),
+        ("false", "0", "3"),
+        "Esc with the keyboard on Open folder did not close the report, hand \
+         the keyboard back and keep the selection: {closed4}"
+    );
+
+    // --- 5. Space on the running Cancel (QE's P3) --------------------------
+    // Cancel is reached by launch 4's own path, which launch 4 has
+    // asserted: the Space can only press Cancel.
+    let cancelling = run_held(
+        "tabring-clip-cancel.jpg",
+        &format!(
+            "1400:wait:load settled gen 0;1500:select-all;1700:clipdest:{dest4};\
+             1900:key:ctrl+shift+e;2300:dump.plan5;\
+             2500:key:return;2700:key:tab;3000:dump.runb;3200:key:space;\
+             3300:wait:clip export finished run 1;3600:dump.cancelled;\
+             3800:key:tab;4100:dump.cb1;4300:key:escape;4600:dump.closed5",
+            dest4 = dest4.display()
+        ),
+    );
+    held(&cancelling, &["plan5", "runb", "cancelled", "cb1"]);
+    let runb = qedump(&cancelling, "runb");
+    assert_eq!(
+        (
+            dump_field(runb, "clipstate"),
+            dump_text(runb, "clipprogress")
+        ),
+        ("1", "Starting…"),
+        "the export was not running, held before its first frame, when the \
+         Tab landed: {runb}"
+    );
+    landings(&cancelling, &[("runb", "tab", "clip cancel")]);
+    assert_eq!(
+        last_gained_before(&mark_labels(&cancelling), "drive: key:space"),
+        "focus: clip cancel gained",
+        "the Space was not dispatched with the keyboard on the running Cancel \
+         — the outcome read after it is not that press's:\n{cancelling}"
+    );
+    assert!(
+        cancelling.contains("wait:clip export finished run 1 (satisfied"),
+        "the cancelled export never put its report up — the dump was timed, \
+         not gated:\n{cancelling}"
+    );
+    let cancelled = qedump(&cancelling, "cancelled");
+    assert!(
+        dump_field(cancelled, "clipstate") == "2"
+            && dump_text(cancelled, "clipreport").contains("Cancelled — nothing was written"),
+        "Space on the running Cancel did not cancel the export: {cancelled}"
+    );
+    assert_the_finish_brings_the_keyboard_home(&cancelling, "clip export finished run 1", "clip");
+    landings(&cancelling, &[("cb1", "tab", "clip open-folder")]);
+    let closed5 = qedump(&cancelling, "closed5");
+    assert_eq!(
+        (
+            dump_field(closed5, "clip"),
+            dump_field(closed5, "focusowner"),
+            dump_field(closed5, "selected")
+        ),
+        ("false", "0", "3"),
+        "Esc with the keyboard on Open folder did not close the report, hand \
+         the keyboard back and keep the selection: {closed5}"
+    );
+    assert_eq!(
+        std::fs::read_dir(&dest4).map(|d| d.count()).unwrap_or(0),
+        0,
+        "an export cancelled during its hold left a file at the destination"
+    );
+    for d in [&src, &dest, &dest3, &dest4] {
         std::fs::remove_dir_all(d).ok();
     }
     std::fs::remove_file(&dest_file).ok();
