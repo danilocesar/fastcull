@@ -556,7 +556,8 @@ Windows runner too. `core:` = a `fastcull-core` unit test, `muxer:` =
 - [x] The keyboard ring (brief 011, AC2): `Tab`/`Shift+Tab` walk Choose…,
       Cancel and Export, then Open folder and Close on the report,
       wrapping and skipping the greyed Export (the third launch; QE
-      2026-10-04, D4); `focusowner` stays `-1`; a `Y` on a focused
+      2026-10-04, D4); `Ctrl+Tab` and `Ctrl+Shift+Tab` move nothing (QE
+      2026-10-04, P2); `focusowner` stays `-1`; a `Y` on a focused
       button marks nothing and keeps the selection; `Space` on the
       focused Cancel closes; `Enter` on the focused Export then `B` on
       the question exports; `Esc` with the keyboard on Open folder
@@ -575,6 +576,10 @@ Windows runner too. `core:` = a `fastcull-core` unit test, `muxer:` =
 
 ## History
 
+- 2026-10-04 — Brief 011, QE's test proposal P2: the ring's box gains
+  `Ctrl+Tab` and `Ctrl+Shift+Tab` moving nothing — ui-grid.md's "`Ctrl+Tab`
+  does nothing unless a dialog's module says otherwise", which this module
+  does not, and which had no test.
 - 2026-10-04 — Brief 011, QE's test proposal P1 (spec correction D4): the
   ring's box gains the greyed Export's skip, which the export test's third
   launch drives — a destination the plan refuses greys Export, and the

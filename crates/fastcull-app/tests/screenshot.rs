@@ -7004,10 +7004,13 @@ fn last_gained_before<'a>(labels: &[&'a str], echo: &str) -> &'a str {
 /// on the unpicked `c`, so a key that reached the grid behind the scrim
 /// would show in the status line: a `Y` would pick `c`. Three launches:
 ///   1. No destination, so Copy is greyed — the old-red's own shape (brief
-///      011 D3). About first, over the dialog: a Tab under it moves nothing
-///      and the first Esc closes About alone. Then Tab, Tab, Tab land on
-///      Choose…, the rename field, and Choose… again, wrapping over the
-///      greyed Copy; Shift+Tab goes back over it to the field.
+///      011 D3). Ctrl+Tab and Ctrl+Shift+Tab first: neither moves the
+///      keyboard (ui-grid.md: "`Ctrl+Tab` does nothing unless a dialog's
+///      module says otherwise"; QE's P2). About next, over the dialog: a
+///      Tab under it moves nothing and the first Esc closes About alone.
+///      Then Tab, Tab, Tab land on Choose…, the rename field, and Choose…
+///      again, wrapping over the greyed Copy; Shift+Tab goes back over it
+///      to the field.
 ///   2. An empty destination and the template `x.{ext}`, so Copy is live.
 ///      The first Shift+Tab from the dialog's home lands on Copy, the LAST
 ///      control — visible order, wrapping, so it is the mirror of the first
@@ -7092,7 +7095,10 @@ fn last_gained_before<'a>(labels: &[&'a str], echo: &str) -> &'a str {
 /// the ring's arm moved ahead of the dialog's About containment → the Tab
 /// under About lands on Choose…, red at dump.abtab; the arm moved ahead of
 /// the clash question's branch → Tab there is eaten without the nudge, red
-/// at dump.qtab. The controls' own token writes have no red mutant —
+/// at dump.qtab; the ring's arm without its `!event.modifiers.control`
+/// (QE's mutant X5) → Ctrl+Tab walks the ring, red at dump.ct, its landing
+/// `focus: copy choose gained` (the Ctrl+Shift+Tab after it then lands on
+/// the field). The controls' own token writes have no red mutant —
 /// `focus-slot` writes the token too, and nothing else writes it while the
 /// dialog is up — and stay as the owner token's claim-site rule.
 #[test]
@@ -7159,14 +7165,17 @@ fn copy_picks_tab_walks_its_own_controls_and_never_leaves_the_dialog() {
     let grey = run(
         "tabring-copy-grey.jpg",
         "1500:wait:load settled gen 0;1700:key:y;1900:key:y;2300:key:ctrl+e;\
-         2700:dump.grey;2800:about;3100:dump.ab;3300:key:tab;3600:dump.abtab;\
-         3800:key:escape;4100:dump.abclosed;\
-         4300:key:tab;4600:dump.g1;4800:key:tab;5100:dump.g2;\
-         5300:key:tab;5600:dump.g3;5800:key:shift+tab;6100:dump.g4",
+         2700:dump.grey;2800:key:ctrl+tab;3100:dump.ct;3300:key:ctrl+shift+tab;3600:dump.cst;\
+         3700:about;4000:dump.ab;4200:key:tab;4500:dump.abtab;\
+         4700:key:escape;5000:dump.abclosed;\
+         5200:key:tab;5500:dump.g1;5700:key:tab;6000:dump.g2;\
+         6200:key:tab;6500:dump.g3;6700:key:shift+tab;7000:dump.g4",
     );
     held(
         &grey,
-        &["grey", "ab", "abtab", "abclosed", "g1", "g2", "g3", "g4"],
+        &[
+            "grey", "ct", "cst", "ab", "abtab", "abclosed", "g1", "g2", "g3", "g4",
+        ],
     );
     assert!(
         grey.contains("wait:load settled gen 0 (satisfied"),
@@ -7184,6 +7193,23 @@ fn copy_picks_tab_walks_its_own_controls_and_never_leaves_the_dialog() {
         status.contains("c.ARW (3/3) · unmarked") && status.contains("★2 ✕0"),
         "the premise is a and b picked and the cursor on the unmarked c: {premise}"
     );
+    // Ctrl+Tab and Ctrl+Shift+Tab move nothing (ui-grid.md, "Modal keyboard
+    // containment"; QE's P2). The ring's arm declines a Tab with Ctrl held,
+    // and Slint's window refuses its own Tab walk for one with Control,
+    // Meta or Alt (`window.rs` `process_key_input`, its `extra_mod`), so the
+    // arm's `!event.modifiers.control` is the one thing between the chord
+    // and the ring — which is the promise this pins.
+    let labels = mark_labels(&grey);
+    for (dump, chord) in [("ct", "ctrl+tab"), ("cst", "ctrl+shift+tab")] {
+        let echo = format!("drive: key:{chord}");
+        assert_eq!(
+            landing(&labels, dump),
+            (echo.as_str(), Vec::new()),
+            "{chord} moved the keyboard in the Copy Picks dialog — ui-grid.md: \
+             \"`Ctrl+Tab` does nothing unless a dialog's module says \
+             otherwise\":\n{grey}"
+        );
+    }
     // About over the dialog takes Tab like every other key: the ring's arm
     // comes after the containment arm, so nothing moves behind the popup,
     // and the first Esc closes About alone (ui-grid.md, "Modal keyboard
@@ -8854,10 +8880,12 @@ fn the_video_export_asks_before_replacing_a_file() {
 /// key that reached the grid behind the scrim would show: a `Y` would pick
 /// `a`, move the cursor and collapse the selection the dialog is about to
 /// export. The destination holds another day's `a-c.mov`. Three launches:
-///   1. The plan state. About first, over the dialog: a Tab under it moves
-///      nothing and the first Esc closes About alone. Then four Tabs —
-///      Choose…, Cancel, Export, and the wrap to Choose…; a `Y` with the
-///      keyboard on Choose… marks nothing and keeps the selection; two
+///   1. The plan state. Ctrl+Tab and Ctrl+Shift+Tab first: neither moves
+///      the keyboard (QE's P2; the copy test says why the ring's guard is
+///      the one thing this pins). About next, over the dialog: a Tab under
+///      it moves nothing and the first Esc closes About alone. Then four
+///      Tabs — Choose…, Cancel, Export, and the wrap to Choose…; a `Y` with
+///      the keyboard on Choose… marks nothing and keeps the selection; two
 ///      Shift+Tabs — Export (the wrap back), Cancel; Esc with the keyboard
 ///      on Cancel closes the dialog.
 ///   2. Two Tabs from the dialog's home reach Cancel, and Space there
@@ -8944,7 +8972,10 @@ fn the_video_export_asks_before_replacing_a_file() {
 /// → the ring's `focus()` on the disabled Export walks on in tree order to
 /// the grid behind the scrim (the fourth canary's fact 10), red at launch
 /// 3's dump.g3, `focusowner=0`, the third Tab's landing `focus: keys
-/// gained` — issue #98 back in this dialog, with launches 1 and 2 green.
+/// gained` — issue #98 back in this dialog, with launches 1 and 2 green;
+/// the ring's arm without its `!event.modifiers.control` (QE's mutant X6)
+/// → Ctrl+Tab walks the ring, red at dump.ct, its landing `focus: clip
+/// choose gained` (the Ctrl+Shift+Tab after it then lands on Export).
 #[test]
 fn export_tab_walks_its_own_controls_and_never_leaves_the_dialog() {
     if !has_display() {
@@ -9015,17 +9046,19 @@ fn export_tab_walks_its_own_controls_and_never_leaves_the_dialog() {
     // --- 1. the plan state's ring, a Y, and Esc ----------------------------
     let ring = run(
         "tabring-clip-ring.jpg",
-        "2300:dump.plan;2400:about;2700:dump.ab;2900:key:tab;3200:dump.abtab;\
-         3400:key:escape;3700:dump.abclosed;\
-         3900:key:tab;4200:dump.t1;4400:key:y;4700:dump.y1;\
-         4900:key:tab;5200:dump.t2;5400:key:tab;5700:dump.t3;5900:key:tab;6200:dump.t4;\
-         6400:key:shift+tab;6700:dump.s1;6900:key:shift+tab;7200:dump.s2;\
-         7400:key:escape;7700:dump.closed",
+        "2300:dump.plan;2400:key:ctrl+tab;2700:dump.ct;2900:key:ctrl+shift+tab;3200:dump.cst;\
+         3300:about;3600:dump.ab;3800:key:tab;4100:dump.abtab;\
+         4300:key:escape;4600:dump.abclosed;\
+         4800:key:tab;5100:dump.t1;5300:key:y;5600:dump.y1;\
+         5800:key:tab;6100:dump.t2;6300:key:tab;6600:dump.t3;6800:key:tab;7100:dump.t4;\
+         7300:key:shift+tab;7600:dump.s1;7800:key:shift+tab;8100:dump.s2;\
+         8300:key:escape;8600:dump.closed",
     );
     held(
         &ring,
         &[
-            "plan", "ab", "abtab", "abclosed", "t1", "y1", "t2", "t3", "t4", "s1", "s2",
+            "plan", "ct", "cst", "ab", "abtab", "abclosed", "t1", "y1", "t2", "t3", "t4", "s1",
+            "s2",
         ],
     );
     assert!(
@@ -9047,6 +9080,19 @@ fn export_tab_walks_its_own_controls_and_never_leaves_the_dialog() {
         dump_text(plan, "status").contains("★0 ✕0"),
         "the premise is a session with no marks: {plan}"
     );
+    // Ctrl+Tab and Ctrl+Shift+Tab move nothing (QE's P2; the copy test's
+    // strand, for this scope).
+    let labels = mark_labels(&ring);
+    for (dump, chord) in [("ct", "ctrl+tab"), ("cst", "ctrl+shift+tab")] {
+        let echo = format!("drive: key:{chord}");
+        assert_eq!(
+            landing(&labels, dump),
+            (echo.as_str(), Vec::new()),
+            "{chord} moved the keyboard in the Export dialog — ui-grid.md: \
+             \"`Ctrl+Tab` does nothing unless a dialog's module says \
+             otherwise\":\n{ring}"
+        );
+    }
     // About over the dialog takes Tab like every other key, and the first
     // Esc closes About alone (the copy test's strand, for this scope).
     assert_eq!(dump_field(qedump(&ring, "ab"), "about"), "true", "{ring}");

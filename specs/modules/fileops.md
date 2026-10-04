@@ -679,7 +679,8 @@ dialog with real key events.
       issue #10; spaces and Unicode in paths are covered.
 - [x] The keyboard ring (brief 011, AC1 and AC3): `Tab`/`Shift+Tab` walk
       Choose…, the rename field and Copy, then Open destination and Close
-      on the report, wrapping and skipping the greyed Copy; `focusowner`
+      on the report, wrapping and skipping the greyed Copy; `Ctrl+Tab`
+      and `Ctrl+Shift+Tab` move nothing (QE 2026-10-04, P2); `focusowner`
       stays `-1`; a `Y` on a focused button marks nothing; the field
       entered by `Tab` is selected and the next letter replaces its text;
       `Enter` on the focused Copy then `B` on the question copies; `Space`
@@ -697,6 +698,10 @@ dialog with real key events.
 
 ## History
 
+- 2026-10-04 — Brief 011, QE's test proposal P2: the ring's box gains
+  `Ctrl+Tab` and `Ctrl+Shift+Tab` moving nothing — ui-grid.md's "`Ctrl+Tab`
+  does nothing unless a dialog's module says otherwise", which this module
+  does not, and which had no test.
 - 2026-10-04 — Brief 011, the senior developer's review F2: the ring
   sentence records the state-change refocus's residual under an open menu
   — unmeasured, recorded rather than fixed (the Manager's ruling).
