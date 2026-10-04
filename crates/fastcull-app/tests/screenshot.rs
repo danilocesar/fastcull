@@ -5890,11 +5890,20 @@ fn overlay_wheel_still_zooms_one_stop_per_notch() {
 /// before it is sent (a probe, never committed) the script without the
 /// wait went red with #101's own message — `left: 1, right: 0`, `dump.t2`
 /// at 17151 and the drop at 17543 — and the script with it is green under
-/// the same probe. The residual the load recipe showed is not this test's
-/// race and is left as it is: under that recipe the `thumb landed idx 11`
-/// wait spent 15–17 s of its 30 s cap and ran past it 2 of 20, the
-/// kitchen's thumb cook queued behind idx 0's full-res cook after `home` —
-/// a forcing artefact, never seen on CI.
+/// the same probe. Two residuals the load recipes showed are not this
+/// test's race and are left as they are; each ends the run at the
+/// `wait:thumb landed idx 11` cap — red, never falsely green — and neither
+/// has been seen on CI. (1) Under the senior developer's recipe the wait
+/// spent 15–17 s of its 30 s cap and ran past it 2 of 20: the kitchen's
+/// thumb cook queued behind idx 0's full-res cook after `home`. (2) With a
+/// cold `cargo` build running beside the spinners, the dominant one (QE
+/// round 1, 2026-10-03, D4: 16 of 16 red while the build ran, 0 of 6 with
+/// the spinners alone once it had finished): the scan settled at
+/// 14.3–23.5 s, after the corrupter's 12 s liveness deadline (below) had
+/// passed and it had zeroed the copy, so `thumb bytes idx 11` never
+/// appeared, idx 11 never had a thumb to arm the masking shape, and the
+/// wait could not be satisfied. Both rest on the clock — the first End's
+/// fixed 15 s and the corrupter's fixed deadline — not on the app's marks.
 #[test]
 fn a_decode_failed_cursor_drops_to_fit_instead_of_masking_the_badge() {
     if !has_display() {
@@ -5927,7 +5936,10 @@ fn a_decode_failed_cursor_drops_to_fit_instead_of_masking_the_badge() {
     // schedule has always put it. The recv deadline is a liveness escape
     // only: corrupting anyway lets the run finish, and the armed-ness
     // guard below then names the real problem instead of a bare
-    // "(decode failed) never appeared".
+    // "(decode failed) never appeared". Its other side: on a scan slower
+    // than the deadline the copy is zeroed BEFORE the read, idx 11 gets no
+    // thumb, and the run ends at the `wait:thumb landed idx 11` cap instead
+    // — the doc's second residual (QE round 1, 2026-10-03, D4).
     let (bytes_tx, bytes_rx) = std::sync::mpsc::channel();
     let corrupter = {
         let path = corrupt.clone();

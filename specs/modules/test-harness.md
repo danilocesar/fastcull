@@ -249,11 +249,12 @@ sidecars — scripts target throwaway copies of test data only.
   alone). `failed badge <id> laid out …` is also the gate for "the app
   knows `<id>` failed": the badge is created in the refresh that sees
   `<id>` enter the failed set, with the cursor's cell laid out — a failure
-  on the cursor drops the overlay in that same refresh and the badge
-  follows it by a few milliseconds (3–11 ms measured idle and under load,
-  this seat, 2026-10-03) — so it fires whatever the overlay's state, where
-  the `(decode failed)` drop
-  above does not; the failed-cursor test gates its first dump on it (brief
+  on the cursor drops the overlay in that same refresh and the badge's
+  mark follows the drop's (QE 2026-10-03, D3: it gave the gap between
+  them as a few milliseconds measured on this seat — a seat measurement,
+  which runs under load widened, and the gate does not depend on the gap)
+  — so it fires whatever the overlay's state, where the `(decode failed)`
+  drop above does not; the failed-cursor test gates its first dump on it (brief
   010, 2026-10-03, issue #101: on a slow runner the failing decode landed
   2.3 s after the first End, and the second End's dump had read a cursor
   the app did not yet know had failed, 1 of 13 Windows debug runs). A
@@ -572,6 +573,9 @@ shot 2.
 
 ## History
 
+- 2026-10-03 — Brief 010, QE round 1 D3: the known-failed gate's sentence
+  keeps the order of the drop's and the badge's marks and loses the
+  seat-measured gap between them, which the gate does not depend on.
 - 2026-10-03 — Brief 010, the senior developer's review F1: a `laid out
   at` mark's edge can be one row off the drawn pixels (windows-latest), so
   a pixel strand straddles the edge or counts rows.
