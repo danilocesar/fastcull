@@ -1014,11 +1014,18 @@ their precedence is `fastcull-core`'s; the app binds (brief 008, 2026-10-01).
 - [x] **AC27 — `Ctrl+,` inert while a keyword field holds the keyboard**
       ("Opening and closing"; brief 010 R3). With the keyword field focused
       and typed into, `Ctrl+,` opens nothing and the field keeps the
-      keyboard (`focusowner=` its token) and its text —
+      keyboard (`focusowner=` its token) and its text — nothing is
+      committed until the open (`revert=""` at the strand's `typed` and
+      `inert` dumps, the IPTC Revert slot filling only when a commit
+      lands), and the open then commits the word whole (the slot filled at
+      `opened`, the sidecar's `>bird<`) —
       `settings_over_a_focused_keyword_field_commits_it_and_owns_the_keyboard`'s
       strand before its open (brief 010, 2026-10-03; the condition the
       integrity review set — a measured red mutant — is the plan's
-      measurement; without one this line records the deferral instead).
+      measurement; without one this line records the deferral instead;
+      the text's reader added the same day, QE 2026-10-03, D2: "and its
+      text" had none — a `Ctrl+,` that committed and cleared the field
+      left the test green, the sidecar holding `>bird<` either way).
 - [x] **AC28 — the active tab's accent underline** ("The card"; brief 010
       R3). At the notes test's shutter on Performance, a window of six
       pixel rows straddling the active tab's bottom edge holds at least 2
@@ -1084,6 +1091,9 @@ their precedence is `fastcull-core`'s; the app binds (brief 008, 2026-10-01).
 
 ## History
 
+- 2026-10-03 — Brief 010, QE round 1 D2: AC27 names what reads "the field
+  keeps its text" — the Revert slot still empty after the chord, so the
+  open's commit is the open's own — which it had lacked.
 - 2026-10-03 — Brief 010, QE round 1 D1: AC22's TP-3 premise ranges from
   the landing, the first `window geometry 1000x400` mark after the resize
   step, where it began at the geometry wait's echo — which a revert

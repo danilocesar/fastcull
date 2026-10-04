@@ -14889,15 +14889,25 @@ fn a_no_change_commit_or_reset_never_creates_the_file() {
 /// keyboard (settings.md, "Opening and closing": the chord lives in the main
 /// key scope and is inert while a field holds the keyboard; brief 010 R3,
 /// AC27): with `bird` typed, `dump.typed` is the premise — the field's own
-/// token (`focusowner` neither 0, the grid, nor −1, a dialog) and no dialog
-/// — and after the chord `dump.inert` reads no dialog and the same token;
-/// the field also keeps its text, which the open that follows commits whole
-/// (the sidecar's `>bird<`, no comma). The strand sits between the last
-/// typed key and the open: the open and every step after it run 500 ms
-/// later than before brief 010, every gap between them kept. Mutant
-/// (2026-10-03): the root's `content` made a FocusScope whose
+/// token (`focusowner` neither 0, the grid, nor −1, a dialog), no dialog and
+/// nothing committed yet (`revert=""`: the IPTC Revert slot fills only when
+/// a commit lands) — and after the chord `dump.inert` reads no dialog, the
+/// same token and still `revert=""`: the chord committed nothing. That is
+/// what "the field keeps its text" rests on: with nothing committed before
+/// the open, the commit `dump.opened` reports (the slot filled) is the
+/// open's own, and the sidecar's `>bird<` says it committed the word whole.
+/// The sidecar alone cannot say WHEN the word was committed — a chord that
+/// committed and cleared the field writes the same `>bird<` (QE 2026-10-03,
+/// D2: this doc had credited the sidecar with "keeps its text"). The strand
+/// sits between the last typed key and the open: the open and every step
+/// after it run 500 ms later than before brief 010, every gap between them
+/// kept. Mutants (2026-10-03): the root's `content` made a FocusScope whose
 /// `capture-key-pressed` opens the dialog on `Ctrl+,` before any field sees
-/// the key → `dump.inert` reads `settings=true focusowner=-1` — red.
+/// the key → `dump.inert` reads `settings=true focusowner=-1` — red at the
+/// dialog check, which comes first; G1, the keyword field's own
+/// `key-pressed` committing its text and clearing it on `Ctrl+,` →
+/// `dump.inert` reads `revert="Revert: keywords on 1 image(s)"` — red at the
+/// `revert` check, and green before that check existed.
 #[test]
 fn settings_over_a_focused_keyword_field_commits_it_and_owns_the_keyboard() {
     if !has_display() {
@@ -14956,6 +14966,25 @@ fn settings_over_a_focused_keyword_field_commits_it_and_owns_the_keyboard() {
         field,
         "Ctrl+, took the keyboard from the keyword field it should be inert over: \
          {inert}"
+    );
+    // ... and the field kept its text: nothing was committed before the
+    // open. `revert=` is the IPTC Revert slot, which fills only when a
+    // commit lands, so it reads "" at `typed` (the premise: the typing
+    // committed nothing) and at `inert` (the chord committed nothing), and
+    // the commit `opened` reports below is then the open's own (QE
+    // 2026-10-03, D2). After the two checks above, so a chord that opened
+    // the dialog — which commits the field too — keeps its own message.
+    assert_eq!(
+        dump_text(typed, "revert"),
+        "",
+        "the premise: something was committed before Ctrl+, — the Revert slot is not \
+         empty at `dump.typed`: {typed}"
+    );
+    assert_eq!(
+        dump_text(inert, "revert"),
+        "",
+        "Ctrl+, committed the keyword field it should be inert over — the field must keep \
+         its text for the open to commit (settings.md AC27): {inert}"
     );
     let opened = qedump(&stderr, "opened");
     assert_eq!(
