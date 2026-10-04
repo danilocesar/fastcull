@@ -181,3 +181,67 @@ No user report; measured, not seen in the wild.
   Commits A (copy ring + its test), B (export ring + its test), C (R4's
   press under About and the card, the canary facts, the suite-count
   sentence).
+- D4 (2026-10-04, Manager, review round 1 — F1, major): the ring made a
+  stale focus reachable on a normal mixed path — the keyboard on Choose…
+  by Tab, a mouse click on Copy/Export starts the run, the state change
+  disables Choose… and a disabled FocusScope ignores FocusOut, so after
+  Esc Choose… wore a focus border while the keyboard was home. Fixed
+  (fae8025): pressing Copy or Export puts the keyboard home BEFORE the run
+  starts, so a control the run disables can no longer hold it; the two
+  buttons report their layout (`copy copy-close`, `clip export-close`,
+  6eed28b) so a test clicks them by name; the fourth canary gains fact 11.
+  The `changed state` refocus's residual under an open menu was recorded
+  as unmeasured (8fbb390) — see D6. Each press that activates a dialog
+  button is checked at the press itself (a635228, F3).
+- D5 (2026-10-04, Manager, QE round 1 — PASS with six minors, seven
+  proposals; the integrity review ranked P1–P4 NOW): the small round
+  landed P1 (the export ring's greyed Export driven — a third launch
+  whose destination is a file; its one-token mutant had re-opened #98 in
+  Export with the suite green), P2 (Ctrl+Tab and Ctrl+Shift+Tab inert in
+  both dialogs, pinned), P3 (the running ring and the finish's refocus
+  driven — the senior developer's Shape A: harness hold knobs
+  `FASTCULL_COPY_HOLD_MS` and `FASTCULL_CLIP_HOLD_MS` hold the copy worker
+  and the export writer before their first file, cancellable, through
+  core's `execute_held`; spec first in 84c7785; test plumbing in
+  `FASTCULL_KITCHEN_COOK_MS`'s family, not a setting — and no large
+  fixture, so QE's question about sparse files on the Windows runner is
+  moot), P4 (Enter in the rename field brings the keyboard home and the
+  next Tab starts at Choose…). QE's D1 — the reviewer's F4: a re-plan that
+  greys Copy or Export while it holds the keyboard leaves it a stale
+  focus border beside the real one (the Use-last chip with a refused
+  template, a Choose… whose plan fails, File › Open Folder under the
+  dialog) — is cosmetic, no key goes astray; recorded as a residual in
+  both ring sentences (e9e95ca) and deferred to the follow-up issue, not
+  fixed here (the Manager, M2: three `.slint` paths the harness could only
+  review-verify, and a Rust-ordered one).
+- D6 (2026-10-04, Manager, QE round 2 — FAIL, one major in test
+  construction): T1's P4 strand, under the test's own "home start removed"
+  mutant, lands Return on Choose… — the native folder picker opened on the
+  seat and the run hung 90 s — so the doc's mutant record ("red at
+  dump.home") and its safety claim ("no script lands Enter or Space on
+  Choose… under any mutant") were false; the plan's must-not was
+  violated by a strand added after it. A bounded fix round: the strand
+  split so no Enter or Space follows a landing no earlier launch has
+  asserted, the doc corrected, the mutant re-run red where it should be;
+  the export clash-question's Tab nudge guarded (a dump field for the
+  nudge — the copy half is guarded, the export half was not); the spec
+  corrections — the menu residual is MEASURED on Linux, where the menu
+  bar is in-window (a run that ends while a menu is open takes the
+  keyboard back to the dialog and the next Esc closes the report, the
+  menu still drawn; with the refocus removed the pre-unit behaviour
+  restored focus to the destroyed Cancel and the next Tab left the dialog
+  — the refocus is the lesser evil, and a correct fix needs a design for
+  the MenuBar's restore target: a follow-up issue, the Manager, M3);
+  video-export.md's pre-existing "Esc in any dialog state closes" narrowed
+  to the plan and report states; test-harness.md's Focus bullet gains its
+  exception and the suite-count sentence is re-measured. Deferred to the
+  follow-up issue with the menu residual: the rename field's slot write on
+  a mouse arrival (needs a layout mark for the field), AC4 strengthened
+  with the IPTC panel open, Enter on the focused plan-state export Cancel,
+  and D5's stale-focus-on-re-plan residual. Relayed to the user, not
+  decided: Space on a focused Close or Cancel closes on the key-press, and
+  a second or held Space then picks the frame behind the closing dialog
+  (measured 30 ms later) — option (a) as shipped (the mark is visible and
+  undoable; Enter already behaves so on the report), (b) buttons acting
+  on release, or (c) the grid ignoring a Space within a few hundred
+  milliseconds of a close; the Manager recommends (a).
