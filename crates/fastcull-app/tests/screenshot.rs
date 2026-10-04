@@ -5856,6 +5856,55 @@ fn overlay_wheel_still_zooms_one_stop_per_notch() {
 /// that cost away (see the M1 test above and 01-architecture.md, "Build
 /// profiles"). Measured in debug before the lift: 10 of 10 idle runs
 /// green and 3 of 3 under the #76 load recipe.
+///
+/// THE KNOWN-FAILED PREMISE IS GATED ON THE APP'S OWN MARK (issue #101,
+/// brief 010 R1; test-harness.md, "Rules for script authors"). Everything
+/// after `dump.t1` reads a cursor the app KNOWS has failed — the first
+/// End's decode failure must have arrived before the second End — and
+/// until brief 010 nothing in the script waited for it: `dump.t1` stood on
+/// the clock 250 ms after the first End. On a slow runner the failing
+/// decode landed 2.3 s after that End, after the second End and its dump
+/// (Windows debug, run 37086089258, 1 of 13 runs: `dump.t2` at 17152, the
+/// `(decode failed)` drop at 17295, the badge at 17374 — the thumb
+/// rendered at the second End because the failure was not yet known, and
+/// the count below read 1). Now `wait:failed badge 11 laid out` stands in
+/// front of `dump.t1`, and the steps after it keep the gaps they had,
+/// rebased on the moment the app knows; no step moved, none added but the
+/// wait, no assertion changed.
+///
+/// Why the badge's mark and not the drop's: `failed badge <id> laid out` is
+/// emitted in the refresh that sees `<id>` enter the failed set, whatever
+/// the overlay's state (after the drop's mark; the gap is a seat
+/// measurement the gate does not depend on — QE 2026-10-03, D3/D5), while
+/// `loupe overlay dropped idx 11 (decode failed)` fires only
+/// when the overlay was UP and wanted when the failure landed — a failure
+/// that lands after a `(hold cap)` drop emits none, and a wait on it would
+/// have hung the very run that went red (the idle trace shows `loupe hold
+/// idx 11 …` 26 ms after the first End). Its `(satisfied` echo and its
+/// ORDER before `QEDUMP t1` are asserted.
+///
+/// The race, forced: under the senior developer's load recipe (`taskset
+/// -c 0,1`, six pinned spinners, rebuild loops) it reproduced 0 of 10 on
+/// either script, the failure landing 60–170 ms after the End (the plan's
+/// record, 2026-10-03). Deterministically (2026-10-03, brief 010's
+/// implementation): with the loupe worker's `Failed` event held 2.5 s
+/// before it is sent (a probe, never committed) the script without the
+/// wait went red with #101's own message — `left: 1, right: 0`, `dump.t2`
+/// at 17151 and the drop at 17543 — and the script with it is green under
+/// the same probe. Two residuals the load recipes showed are not this
+/// test's race and are left as they are; each ends the run at the
+/// `wait:thumb landed idx 11` cap — red, never falsely green — and neither
+/// has been seen on CI. (1) Under the senior developer's recipe the wait
+/// spent 15–17 s of its 30 s cap and ran past it 2 of 20: the kitchen's
+/// thumb cook queued behind idx 0's full-res cook after `home`. (2) With a
+/// cold `cargo` build running beside the spinners, the dominant one (QE
+/// round 1, 2026-10-03, D4: 16 of 16 red while the build ran, 0 of 6 with
+/// the spinners alone once it had finished): the scan settled at
+/// 14.3–23.5 s, after the corrupter's 12 s liveness deadline (below) had
+/// passed and it had zeroed the copy, so `thumb bytes idx 11` never
+/// appeared, idx 11 never had a thumb to arm the masking shape, and the
+/// wait could not be satisfied. Both rest on the clock — the first End's
+/// fixed 15 s and the corrupter's fixed deadline — not on the app's marks.
 #[test]
 fn a_decode_failed_cursor_drops_to_fit_instead_of_masking_the_badge() {
     if !has_display() {
@@ -5888,7 +5937,10 @@ fn a_decode_failed_cursor_drops_to_fit_instead_of_masking_the_badge() {
     // schedule has always put it. The recv deadline is a liveness escape
     // only: corrupting anyway lets the run finish, and the armed-ness
     // guard below then names the real problem instead of a bare
-    // "(decode failed) never appeared".
+    // "(decode failed) never appeared". Its other side: on a scan slower
+    // than the deadline the copy is zeroed BEFORE the read, idx 11 gets no
+    // thumb, and the run ends at the `wait:thumb landed idx 11` cap instead
+    // — the doc's second residual (QE round 1, 2026-10-03, D4).
     let (bytes_tx, bytes_rx) = std::sync::mpsc::channel();
     let corrupter = {
         let path = corrupt.clone();
@@ -5914,7 +5966,7 @@ fn a_decode_failed_cursor_drops_to_fit_instead_of_masking_the_badge() {
             ("FASTCULL_TRACE", "1"),
             (
                 "FASTCULL_DRIVE",
-                "15000:end;15250:dump.t1;16000:home;\
+                "15000:end;15050:wait:failed badge 11 laid out;15250:dump.t1;16000:home;\
                  16500:wait:thumb landed idx 11;17000:end;17150:dump.t2;18000:home",
             ),
         ],
@@ -5928,6 +5980,25 @@ fn a_decode_failed_cursor_drops_to_fit_instead_of_masking_the_badge() {
         },
     );
     corrupter.join().unwrap();
+    // The known-failed premise was gated on the app's own mark (issue
+    // #101): the wait fired, and the first badge mark — the first End's
+    // failure — came before the dump everything after it reads. Anchored on
+    // the mark's own line (`] failed badge 11 laid out at`): the wait's
+    // echo quotes the same words.
+    assert!(
+        stderr.contains("wait:failed badge 11 laid out (satisfied"),
+        "the `wait:failed badge 11 laid out` step never fired — `dump.t1` and \
+         the second End were not gated on the app knowing idx 11 failed \
+         (issue #101):\n{stderr}"
+    );
+    let known = stderr.find("] failed badge 11 laid out at ");
+    let t1 = stderr.find("] QEDUMP t1 ");
+    assert!(
+        known.is_some() && t1.is_some() && known < t1,
+        "the first `failed badge 11 laid out` mark (at byte {known:?}) does not come \
+         before `QEDUMP t1` (at byte {t1:?}) — the dump read a cursor the app did not \
+         yet know had failed (issue #101):\n{stderr}"
+    );
     // The gate was really in force: a `wait:` reports when it fires, so
     // this is the difference between "the token held the second End" and
     // "the token was a typo the parser dropped".
@@ -11256,6 +11327,14 @@ fn settings_stacks_under_the_shortcuts_card_and_closes_topmost_first() {
 /// instead of the one it was closed on → `dump.reopened` reads
 /// `settingstab=0` — red (QE 2026-10-01, D27: until this strand that
 /// mutant stayed green).
+///
+/// Reset NAMES the active tab (settings.md, "The card"; brief 010 R3,
+/// AC29): read from the button's own label mark, `settings reset shows
+/// <text>` (test-harness.md), last before each of the first three dumps —
+/// `Reset General to defaults` at `open`, `Reset UI to defaults` at `right`,
+/// `Reset Performance to defaults` at `ctrltab`. Mutant (2026-10-03): the
+/// label built from `settings-tabs[0]` instead of the active tab's entry →
+/// `dump.right` reads `Reset General to defaults` — red.
 #[test]
 fn settings_tabs_switch_by_keys_and_never_by_digits() {
     if !has_display() {
@@ -11317,6 +11396,31 @@ fn settings_tabs_switch_by_keys_and_never_by_digits() {
         "0",
         "Right from Performance did not wrap to General:\n{stderr}"
     );
+    // Reset names the active tab: what the BUTTON says, its own last label
+    // mark before each dump (AC29).
+    let labels = mark_labels(&stderr);
+    for (dump, said) in [
+        ("open", "Reset General to defaults"),
+        ("right", "Reset UI to defaults"),
+        ("ctrltab", "Reset Performance to defaults"),
+    ] {
+        let step = format!("drive: dump.{dump}");
+        let at = labels
+            .iter()
+            .position(|l| *l == step)
+            .unwrap_or_else(|| panic!("no `{step}` in the trace:\n{stderr}"));
+        let shown = labels[..at]
+            .iter()
+            .rev()
+            .find_map(|l| l.strip_prefix("settings reset shows "));
+        assert_eq!(
+            shown,
+            Some(said),
+            "at dump.{dump} the Reset button does not name the active tab (its last \
+             `settings reset shows` mark before the dump; None means it reported no \
+             label at all) — settings.md, \"The card\":\n{stderr}"
+        );
+    }
     // General's ring: strip → auto-advance → Reset → Close. Three Tabs land
     // on Close, and Enter there closes the dialog.
     let enter = qedump(&stderr, "enterclose");
@@ -11435,6 +11539,19 @@ fn settings_tabs_switch_by_keys_and_never_by_digits() {
 ///
 /// Mutant (2026-10-01): the four `select-all()` calls taken out of
 /// `focus-slot` — which IS 13a904e — → red on all five dumps.
+///
+/// The SPACE strand, at the end (settings.md, "Apply on commit": a checkbox
+/// applies on click or `Space`; brief 010 R2, AC24): `Ctrl+Shift+Tab` back
+/// to General, one `Tab` from the strip to the Auto-advance box, `Space` —
+/// the box commits `false` once and shows it (`dump.aaspace`); then
+/// `Ctrl+Shift+Tab` round to Performance, three `Tab`s from the strip to the
+/// Adaptive box (cleared above, a limit of 2), `Space` — it commits
+/// `max_readers = 0` once and shows `true` (`dump.adspace`). Each commit is
+/// counted over the whole run and must come after its own `Space`; what the
+/// box SHOWS is its own `shows` mark between that `Space` and the dump.
+/// Mutant (2026-10-03): the dialog scope's `capture-key-pressed` accepting
+/// `" "` before any control sees it → neither box commits, `dump.aaspace`
+/// reads `autoadvance=true` — red.
 #[test]
 fn a_number_typed_after_tab_replaces_the_value_in_the_field() {
     if !has_display() {
@@ -11449,7 +11566,9 @@ fn a_number_typed_after_tab_replaces_the_value_in_the_field() {
                   4100:dump.cap;4400:click:settings readers-adaptive;4700:key:tab;4900:key:2;\
                   5100:key:return;5400:dump.limit;5700:key:ctrl+shift+tab;6000:key:shift+tab;\
                   6200:key:shift+tab;6400:key:shift+tab;6600:key:2;6700:key:0;6900:key:return;\
-                  7200:dump.washrev";
+                  7200:dump.washrev;7500:key:ctrl+shift+tab;7800:key:tab;8000:key:space;\
+                  8300:dump.aaspace;8600:key:ctrl+shift+tab;8900:key:tab;9100:key:tab;\
+                  9300:key:tab;9500:key:space;9800:dump.adspace";
     let stderr = shoot_env_stderr(
         &["--synthetic", "24"],
         &[("FASTCULL_TRACE", "1"), ("FASTCULL_DRIVE", script)],
@@ -11503,6 +11622,72 @@ fn a_number_typed_after_tab_replaces_the_value_in_the_field() {
          not commit 20 — the field is not selected when the ring arrives \
          backwards:\n{stderr}"
     );
+    // `Space` on a checkbox commits it (AC24): the Auto-advance box reached
+    // by one Tab from General's strip, then the Adaptive box by three Tabs
+    // from Performance's.
+    let spaces = label_positions(&labels, "drive: key:space");
+    assert_eq!(
+        spaces.len(),
+        2,
+        "the two Space steps did not both run:\n{stderr}"
+    );
+    for (n, (space, dump, tab, field, model, commit, shows)) in [
+        (
+            spaces[0],
+            "aaspace",
+            "0",
+            "autoadvance",
+            "false",
+            "settings committed general.auto_advance = false",
+            "settings auto-advance shows false",
+        ),
+        (
+            spaces[1],
+            "adspace",
+            "2",
+            "readers",
+            "adaptive",
+            "settings committed performance.max_readers = 0",
+            "settings readers-adaptive shows true",
+        ),
+    ]
+    .into_iter()
+    .enumerate()
+    {
+        let step = format!("drive: dump.{dump}");
+        let at = labels
+            .iter()
+            .position(|l| *l == step)
+            .unwrap_or_else(|| panic!("no `{step}` in the trace:\n{stderr}"));
+        let line = qedump(&stderr, dump);
+        assert_eq!(
+            dump_field(line, "settingstab"),
+            tab,
+            "Space {}: not on the tab its box lives on: {line}",
+            n + 1
+        );
+        assert_eq!(
+            dump_field(line, field),
+            model,
+            "Space {} on the checkbox the ring reached did not commit it (`{field}=` \
+             at dump.{dump}) — settings.md, \"Apply on commit\": a checkbox applies on \
+             click or Space:\n{stderr}",
+            n + 1
+        );
+        let commits = label_positions(&labels, commit);
+        assert!(
+            commits.len() == 1 && commits[0] > space && commits[0] < at,
+            "`{commit}` was traced at {commits:?}: once, after Space {} (at {space}) and \
+             before dump.{dump} (at {at}), expected:\n{stderr}",
+            n + 1
+        );
+        assert!(
+            labels[space..at].contains(&shows),
+            "the box does not SHOW the state Space {} gave it — no `{shows}` between the \
+             Space and dump.{dump}:\n{stderr}",
+            n + 1
+        );
+    }
     assert_eq!(
         mark_lines(&stderr, "settings written "),
         0,
@@ -11746,6 +11931,21 @@ fn mark_labels(stderr: &str) -> Vec<&str> {
         .filter_map(|l| l.strip_prefix("fastcull-trace: ["))
         .filter_map(|r| r.split_once("] "))
         .map(|(_, label)| label)
+        .collect()
+}
+
+/// The `[<ms>]` stamps of a run's trace marks — milliseconds since the app
+/// began tracing (trace.rs `emit`) — in [`mark_labels`]'s order: the same
+/// marks, so an index into one is an index into the other.
+fn mark_stamps(stderr: &str) -> Vec<u64> {
+    stderr
+        .lines()
+        .filter_map(|l| l.strip_prefix("fastcull-trace: ["))
+        .filter_map(|r| r.split_once("] "))
+        .map(|(ms, label)| {
+            ms.parse()
+                .unwrap_or_else(|_| panic!("a trace mark with no `[<ms>]` stamp: {ms:?} {label:?}"))
+        })
         .collect()
 }
 
@@ -12821,6 +13021,121 @@ fn a_hand_edit_is_applied_when_the_dialog_next_opens() {
     std::fs::remove_dir_all(&dir).ok();
 }
 
+/// AC25 (settings.md, "Writing": "every save writes EVERY known key with the
+/// value the saving window holds, so … a hand edit made while the dialog is
+/// open, loses to the last save" — the user's option A, brief 008 D42; brief
+/// 010 R2, issue #100's fifth NOW guard). The file says `selection_wash = 40`
+/// at launch and the open reads it (`wash=40` at `dump.opened`). While the
+/// dialog is open a helper thread rewrites the file by hand — `selection_wash
+/// = 10` and a key of the user's own, `hand_edit = 1` — anchored on the app's
+/// own `settings opened` line (the issue #50 way: the drain thread only
+/// signals, through an unbounded channel), 1.7 s ahead of the click on the
+/// script's clock. A commit of ANOTHER setting (the Auto-advance box) then
+/// saves every key as the dialog holds it: the file reads `selection_wash =
+/// 40` again, beside the user's surviving `hand_edit = 1`, and the model
+/// never saw 10 (`wash=40` at `dump.saved`).
+///
+/// The `edited` premise (the integrity review's): `hand_edit = 1` in the
+/// written file proves the hand edit reached the file, and `auto_advance =
+/// false` beside it proves the save came AFTER it and merged into it — a
+/// hand edit that lost its race and landed after the save leaves a file with
+/// no `auto_advance` line at all, which fails there, never as a pass; and
+/// `wash=40` at the open proves the edit followed the open's re-read. Each
+/// premise is asserted before the claim, with its own message.
+///
+/// Mutant (2026-10-03): the bridge's `save` writing only the CHANGED key —
+/// the file re-read and the committed key alone set over it (D42's option B)
+/// → the file keeps the hand edit's `selection_wash = 10` beside `auto_advance
+/// = false` — red.
+#[test]
+fn a_hand_edit_made_while_the_dialog_is_open_loses_to_the_next_save() {
+    if !has_display() {
+        eprintln!("screenshot smoke skipped: no display server");
+        return;
+    }
+    let _s = serial();
+    let dir = settings_scratch("open-edit", Some("[ui]\nselection_wash = 40\n"));
+    let file = dir.join("settings.toml");
+    // The helper waits for the drain thread's signal; when the run ends the
+    // sender goes with the drain thread, so a mark that never came ends the
+    // wait at once rather than at a timeout.
+    let (opened_tx, opened_rx) = std::sync::mpsc::channel::<()>();
+    let editor = {
+        let file = file.clone();
+        std::thread::spawn(move || {
+            if opened_rx.recv().is_ok() {
+                std::fs::write(&file, "[ui]\nselection_wash = 10\nhand_edit = 1\n").unwrap();
+            }
+        })
+    };
+    let out = out_dir().join("settings-open-edit.jpg");
+    let script = "900:key:ctrl+,;1300:dump.opened;2600:click:settings auto-advance;\
+                  3000:dump.saved";
+    let mut signalled = false;
+    let stderr = shoot_env_stderr_watching(
+        &["--synthetic", "24"],
+        &[
+            ("FASTCULL_TRACE", "1"),
+            ("FASTCULL_CONFIG_DIR", dir.to_str().unwrap()),
+            ("FASTCULL_DRIVE", script),
+        ],
+        &out,
+        // The open's own line, once.
+        move |line| {
+            if !signalled && line.contains("] settings opened") {
+                signalled = true;
+                let _ = opened_tx.send(());
+            }
+        },
+    );
+    editor.join().unwrap();
+    let text = std::fs::read_to_string(&file).expect("settings.toml after the run");
+    let has = |line: &str| text.lines().any(|l| l.trim() == line);
+    // The premises.
+    let opened = qedump(&stderr, "opened");
+    assert!(
+        dump_field(opened, "wash") == "40" && dump_field(opened, "washprop") == "0.400",
+        "the premise: the open did not read the launch file's 40, so the hand edit's \
+         place relative to the re-read is unknown: {opened}"
+    );
+    assert_click_resolved(&stderr, "settings auto-advance");
+    assert_eq!(
+        mark_lines(&stderr, "settings committed general.auto_advance = false"),
+        1,
+        "the premise: the click on Auto-advance did not commit once:\n{stderr}"
+    );
+    assert_eq!(
+        mark_lines(&stderr, "settings written "),
+        1,
+        "the premise: the commit was not saved, once:\n{stderr}"
+    );
+    assert!(
+        has("hand_edit = 1"),
+        "the premise: the hand edit never reached the file (the anchor never fired), \
+         so nothing below is about a hand edit: {text:?}"
+    );
+    assert!(
+        has("auto_advance = false"),
+        "the premise: the save did not come after the hand edit — the file is the hand \
+         edit's alone, the save's `auto_advance = false` missing — the edit lost its \
+         race, so nothing below proves the save wins: {text:?}"
+    );
+    // The claim: the save wrote every key as the dialog held it.
+    assert_eq!(
+        dump_field(qedump(&stderr, "saved"), "wash"),
+        "40",
+        "the dialog's model took the hand edit's 10 while it was open — only an open \
+         re-reads the file:\n{stderr}"
+    );
+    assert!(
+        has("selection_wash = 40") && !has("selection_wash = 10"),
+        "A HAND EDIT MADE WHILE THE DIALOG WAS OPEN SURVIVED THE NEXT SAVE: the file \
+         keeps the hand edit's wash where the save must write the 40 the dialog holds \
+         (settings.md, \"Writing\"; the user, brief 008 D42, option A): {text:?}"
+    );
+    std::fs::remove_dir_all(&dir).ok();
+}
+
 /// AC5, a read error NEWER than the move-aside (settings.md, "Writing"; QE
 /// 2026-10-01, D26): a file broken at launch is moved aside by the first
 /// commit and a fresh one written; a hand edit then breaks the FRESH file
@@ -12960,6 +13275,14 @@ fn a_hand_edit_that_breaks_the_fresh_file_is_shown_not_masked_by_rewritten() {
 /// else-branch mark taken out → no `settings: not re-read` line — red
 /// (senior-developer review F5 of brief 008: the open used to trace
 /// `settings loaded from <path>` there).
+///
+/// The STATUS LINE of this plain failed write — no read error standing,
+/// nothing moved aside — reads ` — ⚠ settings.toml could not be written`
+/// at both dumps, and never `rewritten` nor `(defaults in force)`
+/// (settings.md, "Writing"; brief 010 R2, AC23: the line had no driven
+/// reader). Mutant (2026-10-03): the write-error arm of the bridge's
+/// `status_note` taken out → the status line carries no settings words at
+/// `dump.committed` — red.
 #[test]
 fn a_failed_settings_write_keeps_the_commit_and_the_next_open_does_not_reread() {
     if !has_display() {
@@ -13021,6 +13344,21 @@ fn a_failed_settings_write_keeps_the_commit_and_the_next_open_does_not_reread() 
         dump_text(reopened, "settingsnote").starts_with("Could not write settings.toml: "),
         "the notice stopped naming the write error at the second open: {reopened}"
     );
+    // The status line says the write failed, and nothing it is not
+    // (settings.md, "Writing"; AC23): the commit is in force, so never
+    // `(defaults in force)`, and nothing was rewritten.
+    for (label, dump) in [("committed", committed), ("reopened", reopened)] {
+        let status = dump_text(dump, "status");
+        assert!(
+            status.contains(" — ⚠ settings.toml could not be written"),
+            "dump.{label}: the status line does not say the write failed: {status:?}"
+        );
+        assert!(
+            !status.contains("rewritten") && !status.contains("defaults in force"),
+            "dump.{label}: the status line claims a rewrite or the defaults beside a \
+             commit in force: {status:?}"
+        );
+    }
     // Startup and the first open read the file; the second open did not,
     // and says so.
     assert_eq!(
@@ -13311,6 +13649,16 @@ fn templates_and_ui_prefs_are_read_from_the_one_config_dir() {
 /// `changed` handler cannot see (Cargo.toml, the fourth canary's fact 5) —
 /// so the `shows` check holds the box to its state only against a flip that
 /// STAYS, and the commit, the write and the file are the lock's guards.
+///
+/// The locked field SHOWS the environment's value (settings.md, AC7 —
+/// "read-only with the environment's value"; brief 010, issue #100's third
+/// NOW guard): the Limit field's own creation mark, `settings readers-limit
+/// shows <text>` (test-harness.md), is the last before `dump.perf` and reads
+/// `3` in the first run, where the file says 7 — and `7` in the `abc` run,
+/// the variable ignored. The dump's `readers=` is the bridge's resolution,
+/// which cannot see what the field displays. Mutant (2026-10-03): the
+/// `Environment(n)` arm of the bridge's `present` showing the file's value
+/// (`s.max_readers`) → the first run's field shows `7` — red.
 #[test]
 fn the_environment_wins_over_the_settings_file_for_read_workers() {
     if !has_display() {
@@ -13379,6 +13727,23 @@ fn the_environment_wins_over_the_settings_file_for_read_workers() {
          `dump.perf` — `{note}` traced {shown} time(s) (settings.md, \"Environment \
          precedence\"):\n{stderr}"
     );
+    // What the locked Limit field DISPLAYS: its own last mark before the dump
+    // — the environment's 3, never the file's 7 (AC7).
+    let limit_shown = |labels: &[&str], at: usize| -> Option<String> {
+        labels[..at]
+            .iter()
+            .rev()
+            .find_map(|l| l.strip_prefix("settings readers-limit shows "))
+            .map(str::to_string)
+    };
+    assert_eq!(
+        limit_shown(&labels, perf_at).as_deref(),
+        Some("3"),
+        "the read-only Limit field does not SHOW the environment's value — its last \
+         `settings readers-limit shows` before `dump.perf` (None: it reported \
+         nothing) is not `3` while FASTCULL_MAX_READERS=3 governs over the file's 7 \
+         (settings.md, \"Environment precedence\"):\n{stderr}"
+    );
     let typed = qedump(&stderr, "typed");
     assert_eq!(
         dump_field(typed, "readers"),
@@ -13436,6 +13801,18 @@ fn the_environment_wins_over_the_settings_file_for_read_workers() {
             .iter()
             .any(|l| l.starts_with("settings note readers-env shows ")),
         "the environment's note is on screen though the variable is ignored:\n{stderr}"
+    );
+    // The variable ignored, the field shows the file's 7.
+    let labels = mark_labels(&stderr);
+    let perf_at = labels
+        .iter()
+        .position(|l| *l == "drive: dump.perf")
+        .unwrap_or_else(|| panic!("no `drive: dump.perf` step in the abc run:\n{stderr}"));
+    assert_eq!(
+        limit_shown(&labels, perf_at).as_deref(),
+        Some("7"),
+        "under an ignored FASTCULL_MAX_READERS the Limit field does not show the file's \
+         7 before `dump.perf`:\n{stderr}"
     );
     assert_eq!(
         std::fs::read_to_string(dir.join("settings.toml")).unwrap(),
@@ -13665,6 +14042,101 @@ fn auto_advance_off_keeps_the_cursor_and_the_selection_like_u() {
     );
 }
 
+/// AC30 (settings.md, "General › Auto-advance": on, `Y`/`N` moves the
+/// cursor "at every zoom"; off, the cursor STAYS; brief 010 R3 — a launch of
+/// its own, the integrity review's shape): IN THE LOUPE AT 1:1, on a real
+/// folder of three distinct frames (`--start-11`, the full-res of the first
+/// on screen before anything is pressed — `wait:loupe idx 0 factor`, after
+/// the settle). Auto-advance turned off in the dialog, `Y` marks the frame
+/// and the cursor stays — `★1` on the status line, the same cursor, still at
+/// 1:1 (`one2one=true`, `zf=inf`); turned back on, `Y` advances to the next
+/// frame, still at 1:1 (`zf=inf`, the 1:1 desire carried; the shutter of a
+/// `--start-11` run then waits for that frame's full-res).
+///
+/// The mark path has no zoom branch today, so its only red mutant is the
+/// grid test's (`auto_advance_off_keeps_the_cursor_and_the_selection_like_u`):
+/// this pins "at every zoom" against a future one. Mutant (2026-10-03):
+/// `advance` in the mark handler ignoring the setting (`key != "clear"`
+/// alone, nav.rs) → the first `Y` moves the cursor at 1:1 — red.
+#[test]
+fn auto_advance_off_holds_the_cursor_in_the_loupe_at_one_to_one() {
+    if !has_display() {
+        eprintln!("screenshot smoke skipped: no display server");
+        return;
+    }
+    let _s = serial();
+    let dir = out_dir().join("settings-autoadvance-one2one");
+    std::fs::remove_dir_all(&dir).ok();
+    std::fs::create_dir_all(&dir).unwrap();
+    place_three_distinct(&dir);
+    let out = out_dir().join("settings-autoadvance-one2one.jpg");
+    let script = "1500:wait:load settled gen 0;1600:wait:loupe idx 0 factor;\
+                  2000:key:ctrl+,;2400:click:settings auto-advance;2800:key:escape;\
+                  3200:dump.before;3500:key:y;3900:dump.held;4200:key:ctrl+,;\
+                  4600:click:settings auto-advance;5000:key:escape;5400:dump.on;\
+                  5700:key:y;6100:dump.advanced";
+    let stderr = shoot_env_stderr(
+        &["--start-11", dir.to_str().unwrap()],
+        &[("FASTCULL_TRACE", "1"), ("FASTCULL_DRIVE", script)],
+        &out,
+    );
+    for wait in [
+        "wait:load settled gen 0 (satisfied",
+        "wait:loupe idx 0 factor (satisfied",
+    ] {
+        assert!(stderr.contains(wait), "`{wait}` never fired:\n{stderr}");
+    }
+    assert_click_resolved(&stderr, "settings auto-advance");
+    // The premises: auto-advance off, at 1:1, the dialog closed.
+    let before = qedump(&stderr, "before");
+    assert!(
+        dump_field(before, "autoadvance") == "false"
+            && dump_field(before, "settings") == "false"
+            && dump_field(before, "one2one") == "true"
+            && dump_field(before, "zf") == "inf",
+        "the premise: not at 1:1 with auto-advance off and the dialog closed: {before}"
+    );
+    let cursor = dump_field(before, "cursor");
+    // Off: Y marks, and the cursor stays at 1:1.
+    let held = qedump(&stderr, "held");
+    assert!(
+        dump_text(held, "status").contains("★1 ✕0"),
+        "the Y at 1:1 did not mark: {held}"
+    );
+    assert_eq!(
+        dump_field(held, "cursor"),
+        cursor,
+        "WITH AUTO-ADVANCE OFF THE Y MOVED THE CURSOR AT 1:1 — off, the cursor stays on \
+         the frame marked, at every zoom (settings.md, \"General › Auto-advance\"):\n{stderr}"
+    );
+    assert!(
+        dump_field(held, "one2one") == "true" && dump_field(held, "zf") == "inf",
+        "the Y with auto-advance off left 1:1: {held}"
+    );
+    // On: Y advances, at 1:1 too.
+    let on = qedump(&stderr, "on");
+    assert!(
+        dump_field(on, "autoadvance") == "true" && dump_field(on, "cursor") == cursor,
+        "the premise: auto-advance not back on, or the cursor moved before the Y: {on}"
+    );
+    let advanced = qedump(&stderr, "advanced");
+    assert_ne!(
+        dump_field(advanced, "cursor"),
+        cursor,
+        "with auto-advance on the Y at 1:1 did not advance:\n{stderr}"
+    );
+    assert!(
+        dump_text(advanced, "status").contains("(2/3)"),
+        "the advance at 1:1 did not land on the next frame of the three: {advanced}"
+    );
+    assert_eq!(
+        dump_field(advanced, "zf"),
+        "inf",
+        "the advance left 1:1 — the 1:1 desire is carried to the next frame: {advanced}"
+    );
+    std::fs::remove_dir_all(&dir).ok();
+}
+
 /// AC10 (settings.md, "Performance › Loupe memory"): the figure committed in
 /// the dialog shows its hint at once and reaches the loupe engine at the
 /// NEXT folder open — the same folder is fine. The wait is on the engine's
@@ -13723,14 +14195,27 @@ fn loupe_memory_takes_effect_at_the_next_folder_open() {
     );
 }
 
-/// AC12's driven half (settings.md, "Performance › Thumbnail cache"; brief
-/// 008 D13): every driven run is FASTCULL_NO_CACHE, so the row says the
-/// cache is off and Clear does nothing — the live clear is pinned in core
-/// (`cache::tests::clear_leaves_the_file_present_…`), and the worker,
-/// the `Clearing…` state and the re-measured readout are review-verified.
+/// AC12, the cache off (settings.md, "Performance › Thumbnail cache"; brief
+/// 008 D13): under FASTCULL_NO_CACHE — the harness's own — the row says the
+/// cache is off and Clear does nothing. The live clear is
+/// `the_cache_cap_and_clear_cache_reach_the_default_cache`'s, on Linux, and
+/// core's (`cache::tests::clear_leaves_the_file_present_…`); this sentence
+/// called the worker, the `Clearing…` state and the re-measured readout
+/// review-verified until brief 010, though that test had driven them since
+/// QE's round 5 of brief 008.
 ///
-/// Mutant (2026-10-01): the readout ignoring FASTCULL_NO_CACHE → the row
-/// shows the real cache's size (a stat, nothing more) and this goes red.
+/// And the button is DISABLED (brief 010, issue #100's second NOW guard;
+/// QE 2026-10-02, SC-4: until then only the row's text and the absence of a
+/// clear were read): its own mark, `settings clear-cache enabled false`
+/// from its creation, is the last before `dump.perf`, and none reads `true`
+/// from the open on.
+///
+/// Mutants: (2026-10-01) the readout ignoring FASTCULL_NO_CACHE → the row
+/// shows the real cache's size (a stat, nothing more) and this goes red;
+/// (2026-10-03) the bridge's `present` enabling Clear on `clear_rx.is_none()`
+/// alone, the cache-off term dropped → `settings clear-cache enabled true` at
+/// the open — red (the click then still clears nothing: the handler's own
+/// guard holds, so only the button's mark sees it).
 #[test]
 fn clear_cache_is_off_under_no_cache() {
     if !has_display() {
@@ -13754,6 +14239,31 @@ fn clear_cache_is_off_under_no_cache() {
         mark_lines(&stderr, "settings cache cleared"),
         0,
         "Clear ran with the cache off:\n{stderr}"
+    );
+    // The button's own state (AC12): disabled from the open, never offered.
+    let labels = mark_labels(&stderr);
+    let opened = labels
+        .iter()
+        .position(|l| *l == "drive: key:ctrl+,")
+        .unwrap_or_else(|| panic!("no `drive: key:ctrl+,` step:\n{stderr}"));
+    let perf_at = labels
+        .iter()
+        .position(|l| *l == "drive: dump.perf")
+        .unwrap_or_else(|| panic!("no `drive: dump.perf` step:\n{stderr}"));
+    let enabled = labels[opened..perf_at]
+        .iter()
+        .rev()
+        .find_map(|l| l.strip_prefix("settings clear-cache enabled "));
+    assert_eq!(
+        enabled,
+        Some("false"),
+        "the Clear button is not DISABLED with the cache off — its last `settings \
+         clear-cache enabled` mark before `dump.perf` (None: it reported nothing) \
+         (settings.md, \"Performance › Thumbnail cache\"):\n{stderr}"
+    );
+    assert!(
+        !labels[opened..].contains(&"settings clear-cache enabled true"),
+        "the Clear button was offered with the cache off:\n{stderr}"
     );
 }
 
@@ -13898,6 +14408,43 @@ fn rect_variance(shot: &Path, (x, y, w, h): (f32, f32, f32, f32)) -> f64 {
     region_stats(shot, x / sw, y / sh, (x + w) / sw, (y + h) / sh).1
 }
 
+/// How many pixel ROWS of a window-logical rectangle `(x, y, w, h)` of a
+/// shot taken at scale factor 1 read as blue: rows whose mean (B − R)
+/// across the rectangle's width is above `floor` — the blue bias
+/// [`region_blue_bias`] measures, one row at a time.
+///
+/// Rows are counted, never averaged into one band, because a `laid out at`
+/// mark is its position rounded to whole px and the pixels can sit a row
+/// off it (test-harness.md, "Layout"): a 3 px band flush with a mark's edge
+/// held both rows of a 2 px line on one runner and one of them on another,
+/// where a window that straddles the edge holds the same rows on both.
+fn blue_rows(shot: &Path, (x, y, w, h): (f32, f32, f32, f32), floor: f64) -> usize {
+    let bytes = std::fs::read(shot).expect("snapshot file");
+    let mut dec = zune_jpeg::JpegDecoder::new(&bytes);
+    let px = dec.decode().expect("decode snapshot");
+    let (sw, sh) = dec.dimensions().expect("dims");
+    assert_eq!(
+        sw, 1440,
+        "blue_rows assumes scale factor 1 (a 1440 px shot of the 1440 px window); got {sw} px"
+    );
+    // The marks print whole px (`{:.0}`), so these casts drop nothing; a
+    // rectangle past the shot's floor is cut at it.
+    let (x0, x1) = (x as usize, ((x + w) as usize).min(sw));
+    let (y0, y1) = (y as usize, ((y + h) as usize).min(sh));
+    assert!(x0 < x1, "blue_rows: an empty rectangle {x},{y} {w}x{h}");
+    (y0..y1)
+        .filter(|&row| {
+            let bias: f64 = (x0..x1)
+                .map(|col| {
+                    let i = (row * sw + col) * 3;
+                    f64::from(px[i + 2]) - f64::from(px[i])
+                })
+                .sum();
+            bias / (x1 - x0) as f64 > floor
+        })
+        .count()
+}
+
 /// AC3, the notes (settings.md, "The card"; QE 2026-10-01, D22): every row
 /// of every tab carries its one-line note, and the note is CORE's sentence
 /// byte for byte — `Key::note()` and `CLEAR_CACHE_NOTE`, the notes' one
@@ -13912,6 +14459,42 @@ fn rect_variance(shot: &Path, (x, y, w, h): (f32, f32, f32, f32)) -> f64 {
 /// `settings_bridge::wire` → the wash note shows an empty text and this goes
 /// red; the note Text taken out of `SettingRow` → no `settings note` mark at
 /// all — red.
+///
+/// The active tab's ACCENT UNDERLINE, in the same shot (settings.md, "The
+/// card": the active tab is marked by a 2 px accent underline — brief 010
+/// R3, AC28; the underline only, the integrity review having refused a check
+/// of the label's brightness). Each tab cell's rectangle comes from its own
+/// `settings tab <name>` mark at `dump.perf`, and the shot's pixel ROWS are
+/// counted: a row reads as the accent when its mean blue bias (B − R; the
+/// accent `#4da3ff` is strongly blue, the card `#202028` hardly) across the
+/// cell, inset 3 px from its sides, is above 100. In a window of six rows
+/// straddling the active Performance cell's BOTTOM edge there are at least
+/// 2 — the 2 px underline; in the same window at its TOP edge at most 1 —
+/// the 1 px accent ring the strip draws on every edge of the active cell
+/// while it holds the keyboard, whose bottom edge shares the underline's
+/// lower row, so with the underline gone the bottom edge holds that one row
+/// and no more; at the inactive cells' bottom edges none. The windows
+/// straddle the edges because a mark is its position rounded to whole px
+/// and the pixels can sit a row off it (test-harness.md, "Layout").
+/// Measured 2026-10-03, the accent rows reading 176–179 and every other row
+/// in the windows 5–14:
+///   * windows-latest (CI run 37150692393, debug; the mark `578,244 size
+///     103x32`): the ring's top at y+1, the underline at y+h−1 and y+h —
+///     the cell drawn one row below its mark;
+///   * ubuntu-latest (the same run, release, DejaVu Sans; `584,258 size
+///     111x32`) and this seat (Noto Sans; `580,256 size 108x32`): the
+///     ring's top at y, the underline at y+h−2 and y+h−1.
+///
+/// Rows of one shot counted against the cell's own mark, no font metric:
+/// the cell is 32 px tall by the code and its label is centred far from
+/// both windows. Mutants (2026-10-03), each alone: the underline's
+/// `background` always `transparent` → the bottom window holds the ring's
+/// row alone, 1 — red; always `#4da3ff`, an underline under every tab →
+/// the inactive cells' bottom windows hold `[2, 2]` — red.
+/// Until the senior developer's review F1 (2026-10-03) the strand averaged
+/// 3 px bands flush with the mark's edges, which held both underline rows
+/// on this seat and only one on windows-latest: red there on a correct
+/// tree (the bottom band 65.0 against the top band's 65.1).
 #[test]
 fn every_settings_note_is_the_core_text() {
     if !has_display() {
@@ -13970,6 +14553,43 @@ fn every_settings_note_is_the_core_text() {
         "the loupe memory note's rectangle {note:?} reads like bare card — luma \
          variance {drawn:.1} against {empty:.1} for the card's padding: the \
          note is bound but not drawn:\n{stderr}"
+    );
+    // The active tab's accent underline (AC28), counted in accent ROWS: a
+    // row of a tab cell, inset 3 px from its sides (clear of the ring's side
+    // edges and rounded corners), whose mean blue bias is above 100 — the
+    // accent reads 176–179 there, the card and the labels 5–14. Each window
+    // is six rows straddling one edge of the cell, so a cell drawn a row
+    // off its mark (windows-latest) holds the same rows as one drawn inside
+    // it (this seat).
+    let accent = |tab: &str, at_top: bool| {
+        let (x, y, w, h) = laid_out_at(&stderr, &format!("settings tab {tab}"), "perf");
+        let from = if at_top { y - 2.0 } else { y + h - 4.0 };
+        blue_rows(&out, (x + 3.0, from, w - 6.0, 6.0), 100.0)
+    };
+    let inactive = [accent("general", false), accent("ui", false)];
+    assert_eq!(
+        inactive,
+        [0, 0],
+        "an INACTIVE tab's bottom edge holds accent rows (General, UI) — the underline \
+         marks the active tab alone (settings.md, \"The card\"):\n{stderr}"
+    );
+    // The premise of the count below: the ring the strip draws on every edge
+    // of the active cell while it holds the keyboard is 1 px, so its bottom
+    // edge accounts for at most ONE accent row there.
+    let ring = accent("performance", true);
+    assert!(
+        ring <= 1,
+        "the active tab's TOP edge holds {ring} accent rows — more than the 1 px focus \
+         ring, so the rows at its bottom edge could be a thicker ring rather than the \
+         underline, and the count below proves nothing:\n{stderr}"
+    );
+    let underline = accent("performance", false);
+    assert!(
+        underline >= 2,
+        "THE ACTIVE TAB HAS NO ACCENT UNDERLINE: its bottom edge holds {underline} accent \
+         row(s) where the 2 px underline makes 2 — one row there is the focus ring's \
+         bottom edge alone (settings.md, \"The card\"; measured 2 on this seat, on \
+         ubuntu-latest and on windows-latest, 1 with the underline transparent):\n{stderr}"
     );
 }
 
@@ -14277,6 +14897,30 @@ fn a_no_change_commit_or_reset_never_creates_the_file() {
 /// behind it, `dump.opened` reads `focusowner=0` and this goes red — on the
 /// menu path and on the token path (the latter measured on Linux with the
 /// token forced).
+///
+/// Before the open, `Ctrl+,` is INERT while the keyword field holds the
+/// keyboard (settings.md, "Opening and closing": the chord lives in the main
+/// key scope and is inert while a field holds the keyboard; brief 010 R3,
+/// AC27): with `bird` typed, `dump.typed` is the premise — the field's own
+/// token (`focusowner` neither 0, the grid, nor −1, a dialog), no dialog and
+/// nothing committed yet (`revert=""`: the IPTC Revert slot fills only when
+/// a commit lands) — and after the chord `dump.inert` reads no dialog, the
+/// same token and still `revert=""`: the chord committed nothing. That is
+/// what "the field keeps its text" rests on: with nothing committed before
+/// the open, the commit `dump.opened` reports (the slot filled) is the
+/// open's own, and the sidecar's `>bird<` says it committed the word whole.
+/// The sidecar alone cannot say WHEN the word was committed — a chord that
+/// committed and cleared the field writes the same `>bird<` (QE 2026-10-03,
+/// D2: this doc had credited the sidecar with "keeps its text"). The strand
+/// sits between the last typed key and the open: the open and every step
+/// after it run 500 ms later than before brief 010, every gap between them
+/// kept. Mutants (2026-10-03): the root's `content` made a FocusScope whose
+/// `capture-key-pressed` opens the dialog on `Ctrl+,` before any field sees
+/// the key → `dump.inert` reads `settings=true focusowner=-1` — red at the
+/// dialog check, which comes first; G1, the keyword field's own
+/// `key-pressed` committing its text and clearing it on `Ctrl+,` →
+/// `dump.inert` reads `revert="Revert: keywords on 1 image(s)"` — red at the
+/// `revert` check, and green before that check existed.
 #[test]
 fn settings_over_a_focused_keyword_field_commits_it_and_owns_the_keyboard() {
     if !has_display() {
@@ -14293,14 +14937,15 @@ fn settings_over_a_focused_keyword_field_commits_it_and_owns_the_keyboard() {
     );
     let out = out_dir().join("settings-over-keyword.jpg");
     let open = if menu_clicks_are_calibrated() {
-        "3600:click.22,19;4000:click.80,157"
+        "4100:click.22,19;4500:click.80,157"
     } else {
-        "4000:settings"
+        "4500:settings"
     };
     let script = format!(
         "2400:wait:load settled gen 0;2500:key:k;3000:key:b;3100:key:i;3200:key:r;\
-         3300:key:d;{open};4400:dump.opened;4600:key:y;4800:key:n;5100:dump.under;\
-         5300:key:escape;5700:dump.closed;5900:key:+;6200:dump.zoomed"
+         3300:key:d;3500:dump.typed;3700:key:ctrl+,;3900:dump.inert;{open};\
+         4900:dump.opened;5100:key:y;5300:key:n;5600:dump.under;\
+         5800:key:escape;6200:dump.closed;6400:key:+;6700:dump.zoomed"
     );
     let stderr = shoot_env_stderr(
         &[dir.to_str().unwrap()],
@@ -14311,6 +14956,48 @@ fn settings_over_a_focused_keyword_field_commits_it_and_owns_the_keyboard() {
         stderr.contains("wait:load settled gen 0 (satisfied"),
         "the `wait:load settled gen 0` step never fired — the panel opened on \
          the clock:\n{stderr}"
+    );
+    // Ctrl+, inert while the keyword field holds the keyboard (AC27): the
+    // premise — the field's own token, no dialog — then the same after it.
+    let typed = qedump(&stderr, "typed");
+    let field = dump_field(typed, "focusowner");
+    assert!(
+        field != "0" && field != "-1" && dump_field(typed, "settings") == "false",
+        "the premise: the typed keyword field does not hold the keyboard (focusowner \
+         {field}, neither the grid's 0 nor a dialog's -1, expected) or a dialog is \
+         up: {typed}"
+    );
+    let inert = qedump(&stderr, "inert");
+    assert_eq!(
+        dump_field(inert, "settings"),
+        "false",
+        "Ctrl+, opened Settings while the keyword field held the keyboard — the chord \
+         is inert while a field holds it (settings.md, \"Opening and closing\"): {inert}"
+    );
+    assert_eq!(
+        dump_field(inert, "focusowner"),
+        field,
+        "Ctrl+, took the keyboard from the keyword field it should be inert over: \
+         {inert}"
+    );
+    // ... and the field kept its text: nothing was committed before the
+    // open. `revert=` is the IPTC Revert slot, which fills only when a
+    // commit lands, so it reads "" at `typed` (the premise: the typing
+    // committed nothing) and at `inert` (the chord committed nothing), and
+    // the commit `opened` reports below is then the open's own (QE
+    // 2026-10-03, D2). After the two checks above, so a chord that opened
+    // the dialog — which commits the field too — keeps its own message.
+    assert_eq!(
+        dump_text(typed, "revert"),
+        "",
+        "the premise: something was committed before Ctrl+, — the Revert slot is not \
+         empty at `dump.typed`: {typed}"
+    );
+    assert_eq!(
+        dump_text(inert, "revert"),
+        "",
+        "Ctrl+, committed the keyword field it should be inert over — the field must keep \
+         its text for the open to commit (settings.md AC27): {inert}"
     );
     let opened = qedump(&stderr, "opened");
     assert_eq!(
@@ -15277,28 +15964,52 @@ fn the_settings_card_never_shrinks_while_it_is_open() {
 /// the card is centred, so a growth moves it by half (brief 009's plan,
 /// residual 1).
 ///
-/// The premises, each loud: both clicks reached the box (two pointer echoes
-/// on it) and committed (`settings committed general.auto_advance = false`,
-/// then `= true`); the first open's commit moved the broken file aside (the
-/// notice says `rewritten`); the notice at `dump.after` says the write
-/// failed (a chmod that lost its race, or a seat whose read-only file is
-/// still writable, fails THERE, never as a false pass); and that notice is
-/// TALLER than the one at `dump.before` — it wrapped, or the launch proves
-/// nothing. The file is made writable again before anything is removed:
-/// Windows will not delete a read-only file.
+/// The premises, each loud: the clicks reached the box (a pointer echo on
+/// it per click) and committed (`settings committed general.auto_advance =
+/// false`, then `= true`, then `= false`); the first open's commit moved the
+/// broken file aside (the notice says `rewritten`); the notice at
+/// `dump.after` says the write failed (a chmod that lost its race, or a seat
+/// whose read-only file is still writable, fails THERE, never as a false
+/// pass); and that notice is TALLER than the one at `dump.before` — it
+/// wrapped, or the launch proves nothing. The file is made writable again
+/// before anything is removed: Windows will not delete a read-only file.
 ///
-/// GREEN on bef5b5e, said plainly: a content-driven card grows with its
-/// notice too, so this launch guards one sentence inside the high-water
-/// design — a card that grows when a text grows — not the unit, which
-/// `the_settings_card_holds_still_across_its_tabs`, the never-shrinks test
-/// and the below-the-minimum test pin.
+/// Then the card so grown KEEPS that height (settings.md, "The card holds
+/// still": the height is a high-water mark for the open; brief 009's TP-1,
+/// landed in brief 010 — AC18): on the app's own `QEDUMP after` line the
+/// helper makes the file writable again (a second signal from the drain
+/// thread, the first's way), and a third click on Auto-advance commits and
+/// WRITES — the notice un-wraps to the one-line `settings.toml rewritten —
+/// …`, shorter than the write error. The card at `dump.held` is as tall as
+/// at `dump.after`, Close has not moved, and from that third click to the
+/// dump neither the card, Reset nor Close reports a new layout. The body
+/// host and the notice line are not in that set: the notice shrinks and the
+/// slack goes to the host, both by design. This strand is the never-shrinks
+/// rule with power on EVERY face — the write error wraps by width on every
+/// runner — where `the_settings_card_never_shrinks_while_it_is_open`'s
+/// Loupe memory strand has none on DejaVu Sans or Segoe UI and its cache
+/// strand runs on Linux only.
 ///
-/// Mutant (2026-10-03): the card's `changed content` handler deleted AND its
-/// height `min(self.high-water, …)` — a card that never grows → "THE CARD
-/// DID NOT GROW BY THE NOTICE'S EXTRA LINE: the card went 506 → 506 px while
-/// the notice line went 17 → 33 px" — red on Noto Sans; and 497 → 497
+/// On bef5b5e, the head before brief 009, this test cannot run as written:
+/// the `settings notice laid out` mark it reads is brief 009's — this doc
+/// called it GREEN there until brief 010 (QE 2026-10-03, D6 in issue #100).
+/// What is recorded instead: there the card's height FOLLOWED its content,
+/// so the growth held (267 → 283 px, QE's trace of bef5b5e); a card that
+/// follows its content follows a text that shrinks too, and that rule in
+/// today's tree is the second mutant below — red at the third commit's
+/// strand, the card back down by the notice's lost line.
+///
+/// Mutants (2026-10-03): the card's `changed content` handler deleted AND
+/// its height `min(self.high-water, …)` — a card that never grows → "THE
+/// CARD DID NOT GROW BY THE NOTICE'S EXTRA LINE: the card went 506 → 506 px
+/// while the notice line went 17 → 33 px" — red on Noto Sans; and 497 → 497
 /// against 14 → 28 on DejaVu Sans (the ubuntu runner's face, through
 /// `SLINT_DEFAULT_FONT`), where the never-shrinks test stays green under it.
+/// The card's height without the mark, `min(self.content, …)` — the card
+/// following its content, bef5b5e's rule → the growth half green and the
+/// third commit's strand red: "THE CARD SHRANK WHILE OPEN — 506 px after
+/// the third commit un-wrapped the notice against 522 px with the write
+/// error" (Noto Sans, this seat).
 #[test]
 fn the_settings_card_grows_by_a_write_error_that_wraps_while_it_is_open() {
     if !has_display() {
@@ -15308,11 +16019,15 @@ fn the_settings_card_grows_by_a_write_error_that_wraps_while_it_is_open() {
     let _s = serial();
     let dir = settings_scratch("grows", Some("[general\n"));
     let file = dir.join("settings.toml");
-    // The helper waits for the drain thread's signal; when the run ends the
-    // sender goes with the drain thread, so a mark that never came ends the
-    // wait at once rather than at a timeout. It hands back the permissions
-    // it replaced, so the test can restore them.
+    // The helper waits for the drain thread's signals; when the run ends the
+    // senders go with the drain thread, so a mark that never came ends the
+    // wait at once rather than at a timeout. It makes the file read-only on
+    // the first close and writable again once the write error has been
+    // dumped (TP-1's third commit must succeed), and hands back the
+    // permissions it replaced, so the test can restore them whatever
+    // happened.
     let (closed_tx, closed_rx) = std::sync::mpsc::channel::<()>();
+    let (after_tx, after_rx) = std::sync::mpsc::channel::<()>();
     let locker = {
         let file = file.clone();
         std::thread::spawn(move || -> Option<std::fs::Permissions> {
@@ -15321,13 +16036,17 @@ fn the_settings_card_grows_by_a_write_error_that_wraps_while_it_is_open() {
             let mut readonly = writable.clone();
             readonly.set_readonly(true);
             std::fs::set_permissions(&file, readonly).ok()?;
+            if after_rx.recv().is_ok() {
+                std::fs::set_permissions(&file, writable.clone()).ok()?;
+            }
             Some(writable)
         })
     };
     let script = "900:key:ctrl+,;1300:click:settings auto-advance;1700:dump.first;\
                   2000:key:escape;3000:key:ctrl+,;3400:dump.before;\
-                  3700:click:settings auto-advance;4100:dump.after";
-    let mut signalled = false;
+                  3700:click:settings auto-advance;4100:dump.after;\
+                  4500:click:settings auto-advance;4900:dump.held";
+    let (mut closed, mut dumped) = (false, false);
     let stderr = shoot_env_stderr_watching(
         &["--synthetic", "24"],
         &[
@@ -15336,11 +16055,15 @@ fn the_settings_card_grows_by_a_write_error_that_wraps_while_it_is_open() {
             ("FASTCULL_DRIVE", script),
         ],
         &out_dir().join("settings-grows.jpg"),
-        // The FIRST close only.
+        // The FIRST close only, and the write error's dump.
         move |line| {
-            if !signalled && line.contains("] settings closed") {
-                signalled = true;
+            if !closed && line.contains("] settings closed") {
+                closed = true;
                 let _ = closed_tx.send(());
+            }
+            if !dumped && line.contains("] QEDUMP after ") {
+                dumped = true;
+                let _ = after_tx.send(());
             }
         },
     );
@@ -15354,15 +16077,14 @@ fn the_settings_card_grows_by_a_write_error_that_wraps_while_it_is_open() {
         .iter()
         .filter(|l| l.starts_with("drive ptr click ") && l.ends_with(" (settings auto-advance)"))
         .count();
-    let committed = |value: &str| {
-        let mark = format!("settings committed general.auto_advance = {value}");
-        labels.iter().position(|l| *l == mark)
-    };
+    let commits: Vec<&str> = labels
+        .iter()
+        .filter_map(|l| l.strip_prefix("settings committed general.auto_advance = "))
+        .collect();
     assert!(
-        clicks == 2
-            && matches!((committed("false"), committed("true")), (Some(a), Some(b)) if a < b),
-        "the two clicks on Auto-advance did not both land and commit (`false`, then \
-         `true`) — {clicks} pointer echo(es):\n{stderr}"
+        clicks == 3 && commits == ["false", "true", "false"],
+        "the three clicks on Auto-advance did not all land and commit (`false`, `true`, \
+         `false`) — {clicks} pointer echo(es), commits {commits:?}:\n{stderr}"
     );
     let notice = |label: &str| dump_text(qedump(&stderr, label), "settingsnote").to_string();
     assert!(
@@ -15401,6 +16123,57 @@ fn the_settings_card_grows_by_a_write_error_that_wraps_while_it_is_open() {
         line("before"),
         line("after")
     );
+    // TP-1 (AC18): the third commit writes, the notice un-wraps — and the
+    // card keeps the height the write error gave it. The premises first.
+    assert!(
+        notice("held").starts_with("settings.toml rewritten"),
+        "the third commit's write did not succeed — the file was not writable again \
+         when it ran (the restore lost its race), so nothing below is about a notice \
+         that shrank: {:?}\n{stderr}",
+        notice("held")
+    );
+    assert!(
+        line("held") < line("after"),
+        "the notice at dump.held ({} px) is no shorter than the write error's ({} px) — \
+         it did not un-wrap, so this strand proves nothing about a shrink: {:?}\n{stderr}",
+        line("held"),
+        line("after"),
+        notice("held")
+    );
+    assert_eq!(
+        card("held"),
+        card("after"),
+        "THE CARD SHRANK WHILE OPEN — {} px after the third commit un-wrapped the notice \
+         against {} px with the write error; its height is a high-water mark for the open \
+         (settings.md, \"The card holds still\"; brief 009 R1, TP-1):\n{stderr}",
+        card("held"),
+        card("after")
+    );
+    let close_y = |label: &str| laid_out_at(&stderr, "settings close", label).1;
+    assert_eq!(
+        close_y("held"),
+        close_y("after"),
+        "Close moved after the third commit:\n{stderr}"
+    );
+    let third = label_positions(&labels, "drive: click:settings auto-advance");
+    let held_at = labels
+        .iter()
+        .position(|l| l.starts_with("QEDUMP held "))
+        .unwrap_or_else(|| panic!("no `dump.held` mark:\n{stderr}"));
+    assert_eq!(third.len(), 3, "not three click steps:\n{stderr}");
+    for mark in [
+        "settings card laid out at ",
+        "settings reset laid out at ",
+        "settings close laid out at ",
+    ] {
+        let moved = marks_between(&labels, third[2], held_at, mark);
+        assert_eq!(
+            moved, 0,
+            "`{mark}…` reported {moved} new layout(s) after the third commit un-wrapped the \
+             notice — the card followed a text that shrank (settings.md, \"The card holds \
+             still\"):\n{stderr}"
+        );
+    }
     std::fs::remove_dir_all(&dir).ok();
 }
 
@@ -15438,6 +16211,25 @@ fn the_settings_card_grows_by_a_write_error_that_wraps_while_it_is_open() {
 /// → the wheel moves nothing — red; the viewport reset taken out of
 /// `go-to-tab` → General shows its auto-advance box 180 px above the body's
 /// top — red.
+///
+/// The geometry premise names a REVERTED window as such (brief 009's TP-3,
+/// landed in brief 010; issue #100): a satisfied `wait:window geometry
+/// 1000x400` promises the layout reached that size, not that it stayed
+/// there (test-harness.md) — under a cold build's load the compositor
+/// restored 1440x900 some 30 ms after the landing, and the verdicts below
+/// then read the restored window as the body/footer defect. So from the
+/// LANDING — the first `window geometry 1000x400` mark after the
+/// `resize:1000x400` step — to the last dump no `window geometry WxH` other
+/// than `1000x400` may be traced, the WxH prefix compared only; its message
+/// names the revert. Diagnostic quality: a revert is red either way.
+///
+/// The range starts at the landing, never at the wait's echo (corrected
+/// 2026-10-03, QE round 1 D1): a `wait:` answers "has this happened yet",
+/// so a window restored right after the landing still satisfies it, and the
+/// restore is traced BEFORE the echo. Under `taskset -c 0,1` and six pinned
+/// spinners the restore came 13–31 ms after the landing and some 370 ms
+/// before the echo in 16 of 21 of QE's runs, and a range from the echo
+/// named none of them — each read as the card outside the modal layer.
 #[test]
 fn below_the_minimum_window_the_settings_body_gives_before_the_footer() {
     if !has_display() {
@@ -15464,6 +16256,40 @@ fn below_the_minimum_window_the_settings_body_gives_before_the_footer() {
     assert!(
         stderr.contains("wait:window geometry 1000x400 (satisfied"),
         "the window never reached 1000x400 — the premise:\n{stderr}"
+    );
+    // ... and STAYED there from the landing to the last dump (TP-3). The
+    // landing is the first `window geometry 1000x400` mark after the resize
+    // step's echo — not the wait's echo, which a revert precedes (the doc).
+    let labels = mark_labels(&stderr);
+    let resized = labels
+        .iter()
+        .position(|l| *l == "drive: resize:1000x400")
+        .unwrap_or_else(|| panic!("no `resize:1000x400` step echo:\n{stderr}"));
+    let landed = resized
+        + labels[resized..]
+            .iter()
+            .position(|l| l.starts_with("window geometry 1000x400 "))
+            .unwrap_or_else(|| {
+                panic!("no `window geometry 1000x400` landing after the resize step:\n{stderr}")
+            });
+    let last = labels
+        .iter()
+        .position(|l| l.starts_with("QEDUMP general "))
+        .unwrap_or_else(|| panic!("no `dump.general` mark:\n{stderr}"));
+    let reverted: Vec<&str> = labels[landed..last]
+        .iter()
+        .filter(|l| {
+            l.starts_with("window geometry ") && !l.starts_with("window geometry 1000x400 ")
+        })
+        .copied()
+        .collect();
+    assert!(
+        reverted.is_empty(),
+        "THE WINDOW DID NOT STAY AT 1000x400: after it landed (the first `window geometry \
+         1000x400` mark after the resize step) it was traced at {reverted:?} before the last \
+         dump — the compositor reverted it, so the verdicts below would read a restored \
+         window as the body/footer defect (brief 009's TP-3; test-harness.md: a satisfied \
+         geometry wait promises the landing, not that the window stays):\n{stderr}"
     );
     let perf = qedump(&stderr, "perf");
     assert_eq!(
@@ -15555,7 +16381,7 @@ fn below_the_minimum_window_the_settings_body_gives_before_the_footer() {
 /// keeps the `--list` halves the same on every runner; AC12's Windows half
 /// stays review-verified.
 ///
-/// Three runs over one seeded cache (300 thumbnails of 1 MiB each) and one
+/// Four runs over one seeded cache (300 thumbnails of 1 MiB each) and one
 /// settings file (`cache_cap = "0.1"`, held at the 0.25 GB floor =
 /// 268,435,456 bytes, room for 256 of them):
 ///   1. the folder open alone — afterwards at most 256 seeded rows remain
@@ -15593,12 +16419,32 @@ fn below_the_minimum_window_the_settings_body_gives_before_the_footer() {
 ///      thread, the `Clearing…` row, the disabled button and a failed
 ///      clear's wording had no guard — each taken out, the suite stayed
 ///      green).
+///   4. Clear HELD, reached by the keyboard (brief 010 R3; settings.md
+///      AC12): `FASTCULL_CLEAR_HOLD_MS=3000` holds the worker 3 s before it
+///      starts (test-harness.md — announced on stderr, which is asserted).
+///      The thumb of `one.ARW` is in memory first (`wait:thumb landed idx
+///      0`), and `dump.perf` counts it (`thumbtex` ≥ 1). Four Tabs from the
+///      strip on Performance land on Clear and Return starts the clear —
+///      `settings cache clearing` after the Return, with neither a Reset
+///      nor a close between them: the Tab ring reaches Clear when the cache
+///      is on. One second into the hold `dump.during` answers — on the UI
+///      thread, while the row reads `Clearing…` — and its line comes BEFORE
+///      the worker's own `settings cache clear ran on settings-clear` on the
+///      one trace: the clear never blocks the UI thread. A dump after the
+///      worker's line is that verdict only if the row's own `settings cache
+///      readout shows Clearing…` mark — traced as soon as the Return's
+///      handler returns — came after the worker's line too; with that mark
+///      before it the UI thread was free and the drive step itself was
+///      late, which the run reports as such, red, with no verdict on the UI
+///      thread (the senior developer's review F2). After `settings cache
+///      cleared`, `dump.cleared` counts as many thumb textures as
+///      `dump.perf` did: the open session keeps its painted thumbs.
 ///
-/// The name proves the WORKER, not that the UI thread never waits for it:
-/// a `join()` right after the spawn would block the UI and still trace
-/// `settings-clear`, so "never blocks" stays review-verified (settings.md
-/// AC12). That the open session keeps its painted thumbs is review-verified
-/// too: no dump field reads textures.
+/// The worker's NAME (run 2) proves the worker, not that the UI thread never
+/// waits for it — a `join()` right after the spawn would block the UI and
+/// still trace `settings-clear`; run 4's held dump is that proof (until
+/// brief 010 it was review-verified, and the kept thumbs too, no dump field
+/// reading textures).
 ///
 /// Mutants (2026-10-01): session.rs trimming the default cache to
 /// `DEFAULT_CAP_BYTES` → all 300 seeded rows survive run 1 — red; the
@@ -15610,7 +16456,22 @@ fn below_the_minimum_window_the_settings_body_gives_before_the_footer() {
 /// (`clear_rx.is_none()` dropped from `present`) → no `settings clear-cache
 /// enabled false` — red; the completion re-measuring with no error
 /// (`cache_readout(None)`) → run 3's row reads `Thumbnail cache: 92.3 KB
-/// in …` as if the clear had worked — red.
+/// in …` as if the clear had worked — red. Mutants (2026-10-03, brief 010),
+/// each alone, on run 4: the UI thread `join()`ing the worker right after
+/// the spawn → `dump.during` lands after the worker's line, and the row's
+/// `Clearing…` mark after it too — red, THE CLEAR BLOCKED THE UI THREAD
+/// (re-shown at review F2: the worker's line 3001 ms after the Return, the
+/// row's mark after it at 3001–3002, the dump at 3009; a premise on the
+/// dump's delay alone, ≥ 3000 there, would have called this defect a late
+/// drive step); the premise's probe (review F2, never committed: the
+/// script's `dump.during` moved to 3.5 s after the Return) → the row's mark
+/// 1 ms after the Return, the dump after the worker's line — red, THE DRIVE
+/// STEP ITSELF WAS LATE, where the verdict alone had read THE CLEAR BLOCKED
+/// THE UI THREAD; the session's thumb textures dropped when the clear
+/// completes (`st.textures.images.clear()` in `on_settings_cache_cleared`)
+/// → `thumbtex=0` at `dump.cleared` — red; Clear's ring slot never ok
+/// (`slot-ok(5)` false) → the fourth Tab lands on Reset and the Return
+/// resets Performance instead — red.
 #[test]
 fn the_cache_cap_and_clear_cache_reach_the_default_cache() {
     if !has_display() {
@@ -15887,5 +16748,156 @@ fn the_cache_cap_and_clear_cache_reach_the_default_cache() {
         inode(),
         seeded_inode,
         "previews.db is a different file after the failed clear"
+    );
+
+    // 4 — Clear HELD on its worker (FASTCULL_CLEAR_HOLD_MS), reached by the
+    // Tab ring: the UI thread answers during the hold, and the session keeps
+    // its painted thumbs (settings.md AC12; brief 010). The hold is three
+    // times the dump's offset from the Return.
+    let stderr = shoot_with_sandboxed_cache(
+        &[folder.to_str().unwrap()],
+        &[
+            ("FASTCULL_TRACE", "1"),
+            ("HOME", home.to_str().unwrap()),
+            ("XDG_CACHE_HOME", cache_home.to_str().unwrap()),
+            ("FASTCULL_CONFIG_DIR", config.to_str().unwrap()),
+            ("FASTCULL_CLEAR_HOLD_MS", "3000"),
+            (
+                "FASTCULL_DRIVE",
+                "1500:wait:load settled gen 0;1600:wait:thumb landed idx 0;1700:key:ctrl+,;\
+                 2000:key:ctrl+tab;2200:key:ctrl+tab;2600:dump.perf;2900:key:tab;\
+                 3100:key:tab;3300:key:tab;3500:key:tab;3700:key:return;4700:dump.during;\
+                 4800:wait:settings cache cleared;5200:dump.cleared",
+            ),
+        ],
+        &out_dir().join("settings-cache-clear-held.jpg"),
+    );
+    for wait in [
+        "wait:load settled gen 0 (satisfied",
+        "wait:thumb landed idx 0 (satisfied",
+        "wait:settings cache cleared (satisfied",
+    ] {
+        assert!(
+            stderr.contains(wait),
+            "run 4: `{wait}` never fired:\n{stderr}"
+        );
+    }
+    assert!(
+        stderr.contains("fastcull: FASTCULL_CLEAR_HOLD_MS=3000 — every cache clear is held"),
+        "run 4: the hold knob did not announce itself on stderr (test-harness.md), so \
+         the worker may not have been held at all:\n{stderr}"
+    );
+    let perf = qedump(&stderr, "perf");
+    assert_eq!(
+        dump_field(perf, "settingstab"),
+        "2",
+        "run 4: not on Performance: {perf}"
+    );
+    let labels = mark_labels(&stderr);
+    // The Tab ring reached Clear: the four Tabs ran, and the Return started
+    // the clear — no Reset, no close, between them.
+    let tabs = label_positions(&labels, "drive: key:tab");
+    let ret = labels
+        .iter()
+        .rposition(|l| *l == "drive: key:return")
+        .unwrap_or_else(|| panic!("run 4: no Return:\n{stderr}"));
+    let clearing = labels
+        .iter()
+        .position(|l| *l == "settings cache clearing")
+        .unwrap_or_else(|| {
+            panic!(
+                "run 4: the Return after four Tabs started no clear — the Tab ring did not \
+                 reach Clear with the cache on (settings.md AC12):\n{stderr}"
+            )
+        });
+    assert!(
+        tabs.len() == 4 && tabs[3] < ret && ret < clearing,
+        "run 4: not four Tabs, then the Return, then `settings cache clearing` (Tabs at \
+         {tabs:?}, the Return at {ret}, the clearing at {clearing}):\n{stderr}"
+    );
+    assert!(
+        !labels[ret..clearing]
+            .iter()
+            .any(|l| *l == "settings reset performance" || *l == "settings closed"),
+        "run 4: the Return reset or closed before the clear began — the ring was not on \
+         Clear:\n{stderr}"
+    );
+    // The clear never blocks the UI thread: one second into the hold the UI
+    // thread answered a dump while the row read `Clearing…`, BEFORE the
+    // worker's own line.
+    let during = labels
+        .iter()
+        .position(|l| l.starts_with("QEDUMP during "))
+        .unwrap_or_else(|| panic!("run 4: no `dump.during` mark:\n{stderr}"));
+    let ran = labels
+        .iter()
+        .position(|l| *l == "settings cache clear ran on settings-clear")
+        .unwrap_or_else(|| panic!("run 4: the worker never said where it ran:\n{stderr}"));
+    // The premise of that verdict (the senior developer's review F2): a dump
+    // that comes after the worker's line convicts the UI thread only if the
+    // UI thread was silent from the Return to that line, and the dump's own
+    // delay cannot say so — a UI thread that waits for the worker makes the
+    // drive step late by the whole hold too (measured under the `join()`
+    // mutant: the dump 3009 ms after the Return, the worker's line at 3001).
+    // The witness is the row's own `settings cache readout shows Clearing…`
+    // mark: Slint traces it in the same loop turn, as soon as the timer
+    // callback that ran the Return has returned (Cargo.toml, the fourth
+    // canary's fact 8). It comes after the worker's line when that callback
+    // waited for the worker (the `join()` mutant: in the worker's own
+    // millisecond or the next, after its line), and about 3 s before it when
+    // the UI thread was free and only the dump's timer fired late (measured
+    // with the dump moved 3.5 s after the Return: 1 ms after the Return). So
+    // a dump after the worker's line with that mark before it is a late
+    // drive step — red, with no verdict on the UI thread. One shape this
+    // cannot name: a UI thread blocked by the clear LATER than the Return's
+    // handler (a blocking poll, say) shows that mark before the worker's
+    // line and is reported as a late drive step — red either way, as it
+    // would be under a premise on the dump's delay.
+    let stamps = mark_stamps(&stderr);
+    let after_return = |i: usize| stamps[i].saturating_sub(stamps[ret]);
+    let shown = labels[clearing..]
+        .iter()
+        .position(|l| *l == "settings cache readout shows Clearing…")
+        .map(|i| clearing + i);
+    assert!(
+        !(ran < during && shown.is_some_and(|shown| shown < ran)),
+        "run 4: THE DRIVE STEP ITSELF WAS LATE — no verdict on the UI thread. The dump due \
+         1000 ms after the Return came {} ms after it, after the worker's own line ({} ms \
+         after it); but the row's own `settings cache readout shows Clearing…` mark, which \
+         Slint traces as soon as the timer callback that ran the Return returns (Cargo.toml, \
+         the fourth canary's fact 8), came {} ms after the Return — before the worker's line, \
+         so the UI thread was free once the Return was handled and it was the drive's timer \
+         that fired late, not the clear that blocked:\n{stderr}",
+        after_return(during),
+        after_return(ran),
+        shown.map_or(0, after_return),
+    );
+    assert!(
+        clearing < during && during < ran,
+        "THE CLEAR BLOCKED THE UI THREAD: the dump due one second into the worker's \
+         3 s hold came at {during}, after the worker's own line at {ran} (the clearing \
+         at {clearing}) — the UI thread waited for the worker (settings.md, \
+         \"Performance › Thumbnail cache\": never the UI thread):\n{stderr}"
+    );
+    assert_eq!(
+        dump_text(qedump(&stderr, "during"), "cachereadout"),
+        "Clearing…",
+        "run 4: the row did not read `Clearing…` during the hold:\n{stderr}"
+    );
+    // The open session keeps its painted thumbs.
+    let held = dump_field(perf, "thumbtex")
+        .parse::<usize>()
+        .unwrap_or_else(|e| panic!("run 4: unreadable thumbtex at dump.perf ({e}): {perf}"));
+    let cleared = qedump(&stderr, "cleared");
+    assert!(
+        held >= 1,
+        "run 4: the premise: no thumb texture was in memory before the clear, so the \
+         count after it proves nothing: {perf}"
+    );
+    assert_eq!(
+        dump_field(cleared, "thumbtex"),
+        held.to_string(),
+        "run 4: the open session lost painted thumbs to Clear cache — it keeps them \
+         (settings.md, \"Performance › Thumbnail cache\"): {cleared}"
     );
 }

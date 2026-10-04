@@ -963,6 +963,10 @@ mod tests {
     /// Mutant (2026-10-01): the file checked before the environment in
     /// `resolve_max_readers` → env 4 + file 7 builds `(4, 4, 7)` and this
     /// goes red.
+    ///
+    /// The `(None, 1000, …)` row (brief 010 R2, settings.md AC26): a file's
+    /// limit of 1000 is the pool's cap, as `FASTCULL_MAX_READERS=1000`
+    /// would be — the setting has no ceiling of its own.
     #[test]
     fn the_readers_resolution_feeds_the_pool_exactly_as_the_variable_did() {
         use crate::settings::resolve_max_readers;
@@ -980,6 +984,7 @@ mod tests {
             (None, 1, (1, 1, 1)),
             (None, 4, (4, 4, 4)),
             (None, 6, (4, 4, 6)),
+            (None, 1000, (4, 4, 1000)),
             (Some("4"), 7, (4, 4, 4)),
             (Some("abc"), 6, (4, 4, 6)),
             (Some("0"), 1, (1, 1, 1)),

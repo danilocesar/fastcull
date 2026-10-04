@@ -776,7 +776,7 @@ fn dispatch(win: &MainWindow, state: &Rc<RefCell<AppState>>, key: &str, layout: 
                          clip={} clipstate={} clipavail={} clipsummary={:?} clipskipped={:?} \
                          cliperror={:?} clipreport={:?} clipconfirm={:?} clipprogress={:?} \
                          cliphint={:?} exported={} curexported={} \
-                         cursor={} selected={} vpy={:.1} focusowner={} {}",
+                         cursor={} selected={} vpy={:.1} focusowner={} {} thumbtex={}",
             win.get_dbg_keys_focus(),
             win.get_one2one(),
             st.grid.zoom,
@@ -894,6 +894,12 @@ fn dispatch(win: &MainWindow, state: &Rc<RefCell<AppState>>, key: &str, layout: 
             // `washprop`, the WINDOW's wash opacity, which is what proves
             // a commit reached the renderer and not only the model.
             crate::settings_bridge::dump_fields(win, &st),
+            // The decoded thumb textures the session holds — what "the open
+            // session keeps its painted thumbs" after Clear cache is read
+            // from (settings.md AC12; brief 010). LAST, after the settings
+            // block: fields are appended, and `format!` pairs placeholders
+            // with arguments by position.
+            st.textures.images.len(),
         ));
         return;
     }

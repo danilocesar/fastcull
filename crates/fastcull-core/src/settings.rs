@@ -956,22 +956,13 @@ fn merge_into(doc: &mut toml_edit::DocumentMut, settings: &Settings) {
             // comments around it stay with the table (brief 008 D40). An
             // array's first header gives the table its spacing and its
             // comment, so a file that began with `[[general]]` does not
-            // begin with a blank line now; a value gives the comment above
-            // its key line; either gives the comment on its line.
+            // begin with a blank line now, and every later element's
+            // comments follow it above the table (brief 010, QE D48); a
+            // value gives the comment above its key line; either gives the
+            // comment on its line.
             let replaces = existing.is_some();
             let (header_prefix, on_line) = match existing {
-                Some(toml_edit::Item::ArrayOfTables(tables)) => {
-                    tables.get(0).map_or((None, None), |first| {
-                        let decor = first.decor();
-                        (
-                            decor
-                                .prefix()
-                                .and_then(toml_edit::RawString::as_str)
-                                .map(str::to_string),
-                            with_comment(decor.suffix()),
-                        )
-                    })
-                }
+                Some(toml_edit::Item::ArrayOfTables(tables)) => array_comments(tables),
                 Some(toml_edit::Item::Value(value)) => (
                     with_comment(
                         root.key(tab.table())
@@ -1064,19 +1055,61 @@ fn merge_into(doc: &mut toml_edit::DocumentMut, settings: &Settings) {
     }
 }
 
-/// The decor above a replaced table's header and after it on its line — an
-/// array of tables' FIRST header for an array — each only when it holds a
-/// comment (brief 008 D40): the writer carries them to the key that takes
-/// the table's place.
+/// The decor above a replaced table's header and after it on its line —
+/// for an array of tables, every element's comments as [`array_comments`]
+/// gathers them — each only when it holds a comment (brief 008 D40): the
+/// writer carries them to the key that takes the table's place, whose own
+/// spacing rule then decides the rest.
 fn header_comments(item: &toml_edit::Item) -> (Option<String>, Option<String>) {
-    let decor = match item {
-        toml_edit::Item::Table(table) => Some(table.decor()),
-        toml_edit::Item::ArrayOfTables(tables) => tables.get(0).map(toml_edit::Table::decor),
-        _ => None,
+    match item {
+        toml_edit::Item::Table(table) => {
+            let decor = table.decor();
+            (with_comment(decor.prefix()), with_comment(decor.suffix()))
+        }
+        toml_edit::Item::ArrayOfTables(tables) => {
+            let (above, on_line) = array_comments(tables);
+            // The first element's raw prefix may be spacing alone: here
+            // that is no comment, and the key line keeps its own spacing.
+            (above.filter(|text| !text.trim().is_empty()), on_line)
+        }
+        _ => (None, None),
+    }
+}
+
+/// What an array of tables leaves behind when the writer replaces it
+/// (settings.md, "Writing"; brief 010, QE 2026-10-02, D48 — a two-element
+/// `[[general]]` kept only its first header's comments): ABOVE, the first
+/// element's raw prefix — its spacing included, which is what lets a file
+/// that began with `[[general]]` begin with `[general]` — then, for each
+/// later element in order, the comments above its header and its
+/// header-line comment as a line of its own; ON THE LINE, the first
+/// element's header-line comment. A later element's spacing alone carries
+/// nothing. Pure.
+fn array_comments(tables: &toml_edit::ArrayOfTables) -> (Option<String>, Option<String>) {
+    let mut elements = tables.iter();
+    let Some(first) = elements.next() else {
+        return (None, None);
     };
-    decor.map_or((None, None), |decor| {
-        (with_comment(decor.prefix()), with_comment(decor.suffix()))
-    })
+    let mut above = first
+        .decor()
+        .prefix()
+        .and_then(toml_edit::RawString::as_str)
+        .map(str::to_string);
+    for later in elements {
+        let decor = later.decor();
+        let mut carried = with_comment(decor.prefix()).unwrap_or_default();
+        if let Some(comment) = with_comment(decor.suffix()) {
+            // Its own line, so the header it sat beside can go: `# x`
+            // after the comments above it, ended like any line here (the
+            // `\n` becomes `\r\n` in a CRLF file, `restore_file_shape`).
+            carried.push_str(comment.trim_start());
+            carried.push('\n');
+        }
+        if !carried.is_empty() {
+            above.get_or_insert_with(String::new).push_str(&carried);
+        }
+    }
+    (above, with_comment(first.decor().suffix()))
 }
 
 /// A decor's text when it holds a comment — anything but spaces, tabs and
@@ -1191,15 +1224,37 @@ mod tests {
 
     const GIB: u64 = 1 << 30;
 
-    fn scratch(tag: &str) -> PathBuf {
+    fn scratch(tag: &str) -> crate::testutil::ScratchDir {
         crate::testutil::scratch_dir(&format!("settings-{tag}"))
     }
 
-    /// A file holding `text`, in a fresh scratch dir; returns its path.
-    fn file_with(tag: &str, text: &str) -> PathBuf {
-        let path = scratch(tag).join(FILE_NAME);
+    /// A settings file in a scratch dir of its own: it reads as the file's
+    /// path, and holds the dir's guard for as long as the path is held, so
+    /// the dir goes with it (brief 010, AC31) — or stays, for a red test.
+    struct ScratchFile {
+        path: PathBuf,
+        _dir: crate::testutil::ScratchDir,
+    }
+
+    impl std::ops::Deref for ScratchFile {
+        type Target = Path;
+        fn deref(&self) -> &Path {
+            &self.path
+        }
+    }
+
+    impl AsRef<Path> for ScratchFile {
+        fn as_ref(&self) -> &Path {
+            &self.path
+        }
+    }
+
+    /// A file holding `text`, in a fresh scratch dir.
+    fn file_with(tag: &str, text: &str) -> ScratchFile {
+        let dir = scratch(tag);
+        let path = dir.join(FILE_NAME);
         std::fs::write(&path, text).unwrap();
-        path
+        ScratchFile { path, _dir: dir }
     }
 
     fn non_default() -> Settings {
@@ -1242,7 +1297,8 @@ mod tests {
     /// a default.
     #[test]
     fn a_written_file_round_trips_every_key() {
-        let path = scratch("roundtrip").join(FILE_NAME);
+        let dir = scratch("roundtrip");
+        let path = dir.join(FILE_NAME);
         let s = non_default();
         assert_eq!(write(&path, &s).unwrap(), None);
         let loaded = load(&path);
@@ -1262,7 +1318,8 @@ mod tests {
     /// of the parsed value → the file holds `"2gb"` and this goes red.
     #[test]
     fn the_normalised_string_is_what_the_file_stores() {
-        let path = scratch("normalised").join(FILE_NAME);
+        let dir = scratch("normalised");
+        let path = dir.join(FILE_NAME);
         let mut s = Settings::default();
         s.set_from_text(Key::LoupeMemory, "8gb").unwrap();
         s.set_from_text(Key::CacheCap, " 0.50 GB").unwrap();
@@ -1619,6 +1676,266 @@ mod tests {
         }
     }
 
+    /// An array of tables with SEVERAL elements where a table or a key
+    /// belongs keeps EVERY element's comments, not only the first's
+    /// (settings.md, "Writing"; brief 010 R4, QE 2026-10-02, D48): the
+    /// comments above each element in the elements' order, a later
+    /// element's header-line comment as a line of its own after them, all
+    /// above what replaces the array — whose own line keeps the first
+    /// element's header-line comment. Over `[[general]]` where the General
+    /// table belongs, over `[[performance.loupe_memory]]` where the Loupe
+    /// memory key belongs, and over three `[[general]]` elements the middle
+    /// one bare. Blank lines between the carried comments are not pinned:
+    /// a later element's own spacing comes with its comment.
+    ///
+    /// RED on f771f6f, the writer before the fix: `# second above` and `#
+    /// second on line` (and `# above second`, `# on second`, `# three`, `#
+    /// third`) were gone — only the first element's comments were carried,
+    /// the later ones' went with the array. When this fails that way it is
+    /// that defect; do not quiet it.
+    ///
+    /// Mutants (2026-10-03), each alone: the first-element-only carry (the
+    /// writer before the fix) → `# second above` missing — red; the carry
+    /// cleared (`array_comments` returning no comment above) → `# first
+    /// above` missing too — red.
+    #[test]
+    fn every_elements_comments_of_a_replaced_array_stay_above_what_replaces_it() {
+        let s = non_default();
+        for (tag, users, kept) in [
+            (
+                "aot-two",
+                "# first above\n[[general]] # first on line\nauto_advance = true\n\n\
+                 # second above\n[[general]] # second on line\nauto_advance = true\n",
+                &["# first above", "# second above", "# second on line"][..],
+            ),
+            (
+                "sub-aot-two",
+                "[performance]\n# above first\n[[performance.loupe_memory]] # on first\nfoo = 1\n\
+                 # above second\n[[performance.loupe_memory]] # on second\nbar = 2\n",
+                &["# above first", "# above second", "# on second"][..],
+            ),
+            (
+                "aot-three",
+                "# one\n[[general]] # first\na = 1\n[[general]]\nb = 2\n# three\n\
+                 [[general]] # third\nc = 3\n",
+                &["# one", "# three", "# third"][..],
+            ),
+        ] {
+            let path = file_with(tag, users);
+            write(&path, &s).unwrap();
+            let text = std::fs::read_to_string(&path).unwrap();
+            assert!(
+                text.parse::<toml::Table>().is_ok(),
+                "{tag}: the written file does not parse: {text:?}"
+            );
+            let reread = load(&path);
+            assert_eq!(reread.error, None, "{tag}: {text:?}");
+            assert_eq!(
+                reread.settings, s,
+                "{tag}: the file does not read back what was written: {text:?}"
+            );
+            // The replacing line, with the FIRST element's header-line
+            // comment on it.
+            let (replacing, first_on_line) = match tag {
+                "sub-aot-two" => ("loupe_memory = \"40%\"", "# on first"),
+                "aot-three" => ("[general]", "# first"),
+                _ => ("[general]", "# first on line"),
+            };
+            let lines: Vec<&str> = text.lines().collect();
+            let at = lines
+                .iter()
+                .position(|l| l.trim_start().starts_with(replacing))
+                .unwrap_or_else(|| panic!("{tag}: no `{replacing}` line: {text:?}"));
+            assert!(
+                lines[at].trim_end().ends_with(first_on_line),
+                "{tag}: the replacing line does not keep the first element's header-line \
+                 comment `{first_on_line}`: {:?} in {text:?}",
+                lines[at]
+            );
+            // Every element's comments, each on a line of its own, in the
+            // elements' order, all above the replacing line.
+            let above: Vec<&str> = lines[..at]
+                .iter()
+                .map(|l| l.trim())
+                .filter(|l| l.starts_with('#'))
+                .collect();
+            let found: Vec<&str> = kept.iter().copied().filter(|c| above.contains(c)).collect();
+            assert_eq!(
+                found, kept,
+                "{tag}: not every element's comments stayed above what replaced the \
+                 array, in order (settings.md, \"Writing\"; QE 2026-10-02, D48) — \
+                 above it: {above:?}; the file: {text:?}"
+            );
+            let order: Vec<usize> = kept
+                .iter()
+                .map(|c| above.iter().position(|l| l == c).unwrap())
+                .collect();
+            assert!(
+                order.windows(2).all(|w| w[0] < w[1]),
+                "{tag}: the carried comments are out of the elements' order: {above:?} \
+                 in {text:?}"
+            );
+            // The array's contents went with it.
+            for gone in ["foo = 1", "bar = 2", "a = 1", "b = 2", "c = 3"] {
+                assert!(
+                    !text.lines().any(|line| line.trim() == gone),
+                    "{tag}: the array's content `{gone}` stayed: {text:?}"
+                );
+            }
+        }
+    }
+
+    /// A key the write CREATES inside an inline table the user wrote by
+    /// hand goes into the braces with NO note, and the braces stay the
+    /// user's shape (settings.md, "Writing"; brief 010 R4, D5 — QE
+    /// 2026-10-02, D47): TOML cannot hold a comment inside braces, and
+    /// expanding the inline table into a `[performance]` table would rewrite
+    /// the user's line and move the group (measured on toml_edit 0.22.27,
+    /// 2026-10-03: `into_table()` wrote an unparsable header). Its comment
+    /// above and its comment on the line stay. A key created under a DOTTED
+    /// key (`performance.cache_cap = …`) is in a table, and carries its note.
+    ///
+    /// A pin, not a fix: the writer already behaved so (brief 010 D5: no
+    /// code change). Mutant (2026-10-03): the inline table taken for "not a
+    /// table" and replaced by `[performance]` — the expansion a future fix
+    /// would reach for (`is_table()` for `is_table_like()` in `merge_into`)
+    /// → a `[performance]` header and the notes appear — red.
+    #[test]
+    fn a_key_created_inside_an_inline_table_carries_no_note_and_the_braces_stay() {
+        let s = non_default();
+        let path = file_with(
+            "inline",
+            "# my perf block\nperformance = { cache_cap = \"2 GB\" } # inline\n",
+        );
+        write(&path, &s).unwrap();
+        let text = std::fs::read_to_string(&path).unwrap();
+        assert!(
+            text.parse::<toml::Table>().is_ok(),
+            "the written file does not parse: {text:?}"
+        );
+        assert_eq!(
+            load(&path).settings,
+            s,
+            "the file does not read back: {text:?}"
+        );
+        let braces: Vec<&str> = text
+            .lines()
+            .filter(|l| l.starts_with("performance = {"))
+            .collect();
+        assert_eq!(
+            braces.len(),
+            1,
+            "the user's inline table is not one `performance = {{ … }}` line any more: \
+             {text:?}"
+        );
+        let line = braces[0];
+        for key in [Key::LoupeMemory, Key::CacheCap, Key::MaxReaders] {
+            assert!(
+                line.contains(&format!("{} = ", key.name())),
+                "{} is not inside the user's braces: {line:?}",
+                key.name()
+            );
+        }
+        assert!(
+            line.trim_end().ends_with("} # inline"),
+            "the comment on the user's line is gone: {line:?}"
+        );
+        assert!(
+            text.starts_with("# my perf block\nperformance = {"),
+            "the comment above the user's line did not stay above it: {text:?}"
+        );
+        assert!(
+            !text
+                .lines()
+                .any(|l| l.trim_start().starts_with("[performance")),
+            "the inline table was expanded into a table — the user's shape was \
+             rewritten: {text:?}"
+        );
+        for key in [Key::LoupeMemory, Key::MaxReaders] {
+            let first_words = key.note().split_whitespace().take(4).collect::<Vec<_>>();
+            assert!(
+                !text.contains(&first_words.join(" ")),
+                "a note for {} was written though TOML cannot comment inside braces: \
+                 {text:?}",
+                key.name()
+            );
+        }
+
+        // A dotted key: a table, so the keys it gains carry their notes.
+        let path = file_with("dotted", "# dotted\nperformance.cache_cap = \"2 GB\"\n");
+        write(&path, &s).unwrap();
+        let text = std::fs::read_to_string(&path).unwrap();
+        assert!(
+            text.parse::<toml::Table>().is_ok(),
+            "the written dotted file does not parse: {text:?}"
+        );
+        assert_eq!(
+            load(&path).settings,
+            s,
+            "the dotted file does not read back: {text:?}"
+        );
+        let lines: Vec<&str> = text.lines().collect();
+        for key in [Key::LoupeMemory, Key::MaxReaders] {
+            let at = lines
+                .iter()
+                .position(|l| l.contains(&format!("{} = ", key.name())))
+                .unwrap_or_else(|| panic!("no {} line: {text:?}", key.name()));
+            let note: Vec<&str> = lines[..at]
+                .iter()
+                .rev()
+                .take_while(|l| l.starts_with("# "))
+                .map(|l| &l[2..])
+                .collect::<Vec<_>>()
+                .into_iter()
+                .rev()
+                .collect();
+            assert_eq!(
+                note.join(" "),
+                key.note(),
+                "{} created under a dotted key does not carry its note: {text:?}",
+                key.name()
+            );
+        }
+    }
+
+    /// The read workers' Limit has no ceiling of its own, as
+    /// `FASTCULL_MAX_READERS` has none (settings.md, "Performance › Read
+    /// workers"; brief 010 R2, issue #100's sixth guard): typed, a limit of
+    /// 64 is 64 and 4294967295 is the type's own maximum; a file's 1000 reads
+    /// 1000 and resolves to a limit of 1000 (the pool adopting `(4, 4, 1000)`
+    /// is `pipeline::tests::the_readers_resolution_feeds_the_pool_exactly_as_the_variable_did`'s
+    /// row). Only the type caps it: a figure past `u32::MAX` holds there.
+    ///
+    /// Mutant (2026-10-03): `clamp_readers` capped at 64 (`clamp(0, 64)`) →
+    /// `"4294967295"` reads 64 — red.
+    #[test]
+    fn the_readers_limit_has_no_ceiling_of_its_own() {
+        let mut s = Settings::default();
+        s.set_from_text(Key::MaxReaders, "64").unwrap();
+        assert_eq!(s.max_readers, 64);
+        s.set_from_text(Key::MaxReaders, "4294967295").unwrap();
+        assert_eq!(
+            s.max_readers,
+            u32::MAX,
+            "a limit the type can hold was capped by a ceiling of the setting's own"
+        );
+        s.set_from_text(Key::MaxReaders, "99999999999").unwrap();
+        assert_eq!(
+            s.max_readers,
+            u32::MAX,
+            "only the type's own maximum caps it"
+        );
+        let doc = "[performance]\nmax_readers = 1000\n"
+            .parse::<toml_edit::DocumentMut>()
+            .unwrap();
+        let read = Settings::from_document(&doc);
+        assert_eq!(read.max_readers, 1000, "a file's 1000 did not read as 1000");
+        assert_eq!(
+            resolve_max_readers(None, read.max_readers),
+            Readers::Limit(1000)
+        );
+    }
+
     /// A key the write creates carries its note above it, wrapped inside
     /// 78 columns; a key that existed keeps the user's comment above it
     /// and on its line, with only the value changed.
@@ -1721,7 +2038,8 @@ mod tests {
             "{out:?}"
         );
         // A file written from nothing: LF, no mark.
-        let fresh = scratch("fresh").join(FILE_NAME);
+        let fresh_dir = scratch("fresh");
+        let fresh = fresh_dir.join(FILE_NAME);
         write(&fresh, &s).unwrap();
         let out = std::fs::read_to_string(&fresh).unwrap();
         assert!(

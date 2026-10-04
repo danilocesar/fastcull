@@ -708,7 +708,7 @@ fn atomic_write(path: &Path, bytes: &[u8]) -> Result<(), XmpError> {
 mod tests {
     use super::*;
 
-    fn tmp() -> PathBuf {
+    fn tmp() -> crate::testutil::ScratchDir {
         crate::testutil::scratch_dir("xmp")
     }
 

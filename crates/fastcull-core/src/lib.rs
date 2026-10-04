@@ -40,12 +40,50 @@ pub mod zoompan;
 /// binary share a directory and race each other).
 #[cfg(test)]
 pub(crate) mod testutil {
-    use std::path::PathBuf;
+    use std::path::{Path, PathBuf};
+
+    /// A scratch directory that goes when the test that made it ends — and
+    /// STAYS when that test is panicking, so a red test's files are still
+    /// there to be read (brief 010 R3, settings.md AC31: every passing run
+    /// used to leave its dirs behind, 1,086 of them in /tmp on the
+    /// development seat, 2026-10-03). It reads as the directory's `Path`.
+    ///
+    /// Hold it for the test's whole life — `let dir = scratch_dir(tag);` —
+    /// never as a temporary (`scratch_dir(tag).join(…)`): a guard dropped
+    /// early deletes the directory under the test, which then fails loudly
+    /// on its first file, never silently. Not `Clone`: two guards of one
+    /// directory would each delete it.
+    pub(crate) struct ScratchDir(PathBuf);
+
+    impl std::ops::Deref for ScratchDir {
+        type Target = Path;
+        fn deref(&self) -> &Path {
+            &self.0
+        }
+    }
+
+    impl AsRef<Path> for ScratchDir {
+        fn as_ref(&self) -> &Path {
+            &self.0
+        }
+    }
+
+    impl Drop for ScratchDir {
+        fn drop(&mut self) {
+            // A test that panics is unwinding when its locals drop: its dir
+            // is its evidence. A removal that fails (a file still open on
+            // Windows, a directory a test left read-only) leaves the dir as
+            // every run used to, and never turns a green test red.
+            if !std::thread::panicking() {
+                std::fs::remove_dir_all(&self.0).ok();
+            }
+        }
+    }
 
     /// A fresh `<temp>/fastcull-<tag>-<pid>-<thread>` directory: the
     /// thread id keeps parallel tests in one binary apart, and the
     /// pre-clean means a crashed earlier run cannot poison this one.
-    pub(crate) fn scratch_dir(tag: &str) -> PathBuf {
+    pub(crate) fn scratch_dir(tag: &str) -> ScratchDir {
         let dir = std::env::temp_dir().join(format!(
             "fastcull-{tag}-{}-{:?}",
             std::process::id(),
@@ -53,7 +91,51 @@ pub(crate) mod testutil {
         ));
         std::fs::remove_dir_all(&dir).ok();
         std::fs::create_dir_all(&dir).unwrap();
-        dir
+        ScratchDir(dir)
+    }
+
+    mod tests {
+        use super::*;
+
+        /// The guard removes its directory when the test ends, and keeps it
+        /// when the test is panicking — a red test's evidence (brief 010
+        /// R3, settings.md AC31). The panic below is on purpose, caught, and
+        /// prints its message like any panic.
+        ///
+        /// Mutants (2026-10-03), each alone: `Drop`'s removal taken out →
+        /// "a scratch dir outlived the test that made it" — red; the
+        /// `panicking()` check taken out → "a panicking test's scratch dir
+        /// was removed" — red.
+        #[test]
+        fn a_scratch_dir_goes_on_drop_and_stays_for_a_panicking_test() {
+            let dir = scratch_dir("guard-drop");
+            let gone = dir.to_path_buf();
+            std::fs::write(dir.join("evidence"), b"green").unwrap();
+            drop(dir);
+            assert!(
+                !gone.exists(),
+                "a scratch dir outlived the test that made it: {}",
+                gone.display()
+            );
+
+            let mut kept = None;
+            let outcome = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+                let dir = scratch_dir("guard-panic");
+                std::fs::write(dir.join("evidence"), b"red").unwrap();
+                kept = Some(dir.to_path_buf());
+                panic!("a red test, on purpose: its scratch dir must stay");
+            }));
+            assert!(outcome.is_err(), "the closure did not panic");
+            let kept = kept.expect("the panicking closure never made its dir");
+            let evidence = std::fs::read(kept.join("evidence"));
+            std::fs::remove_dir_all(&kept).ok();
+            assert_eq!(
+                evidence.ok().as_deref(),
+                Some(&b"red"[..]),
+                "a panicking test's scratch dir was removed — its evidence is gone: {}",
+                kept.display()
+            );
+        }
     }
 }
 

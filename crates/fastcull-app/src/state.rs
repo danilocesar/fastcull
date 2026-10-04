@@ -308,8 +308,12 @@ pub(crate) struct SettingsState {
     pub(crate) moved_aside: Option<std::path::PathBuf>,
     /// Why the last write failed, until one succeeds. While it stands the
     /// commits live only in memory, so an open does NOT re-read the file
-    /// over them (settings.md, "Writing": nothing is silently lost).
-    pub(crate) write_error: Option<String>,
+    /// over them (settings.md, "Writing": nothing is silently lost). The
+    /// error itself, not its text: the notice and the status line name an
+    /// earlier aside differently when the write failed at the MOVE-ASIDE,
+    /// and that is decided by the error's kind, never by its wording (brief
+    /// 010 R6).
+    pub(crate) write_error: Option<fastcull_core::settings::WriteError>,
     /// Clear cache is running on its worker; its outcome arrives here.
     pub(crate) clear_rx: Option<std::sync::mpsc::Receiver<CacheCleared>>,
     /// The Thumbnail cache row's text.

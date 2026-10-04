@@ -1407,7 +1407,7 @@ mod tests {
     use super::*;
     use crate::catalog::PickState;
 
-    fn tmp() -> PathBuf {
+    fn tmp() -> crate::testutil::ScratchDir {
         crate::testutil::scratch_dir("fops")
     }
 
