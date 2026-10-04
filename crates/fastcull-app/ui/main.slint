@@ -2437,12 +2437,15 @@ export component MainWindow inherits Window {
                 // whose slot it is focuses itself and clears the request.
                 property <int> want-slot: -1;
                 // EVERY STATE CHANGE BRINGS THE KEYBOARD HOME. A control
-                // the new state removes — Enter on a focused Copy removes
-                // Copy, the worker's finish removes Cancel — would
-                // otherwise keep a focus that Slint never takes back (a
-                // destroyed item delivers no FocusOut: Cargo.toml, the
-                // second canary's fact 2), and every key after it would
-                // be delivered to nothing.
+                // the new state removes — the run's end removes Cancel,
+                // which the keyboard may be on (by Tab, or by the Space
+                // that cancelled the run) — would otherwise keep a focus
+                // that Slint never takes back (a destroyed item delivers
+                // no FocusOut: Cargo.toml, the second canary's fact 2),
+                // and every key after it would be delivered to nothing.
+                // Copy/Close goes home by itself BEFORE the state changes
+                // (its `clicked`, brief 011 review F1), so Enter on a
+                // focused Copy no longer relies on this.
                 property <int> state: root.copy-state;
                 changed state => {
                     self.slot = -1;
@@ -3002,6 +3005,18 @@ export component MainWindow inherits Window {
                             text: root.copy-state == 2 ? "Close" : "Copy";
                             enabled: root.copy-state == 2 || root.copy-ready;
                             clicked => {
+                                // The keyboard goes HOME FIRST, while Choose…
+                                // and the rename field are still enabled.
+                                // After `copy-start()` it is too late: the
+                                // run disables them, and a disabled control
+                                // ignores the FocusOut — Choose…, reached by
+                                // Tab and left by a mouse click here, kept
+                                // `has-focus`, wore its focus border with the
+                                // keyboard at home and emitted no `gained`
+                                // when the ring landed on it again (Cargo.toml,
+                                // the fourth canary's fact 11; brief 011
+                                // review F1). Harmless before Close.
+                                copy-keys.focus();
                                 if (root.copy-state == 2) {
                                     root.copy-close();
                                 } else {
@@ -3122,9 +3137,10 @@ export component MainWindow inherits Window {
                 // The request the four conditional row buttons watch (the
                 // copy ring's `want-slot`).
                 property <int> want-slot: -1;
-                // Every state change brings the keyboard home: Enter on a
-                // focused Export removes Export, the writer's finish
-                // removes the running Cancel.
+                // Every state change brings the keyboard home: the
+                // writer's finish removes the running Cancel, which the
+                // keyboard may be on. (Export/Close goes home by itself
+                // before the run starts — its `clicked`, review F1.)
                 property <int> state: root.clip-state;
                 changed state => {
                     self.slot = -1;
@@ -3589,6 +3605,12 @@ export component MainWindow inherits Window {
                             text: root.clip-state == 2 ? "Close" : "Export";
                             enabled: root.clip-state == 2 || root.clip-ready;
                             clicked => {
+                                // Home FIRST, while Choose… is still enabled:
+                                // the run disables it, and a disabled control
+                                // cannot let go of the keyboard (the copy
+                                // dialog's Copy button says how; fact 11 of
+                                // the fourth canary; brief 011 review F1).
+                                clip-keys.focus();
                                 if (root.clip-state == 2) {
                                     root.clip-close();
                                 } else {

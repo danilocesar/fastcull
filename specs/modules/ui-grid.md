@@ -724,7 +724,13 @@ mis-marked frame costs one arrow back and a re-mark.
   keyboard's home in a dialog is its scope: the open puts it there, and
   every state change of the dialog puts it back there, because a control
   the new state removes would otherwise keep a dangling focus and a dead
-  keyboard. `Enter` and `Space` on a focused button press that button;
+  keyboard. A button that starts the dialog's run — Copy, Export — puts
+  the keyboard home BEFORE it starts, because a control the run disables
+  can no longer let go of it: a disabled scope ignores `FocusOut` as it
+  ignores `FocusIn`, keeps `has-focus`, wears its focus border while the
+  keyboard is elsewhere and emits no `gained` when focused again (the
+  Slint list below; senior-developer review 2026-10-04, F1). `Enter` and
+  `Space` on a focused button press that button;
   from the scope every key keeps the meaning this spec and the dialog's
   module give it; `Ctrl+Tab` does nothing unless a dialog's module says
   otherwise. Which controls each ring holds, per state, is the dialog's
@@ -878,6 +884,15 @@ moves on — `set_focus_item` runs the same `move_focus` with the
 programmatic reason and publishes to the next item in tree order that
 accepts the focus, inside the dialog or behind its scrim — so a ring
 checks a control's state before it focuses it; read 2026-10-04); a
+disabled `FocusScope` ignores `FocusOut` too — `focus_event` returns
+`FocusIgnored` before it reads the event (`items/input_items.rs:643`),
+and `take_focus_item` takes the window's focus from it all the same
+(`window.rs:1254`) — so a control disabled while it holds the keyboard
+keeps `has-focus` true until it is next focused and released while
+enabled, and a fluent `Button` in that state draws its focus border as
+soon as it is enabled again (`widgets/fluent/button.slint:121`); a
+`TextInput` tests `enabled` only on `FocusIn` (`items/text.rs:1166`) and
+lets go normally (senior-developer review 2026-10-04, F1); a
 focused item that has become invisible loses the keyboard at the next
 key; a `TextInput` ignores `Tab` and `Escape`, which is what lets an
 ancestor scope see them; the built-in `Tooltip` raises its popup 500 ms
@@ -1252,6 +1267,18 @@ host, not the footer, absorbs the high-water mark's extra height).
 - [ ] AC6 (brief 011) — the spec sentences and the docs say so and the
       Slint-facts gap is retracted: review-verified at brief 011's merge
       (open until then).
+- [x] AC7 (brief 011, the senior developer's review F1) — a button that
+      starts the dialog's run puts the keyboard home before it starts:
+      `Tab` onto Choose…, a click on Copy (or Export), `Esc` back to the
+      plan — the click lets go of Choose… while it is enabled (`focus:
+      copy choose lost` / `focus: clip choose lost` after it) and the next
+      `Tab` lands on Choose… with its own `gained` —
+      `copy_picks_tab_walks_its_own_controls_and_never_leaves_the_dialog`,
+      `export_tab_walks_its_own_controls_and_never_leaves_the_dialog`
+      (red on 6eed28b, 841bb1d with the two buttons' layout marks: no
+      `lost` after the click, and after `Esc` a silent `Tab` — Choose…
+      kept `has-focus` and wore its focus border with the keyboard at
+      home).
 - RETIRED 2026-09-17 (user decision): the per-release manual acceptance
   (a 5,000-file A1 folder at 60 fps; no perceived latency in the
   pick→auto-advance loop) — never recorded as run; the perf budgets, the
@@ -1259,6 +1286,11 @@ host, not the footer, absorbs the high-water mark's extra height).
 
 ## History
 
+- 2026-10-04 — Brief 011, the senior developer's review F1: a button that
+  starts a dialog's run puts the keyboard home before it starts — Choose…,
+  reached by `Tab` and left by a click on Copy or Export, kept its focus
+  border with the keyboard at home and landed silently on the next `Tab`;
+  the Slint list gains the disabled scope's ignored `FocusOut`; AC7.
 - 2026-10-04 — Brief 011 (issue #98): every dialog's key scope owns `Tab`
   — the rule stated once under "Modal keyboard containment", the Copy
   Picks and Export rings in fileops.md and video-export.md, settings.md

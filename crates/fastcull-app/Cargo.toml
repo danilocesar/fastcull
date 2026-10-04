@@ -62,13 +62,14 @@ fastcull-core.workspace = true
 # raising this bound.
 # FOURTH CANARY (brief 008, the Settings dialog and the Failed badge's
 # tooltip; brief 011, the Copy Picks and Export keyboard rings; same
-# 1.17.1). Ten measured behaviours they stand on, none documented upstream
-# (read 2026-10-01 in i-slint-core window.rs `process_key_input`,
+# 1.17.1). Eleven measured behaviours they stand on, none documented
+# upstream (read 2026-10-01 in i-slint-core window.rs `process_key_input`,
 # items/text.rs, items.rs and properties/change_tracker.rs; 2026-10-02 in
 # i-slint-compiler widgets/fluent/checkbox.slint, i-slint-core platform.rs
 # and i-slint-backend-winit event_loop.rs; 2026-10-04 in i-slint-core
-# window.rs `set_focus_item`/`move_focus` and items/input_items.rs;
-# ui-grid.md's Slint list):
+# window.rs `set_focus_item`/`move_focus`/`take_focus_item`,
+# items/input_items.rs and items/text.rs, and i-slint-compiler
+# widgets/fluent/button.slint; ui-grid.md's Slint list):
 #   1. The WINDOW handles a Tab or Shift+Tab that the focused item and
 #      every ancestor scope ignored, by walking the WHOLE item tree to the
 #      next focusable item — surfaces hidden behind a scrim included. The
@@ -151,6 +152,22 @@ fastcull-core.workspace = true
 #      011: the copy ring's `focus()` on the greyed Copy, as a mutant,
 #      landed on the grid's scope). Why the two rings focus a slot only
 #      after `slot-ok` has approved it.
+#  11. A disabled `FocusScope` ignores `FocusOut` too: `focus_event`
+#      returns `FocusIgnored` before it reads the event
+#      (items/input_items.rs:643), while `take_focus_item` takes the
+#      window's focus from it all the same (window.rs:1254). A control
+#      disabled while it holds the keyboard therefore keeps `has-focus`
+#      true: the fluent `Button` draws its focus border whenever
+#      `has-focus && enabled` (widgets/fluent/button.slint:121), so it
+#      wears one again once re-enabled, with the keyboard elsewhere, and
+#      the next focus on it changes nothing — no `changed has-focus`, no
+#      `gained` mark — until it is released while enabled. A `TextInput`
+#      tests `enabled` only on `FocusIn` (items/text.rs:1166) and lets go
+#      normally. Why the Copy and Export buttons put the keyboard home
+#      BEFORE they start the run, which disables Choose… (brief 011, the
+#      senior developer's review F1: Tab onto Choose…, a click on Copy,
+#      Esc back to the plan — Choose… wore its border with the keyboard at
+#      home, and the next Tab onto it was silent).
 # FIFTH CANARY (brief 009, the Settings card holds still; same 1.17.1).
 # Three measured behaviours the card's one height per open stands on, none
 # documented upstream (read 2026-10-03 by the senior developer, and each

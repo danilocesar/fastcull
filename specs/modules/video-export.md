@@ -232,7 +232,10 @@ express.
   Open folder and Close on the report; the clash question has no control
   that takes the keyboard, so `Tab` there is swallowed with the nudge like
   every other key; the keyboard's home is the dialog's scope, where the
-  open and every state change put it; `Enter`/`Space` on the focused
+  open and every state change put it, and where pressing Export — a click,
+  or `Enter`/`Space` on it — puts it before the run starts (brief 011
+  review F1, 2026-10-04: a control the run disables cannot let go of the
+  keyboard afterwards); `Enter`/`Space` on the focused
   Cancel, Export or Close press it, and from the scope `Enter` keeps the
   meaning above.
 - **The card's height follows its content** (issue #62): a floor of 260 px
@@ -558,9 +561,21 @@ Windows runner too. `core:` = a `fastcull-core` unit test, `muxer:` =
       (red on the pre-fix build at the fourth `Tab`, `focusowner=0`: the
       keyboard on the grid, where brief 011 D3 measured a `Y` marking the
       frame and collapsing the selection).
+- [x] The mixed path (brief 011, review F1): `Tab` onto Choose…, a click
+      on Export, `Esc` back to the plan — the click lets go of Choose…
+      while it is enabled (`focus: clip choose lost` after it) and the
+      next `Tab` lands on Choose… with its own `gained` — app
+      `export_tab_walks_its_own_controls_and_never_leaves_the_dialog`
+      (red on 6eed28b, 841bb1d with the button's layout mark: no `clip
+      choose lost` after the click, a silent `Tab` after `Esc`).
 
 ## History
 
+- 2026-10-04 — Brief 011, the senior developer's review F1: pressing
+  Export puts the keyboard home before the run starts (the rule is
+  ui-grid.md's) — Choose…, reached by `Tab` and left by a click on Export,
+  had kept its focus border with the keyboard at home; the mixed path's
+  box.
 - 2026-10-04 — Brief 011, the senior developer's review F1: the
   Export/Close button reports its layout, `clip export-close laid out …`,
   for a test that clicks it by name.

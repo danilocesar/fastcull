@@ -419,7 +419,10 @@ is the eventual fix; no perf budget covers plan time.
   to clicks — so `Tab` there is swallowed with the nudge like every other
   key; the rename field entered by `Tab` is selected, so what is typed
   replaces the template shown; the keyboard's home is the dialog's scope,
-  where the open and every state change put it; `Enter`/`Space` on the
+  where the open and every state change put it, and where pressing Copy —
+  a click, or `Enter`/`Space` on it — puts it before the run starts (brief
+  011 review F1, 2026-10-04: a control the run disables cannot let go of
+  the keyboard afterwards); `Enter`/`Space` on the
   focused Copy or Close press it, and from the scope `Enter` keeps the
   meaning above. The *Use last* chip takes the pointer only (recorded).
 - **Sizes on screen** (user decision 2026-09-12, brief 006): every byte
@@ -682,9 +685,20 @@ dialog with real key events.
       `copy_picks_tab_walks_its_own_controls_and_never_leaves_the_dialog`
       (red on the pre-fix build at the third `Tab` with Copy greyed,
       `focusowner=0`, the keyboard on the grid).
+- [x] The mixed path (brief 011, review F1): `Tab` onto Choose…, a click
+      on Copy, `Esc` back to the plan — the click lets go of Choose…
+      while it is enabled (`focus: copy choose lost` after it) and the
+      next `Tab` lands on Choose… with its own `gained` — app
+      `copy_picks_tab_walks_its_own_controls_and_never_leaves_the_dialog`
+      (red on 6eed28b, 841bb1d with the button's layout mark: no `copy
+      choose lost` after the click, a silent `Tab` after `Esc`).
 
 ## History
 
+- 2026-10-04 — Brief 011, the senior developer's review F1: pressing Copy
+  puts the keyboard home before the run starts (the rule is ui-grid.md's)
+  — Choose…, reached by `Tab` and left by a click on Copy, had kept its
+  focus border with the keyboard at home; the mixed path's box.
 - 2026-10-04 — Brief 011, the senior developer's review F1: the Copy/Close
   button reports its layout, `copy copy-close laid out …`, for a test that
   clicks it by name.

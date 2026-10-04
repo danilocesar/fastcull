@@ -6992,14 +6992,21 @@ fn landing<'a>(labels: &[&'a str], dump: &str) -> (&'a str, Vec<&'a str>) {
 ///      Shift+Tabs — Copy, the field — and the `z` typed there REPLACES
 ///      `x.{ext}` (AC3: the field the ring lands on is selected); Esc closes
 ///      the dialog from the field, and the `+` after it zooms the grid.
-///   3. A destination holding another body's `a.ARW`: three Tabs from the
-///      dialog's home reach Copy; Enter on the focused Copy asks the clash
-///      question, and the state change brings the keyboard home (`focus:
-///      copy dialog gained`); Tab on the question moves nothing and nudges;
-///      `B` copies; on the report Tab, Tab, Shift+Tab, Tab walk Open
-///      destination, Close, Open destination, Close — past the disabled
-///      Choose… and field and the absent Cancel — and Space on the focused
-///      Close closes the dialog.
+///   3. A destination holding another body's `a.ARW`. First the mixed path
+///      (the senior developer's review F1): Tab puts the keyboard on
+///      Choose…, a mouse click on Copy — by name, `click:copy copy-close` —
+///      asks the clash question, and the keyboard leaves Choose… while
+///      Choose… is still enabled (`focus: copy choose lost` and `focus: copy
+///      dialog gained` after the click); Esc goes back to the plan, and the
+///      next Tab lands on Choose… with its own `gained` — a control the run
+///      disabled while it held the keyboard keeps `has-focus` and is landed
+///      on silently. Two more Tabs reach Copy; Enter on the focused Copy
+///      asks the question and the keyboard is home (`focus: copy dialog
+///      gained`); Tab on the question moves nothing and nudges; `B` copies;
+///      on the report Tab, Tab, Shift+Tab, Tab walk Open destination,
+///      Close, Open destination, Close — past the disabled Choose… and
+///      field and the absent Cancel — and Space on the focused Close closes
+///      the dialog.
 ///
 /// No script lands Enter or Space on Choose… or Open destination, and none
 /// would under any mutant below: they open the native folder picker and the
@@ -7010,28 +7017,41 @@ fn landing<'a>(labels: &[&'a str], dump: &str) -> (&'a str, Vec<&'a str>) {
 /// RED on b6c238f, the head before the fix (brief 011 D3 measured the same
 /// on f1520b9): launch 1's third Tab puts the keyboard on the grid's scope
 /// behind the scrim — `focus: keys gained`, dump.g3 `focusowner=0`. The
-/// same build driven through the other two scripts: launch 2's first
-/// Shift+Tab lands on `keys` at once (`focusowner=0`); in launch 3 the
-/// window's own Tab walk reaches the live Copy, Enter there asks the
-/// question and leaves the keyboard on the destroyed button, the Tab after
-/// it lands on `keys` (`focusowner=0`, no nudge) and the `B` never answers.
-/// When this fails that way it is that defect; do not quiet it.
+/// same build driven through the other two scripts as they stood before
+/// review F1: launch 2's first Shift+Tab lands on `keys` at once
+/// (`focusowner=0`); in launch 3 the window's own Tab walk reaches the live
+/// Copy, Enter there asks the question and leaves the keyboard on the
+/// destroyed button, the Tab after it lands on `keys` (`focusowner=0`, no
+/// nudge) and the `B` never answers. When this fails that way it is that
+/// defect; do not quiet it.
+///
+/// RED on 6eed28b, the build with the Copy button's layout mark and
+/// without review F1's fix: after the click on Copy no `copy choose lost`
+/// — the state change brought the keyboard home with Choose… already
+/// disabled — and after Esc the Tab onto Choose… is silent (`focus: copy
+/// dialog lost` alone, so dump.c2's landing is empty). When this fails that
+/// way it is that defect; do not quiet it.
 ///
 /// Mutants (2026-10-04), each alone: the scope's Tab arm removed → red at
 /// dump.g3, `focusowner=0`; the rename field left out of `slot-ok` → red at
 /// dump.g2, no landing; the wrap removed (`clamp` for `Math.mod` in `walk`)
 /// → red at dump.g3, no landing; `select-all()` removed → dump.z reads
-/// `zx.{ext}`, the letter typed in at the caret; the `changed state`
-/// refocus removed → Enter on the focused Copy leaves no focus at all, the
-/// Tab on the question lands on `keys` and the run exits at `wait:copy
-/// finished run 1`; the home start removed (`slot + dir` from -1) → the
-/// first Shift+Tab lands on the field, red at dump.home; `slot-ok`
-/// approving the greyed Copy → the ring's `focus()` on it walks on to
-/// `keys` behind the scrim, red at dump.g3, `focusowner=0`; the ring's arm
-/// moved ahead of the dialog's About containment → the Tab under About
-/// lands on Choose…, red at dump.abtab; the arm moved ahead of the clash
-/// question's branch → Tab there is eaten without the nudge, red at
-/// dump.qtab. The controls' own token writes have no red mutant —
+/// `zx.{ext}`, the letter typed in at the caret; `copy-keys.focus()` removed
+/// from the Copy button's `clicked` (review F1) → red after the click, no
+/// `copy choose lost`; the `changed state` refocus removed → red on 841bb1d
+/// through Enter-on-Copy (no focus at all after the Return, the Tab on the
+/// question on `keys`, the run dead at `wait:copy finished run 1`), GREEN
+/// since F1, which sends the keyboard home from Copy's own `clicked`: it
+/// guards the worker-finish path only — a run ending under a focused
+/// Cancel — which no fixture holds long enough to Tab onto Cancel (2 KB
+/// fakes finish in milliseconds): review-verified; the home start removed
+/// (`slot + dir` from -1) → the first Shift+Tab lands on the field, red at
+/// dump.home; `slot-ok` approving the greyed Copy → the ring's `focus()` on
+/// it walks on to `keys` behind the scrim, red at dump.g3, `focusowner=0`;
+/// the ring's arm moved ahead of the dialog's About containment → the Tab
+/// under About lands on Choose…, red at dump.abtab; the arm moved ahead of
+/// the clash question's branch → Tab there is eaten without the nudge, red
+/// at dump.qtab. The controls' own token writes have no red mutant —
 /// `focus-slot` writes the token too, and nothing else writes it while the
 /// dialog is up — and stay as the owner token's claim-site rule.
 #[test]
@@ -7235,24 +7255,28 @@ fn copy_picks_tab_walks_its_own_controls_and_never_leaves_the_dialog() {
         "the `+` after the dialog closed was dead:\n{ring}"
     );
 
-    // --- 3. the clash question and the report -----------------------------
+    // --- 3. the mixed path, the clash question and the report -------------
     let clash = run(
         "tabring-copy-clash.jpg",
         &format!(
             "1500:wait:load settled gen 0;1700:key:y;1900:key:y;2100:copydest:{dest2};\
-             2300:key:ctrl+e;2700:dump.plan2;2900:key:tab;3100:key:tab;3300:key:tab;\
-             3600:dump.oncopy;3800:key:return;4100:dump.q;4300:key:tab;4600:dump.qtab;\
-             4800:key:b;4900:wait:copy finished run 1;5300:dump.report;\
-             5500:key:tab;5800:dump.r1;6000:key:tab;6300:dump.r2;\
-             6500:key:shift+tab;6800:dump.r3;7000:key:tab;7300:dump.r4;\
-             7500:key:space;7800:dump.end",
+             2300:key:ctrl+e;2700:dump.plan2;\
+             2900:key:tab;3200:dump.c1;3400:click:copy copy-close;3700:dump.cq;\
+             3900:key:escape;4200:dump.cback;4400:key:tab;4700:dump.c2;\
+             4900:key:tab;5200:dump.c3;5400:key:tab;5700:dump.oncopy;\
+             5900:key:return;6200:dump.q;6400:key:tab;6700:dump.qtab;\
+             6900:key:b;7000:wait:copy finished run 1;7400:dump.report;\
+             7600:key:tab;7900:dump.r1;8100:key:tab;8400:dump.r2;\
+             8600:key:shift+tab;8900:dump.r3;9100:key:tab;9400:dump.r4;\
+             9600:key:space;9900:dump.end",
             dest2 = dest2.display()
         ),
     );
     held(
         &clash,
         &[
-            "plan2", "oncopy", "q", "qtab", "report", "r1", "r2", "r3", "r4",
+            "plan2", "c1", "cq", "cback", "c2", "c3", "oncopy", "q", "qtab", "report", "r1", "r2",
+            "r3", "r4",
         ],
     );
     let plan2 = qedump(&clash, "plan2");
@@ -7261,9 +7285,47 @@ fn copy_picks_tab_walks_its_own_controls_and_never_leaves_the_dialog() {
         dump_text(plan2, "copynote").contains("already exist here — Copy will ask"),
         "the premise is a live Copy that will ask: {plan2}"
     );
+    // The mixed path (review F1): the keyboard on Choose… by Tab, then a
+    // mouse click on Copy. The click asked the question and Esc went back
+    // to the plan — the premise of the two assertions after it.
+    assert_eq!(
+        (
+            dump_field(qedump(&clash, "cq"), "copystate"),
+            dump_field(qedump(&clash, "cback"), "copystate")
+        ),
+        ("3", "0"),
+        "the click on Copy did not ask the clash question, or Esc did not \
+         take it back to the plan:\n{clash}"
+    );
+    // The click let go of Choose… while Choose… was still enabled. The run
+    // it starts disables Choose…, and a disabled control ignores the
+    // FocusOut (Cargo.toml, the fourth canary's fact 11), so a keyboard
+    // moved home only by the state change leaves Choose… holding a stale
+    // `has-focus` — its focus border on, the keyboard elsewhere.
+    let labels = mark_labels(&clash);
+    let click = label_positions(&labels, "drive: click:copy copy-close");
+    let cq = label_positions(&labels, "drive: dump.cq");
+    assert!(
+        click.len() == 1 && cq.len() == 1 && click[0] < cq[0],
+        "the click strand is not in the trace as written:\n{clash}"
+    );
+    for mark in ["focus: copy choose lost", "focus: copy dialog gained"] {
+        assert!(
+            marks_between(&labels, click[0], cq[0], mark) > 0,
+            "after the click on Copy no `{mark}`: the keyboard did not leave \
+             Choose… before the run disabled it (ui-grid.md, \"Modal keyboard \
+             containment\"; review F1). When this fails this way it is that \
+             defect; do not quiet it:\n{clash}"
+        );
+    }
     landings(
         &clash,
         &[
+            ("c1", "tab", "copy choose"),
+            // After Esc, Choose… is focused again WITH its own `gained`: a
+            // stale `has-focus` would make this Tab silent.
+            ("c2", "tab", "copy choose"),
+            ("c3", "tab", "copy template"),
             ("oncopy", "tab", "copy copy-close"),
             ("q", "return", "copy dialog"),
             ("r1", "tab", "copy open-dest"),
@@ -8742,10 +8804,16 @@ fn the_video_export_asks_before_replacing_a_file() {
 ///      Shift+Tabs — Export (the wrap back), Cancel; Esc with the keyboard
 ///      on Cancel closes the dialog.
 ///   2. Two Tabs from the dialog's home reach Cancel, and Space there
-///      closes the dialog; reopened, three Tabs reach Export, and Enter
-///      there asks the clash question while the state change brings the
-///      keyboard home (`focus: clip dialog gained`); Tab on the question
-///      moves nothing; `B` exports; on the report the first Shift+Tab from
+///      closes the dialog. Reopened, the mixed path (the senior developer's
+///      review F1, the copy test's strand): Tab puts the keyboard on
+///      Choose…, a mouse click on Export — by name, `click:clip
+///      export-close` — asks the clash question while the keyboard leaves
+///      Choose… still enabled (`focus: clip choose lost`, `focus: clip
+///      dialog gained`), Esc goes back to the plan and the next Tab lands
+///      on Choose… with its own `gained`; two more Tabs reach Cancel and
+///      Export, and Enter there asks the question with the keyboard home
+///      (`focus: clip dialog gained`); Tab on the question moves nothing;
+///      `B` exports; on the report the first Shift+Tab from
 ///      home lands on Close, the LAST control, and Tab, Tab, Shift+Tab walk
 ///      Open folder, Close, Open folder — past the disabled Choose… and the
 ///      absent Cancel — and Esc with the keyboard on Open folder closes.
@@ -8755,27 +8823,39 @@ fn the_video_export_asks_before_replacing_a_file() {
 /// launch a ring without its wrap would put the Space meant for Cancel on
 /// Choose… (the native folder picker), and a ring missing Cancel would put
 /// the Enter meant for Export there. Launch 2 reaches Cancel and Export
-/// only by Tabs from home, which no ring that passed launch 1 can turn onto
-/// Choose…, and the report takes Esc, never Enter or Space on Open folder
-/// (xdg-open).
+/// only by the Tabs launch 1 has asserted — from home, and from Choose…
+/// onward — which no ring that passed launch 1 can turn onto Choose…, and
+/// the report takes Esc, never Enter or Space on Open folder (xdg-open).
 ///
 /// RED on b6c238f, the head before the fix (brief 011 D3 measured the same
 /// on f1520b9): launch 1's fourth Tab puts the keyboard on the grid's scope
 /// behind the scrim — `focus: keys gained`, dump.t4 `focusowner=0` — where
 /// D3 saw a `Y` mark the frame and collapse the selection. The same build
-/// driven through launch 2: the window's own Tab walk reaches the live
-/// Export (`onexport` reads -1), Enter there asks the question and leaves
-/// the keyboard on the destroyed button, the Tab after it lands on `keys`
-/// (`qtab` reads 0) and the `B` never answers. When this fails that way it
-/// is that defect; do not quiet it.
+/// driven through launch 2 as it stood before review F1: the window's own
+/// Tab walk reaches the live Export (`onexport` reads -1), Enter there asks
+/// the question and leaves the keyboard on the destroyed button, the Tab
+/// after it lands on `keys` (`qtab` reads 0) and the `B` never answers.
+/// When this fails that way it is that defect; do not quiet it.
+///
+/// RED on 6eed28b, the build with the Export button's layout mark and
+/// without review F1's fix: after the click on Export no `clip choose
+/// lost`, and after Esc the Tab onto Choose… is silent (`focus: clip dialog
+/// lost` alone, dump.c2's landing empty). When this fails that way it is
+/// that defect; do not quiet it.
 ///
 /// Mutants (2026-10-04), each alone: the scope's Tab arm removed → red at
 /// dump.t4, `focusowner=0`; Cancel left out of `slot-ok` → red at dump.t2,
 /// the Tab lands on Export; the wrap removed (`clamp` for `Math.mod` in
-/// `walk`) → red at dump.t4, no landing; the `changed state` refocus
-/// removed → Enter on the focused Export leaves no focus at all, the Tab on
-/// the question lands on `keys` (`qtab` 0) and the run exits at `wait:clip
-/// export finished run 1`; the home start removed (`slot + dir` from -1) →
+/// `walk`) → red at dump.t4, no landing; `clip-keys.focus()` removed from
+/// the Export button's `clicked` (review F1) → red after the click, no
+/// `clip choose lost`; the `changed state` refocus removed → red on 841bb1d
+/// through Enter-on-Export (no focus at all after the Return, the Tab on
+/// the question on `keys`, `qtab` 0, the run dead at `wait:clip export
+/// finished run 1`), GREEN since F1, which sends the keyboard home from
+/// Export's own `clicked`: it guards the writer-finish path only — a run
+/// ending under a focused Cancel — which no fixture holds long enough to
+/// Tab onto Cancel (three 400×300 frames export in milliseconds):
+/// review-verified; the home start removed (`slot + dir` from -1) →
 /// red at dump.rhome, the first Shift+Tab on the report landing on Open
 /// folder instead of Close; the ring's arm moved ahead of the dialog's
 /// About containment → the Tab under About lands on Choose…, red at
@@ -8942,28 +9022,66 @@ fn export_tab_walks_its_own_controls_and_never_leaves_the_dialog() {
          keyboard back and keep the selection: {closed}"
     );
 
-    // --- 2. Space on Cancel; Enter on Export, the question, the report ------
+    // --- 2. Space on Cancel; the mixed path; Enter on Export, the question,
+    // the report ----------------------------------------------------------
     let flow = run(
         "tabring-clip-flow.jpg",
         "2300:dump.open;2500:key:tab;2700:key:tab;3000:dump.oncancel;\
          3200:key:space;3500:dump.cancelled;\
-         3800:key:ctrl+shift+e;4100:key:tab;4300:key:tab;4500:key:tab;4800:dump.onexport;\
-         5000:key:return;5300:dump.q;5500:key:tab;5800:dump.qtab;\
-         6000:key:b;6100:wait:clip export finished run 1;6800:dump.report;\
-         7000:key:shift+tab;7300:dump.rhome;7500:key:tab;7800:dump.r1;\
-         8000:key:tab;8300:dump.r2;8500:key:shift+tab;8800:dump.r3;\
-         9000:key:escape;9300:dump.end",
+         3800:key:ctrl+shift+e;4100:key:tab;4400:dump.c1;\
+         4600:click:clip export-close;4900:dump.cq;5100:key:escape;5400:dump.cback;\
+         5600:key:tab;5900:dump.c2;6100:key:tab;6400:dump.c3;6600:key:tab;6900:dump.onexport;\
+         7100:key:return;7400:dump.q;7600:key:tab;7900:dump.qtab;\
+         8100:key:b;8200:wait:clip export finished run 1;8900:dump.report;\
+         9100:key:shift+tab;9400:dump.rhome;9600:key:tab;9900:dump.r1;\
+         10100:key:tab;10400:dump.r2;10600:key:shift+tab;10900:dump.r3;\
+         11100:key:escape;11400:dump.end",
     );
     held(
         &flow,
         &[
-            "open", "oncancel", "onexport", "q", "qtab", "report", "rhome", "r1", "r2", "r3",
+            "open", "oncancel", "c1", "cq", "cback", "c2", "c3", "onexport", "q", "qtab", "report",
+            "rhome", "r1", "r2", "r3",
         ],
     );
+    // The mixed path (review F1), the copy test's strand: the keyboard on
+    // Choose… by Tab, a mouse click on Export asks the clash question, Esc
+    // goes back to the plan.
+    assert_eq!(
+        (
+            dump_field(qedump(&flow, "cq"), "clipstate"),
+            dump_field(qedump(&flow, "cback"), "clipstate")
+        ),
+        ("3", "0"),
+        "the click on Export did not ask the clash question, or Esc did not \
+         take it back to the plan:\n{flow}"
+    );
+    // The click let go of Choose… while Choose… was still enabled (the copy
+    // test says why: a disabled control ignores the FocusOut, fact 11).
+    let labels = mark_labels(&flow);
+    let click = label_positions(&labels, "drive: click:clip export-close");
+    let cq = label_positions(&labels, "drive: dump.cq");
+    assert!(
+        click.len() == 1 && cq.len() == 1 && click[0] < cq[0],
+        "the click strand is not in the trace as written:\n{flow}"
+    );
+    for mark in ["focus: clip choose lost", "focus: clip dialog gained"] {
+        assert!(
+            marks_between(&labels, click[0], cq[0], mark) > 0,
+            "after the click on Export no `{mark}`: the keyboard did not leave \
+             Choose… before the run disabled it (ui-grid.md, \"Modal keyboard \
+             containment\"; review F1). When this fails this way it is that \
+             defect; do not quiet it:\n{flow}"
+        );
+    }
     landings(
         &flow,
         &[
             ("oncancel", "tab", "clip cancel"),
+            ("c1", "tab", "clip choose"),
+            // After Esc, Choose… is focused again WITH its own `gained`.
+            ("c2", "tab", "clip choose"),
+            ("c3", "tab", "clip cancel"),
             ("onexport", "tab", "clip export-close"),
             ("q", "return", "clip dialog"),
             ("rhome", "shift+tab", "clip export-close"),
