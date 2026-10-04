@@ -2,7 +2,9 @@
 
 `Ctrl+E` (or **File > Copy Picks…**). The dialog shows how many files
 will go, their total size, and the destination's free space — glance,
-`Enter`, done. Sidecars travel with their RAWs automatically.
+`Enter`, done. Sidecars travel with their RAWs automatically. `Tab` moves
+between Choose…, the rename field and Copy and stays inside the dialog;
+landing in the rename field selects it, so you just type.
 
 If the destination hasn't got the room, the dialog says so before
 anything moves — *"The copy needs 7.3 GB and there is 1.1 GB free at the

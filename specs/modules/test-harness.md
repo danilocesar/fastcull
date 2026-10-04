@@ -361,9 +361,19 @@ sidecars — scripts target throwaway copies of test data only.
   and process exit never trace it (xmp-sidecars.md).
 - **Focus**: `focus: <what> gained|lost` from the `changed has-focus`
   handlers of the main scope (`keys`), each `iptc field N`, the keyword
-  field, `copy dialog`, `clip dialog`, and since brief 008 `settings
-  dialog` and `settings strip` — a `gained` with no matching `lost` from
-  the previous holder is the dangling-weak signature. `settings dialog` is
+  field, `copy dialog`, `clip dialog`, since brief 008 `settings
+  dialog` and `settings strip`, and since brief 011 the two export
+  dialogs' ring controls — `copy choose`, `copy template`, `copy
+  open-dest`, `copy cancel`, `copy copy-close`, `clip choose`, `clip
+  open-folder`, `clip cancel`, `clip export-close` — each from its own
+  `changed has-focus`, so a ring's landing is the control's `gained` and
+  the dialog scope's own `gained` is the keyboard back at its home (the
+  export dialog's two Cancel buttons, the plan state's and the running
+  state's, share `clip cancel`: they never coexist; a button a state
+  change destroys emits no `lost`, the dangling-weak shape, which is why
+  the state change refocuses the scope) — a `gained` with no matching
+  `lost` from the previous holder is the dangling-weak signature.
+  `settings dialog` is
   the Settings dialog's own scope: `gained` when a press on the scrim, or
   on the card outside any control, hands it the keyboard (a FocusScope
   takes focus on a click), `lost` when the keyboard moves on from there.
@@ -574,6 +584,9 @@ shot 2.
 
 ## History
 
+- 2026-10-04 — Brief 011 (issue #98): the focus-mark family gains the two
+  export dialogs' ring controls, nine names; no new token and no new dump
+  field — `key:tab` and `key:shift+tab` existed.
 - 2026-10-03 — Brief 010, QE round 1 D3: the known-failed gate's sentence
   keeps the order of the drop's and the badge's marks and loses the
   seat-measured gap between them, which the gate does not depend on.

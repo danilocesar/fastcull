@@ -225,6 +225,16 @@ express.
   Picks; the clash question swallows everything but `B`, `O` and `Esc` and
   says so. The dialog never marks, never moves the cursor, never touches
   the selection.
+- **The keyboard ring** (issue #98, brief 011, 2026-10-04; the rule is
+  ui-grid.md's "Modal keyboard containment"): `Tab`/`Shift+Tab` walk, in
+  this order and wrapping, Choose…, Cancel and Export in the plan state
+  (Export skipped while it is greyed), Cancel alone while the export runs,
+  Open folder and Close on the report; the clash question has no control
+  that takes the keyboard, so `Tab` there is swallowed with the nudge like
+  every other key; the keyboard's home is the dialog's scope, where the
+  open and every state change put it; `Enter`/`Space` on the focused
+  Cancel, Export or Close press it, and from the scope `Enter` keeps the
+  meaning above.
 - **The card's height follows its content** (issue #62): a floor of 260 px
   (380 px while the clash question is up), the window as the ceiling
   (`parent.height - 40px`), and past the ceiling the text body scrolls in a
@@ -362,7 +372,9 @@ are skipped, not failed, elsewhere.
 - For the driven suite (test-harness.md): the marks `clip export finished
   run N` (fires when the report card goes up; a run cancelled by a session
   swap emits none), `clip card laid out …`, `clip buttons laid out …`,
-  `clip body scrolled to Y`; the dump fields `clip=`, `clipstate=`,
+  `clip body scrolled to Y`, and since brief 011 the focus marks `focus:
+  clip choose|open-folder|cancel|export-close gained|lost` of the ring's
+  controls; the dump fields `clip=`, `clipstate=`,
   `clipavail=`, `clipsummary=`, `clipskipped=`, `cliperror=`,
   `clipreport=`, `clipconfirm=`, `clipprogress=`, `cliphint=`, `exported=`,
   `curexported=`;
@@ -535,9 +547,22 @@ Windows runner too. `core:` = a `fastcull-core` unit test, `muxer:` =
       dialog's was driven; the export one cannot be reached on synthetic
       data, which has nothing to export — the two arms are
       character-identical).
+- [ ] The keyboard ring (brief 011, AC2): `Tab`/`Shift+Tab` walk Choose…,
+      Cancel and Export, then Open folder and Close on the report,
+      wrapping; `focusowner` stays `-1`; a `Y` on a focused button marks
+      nothing and keeps the selection; `Space` on the focused Cancel
+      closes; `Enter` on the focused Export then `B` on the question
+      exports; `Esc` with the keyboard on Open folder closes — app
+      `export_tab_walks_its_own_controls_and_never_leaves_the_dialog`
+      (open: lands with brief 011's implementation; red on the pre-fix
+      build at the fourth `Tab`, `focusowner=0`, where `Y` then marked the
+      frame and collapsed the selection).
 
 ## History
 
+- 2026-10-04 — Brief 011 (issue #98): the dialog's keyboard ring — `Tab`
+  stays inside, the scope the keyboard's home; the rule itself is
+  ui-grid.md's.
 - 2026-09-17 — Rewritten (brief 007). The pre-rewrite text, with every
   validator and QE finding of the M9 rounds, is
   `specs/history/video-export.md`.

@@ -7,7 +7,8 @@ into a phone editor. **Your RAW files and their `.xmp` sidecars are not
 touched**: they are read, never written, and the video goes only into the
 folder you point the dialog at. Your picks and rejects are not touched
 either — the frames you export are usually the rejects, and exporting
-changes no marks.
+changes no marks. `Tab` moves between Choose…, Cancel and Export and
+stays inside the dialog.
 
 ## What it does, in one sentence
 

@@ -410,6 +410,18 @@ is the eventual fix; no perf budget covers plan time.
   line, the failures with reasons, and an *Open destination folder* action.
   Modal in v1. Cut from v1: per-file mode selectors, speed and ETA, pause,
   background copy.
+- **The keyboard ring** (issue #98, brief 011, 2026-10-04; the rule is
+  ui-grid.md's "Modal keyboard containment"): `Tab`/`Shift+Tab` walk, in
+  this order and wrapping, Choose…, the rename field and Copy in the plan
+  state (Copy skipped while it is greyed), Cancel alone while the copy
+  runs, Open destination and Close on the report; the clash question has
+  no control that takes the keyboard — its rows answer to bare letters and
+  to clicks — so `Tab` there is swallowed with the nudge like every other
+  key; the rename field entered by `Tab` is selected, so what is typed
+  replaces the template shown; the keyboard's home is the dialog's scope,
+  where the open and every state change put it; `Enter`/`Space` on the
+  focused Copy or Close press it, and from the scope `Enter` keeps the
+  meaning above. The *Use last* chip takes the pointer only (recorded).
 - **Sizes on screen** (user decision 2026-09-12, brief 006): every byte
   count either dialog prints goes through the one formatter the two bridges
   share (`human_bytes`, app crate — presentation, not a rule about files):
@@ -465,7 +477,9 @@ is the eventual fix; no perf budget covers plan time.
   destination is deleted; nothing is replaced without the Overwrite answer.
 - For the driven suite (test-harness.md): the marks `copy finished run N`,
   `copy card laid out …`, `copy buttons laid out …`, `copy body scrolled to
-  Y`, `copy answer N|B|O|Esc laid out …`; the dump fields `copystate=` (0
+  Y`, `copy answer N|B|O|Esc laid out …`, and since brief 011 the focus
+  marks `focus: copy choose|template|open-dest|cancel|copy-close
+  gained|lost` of the ring's controls; the dump fields `copystate=` (0
   plan, 1 running, 2 report, 3 the question), `confirm=`, `newonly=`,
   `nudge=`, `nudged=`, `warning=`, `copyprogress=` (`Starting…` before the
   first file; the last line survives into the report), `copyerror=`,
@@ -657,9 +671,22 @@ dialog with real key events.
 - [ ] Windows reserved names (`CON`, `NUL`, trailing dots) in templated
       names — deferred with the user's OK (2026-07-26, "low priority"),
       issue #10; spaces and Unicode in paths are covered.
+- [ ] The keyboard ring (brief 011, AC1 and AC3): `Tab`/`Shift+Tab` walk
+      Choose…, the rename field and Copy, then Open destination and Close
+      on the report, wrapping and skipping the greyed Copy; `focusowner`
+      stays `-1`; a `Y` on a focused button marks nothing; the field
+      entered by `Tab` is selected and the next letter replaces its text;
+      `Enter` on the focused Copy then `B` on the question copies; `Space`
+      on the focused Close closes — app
+      `copy_picks_tab_walks_its_own_controls_and_never_leaves_the_dialog`
+      (open: lands with brief 011's implementation; red on the pre-fix
+      build at the third `Tab`, `focusowner=0`).
 
 ## History
 
+- 2026-10-04 — Brief 011 (issue #98): the dialog's keyboard ring — `Tab`
+  stays inside, the rename field selected on arrival, the scope the
+  keyboard's home; the rule itself is ui-grid.md's.
 - 2026-09-17 — Rewritten in the brief 007 shape. The pre-rewrite text, with
   every gate finding and measurement, is `specs/history/fileops.md`.
 - 2026-09-12 — New only, the fourth answer to the clash question (issue #86,

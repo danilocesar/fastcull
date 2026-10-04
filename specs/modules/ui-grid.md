@@ -714,7 +714,24 @@ mis-marked frame costs one arrow back and a re-mark.
   modal only** (issue #42): About over the live copy dialog takes two Esc
   presses, the dialog's plan and destination survive the first, and every
   dialog key scope — the copy, export and settings scopes — contains
-  modals identically. The Settings dialog is contained like the copy
+  modals identically. **Every dialog's key scope owns `Tab`** (issue #98,
+  brief 011, 2026-10-04): `Tab`/`Shift+Tab` walk the dialog's own
+  controls in visible order, wrapping, skipping a control that is disabled
+  or not shown in the dialog's current state, selecting a text field's
+  content on arrival, and never leave the dialog — the scope accepts both
+  keys, so the window's own Tab navigation, which walks the surfaces
+  hidden behind the scrim, never sees them (the Slint list below). The
+  keyboard's home in a dialog is its scope: the open puts it there, and
+  every state change of the dialog puts it back there, because a control
+  the new state removes would otherwise keep a dangling focus and a dead
+  keyboard. `Enter` and `Space` on a focused button press that button;
+  from the scope every key keeps the meaning this spec and the dialog's
+  module give it; `Ctrl+Tab` does nothing unless a dialog's module says
+  otherwise. Which controls each ring holds, per state, is the dialog's
+  module (settings.md "Keyboard", fileops.md "The dialog",
+  video-export.md "The dialog"). About and the shortcuts card hold no
+  control that takes the keyboard, so `Tab` under them is swallowed like
+  every other key. The Settings dialog is contained like the copy
   dialog and never stacks with it (settings.md, "The dialog"); its card is
   content-driven tall like the shortcuts card's, the content being its
   TALLEST tab — one height per open, every tab (settings.md, "The card
@@ -850,7 +867,17 @@ and `Shift+Tab` only after the focused item and every ancestor scope have
 ignored them, and then walks the whole item tree — surfaces hidden behind
 a scrim included — so a dialog that must contain the keyboard accepts
 both in its own scope (`window.rs` `process_key_input`, read 2026-10-01
-for settings.md; the copy and export scopes do not, a recorded gap); a
+for settings.md; corrected 2026-10-04, brief 011: this parenthesis said
+"the copy and export scopes do not, a recorded gap" — they do since brief
+011, issue #98; the walk itself, `move_focus`, tests only `visible` and
+never occlusion, and lands on the first item that accepts the focus, so
+a disabled `FocusScope` — a greyed fluent `Button`'s — is passed over
+(`items/input_items.rs`, `FocusScope::focus_event` refuses when not
+enabled); and a `focus()` from code on a disabled item does not fail but
+moves on — `set_focus_item` runs the same `move_focus` with the
+programmatic reason and publishes to the next item in tree order that
+accepts the focus, inside the dialog or behind its scrim — so a ring
+checks a control's state before it focuses it; read 2026-10-04); a
 focused item that has become invisible loses the keyboard at the next
 key; a `TextInput` ignores `Tab` and `Escape`, which is what lets an
 ancestor scope see them; the built-in `Tooltip` raises its popup 500 ms
@@ -1191,6 +1218,35 @@ host, not the footer, absorbs the high-water mark's extra height).
       (`settings_opens_from_the_chord_and_the_menu_and_closes_with_esc_keeping_the_keyboard`,
       `settings_contains_every_grid_key_and_stacks_under_about`,
       `auto_advance_off_keeps_the_cursor_and_the_selection_like_u`).
+- [ ] AC1 (brief 011, issue #98) — Copy Picks: `Tab`/`Shift+Tab` walk
+      Choose…, the rename field and Copy in the plan state, Open
+      destination and Close on the report, wrap, skip a disabled or absent
+      control, and `focusowner` stays `-1` through every press —
+      `copy_picks_tab_walks_its_own_controls_and_never_leaves_the_dialog`
+      (open: the test lands with brief 011's implementation; red on the
+      pre-fix build at the third `Tab`, where the token reads `0`).
+- [ ] AC2 (brief 011) — the same in Export Frames as Video over Choose…,
+      Cancel and Export, then Open folder and Close —
+      `export_tab_walks_its_own_controls_and_never_leaves_the_dialog`
+      (open: lands with brief 011; red on the pre-fix build at the fourth
+      `Tab`, where `Y` then marked the frame behind the scrim and
+      collapsed the selection).
+- [ ] AC3 (brief 011) — the rename field entered by `Tab` is selected, so
+      the next character replaces its text — the copy test's typed-letter
+      strand (open: lands with brief 011; its mutant is `select-all()`
+      removed, the letter appended).
+- [ ] AC4 (brief 011) — `Tab` and `Shift+Tab` under About and under the
+      shortcuts card change nothing: the two presses added to
+      `about_dialog_renders_and_contains_the_keyboard` and
+      `shortcuts_popup_contains_the_keyboard`, `focusowner=0` and `★0`
+      read after them (open: land with brief 011; no code change — the
+      pre-fix build already behaves so, measured 2026-10-04).
+- [ ] AC5 (brief 011) — the two dialogs' other keys and every answer
+      behave as before: the existing copy and export driven tests, run
+      unchanged (open until brief 011's suite is green on both runners).
+- [ ] AC6 (brief 011) — the spec sentences and the docs say so and the
+      Slint-facts gap is retracted: review-verified at brief 011's merge
+      (open until then).
 - RETIRED 2026-09-17 (user decision): the per-release manual acceptance
   (a 5,000-file A1 folder at 60 fps; no perceived latency in the
   pick→auto-advance loop) — never recorded as run; the perf budgets, the
@@ -1198,6 +1254,14 @@ host, not the footer, absorbs the high-water mark's extra height).
 
 ## History
 
+- 2026-10-04 — Brief 011 (issue #98): every dialog's key scope owns `Tab`
+  — the rule stated once under "Modal keyboard containment", the Copy
+  Picks and Export rings in fileops.md and video-export.md, settings.md
+  pointing here; the Slint-facts parenthesis that called the copy and
+  export scopes a recorded gap retracted in place; AC1–AC6 opened in the
+  ledger. The pre-fix measurement is the brief's: `Tab`s in either dialog
+  put the keyboard on the grid's scope behind the scrim, where `Y` marked
+  the hidden frame and `Esc` no longer closed the dialog.
 - 2026-10-03 — Brief 010: the failed-cursor ledger line says its test
   gates the known-failed premise on the app's own `failed badge 11 laid
   out` mark (written in f771f6f, which wrote no line here), and the gate

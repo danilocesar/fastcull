@@ -150,3 +150,34 @@ No user report; measured, not seen in the wild.
 - D2 (2026-10-04, Manager): the branch was cut from `origin/main` at
   e8c26ef while PR #103 (brief 010) waited for CI, to use the wait; it is
   rebased onto the merge commit before any role touches it (M12).
+- D3 (2026-10-04, Manager, on the senior developer's measured old-red and
+  plan). The old-red, head f1520b9, debug, this seat, 13 driven runs: in
+  Copy Picks' plan state Tab 1 lands on Choose…, Tab 2 on the rename
+  field, **Tab 3 on the grid's key scope** (`focus: keys gained`,
+  `focusowner=0`) — a `Y` there marked a hidden frame (★2 → ★3, the cursor
+  4/24 → 5/24), `Esc` left the dialog up, `N` rejected another; one
+  `Shift+Tab` lands on `keys` at once; with the IPTC panel open the
+  issue-#41 bounce belt protects the fields but nothing protects `keys`;
+  the report state's third Tab lands on `keys` too; the clash question
+  already swallows Tab with its nudge. In Export's plan state Tab 4 lands
+  on `keys` and a `Y` marked a frame and **collapsed the selection**
+  (against video-export.md's "never touches the selection"); one
+  `Shift+Tab` the same. About and the shortcuts card swallow Tab (R4
+  holds today — recorded, no code). Slint facts read for the plan: a
+  disabled `FocusScope` refuses focus (why the greyed Copy was passed
+  over), and a programmatic `focus()` on a disabled item walks on in tree
+  order — so the ring never focuses a slot `slot-ok` has not approved.
+  Rulings (M2): `Enter`/`Space` on a focused button press it — the
+  fluent Button's own behaviour, now stated (Tab-to-Cancel-Enter cancels
+  an export; Enter from the dialog's resting state still starts it); Tab
+  on the clash question keeps today's "pick one of N/B/O/Esc" nudge; the
+  *Use last* template chip stays pointer-only (recorded in fileops.md; a
+  follow-up only if the user asks). The copy and export scopes contain
+  About and the card in the bubble phase where Settings uses the capture
+  phase — a follow-up issue at the merge (M3), not this unit. A
+  `changed state` refocus to the scope is part of the ring: a control
+  the new state destroys (Enter on the focused Copy destroys Copy; the
+  worker's finish destroys Cancel) would otherwise dangle the focus.
+  Commits A (copy ring + its test), B (export ring + its test), C (R4's
+  press under About and the card, the canary facts, the suite-count
+  sentence).
