@@ -401,7 +401,12 @@ sidecars — scripts target throwaway copies of test data only.
   the button's `lost` lands with the scope's `gained`; QE 2026-10-04, D1:
   this said the destroyed button emits no `lost`, which holds only with
   that refocus removed) — a `gained` with no matching `lost` from the
-  previous holder is the dangling-weak signature.
+  previous holder is the dangling-weak signature, except where a dialog
+  closes on a press of its own focused button — `Space` or `Enter` on
+  Close, or on the export's plan-state Cancel: there only `focus: keys
+  gained` is traced and the button's `lost` never comes, with the
+  keyboard alive on the grid (`focusowner=0`; QE 2026-10-04, round 2 D7:
+  the signature was stated without this exception).
   `settings dialog` is
   the Settings dialog's own scope: `gained` when a press on the scrim, or
   on the card outside any control, hands it the keyboard (a FocusScope
@@ -559,13 +564,16 @@ shot 2.
   crates/fastcull-app/tests/screenshot.rs | sort -u` lists them).
 - The suite's size: 122 driven tests after brief 011, 120 after brief
   010 and 118 at its start (`cargo test -p fastcull-app --test screenshot
-  -- --list`, re-measured 2026-10-04 at brief 011's commit C). They no
+  -- --list`, re-measured 2026-10-04 at the fix round of brief 011's
+  second QE round; its QE rounds added launches, not tests). They no
   longer fit one 600 s foreground call in debug on the development seat
-  and run there as three `--exact` thirds split from that list: 349 s +
-  298 s + 323 s, 970 s, in debug on the idle seat at brief 011's commit C
-  (327 s + 280 s + 325 s, 932 s, for the 120 at brief 010's commit E;
+  and run there as three `--exact` thirds split from that list: 372 s +
+  319 s + 325 s, 1016 s, in debug on the idle seat at that fix round (QE
+  2026-10-04, round 2 D6: this gave 349 s + 298 s + 323 s, 970 s,
+  measured at brief 011's commit C, before the QE rounds' held launches;
+  327 s + 280 s + 325 s, 932 s, for the 120 at brief 010's commit E;
   326 s + 271 s + 311 s, 908 s, for the 118); halves would run some
-  485 s each, too near the cap (brief 010 R8 and D5; this sentence said
+  508 s each, too near the cap (brief 010 R8 and D5; this sentence said
   two halves and left the figures to be measured until brief 010's
   implementation; the "87 tests, 318 s + 288 s" of the agent files dates
   from 2026-09-12, before briefs 008–009 added 31).
@@ -618,6 +626,11 @@ shot 2.
 
 ## History
 
+- 2026-10-04 — Brief 011, QE round 2 D6 and D7: the suite's size
+  re-measured at the second QE round's fix — 122 tests, three thirds of
+  372 s + 319 s + 325 s in debug on the idle seat; the Focus bullet's
+  dangling-weak signature gains its one exception, a dialog closed by a
+  press of its own focused button, whose `lost` is never traced.
 - 2026-10-04 — Brief 011, QE round 2 D3: the dump gains `clipnudged=`,
   appended after `thumbtex=` — the export clash question's nudge, the
   twin of `nudged=` — so the export ring test can tell a `Tab` swallowed
