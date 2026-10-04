@@ -348,9 +348,17 @@ pub(crate) fn short_dest(p: &std::path::Path) -> String {
     format!("…/{}", tail.display())
 }
 
+/// `FASTCULL_COPY_HOLD_MS` (test-harness.md): the copy worker held before
+/// its first file, so a driven test can reach the running dialog — test
+/// plumbing, never a setting (brief 011, QE's P3).
+fn copy_hold() -> Option<std::time::Duration> {
+    static HOLD_MS: std::sync::OnceLock<u64> = std::sync::OnceLock::new();
+    crate::harness::worker_hold(&HOLD_MS, "FASTCULL_COPY_HOLD_MS", "copy")
+}
+
 /// Hand a plan to the copy worker and put the dialog in its running state.
 fn start_copy(win: &MainWindow, st: &mut AppState, plan: fastcull_core::fileops::CopyPlan) {
-    let (handle, rx) = fastcull_core::fileops::execute(plan);
+    let (handle, rx) = fastcull_core::fileops::execute_held(plan, copy_hold());
     // Numbered from here, not from the report: the mark this feeds is
     // "the Nth copy has finished", and N must already be this run's when
     // the events start arriving.

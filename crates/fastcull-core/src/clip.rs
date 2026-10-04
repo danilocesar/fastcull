@@ -860,13 +860,33 @@ impl Drop for ClipHandle {
 
 /// Write the plan on a worker thread.
 pub fn execute(plan: ClipPlan) -> (ClipHandle, Receiver<ClipEvent>) {
+    execute_held(plan, None)
+}
+
+/// [`execute`] with the writer HELD for `hold` before its first frame: the
+/// driven suite's pacing knob `FASTCULL_CLIP_HOLD_MS` (test-harness.md),
+/// never a setting — the copy engine's [`crate::fileops::execute_held`],
+/// for the same reason (brief 011, QE's P3): three small test frames are
+/// written before a scripted key can reach the running dialog. Spent on
+/// the worker and cancellable: a Cancel during the hold, or the handle
+/// dropped by a quit or a folder swap, ends the run before its first frame,
+/// and nothing is written. `None` is [`execute`].
+pub fn execute_held(
+    plan: ClipPlan,
+    hold: Option<std::time::Duration>,
+) -> (ClipHandle, Receiver<ClipEvent>) {
     let (tx, rx) = std::sync::mpsc::channel();
     let cancel = Arc::new(AtomicBool::new(false));
     let landed = Arc::new(AtomicBool::new(false));
     let (flag, landed_flag) = (Arc::clone(&cancel), Arc::clone(&landed));
     let handle = std::thread::Builder::new()
         .name("export-video".into())
-        .spawn(move || run_plan(&plan, &tx, &flag, &landed_flag))
+        .spawn(move || {
+            if let Some(hold) = hold {
+                crate::fileops::hold_unless_cancelled(hold, &flag);
+            }
+            run_plan(&plan, &tx, &flag, &landed_flag)
+        })
         .expect("spawn video export worker");
     (
         ClipHandle {
@@ -2637,6 +2657,66 @@ mod tests {
         assert!(report.cancelled && report.failed.is_none());
         assert_eq!(report.path, None);
         assert!(!report.earned_the_green_light());
+        assert!(listing(&dest).is_empty(), "{:?}", listing(&dest));
+        std::fs::remove_dir_all(&dir).ok();
+    }
+
+    /// The writer's harness hold (test-harness.md, `FASTCULL_CLIP_HOLD_MS`;
+    /// brief 011, QE's P3): nothing — not the first frame's progress line —
+    /// before the hold is over, then the export `execute` writes. Only a
+    /// lower bound is asserted, and a sleep never ends early.
+    #[test]
+    fn a_held_export_writes_its_first_frame_after_the_hold() {
+        let dir = scratch_dir("clip-held");
+        let src = dir.join("src");
+        let dest = dir.join("out");
+        let sources = burst(&src);
+        let plan = plan(&sources, &dest, ClashPolicy::Ask).unwrap();
+        let hold = std::time::Duration::from_millis(400);
+        let started = std::time::Instant::now();
+        let (_h, rx) = execute_held(plan, Some(hold));
+        match rx.recv().expect("first event") {
+            ClipEvent::Frame { index, .. } => assert_eq!(index, 1),
+            other => panic!("expected the first frame event, got {other:?}"),
+        }
+        let at = started.elapsed();
+        assert!(
+            at >= hold,
+            "the first frame went out {at:?} into a {hold:?} hold"
+        );
+        let report = rx
+            .iter()
+            .find_map(|e| match e {
+                ClipEvent::Finished(r) => Some(r),
+                _ => None,
+            })
+            .expect("a run always finishes");
+        assert!(report.earned_the_green_light(), "{report:?}");
+        assert_eq!(listing(&dest), ["a-c.mov"]);
+        std::fs::remove_dir_all(&dir).ok();
+    }
+
+    /// A Cancel during the writer's hold ends the run before its first
+    /// frame, at once, and writes nothing — not even the hidden temp file
+    /// (the copy engine's twin test says why the hold must poll the flag).
+    #[test]
+    fn a_cancel_during_the_hold_ends_the_export_before_its_first_frame() {
+        let dir = scratch_dir("clip-held-cancel");
+        let src = dir.join("src");
+        let dest = dir.join("out");
+        let sources = burst(&src);
+        let plan = plan(&sources, &dest, ClashPolicy::Ask).unwrap();
+        let (h, rx) = execute_held(plan, Some(std::time::Duration::from_secs(10)));
+        std::thread::sleep(std::time::Duration::from_millis(100));
+        h.cancel();
+        let first = rx
+            .recv_timeout(std::time::Duration::from_secs(5))
+            .expect("the hold did not end on the cancel");
+        let ClipEvent::Finished(report) = first else {
+            panic!("a frame went out after the cancel: {first:?}");
+        };
+        assert!(report.cancelled && report.failed.is_none(), "{report:?}");
+        assert_eq!(report.path, None);
         assert!(listing(&dest).is_empty(), "{:?}", listing(&dest));
         std::fs::remove_dir_all(&dir).ok();
     }

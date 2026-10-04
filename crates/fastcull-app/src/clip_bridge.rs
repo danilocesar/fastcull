@@ -256,6 +256,14 @@ fn clip_sources(st: &AppState) -> Vec<clip::ClipSource> {
         .collect()
 }
 
+/// `FASTCULL_CLIP_HOLD_MS` (test-harness.md): the writer held before its
+/// first frame, so a driven test can reach the running dialog — test
+/// plumbing, never a setting (brief 011, QE's P3).
+fn clip_hold() -> Option<std::time::Duration> {
+    static HOLD_MS: std::sync::OnceLock<u64> = std::sync::OnceLock::new();
+    crate::harness::worker_hold(&HOLD_MS, "FASTCULL_CLIP_HOLD_MS", "video export")
+}
+
 /// Hand a plan to the writer and put the dialog in its running state.
 fn start_export(win: &MainWindow, st: &mut AppState, plan: ClipPlan) {
     st.clip.running_dst = Some(plan.dst.clone());
@@ -265,7 +273,7 @@ fn start_export(win: &MainWindow, st: &mut AppState, plan: ClipPlan) {
     // uniformity rules skipped never gets a badge for a video it is not
     // in.
     st.clip.running_frames = plan.frames.iter().map(|f| f.id).collect();
-    let (handle, rx) = clip::execute(plan);
+    let (handle, rx) = clip::execute_held(plan, clip_hold());
     // Numbered here for the same reason as the copy's (copy_bridge.rs).
     st.clip.runs = st.clip.runs.saturating_add(1);
     st.clip.handle = Some(handle);

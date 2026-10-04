@@ -83,6 +83,33 @@ const WAIT_POLL: Duration = Duration::from_millis(5);
 /// click must not depend on whether the run also asked for a trace log.
 type LayoutMap = Rc<RefCell<HashMap<String, (f32, f32, f32, f32)>>>;
 
+/// The worker holds of Copy Picks and the video export (test-harness.md,
+/// `FASTCULL_COPY_HOLD_MS` and `FASTCULL_CLIP_HOLD_MS`; brief 011, QE's
+/// P3): `var` in ms, read ONCE per process into `cell` and said out loud
+/// the first time, unconditionally — a leftover value in some environment
+/// makes every copy or export mysteriously slow, and a knob that ships in
+/// release builds must be diagnosable from a bug report's stderr (the
+/// kitchen knob's reason, `FASTCULL_KITCHEN_COOK_MS`). `None` — no hold,
+/// no cost — when unset, 0 or unparsable. The hold itself is core's
+/// (`execute_held`): it runs on the worker and the cancel ends it.
+pub(crate) fn worker_hold(
+    cell: &'static std::sync::OnceLock<u64>,
+    var: &str,
+    what: &str,
+) -> Option<Duration> {
+    let ms = *cell.get_or_init(|| {
+        let ms = std::env::var(var)
+            .ok()
+            .and_then(|v| v.parse().ok())
+            .unwrap_or(0);
+        if ms > 0 {
+            eprintln!("fastcull: {var}={ms} — every {what} is held");
+        }
+        ms
+    });
+    (ms > 0).then(|| Duration::from_millis(ms))
+}
+
 /// Schedule every step of the FASTCULL_DRIVE script (a no-op when the
 /// variable is unset). Returns the not-yet-fired counter the screenshot
 /// shutter waits on, so a scripted run means the same thing in every
