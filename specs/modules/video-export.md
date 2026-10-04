@@ -31,13 +31,16 @@ an editor; it is never one.** The export has no options.
 - Pick state is irrelevant and untouched — the export reads marks like Copy
   Picks does and never writes them; by definition the frames are usually
   rejects. Nothing consumes the selection: a finished export leaves it as
-  it was, Cancel changes nothing, and Esc in any dialog state closes the
-  dialog with the selection intact — the next plain move, or a second Esc
-  on the grid, ends it (the user rejected auto-deselect: "I don't think
-  auto deselecting is intuitive"). The per-burst rhythm needs no Esc: a
-  plain `]` collapses the selection (ui-grid.md's selection rule), so
-  "export this burst, `]`, export the next" takes the burst under the
-  cursor the second time.
+  it was, Cancel changes nothing, and Esc from the plan or the report
+  closes the dialog with the selection intact (on the clash question Esc
+  returns to the plan, and while the export runs it does nothing —
+  Cancel is the way out; corrected 2026-10-04, QE round 2 D5: this said
+  "Esc in any dialog state closes the dialog") — the next plain move, or
+  a second Esc on the grid, ends it (the user rejected auto-deselect: "I
+  don't think auto deselecting is intuitive"). The per-burst rhythm needs
+  no Esc: a plain `]` collapses the selection (ui-grid.md's selection
+  rule), so "export this burst, `]`, export the next" takes the burst
+  under the cursor the second time.
 - **Every frame keeps its whole image.** No crop, no scale, no rotation of
   pixels.
 
@@ -594,6 +597,12 @@ Windows runner too. `core:` = a `fastcull-core` unit test, `muxer:` =
 
 ## History
 
+- 2026-10-04 — Brief 011, QE round 2 D5: "Esc in any dialog state closes
+  the dialog" corrected to the plan and the report — on the clash
+  question Esc returns to the plan, and while the export runs it does
+  nothing (the dialog scope's Esc arm, unchanged since M9; surfaced when
+  the ring test's running strand could not pin an Esc against the
+  sentence).
 - 2026-10-04 — Brief 011, QE round 2 D2: the ring sentence's menu
   residual, recorded as unmeasured at the senior developer's review F2,
   is measured — an export that ends while a menu is open takes the
