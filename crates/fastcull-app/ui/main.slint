@@ -3022,6 +3022,24 @@ export component MainWindow inherits Window {
                                     root.focus-owner = -1;
                                 }
                             }
+                            // Where the layout put this button, so a driven
+                            // test clicks it BY NAME (`click:copy
+                            // copy-close`, test-harness.md): a coordinate
+                            // measured on one platform lands elsewhere on
+                            // another (issue #70). The button is created per
+                            // state, so its mark reappears with it.
+                            init => {
+                                root.dbg-card-laid-out("copy copy-close", self.absolute-position.x,
+                                    self.absolute-position.y, self.width, self.height);
+                            }
+                            changed absolute-position => {
+                                root.dbg-card-laid-out("copy copy-close", self.absolute-position.x,
+                                    self.absolute-position.y, self.width, self.height);
+                            }
+                            changed height => {
+                                root.dbg-card-laid-out("copy copy-close", self.absolute-position.x,
+                                    self.absolute-position.y, self.width, self.height);
+                            }
                         }
                     }
                 }
@@ -3590,6 +3608,22 @@ export component MainWindow inherits Window {
                                     clip-keys.slot = 3;
                                     root.focus-owner = -1;
                                 }
+                            }
+                            // Clicked BY NAME in the driven tests (`click:clip
+                            // export-close`), as the copy dialog's Copy/Close;
+                            // created per state, so the mark reappears with
+                            // the button.
+                            init => {
+                                root.dbg-card-laid-out("clip export-close", self.absolute-position.x,
+                                    self.absolute-position.y, self.width, self.height);
+                            }
+                            changed absolute-position => {
+                                root.dbg-card-laid-out("clip export-close", self.absolute-position.x,
+                                    self.absolute-position.y, self.width, self.height);
+                            }
+                            changed height => {
+                                root.dbg-card-laid-out("clip export-close", self.absolute-position.x,
+                                    self.absolute-position.y, self.width, self.height);
                             }
                         }
                     }

@@ -139,7 +139,8 @@ sidecars — scripts target throwaway copies of test data only.
   `settings wash`, `settings loupe-memory`, `settings cache-cap`,
   `settings readers-adaptive`, `settings readers-limit`,
   `settings clear-cache`, `settings reset`, `settings close`,
-  `failed badge <id>`), resolved at dispatch time from a table the
+  `failed badge <id>`, and since brief 011 `copy copy-close` and `clip
+  export-close`), resolved at dispatch time from a table the
   layout marks write unconditionally; it echoes `drive ptr click X,Y
   (<element>)`, which a test reads to assert the click landed inside the
   rectangle. A name with no mark yet aborts the run loudly (`drive: click:
@@ -220,7 +221,11 @@ sidecars — scripts target throwaway copies of test data only.
   `copy card laid out …`, `copy buttons laid out …`, `clip card …`, `clip
   buttons …` (from `changed absolute-position` and `changed height`; a
   card's mark is also the landing witness for a `resize:` while a dialog
-  is up, the card being centred); `copy answer N|B|O|Esc laid out …`; `copy
+  is up, the card being centred); `copy copy-close laid out …` and `clip
+  export-close laid out …` (the Copy/Close and Export/Close buttons, from
+  `init`, `changed absolute-position` and `changed height`; created per
+  state, so the mark reappears with the button — brief 011, the senior
+  developer's review F1); `copy answer N|B|O|Esc laid out …`; `copy
   body scrolled to Y` / `clip body scrolled to Y` (0 at the top, negative
   going down, on change); `shortcuts card laid out …`; `status selected
   laid out …` / `status head laid out …`; since brief 008 `settings card
@@ -586,6 +591,9 @@ shot 2.
 
 ## History
 
+- 2026-10-04 — Brief 011, the senior developer's review F1: the Copy/Close
+  and Export/Close buttons report their layout (`copy copy-close`, `clip
+  export-close`), so a driven test clicks them by name.
 - 2026-10-04 — Brief 011 commit C: the suite's size re-measured — 122
   tests, three thirds of 349 s + 298 s + 323 s in debug on the idle seat.
 - 2026-10-04 — Brief 011 (issue #98): the focus-mark family gains the two

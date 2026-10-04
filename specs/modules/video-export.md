@@ -374,12 +374,13 @@ are skipped, not failed, elsewhere.
   swap emits none), `clip card laid out …`, `clip buttons laid out …`,
   `clip body scrolled to Y`, and since brief 011 the focus marks `focus:
   clip choose|open-folder|cancel|export-close gained|lost` of the ring's
-  controls; the dump fields `clip=`, `clipstate=`,
+  controls and `clip export-close laid out …` of the Export/Close button
+  (review F1); the dump fields `clip=`, `clipstate=`,
   `clipavail=`, `clipsummary=`, `clipskipped=`, `cliperror=`,
   `clipreport=`, `clipconfirm=`, `clipprogress=`, `cliphint=`, `exported=`,
   `curexported=`;
   the tokens `clipdest:PATH` (before the `Ctrl+Shift+E` that should see
-  it), `key:ctrl+shift+e`.
+  it), `key:ctrl+shift+e`, `click:clip export-close`.
 
 ## Acceptance criteria
 
@@ -560,6 +561,9 @@ Windows runner too. `core:` = a `fastcull-core` unit test, `muxer:` =
 
 ## History
 
+- 2026-10-04 — Brief 011, the senior developer's review F1: the
+  Export/Close button reports its layout, `clip export-close laid out …`,
+  for a test that clicks it by name.
 - 2026-10-04 — Brief 011 (issue #98): the dialog's keyboard ring — `Tab`
   stays inside, the scope the keyboard's home; the rule itself is
   ui-grid.md's.

@@ -479,14 +479,15 @@ is the eventual fix; no perf budget covers plan time.
   `copy card laid out …`, `copy buttons laid out …`, `copy body scrolled to
   Y`, `copy answer N|B|O|Esc laid out …`, and since brief 011 the focus
   marks `focus: copy choose|template|open-dest|cancel|copy-close
-  gained|lost` of the ring's controls; the dump fields `copystate=` (0
+  gained|lost` of the ring's controls and `copy copy-close laid out …` of
+  the Copy/Close button (review F1); the dump fields `copystate=` (0
   plan, 1 running, 2 report, 3 the question), `confirm=`, `newonly=`,
   `nudge=`, `nudged=`, `warning=`, `copyprogress=` (`Starting…` before the
   first file; the last line survives into the report), `copyerror=`,
   `copynote=` (the preview's notes, the `{seq}` note among them), `report=`;
   the tokens `copydest:PATH` (before the
   `Ctrl+E` that should see it), `copytemplate:TEXT` (after it — opening
-  clears the field), `click:copy answer B`.
+  clears the field), `click:copy answer B`, `click:copy copy-close`.
 - A `#[cfg(unix)]` test takes its private helpers with it — `cargo clippy
   --all-targets -- -D warnings` on the Windows job refuses dead code —
   while helpers shared with a platform-neutral test are never gated (red on
@@ -684,6 +685,9 @@ dialog with real key events.
 
 ## History
 
+- 2026-10-04 — Brief 011, the senior developer's review F1: the Copy/Close
+  button reports its layout, `copy copy-close laid out …`, for a test that
+  clicks it by name.
 - 2026-10-04 — Brief 011 (issue #98): the dialog's keyboard ring — `Tab`
   stays inside, the rename field selected on arrival, the scope the
   keyboard's home; the rule itself is ui-grid.md's.
