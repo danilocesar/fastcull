@@ -683,8 +683,10 @@ dialog with real key events.
       and `Ctrl+Shift+Tab` move nothing (QE 2026-10-04, P2); `focusowner`
       stays `-1`; a `Y` on a focused button marks nothing; the field
       entered by `Tab` is selected and the next letter replaces its text;
-      `Enter` on the focused Copy then `B` on the question copies; `Space`
-      on the focused Close closes — app
+      `Enter` in the rename field puts the keyboard home and the next
+      `Tab` starts at Choose… (QE 2026-10-04, P4); `Enter` on the focused
+      Copy then `B` on the question copies; `Space` on the focused Close
+      closes — app
       `copy_picks_tab_walks_its_own_controls_and_never_leaves_the_dialog`
       (red on the pre-fix build at the third `Tab` with Copy greyed,
       `focusowner=0`, the keyboard on the grid).
@@ -698,6 +700,10 @@ dialog with real key events.
 
 ## History
 
+- 2026-10-04 — Brief 011, QE's test proposal P4: the ring's box gains
+  `Enter` in the rename field — it re-plans, brings the keyboard home, and
+  the next `Tab` starts the ring over at Choose… (visible order after an
+  arrival the ring did not make), which had no test.
 - 2026-10-04 — Brief 011, QE's test proposal P2: the ring's box gains
   `Ctrl+Tab` and `Ctrl+Shift+Tab` moving nothing — ui-grid.md's "`Ctrl+Tab`
   does nothing unless a dialog's module says otherwise", which this module

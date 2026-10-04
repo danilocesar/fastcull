@@ -7017,8 +7017,13 @@ fn last_gained_before<'a>(labels: &[&'a str], echo: &str) -> &'a str {
 ///      Tab; then four Tabs — Choose… (the wrap), the field, Copy, Choose…
 ///      again; a `Y` with the keyboard on Choose… marks nothing; two
 ///      Shift+Tabs — Copy, the field — and the `z` typed there REPLACES
-///      `x.{ext}` (AC3: the field the ring lands on is selected); Esc closes
-///      the dialog from the field, and the `+` after it zooms the grid.
+///      `x.{ext}` (AC3: the field the ring lands on is selected). Enter in
+///      the field re-plans without copying and brings the keyboard home
+///      (`focus: copy dialog gained`), and the next Tab starts the ring
+///      over at Choose…, the first control — the home reset on a gain that
+///      did not come from the ring (QE's P4; Copy stays live under `z`, so
+///      a ring that kept the field's slot would land on Copy). Esc closes
+///      the dialog from Choose…, and the `+` after it zooms the grid.
 ///   3. A destination holding another body's `a.ARW`. First the mixed path
 ///      (the senior developer's review F1): Tab puts the keyboard on
 ///      Choose…, a mouse click on Copy — by name, `click:copy copy-close` —
@@ -7098,7 +7103,11 @@ fn last_gained_before<'a>(labels: &[&'a str], echo: &str) -> &'a str {
 /// at dump.qtab; the ring's arm without its `!event.modifiers.control`
 /// (QE's mutant X5) → Ctrl+Tab walks the ring, red at dump.ct, its landing
 /// `focus: copy choose gained` (the Ctrl+Shift+Tab after it then lands on
-/// the field). The controls' own token writes have no red mutant —
+/// the field); the scope's own gain no longer resetting the ring to home
+/// (`self.slot = -1` removed from `copy-keys`' `changed has-focus`, QE's
+/// mutant M12) → after Enter in the rename field the next Tab goes on from
+/// the field's slot to Copy, red at dump.hometab, `focus: copy copy-close
+/// gained`. The controls' own token writes have no red mutant —
 /// `focus-slot` writes the token too, and nothing else writes it while the
 /// dialog is up — and stay as the owner token's claim-site rule.
 #[test]
@@ -7255,15 +7264,16 @@ fn copy_picks_tab_walks_its_own_controls_and_never_leaves_the_dialog() {
              3600:key:tab;3900:dump.t1;4100:key:y;4400:dump.y1;4600:key:tab;4900:dump.t2;\
              5100:key:tab;5400:dump.t3;5600:key:tab;5900:dump.t4;\
              6100:key:shift+tab;6400:dump.s1;6600:key:shift+tab;6900:dump.s2;\
-             7100:key:z;7400:dump.z;7600:key:escape;7900:dump.closed;\
-             8100:key:+;8400:dump.zoom",
+             7100:key:z;7400:dump.z;7600:key:return;7900:dump.acc;\
+             8100:key:tab;8400:dump.hometab;8600:key:escape;8900:dump.closed;\
+             9100:key:+;9400:dump.zoom",
             dest = dest.display()
         ),
     );
     held(
         &ring,
         &[
-            "plan", "home", "t1", "y1", "t2", "t3", "t4", "s1", "s2", "z",
+            "plan", "home", "t1", "y1", "t2", "t3", "t4", "s1", "s2", "z", "acc", "hometab",
         ],
     );
     let plan = qedump(&ring, "plan");
@@ -7309,12 +7319,36 @@ fn copy_picks_tab_walks_its_own_controls_and_never_leaves_the_dialog() {
          its text — the ring's arrival did not select it (fileops.md, \"The \
          keyboard ring\"; AC3):\n{ring}"
     );
+    // Enter in the rename field (QE's P4): it re-plans and does not copy
+    // (the field's `accepted`), and Copy stays live under the template `z`
+    // — the premise that lets the next Tab tell the scope's home reset from
+    // a ring that kept the field's slot, which would land on Copy.
+    let acc = qedump(&ring, "acc");
+    assert_eq!(
+        (
+            dump_field(acc, "copystate"),
+            dump_text(acc, "template"),
+            dump_text(acc, "copyerror")
+        ),
+        ("0", "z", ""),
+        "Enter in the rename field must re-plan without copying, with Copy \
+         still live: {acc}"
+    );
+    landings(
+        &ring,
+        &[
+            // The keyboard home…
+            ("acc", "return", "copy dialog"),
+            // …and the ring from its start, not from the field.
+            ("hometab", "tab", "copy choose"),
+        ],
+    );
     let closed = qedump(&ring, "closed");
     assert_eq!(
         (dump_field(closed, "copy"), dump_field(closed, "focusowner")),
         ("false", "0"),
-        "Esc in the rename field did not close the dialog and hand the keyboard \
-         back to the grid: {closed}"
+        "Esc with the keyboard on Choose… did not close the dialog and hand \
+         the keyboard back to the grid: {closed}"
     );
     assert_eq!(
         dump_field(qedump(&ring, "zoom"), "zoom"),
