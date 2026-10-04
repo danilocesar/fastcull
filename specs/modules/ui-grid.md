@@ -1225,12 +1225,12 @@ host, not the footer, absorbs the high-water mark's extra height).
       `copy_picks_tab_walks_its_own_controls_and_never_leaves_the_dialog`
       (red on the pre-fix build at the third `Tab` with Copy greyed, where
       the token reads `0`).
-- [ ] AC2 (brief 011) — the same in Export Frames as Video over Choose…,
+- [x] AC2 (brief 011) — the same in Export Frames as Video over Choose…,
       Cancel and Export, then Open folder and Close —
       `export_tab_walks_its_own_controls_and_never_leaves_the_dialog`
-      (open: lands with brief 011; red on the pre-fix build at the fourth
-      `Tab`, where `Y` then marked the frame behind the scrim and
-      collapsed the selection).
+      (red on the pre-fix build at the fourth `Tab`, where the token reads
+      `0`: the grid, where brief 011 D3 measured a `Y` marking the frame
+      behind the scrim and collapsing the selection).
 - [x] AC3 (brief 011) — the rename field entered by `Tab` is selected, so
       the next character replaces its text — the copy test's typed-letter
       strand, `copy_picks_tab_walks_its_own_controls_and_never_leaves_the_dialog`

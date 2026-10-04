@@ -8669,6 +8669,279 @@ fn the_video_export_asks_before_replacing_a_file() {
     );
 }
 
+/// AC2 of brief 011 (issue #98; ui-grid.md "Modal keyboard containment",
+/// video-export.md "The keyboard ring"): the Copy Picks ring's rule in the
+/// Export Frames as Video dialog — Choose…, Cancel and Export in the plan
+/// state, Open folder and Close on the report, wrapping — with
+/// `focusowner` at the dialog's `-1` after every press and each landing
+/// read from the control's own `focus: clip <name> gained` mark
+/// (test-harness.md).
+///
+/// Three synthetic 400×300 frames, all selected, the cursor on `a`, so a
+/// key that reached the grid behind the scrim would show: a `Y` would pick
+/// `a`, move the cursor and collapse the selection the dialog is about to
+/// export. The destination holds another day's `a-c.mov`. Two launches:
+///   1. The plan state: four Tabs — Choose…, Cancel, Export, and the wrap
+///      to Choose…; a `Y` with the keyboard on Choose… marks nothing and
+///      keeps the selection; two Shift+Tabs — Export (the wrap back),
+///      Cancel; Esc with the keyboard on Cancel closes the dialog.
+///   2. Two Tabs from the dialog's home reach Cancel, and Space there
+///      closes the dialog; reopened, three Tabs reach Export, and Enter
+///      there asks the clash question while the state change brings the
+///      keyboard home (`focus: clip dialog gained`); Tab on the question
+///      moves nothing; `B` exports; on the report the first Shift+Tab from
+///      home lands on Close, the LAST control, and Tab, Tab, Shift+Tab walk
+///      Open folder, Close, Open folder — past the disabled Choose… and the
+///      absent Cancel — and Esc with the keyboard on Open folder closes.
+///
+/// Two launches where the plan had one, so that no Space or Enter is
+/// pressed before the plan-state ring has been asserted: in a single
+/// launch a ring without its wrap would put the Space meant for Cancel on
+/// Choose… (the native folder picker), and a ring missing Cancel would put
+/// the Enter meant for Export there. Launch 2 reaches Cancel and Export
+/// only by Tabs from home, which no ring that passed launch 1 can turn onto
+/// Choose…, and the report takes Esc, never Enter or Space on Open folder
+/// (xdg-open).
+///
+/// RED on b6c238f, the head before the fix (brief 011 D3 measured the same
+/// on f1520b9): launch 1's fourth Tab puts the keyboard on the grid's scope
+/// behind the scrim — `focus: keys gained`, dump.t4 `focusowner=0` — where
+/// D3 saw a `Y` mark the frame and collapse the selection. The same build
+/// driven through launch 2: the window's own Tab walk reaches the live
+/// Export (`onexport` reads -1), Enter there asks the question and leaves
+/// the keyboard on the destroyed button, the Tab after it lands on `keys`
+/// (`qtab` reads 0) and the `B` never answers. When this fails that way it
+/// is that defect; do not quiet it.
+///
+/// Mutants (2026-10-04), each alone: the scope's Tab arm removed → red at
+/// dump.t4, `focusowner=0`; Cancel left out of `slot-ok` → red at dump.t2,
+/// the Tab lands on Export; the wrap removed (`clamp` for `Math.mod` in
+/// `walk`) → red at dump.t4, no landing; the `changed state` refocus
+/// removed → Enter on the focused Export leaves no focus at all, the Tab on
+/// the question lands on `keys` (`qtab` 0) and the run exits at `wait:clip
+/// export finished run 1`; the home start removed (`slot + dir` from -1) →
+/// red at dump.rhome, the first Shift+Tab on the report landing on Open
+/// folder instead of Close.
+#[test]
+fn export_tab_walks_its_own_controls_and_never_leaves_the_dialog() {
+    if !has_display() {
+        eprintln!("screenshot smoke skipped: no display server");
+        return;
+    }
+    let _s = serial();
+    let src = out_dir().join("tabring-clip-src");
+    let dest = out_dir().join("tabring-clip-dest");
+    for d in [&src, &dest] {
+        std::fs::remove_dir_all(d).ok();
+        std::fs::create_dir_all(d).unwrap();
+    }
+    write_synthetic_raw(&src.join("a.ARW"), 400, 300, 1, 4096);
+    write_synthetic_raw(&src.join("b.ARW"), 400, 300, 1, 5000);
+    write_synthetic_raw(&src.join("c.ARW"), 400, 300, 1, 4500);
+    std::fs::write(dest.join("a-c.mov"), b"another day's export").unwrap();
+    let opened = format!(
+        "1400:wait:load settled gen 0;1500:select-all;1700:clipdest:{dest};1900:key:ctrl+shift+e;",
+        dest = dest.display()
+    );
+    let run = |shot: &str, script: &str| -> String {
+        let script = format!("{opened}{script}");
+        shoot_env_stderr(
+            &[src.to_str().unwrap()],
+            &[("FASTCULL_TRACE", "1"), ("FASTCULL_DRIVE", script.as_str())],
+            &out_dir().join(shot),
+        )
+    };
+    // Every press's landing: its key, and the one control it reached.
+    let landings = |stderr: &str, rows: &[(&str, &str, &str)]| {
+        let labels = mark_labels(stderr);
+        for (dump, key, mark) in rows {
+            let (step, gained) = landing(&labels, dump);
+            assert_eq!(
+                step,
+                format!("drive: key:{key}"),
+                "the script's step before dump.{dump} is not the key this row \
+                 is about:\n{stderr}"
+            );
+            assert_eq!(
+                gained,
+                vec![format!("focus: {mark} gained")],
+                "the {key} before dump.{dump} did not land on {mark} alone \
+                 (video-export.md, \"The keyboard ring\"):\n{stderr}"
+            );
+        }
+    };
+    // The token after every press — the old-red, asserted first.
+    let held = |stderr: &str, dumps: &[&str]| {
+        for dump in dumps {
+            let line = qedump(stderr, dump);
+            assert_eq!(
+                dump_field(line, "focusowner"),
+                "-1",
+                "at dump.{dump} the keyboard has left the Export dialog \
+                 (focusowner is not the dialog's -1): a Tab or Shift+Tab \
+                 carried it behind the scrim — issue #98. When this fails \
+                 this way it is that defect; do not quiet it:\n{stderr}"
+            );
+            assert_eq!(dump_field(line, "clip"), "true", "{line}");
+        }
+    };
+
+    // --- 1. the plan state's ring, a Y, and Esc ----------------------------
+    let ring = run(
+        "tabring-clip-ring.jpg",
+        "2300:dump.plan;2500:key:tab;2800:dump.t1;3000:key:y;3300:dump.y1;\
+         3500:key:tab;3800:dump.t2;4000:key:tab;4300:dump.t3;4500:key:tab;4800:dump.t4;\
+         5000:key:shift+tab;5300:dump.s1;5500:key:shift+tab;5800:dump.s2;\
+         6000:key:escape;6300:dump.closed",
+    );
+    held(&ring, &["plan", "t1", "y1", "t2", "t3", "t4", "s1", "s2"]);
+    assert!(
+        ring.contains("wait:load settled gen 0 (satisfied"),
+        "the selection was made before the folder settled:\n{ring}"
+    );
+    let plan = qedump(&ring, "plan");
+    assert_eq!(
+        (dump_field(plan, "clipstate"), dump_field(plan, "selected")),
+        ("0", "3"),
+        "{plan}"
+    );
+    assert!(
+        dump_text(plan, "clipsummary").starts_with("3 frames · 400×300 ·")
+            && dump_text(plan, "cliperror").is_empty(),
+        "the premise is a clean plan, where Export is live: {plan}"
+    );
+    assert!(
+        dump_text(plan, "status").contains("★0 ✕0"),
+        "the premise is a session with no marks: {plan}"
+    );
+    landings(
+        &ring,
+        &[
+            ("t1", "tab", "clip choose"),
+            ("t2", "tab", "clip cancel"),
+            ("t3", "tab", "clip export-close"),
+            ("t4", "tab", "clip choose"),
+            ("s1", "shift+tab", "clip export-close"),
+            ("s2", "shift+tab", "clip cancel"),
+        ],
+    );
+    // A Y with the keyboard on Choose… marks nothing, moves nothing and
+    // keeps the selection (video-export.md: the dialog never marks, never
+    // moves the cursor, never touches the selection).
+    let y1 = qedump(&ring, "y1");
+    assert_eq!(
+        (
+            dump_text(y1, "status"),
+            dump_field(y1, "cursor"),
+            dump_field(y1, "selected")
+        ),
+        (
+            dump_text(plan, "status"),
+            dump_field(plan, "cursor"),
+            dump_field(plan, "selected")
+        ),
+        "the Y on the focused Choose… reached the grid behind the dialog:\n{ring}"
+    );
+    assert_eq!(
+        landing(&mark_labels(&ring), "y1").1,
+        Vec::<&str>::new(),
+        "the Y moved the keyboard:\n{ring}"
+    );
+    let closed = qedump(&ring, "closed");
+    assert_eq!(
+        (
+            dump_field(closed, "clip"),
+            dump_field(closed, "focusowner"),
+            dump_field(closed, "selected")
+        ),
+        ("false", "0", "3"),
+        "Esc with the keyboard on Cancel did not close the dialog, hand the \
+         keyboard back and keep the selection: {closed}"
+    );
+
+    // --- 2. Space on Cancel; Enter on Export, the question, the report ------
+    let flow = run(
+        "tabring-clip-flow.jpg",
+        "2300:dump.open;2500:key:tab;2700:key:tab;3000:dump.oncancel;\
+         3200:key:space;3500:dump.cancelled;\
+         3800:key:ctrl+shift+e;4100:key:tab;4300:key:tab;4500:key:tab;4800:dump.onexport;\
+         5000:key:return;5300:dump.q;5500:key:tab;5800:dump.qtab;\
+         6000:key:b;6100:wait:clip export finished run 1;6800:dump.report;\
+         7000:key:shift+tab;7300:dump.rhome;7500:key:tab;7800:dump.r1;\
+         8000:key:tab;8300:dump.r2;8500:key:shift+tab;8800:dump.r3;\
+         9000:key:escape;9300:dump.end",
+    );
+    held(
+        &flow,
+        &[
+            "open", "oncancel", "onexport", "q", "qtab", "report", "rhome", "r1", "r2", "r3",
+        ],
+    );
+    landings(
+        &flow,
+        &[
+            ("oncancel", "tab", "clip cancel"),
+            ("onexport", "tab", "clip export-close"),
+            ("q", "return", "clip dialog"),
+            ("rhome", "shift+tab", "clip export-close"),
+            ("r1", "tab", "clip open-folder"),
+            ("r2", "tab", "clip export-close"),
+            ("r3", "shift+tab", "clip open-folder"),
+        ],
+    );
+    let cancelled = qedump(&flow, "cancelled");
+    assert_eq!(
+        (
+            dump_field(cancelled, "clip"),
+            dump_field(cancelled, "focusowner"),
+            dump_field(cancelled, "selected")
+        ),
+        ("false", "0", "3"),
+        "Space on the focused Cancel did not close the dialog, hand the \
+         keyboard back and keep the selection: {cancelled}"
+    );
+    let q = qedump(&flow, "q");
+    assert!(
+        dump_field(q, "clipstate") == "3" && dump_text(q, "clipconfirm").contains("a-c.mov"),
+        "Enter on the focused Export did not ask the clash question: {q}"
+    );
+    assert_eq!(
+        dump_field(qedump(&flow, "qtab"), "clipstate"),
+        "3",
+        "Tab answered the clash question:\n{flow}"
+    );
+    assert_eq!(
+        landing(&mark_labels(&flow), "qtab").1,
+        Vec::<&str>::new(),
+        "Tab on the clash question moved the keyboard:\n{flow}"
+    );
+    assert!(
+        flow.contains("wait:clip export finished run 1 (satisfied"),
+        "the `B` answered nothing — the report dump was timed, not gated:\n{flow}"
+    );
+    let report = qedump(&flow, "report");
+    assert_eq!(dump_field(report, "clipstate"), "2", "{report}");
+    assert!(
+        dump_text(report, "clipreport").contains("a-c_1.mov")
+            && dump_text(report, "clipreport").contains("all checksums verified"),
+        "the `B` after Enter on the focused Export did not keep both: {report}"
+    );
+    let end = qedump(&flow, "end");
+    assert_eq!(
+        (
+            dump_field(end, "clip"),
+            dump_field(end, "focusowner"),
+            dump_field(end, "selected")
+        ),
+        ("false", "0", "3"),
+        "Esc with the keyboard on Open folder did not close the dialog and \
+         hand the keyboard back: {end}"
+    );
+    for d in [&src, &dest] {
+        std::fs::remove_dir_all(d).ok();
+    }
+}
+
 /// Issue #55: Shift+`]` / Shift+`[` extend the selection by WHOLE bursts,
 /// Ctrl+Shift+B selects the burst under the cursor, and Esc clears the
 /// selection — driven through real key events (with the Shift and Control

@@ -547,16 +547,16 @@ Windows runner too. `core:` = a `fastcull-core` unit test, `muxer:` =
       dialog's was driven; the export one cannot be reached on synthetic
       data, which has nothing to export — the two arms are
       character-identical).
-- [ ] The keyboard ring (brief 011, AC2): `Tab`/`Shift+Tab` walk Choose…,
+- [x] The keyboard ring (brief 011, AC2): `Tab`/`Shift+Tab` walk Choose…,
       Cancel and Export, then Open folder and Close on the report,
       wrapping; `focusowner` stays `-1`; a `Y` on a focused button marks
       nothing and keeps the selection; `Space` on the focused Cancel
       closes; `Enter` on the focused Export then `B` on the question
       exports; `Esc` with the keyboard on Open folder closes — app
       `export_tab_walks_its_own_controls_and_never_leaves_the_dialog`
-      (open: lands with brief 011's implementation; red on the pre-fix
-      build at the fourth `Tab`, `focusowner=0`, where `Y` then marked the
-      frame and collapsed the selection).
+      (red on the pre-fix build at the fourth `Tab`, `focusowner=0`: the
+      keyboard on the grid, where brief 011 D3 measured a `Y` marking the
+      frame and collapsing the selection).
 
 ## History
 
