@@ -6916,6 +6916,347 @@ fn copy_picks_new_only_copies_the_new_pick_and_leaves_the_rest_alone() {
     );
 }
 
+/// Where the key before `dump.<dump>` put the keyboard: that key's own
+/// `drive: key:…` echo — the last one before the dump's echo — and the
+/// `focus: … gained` marks between the two, in order (brief 011; the focus
+/// marks of test-harness.md). A `lost` is not a landing and is left out,
+/// and a repeat of the same `gained` collapses into one: a window that is
+/// deactivated and reactivated hands the keyboard back to the control that
+/// had it. So a press that lands on a control reads as exactly that
+/// control's mark, and a press that moves nothing reads as no mark.
+fn landing<'a>(labels: &[&'a str], dump: &str) -> (&'a str, Vec<&'a str>) {
+    let echo = format!("drive: dump.{dump}");
+    let at = labels
+        .iter()
+        .position(|l| *l == echo)
+        .unwrap_or_else(|| panic!("no `{echo}` in the trace: {labels:?}"));
+    let key = labels[..at]
+        .iter()
+        .rposition(|l| l.starts_with("drive: key:"))
+        .unwrap_or_else(|| panic!("no key step before `{echo}`: {labels:?}"));
+    let mut gained: Vec<&str> = labels[key + 1..at]
+        .iter()
+        .copied()
+        .filter(|l| l.starts_with("focus: ") && l.ends_with(" gained"))
+        .collect();
+    gained.dedup();
+    (labels[key], gained)
+}
+
+/// AC1 and AC3 of brief 011 (issue #98; ui-grid.md "Modal keyboard
+/// containment", fileops.md "The keyboard ring"): in the Copy Picks dialog
+/// `Tab` and `Shift+Tab` walk the dialog's own controls in visible order,
+/// wrapping, passing over a control the state disables or does not show,
+/// and the keyboard never leaves the dialog — `focusowner` reads `-1` after
+/// every press, and the control a press lands on is read from that
+/// control's own `focus: copy <name> gained` mark (test-harness.md).
+///
+/// One folder of three 2 KB fakes, `a` and `b` picked and the cursor left
+/// on the unpicked `c`, so a key that reached the grid behind the scrim
+/// would show in the status line: a `Y` would pick `c`. Three launches:
+///   1. No destination, so Copy is greyed — the old-red's own shape (brief
+///      011 D3): Tab, Tab, Tab land on Choose…, the rename field, and Choose…
+///      again, wrapping over the greyed Copy; Shift+Tab goes back over it
+///      to the field.
+///   2. An empty destination and the template `x.{ext}`, so Copy is live.
+///      The first Shift+Tab from the dialog's home lands on Copy, the LAST
+///      control — visible order, wrapping, so it is the mirror of the first
+///      Tab; then four Tabs — Choose… (the wrap), the field, Copy, Choose…
+///      again; a `Y` with the keyboard on Choose… marks nothing; two
+///      Shift+Tabs — Copy, the field — and the `z` typed there REPLACES
+///      `x.{ext}` (AC3: the field the ring lands on is selected); Esc closes
+///      the dialog from the field, and the `+` after it zooms the grid.
+///   3. A destination holding another body's `a.ARW`: three Tabs from the
+///      dialog's home reach Copy; Enter on the focused Copy asks the clash
+///      question, and the state change brings the keyboard home (`focus:
+///      copy dialog gained`); Tab on the question moves nothing and nudges;
+///      `B` copies; on the report Tab, Tab, Shift+Tab, Tab walk Open
+///      destination, Close, Open destination, Close — past the disabled
+///      Choose… and field and the absent Cancel — and Space on the focused
+///      Close closes the dialog.
+///
+/// No script lands Enter or Space on Choose… or Open destination, and none
+/// would under any mutant below: they open the native folder picker and the
+/// file manager. That is why the home strand sits in launch 2 — after the
+/// report, a ring that landed one control off would put launch 3's closing
+/// Space on Open destination.
+///
+/// RED on b6c238f, the head before the fix (brief 011 D3 measured the same
+/// on f1520b9): launch 1's third Tab puts the keyboard on the grid's scope
+/// behind the scrim — `focus: keys gained`, dump.g3 `focusowner=0`. The
+/// same build driven through the other two scripts: launch 2's first
+/// Shift+Tab lands on `keys` at once (`focusowner=0`); in launch 3 the
+/// window's own Tab walk reaches the live Copy, Enter there asks the
+/// question and leaves the keyboard on the destroyed button, the Tab after
+/// it lands on `keys` (`focusowner=0`, no nudge) and the `B` never answers.
+/// When this fails that way it is that defect; do not quiet it.
+///
+/// Mutants (2026-10-04), each alone: the scope's Tab arm removed → red at
+/// dump.g3, `focusowner=0`; the rename field left out of `slot-ok` → red at
+/// dump.g2, no landing; the wrap removed (`clamp` for `Math.mod` in `walk`)
+/// → red at dump.g3, no landing; `select-all()` removed → dump.z reads
+/// `zx.{ext}`, the letter typed in at the caret; the `changed state`
+/// refocus removed → Enter on the focused Copy leaves no focus at all, the
+/// Tab on the question lands on `keys` and the run exits at `wait:copy
+/// finished run 1`; the home start removed (`slot + dir` from -1) → the
+/// first Shift+Tab lands on the field, red at dump.home; `slot-ok`
+/// approving the greyed Copy → the ring's `focus()` on it walks on to
+/// `keys` behind the scrim, red at dump.g3, `focusowner=0`. The controls'
+/// own token writes have no red mutant — `focus-slot` writes the token too,
+/// and nothing else writes it while the dialog is up — and stay as the
+/// owner token's claim-site rule.
+#[test]
+fn copy_picks_tab_walks_its_own_controls_and_never_leaves_the_dialog() {
+    if !has_display() {
+        eprintln!("screenshot smoke skipped: no display server");
+        return;
+    }
+    let _s = serial();
+    let src = out_dir().join("tabring-copy-src");
+    let dest = out_dir().join("tabring-copy-dest");
+    let dest2 = out_dir().join("tabring-copy-dest2");
+    for d in [&src, &dest, &dest2] {
+        std::fs::remove_dir_all(d).ok();
+        std::fs::create_dir_all(d).unwrap();
+    }
+    for (name, byte) in [("a", 0xABu8), ("b", 0xCD), ("c", 0xEF)] {
+        std::fs::write(src.join(format!("{name}.ARW")), vec![byte; 2048]).unwrap();
+    }
+    std::fs::write(dest2.join("a.ARW"), b"another body's frame").unwrap();
+    let run = |shot: &str, script: &str| -> String {
+        shoot_env_stderr(
+            &[src.to_str().unwrap()],
+            &[("FASTCULL_TRACE", "1"), ("FASTCULL_DRIVE", script)],
+            &out_dir().join(shot),
+        )
+    };
+    // Every press's landing: its key, and the one control it reached.
+    let landings = |stderr: &str, rows: &[(&str, &str, &str)]| {
+        let labels = mark_labels(stderr);
+        for (dump, key, mark) in rows {
+            let (step, gained) = landing(&labels, dump);
+            assert_eq!(
+                step,
+                format!("drive: key:{key}"),
+                "the script's step before dump.{dump} is not the key this row \
+                 is about:\n{stderr}"
+            );
+            assert_eq!(
+                gained,
+                vec![format!("focus: {mark} gained")],
+                "the {key} before dump.{dump} did not land on {mark} alone \
+                 (fileops.md, \"The keyboard ring\"):\n{stderr}"
+            );
+        }
+    };
+    // The token after every press — the old-red, asserted first.
+    let held = |stderr: &str, dumps: &[&str]| {
+        for dump in dumps {
+            let line = qedump(stderr, dump);
+            assert_eq!(
+                dump_field(line, "focusowner"),
+                "-1",
+                "at dump.{dump} the keyboard has left the Copy Picks dialog \
+                 (focusowner is not the dialog's -1): a Tab or Shift+Tab \
+                 carried it behind the scrim — issue #98. When this fails \
+                 this way it is that defect; do not quiet it:\n{stderr}"
+            );
+            assert_eq!(dump_field(line, "copy"), "true", "{line}");
+        }
+    };
+
+    // --- 1. no destination: the greyed Copy is passed over both ways ------
+    let grey = run(
+        "tabring-copy-grey.jpg",
+        "1500:wait:load settled gen 0;1700:key:y;1900:key:y;2300:key:ctrl+e;\
+         2700:dump.grey;2900:key:tab;3200:dump.g1;3400:key:tab;3700:dump.g2;\
+         3900:key:tab;4200:dump.g3;4400:key:shift+tab;4700:dump.g4",
+    );
+    held(&grey, &["grey", "g1", "g2", "g3", "g4"]);
+    assert!(
+        grey.contains("wait:load settled gen 0 (satisfied"),
+        "the picks were pressed before the folder settled:\n{grey}"
+    );
+    let premise = qedump(&grey, "grey");
+    assert_eq!(dump_field(premise, "copystate"), "0", "{premise}");
+    assert_eq!(
+        dump_text(premise, "summary"),
+        "2 picked images. Choose a destination.",
+        "the premise is a plan with no destination, where Copy is greyed: {premise}"
+    );
+    let status = dump_text(premise, "status");
+    assert!(
+        status.contains("c.ARW (3/3) · unmarked") && status.contains("★2 ✕0"),
+        "the premise is a and b picked and the cursor on the unmarked c: {premise}"
+    );
+    landings(
+        &grey,
+        &[
+            ("g1", "tab", "copy choose"),
+            ("g2", "tab", "copy template"),
+            ("g3", "tab", "copy choose"),
+            ("g4", "shift+tab", "copy template"),
+        ],
+    );
+    assert_eq!(
+        dump_text(qedump(&grey, "g4"), "status"),
+        status,
+        "a key reached the grid behind the dialog:\n{grey}"
+    );
+
+    // --- 2. Copy live: the whole ring, a Y, the field selected ------------
+    let ring = run(
+        "tabring-copy-ring.jpg",
+        &format!(
+            "1500:wait:load settled gen 0;1700:key:y;1900:key:y;2100:copydest:{dest};\
+             2300:key:ctrl+e;2600:copytemplate:x.{{ext}};2900:dump.plan;\
+             3100:key:shift+tab;3400:dump.home;\
+             3600:key:tab;3900:dump.t1;4100:key:y;4400:dump.y1;4600:key:tab;4900:dump.t2;\
+             5100:key:tab;5400:dump.t3;5600:key:tab;5900:dump.t4;\
+             6100:key:shift+tab;6400:dump.s1;6600:key:shift+tab;6900:dump.s2;\
+             7100:key:z;7400:dump.z;7600:key:escape;7900:dump.closed;\
+             8100:key:+;8400:dump.zoom",
+            dest = dest.display()
+        ),
+    );
+    held(
+        &ring,
+        &[
+            "plan", "home", "t1", "y1", "t2", "t3", "t4", "s1", "s2", "z",
+        ],
+    );
+    let plan = qedump(&ring, "plan");
+    assert_eq!(dump_field(plan, "copystate"), "0", "{plan}");
+    assert_eq!(dump_text(plan, "template"), "x.{ext}", "{plan}");
+    assert!(
+        dump_text(plan, "summary").contains(" to copy · ")
+            && dump_text(plan, "copyerror").is_empty(),
+        "the premise is a clean plan, where Copy is live: {plan}"
+    );
+    landings(
+        &ring,
+        &[
+            ("home", "shift+tab", "copy copy-close"),
+            ("t1", "tab", "copy choose"),
+            ("t2", "tab", "copy template"),
+            ("t3", "tab", "copy copy-close"),
+            ("t4", "tab", "copy choose"),
+            ("s1", "shift+tab", "copy copy-close"),
+            ("s2", "shift+tab", "copy template"),
+        ],
+    );
+    // A Y with the keyboard on Choose… marks nothing: the button takes only
+    // Space and Enter, and the dialog's scope swallows the rest.
+    let y1 = qedump(&ring, "y1");
+    assert_eq!(
+        (dump_text(y1, "status"), dump_field(y1, "cursor")),
+        (dump_text(plan, "status"), dump_field(plan, "cursor")),
+        "the Y on the focused Choose… reached the grid behind the dialog:\n{ring}"
+    );
+    assert_eq!(
+        landing(&mark_labels(&ring), "y1").1,
+        Vec::<&str>::new(),
+        "the Y moved the keyboard:\n{ring}"
+    );
+    // AC3: the field the ring lands on is selected, so the letter replaces
+    // the template instead of joining it. Tab and Shift+Tab arrive through
+    // the same `focus-slot`, so the selection is the arrival's, either way.
+    assert_eq!(
+        dump_text(qedump(&ring, "z"), "template"),
+        "z",
+        "the `z` typed after Shift+Tab into the rename field did not replace \
+         its text — the ring's arrival did not select it (fileops.md, \"The \
+         keyboard ring\"; AC3):\n{ring}"
+    );
+    let closed = qedump(&ring, "closed");
+    assert_eq!(
+        (dump_field(closed, "copy"), dump_field(closed, "focusowner")),
+        ("false", "0"),
+        "Esc in the rename field did not close the dialog and hand the keyboard \
+         back to the grid: {closed}"
+    );
+    assert_eq!(
+        dump_field(qedump(&ring, "zoom"), "zoom"),
+        "2",
+        "the `+` after the dialog closed was dead:\n{ring}"
+    );
+
+    // --- 3. the clash question and the report -----------------------------
+    let clash = run(
+        "tabring-copy-clash.jpg",
+        &format!(
+            "1500:wait:load settled gen 0;1700:key:y;1900:key:y;2100:copydest:{dest2};\
+             2300:key:ctrl+e;2700:dump.plan2;2900:key:tab;3100:key:tab;3300:key:tab;\
+             3600:dump.oncopy;3800:key:return;4100:dump.q;4300:key:tab;4600:dump.qtab;\
+             4800:key:b;4900:wait:copy finished run 1;5300:dump.report;\
+             5500:key:tab;5800:dump.r1;6000:key:tab;6300:dump.r2;\
+             6500:key:shift+tab;6800:dump.r3;7000:key:tab;7300:dump.r4;\
+             7500:key:space;7800:dump.end",
+            dest2 = dest2.display()
+        ),
+    );
+    held(
+        &clash,
+        &[
+            "plan2", "oncopy", "q", "qtab", "report", "r1", "r2", "r3", "r4",
+        ],
+    );
+    let plan2 = qedump(&clash, "plan2");
+    assert_eq!(dump_field(plan2, "copystate"), "0", "{plan2}");
+    assert!(
+        dump_text(plan2, "copynote").contains("already exist here — Copy will ask"),
+        "the premise is a live Copy that will ask: {plan2}"
+    );
+    landings(
+        &clash,
+        &[
+            ("oncopy", "tab", "copy copy-close"),
+            ("q", "return", "copy dialog"),
+            ("r1", "tab", "copy open-dest"),
+            ("r2", "tab", "copy copy-close"),
+            ("r3", "shift+tab", "copy open-dest"),
+            ("r4", "tab", "copy copy-close"),
+        ],
+    );
+    assert_eq!(
+        dump_field(qedump(&clash, "q"), "copystate"),
+        "3",
+        "Enter on the focused Copy did not ask the clash question:\n{clash}"
+    );
+    let qtab = qedump(&clash, "qtab");
+    assert_eq!(
+        (dump_field(qtab, "copystate"), dump_field(qtab, "nudged")),
+        ("3", "true"),
+        "Tab on the clash question must be swallowed with the nudge, like \
+         every key that is not an answer (fileops.md): {qtab}"
+    );
+    assert_eq!(
+        landing(&mark_labels(&clash), "qtab").1,
+        Vec::<&str>::new(),
+        "Tab on the clash question moved the keyboard:\n{clash}"
+    );
+    assert!(
+        clash.contains("wait:copy finished run 1 (satisfied"),
+        "the `B` answered nothing — the report dump was timed, not gated:\n{clash}"
+    );
+    let report = qedump(&clash, "report");
+    assert_eq!(dump_field(report, "copystate"), "2", "{report}");
+    assert!(
+        dump_text(report, "report").contains("1 landed under new names (a_1.ARW"),
+        "the `B` after Enter on the focused Copy did not keep both: {report}"
+    );
+    let end = qedump(&clash, "end");
+    assert_eq!(
+        (dump_field(end, "copy"), dump_field(end, "focusowner")),
+        ("false", "0"),
+        "Space on the focused Close did not close the dialog and hand the \
+         keyboard back: {end}"
+    );
+    for d in [&src, &dest, &dest2] {
+        std::fs::remove_dir_all(d).ok();
+    }
+}
+
 /// `{camera}` used to expand to nothing in the app: both template engines
 /// were handed `camera: None`, so a rename template of `{camera}.{ext}`
 /// wrote `.ARW` — a hidden file with no name of its own — and an IPTC

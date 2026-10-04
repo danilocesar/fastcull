@@ -671,7 +671,7 @@ dialog with real key events.
 - [ ] Windows reserved names (`CON`, `NUL`, trailing dots) in templated
       names — deferred with the user's OK (2026-07-26, "low priority"),
       issue #10; spaces and Unicode in paths are covered.
-- [ ] The keyboard ring (brief 011, AC1 and AC3): `Tab`/`Shift+Tab` walk
+- [x] The keyboard ring (brief 011, AC1 and AC3): `Tab`/`Shift+Tab` walk
       Choose…, the rename field and Copy, then Open destination and Close
       on the report, wrapping and skipping the greyed Copy; `focusowner`
       stays `-1`; a `Y` on a focused button marks nothing; the field
@@ -679,8 +679,8 @@ dialog with real key events.
       `Enter` on the focused Copy then `B` on the question copies; `Space`
       on the focused Close closes — app
       `copy_picks_tab_walks_its_own_controls_and_never_leaves_the_dialog`
-      (open: lands with brief 011's implementation; red on the pre-fix
-      build at the third `Tab`, `focusowner=0`).
+      (red on the pre-fix build at the third `Tab` with Copy greyed,
+      `focusowner=0`, the keyboard on the grid).
 
 ## History
 

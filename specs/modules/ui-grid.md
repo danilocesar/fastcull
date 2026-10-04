@@ -1218,23 +1218,25 @@ host, not the footer, absorbs the high-water mark's extra height).
       (`settings_opens_from_the_chord_and_the_menu_and_closes_with_esc_keeping_the_keyboard`,
       `settings_contains_every_grid_key_and_stacks_under_about`,
       `auto_advance_off_keeps_the_cursor_and_the_selection_like_u`).
-- [ ] AC1 (brief 011, issue #98) — Copy Picks: `Tab`/`Shift+Tab` walk
+- [x] AC1 (brief 011, issue #98) — Copy Picks: `Tab`/`Shift+Tab` walk
       Choose…, the rename field and Copy in the plan state, Open
       destination and Close on the report, wrap, skip a disabled or absent
       control, and `focusowner` stays `-1` through every press —
       `copy_picks_tab_walks_its_own_controls_and_never_leaves_the_dialog`
-      (open: the test lands with brief 011's implementation; red on the
-      pre-fix build at the third `Tab`, where the token reads `0`).
+      (red on the pre-fix build at the third `Tab` with Copy greyed, where
+      the token reads `0`).
 - [ ] AC2 (brief 011) — the same in Export Frames as Video over Choose…,
       Cancel and Export, then Open folder and Close —
       `export_tab_walks_its_own_controls_and_never_leaves_the_dialog`
       (open: lands with brief 011; red on the pre-fix build at the fourth
       `Tab`, where `Y` then marked the frame behind the scrim and
       collapsed the selection).
-- [ ] AC3 (brief 011) — the rename field entered by `Tab` is selected, so
+- [x] AC3 (brief 011) — the rename field entered by `Tab` is selected, so
       the next character replaces its text — the copy test's typed-letter
-      strand (open: lands with brief 011; its mutant is `select-all()`
-      removed, the letter appended).
+      strand, `copy_picks_tab_walks_its_own_controls_and_never_leaves_the_dialog`
+      (its mutant, `select-all()` removed, types the letter in at the
+      caret, `zx.{ext}` — corrected 2026-10-04 at the implementation: this
+      box predicted the letter appended).
 - [ ] AC4 (brief 011) — `Tab` and `Shift+Tab` under About and under the
       shortcuts card change nothing: the two presses added to
       `about_dialog_renders_and_contains_the_keyboard` and
