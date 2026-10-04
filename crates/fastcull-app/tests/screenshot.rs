@@ -6968,6 +6968,30 @@ fn landing<'a>(labels: &[&'a str], dump: &str) -> (&'a str, Vec<&'a str>) {
     (labels[key], gained)
 }
 
+/// Where the keyboard was when the step `echo` (a `drive: key:…` line) was
+/// dispatched: the last `focus: … gained` mark before that echo (brief 011,
+/// the senior developer's review F3). The harness prints a step's echo
+/// before it dispatches the step, so nothing the press itself moves is
+/// counted. A [`landing`] row reads a press from its key to the next dump;
+/// this reads the premise of a press that ACTIVATES a button (Space, Enter)
+/// at the press itself, so the gap between the dump before it and the key
+/// is covered too. The echo must occur once in the run: a premise is about
+/// one press.
+fn last_gained_before<'a>(labels: &[&'a str], echo: &str) -> &'a str {
+    let at = label_positions(labels, echo);
+    assert_eq!(
+        at.len(),
+        1,
+        "`{echo}` is not exactly one step of this run: {labels:?}"
+    );
+    labels[..at[0]]
+        .iter()
+        .rev()
+        .copied()
+        .find(|l| l.starts_with("focus: ") && l.ends_with(" gained"))
+        .unwrap_or_else(|| panic!("no `focus: … gained` before `{echo}`: {labels:?}"))
+}
+
 /// AC1 and AC3 of brief 011 (issue #98; ui-grid.md "Modal keyboard
 /// containment", fileops.md "The keyboard ring"): in the Copy Picks dialog
 /// `Tab` and `Shift+Tab` walk the dialog's own controls in visible order,
@@ -7013,6 +7037,23 @@ fn landing<'a>(labels: &[&'a str], dump: &str) -> (&'a str, Vec<&'a str>) {
 /// file manager. That is why the home strand sits in launch 2 — after the
 /// report, a ring that landed one control off would put launch 3's closing
 /// Space on Open destination.
+///
+/// Each press that activates a button has its premise read at the press
+/// itself (the senior developer's review F3, [`last_gained_before`]): the
+/// keyboard on Copy when the Return goes, on Close when the Space goes
+/// (shown red by a script mutant: an Esc slipped in before the Space closes
+/// the dialog under it, and the premise reads `focus: keys gained`). What
+/// no assertion can do: that exposure is a RUN-TIME one. Were Close to drop
+/// out of `slot-ok` in the report state alone, launch 3's closing Space
+/// would land on Open destination — the file manager — before any assertion
+/// here runs. No script-level gate is available: a `wait:` is satisfied by
+/// a mark emitted at any time in the run (test-harness.md; its substring is
+/// registered before the first frame), and `focus: copy copy-close gained`
+/// has already been emitted earlier in the launch. Each launch's ring is
+/// asserted before the next launch runs (`held` and `landings` run between
+/// the `run(…)` calls), which stops every ring regression the mutants below
+/// produced from reaching a press; a regression of the report state alone
+/// stays a recorded residual, not a tolerated one.
 ///
 /// RED on b6c238f, the head before the fix (brief 011 D3 measured the same
 /// on f1520b9): launch 1's third Tab puts the keyboard on the grid's scope
@@ -7316,6 +7357,22 @@ fn copy_picks_tab_walks_its_own_controls_and_never_leaves_the_dialog() {
              Choose… before the run disabled it (ui-grid.md, \"Modal keyboard \
              containment\"; review F1). When this fails this way it is that \
              defect; do not quiet it:\n{clash}"
+        );
+    }
+    // The premise of each press that activates a button, read at the press
+    // itself (review F3): the Return was dispatched with the keyboard on
+    // Copy, and the closing Space with it on Close. A wrong landing between
+    // the dump before a press and the press is caught here, after the run
+    // — not before it: see the doc above on what no assertion can do.
+    for (echo, on) in [
+        ("drive: key:return", "focus: copy copy-close gained"),
+        ("drive: key:space", "focus: copy copy-close gained"),
+    ] {
+        assert_eq!(
+            last_gained_before(&labels, echo),
+            on,
+            "`{echo}` was not dispatched with the keyboard where the script \
+             put it — the outcome read after it is not that press's:\n{clash}"
         );
     }
     landings(
@@ -8827,6 +8884,19 @@ fn the_video_export_asks_before_replacing_a_file() {
 /// onward — which no ring that passed launch 1 can turn onto Choose…, and
 /// the report takes Esc, never Enter or Space on Open folder (xdg-open).
 ///
+/// Each press that activates a button has its premise read at the press
+/// itself (review F3, the copy test's [`last_gained_before`]): the keyboard
+/// on Cancel when the Space goes, on Export when the Return goes. As in the
+/// copy test that check runs after the run, and the exposure is a RUN-TIME
+/// one: a ring regression that showed only after the reopen, or only after
+/// the mixed path's Esc, could send the Return to Choose… — the native
+/// folder picker — before any assertion here runs, and no `wait:` can hold
+/// a press until the keyboard is in place, a wait being satisfied by a mark
+/// from any time in the run. Launch 1's ring is asserted before launch 2
+/// runs, which stops every ring regression the mutants below produced from
+/// reaching a press; one that shows only in launch 2 stays a recorded
+/// residual, not a tolerated one.
+///
 /// RED on b6c238f, the head before the fix (brief 011 D3 measured the same
 /// on f1520b9): launch 1's fourth Tab puts the keyboard on the grid's scope
 /// behind the scrim — `focus: keys gained`, dump.t4 `focusowner=0` — where
@@ -9072,6 +9142,22 @@ fn export_tab_walks_its_own_controls_and_never_leaves_the_dialog() {
              Choose… before the run disabled it (ui-grid.md, \"Modal keyboard \
              containment\"; review F1). When this fails this way it is that \
              defect; do not quiet it:\n{flow}"
+        );
+    }
+    // The premise of each press that activates a button, read at the press
+    // itself (review F3; the copy test's helper): the Space was dispatched
+    // with the keyboard on Cancel, the Return with it on Export. The closing
+    // Esc needs none: Esc bubbles to the scope wherever the keyboard is and
+    // never presses a button.
+    for (echo, on) in [
+        ("drive: key:space", "focus: clip cancel gained"),
+        ("drive: key:return", "focus: clip export-close gained"),
+    ] {
+        assert_eq!(
+            last_gained_before(&labels, echo),
+            on,
+            "`{echo}` was not dispatched with the keyboard where the script \
+             put it — the outcome read after it is not that press's:\n{flow}"
         );
     }
     landings(
