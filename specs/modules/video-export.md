@@ -232,10 +232,15 @@ express.
   Open folder and Close on the report; the clash question has no control
   that takes the keyboard, so `Tab` there is swallowed with the nudge like
   every other key; the keyboard's home is the dialog's scope, where the
-  open and every state change put it (residual, unmeasured: a run that
-  ends while a menu is open brings the keyboard home under the menu), and
-  where pressing Export — a click,
-  or `Enter`/`Space` on it — puts it before the run starts (brief 011
+  open and every state change put it (residual, measured on Linux, where
+  the menu bar is in-window, as in Copy Picks — fileops.md has why the
+  refocus stays: an export that ends while a menu is open takes the
+  keyboard back to the dialog from the open menu, which stays drawn, and
+  the next `Esc` closes the report instead of the menu; a fix needs a
+  design for the MenuBar's restore target, a follow-up issue; QE
+  2026-10-04, round 2 D2: this said "unmeasured"), and where pressing
+  Export — a click, or `Enter`/`Space` on it — puts it before the run
+  starts (brief 011
   review F1, 2026-10-04: a control the run disables cannot let go of the
   keyboard afterwards; residual, not fixed: a re-plan that greys Export
   while the keyboard is on it — a destination Choose… returns that the
@@ -589,6 +594,11 @@ Windows runner too. `core:` = a `fastcull-core` unit test, `muxer:` =
 
 ## History
 
+- 2026-10-04 — Brief 011, QE round 2 D2: the ring sentence's menu
+  residual, recorded as unmeasured at the senior developer's review F2,
+  is measured — an export that ends while a menu is open takes the
+  keyboard from the menu, and the next `Esc` closes the report rather
+  than the menu (Linux; the account is fileops.md's).
 - 2026-10-04 — Brief 011, QE round 2 D3: the ring's box gains `Tab` on
   the clash question raising the nudge, which the export test reads from
   the dump's new `clipnudged=` (Contracts) — the copy half was pinned by

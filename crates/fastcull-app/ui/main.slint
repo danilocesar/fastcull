@@ -2446,12 +2446,19 @@ export component MainWindow inherits Window {
                 // Copy/Close goes home by itself BEFORE the state changes
                 // (its `clicked`, brief 011 review F1), so Enter on a
                 // focused Copy no longer relies on this.
-                // Residual, unmeasured (brief 011, the developer's (c);
-                // Manager 2026-10-04): a run that finishes while a menu is
-                // open refocuses the scope under the menu —
-                // `set_focus_item` redirects only to a top-level popup's
-                // window (window.rs:1231), and the in-window menu is not
-                // one.
+                // Residual, MEASURED on Linux, where the menu bar is
+                // in-window (QE 2026-10-04, round 2 D2; this said
+                // "unmeasured"): a run that finishes while a menu is open
+                // takes the keyboard from the open menu — `set_focus_item`
+                // redirects only to a top-level popup's window
+                // (window.rs:1231), and the in-window menu is not one — so
+                // the menu stays drawn, the arrows no longer reach it, and
+                // the next Esc closes the report, not the menu. Without
+                // this refocus the menu keeps the keyboard, but a Cancel
+                // the keyboard was on becomes the menu's restore target,
+                // dies with the run, and the next Tab leaves the dialog:
+                // this is the lesser evil. A fix needs a design for the
+                // MenuBar's restore target (a follow-up issue).
                 property <int> state: root.copy-state;
                 changed state => {
                     self.slot = -1;
@@ -3147,12 +3154,11 @@ export component MainWindow inherits Window {
                 // writer's finish removes the running Cancel, which the
                 // keyboard may be on. (Export/Close goes home by itself
                 // before the run starts — its `clicked`, review F1.)
-                // Residual, unmeasured (brief 011, the developer's (c);
-                // Manager 2026-10-04): a run that finishes while a menu is
-                // open refocuses the scope under the menu —
-                // `set_focus_item` redirects only to a top-level popup's
-                // window (window.rs:1231), and the in-window menu is not
-                // one.
+                // Residual, MEASURED on Linux (QE 2026-10-04, round 2 D2;
+                // this said "unmeasured"): an export that finishes while a
+                // menu is open takes the keyboard from the open menu, and
+                // the next Esc closes the report, not the menu — the copy
+                // scope's comment has why, and why the refocus stays.
                 property <int> state: root.clip-state;
                 changed state => {
                     self.slot = -1;

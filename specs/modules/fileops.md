@@ -419,9 +419,17 @@ is the eventual fix; no perf budget covers plan time.
   to clicks — so `Tab` there is swallowed with the nudge like every other
   key; the rename field entered by `Tab` is selected, so what is typed
   replaces the template shown; the keyboard's home is the dialog's scope,
-  where the open and every state change put it (residual, unmeasured: a
-  run that ends while a menu is open brings the keyboard home under the
-  menu), and where pressing Copy —
+  where the open and every state change put it (residual, measured on
+  Linux, where the menu bar is in-window; Windows' system menu bar is
+  not: a run that ends while a menu is open takes the keyboard back to
+  the dialog from the open menu — the menu stays drawn, the arrow keys no
+  longer reach it, and the next `Esc` closes the report instead of the
+  menu; without that refocus the menu kept the keyboard and `Esc` closed
+  it, but a Cancel the keyboard was on became the menu's restore target,
+  died with the run, and the next `Tab` left the dialog — so the refocus
+  stays, and a fix needs a design for the MenuBar's restore target, a
+  follow-up issue; QE 2026-10-04, round 2 D2: this said "unmeasured"),
+  and where pressing Copy —
   a click, or `Enter`/`Space` on it — puts it before the run starts (brief
   011 review F1, 2026-10-04: a control the run disables cannot let go of
   the keyboard afterwards; residual, not fixed: a re-plan that greys Copy
@@ -712,6 +720,13 @@ dialog with real key events.
 
 ## History
 
+- 2026-10-04 — Brief 011, QE round 2 D2: the ring sentence's menu
+  residual, recorded as unmeasured at the senior developer's review F2,
+  is measured — on Linux, where the menu bar is in-window, a run that
+  ends while a menu is open takes the keyboard from the menu, and the
+  next `Esc` closes the report rather than the menu; the refocus stays
+  (without it a destroyed Cancel became the menu's restore target), and
+  the fix is a follow-up issue.
 - 2026-10-04 — Brief 011, QE's test proposal P3: the ring's box gains the
   running state — Cancel alone while the copy runs, and the run's end
   bringing the keyboard home — which the copy test's fourth and fifth
