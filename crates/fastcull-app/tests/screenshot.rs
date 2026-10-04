@@ -2323,6 +2323,12 @@ fn panel_toggle_at_one_to_one_reanchors_the_crop() {
 /// FocusScope. The keyboard's whereabouts is asserted with them: a
 /// stranded keyboard would swallow the keys just as thoroughly and mean
 /// the opposite.
+///
+/// Tab and Shift+Tab are among the swallowed keys (brief 011, AC4;
+/// ui-grid.md "Modal keyboard containment": About holds no control that
+/// takes the keyboard): pressed first, they leave the owner token on the
+/// main scope and the window's own Tab walk never runs. No code stands
+/// behind this — the pre-fix build passes it too, which is the claim.
 #[test]
 fn about_dialog_renders_and_contains_the_keyboard() {
     if !has_display() {
@@ -2341,7 +2347,8 @@ fn about_dialog_renders_and_contains_the_keyboard() {
         "900:about"
     };
     let script = format!(
-        "{open};1300:dump.up;1600:key:n;1900:key:p;2300:dump.contained;\
+        "{open};1300:dump.up;1400:key:tab;1500:key:shift+tab;1600:key:n;1900:key:p;\
+         2300:dump.contained;\
          2600:key:escape;2900:dump.closed;3200:key:n;3600:dump.control;\
          3900:about;4300:dump.shot"
     );
@@ -2367,7 +2374,7 @@ fn about_dialog_renders_and_contains_the_keyboard() {
          `keysfocus`: a deactivated window reads false there with the \
          keyboard alive (issue #63):\n{stderr}"
     );
-    // THE containment: two real keystrokes, no mark.
+    // THE containment: Tab, Shift+Tab and two real keystrokes, no mark.
     let contained = qedump(&stderr, "contained");
     assert_eq!(
         dump_field(contained, "about"),
@@ -2377,6 +2384,13 @@ fn about_dialog_renders_and_contains_the_keyboard() {
     assert!(
         dump_text(contained, "status").contains("★0 ✕0"),
         "a mark leaked through the About modal: {contained}"
+    );
+    assert_eq!(
+        dump_field(contained, "focusowner"),
+        "0",
+        "Tab or Shift+Tab under About moved the keyboard off the main scope \
+         — About holds no control, so both are swallowed like every other \
+         key (ui-grid.md, \"Modal keyboard containment\"; brief 011 AC4):\n{stderr}"
     );
     // The control: Esc closes it and the SAME key now marks. Without this
     // the containment assertion also passes on a build where N is simply
@@ -2493,7 +2507,9 @@ fn about_dialog_renders_and_contains_the_keyboard() {
 /// after issue #13's fidelity note: the REAL Help > Keyboard Shortcuts
 /// item, a REAL N, and the keyboard's whereabouts asserted alongside the
 /// mark counts (see the About test for why the token-plus-nav version
-/// was testing the harness rather than the app).
+/// was testing the harness rather than the app). Tab and Shift+Tab are
+/// swallowed here too (brief 011, AC4: the card holds no control that
+/// takes the keyboard) — a claim the pre-fix build already met.
 #[test]
 fn shortcuts_popup_contains_the_keyboard() {
     if !has_display() {
@@ -2508,7 +2524,8 @@ fn shortcuts_popup_contains_the_keyboard() {
         "900:shortcuts"
     };
     let script = format!(
-        "{open};1300:dump.up;1600:key:n;2000:dump.contained;\
+        "{open};1300:dump.up;1400:key:tab;1500:key:shift+tab;1600:key:n;\
+         2000:dump.contained;\
          2300:key:escape;2600:dump.closed;2900:key:n;3300:dump.control;\
          3600:shortcuts;4000:dump.shot"
     );
@@ -2540,6 +2557,14 @@ fn shortcuts_popup_contains_the_keyboard() {
     assert!(
         dump_text(contained, "status").contains("★0 ✕0"),
         "a mark leaked through the shortcuts modal: {contained}"
+    );
+    assert_eq!(
+        dump_field(contained, "focusowner"),
+        "0",
+        "Tab or Shift+Tab under the shortcuts card moved the keyboard off the \
+         main scope — the card holds no control, so both are swallowed like \
+         every other key (ui-grid.md, \"Modal keyboard containment\"; brief \
+         011 AC4):\n{stderr}"
     );
     assert_eq!(
         dump_field(qedump(&stderr, "closed"), "shortcuts"),
@@ -6955,9 +6980,10 @@ fn landing<'a>(labels: &[&'a str], dump: &str) -> (&'a str, Vec<&'a str>) {
 /// on the unpicked `c`, so a key that reached the grid behind the scrim
 /// would show in the status line: a `Y` would pick `c`. Three launches:
 ///   1. No destination, so Copy is greyed — the old-red's own shape (brief
-///      011 D3): Tab, Tab, Tab land on Choose…, the rename field, and Choose…
-///      again, wrapping over the greyed Copy; Shift+Tab goes back over it
-///      to the field.
+///      011 D3). About first, over the dialog: a Tab under it moves nothing
+///      and the first Esc closes About alone. Then Tab, Tab, Tab land on
+///      Choose…, the rename field, and Choose… again, wrapping over the
+///      greyed Copy; Shift+Tab goes back over it to the field.
 ///   2. An empty destination and the template `x.{ext}`, so Copy is live.
 ///      The first Shift+Tab from the dialog's home lands on Copy, the LAST
 ///      control — visible order, wrapping, so it is the mirror of the first
@@ -7001,10 +7027,13 @@ fn landing<'a>(labels: &[&'a str], dump: &str) -> (&'a str, Vec<&'a str>) {
 /// finished run 1`; the home start removed (`slot + dir` from -1) → the
 /// first Shift+Tab lands on the field, red at dump.home; `slot-ok`
 /// approving the greyed Copy → the ring's `focus()` on it walks on to
-/// `keys` behind the scrim, red at dump.g3, `focusowner=0`. The controls'
-/// own token writes have no red mutant — `focus-slot` writes the token too,
-/// and nothing else writes it while the dialog is up — and stay as the
-/// owner token's claim-site rule.
+/// `keys` behind the scrim, red at dump.g3, `focusowner=0`; the ring's arm
+/// moved ahead of the dialog's About containment → the Tab under About
+/// lands on Choose…, red at dump.abtab; the arm moved ahead of the clash
+/// question's branch → Tab there is eaten without the nudge, red at
+/// dump.qtab. The controls' own token writes have no red mutant —
+/// `focus-slot` writes the token too, and nothing else writes it while the
+/// dialog is up — and stay as the owner token's claim-site rule.
 #[test]
 fn copy_picks_tab_walks_its_own_controls_and_never_leaves_the_dialog() {
     if !has_display() {
@@ -7069,10 +7098,15 @@ fn copy_picks_tab_walks_its_own_controls_and_never_leaves_the_dialog() {
     let grey = run(
         "tabring-copy-grey.jpg",
         "1500:wait:load settled gen 0;1700:key:y;1900:key:y;2300:key:ctrl+e;\
-         2700:dump.grey;2900:key:tab;3200:dump.g1;3400:key:tab;3700:dump.g2;\
-         3900:key:tab;4200:dump.g3;4400:key:shift+tab;4700:dump.g4",
+         2700:dump.grey;2800:about;3100:dump.ab;3300:key:tab;3600:dump.abtab;\
+         3800:key:escape;4100:dump.abclosed;\
+         4300:key:tab;4600:dump.g1;4800:key:tab;5100:dump.g2;\
+         5300:key:tab;5600:dump.g3;5800:key:shift+tab;6100:dump.g4",
     );
-    held(&grey, &["grey", "g1", "g2", "g3", "g4"]);
+    held(
+        &grey,
+        &["grey", "ab", "abtab", "abclosed", "g1", "g2", "g3", "g4"],
+    );
     assert!(
         grey.contains("wait:load settled gen 0 (satisfied"),
         "the picks were pressed before the folder settled:\n{grey}"
@@ -7088,6 +7122,26 @@ fn copy_picks_tab_walks_its_own_controls_and_never_leaves_the_dialog() {
     assert!(
         status.contains("c.ARW (3/3) · unmarked") && status.contains("★2 ✕0"),
         "the premise is a and b picked and the cursor on the unmarked c: {premise}"
+    );
+    // About over the dialog takes Tab like every other key: the ring's arm
+    // comes after the containment arm, so nothing moves behind the popup,
+    // and the first Esc closes About alone (ui-grid.md, "Modal keyboard
+    // containment").
+    assert_eq!(dump_field(qedump(&grey, "ab"), "about"), "true", "{grey}");
+    assert_eq!(
+        landing(&mark_labels(&grey), "abtab").1,
+        Vec::<&str>::new(),
+        "Tab under About moved the keyboard behind the popup — the ring ran \
+         before the dialog's containment arm:\n{grey}"
+    );
+    let abclosed = qedump(&grey, "abclosed");
+    assert_eq!(
+        (
+            dump_field(abclosed, "about"),
+            dump_field(abclosed, "copystate")
+        ),
+        ("false", "0"),
+        "the first Esc did not close About alone: {abclosed}"
     );
     landings(
         &grey,
@@ -8681,10 +8735,12 @@ fn the_video_export_asks_before_replacing_a_file() {
 /// key that reached the grid behind the scrim would show: a `Y` would pick
 /// `a`, move the cursor and collapse the selection the dialog is about to
 /// export. The destination holds another day's `a-c.mov`. Two launches:
-///   1. The plan state: four Tabs — Choose…, Cancel, Export, and the wrap
-///      to Choose…; a `Y` with the keyboard on Choose… marks nothing and
-///      keeps the selection; two Shift+Tabs — Export (the wrap back),
-///      Cancel; Esc with the keyboard on Cancel closes the dialog.
+///   1. The plan state. About first, over the dialog: a Tab under it moves
+///      nothing and the first Esc closes About alone. Then four Tabs —
+///      Choose…, Cancel, Export, and the wrap to Choose…; a `Y` with the
+///      keyboard on Choose… marks nothing and keeps the selection; two
+///      Shift+Tabs — Export (the wrap back), Cancel; Esc with the keyboard
+///      on Cancel closes the dialog.
 ///   2. Two Tabs from the dialog's home reach Cancel, and Space there
 ///      closes the dialog; reopened, three Tabs reach Export, and Enter
 ///      there asks the clash question while the state change brings the
@@ -8721,7 +8777,9 @@ fn the_video_export_asks_before_replacing_a_file() {
 /// the question lands on `keys` (`qtab` 0) and the run exits at `wait:clip
 /// export finished run 1`; the home start removed (`slot + dir` from -1) →
 /// red at dump.rhome, the first Shift+Tab on the report landing on Open
-/// folder instead of Close.
+/// folder instead of Close; the ring's arm moved ahead of the dialog's
+/// About containment → the Tab under About lands on Choose…, red at
+/// dump.abtab.
 #[test]
 fn export_tab_walks_its_own_controls_and_never_leaves_the_dialog() {
     if !has_display() {
@@ -8789,12 +8847,19 @@ fn export_tab_walks_its_own_controls_and_never_leaves_the_dialog() {
     // --- 1. the plan state's ring, a Y, and Esc ----------------------------
     let ring = run(
         "tabring-clip-ring.jpg",
-        "2300:dump.plan;2500:key:tab;2800:dump.t1;3000:key:y;3300:dump.y1;\
-         3500:key:tab;3800:dump.t2;4000:key:tab;4300:dump.t3;4500:key:tab;4800:dump.t4;\
-         5000:key:shift+tab;5300:dump.s1;5500:key:shift+tab;5800:dump.s2;\
-         6000:key:escape;6300:dump.closed",
+        "2300:dump.plan;2400:about;2700:dump.ab;2900:key:tab;3200:dump.abtab;\
+         3400:key:escape;3700:dump.abclosed;\
+         3900:key:tab;4200:dump.t1;4400:key:y;4700:dump.y1;\
+         4900:key:tab;5200:dump.t2;5400:key:tab;5700:dump.t3;5900:key:tab;6200:dump.t4;\
+         6400:key:shift+tab;6700:dump.s1;6900:key:shift+tab;7200:dump.s2;\
+         7400:key:escape;7700:dump.closed",
     );
-    held(&ring, &["plan", "t1", "y1", "t2", "t3", "t4", "s1", "s2"]);
+    held(
+        &ring,
+        &[
+            "plan", "ab", "abtab", "abclosed", "t1", "y1", "t2", "t3", "t4", "s1", "s2",
+        ],
+    );
     assert!(
         ring.contains("wait:load settled gen 0 (satisfied"),
         "the selection was made before the folder settled:\n{ring}"
@@ -8813,6 +8878,24 @@ fn export_tab_walks_its_own_controls_and_never_leaves_the_dialog() {
     assert!(
         dump_text(plan, "status").contains("★0 ✕0"),
         "the premise is a session with no marks: {plan}"
+    );
+    // About over the dialog takes Tab like every other key, and the first
+    // Esc closes About alone (the copy test's strand, for this scope).
+    assert_eq!(dump_field(qedump(&ring, "ab"), "about"), "true", "{ring}");
+    assert_eq!(
+        landing(&mark_labels(&ring), "abtab").1,
+        Vec::<&str>::new(),
+        "Tab under About moved the keyboard behind the popup — the ring ran \
+         before the dialog's containment arm:\n{ring}"
+    );
+    let abclosed = qedump(&ring, "abclosed");
+    assert_eq!(
+        (
+            dump_field(abclosed, "about"),
+            dump_field(abclosed, "clipstate")
+        ),
+        ("false", "0"),
+        "the first Esc did not close About alone: {abclosed}"
     );
     landings(
         &ring,

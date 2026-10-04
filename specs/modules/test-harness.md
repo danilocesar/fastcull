@@ -525,16 +525,18 @@ shot 2.
   009 commit B: it said ten, and nine before brief 009 — 1010x520, driven
   since 2026-09-04, was never counted; `grep -o 'resize:[0-9]*x[0-9]*'
   crates/fastcull-app/tests/screenshot.rs | sort -u` lists them).
-- The suite's size: 120 driven tests after brief 010, 118 at its start
-  (`cargo test -p fastcull-app --test screenshot -- --list`, 2026-10-03).
-  They no longer fit one 600 s foreground call in debug on the development
-  seat and run there as three `--exact` thirds split from that list:
-  327 s + 280 s + 325 s, 932 s, in debug on the idle seat at brief 010's
-  commit E (326 s + 271 s + 311 s, 908 s, for the 118 at its start);
-  halves would run some 470 s each, too near the cap (brief 010 R8 and
-  D5; this sentence said two halves and left the figures to be measured
-  until brief 010's implementation; the "87 tests, 318 s + 288 s" of the
-  agent files dates from 2026-09-12, before briefs 008–009 added 31).
+- The suite's size: 122 driven tests after brief 011, 120 after brief
+  010 and 118 at its start (`cargo test -p fastcull-app --test screenshot
+  -- --list`, re-measured 2026-10-04 at brief 011's commit C). They no
+  longer fit one 600 s foreground call in debug on the development seat
+  and run there as three `--exact` thirds split from that list: 349 s +
+  298 s + 323 s, 970 s, in debug on the idle seat at brief 011's commit C
+  (327 s + 280 s + 325 s, 932 s, for the 120 at brief 010's commit E;
+  326 s + 271 s + 311 s, 908 s, for the 118); halves would run some
+  485 s each, too near the cap (brief 010 R8 and D5; this sentence said
+  two halves and left the figures to be measured until brief 010's
+  implementation; the "87 tests, 318 s + 288 s" of the agent files dates
+  from 2026-09-12, before briefs 008–009 added 31).
 - CI facts: a pull request's runs share one concurrency group per ref with
   `cancel-in-progress` (a run that vanishes without a verdict is a cancel,
   not a hang); every other event gets its own group; the job cap is 90
@@ -584,6 +586,8 @@ shot 2.
 
 ## History
 
+- 2026-10-04 — Brief 011 commit C: the suite's size re-measured — 122
+  tests, three thirds of 349 s + 298 s + 323 s in debug on the idle seat.
 - 2026-10-04 — Brief 011 (issue #98): the focus-mark family gains the two
   export dialogs' ring controls, nine names; no new token and no new dump
   field — `key:tab` and `key:shift+tab` existed.

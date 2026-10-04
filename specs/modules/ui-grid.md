@@ -1237,12 +1237,15 @@ host, not the footer, absorbs the high-water mark's extra height).
       (its mutant, `select-all()` removed, types the letter in at the
       caret, `zx.{ext}` — corrected 2026-10-04 at the implementation: this
       box predicted the letter appended).
-- [ ] AC4 (brief 011) — `Tab` and `Shift+Tab` under About and under the
+- [x] AC4 (brief 011) — `Tab` and `Shift+Tab` under About and under the
       shortcuts card change nothing: the two presses added to
       `about_dialog_renders_and_contains_the_keyboard` and
       `shortcuts_popup_contains_the_keyboard`, `focusowner=0` and `★0`
-      read after them (open: land with brief 011; no code change — the
-      pre-fix build already behaves so, measured 2026-10-04).
+      read after them (no code change: both pass on the pre-fix build
+      too, which is the claim); a `Tab` under About over the copy or the
+      export dialog moves nothing either — the first launch of each ring
+      test, red when the ring's arm is moved ahead of the dialog's
+      containment arm.
 - [ ] AC5 (brief 011) — the two dialogs' other keys and every answer
       behave as before: the existing copy and export driven tests, run
       unchanged (open until brief 011's suite is green on both runners).

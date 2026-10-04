@@ -61,17 +61,22 @@ fastcull-core.workspace = true
 # Re-read the owner-invariant section of specs/modules/ui-grid.md before
 # raising this bound.
 # FOURTH CANARY (brief 008, the Settings dialog and the Failed badge's
-# tooltip; same 1.17.1). Eight measured behaviours they stand on, none
-# documented upstream (read 2026-10-01 in i-slint-core window.rs
-# `process_key_input`, items/text.rs, items.rs and
-# properties/change_tracker.rs, and 2026-10-02 in i-slint-compiler
-# widgets/fluent/checkbox.slint, i-slint-core platform.rs and
-# i-slint-backend-winit event_loop.rs; ui-grid.md's Slint list):
+# tooltip; brief 011, the Copy Picks and Export keyboard rings; same
+# 1.17.1). Ten measured behaviours they stand on, none documented upstream
+# (read 2026-10-01 in i-slint-core window.rs `process_key_input`,
+# items/text.rs, items.rs and properties/change_tracker.rs; 2026-10-02 in
+# i-slint-compiler widgets/fluent/checkbox.slint, i-slint-core platform.rs
+# and i-slint-backend-winit event_loop.rs; 2026-10-04 in i-slint-core
+# window.rs `set_focus_item`/`move_focus` and items/input_items.rs;
+# ui-grid.md's Slint list):
 #   1. The WINDOW handles a Tab or Shift+Tab that the focused item and
 #      every ancestor scope ignored, by walking the WHOLE item tree to the
 #      next focusable item — surfaces hidden behind a scrim included. The
-#      Settings scope accepts both itself; that is the only reason the
-#      keyboard cannot walk out of the dialog into a hidden panel field.
+#      Settings, Copy Picks and Export scopes accept both themselves (the
+#      last two since brief 011: before it the third Tab in Copy Picks and
+#      the fourth in Export put the keyboard on the grid behind the
+#      scrim); that is the only reason the keyboard cannot walk out of a
+#      dialog into a hidden panel field or the grid.
 #   2. A focused item that has become invisible loses the keyboard at the
 #      NEXT key, and that key is delivered to nothing — why the dialog's
 #      tab bodies are permanent, toggled by `visible`, and a tab switch
@@ -103,7 +108,9 @@ fastcull-core.workspace = true
 #      seat; re-review RR-F5), so a field the Settings ring focuses
 #      selects nothing and the caret stays where it was (at 0 the first
 #      time: Tab, 8, Enter put `82 GB`) — why `focus-slot` calls
-#      `select-all()` itself (QE 2026-10-01, D33).
+#      `select-all()` itself (QE 2026-10-01, D33), in the Settings ring
+#      and in the Copy Picks ring for the rename field (brief 011: without
+#      it a typed `z` went in at the caret, `zx.{ext}`).
 #   7. The fluent `CheckBox` flips `checked` and THEN calls `toggled`
 #      (widgets/fluent/checkbox.slint:96-101; Space and Enter go through
 #      the same `clicked`), and a two-way binding (`checked <=> root.…`)
@@ -129,6 +136,21 @@ fastcull-core.workspace = true
 #      themselves (QE 2026-10-02, round 5; the senior developer's
 #      test-integrity review, which first suspected a race here and
 #      refuted it in this source).
+#   9. A disabled `FocusScope` refuses focus: `FocusScope::focus_event`
+#      returns `FocusIgnored` when the scope is not enabled
+#      (items/input_items.rs), so the window's Tab walk passes a greyed
+#      fluent `Button` over (the pre-fix walk skipped the greyed Copy and
+#      reached the grid one Tab sooner, brief 011 D3) — why the copy and
+#      export rings' `slot-ok` checks each control's `enabled` as well as
+#      the `if` that shows it.
+#  10. A `focus()` called from code on an item that refuses focus does not
+#      fail: `set_focus_item` runs `move_focus` with
+#      `FocusReason::Programmatic` (window.rs :1226, :1315), which skips
+#      the visibility test and publishes the next item in tree order that
+#      takes the keyboard — inside the dialog or behind its scrim (brief
+#      011: the copy ring's `focus()` on the greyed Copy, as a mutant,
+#      landed on the grid's scope). Why the two rings focus a slot only
+#      after `slot-ok` has approved it.
 # FIFTH CANARY (brief 009, the Settings card holds still; same 1.17.1).
 # Three measured behaviours the card's one height per open stands on, none
 # documented upstream (read 2026-10-03 by the senior developer, and each
