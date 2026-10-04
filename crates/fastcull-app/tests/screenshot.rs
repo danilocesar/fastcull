@@ -9248,8 +9248,9 @@ fn the_video_export_asks_before_replacing_a_file() {
 ///      dialog gained`), Esc goes back to the plan and the next Tab lands
 ///      on Choose… with its own `gained`; two more Tabs reach Cancel and
 ///      Export, and Enter there asks the question with the keyboard home
-///      (`focus: clip dialog gained`); Tab on the question moves nothing;
-///      `B` exports; on the report the first Shift+Tab from
+///      (`focus: clip dialog gained`); Tab on the question moves nothing
+///      and raises the nudge (`clipnudged=true`, QE round 2 D3); `B`
+///      exports; on the report the first Shift+Tab from
 ///      home lands on Close, the LAST control, and Tab, Tab, Shift+Tab walk
 ///      Open folder, Close, Open folder — past the disabled Choose… and the
 ///      absent Cancel — and Esc with the keyboard on Open folder closes.
@@ -9351,7 +9352,10 @@ fn the_video_export_asks_before_replacing_a_file() {
 /// gained` — issue #98 back in this dialog, with launches 1 and 2 green;
 /// the ring's arm without its `!event.modifiers.control` (QE's mutant X6)
 /// → Ctrl+Tab walks the ring, red at dump.ct, its landing `focus: clip
-/// choose gained` (the Ctrl+Shift+Tab after it then lands on Export).
+/// choose gained` (the Ctrl+Shift+Tab after it then lands on Export); the
+/// ring's arm moved ahead of the clash question's branch (QE's mutant E11)
+/// → Tab there is eaten without the nudge, red at dump.qtab, `clipnudged`
+/// false (QE round 2 D3: green until the dump carried the field).
 #[test]
 fn export_tab_walks_its_own_controls_and_never_leaves_the_dialog() {
     if !has_display() {
@@ -9651,10 +9655,26 @@ fn export_tab_walks_its_own_controls_and_never_leaves_the_dialog() {
         dump_field(q, "clipstate") == "3" && dump_text(q, "clipconfirm").contains("a-c.mov"),
         "Enter on the focused Export did not ask the clash question: {q}"
     );
+    // The question opens without its nudge, so the nudge at dump.qtab is
+    // the Tab's.
     assert_eq!(
-        dump_field(qedump(&flow, "qtab"), "clipstate"),
-        "3",
-        "Tab answered the clash question:\n{flow}"
+        dump_field(q, "clipnudged"),
+        "false",
+        "the clash question opened already nudging: {q}"
+    );
+    // Tab on the question moves nothing and is swallowed WITH the nudge,
+    // like every key that is not an answer (video-export.md, "The keyboard
+    // ring"; QE round 2 D3): the question's branch sees the Tab before the
+    // ring's arm does.
+    let qtab = qedump(&flow, "qtab");
+    assert_eq!(
+        (
+            dump_field(qtab, "clipstate"),
+            dump_field(qtab, "clipnudged")
+        ),
+        ("3", "true"),
+        "Tab on the clash question must be swallowed with the nudge, like \
+         every key that is not an answer (video-export.md): {qtab}"
     );
     assert_eq!(
         landing(&mark_labels(&flow), "qtab").1,

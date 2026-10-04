@@ -803,7 +803,8 @@ fn dispatch(win: &MainWindow, state: &Rc<RefCell<AppState>>, key: &str, layout: 
                          clip={} clipstate={} clipavail={} clipsummary={:?} clipskipped={:?} \
                          cliperror={:?} clipreport={:?} clipconfirm={:?} clipprogress={:?} \
                          cliphint={:?} exported={} curexported={} \
-                         cursor={} selected={} vpy={:.1} focusowner={} {} thumbtex={}",
+                         cursor={} selected={} vpy={:.1} focusowner={} {} thumbtex={} \
+                         clipnudged={}",
             win.get_dbg_keys_focus(),
             win.get_one2one(),
             st.grid.zoom,
@@ -923,10 +924,18 @@ fn dispatch(win: &MainWindow, state: &Rc<RefCell<AppState>>, key: &str, layout: 
             crate::settings_bridge::dump_fields(win, &st),
             // The decoded thumb textures the session holds — what "the open
             // session keeps its painted thumbs" after Clear cache is read
-            // from (settings.md AC12; brief 010). LAST, after the settings
-            // block: fields are appended, and `format!` pairs placeholders
-            // with arguments by position.
+            // from (settings.md AC12; brief 010). After the settings block:
+            // fields are appended, and `format!` pairs placeholders with
+            // arguments by position.
             st.textures.images.len(),
+            // The export clash question's nudge, the twin of the copy
+            // block's `nudged=` (brief 011, QE round 2 D3): whether a key
+            // the question does not take was answered with "Pick one: B, O
+            // or Esc." or swallowed in silence — the only way a driven run
+            // tells the two apart, which is what the export ring's Tab on
+            // the question promises. Appended, LAST, for the same reason
+            // as `thumbtex` above.
+            win.get_clip_confirm_nudged(),
         ));
         return;
     }

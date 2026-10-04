@@ -483,7 +483,10 @@ that proves a commit reached the renderer, not the model),
 then `thumbtex=` (brief 010, 2026-10-03), the number of decoded thumb
 textures the session holds (`TextureStore.images`) — what "the open
 session keeps its painted thumbs" after Clear is read from (settings.md
-AC12).
+AC12); then `clipnudged=` (brief 011, 2026-10-04, QE round 2 D3), the
+export clash question's nudge, the twin of the copy block's `nudged=`:
+`true` once a key the question does not take has been answered with
+"Pick one: B, O or Esc." rather than swallowed in silence.
 New fields are APPENDED; `dump_field` finds `name=` by prefix. The
 nav-token swallow mirror (`drive swallowed by modal`) covers the Settings
 dialog like About and the card.
@@ -615,6 +618,10 @@ shot 2.
 
 ## History
 
+- 2026-10-04 — Brief 011, QE round 2 D3: the dump gains `clipnudged=`,
+  appended after `thumbtex=` — the export clash question's nudge, the
+  twin of `nudged=` — so the export ring test can tell a `Tab` swallowed
+  with the nudge from one swallowed in silence.
 - 2026-10-04 — Brief 011, QE's spec corrections D1 and D2 (its defect
   D6): the Focus bullet said a button a state change destroys emits no
   `lost` — on the shipped dialogs it does, beside the scope's `gained`,

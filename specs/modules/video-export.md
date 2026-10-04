@@ -387,7 +387,8 @@ are skipped, not failed, elsewhere.
   (review F1); the dump fields `clip=`, `clipstate=`,
   `clipavail=`, `clipsummary=`, `clipskipped=`, `cliperror=`,
   `clipreport=`, `clipconfirm=`, `clipprogress=`, `cliphint=`, `exported=`,
-  `curexported=`;
+  `curexported=`, and since brief 011 `clipnudged=` (the clash question's
+  nudge; QE 2026-10-04, round 2 D3);
   the tokens `clipdest:PATH` (before the `Ctrl+Shift+E` that should see
   it), `key:ctrl+shift+e`, `click:clip export-close`; the variable
   `FASTCULL_CLIP_HOLD_MS`, which core takes as `execute_held(plan, hold)`
@@ -570,8 +571,10 @@ Windows runner too. `core:` = a `fastcull-core` unit test, `muxer:` =
       move nothing (QE 2026-10-04, P2); `focusowner` stays `-1`; a `Y` on
       a focused button marks nothing and keeps the selection, the running
       Cancel included; `Space` on the focused Cancel closes; `Enter` on
-      the focused Export then `B` on the question exports; `Esc` with the
-      keyboard on Open folder closes — app
+      the focused Export then `B` on the question exports; `Tab` on the
+      question moves nothing and raises the nudge, `clipnudged=true` (QE
+      2026-10-04, round 2 D3); `Esc` with the keyboard on Open folder
+      closes — app
       `export_tab_walks_its_own_controls_and_never_leaves_the_dialog`
       (red on the pre-fix build at the fourth `Tab`, `focusowner=0`: the
       keyboard on the grid, where brief 011 D3 measured a `Y` marking the
@@ -586,6 +589,11 @@ Windows runner too. `core:` = a `fastcull-core` unit test, `muxer:` =
 
 ## History
 
+- 2026-10-04 — Brief 011, QE round 2 D3: the ring's box gains `Tab` on
+  the clash question raising the nudge, which the export test reads from
+  the dump's new `clipnudged=` (Contracts) — the copy half was pinned by
+  `nudged=`; this half had no field, and the ring's arm moved ahead of
+  the question's branch kept the suite green.
 - 2026-10-04 — Brief 011, QE's test proposal P3: the ring's box gains the
   running state — Cancel alone while the export runs, and the run's end
   bringing the keyboard home — which the export test's fourth and fifth
