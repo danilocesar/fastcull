@@ -419,7 +419,9 @@ is the eventual fix; no perf budget covers plan time.
   to clicks — so `Tab` there is swallowed with the nudge like every other
   key; the rename field entered by `Tab` is selected, so what is typed
   replaces the template shown; the keyboard's home is the dialog's scope,
-  where the open and every state change put it, and where pressing Copy —
+  where the open and every state change put it (residual, unmeasured: a
+  run that ends while a menu is open brings the keyboard home under the
+  menu), and where pressing Copy —
   a click, or `Enter`/`Space` on it — puts it before the run starts (brief
   011 review F1, 2026-10-04: a control the run disables cannot let go of
   the keyboard afterwards); `Enter`/`Space` on the
@@ -695,6 +697,9 @@ dialog with real key events.
 
 ## History
 
+- 2026-10-04 — Brief 011, the senior developer's review F2: the ring
+  sentence records the state-change refocus's residual under an open menu
+  — unmeasured, recorded rather than fixed (the Manager's ruling).
 - 2026-10-04 — Brief 011, the senior developer's review F1: pressing Copy
   puts the keyboard home before the run starts (the rule is ui-grid.md's)
   — Choose…, reached by `Tab` and left by a click on Copy, had kept its
