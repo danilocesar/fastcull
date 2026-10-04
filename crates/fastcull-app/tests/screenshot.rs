@@ -16176,9 +16176,18 @@ fn the_settings_card_grows_by_a_write_error_that_wraps_while_it_is_open() {
 /// there (test-harness.md) — under a cold build's load the compositor
 /// restored 1440x900 some 30 ms after the landing, and the verdicts below
 /// then read the restored window as the body/footer defect. So from the
-/// wait's own echo to the last dump no `window geometry WxH` other than
-/// `1000x400` may be traced, the WxH prefix compared only; its message
+/// LANDING — the first `window geometry 1000x400` mark after the
+/// `resize:1000x400` step — to the last dump no `window geometry WxH` other
+/// than `1000x400` may be traced, the WxH prefix compared only; its message
 /// names the revert. Diagnostic quality: a revert is red either way.
+///
+/// The range starts at the landing, never at the wait's echo (corrected
+/// 2026-10-03, QE round 1 D1): a `wait:` answers "has this happened yet",
+/// so a window restored right after the landing still satisfies it, and the
+/// restore is traced BEFORE the echo. Under `taskset -c 0,1` and six pinned
+/// spinners the restore came 13–31 ms after the landing and some 370 ms
+/// before the echo in 16 of 21 of QE's runs, and a range from the echo
+/// named none of them — each read as the card outside the modal layer.
 #[test]
 fn below_the_minimum_window_the_settings_body_gives_before_the_footer() {
     if !has_display() {
@@ -16206,12 +16215,21 @@ fn below_the_minimum_window_the_settings_body_gives_before_the_footer() {
         stderr.contains("wait:window geometry 1000x400 (satisfied"),
         "the window never reached 1000x400 — the premise:\n{stderr}"
     );
-    // ... and STAYED there from the landing to the last dump (TP-3).
+    // ... and STAYED there from the landing to the last dump (TP-3). The
+    // landing is the first `window geometry 1000x400` mark after the resize
+    // step's echo — not the wait's echo, which a revert precedes (the doc).
     let labels = mark_labels(&stderr);
-    let landed = labels
+    let resized = labels
         .iter()
-        .position(|l| l.starts_with("drive: wait:window geometry 1000x400 (satisfied"))
-        .unwrap_or_else(|| panic!("no geometry wait echo:\n{stderr}"));
+        .position(|l| *l == "drive: resize:1000x400")
+        .unwrap_or_else(|| panic!("no `resize:1000x400` step echo:\n{stderr}"));
+    let landed = resized
+        + labels[resized..]
+            .iter()
+            .position(|l| l.starts_with("window geometry 1000x400 "))
+            .unwrap_or_else(|| {
+                panic!("no `window geometry 1000x400` landing after the resize step:\n{stderr}")
+            });
     let last = labels
         .iter()
         .position(|l| l.starts_with("QEDUMP general "))
@@ -16225,11 +16243,11 @@ fn below_the_minimum_window_the_settings_body_gives_before_the_footer() {
         .collect();
     assert!(
         reverted.is_empty(),
-        "THE WINDOW DID NOT STAY AT 1000x400: after the geometry wait's landing it was \
-         traced at {reverted:?} before the last dump — the compositor reverted it, so the \
-         verdicts below would read a restored window as the body/footer defect (brief \
-         009's TP-3; test-harness.md: a satisfied geometry wait promises the landing, not \
-         that the window stays):\n{stderr}"
+        "THE WINDOW DID NOT STAY AT 1000x400: after it landed (the first `window geometry \
+         1000x400` mark after the resize step) it was traced at {reverted:?} before the last \
+         dump — the compositor reverted it, so the verdicts below would read a restored \
+         window as the body/footer defect (brief 009's TP-3; test-harness.md: a satisfied \
+         geometry wait promises the landing, not that the window stays):\n{stderr}"
     );
     let perf = qedump(&stderr, "perf");
     assert_eq!(

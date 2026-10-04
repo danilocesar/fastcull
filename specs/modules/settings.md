@@ -964,10 +964,14 @@ their precedence is `fastcull-core`'s; the app binds (brief 008, 2026-10-01).
       body back at its top —
       `below_the_minimum_window_the_settings_body_gives_before_the_footer`
       (brief 009, 2026-10-03); its premise names a reverted window as
-      such: between the geometry wait's echo and the last dump no `window
+      such: between the landing (the first `window geometry 1000x400`
+      mark after the `resize:1000x400` step) and the last dump no `window
       geometry WxH` other than `1000x400` is traced, the WxH prefix
       compared only — diagnostic quality, a revert is red either way
-      (brief 009's TP-3, landed with brief 010, 2026-10-03).
+      (brief 009's TP-3, landed with brief 010, 2026-10-03; corrected the
+      same day, QE 2026-10-03, D1: the range began at the geometry wait's
+      echo, and a revert is traced before that echo — a wait answers "has
+      this happened yet" — so the strand named no revert).
 - [x] **AC23 — a plain failed write's status line** (brief 010 R2). With no
       read error standing and no file moved aside, a write that fails puts
       ` — ⚠ settings.toml could not be written` on the status line — no
@@ -1080,6 +1084,10 @@ their precedence is `fastcull-core`'s; the app binds (brief 008, 2026-10-01).
 
 ## History
 
+- 2026-10-03 — Brief 010, QE round 1 D1: AC22's TP-3 premise ranges from
+  the landing, the first `window geometry 1000x400` mark after the resize
+  step, where it began at the geometry wait's echo — which a revert
+  precedes, so it had named none.
 - 2026-10-03 — Brief 010, the senior developer's review F3: AC26 names the
   saturation its test pins — a Limit past the type's maximum holds there.
 - 2026-10-03 — Brief 010, the senior developer's review F1: AC28 counts
