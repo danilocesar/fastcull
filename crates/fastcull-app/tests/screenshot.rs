@@ -7051,7 +7051,7 @@ fn assert_the_finish_brings_the_keyboard_home(stderr: &str, finished: &str, dial
 ///
 /// One folder of three 2 KB fakes, `a` and `b` picked and the cursor left
 /// on the unpicked `c`, so a key that reached the grid behind the scrim
-/// would show in the status line: a `Y` would pick `c`. Five launches:
+/// would show in the status line: a `Y` would pick `c`. Six launches:
 ///   1. No destination, so Copy is greyed — the old-red's own shape (brief
 ///      011 D3). Ctrl+Tab and Ctrl+Shift+Tab first: neither moves the
 ///      keyboard (ui-grid.md: "`Ctrl+Tab` does nothing unless a dialog's
@@ -7066,13 +7066,21 @@ fn assert_the_finish_brings_the_keyboard_home(stderr: &str, finished: &str, dial
 ///      Tab; then four Tabs — Choose… (the wrap), the field, Copy, Choose…
 ///      again; a `Y` with the keyboard on Choose… marks nothing; two
 ///      Shift+Tabs — Copy, the field — and the `z` typed there REPLACES
-///      `x.{ext}` (AC3: the field the ring lands on is selected). Enter in
-///      the field re-plans without copying and brings the keyboard home
-///      (`focus: copy dialog gained`), and the next Tab starts the ring
-///      over at Choose…, the first control — the home reset on a gain that
-///      did not come from the ring (QE's P4; Copy stays live under `z`, so
-///      a ring that kept the field's slot would land on Copy). Esc closes
-///      the dialog from Choose…, and the `+` after it zooms the grid.
+///      `x.{ext}` (AC3: the field the ring lands on is selected); Esc closes
+///      the dialog from the field — the field lets Escape through to the
+///      dialog's scope — and the `+` after it zooms the grid. No Enter and
+///      no Space: this launch is the first to walk the ring with Copy live.
+///
+///      2b. The same folder, destination and template, in a launch of its
+///      own (QE's P4; split out of launch 2 at QE's round 2, D1): Tab, Tab
+///      from the dialog's home land on Choose… and in the field — the two
+///      landings launch 1 asserted — and the `z` typed there replaces
+///      `x.{ext}`. Enter in the field re-plans without copying and brings
+///      the keyboard home (`focus: copy dialog gained`), and the next Tab
+///      starts the ring over at Choose…, the first control — the home reset
+///      on a gain that did not come from the ring (Copy stays live under
+///      `z`, so a ring that kept the field's slot would land on Copy). Esc
+///      closes the dialog from Choose….
 ///   3. A destination holding another body's `a.ARW`. First the mixed path
 ///      (the senior developer's review F1): Tab puts the keyboard on
 ///      Choose…, a mouse click on Copy — by name, `click:copy copy-close` —
@@ -7107,14 +7115,28 @@ fn assert_the_finish_brings_the_keyboard_home(stderr: &str, finished: &str, dial
 ///      at the destination.
 ///
 /// No script lands Enter or Space on Choose… or Open destination, and none
-/// would under any mutant below: they open the native folder picker and the
-/// file manager. That is why the home strand sits in launch 2 — after the
-/// report, a ring that landed one control off would put launch 3's closing
-/// Space on Open destination. Launch 5's Space reaches the running Cancel
+/// does under any mutant below: they open the native folder picker and the
+/// file manager, and the picker holds the app until the watchdog kills it
+/// 90 s later, with no assertion reached. What keeps it so: an Enter or a
+/// Space comes only after landings an EARLIER launch has asserted, so a
+/// ring that lands one control off goes red at a landing assertion before
+/// any press can reach the wrong control. Launches 1 and 2 press neither.
+/// Launch 2b's Enter goes into the field, reached from home by the two
+/// Tabs launch 1 asserted. Launch 3's Enter goes to Copy after the landings
+/// launches 1 and 2 asserted. Launch 5's Space reaches the running Cancel
 /// only by launch 4's own path, Enter from home and one Tab, which launch 4
 /// has asserted; under a ring that loses the running Cancel (the M14 mutant
 /// below) that Tab goes nowhere and the Space lands on the dialog's home,
-/// which ignores it.
+/// which ignores it. The Shift+Tab from home sits in launch 2 for the same
+/// reason: after the report, a ring that landed one control off would put
+/// launch 3's closing Space on Open destination. That closing Space is the
+/// one press after landings no earlier launch asserts — the report's
+/// Tabs — and is the run-time residual recorded below. (Corrected
+/// 2026-10-04, QE round 2 D1: this paragraph said the same while launch 2
+/// still pressed Enter in the field after six landings no earlier launch
+/// had asserted, the Shift+Tab from home first among them; under the
+/// home-start mutant that Return landed on Choose…, the native picker
+/// opened and the run hung until the watchdog.)
 ///
 /// Each press that activates a button has its premise read at the press
 /// itself (the senior developer's review F3, [`last_gained_before`]): the
@@ -7173,10 +7195,16 @@ fn assert_the_finish_brings_the_keyboard_home(stderr: &str, finished: &str, dial
 /// M14) → red at launch 4's dump.run, the Tab landing nowhere, and launch
 /// 5's script driven alone against that build has its Space land on the
 /// dialog's home, where it is ignored, and the copy runs to "2 copied";
-/// the home start removed
-/// (`slot + dir` from -1) → the first Shift+Tab lands on the field, red at
-/// dump.home; `slot-ok` approving the greyed Copy → the ring's `focus()` on
-/// it walks on to `keys` behind the scrim, red at dump.g3, `focusowner=0`;
+/// the home start removed (`slot + dir` from -1, `let start = self.slot;`
+/// in `walk`; QE's mutant M6) → the first Shift+Tab lands on the field,
+/// red at launch 2's dump.home, `left: ["focus: copy template gained"]
+/// right: ["focus: copy copy-close gained"]` (corrected 2026-10-04, QE
+/// round 2 D1: this said red at dump.home while launch 2 still pressed
+/// Return in the field after that landing — under this mutant the Return
+/// landed on Choose…, the native picker opened and the run hung until the
+/// watchdog, so the assertion was never reached); `slot-ok` approving the
+/// greyed Copy → the ring's `focus()` on it walks on to `keys` behind the
+/// scrim, red at dump.g3, `focusowner=0`;
 /// the ring's arm moved ahead of the dialog's About containment → the Tab
 /// under About lands on Choose…, red at dump.abtab; the arm moved ahead of
 /// the clash question's branch → Tab there is eaten without the nudge, red
@@ -7186,8 +7214,8 @@ fn assert_the_finish_brings_the_keyboard_home(stderr: &str, finished: &str, dial
 /// the field); the scope's own gain no longer resetting the ring to home
 /// (`self.slot = -1` removed from `copy-keys`' `changed has-focus`, QE's
 /// mutant M12) → after Enter in the rename field the next Tab goes on from
-/// the field's slot to Copy, red at dump.hometab, `focus: copy copy-close
-/// gained`. The controls' own token writes have no red mutant —
+/// the field's slot to Copy, red at launch 2b's dump.hometab, `focus: copy
+/// copy-close gained`. The controls' own token writes have no red mutant —
 /// `focus-slot` writes the token too, and nothing else writes it while the
 /// dialog is up — and stay as the owner token's claim-site rule.
 #[test]
@@ -7364,16 +7392,15 @@ fn copy_picks_tab_walks_its_own_controls_and_never_leaves_the_dialog() {
              3600:key:tab;3900:dump.t1;4100:key:y;4400:dump.y1;4600:key:tab;4900:dump.t2;\
              5100:key:tab;5400:dump.t3;5600:key:tab;5900:dump.t4;\
              6100:key:shift+tab;6400:dump.s1;6600:key:shift+tab;6900:dump.s2;\
-             7100:key:z;7400:dump.z;7600:key:return;7900:dump.acc;\
-             8100:key:tab;8400:dump.hometab;8600:key:escape;8900:dump.closed;\
-             9100:key:+;9400:dump.zoom",
+             7100:key:z;7400:dump.z;7600:key:escape;7900:dump.closed;\
+             8100:key:+;8400:dump.zoom",
             dest = dest.display()
         ),
     );
     held(
         &ring,
         &[
-            "plan", "home", "t1", "y1", "t2", "t3", "t4", "s1", "s2", "z", "acc", "hometab",
+            "plan", "home", "t1", "y1", "t2", "t3", "t4", "s1", "s2", "z",
         ],
     );
     let plan = qedump(&ring, "plan");
@@ -7419,11 +7446,64 @@ fn copy_picks_tab_walks_its_own_controls_and_never_leaves_the_dialog() {
          its text — the ring's arrival did not select it (fileops.md, \"The \
          keyboard ring\"; AC3):\n{ring}"
     );
-    // Enter in the rename field (QE's P4): it re-plans and does not copy
-    // (the field's `accepted`), and Copy stays live under the template `z`
-    // — the premise that lets the next Tab tell the scope's home reset from
-    // a ring that kept the field's slot, which would land on Copy.
-    let acc = qedump(&ring, "acc");
+    let closed = qedump(&ring, "closed");
+    assert_eq!(
+        (dump_field(closed, "copy"), dump_field(closed, "focusowner")),
+        ("false", "0"),
+        "Esc in the rename field did not close the dialog and hand the keyboard \
+         back to the grid: {closed}"
+    );
+    assert_eq!(
+        dump_field(qedump(&ring, "zoom"), "zoom"),
+        "2",
+        "the `+` after the dialog closed was dead:\n{ring}"
+    );
+
+    // --- 2b. Enter in the rename field (QE's P4) --------------------------
+    // A launch of its own (QE's round 2, D1): its Enter follows only the two
+    // landings launch 1 asserted — Tab from home onto Choose…, Tab on into
+    // the field — never one this launch is the first to make.
+    let enter = run(
+        "tabring-copy-enter.jpg",
+        &format!(
+            "1500:wait:load settled gen 0;1700:key:y;1900:key:y;2100:copydest:{dest};\
+             2300:key:ctrl+e;2600:copytemplate:x.{{ext}};2900:dump.plan;\
+             3100:key:tab;3400:dump.p1;3600:key:tab;3900:dump.p2;\
+             4100:key:z;4400:dump.pz;4600:key:return;4900:dump.acc;\
+             5100:key:tab;5400:dump.hometab;5600:key:escape;5900:dump.closed",
+            dest = dest.display()
+        ),
+    );
+    held(&enter, &["plan", "p1", "p2", "pz", "acc", "hometab"]);
+    let eplan = qedump(&enter, "plan");
+    assert_eq!(dump_field(eplan, "copystate"), "0", "{eplan}");
+    assert_eq!(dump_text(eplan, "template"), "x.{ext}", "{eplan}");
+    assert!(
+        dump_text(eplan, "summary").contains(" to copy · ")
+            && dump_text(eplan, "copyerror").is_empty(),
+        "the premise is a clean plan, where Copy is live: {eplan}"
+    );
+    landings(
+        &enter,
+        &[("p1", "tab", "copy choose"), ("p2", "tab", "copy template")],
+    );
+    // The `z` replaced the selected template and Copy stays live under it —
+    // the premise that lets the Tab after Enter tell the scope's home reset
+    // from a ring that kept the field's slot, which would land on Copy.
+    let pz = qedump(&enter, "pz");
+    assert_eq!(
+        (
+            dump_field(pz, "copystate"),
+            dump_text(pz, "template"),
+            dump_text(pz, "copyerror")
+        ),
+        ("0", "z", ""),
+        "the `z` typed after Tab, Tab into the rename field did not replace \
+         its text, or left Copy greyed: {pz}"
+    );
+    // Enter in the rename field re-plans and does not copy (the field's
+    // `accepted`), with Copy still live.
+    let acc = qedump(&enter, "acc");
     assert_eq!(
         (
             dump_field(acc, "copystate"),
@@ -7435,7 +7515,7 @@ fn copy_picks_tab_walks_its_own_controls_and_never_leaves_the_dialog() {
          still live: {acc}"
     );
     landings(
-        &ring,
+        &enter,
         &[
             // The keyboard home…
             ("acc", "return", "copy dialog"),
@@ -7443,17 +7523,15 @@ fn copy_picks_tab_walks_its_own_controls_and_never_leaves_the_dialog() {
             ("hometab", "tab", "copy choose"),
         ],
     );
-    let closed = qedump(&ring, "closed");
+    let eclosed = qedump(&enter, "closed");
     assert_eq!(
-        (dump_field(closed, "copy"), dump_field(closed, "focusowner")),
+        (
+            dump_field(eclosed, "copy"),
+            dump_field(eclosed, "focusowner")
+        ),
         ("false", "0"),
         "Esc with the keyboard on Choose… did not close the dialog and hand \
-         the keyboard back to the grid: {closed}"
-    );
-    assert_eq!(
-        dump_field(qedump(&ring, "zoom"), "zoom"),
-        "2",
-        "the `+` after the dialog closed was dead:\n{ring}"
+         the keyboard back to the grid: {eclosed}"
     );
 
     // --- 3. the mixed path, the clash question and the report -------------
