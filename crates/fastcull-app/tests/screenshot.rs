@@ -8853,7 +8853,7 @@ fn the_video_export_asks_before_replacing_a_file() {
 /// Three synthetic 400×300 frames, all selected, the cursor on `a`, so a
 /// key that reached the grid behind the scrim would show: a `Y` would pick
 /// `a`, move the cursor and collapse the selection the dialog is about to
-/// export. The destination holds another day's `a-c.mov`. Two launches:
+/// export. The destination holds another day's `a-c.mov`. Three launches:
 ///   1. The plan state. About first, over the dialog: a Tab under it moves
 ///      nothing and the first Esc closes About alone. Then four Tabs —
 ///      Choose…, Cancel, Export, and the wrap to Choose…; a `Y` with the
@@ -8874,15 +8874,25 @@ fn the_video_export_asks_before_replacing_a_file() {
 ///      home lands on Close, the LAST control, and Tab, Tab, Shift+Tab walk
 ///      Open folder, Close, Open folder — past the disabled Choose… and the
 ///      absent Cancel — and Esc with the keyboard on Open folder closes.
+///   3. Export greyed (QE's P1, 2026-10-04): the destination is a FILE, so
+///      the plan refuses it — `cliperror` names the refusal, which is what
+///      tells a greyed Export from a selection the plan could not use — and
+///      Export is greyed. Tab, Tab, Tab land on Choose…, Cancel and Choose…
+///      again: the wrap passes over the greyed Export (video-export.md,
+///      "Export skipped while it is greyed"); a `Y` with the keyboard on
+///      Choose… marks nothing and keeps the selection; Shift+Tab, Shift+Tab
+///      land on Cancel and Choose…; Esc closes. No Enter or Space anywhere
+///      in this launch: Choose… opens the native folder picker.
 ///
-/// Two launches where the plan had one, so that no Space or Enter is
-/// pressed before the plan-state ring has been asserted: in a single
-/// launch a ring without its wrap would put the Space meant for Cancel on
-/// Choose… (the native folder picker), and a ring missing Cancel would put
-/// the Enter meant for Export there. Launch 2 reaches Cancel and Export
-/// only by the Tabs launch 1 has asserted — from home, and from Choose…
-/// onward — which no ring that passed launch 1 can turn onto Choose…, and
-/// the report takes Esc, never Enter or Space on Open folder (xdg-open).
+/// Launches 1 and 2 split what the plan had as one launch, so that no
+/// Space or Enter is pressed before the plan-state ring has been asserted:
+/// in a single launch a ring without its wrap would put the Space meant for
+/// Cancel on Choose… (the native folder picker), and a ring missing Cancel
+/// would put the Enter meant for Export there. Launch 2 reaches Cancel and
+/// Export only by the Tabs launch 1 has asserted — from home, and from
+/// Choose… onward — which no ring that passed launch 1 can turn onto
+/// Choose…, and the report takes Esc, never Enter or Space on Open folder
+/// (xdg-open).
 ///
 /// Each press that activates a button has its premise read at the press
 /// itself (review F3, the copy test's [`last_gained_before`]): the keyboard
@@ -8929,7 +8939,12 @@ fn the_video_export_asks_before_replacing_a_file() {
 /// red at dump.rhome, the first Shift+Tab on the report landing on Open
 /// folder instead of Close; the ring's arm moved ahead of the dialog's
 /// About containment → the Tab under About lands on Choose…, red at
-/// dump.abtab.
+/// dump.abtab; `slot-ok` approving the greyed Export (QE's mutant E9,
+/// `if (s == 3) { return root.clip-state == 0 || root.clip-state == 2; }`)
+/// → the ring's `focus()` on the disabled Export walks on in tree order to
+/// the grid behind the scrim (the fourth canary's fact 10), red at launch
+/// 3's dump.g3, `focusowner=0`, the third Tab's landing `focus: keys
+/// gained` — issue #98 back in this dialog, with launches 1 and 2 green.
 #[test]
 fn export_tab_walks_its_own_controls_and_never_leaves_the_dialog() {
     if !has_display() {
@@ -8939,6 +8954,8 @@ fn export_tab_walks_its_own_controls_and_never_leaves_the_dialog() {
     let _s = serial();
     let src = out_dir().join("tabring-clip-src");
     let dest = out_dir().join("tabring-clip-dest");
+    // Launch 3's destination: a FILE, which the plan refuses.
+    let dest_file = out_dir().join("tabring-clip-dest-file");
     for d in [&src, &dest] {
         std::fs::remove_dir_all(d).ok();
         std::fs::create_dir_all(d).unwrap();
@@ -8947,6 +8964,7 @@ fn export_tab_walks_its_own_controls_and_never_leaves_the_dialog() {
     write_synthetic_raw(&src.join("b.ARW"), 400, 300, 1, 5000);
     write_synthetic_raw(&src.join("c.ARW"), 400, 300, 1, 4500);
     std::fs::write(dest.join("a-c.mov"), b"another day's export").unwrap();
+    std::fs::write(&dest_file, b"a file where the folder should be").unwrap();
     let opened = format!(
         "1400:wait:load settled gen 0;1500:select-all;1700:clipdest:{dest};1900:key:ctrl+shift+e;",
         dest = dest.display()
@@ -9224,9 +9242,91 @@ fn export_tab_walks_its_own_controls_and_never_leaves_the_dialog() {
         "Esc with the keyboard on Open folder did not close the dialog and \
          hand the keyboard back: {end}"
     );
+
+    // --- 3. Export greyed: the ring passes over it both ways (QE's P1) -----
+    // Its own prefix: the shared one carries the folder destination.
+    let script = format!(
+        "1400:wait:load settled gen 0;1500:select-all;1700:clipdest:{dest_file};\
+         1900:key:ctrl+shift+e;2300:dump.plan;\
+         2500:key:tab;2800:dump.g1;3000:key:tab;3300:dump.g2;3500:key:tab;3800:dump.g3;\
+         4000:key:y;4300:dump.gy;\
+         4500:key:shift+tab;4800:dump.g4;5000:key:shift+tab;5300:dump.g5;\
+         5500:key:escape;5800:dump.closed",
+        dest_file = dest_file.display()
+    );
+    let grey = shoot_env_stderr(
+        &[src.to_str().unwrap()],
+        &[("FASTCULL_TRACE", "1"), ("FASTCULL_DRIVE", script.as_str())],
+        &out_dir().join("tabring-clip-grey.jpg"),
+    );
+    held(&grey, &["plan", "g1", "g2", "g3", "gy", "g4", "g5"]);
+    assert!(
+        grey.contains("wait:load settled gen 0 (satisfied"),
+        "the selection was made before the folder settled:\n{grey}"
+    );
+    // The premise names the refusal: Export greyed because the destination
+    // is not a folder, not because the selection gave the plan nothing to
+    // export.
+    let gplan = qedump(&grey, "plan");
+    assert_eq!(
+        (
+            dump_field(gplan, "clipstate"),
+            dump_text(gplan, "cliperror"),
+            dump_field(gplan, "selected")
+        ),
+        ("0", "the destination is not a folder", "3"),
+        "the premise is a plan the destination refuses, where Export is \
+         greyed: {gplan}"
+    );
+    assert!(
+        dump_text(gplan, "status").contains("★0 ✕0"),
+        "the premise is a session with no marks: {gplan}"
+    );
+    landings(
+        &grey,
+        &[
+            ("g1", "tab", "clip choose"),
+            ("g2", "tab", "clip cancel"),
+            // The wrap, over the greyed Export.
+            ("g3", "tab", "clip choose"),
+            ("g4", "shift+tab", "clip cancel"),
+            ("g5", "shift+tab", "clip choose"),
+        ],
+    );
+    let gy = qedump(&grey, "gy");
+    assert_eq!(
+        (
+            dump_text(gy, "status"),
+            dump_field(gy, "cursor"),
+            dump_field(gy, "selected")
+        ),
+        (
+            dump_text(gplan, "status"),
+            dump_field(gplan, "cursor"),
+            dump_field(gplan, "selected")
+        ),
+        "the Y on the focused Choose… reached the grid behind the dialog:\n{grey}"
+    );
+    assert_eq!(
+        landing(&mark_labels(&grey), "gy").1,
+        Vec::<&str>::new(),
+        "the Y moved the keyboard:\n{grey}"
+    );
+    let gclosed = qedump(&grey, "closed");
+    assert_eq!(
+        (
+            dump_field(gclosed, "clip"),
+            dump_field(gclosed, "focusowner"),
+            dump_field(gclosed, "selected")
+        ),
+        ("false", "0", "3"),
+        "Esc with the keyboard on Choose… did not close the dialog, hand the \
+         keyboard back and keep the selection: {gclosed}"
+    );
     for d in [&src, &dest] {
         std::fs::remove_dir_all(d).ok();
     }
+    std::fs::remove_file(&dest_file).ok();
 }
 
 /// Issue #55: Shift+`]` / Shift+`[` extend the selection by WHOLE bursts,

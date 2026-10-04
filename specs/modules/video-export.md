@@ -555,10 +555,12 @@ Windows runner too. `core:` = a `fastcull-core` unit test, `muxer:` =
       character-identical).
 - [x] The keyboard ring (brief 011, AC2): `Tab`/`Shift+Tab` walk Choose…,
       Cancel and Export, then Open folder and Close on the report,
-      wrapping; `focusowner` stays `-1`; a `Y` on a focused button marks
-      nothing and keeps the selection; `Space` on the focused Cancel
-      closes; `Enter` on the focused Export then `B` on the question
-      exports; `Esc` with the keyboard on Open folder closes — app
+      wrapping and skipping the greyed Export (the third launch; QE
+      2026-10-04, D4); `focusowner` stays `-1`; a `Y` on a focused
+      button marks nothing and keeps the selection; `Space` on the
+      focused Cancel closes; `Enter` on the focused Export then `B` on
+      the question exports; `Esc` with the keyboard on Open folder
+      closes — app
       `export_tab_walks_its_own_controls_and_never_leaves_the_dialog`
       (red on the pre-fix build at the fourth `Tab`, `focusowner=0`: the
       keyboard on the grid, where brief 011 D3 measured a `Y` marking the
@@ -573,6 +575,11 @@ Windows runner too. `core:` = a `fastcull-core` unit test, `muxer:` =
 
 ## History
 
+- 2026-10-04 — Brief 011, QE's test proposal P1 (spec correction D4): the
+  ring's box gains the greyed Export's skip, which the export test's third
+  launch drives — a destination the plan refuses greys Export, and the
+  wrap passes over it; until then "(Export skipped while it is greyed)"
+  had no test.
 - 2026-10-04 — Brief 011, the senior developer's review F2: the ring
   sentence records the state-change refocus's residual under an open menu
   — unmeasured, recorded rather than fixed (the Manager's ruling).
