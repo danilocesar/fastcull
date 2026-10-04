@@ -74,6 +74,23 @@ explain itself on stderr.
   on stderr when set (`fastcull: FASTCULL_CLEAR_HOLD_MS=N — every cache
   clear is held`). Test plumbing in `FASTCULL_KITCHEN_COOK_MS`'s family,
   not a setting (brief 010 D3, 2026-10-03; brief 008 D13 and D42 stand).
+- `FASTCULL_COPY_HOLD_MS=N` and `FASTCULL_CLIP_HOLD_MS=N` — hold the Copy
+  Picks worker, or the video export's writer, N ms on the worker itself
+  before its first file (its first frame), with the run's cancel flag
+  polled at least every 10 ms through the hold, so a Cancel pressed during
+  it ends the run with nothing copied or written: the pacing knob for the
+  running dialog's keyboard ring and the refocus at the worker's finish
+  (fileops.md and video-export.md, "The keyboard ring") — with the worker
+  held, a `Tab` reaches the running Cancel while the dump still reads
+  `copystate=1` (`clipstate=1`), where a 2 KB copy or a three-frame export
+  ends in milliseconds and leaves no running state to drive; default 0,
+  off. Read once per process, at the first run's start, and announced
+  then on stderr (`fastcull: FASTCULL_COPY_HOLD_MS=N — every copy is
+  held`, `fastcull: FASTCULL_CLIP_HOLD_MS=N — every video export is
+  held`). Test plumbing in `FASTCULL_KITCHEN_COOK_MS`'s family, not a
+  setting: core's `fileops::execute_held` and `clip::execute_held` take
+  the hold, and `execute` is the same call without one (brief 011,
+  2026-10-04: QE's test proposal P3, the senior developer's Shape A).
 - `FASTCULL_MAX_READERS=N` — the read pool override (raw-pipeline.md);
   wins over the `performance.max_readers` setting, whose field the dialog
   then shows read-only (settings.md).
@@ -360,7 +377,10 @@ sidecars — scripts target throwaway copies of test data only.
   card went up; N counts the copies (exports) this PROCESS started,
   1-based, carried across a session swap; a bare `wait:copy finished`
   matches as a substring; a run cancelled by a session swap emits none —
-  cancelled is not finished.
+  cancelled is not finished — while a run the Cancel button stops puts its
+  report card up and emits it like any other (clarified 2026-10-04, brief
+  011, QE's P3: "cancelled is not finished" is the swap's case, and the
+  ring tests' cancelled strand waits on the mark).
 - `sidecar writer closed gen N: K pending flushed` — N is the CLOSED
   session's generation, K the writes still inside their debounce; startup
   and process exit never trace it (xmp-sidecars.md).
@@ -591,6 +611,15 @@ shot 2.
 
 ## History
 
+- 2026-10-04 — Brief 011, QE's test proposal P3 (the senior developer's
+  Shape A), spec first: `FASTCULL_COPY_HOLD_MS` and `FASTCULL_CLIP_HOLD_MS`
+  hold the copy worker and the export writer before their first file,
+  cancellable, so a driven test can reach the running Cancel and wait for
+  the finish — a 2 KB copy is over before any key lands, and the other
+  shape, 1.2 GB of sparse fakes, would have written 1.2 GB per run into
+  the temp directory, and allocated it on Windows; the finished-run
+  marks' sentence says a run the Cancel button stops emits its mark too,
+  which the cancelled strand waits on.
 - 2026-10-04 — Brief 011, the senior developer's review F1: the Copy/Close
   and Export/Close buttons report their layout (`copy copy-close`, `clip
   export-close`), so a driven test clicks them by name.

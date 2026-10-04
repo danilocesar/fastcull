@@ -389,7 +389,11 @@ are skipped, not failed, elsewhere.
   `clipreport=`, `clipconfirm=`, `clipprogress=`, `cliphint=`, `exported=`,
   `curexported=`;
   the tokens `clipdest:PATH` (before the `Ctrl+Shift+E` that should see
-  it), `key:ctrl+shift+e`, `click:clip export-close`.
+  it), `key:ctrl+shift+e`, `click:clip export-close`; the variable
+  `FASTCULL_CLIP_HOLD_MS`, which core takes as `execute_held(plan, hold)`
+  — the writer held before its first frame, the cancel polled through the
+  hold; `execute(plan)` is the same call with no hold (brief 011, QE's
+  P3).
 
 ## Acceptance criteria
 
@@ -580,6 +584,10 @@ Windows runner too. `core:` = a `fastcull-core` unit test, `muxer:` =
 
 ## History
 
+- 2026-10-04 — Brief 011, QE's test proposal P3 (the senior developer's
+  Shape A), spec first: the driven suite's contract gains
+  `FASTCULL_CLIP_HOLD_MS` and core's `execute_held`, so a test can reach
+  the running Cancel and the writer's finish (test-harness.md).
 - 2026-10-04 — Brief 011, QE's spec correction D3 (its defect D1, the
   senior developer's F4): the ring sentence records the stale focus a
   re-plan leaves on an Export it greys while the keyboard is on it — a

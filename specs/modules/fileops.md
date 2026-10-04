@@ -497,7 +497,11 @@ is the eventual fix; no perf budget covers plan time.
   `copynote=` (the preview's notes, the `{seq}` note among them), `report=`;
   the tokens `copydest:PATH` (before the
   `Ctrl+E` that should see it), `copytemplate:TEXT` (after it — opening
-  clears the field), `click:copy answer B`, `click:copy copy-close`.
+  clears the field), `click:copy answer B`, `click:copy copy-close`; the
+  variable `FASTCULL_COPY_HOLD_MS`, which core takes as
+  `execute_held(plan, hold)` — the worker held before its first file, the
+  cancel polled through the hold; `execute(plan)` is the same call with no
+  hold (brief 011, QE's P3).
 - A `#[cfg(unix)]` test takes its private helpers with it — `cargo clippy
   --all-targets -- -D warnings` on the Windows job refuses dead code —
   while helpers shared with a platform-neutral test are never gated (red on
@@ -705,6 +709,10 @@ dialog with real key events.
 
 ## History
 
+- 2026-10-04 — Brief 011, QE's test proposal P3 (the senior developer's
+  Shape A), spec first: the driven suite's contract gains
+  `FASTCULL_COPY_HOLD_MS` and core's `execute_held`, so a test can reach
+  the running Cancel and the worker's finish (test-harness.md).
 - 2026-10-04 — Brief 011, QE's spec correction D3 (its defect D1, the
   senior developer's F4): the ring sentence records the stale focus a
   re-plan leaves on a Copy it greys while the keyboard is on it — a
