@@ -216,3 +216,32 @@ clock guess.
   change. AC22 stays ticked with TP-3's clause (the claim is pinned; TP-3
   improves the premise). AC27 is the strand in the keyword test. The
   harness hold knob `FASTCULL_CLEAR_HOLD_MS` is test plumbing (D3).
+- D6 (2026-10-04, Manager, at the merge): the verdict trail — review
+  round 1 CHANGES_REQUESTED (a blocker: AC28's underline strand red on
+  windows-latest on correct code — a 3 px band flush with the tab's mark
+  held one underline row of two there; two minors), fixed in three
+  commits and APPROVED; QE round 1 FAIL on two majors in test power, each
+  with a fix QE measured in a worktree — TP-3's revert diagnostic ranged
+  from the geometry wait's echo, not the window's landing, and named 0 of
+  16 reverts under load (the brief's and the issue's wording said
+  "landing"; AC22's sentence corrected, `(QE 2026-10-03, D1)`), and AC27's
+  "keeps its text" had no reader (a `revert=""` premise at the typed and
+  inert dumps, red under the commit-and-clear mutant, `(QE 2026-10-03,
+  D2)`) — plus a seat figure in test-harness.md's Behaviour (dropped,
+  D3) and a second load residual the failed-cursor test's doc now names
+  (D4); re-review APPROVED (two nits: a retraction's wording, this log's
+  entry); QE round 2 PASS — one minor, D5, the test doc's "a few ms"
+  wording, fixed here as a comment fixup. The Manager's rulings of round
+  1 recorded: the two load residuals' clock-based steps (the fixed 15 s
+  first `End`, the corrupter's 12 s deadline) are a follow-up issue, not
+  this unit's; the other seat and CI figures in test-harness.md's
+  Behaviour are an M10 sweep after this unit; the keyword editor's own
+  text has no dump reader (a typed comma is hidden by the commit's split)
+  — a recorded limit, in the follow-up issue; the failed-cursor test
+  leaves its scratch (pre-existing hygiene) — the same issue. Directive
+  candidates for the user: the driven suite is 120 tests, thirds of ~327
+  + 280 + 326 s in debug on the idle seat; a third runs as `cargo test
+  --workspace --locked -- --test-threads=1 --exact <names>` — CI's one
+  feature resolution — because `--test screenshot` builds a second
+  variant of the app. CI green on both runners at 3467cc0 (ubuntu
+  19m27s, windows 44m57s). #100 and #101 close with PR #103.

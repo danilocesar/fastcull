@@ -5874,8 +5874,9 @@ fn overlay_wheel_still_zooms_one_stop_per_notch() {
 ///
 /// Why the badge's mark and not the drop's: `failed badge <id> laid out` is
 /// emitted in the refresh that sees `<id>` enter the failed set, whatever
-/// the overlay's state (a few ms after the drop, measured idle and under
-/// load), while `loupe overlay dropped idx 11 (decode failed)` fires only
+/// the overlay's state (after the drop's mark; the gap is a seat
+/// measurement the gate does not depend on — QE 2026-10-03, D3/D5), while
+/// `loupe overlay dropped idx 11 (decode failed)` fires only
 /// when the overlay was UP and wanted when the failure landed — a failure
 /// that lands after a `(hold cap)` drop emits none, and a wait on it would
 /// have hung the very run that went red (the idle trace shows `loupe hold

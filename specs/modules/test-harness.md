@@ -250,9 +250,10 @@ sidecars — scripts target throwaway copies of test data only.
   knows `<id>` failed": the badge is created in the refresh that sees
   `<id>` enter the failed set, with the cursor's cell laid out — a failure
   on the cursor drops the overlay in that same refresh and the badge's
-  mark follows the drop's (QE 2026-10-03, D3: it gave the gap between
-  them as a few milliseconds measured on this seat — a seat measurement,
-  which runs under load widened, and the gate does not depend on the gap)
+  mark follows the drop's (QE 2026-10-03, D3: this sentence had given the
+  gap between them as a few milliseconds — a seat measurement, which
+  belongs in the brief or the commit, and which load runs widened; the
+  gate does not depend on the gap)
   — so it fires whatever the overlay's state, where the `(decode failed)`
   drop above does not; the failed-cursor test gates its first dump on it (brief
   010, 2026-10-03, issue #101: on a slow runner the failing decode landed
