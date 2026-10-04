@@ -424,9 +424,14 @@ is the eventual fix; no perf budget covers plan time.
   menu), and where pressing Copy —
   a click, or `Enter`/`Space` on it — puts it before the run starts (brief
   011 review F1, 2026-10-04: a control the run disables cannot let go of
-  the keyboard afterwards); `Enter`/`Space` on the
-  focused Copy or Close press it, and from the scope `Enter` keeps the
-  meaning above. The *Use last* chip takes the pointer only (recorded).
+  the keyboard afterwards; residual, not fixed: a re-plan that greys Copy
+  while the keyboard is on it — the *Use last* chip, a destination Choose…
+  returns that the plan refuses, a folder opened under the dialog — leaves
+  Copy holding that stale focus, a second focus border once Copy is live
+  again and a silent landing on it, QE 2026-10-04, D3); `Enter`/`Space`
+  on the focused Copy or Close press it, and from the scope `Enter` keeps
+  the meaning above. The *Use last* chip takes the pointer only
+  (recorded).
 - **Sizes on screen** (user decision 2026-09-12, brief 006): every byte
   count either dialog prints goes through the one formatter the two bridges
   share (`human_bytes`, app crate — presentation, not a rule about files):
@@ -700,6 +705,12 @@ dialog with real key events.
 
 ## History
 
+- 2026-10-04 — Brief 011, QE's spec correction D3 (its defect D1, the
+  senior developer's F4): the ring sentence records the stale focus a
+  re-plan leaves on a Copy it greys while the keyboard is on it — a
+  residual, recorded and not fixed: the keyboard would have to leave Copy
+  before the re-plan disables it, and the re-plan runs in Rust from the
+  field, the chip, the picker and the folder swap.
 - 2026-10-04 — Brief 011, QE's test proposal P4: the ring's box gains
   `Enter` in the rename field — it re-plans, brings the keyboard home, and
   the next `Tab` starts the ring over at Choose… (visible order after an

@@ -237,9 +237,13 @@ express.
   where pressing Export — a click,
   or `Enter`/`Space` on it — puts it before the run starts (brief 011
   review F1, 2026-10-04: a control the run disables cannot let go of the
-  keyboard afterwards); `Enter`/`Space` on the focused
-  Cancel, Export or Close press it, and from the scope `Enter` keeps the
-  meaning above.
+  keyboard afterwards; residual, not fixed: a re-plan that greys Export
+  while the keyboard is on it — a destination Choose… returns that the
+  plan refuses, a folder opened under the dialog — leaves Export holding
+  that stale focus, a second focus border once Export is live again and a
+  silent landing on it; measured in Copy Picks, the same mechanism here,
+  QE 2026-10-04, D3); `Enter`/`Space` on the focused Cancel, Export or
+  Close press it, and from the scope `Enter` keeps the meaning above.
 - **The card's height follows its content** (issue #62): a floor of 260 px
   (380 px while the clash question is up), the window as the ceiling
   (`parent.height - 40px`), and past the ceiling the text body scrolls in a
@@ -576,6 +580,10 @@ Windows runner too. `core:` = a `fastcull-core` unit test, `muxer:` =
 
 ## History
 
+- 2026-10-04 — Brief 011, QE's spec correction D3 (its defect D1, the
+  senior developer's F4): the ring sentence records the stale focus a
+  re-plan leaves on an Export it greys while the keyboard is on it — a
+  residual, recorded and not fixed, measured in Copy Picks (fileops.md).
 - 2026-10-04 — Brief 011, QE's test proposal P2: the ring's box gains
   `Ctrl+Tab` and `Ctrl+Shift+Tab` moving nothing — ui-grid.md's "`Ctrl+Tab`
   does nothing unless a dialog's module says otherwise", which this module
