@@ -661,6 +661,11 @@ pub(crate) struct LoupeViewState {
     pub(crate) last_badge: Option<(usize, i32)>,
     /// Which image the overlay last showed (trace bookkeeping only).
     pub(crate) last_overlay_cursor: Option<usize>,
+    /// The engine's ring report the `loupe ring` mark last printed — trace
+    /// bookkeeping only: the mark fires on CHANGE (test-harness.md; brief
+    /// 012 D5), and a session swap replaces this struct, so the next
+    /// folder's engine is reported afresh.
+    pub(crate) last_ring: Option<fastcull_core::loupe::RingReport>,
 }
 
 /// Hand-written: the two fields that describe WHERE the user is looking do
@@ -680,6 +685,7 @@ impl Default for LoupeViewState {
             last_resolved_factor: None,
             last_badge: None,
             last_overlay_cursor: None,
+            last_ring: None,
         }
     }
 }

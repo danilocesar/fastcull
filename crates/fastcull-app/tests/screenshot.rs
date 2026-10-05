@@ -16088,9 +16088,25 @@ fn auto_advance_off_holds_the_cursor_in_the_loupe_at_one_to_one() {
 /// own mark with the exact budget, so a run whose engine started with any
 /// other number never satisfies it and fails loudly at the wait's cap.
 ///
-/// Mutant (2026-10-01): `session.rs` starting the engine with
+/// And it reaches the ring RULE (raw-pipeline.md, "The ring fits the
+/// budget"; brief 012 AC4): `Z` in the 0.5 GB session is the session's
+/// first loupe focus, at 1:1; the first header the engine parses sizes the
+/// ring, and the `loupe ring` mark must name the windows three A1 frames
+/// allow — the focused frame and its two nearest neighbours, `rest 1/1`,
+/// and the held arrow's ring of mids whole, `transit 2/8`. The mark comes
+/// from the engine's own report, never from the app (brief 012 D5), and it
+/// reports what the budget allows, not what `focus()` asks for — that is
+/// pinned in core, by `a_budget_below_the_prefetch_window_goes_quiet_when_idle`
+/// and `a_held_arrow_keeps_its_ring_of_mids_at_the_floor` (QE 2026-10-05,
+/// D2, D3: this paragraph said the test pinned the ring of mids left whole,
+/// where it pins the report's arithmetic).
+///
+/// Mutants: (2026-10-01) `session.rs` starting the engine with
 /// `DEFAULT_BUDGET_BYTES` again → the second mark says 2147483648, the wait
-/// is never satisfied and the run exits 1 — red.
+/// is never satisfied and the run exits 1 — red; (2026-10-05) the cap
+/// bypassed in `ring_within_budget` → the mark says `rest 2/2`, the ring
+/// wait is never satisfied and the run exits 1 — red; the pump never
+/// printing the mark → the same.
 #[test]
 fn loupe_memory_takes_effect_at_the_next_folder_open() {
     if !has_display() {
@@ -16106,11 +16122,15 @@ fn loupe_memory_takes_effect_at_the_next_folder_open() {
         &dir.join("one.ARW"),
     );
     let out = out_dir().join("settings-loupe.jpg");
+    // 0.5 GiB holds three decoded A1 frames (149,299,200 bytes each, a
+    // fixture here: the engine learns the size from the header).
+    let ring = "loupe ring budget 536870912 frame 149299200 rest 1/1 transit 2/8";
     let script = format!(
         "1500:wait:load settled gen 0;1600:key:ctrl+,;1900:key:ctrl+tab;2100:key:ctrl+tab;\
          2500:click:settings loupe-memory;2800:key:ctrl+a;3000:key:0;3200:key:.;3400:key:5;\
          3600:key:return;4000:dump.set;4200:key:escape;4500:open:{dir};\
-         4600:wait:loupe engine started budget 536870912;4800:dump.after",
+         4600:wait:loupe engine started budget 536870912;4800:key:z;5000:wait:{ring};\
+         5200:dump.after",
         dir = dir.display()
     );
     let stderr = shoot_env_stderr(
@@ -16125,6 +16145,21 @@ fn loupe_memory_takes_effect_at_the_next_folder_open() {
     assert!(
         stderr.contains("wait:loupe engine started budget 536870912 (satisfied"),
         "the engine never started with the committed 0.5 GB:\n{stderr}"
+    );
+    assert!(
+        stderr.contains(&format!("wait:{ring} (satisfied")),
+        "the 0.5 GB budget never reached the ring rule — no `{ring}` mark after \
+         the session's first 1:1 focus (raw-pipeline.md, \"The ring fits the \
+         budget\"):\n{stderr}"
+    );
+    let wide: Vec<&str> = mark_labels(&stderr)
+        .into_iter()
+        .filter(|l| l.starts_with("loupe ring budget 536870912 ") && l.contains(" rest 2/2 "))
+        .collect();
+    assert!(
+        wide.is_empty(),
+        "at 0.5 GB the engine reported the whole ±2 window for full frames, \
+         which the budget cannot hold: {wide:?}"
     );
     assert_click_resolved(&stderr, "settings loupe-memory");
     let set = qedump(&stderr, "set");

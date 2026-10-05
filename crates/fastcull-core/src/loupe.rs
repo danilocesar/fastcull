@@ -11,10 +11,12 @@
 //! and prefetches ±PREFETCH neighbors — in VIEW order, the order arrows
 //! actually travel (`set_view`; issue #46): an id-space ring on a
 //! capture-sorted multi-body folder warmed frames no arrow could reach
-//! while every real neighbor stayed cold. A byte-budget LRU (default
-//! 2 GiB) evicts the least recently focused images, never the focused one,
-//! and a ring member it evicts is not asked for again until the focus
-//! moves (`LoupeState::evicted_under_focus`).
+//! while every real neighbor stayed cold. The ring is capped to the frames
+//! the memory budget holds (`ring_within_budget`; brief 012), sized from the
+//! headers the workers parse. A byte-budget LRU (default 2 GiB) evicts the
+//! least recently focused images, never the focused one, and a ring member
+//! it evicts is not asked for again until the focus moves
+//! (`LoupeState::evicted_under_focus`).
 
 use std::collections::{HashMap, HashSet};
 use std::path::PathBuf;
@@ -22,7 +24,7 @@ use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::sync::mpsc::{Receiver, Sender};
 use std::sync::{Arc, Condvar, Mutex};
 
-use crate::raw::{find_embedded_jpegs, read_jpeg};
+use crate::raw::{find_embedded_jpegs, read_jpeg, EmbeddedJpeg, EmbeddedPreviews};
 
 /// Neighbors prefetched on each side of the focused image.
 pub const PREFETCH: usize = 2;
@@ -82,6 +84,34 @@ pub enum LoupeEvent {
     },
 }
 
+/// The ring the engine's budget allows for the frame sizes it has learned
+/// (`LoupeEngine::ring_report`): what the app's `loupe ring` trace mark
+/// prints (test-harness.md; brief 012 D5).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct RingReport {
+    /// The budget the engine adopted, floored (`LoupeEngine::budget`).
+    pub budget: usize,
+    /// The largest full-res frame whose header was parsed this session, in
+    /// decoded bytes (width × height × 3).
+    pub frame_bytes: usize,
+    /// The largest mid preview parsed, likewise; 0 if none was.
+    pub mid_bytes: usize,
+    /// The ±PREFETCH window the budget allows for `frame_bytes` — what a
+    /// settled 1:1 focus asks for — as `(behind, ahead)` of the direction
+    /// of travel.
+    pub rest: (usize, usize),
+    /// The 2/8 transit window the budget allows for the rung a held arrow's
+    /// request climbs to — `MID_RUNG_TARGET`, what a held arrow asks for at
+    /// 1:1 and at fit on any display at least that long: `mid_bytes` when
+    /// the folder's smallest two-rung mid serves it, `frame_bytes`
+    /// otherwise — sized exactly as `focus()` sizes that window
+    /// (`rung_bytes_for`). Sized by `mid_bytes` alone it said 2/8 at the
+    /// floor for a body whose mid is under ~1293 px (1616 ÷ 1.25), where
+    /// the engine climbs to the full in transit and plans 2/2 (QE
+    /// 2026-10-05, D7; senior-developer review 2026-10-05, F2).
+    pub transit: (usize, usize),
+}
+
 #[derive(Default)]
 struct LoupeState {
     /// Pending (index, display-long-edge), most urgent last (workers pop
@@ -121,10 +151,13 @@ struct LoupeState {
     ///
     /// The invariant: a frame evicted while the focus rests on F at
     /// target T is never re-requested by `focus(F, T')` for any T' ≤ T.
-    /// A small budget therefore costs a re-decode on the next step, never
-    /// a loop. The focused frame itself is never evicted (see `focused`),
-    /// so this never holds it; grid wants (`want()`, mid rungs) are not
-    /// held back either — they are the visible cells' own requests.
+    /// A small budget therefore never loops while the user rests. Since
+    /// the ring fits the budget (`ring_within_budget`; brief 012) the
+    /// window itself fits, so a member is evicted under a settled focus
+    /// only at the margin — a transit's mids share the budget. The focused
+    /// frame itself is never evicted (see `focused`), so this never holds
+    /// it; grid wants (`want()`, mid rungs) are not held back either —
+    /// they are the visible cells' own requests.
     evicted_under_focus: HashSet<usize>,
     /// The image the user is looking at: never evicted, even over-budget —
     /// evicting it after decode would strand the loupe forever (found by
@@ -172,6 +205,26 @@ struct LoupeState {
     /// behavior exactly.
     view_ids: Vec<usize>,
     view_pos: Vec<usize>,
+    /// What one decoded frame of THIS folder takes, per rung, in bytes
+    /// (width × height × 3): the largest full-res and the largest mid
+    /// preview whose headers the workers have parsed this session, 0 until
+    /// the first parse (raw-pipeline.md, "The ring fits the budget"; brief
+    /// 012). Learned, never assumed: an A1 frame is 149 MB and another
+    /// body's is not (M11), and a folder mixing bodies is sized by its
+    /// biggest frame. `note_frame_dims` writes them; the ring's cap reads
+    /// them through `rung_bytes_for`.
+    frame_bytes_full: usize,
+    frame_bytes_mid: usize,
+    /// Long edge of the SMALLEST mid preview with a full rung above it in
+    /// its own file, 0 until one is parsed: a request above what that mid
+    /// serves sends at least one frame of this folder to its full rung, so
+    /// the window is sized by the full (`rung_bytes_for`). The smallest,
+    /// not the largest, because sizing a mixed folder by a mid some of its
+    /// frames climb past would ask for full frames the budget cannot keep.
+    /// A one-rung file (a bare JPEG) is left out: it costs its one rung at
+    /// any request — already in both maxima — and a small one would
+    /// otherwise size a held arrow's ring of mids by the full frames.
+    mid_long: u32,
 }
 
 impl LoupeState {
@@ -286,10 +339,41 @@ impl LoupeEngine {
         self.shared.budget
     }
 
+    /// The ring this engine's budget allows for the frame sizes it has
+    /// learned so far — `None` until a worker has parsed a header, because
+    /// no size is known before then and none is assumed (M11; a report
+    /// built from an assumed size would read the same at every budget, a
+    /// mark that cannot go red — brief 012 D5). The app prints it as its
+    /// `loupe ring` mark on change: the proof the budget and the learned
+    /// sizes reached the ring RULE, as `budget()` proves the budget reached
+    /// the engine — it reports the windows the budget allows, not what
+    /// `focus()` asks for (QE 2026-10-05, D3). Takes the engine's lock
+    /// briefly and reads no file, so the UI thread may call it.
+    pub fn ring_report(&self) -> Option<RingReport> {
+        let state = lock(&self.shared);
+        if state.frame_bytes_full == 0 {
+            return None;
+        }
+        let budget = self.shared.budget;
+        Some(RingReport {
+            budget,
+            frame_bytes: state.frame_bytes_full,
+            mid_bytes: state.frame_bytes_mid,
+            rest: ring_within_budget(budget, state.frame_bytes_full, PREFETCH, PREFETCH),
+            transit: ring_within_budget(
+                budget,
+                rung_bytes_for(&state, MID_RUNG_TARGET),
+                TRANSIT_BEHIND,
+                TRANSIT_AHEAD,
+            ),
+        })
+    }
+
     /// The user is looking at `index` on a display whose longest edge is
     /// `display_long` physical pixels: ensure it and its ±PREFETCH neighbors
-    /// — in VIEW order (see `set_view`) — have an asset sufficient for that
-    /// display (ladder rule) or are queued. Returns the best cached image
+    /// — in VIEW order (see `set_view`), as many of them as the budget holds
+    /// (`ring_within_budget`) — have an asset sufficient for that display
+    /// (ladder rule) or are queued. Returns the best cached image
     /// immediately (which may be a lower rung — a better one arrives as an
     /// event once cooked).
     pub fn focus(&self, index: usize, display_long: u32) -> Option<FullImage> {
@@ -314,6 +398,13 @@ impl LoupeEngine {
         // focused id with no view position (filtered out mid-flight) gets
         // no neighbors — its neighbors are unknowable, and guessing in id
         // space is the bug this replaced.
+        //
+        // The window is capped to what the budget holds, measured in the
+        // bytes one decoded frame of the rung this request climbs to takes
+        // in this folder (brief 012) — 0, and uncapped, until a worker has
+        // parsed a header. Read from state the workers filled: no I/O here.
+        let request = plan_request(transit, display_long);
+        let rung_bytes = rung_bytes_for(&state, request);
         let (request, wanted) = match state.pos_of(index) {
             Some(fpos) => {
                 let (request, lo, hi) = focus_plan(
@@ -322,10 +413,12 @@ impl LoupeEngine {
                     fpos,
                     display_long,
                     state.ring_len(count),
+                    self.shared.budget,
+                    rung_bytes,
                 );
                 (request, ring_ids(&state, fpos, lo, hi))
             }
-            None => (plan_request(transit, display_long), Vec::new()),
+            None => (request, Vec::new()),
         };
         // Farthest neighbors first, focused index last (back of the queue
         // = popped first by workers).
@@ -441,22 +534,32 @@ fn cached_serves(state: &LoupeState, index: usize, display_long: u32) -> bool {
 
 /// Land-time revival of a deferred upgrade (an in-flight index whose wanted
 /// rung grew mid-decode). Revived ONLY while the index is still inside the
-/// focused prefetch ring: a stale upgrade — the cursor moved on while the
-/// flight decoded — re-queued at top priority captured BOTH workers for
-/// multi-second full-res decodes and starved the current frame's ladder
-/// (Windows CI 2026-07-27: three screenshot tests hit the 60 s shutter cap
-/// exactly this way). Dropping a stale upgrade loses nothing: focus()
-/// re-requests it the moment the user returns. The focused index re-queues
-/// at the back (popped next); a ring neighbor goes to the front so it can
-/// never outrank the focused frame's own pending work.
-fn revive_deferred(state: &mut LoupeState, index: usize, target: u32, stamp: u64) -> bool {
+/// focused prefetch ring — the settled window the budget allows for the
+/// rung `target` climbs to (±PREFETCH at the default; brief 012): reviving
+/// a neighbour outside it decodes a frame the budget cannot keep. A stale
+/// upgrade — the cursor moved on while the flight decoded — re-queued at
+/// top priority captured BOTH workers for multi-second full-res decodes and
+/// starved the current frame's ladder (Windows CI 2026-07-27: three
+/// screenshot tests hit the 60 s shutter cap exactly this way). Dropping a
+/// stale upgrade loses nothing: focus() re-requests it the moment the user
+/// returns. The focused index re-queues at the back (popped next); a ring
+/// neighbor goes to the front so it can never outrank the focused frame's
+/// own pending work.
+fn revive_deferred(
+    state: &mut LoupeState,
+    budget: usize,
+    index: usize,
+    target: u32,
+    stamp: u64,
+) -> bool {
     // Ring membership in VIEW positions (issue #46), like the ring itself:
     // an id 2 away can be a view-order stranger, and a view neighbor can
     // be any id at all. No position (filtered out) = not in the ring.
+    let window = ring_within_budget(budget, rung_bytes_for(state, target), PREFETCH, PREFETCH);
     let in_ring = state
         .focused
         .is_some_and(|f| match (state.pos_of(index), state.pos_of(f)) {
-            (Some(a), Some(b)) => a.abs_diff(b) <= PREFETCH,
+            (Some(pos), Some(fpos)) => in_reach(state.travel_forward, fpos, window, pos),
             _ => false,
         });
     // A frame the budget evicted under this focus stays out until the
@@ -646,6 +749,52 @@ const SETTLE_DEBOUNCE: std::time::Duration = std::time::Duration::from_millis(15
 const TRANSIT_AHEAD: usize = 8;
 const TRANSIT_BEHIND: usize = 2;
 
+/// The window the budget lets the engine ask for — the one site of the
+/// rule (raw-pipeline.md, "The ring fits the budget"; brief 012, issue
+/// #99).
+///
+/// `behind` and `ahead` are in TRAVEL coordinates: `ahead` is the side the
+/// user is moving toward. The budget holds `max(1, ⌊budget ÷ rung_bytes⌋)`
+/// decoded frames of the rung being asked for. The focused frame takes the
+/// first slot whatever the budget — a loupe that cannot show the frame the
+/// user is looking at is broken, not frugal — and the rest go to the
+/// neighbours nearest the focus, the travel side first at equal distance
+/// (that is where the next arrow lands), so the far side shrinks first.
+/// The result is never wider than the window it was given.
+///
+/// `rung_bytes == 0` means no header has been parsed yet, so no size is
+/// known: the window comes back uncapped (brief 012 D4 — there is no size
+/// to assume, M11). Without this cap every step asked for the whole window
+/// and the byte LRU evicted what did not fit: at 0.5 GB two or three
+/// full-res decodes per step keeping two, at the 200 MB floor four keeping
+/// none but the focused frame (brief 012's before table).
+pub fn ring_within_budget(
+    budget: usize,
+    rung_bytes: usize,
+    behind: usize,
+    ahead: usize,
+) -> (usize, usize) {
+    if rung_bytes == 0 {
+        return (behind, ahead);
+    }
+    // The slots left once the focused frame has its own.
+    let mut room = (budget / rung_bytes).max(1) - 1;
+    let (mut kept_behind, mut kept_ahead) = (0, 0);
+    let mut distance = 1;
+    while room > 0 && (distance <= ahead || distance <= behind) {
+        if distance <= ahead {
+            kept_ahead = distance;
+            room -= 1;
+        }
+        if distance <= behind && room > 0 {
+            kept_behind = distance;
+            room -= 1;
+        }
+        distance += 1;
+    }
+    (kept_behind, kept_ahead)
+}
+
 /// Is the user MOVING between frames (held key, `[`/`]`, a Y/N
 /// auto-advance chain) rather than looking at one?
 ///
@@ -670,7 +819,10 @@ const TRANSIT_BEHIND: usize = 2;
 /// pre-existing behaviour and is what keeps tap-stepping through a burst
 /// sharp.
 ///
-/// Returns `(request, lo, hi)` with `lo..=hi` already clamped to `count`.
+/// Returns `(request, lo, hi)`: `lo..=hi` is the window capped to what
+/// `budget` holds of frames `rung_bytes` each (`ring_within_budget`; 0 =
+/// no size known yet, uncapped), clamped to `count`. When the cap does not
+/// bind — the default budget — the window is exactly the pre-brief-012 one.
 ///
 /// Since issue #46 the coordinates are VIEW POSITIONS, not image ids —
 /// the caller (`focus`) maps positions back to ids via `ring_ids` at
@@ -681,27 +833,74 @@ fn focus_plan(
     index: usize,
     display_long: u32,
     count: usize,
+    budget: usize,
+    rung_bytes: usize,
 ) -> (u32, usize, usize) {
+    let (behind, ahead) = uncapped_window(transit);
+    // Capped in TRAVEL coordinates, before the mapping to view positions:
+    // "the travel side first" is the side the user moves toward, whichever
+    // way that is (raw-pipeline.md, "The ring fits the budget").
+    let window = ring_within_budget(budget, rung_bytes, behind, ahead);
+    let (below, above) = view_reach(forward, window);
+    (
+        plan_request(transit, display_long),
+        index.saturating_sub(below),
+        (index + above).min(count - 1),
+    )
+}
+
+/// The UNCAPPED window `(behind, ahead)` in travel coordinates: the wide
+/// lean of a held arrow, the tight ±PREFETCH ring once settled — what the
+/// budget then caps (`ring_within_budget`).
+fn uncapped_window(transit: bool) -> (usize, usize) {
     if transit {
-        // A reversal must re-lean immediately: arrowing back through a
-        // burst you just flew over is the commonest correction there is,
-        // and a ring still leaning forward would prefetch behind you.
-        let (back, ahead) = if forward {
-            (TRANSIT_BEHIND, TRANSIT_AHEAD)
-        } else {
-            (TRANSIT_AHEAD, TRANSIT_BEHIND)
-        };
-        (
-            plan_request(transit, display_long),
-            index.saturating_sub(back),
-            (index + ahead).min(count - 1),
-        )
+        (TRANSIT_BEHIND, TRANSIT_AHEAD)
     } else {
-        (
-            display_long,
-            index.saturating_sub(PREFETCH),
-            (index + PREFETCH).min(count - 1),
-        )
+        (PREFETCH, PREFETCH)
+    }
+}
+
+/// A travel-coordinate window as view positions: how far `(below, above)`
+/// the focused position it reaches.
+///
+/// A reversal must re-lean immediately: arrowing back through a burst you
+/// just flew over is the commonest correction there is, and a ring still
+/// leaning forward would prefetch behind you.
+fn view_reach(forward: bool, (behind, ahead): (usize, usize)) -> (usize, usize) {
+    if forward {
+        (behind, ahead)
+    } else {
+        (ahead, behind)
+    }
+}
+
+/// Is view position `pos` inside the travel-coordinate `window` around the
+/// focused position `fpos`? The focused position itself always is. One
+/// definition for the two places that test membership rather than plan —
+/// the deferred revival and the first parse's cull — so neither can drift
+/// from the window `focus_plan` asks for.
+fn in_reach(forward: bool, fpos: usize, window: (usize, usize), pos: usize) -> bool {
+    let (below, above) = view_reach(forward, window);
+    if pos >= fpos {
+        pos - fpos <= above
+    } else {
+        fpos - pos <= below
+    }
+}
+
+/// The bytes one decoded frame of the rung `request` climbs to takes in
+/// this folder — the measure the ring is capped by (brief 012 D3): the mid
+/// preview while the mid serves the request (a held arrow; fit on a ≤2K
+/// display), the full frame above that (1:1; fit on a 4K display). A
+/// transit ring of ~5 MB mids measured in 149 MB frames would shrink to the
+/// focused frame at the floor for no memory reason, losing the look-ahead
+/// a held arrow exists for. 0 while no header has been parsed: no size,
+/// no cap. The mid's reach is the `serves` rule (`UPSCALE_THRESHOLD`).
+fn rung_bytes_for(state: &LoupeState, request: u32) -> usize {
+    if state.mid_long > 0 && serves_dims(state.mid_long, state.mid_long, request) {
+        state.frame_bytes_mid
+    } else {
+        state.frame_bytes_full
     }
 }
 
@@ -860,7 +1059,7 @@ fn worker(shared: &Shared, focus_reserved: bool) {
         }
         if let Some(target) = state.deferred.remove(&index) {
             let stamp = shared.stamp.load(Ordering::Relaxed);
-            if revive_deferred(&mut state, index, target, stamp) {
+            if revive_deferred(&mut state, shared.budget, index, target, stamp) {
                 shared.wakeup.notify_all();
             }
         }
@@ -898,6 +1097,10 @@ fn decode_ladder(
     let path = &shared.paths[index];
     let mut file = std::fs::File::open(path).map_err(|e| format!("open: {e}"))?;
     let previews = find_embedded_jpegs(&mut file).map_err(|e| format!("parse: {e}"))?;
+    // HERE, before a pixel is decoded: the session's first parse sizes the
+    // loupe's ring and culls the queued prefetch the cap excludes (brief
+    // 012 D4) — about a millisecond into the focused frame's own decode.
+    note_frame_dims(shared, &previews, std::time::Instant::now());
 
     let orientation = previews.orientation;
     let mut rungs: Vec<crate::raw::EmbeddedJpeg> = Vec::new();
@@ -967,6 +1170,114 @@ fn note_best(shared: &Shared, index: usize, long: u32) {
     let mut state = lock(shared);
     let entry = state.best_long.entry(index).or_insert(0);
     *entry = (*entry).max(long);
+}
+
+/// Learn this folder's frame sizes from a header a worker just parsed —
+/// before a pixel of it is decoded — and, when they change, drop the
+/// queued prefetch the capped ring now excludes (raw-pipeline.md, "The
+/// ring fits the budget"; brief 012 D4). WORKER thread; holds the lock
+/// briefly, never across I/O.
+fn note_frame_dims(shared: &Shared, previews: &EmbeddedPreviews, now: std::time::Instant) {
+    let mut state = lock(shared);
+    if learn_frame_dims(&mut state, previews) {
+        cull_outside_ring(&mut state, shared.budget, now);
+    }
+}
+
+/// Fold one file's preview sizes into the session's (see
+/// `LoupeState::frame_bytes_full` and `mid_long`); true when anything
+/// changed. The rungs are the ones `decode_ladder` climbs: `grid_source`
+/// (the mid) and `fullres`, two rungs when they differ.
+fn learn_frame_dims(state: &mut LoupeState, previews: &EmbeddedPreviews) -> bool {
+    let before = (
+        state.frame_bytes_full,
+        state.frame_bytes_mid,
+        state.mid_long,
+    );
+    let full = previews
+        .fullres()
+        .and_then(|j| decoded_bytes(j).map(|bytes| (j, bytes)));
+    let mid = previews
+        .grid_source()
+        .and_then(|j| decoded_bytes(j).map(|bytes| (j, bytes)));
+    if let Some((_, bytes)) = full {
+        state.frame_bytes_full = state.frame_bytes_full.max(bytes);
+    }
+    if let Some((_, bytes)) = mid {
+        state.frame_bytes_mid = state.frame_bytes_mid.max(bytes);
+    }
+    if let (Some((mid, _)), Some((full, _))) = (mid, full) {
+        if mid != full {
+            let long = mid.width.max(mid.height);
+            state.mid_long = match state.mid_long {
+                0 => long,
+                seen => seen.min(long),
+            };
+        }
+    }
+    before
+        != (
+            state.frame_bytes_full,
+            state.frame_bytes_mid,
+            state.mid_long,
+        )
+}
+
+/// Bytes of one decoded RGB frame of this preview, or `None` for a size
+/// that teaches nothing: a header claiming more pixels than
+/// `decode_oriented` will ever decode (`plausible_decoded_dims`, issue #31)
+/// would otherwise shrink every ring to the focused frame for a frame that
+/// is refused — a harmless complaint must not cost the folder its prefetch
+/// (M11) — and a zero side is no frame at all.
+fn decoded_bytes(jpeg: &EmbeddedJpeg) -> Option<usize> {
+    let width = usize::try_from(jpeg.width).ok()?;
+    let height = usize::try_from(jpeg.height).ok()?;
+    if !crate::raw::plausible_decoded_dims(width, height) {
+        return None;
+    }
+    width
+        .checked_mul(height)?
+        .checked_mul(3)
+        .filter(|bytes| *bytes > 0)
+}
+
+/// Remove the queued prefetch the capped ring excludes — the first parse's
+/// cull (raw-pipeline.md, "The ring fits the budget"; brief 012 D4).
+/// WORKER thread, under the lock.
+///
+/// Before a session's first header is parsed `focus()` knows no size and
+/// queues the uncapped window; once a size is learned, or grows, the
+/// focus-origin entries outside the window the budget allows around the
+/// current focus are dropped. Kept: grid wants (the visible cells' own
+/// requests), the focused frame and its capped window. A decode already
+/// running completes — a decode is never interrupted — and nothing is
+/// replanned: the cold focus already queued a superset. When the cap does
+/// not bind (the default budget) the queue is left exactly as it was.
+fn cull_outside_ring(state: &mut LoupeState, budget: usize, now: std::time::Instant) {
+    let Some(focused) = state.focused else {
+        return;
+    };
+    // No view position: `focus()` gave this focus no ring at all.
+    let Some(fpos) = state.pos_of(focused) else {
+        return;
+    };
+    let transit = in_transit(state, now);
+    let uncapped = uncapped_window(transit);
+    let rung_bytes = rung_bytes_for(state, plan_request(transit, state.desired_long));
+    let window = ring_within_budget(budget, rung_bytes, uncapped.0, uncapped.1);
+    if window == uncapped {
+        return;
+    }
+    let forward = state.travel_forward;
+    // Taken out so the filter can read the view mapping beside it.
+    let mut queue = std::mem::take(&mut state.queue);
+    queue.retain(|&(q, _, focus_origin)| {
+        !focus_origin
+            || state
+                .pos_of(q)
+                .is_some_and(|pos| in_reach(forward, fpos, window, pos))
+    });
+    state.queue = queue;
 }
 
 fn serves_dims(w: u32, h: u32, display_long: u32) -> bool {
@@ -1364,7 +1675,7 @@ mod tests {
     fn transit_ring_leans_in_the_direction_of_travel() {
         let count = 1000;
         // Moving forward: far more ahead than behind.
-        let (_, lo, hi) = focus_plan(true, true, 500, u32::MAX, count);
+        let (_, lo, hi) = focus_plan(true, true, 500, u32::MAX, count, DEFAULT_BUDGET_BYTES, 0);
         assert_eq!(
             (hi - 500, 500 - lo),
             (TRANSIT_AHEAD, TRANSIT_BEHIND),
@@ -1378,24 +1689,24 @@ mod tests {
             500 - lo
         );
         // Reversed on the very next frame: the lean flips with it.
-        let (_, lo, hi) = focus_plan(true, false, 499, u32::MAX, count);
+        let (_, lo, hi) = focus_plan(true, false, 499, u32::MAX, count, DEFAULT_BUDGET_BYTES, 0);
         assert_eq!(
             (499 - lo, hi - 499),
             (TRANSIT_AHEAD, TRANSIT_BEHIND),
             "arrowing back must re-lean backward immediately"
         );
         // Settled: the tight symmetric ring, and the app's REAL target.
-        let (req, lo, hi) = focus_plan(false, true, 500, 8640, count);
+        let (req, lo, hi) = focus_plan(false, true, 500, 8640, count, DEFAULT_BUDGET_BYTES, 0);
         assert_eq!((500 - lo, hi - 500), (PREFETCH, PREFETCH));
         assert_eq!(req, 8640, "a settled frame must ask for full quality");
         assert!(
-            focus_plan(true, true, 500, 8640, count).0 < req,
+            focus_plan(true, true, 500, 8640, count, DEFAULT_BUDGET_BYTES, 0).0 < req,
             "transit must ask for LESS than settled, or it is not transit"
         );
         // Edges clamp rather than wrap or panic.
-        let (_, lo, hi) = focus_plan(true, true, 0, u32::MAX, 3);
+        let (_, lo, hi) = focus_plan(true, true, 0, u32::MAX, 3, DEFAULT_BUDGET_BYTES, 0);
         assert_eq!((lo, hi), (0, 2), "ring clamps at the start of the folder");
-        let (_, lo, hi) = focus_plan(true, true, 2, u32::MAX, 3);
+        let (_, lo, hi) = focus_plan(true, true, 2, u32::MAX, 3, DEFAULT_BUDGET_BYTES, 0);
         assert_eq!((lo, hi), (0, 2), "ring clamps at the end of the folder");
     }
 
@@ -1444,7 +1755,15 @@ mod tests {
         // 9's id-space neighbors (7, 8), which are view strangers.
         let fpos = state.pos_of(9).expect("id 9 is in the view");
         assert_eq!(fpos, 3);
-        let (_, lo, hi) = focus_plan(false, true, fpos, u32::MAX, state.ring_len(10));
+        let (_, lo, hi) = focus_plan(
+            false,
+            true,
+            fpos,
+            u32::MAX,
+            state.ring_len(10),
+            DEFAULT_BUDGET_BYTES,
+            0,
+        );
         let ids = ring_ids(&state, fpos, lo, hi);
         let mut sorted = ids.clone();
         sorted.sort_unstable();
@@ -1508,12 +1827,12 @@ mod tests {
         let mut state = stable_focus_state(9); // view position 3
         apply_view(&mut state, &view, 10);
         assert!(
-            revive_deferred(&mut state, 1, u32::MAX, 1),
+            revive_deferred(&mut state, DEFAULT_BUDGET_BYTES, 1, u32::MAX, 1),
             "id 1 is the focused frame's direct VIEW neighbor (pos 4)"
         );
         state.queue.clear();
         assert!(
-            !revive_deferred(&mut state, 8, u32::MAX, 1),
+            !revive_deferred(&mut state, DEFAULT_BUDGET_BYTES, 8, u32::MAX, 1),
             "id 8 neighbors 9 in id space but sits at view pos 9 — a \
              stranger the ring must not revive"
         );
@@ -1540,23 +1859,47 @@ mod tests {
     fn stale_deferred_upgrade_is_dropped_not_revived() {
         let mut state = stable_focus_state(4);
         assert!(
-            !revive_deferred(&mut state, 0, u32::MAX, 1),
+            !revive_deferred(&mut state, DEFAULT_BUDGET_BYTES, 0, u32::MAX, 1),
             "index 0 is outside the ring of focus 4"
         );
         assert!(state.queue.is_empty(), "nothing may be re-queued");
         // Exact ring boundary: distance PREFETCH is IN, one past is OUT.
-        assert!(revive_deferred(&mut state, 4 - PREFETCH, u32::MAX, 1));
-        assert!(!revive_deferred(&mut state, 4 - PREFETCH - 1, u32::MAX, 1));
+        assert!(revive_deferred(
+            &mut state,
+            DEFAULT_BUDGET_BYTES,
+            4 - PREFETCH,
+            u32::MAX,
+            1
+        ));
+        assert!(!revive_deferred(
+            &mut state,
+            DEFAULT_BUDGET_BYTES,
+            4 - PREFETCH - 1,
+            u32::MAX,
+            1
+        ));
         // No focus at all (loupe never opened): equally dropped.
         state.focused = None;
-        assert!(!revive_deferred(&mut state, 0, u32::MAX, 2));
+        assert!(!revive_deferred(
+            &mut state,
+            DEFAULT_BUDGET_BYTES,
+            0,
+            u32::MAX,
+            2
+        ));
     }
 
     #[test]
     fn focused_deferred_upgrade_revives_at_top_priority() {
         let mut state = stable_focus_state(4);
         state.queue.push((6, 1000, true));
-        assert!(revive_deferred(&mut state, 4, u32::MAX, 1));
+        assert!(revive_deferred(
+            &mut state,
+            DEFAULT_BUDGET_BYTES,
+            4,
+            u32::MAX,
+            1
+        ));
         // Workers pop from the back: the focused frame goes next.
         assert_eq!(state.queue.last(), Some(&(4, u32::MAX, true)));
     }
@@ -1565,7 +1908,13 @@ mod tests {
     fn ring_neighbor_deferred_upgrade_never_outranks_the_focused_frame() {
         let mut state = stable_focus_state(4);
         state.queue.push((4, u32::MAX, true)); // the cursor's own pending work
-        assert!(revive_deferred(&mut state, 5, u32::MAX, 1));
+        assert!(revive_deferred(
+            &mut state,
+            DEFAULT_BUDGET_BYTES,
+            5,
+            u32::MAX,
+            1
+        ));
         assert_eq!(
             state.queue.last(),
             Some(&(4, u32::MAX, true)),
@@ -1578,7 +1927,13 @@ mod tests {
     fn failed_or_sufficient_deferred_upgrades_stay_dead() {
         let mut state = stable_focus_state(4);
         state.failed.insert(4);
-        assert!(!revive_deferred(&mut state, 4, u32::MAX, 1));
+        assert!(!revive_deferred(
+            &mut state,
+            DEFAULT_BUDGET_BYTES,
+            4,
+            u32::MAX,
+            1
+        ));
         // A cached asset that already tops out (best_long known) is enough.
         let mut state = stable_focus_state(4);
         let img = FullImage {
@@ -1588,7 +1943,13 @@ mod tests {
         };
         state.cache.insert(4, (img, 0));
         state.best_long.insert(4, 100);
-        assert!(!revive_deferred(&mut state, 4, u32::MAX, 1));
+        assert!(!revive_deferred(
+            &mut state,
+            DEFAULT_BUDGET_BYTES,
+            4,
+            u32::MAX,
+            1
+        ));
     }
 
     /// QE defect (the settled-then-left capture, ~20% in the CI shape):
@@ -1834,6 +2195,39 @@ mod tests {
         assert_eq!(LoupeEngine::start(vec![], 3 << 30).0.budget(), 3 << 30);
     }
 
+    /// `ring_report()` (brief 012 D5, the `loupe ring` mark's source):
+    /// nothing before a size is learned — no size is assumed — then the
+    /// adopted budget, the sizes learned and the two windows the budget
+    /// allows for them. No paths, so no worker decodes anything; the sizes
+    /// are written as a parse would write them (A1-shaped fixtures).
+    #[test]
+    fn the_ring_report_waits_for_a_size_and_reports_the_ring_it_allows() {
+        let (engine, _rx) = LoupeEngine::start(vec![], 512 << 20);
+        assert_eq!(engine.ring_report(), None, "no header parsed: no report");
+        {
+            let mut state = lock(&engine.shared);
+            state.frame_bytes_full = 8640 * 5760 * 3;
+            state.frame_bytes_mid = 1616 * 1080 * 3;
+            state.mid_long = 1616;
+        }
+        assert_eq!(
+            engine.ring_report(),
+            Some(RingReport {
+                budget: 512 << 20,
+                frame_bytes: 149_299_200,
+                mid_bytes: 5_235_840,
+                rest: (1, 1),
+                transit: (TRANSIT_BEHIND, TRANSIT_AHEAD),
+            })
+        );
+        // The budget reported is the one ADOPTED: a figure under the floor
+        // reports the floor, and the ring it allows there.
+        let (floored, _rx) = LoupeEngine::start(vec![], 1);
+        lock(&floored.shared).frame_bytes_full = 8640 * 5760 * 3;
+        let report = floored.ring_report().expect("a size is known");
+        assert_eq!((report.budget, report.rest), (BUDGET_FLOOR_BYTES, (0, 0)));
+    }
+
     #[test]
     fn eviction_keeps_newest_and_at_least_one() {
         let mut state = LoupeState::default();
@@ -1858,9 +2252,12 @@ mod tests {
     /// or a smaller target — the app re-focuses on every landing, and
     /// queueing it there was the loop — nor revived as a deferred upgrade;
     /// a grid want is the visible cell's own request and is never held;
-    /// and a step, or an escalation, asks for it again. The engine-level
-    /// proof with real decodes is `tests/loupe.rs::a_budget_below_the_
-    /// prefetch_window_goes_quiet_when_idle`.
+    /// and a step, or an escalation, asks for it again. Since the ring fits
+    /// the budget (brief 012) an eviction under a settled focus happens
+    /// only at the margin, so this test is where the hold itself is pinned;
+    /// the engine-level proof with real decodes — quiet while idle, a step
+    /// back re-fetching what the budget let go — is `tests/loupe.rs::
+    /// a_budget_below_the_prefetch_window_goes_quiet_when_idle`.
     ///
     /// Mutants (2026-10-01): the hold check taken out of `schedule` → the
     /// re-focus queues 5 again and the first assertion goes red; the two
@@ -1900,7 +2297,7 @@ mod tests {
         note_focus(&mut state, 6, 4000, now);
         assert!(!schedule(&mut state, 5, 4000, 5, Origin::Focus));
         assert!(
-            !revive_deferred(&mut state, 5, 8640, 6),
+            !revive_deferred(&mut state, DEFAULT_BUDGET_BYTES, 5, 8640, 6),
             "a deferred upgrade revived the evicted frame under the same focus"
         );
         assert!(state.queue.is_empty());
@@ -1928,6 +2325,465 @@ mod tests {
         assert!(
             schedule(&mut state, 8, u32::MAX, 12, Origin::Focus),
             "an escalated target did not ask for the evicted frame again"
+        );
+    }
+
+    /// The ring rule's table (raw-pipeline.md, "The ring fits the budget";
+    /// brief 012 AC1). Windows are `(behind, ahead)` in travel coordinates.
+    /// The bodies' frame sizes are fixtures here — the engine itself learns
+    /// them from the headers it parses and holds no body constant (M11).
+    #[test]
+    fn the_ring_fits_the_budget() {
+        /// budget, rung bytes, the window asked for, the window allowed, why.
+        type Row = (usize, usize, (usize, usize), (usize, usize), &'static str);
+        const GIB: usize = 1 << 30;
+        const DEF: usize = DEFAULT_BUDGET_BYTES;
+        const FLOOR: usize = BUDGET_FLOOR_BYTES;
+        // Decoded RGB bytes of one frame: width × height × 3.
+        const A1_FULL: usize = 8640 * 5760 * 3; // 149,299,200
+        const A1_MID: usize = 1616 * 1080 * 3; // 5,235,840
+        const MP24_FULL: usize = 6000 * 4000 * 3; // 72,000,000
+        const MP100_FULL: usize = 11_648 * 8_736 * 3; // 305,270,784
+        let rest = (PREFETCH, PREFETCH);
+        let transit = (TRANSIT_BEHIND, TRANSIT_AHEAD);
+        let rows: [Row; 19] = [
+            // The default: both windows unchanged, with room (14 A1 frames).
+            (DEF, A1_FULL, rest, rest, "default, 1:1"),
+            (DEF, A1_FULL, transit, transit, "default, 2/8 fulls"),
+            (DEF, A1_MID, transit, transit, "default, 2/8 mids"),
+            // 0.5 GB holds three A1 frames: the focused one and its nearest two.
+            (512 << 20, A1_FULL, (2, 2), (1, 1), "0.5 GB, A1 at 1:1"),
+            // The floor holds one: the focused frame alone — at the engine's
+            // floor and at the setting's 0.2 GiB, 5 MB above it.
+            (FLOOR, A1_FULL, (2, 2), (0, 0), "the 200 MiB floor"),
+            (214_748_365, A1_FULL, (2, 2), (0, 0), "0.2 GiB setting"),
+            // Two frames, at both ends of the range: the travel-side
+            // neighbour, never the one behind.
+            (2 * A1_FULL, A1_FULL, (2, 2), (0, 1), "two frames exactly"),
+            (3 * A1_FULL - 1, A1_FULL, (2, 2), (0, 1), "byte short of 3"),
+            // Room for six neighbours of a 2/8 window: nearest first, the far
+            // side shrinks first.
+            (2 * GIB, MP100_FULL, (2, 8), (2, 4), "2 GiB, 100 MP, 2/8"),
+            // Other bodies: a 24 MP frame fits more per GB, a 100 MP one fewer.
+            (GIB, MP24_FULL, (2, 2), (2, 2), "1 GiB, 24 MP"),
+            (GIB, MP100_FULL, (2, 2), (1, 1), "1 GiB, 100 MP"),
+            // No header parsed yet: no size, no cap.
+            (512 << 20, 0, (2, 2), (2, 2), "unknown size, settled"),
+            (FLOOR, 0, (2, 8), (2, 8), "unknown size, transit"),
+            // A budget below one frame still asks for the focused frame.
+            (A1_FULL - 1, A1_FULL, (2, 2), (0, 0), "byte short of 1"),
+            (1, A1_FULL, (2, 8), (0, 0), "one byte"),
+            // A transit of A1 mids is never narrowed above 58 MB (eleven
+            // mids): not at the floor, not at exactly eleven, and the
+            // boundary bites one byte below.
+            (FLOOR, A1_MID, (2, 8), (2, 8), "mids at the floor"),
+            (11 * A1_MID, A1_MID, (2, 8), (2, 8), "exactly 11 mids"),
+            (11 * A1_MID - 1, A1_MID, (2, 8), (2, 7), "short of 11 mids"),
+            // Never wider than asked, however large the budget.
+            (usize::MAX, 1, (2, 2), (2, 2), "a budget of everything"),
+        ];
+        // Every row is checked before anything fails, so a red run names
+        // every row the rule broke, not only the first.
+        let wrong: Vec<String> = rows
+            .iter()
+            .filter_map(|&(budget, rung_bytes, (behind, ahead), want, why)| {
+                let got = ring_within_budget(budget, rung_bytes, behind, ahead);
+                (got != want).then(|| {
+                    format!(
+                        "{why}: budget {budget}, rung {rung_bytes} bytes, window \
+                         {behind}/{ahead} -> {}/{}, expected {}/{}",
+                        got.0, got.1, want.0, want.1
+                    )
+                })
+            })
+            .collect();
+        assert!(
+            wrong.is_empty(),
+            "the ring does not fit the budget as raw-pipeline.md states it:\n{}",
+            wrong.join("\n")
+        );
+    }
+
+    /// An engine's shared half for the tests that drive worker-side code
+    /// (`decode_ladder`, `note_frame_dims`) without spawning workers.
+    fn test_shared(paths: Vec<PathBuf>, state: LoupeState, budget: usize) -> Shared {
+        let (events, _) = std::sync::mpsc::channel();
+        Shared {
+            state: Mutex::new(state),
+            wakeup: Condvar::new(),
+            paths,
+            events,
+            shutdown: AtomicBool::new(false),
+            stamp: AtomicU64::new(0),
+            budget,
+        }
+    }
+
+    /// The folder's frame sizes come from the headers the workers parse —
+    /// through the shipped `decode_ladder`, before a pixel of the frame is
+    /// decoded — never from a body constant (raw-pipeline.md, "The ring
+    /// fits the budget"; brief 012 AC3, M11): the largest full and mid seen
+    /// govern; the mid's reach is that of the smallest mid with a full rung
+    /// above it; a file that fails to parse, a header claiming an
+    /// undecodable size and a one-rung file teach nothing more.
+    #[test]
+    fn frame_bytes_come_from_the_headers_parsed() {
+        use crate::raw::jpeg_hostile::encoded;
+        use crate::raw::tiff_testutil::{tiny_jpeg, TiffBuilder};
+        // The A1's layout at synthetic sizes: the mid preview in IFD0, the
+        // full rung in the next IFD. In this synthetic file the full rung
+        // is sized from its SOF; on the A1 the full rung sits in the third
+        // IFD and is IFD-sized — the mid is the SOF-sized one (QE 2026-10-05,
+        // round 2 D12: this comment had said "as on the A1").
+        let tiff = |mid: &[u8], full: &[u8]| {
+            let mut b = TiffBuilder::new(true);
+            let mid_off = b.add_blob(mid);
+            let full_off = b.add_blob(full);
+            let second = b.add_ifd(
+                &[(0x0201, 4, 1, full_off), (0x0202, 4, 1, full.len() as u32)],
+                0,
+            );
+            let ifd0 = b.add_ifd(
+                &[(0x0201, 4, 1, mid_off), (0x0202, 4, 1, mid.len() as u32)],
+                second,
+            );
+            b.set_ifd0(ifd0);
+            b.bytes
+        };
+        let dir = crate::testutil::scratch_dir("ring-sizes");
+        let files: [(&str, Vec<u8>); 7] = [
+            ("a.arw", tiff(&encoded(640, 400), &tiny_jpeg(2000, 1500))),
+            ("b.arw", tiff(&encoded(640, 400), &tiny_jpeg(3000, 2000))),
+            // Smaller than a and b, still above the grid source's ~2.1 MP line.
+            ("c.arw", tiff(&encoded(640, 400), &tiny_jpeg(1800, 1200))),
+            ("d.arw", tiff(&encoded(1000, 700), &tiny_jpeg(2400, 1600))),
+            ("junk.arw", b"junk".to_vec()),
+            // 900 MP claimed: over MAX_DECODED_PIXELS, refused at decode.
+            (
+                "claim.arw",
+                tiff(&encoded(640, 400), &tiny_jpeg(30000, 30000)),
+            ),
+            ("solo.jpg", encoded(380, 260)),
+        ];
+        let paths = files
+            .iter()
+            .map(|(name, bytes)| {
+                let path = dir.join(name);
+                std::fs::write(&path, bytes).unwrap();
+                path
+            })
+            .collect();
+        let shared = test_shared(paths, LoupeState::default(), DEFAULT_BUDGET_BYTES);
+        let sizes = || {
+            let state = lock(&shared);
+            (
+                state.frame_bytes_full,
+                state.frame_bytes_mid,
+                state.mid_long,
+            )
+        };
+        let rung = |request: u32| rung_bytes_for(&lock(&shared), request);
+        // A request every mid here serves: each ladder parses, decodes its
+        // mid (or its only rung) and stops — the full rungs are header-only
+        // fixtures and are never decoded.
+        let ladder = |index: usize| decode_ladder(&shared, index, 640, 0, false);
+        assert_eq!(sizes(), (0, 0, 0), "nothing is known before a parse");
+        assert_eq!(rung(u32::MAX), 0, "no size, no cap");
+
+        ladder(0).expect("a decodes");
+        assert_eq!(
+            sizes(),
+            (2000 * 1500 * 3, 640 * 400 * 3, 640),
+            "the first parse teaches the full and the mid"
+        );
+        assert_eq!(rung(u32::MAX), 9_000_000, "1:1 climbs to the full");
+        assert_eq!(rung(800), 768_000, "the mid serves 1.25x its long edge");
+        assert_eq!(rung(801), 9_000_000, "above that, the full");
+
+        ladder(1).expect("b decodes");
+        assert_eq!(
+            sizes(),
+            (18_000_000, 768_000, 640),
+            "a larger full raises it"
+        );
+        ladder(2).expect("c decodes");
+        assert_eq!(
+            sizes(),
+            (18_000_000, 768_000, 640),
+            "a smaller full leaves the largest governing"
+        );
+        ladder(3).expect("d decodes");
+        assert_eq!(
+            sizes(),
+            (18_000_000, 2_100_000, 640),
+            "a larger mid raises the mid's bytes, and the mid's reach stays \
+             that of the smallest mid with a full above it"
+        );
+        assert_eq!(
+            rung(800),
+            2_100_000,
+            "every mid serves 800: the largest mid"
+        );
+        assert_eq!(
+            rung(801),
+            18_000_000,
+            "a's 640 mid does not: the largest full"
+        );
+
+        assert!(ladder(4).is_err(), "junk must fail to parse");
+        assert_eq!(
+            sizes(),
+            (18_000_000, 2_100_000, 640),
+            "a file that fails to parse teaches nothing"
+        );
+        ladder(5).expect("the claim's mid decodes");
+        assert_eq!(
+            sizes(),
+            (18_000_000, 2_100_000, 640),
+            "a header claiming 900 MP teaches nothing (it is refused at decode)"
+        );
+        ladder(6).expect("the bare JPEG decodes");
+        assert_eq!(
+            sizes(),
+            (18_000_000, 2_100_000, 640),
+            "a one-rung 380 px file leaves the mid's reach alone"
+        );
+        assert_eq!(
+            rung(800),
+            2_100_000,
+            "a held arrow's ring is still sized by mids"
+        );
+    }
+
+    /// The deferred-upgrade revival respects the capped ring (raw-pipeline.md,
+    /// the deferred-upgrade sentence; brief 012 R3, AC2): a neighbour outside
+    /// the settled window the budget allows is dropped, never revived —
+    /// reviving it decodes a frame the budget cannot keep. At the default the
+    /// window is ±PREFETCH, as before brief 012.
+    #[test]
+    fn deferred_revival_respects_the_capped_ring() {
+        // An A1-sized full frame (a fixture: the engine learns it from the
+        // header), the focus on 4 at 1:1.
+        let focused_on_4 = |forward: bool| LoupeState {
+            frame_bytes_full: 8640 * 5760 * 3,
+            travel_forward: forward,
+            ..stable_focus_state(4)
+        };
+        // 0.5 GB holds three such frames: 4 and its nearest two.
+        let half_gb = 512 << 20;
+        let mut state = focused_on_4(true);
+        assert!(revive_deferred(&mut state, half_gb, 5, u32::MAX, 1));
+        assert!(revive_deferred(&mut state, half_gb, 3, u32::MAX, 1));
+        state.queue.clear();
+        assert!(
+            !revive_deferred(&mut state, half_gb, 6, u32::MAX, 1),
+            "6 is two away, outside the 1/1 window 0.5 GB allows — it must be \
+             dropped, not revived"
+        );
+        assert!(!revive_deferred(&mut state, half_gb, 2, u32::MAX, 1));
+        assert!(
+            state.queue.is_empty(),
+            "nothing outside the window re-queued"
+        );
+        assert!(
+            revive_deferred(&mut state, DEFAULT_BUDGET_BYTES, 6, u32::MAX, 1),
+            "at the default the window is ±PREFETCH and 6 revives"
+        );
+        // Exactly two frames: the travel-side neighbour only, whichever way
+        // the user is moving.
+        let two_frames = 2 * 8640 * 5760 * 3;
+        let mut state = focused_on_4(true);
+        assert!(revive_deferred(&mut state, two_frames, 5, u32::MAX, 1));
+        assert!(
+            !revive_deferred(&mut state, two_frames, 3, u32::MAX, 1),
+            "moving forward, 3 is behind: outside a 0/1 window"
+        );
+        let mut state = focused_on_4(false);
+        assert!(revive_deferred(&mut state, two_frames, 3, u32::MAX, 1));
+        assert!(
+            !revive_deferred(&mut state, two_frames, 5, u32::MAX, 1),
+            "moving backward, 5 is behind: outside a 0/1 window"
+        );
+    }
+
+    /// The first parse culls what the cap excludes (raw-pipeline.md, "The
+    /// ring fits the budget"; brief 012 D4, AC2): before any header is
+    /// parsed a cold focus queues the uncapped window, and the parse that
+    /// teaches the frame size removes the focus-origin entries outside the
+    /// capped window — only those. The grid want and the window stay, and
+    /// at the default budget, where the cap does not bind, the queue is left
+    /// exactly as it was, a stale entry of an earlier focus included.
+    #[test]
+    fn the_first_parse_culls_what_the_cap_excludes() {
+        // An A1-shaped header (a fixture: the engine learns sizes from it).
+        let previews = EmbeddedPreviews {
+            candidates: vec![
+                EmbeddedJpeg {
+                    offset: 4096,
+                    len: 1000,
+                    width: 8640,
+                    height: 5760,
+                },
+                EmbeddedJpeg {
+                    offset: 2048,
+                    len: 1000,
+                    width: 1616,
+                    height: 1080,
+                },
+            ],
+            whole_file: false,
+            orientation: 1,
+        };
+        // What a cold settled focus on 6 at 1:1 queues before any size is
+        // known — the uncapped ±2 window, farthest first, 6 last (popped
+        // first) — behind a grid want (20, at the front) and a prefetch
+        // entry left by an earlier focus (12).
+        let queued = vec![
+            (20, 1616, false),
+            (12, u32::MAX, true),
+            (4, u32::MAX, true),
+            (8, u32::MAX, true),
+            (5, u32::MAX, true),
+            (7, u32::MAX, true),
+            (6, u32::MAX, true),
+        ];
+        let cold_focus_on_6 = || LoupeState {
+            desired_long: u32::MAX,
+            travel_forward: true,
+            queue: queued.clone(),
+            ..stable_focus_state(6)
+        };
+        let now = std::time::Instant::now();
+
+        // 0.5 GB holds three A1 frames: the window is 5..=7.
+        let tight = test_shared(Vec::new(), cold_focus_on_6(), 512 << 20);
+        note_frame_dims(&tight, &previews, now);
+        assert_eq!(
+            lock(&tight).queue,
+            vec![
+                (20, 1616, false),
+                (5, u32::MAX, true),
+                (7, u32::MAX, true),
+                (6, u32::MAX, true),
+            ],
+            "the first parse must drop the queued prefetch outside the capped \
+             window (4, 8, and the stale 12) and nothing else"
+        );
+
+        // The default holds the whole window: nothing moves.
+        let roomy = test_shared(Vec::new(), cold_focus_on_6(), DEFAULT_BUDGET_BYTES);
+        note_frame_dims(&roomy, &previews, now);
+        assert_eq!(
+            lock(&roomy).queue,
+            queued,
+            "at the default budget the cap does not bind and the queue must be \
+             left exactly as it was"
+        );
+
+        // Exactly two frames: the window is the focused frame and its
+        // travel-side neighbour (0/1) — 7 moving forward, 5 moving back.
+        // Mutant X6 (QE 2026-10-05, D4): the cull reading the direction
+        // mirrored keeps the frame the user is leaving — both rows red.
+        let two_frames = 2 * 8640 * 5760 * 3;
+        let forward = test_shared(Vec::new(), cold_focus_on_6(), two_frames);
+        note_frame_dims(&forward, &previews, now);
+        assert_eq!(
+            lock(&forward).queue,
+            vec![(20, 1616, false), (7, u32::MAX, true), (6, u32::MAX, true)],
+            "moving forward at two frames the cull must keep 7, the frame the \
+             next arrow lands on, and drop 5"
+        );
+        let backward = test_shared(
+            Vec::new(),
+            LoupeState {
+                travel_forward: false,
+                ..cold_focus_on_6()
+            },
+            two_frames,
+        );
+        note_frame_dims(&backward, &previews, now);
+        assert_eq!(
+            lock(&backward).queue,
+            vec![(20, 1616, false), (5, u32::MAX, true), (6, u32::MAX, true)],
+            "moving backward at two frames the cull must keep 5, the frame the \
+             next arrow lands on, and drop 7"
+        );
+    }
+
+    /// The planner caps the window in TRAVEL coordinates, before the mapping
+    /// to view positions (raw-pipeline.md, "The ring fits the budget": the
+    /// travel side first) — pinned moving BACKWARD, where the two orders
+    /// differ. Mutant X2 (QE 2026-10-05, D4): the cap applied after
+    /// `view_reach` → a two-frame budget moving backward keeps the frame
+    /// ABOVE, the one the user is leaving (the second row goes red), and a
+    /// four-frame transit backward keeps two above and one below (the fourth
+    /// row goes red). Moving forward the two orders agree, which is why the
+    /// forward rows alone could not see X2.
+    #[test]
+    fn the_planner_caps_before_the_view_mapping() {
+        const A1_FULL: usize = 8640 * 5760 * 3;
+        let plan = |transit: bool, forward: bool, budget: usize| {
+            let (_, lo, hi) = focus_plan(transit, forward, 10, u32::MAX, 20, budget, A1_FULL);
+            (lo, hi)
+        };
+        // Two frames, settled: the travel-side neighbour only.
+        assert_eq!(
+            plan(false, true, 2 * A1_FULL),
+            (10, 11),
+            "forward at two frames: the frame ahead"
+        );
+        assert_eq!(
+            plan(false, false, 2 * A1_FULL),
+            (9, 10),
+            "backward at two frames: the frame behind is the travel side"
+        );
+        // Four frames in transit (2/8 uncapped): three neighbours, two of
+        // them on the travel side.
+        assert_eq!(
+            plan(true, true, 4 * A1_FULL),
+            (9, 12),
+            "forward transit at four frames: one behind, two ahead"
+        );
+        assert_eq!(
+            plan(true, false, 4 * A1_FULL),
+            (8, 11),
+            "backward transit at four frames: two below, one above"
+        );
+    }
+
+    /// The report's transit figure is the engine's: the window the budget
+    /// allows for the rung a held arrow's request climbs to — the mid when
+    /// the folder's smallest two-rung mid serves `MID_RUNG_TARGET`, the full
+    /// otherwise — exactly as `focus()` sizes it (`rung_bytes_for`). A body
+    /// whose mid is under ~1293 px (1616 ÷ 1.25) climbs to its full in
+    /// transit, so its transit ring is sized by the full frame; a report
+    /// sized by the largest mid said 2/8 at the floor where the engine asks
+    /// for 2/2 (QE 2026-10-05, D7: a 12 MP body with a 1280×853 mid).
+    #[test]
+    fn the_ring_report_sizes_transit_by_the_rung_a_held_arrow_climbs_to() {
+        let (engine, _rx) = LoupeEngine::start(vec![], BUDGET_FLOOR_BYTES);
+        {
+            let mut state = lock(&engine.shared);
+            state.frame_bytes_full = 4000 * 3000 * 3; // 36,000,000
+            state.frame_bytes_mid = 1280 * 853 * 3;
+            state.mid_long = 1280;
+        }
+        assert_eq!(
+            engine.ring_report().expect("a size is known").transit,
+            (2, 2),
+            "a 1280 px mid does not serve a 1616 px transit request, so the \
+             held arrow climbs to the 36 MB full and the floor holds five"
+        );
+        // An A1-shaped folder keeps 2/8: its 1616 mid serves the request.
+        {
+            let mut state = lock(&engine.shared);
+            state.frame_bytes_full = 8640 * 5760 * 3;
+            state.frame_bytes_mid = 1616 * 1080 * 3;
+            state.mid_long = 1616;
+        }
+        assert_eq!(
+            engine.ring_report().expect("a size is known").transit,
+            (TRANSIT_BEHIND, TRANSIT_AHEAD)
         );
     }
 }

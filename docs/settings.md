@@ -53,9 +53,14 @@ it). It takes effect when a folder is next opened: **File › Open
 Folder…**, and the same folder is fine. Below 200 MB it is held at 200 MB
 (one frame); above your machine's RAM it is held at your RAM. A small
 figure is fine, with one cost: below about 0.7 GB (on an A1) the loupe
-cannot keep all five frames around the one you are looking at, so a step
-at 1:1 decodes again the frames it had to let go — it never keeps
-decoding while you sit still.
+keeps fewer frames around the one you are looking at — only as many as
+fit, down to that one frame at 200 MB — so stepping back past them
+decodes again what it let go. It asks only for the frames it can keep —
+the first time you open the loupe after opening a folder, before it has
+learned how big the folder's frames are, it may decode one or two more,
+and again the first time it meets a frame from a higher-resolution
+camera in a folder that mixes cameras — and never keeps decoding while
+you sit still.
 
 **Thumbnail cache cap** (2 GB). The most the thumbnail cache (see below)
 may hold in thumbnails; past it the oldest are dropped when a folder is
