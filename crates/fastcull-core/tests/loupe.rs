@@ -448,47 +448,49 @@ fn assert_each_once(landed: &[usize], want: &[usize], phase: &str) {
     }
 }
 
-/// A loupe budget SMALLER than the ±PREFETCH window goes quiet while the
-/// user is idle, and still serves the window once (raw-pipeline.md, the
-/// ring's budget rule; QE 2026-10-01, D1: at 0.5 GB the engine re-decoded
-/// two neighbours every ~150 ms for as long as the cursor rested). 512 MiB
-/// holds three decoded A1 frames; the settled window around 6 is five,
-/// 4..=8, so two of them must be evicted to make room.
+/// A loupe budget SMALLER than the ±PREFETCH window asks for the ring it
+/// holds and goes quiet while the user is idle (raw-pipeline.md, "The ring
+/// fits the budget" and the ring's budget rule; brief 012, re-stating brief
+/// 008 D20). 512 MiB holds three decoded A1 frames; the ±PREFETCH window
+/// around 6 is five, 4..=8, so the engine asks for the focused frame and its
+/// two nearest neighbours, 5..=7, and never for 4 or 8. Until brief 012 the
+/// promise read "each frame of the window is decoded once": the engine asked
+/// for all five and the byte LRU evicted two — decodes the budget could not
+/// keep (QE 2026-10-01, D1: before D20 that was a loop, 101 decodes in 15
+/// idle seconds; after it, two or three decodes per step).
 ///
 /// The APP is simulated, not merely called: it re-focuses on every landing
-/// (`presenter::refresh`), and the loop cannot start without that — a
-/// single `focus()` is green on the engine that loops (measured,
-/// senior-developer test-integrity review of brief 008, 2026-10-01). Every
-/// assertion is a COUNT, never a duration:
+/// (`presenter::refresh`). Every assertion is a COUNT, never a duration:
 ///
-///   1. settled on 6: each frame of 4..=8 lands at full size exactly once,
-///      and 6 is served (a fix that stopped prefetching cannot pass);
+///   1. settled on 6, cold: 5, 6 and 7 each land at full size exactly once,
+///      4 and 8 never. The first focus of a session knows no frame size and
+///      queues the uncapped window; the first header parsed sizes the ring
+///      and culls the queue. Deterministic: the two backlog workers pop 6
+///      and 7 (the back of the queue), the reserved lane takes only the
+///      focused frame's entry, and a worker parses its file a millisecond
+///      into its decode — so 4 and 8 are culled before anyone reaches them;
 ///   2. eight more idle seconds of the app's re-focusing: no landing at all;
-///   3. a step: the new window is asked for WHOLE again — the frames the
-///      budget evicted under the old focus included — each once. Which two
-///      frames phase 1 evicted is the LRU's tie-break (each re-focus stamps
-///      every cached member alike), so the step is picked from what is
-///      missing: 5 when 4 or 7 was evicted, else 7 (the evicted pair is 5
-///      and 8). Either way the new window holds an evicted frame OTHER than
-///      the one stepped to — which only the step's request can fetch; the
-///      stepped-to frame itself the reserved lane's settle guarantee would
-///      fetch even from an engine that never asked again.
+///   3. a step to 7: the window 6..=8 holds one new frame, 8 — exactly it,
+///      once; its landing puts four frames in a three-frame budget, and the
+///      LRU lets go of 5, the one frame outside the new window;
+///   4. a step back to 6: the window 5..=7 holds the one frame the budget
+///      let go, 5 — exactly it, once.
 ///
-/// Mutants (2026-10-01), each measured red in debug on the development
-/// seat — see the commit: the hold check taken out of `schedule` (today's
-/// engine before the fix) → phase 1 sees a sixth full-res landing and
-/// stops early, red on "decoded … 2 times"; the clearing taken out of
-/// `note_focus` → phase 3 never fetches the evicted neighbour, red on
-/// "never decoded at full size" at the 60 s cap.
+/// Mutants (2026-10-05, debug, this seat — see the commit): the cap bypassed
+/// (`focus_plan` handed a rung size of 0), the first parse's cull removed,
+/// the frame size never learned (`note_frame_dims` not called from
+/// `decode_ladder`) — each red in phase 1 on "outside the window"; the
+/// clearing of the hold taken out of `note_focus` — red in phase 4 on "never
+/// decoded at full size".
 #[test]
 fn a_budget_below_the_prefetch_window_goes_quiet_when_idle() {
     let _serial = SERIAL
         .lock()
         .unwrap_or_else(std::sync::PoisonError::into_inner);
     let (engine, rx) = LoupeEngine::start(a1_cycled(12), 512 * 1024 * 1024);
-    let window: Vec<usize> = (4..=8).collect();
 
-    // 1 — settled on 6.
+    // 1 — settled on 6, cold.
+    let window = [5usize, 6, 7];
     engine.focus(6, A1_FULL);
     let settled = drain_refocusing(&engine, &rx, 6, &window);
     assert!(
@@ -519,40 +521,28 @@ fn a_budget_below_the_prefetch_window_goes_quiet_when_idle() {
          landings {idle:?} in eight idle seconds"
     );
 
-    // 3 — a step.
-    let evicted: Vec<usize> = window
-        .iter()
-        .copied()
-        .filter(|i| !full_in_cache(&engine, *i))
-        .collect();
+    // 3 — a step forward: one new frame.
+    engine.focus(7, A1_FULL);
+    let stepped = drain_refocusing(&engine, &rx, 7, &[8]);
     assert!(
-        !evicted.is_empty(),
-        "512 MiB kept the whole five-frame window — the budget no longer \
-         sits below it, and this test proves nothing"
+        full_in_cache(&engine, 7),
+        "the step to 7 lost its frame (landings {stepped:?})"
     );
-    let step = if evicted.contains(&4) || evicted.contains(&7) {
-        5
-    } else {
-        7
-    };
-    let new_window: Vec<usize> = (step - 2..=step + 2).collect();
-    let to_land: Vec<usize> = new_window
-        .iter()
-        .copied()
-        .filter(|i| !full_in_cache(&engine, *i))
-        .collect();
+    assert_each_once(&stepped, &[8], "stepped to 7");
+
+    // 4 — a step back: the one frame the budget let go.
     assert!(
-        to_land.iter().any(|i| *i != step && evicted.contains(i)),
-        "the step to {step} has no evicted frame but itself in its window \
-         (evicted {evicted:?}) — the step choice above is wrong"
+        !full_in_cache(&engine, 5),
+        "5 is still cached after the step to 7 — the budget no longer sits \
+         below four frames, and the step back proves nothing"
     );
-    engine.focus(step, A1_FULL);
-    let stepped = drain_refocusing(&engine, &rx, step, &to_land);
+    engine.focus(6, A1_FULL);
+    let back = drain_refocusing(&engine, &rx, 6, &[5]);
     assert!(
-        full_in_cache(&engine, step),
-        "the step to {step} was never served at full size (landings {stepped:?})"
+        full_in_cache(&engine, 6),
+        "the step back to 6 lost its frame (landings {back:?})"
     );
-    assert_each_once(&stepped, &to_land, &format!("stepped to {step}"));
+    assert_each_once(&back, &[5], "stepped back to 6");
 }
 
 /// `decode_oriented` must actually APPLY the orientation it is given —

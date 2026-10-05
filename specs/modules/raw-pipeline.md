@@ -467,7 +467,7 @@ medium's measured behaviour:
 - [x] `set_visible` promotion: with a saturated queue a newly visible
       image's thumb arrives before ≥ 90 % of background items —
       `tests/pipeline.rs::promoted_jobs_finish_before_background_bulk`.
-- [ ] **A budget below the prefetch window asks for the ring it holds and
+- [x] **A budget below the prefetch window asks for the ring it holds and
       goes quiet** — settled at 512 MiB (three A1 frames against a window
       of five), the engine asks for the focused frame and its two nearest
       neighbours, each decoded at full size once, the two frames of the
@@ -477,10 +477,8 @@ medium's measured behaviour:
       once — `tests/loupe.rs::a_budget_below_the_prefetch_window_goes_quiet_when_idle`
       (the app's refresh simulated: a re-focus on every landing),
       `loupe::tests::a_frame_evicted_under_a_settled_focus_waits_for_the_next_step`.
-      Open because brief 012 re-states the promise (until 2026-10-05 the
-      step asked for the whole five-frame window, and the test pinned
-      that); the box closes when the test follows the sentence in the
-      unit's implementation commit.
+      Re-stated by brief 012 (until 2026-10-05 the step asked for the whole
+      five-frame window, and the test pinned that).
 - [x] **AC1 (brief 012) The ring rule's table**: at the default both windows
       are unchanged (2/2 and 2/8); at 0.5 GB with A1 frames the settled 1:1
       window is 1/1; at the 200 MB floor 0/0; a budget holding exactly two
@@ -490,7 +488,7 @@ medium's measured behaviour:
       body's 305 MB frame fewer (1/1 at 1 GiB); an unknown size leaves the
       window uncapped; a budget below one frame still asks for the focused
       frame — `loupe::tests::the_ring_fits_the_budget` (brief 012).
-- [ ] **AC2 (brief 012) No frame outside the ring is decoded**: at 512 MiB
+- [x] **AC2 (brief 012) No frame outside the ring is decoded**: at 512 MiB
       a cold settled focus decodes exactly the three frames of its capped
       window at full size, each once, the two outside it never; a step
       decodes one; a step back decodes the one the budget let go; a
@@ -498,15 +496,15 @@ medium's measured behaviour:
       `tests/loupe.rs::a_budget_below_the_prefetch_window_goes_quiet_when_idle`
       (re-stated above; mutants: the cap bypassed, the queue not culled at
       the first parse, the frame size never learned — each red on "outside
-      the window"), `loupe::tests::deferred_revival_respects_the_capped_ring`
-      (planned). Open until the tests land.
-- [ ] **AC3 (brief 012) The frame size is the folder's**: the engine learns
+      the window"), `loupe::tests::deferred_revival_respects_the_capped_ring`,
+      `loupe::tests::the_first_parse_culls_what_the_cap_excludes`.
+- [x] **AC3 (brief 012) The frame size is the folder's**: the engine learns
       full and mid bytes from the headers it parses — a synthetic TIFF with
       a 640×400 mid and a 2000×1500 full teaches 2000×1500×3 and 640×400×3,
       a second file with a larger full raises the maximum, a file that
       fails to parse teaches nothing; no A1 constant is referenced from
       `loupe.rs` — `loupe::tests::frame_bytes_come_from_the_headers_parsed`
-      (planned) and the review's grep. Open until the test lands.
+      and the review's grep.
 - [ ] **AC4 (brief 012) The mark names the ring**: `loupe ring budget <B>
       frame <F> rest <b>/<a> transit <b>/<a>` fires when the engine first
       knows a frame size and whenever the report changes, never at start;
