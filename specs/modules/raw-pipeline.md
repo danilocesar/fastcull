@@ -119,18 +119,53 @@ BACKLOG workers and one FOCUS-RESERVED lane.
   #76). A decode itself is never interrupted.
 - **The ring is in VIEW order** (`set_view`; issue #46): ±`PREFETCH` (2)
   when settled, `TRANSIT_BEHIND`/`TRANSIT_AHEAD` (2/8, leaning the way of
-  travel) while moving; an engine whose consumer never calls `set_view`
-  keeps identity order — the pre-#46 behaviour, which the pre-#46 core tests
-  still pin. A deferred upgrade — an in-flight index whose
+  travel) while moving — the UNCAPPED windows; an engine whose consumer
+  never calls `set_view` keeps identity order — the pre-#46 behaviour,
+  which the pre-#46 core tests still pin.
+- **The ring fits the budget**: the window the engine asks for is capped so
+  that `1 + behind + ahead ≤ max(1, ⌊budget ÷ rung_bytes⌋)` — the focused
+  frame always, then the neighbours nearest the focus, the travel side
+  first at equal distance, the far side shrinking first
+  (`loupe::ring_within_budget`, the one site of the rule; the window is
+  planned in travel coordinates — behind/ahead of the direction of travel
+  — and mapped to view positions after the cap). `rung_bytes` is what one
+  decoded frame of the rung the window asks for takes in THIS folder: the
+  full-res frame when the request is above what the mid rung serves (1:1;
+  fit on a 4K display), the mid preview when the mid serves it (transit;
+  fit on a ≤2K display) — so a transit ring of ~5 MB mids is never
+  narrowed by a budget meant for 149 MB frames. Both sizes come from the
+  headers the engine parses — `find_embedded_jpegs` gives each preview's
+  width × height before a pixel is decoded; bytes = width × height × 3 —
+  the largest seen in the session governing, so a folder mixing bodies is
+  sized by its biggest frame, and never from a constant of any body (M11:
+  the setting's hint is where an A1 number belongs, and it names the
+  body). Before the first header of a session is parsed the engine knows
+  no size and asks for the uncapped window; the first parse — the focused
+  frame's own, about a millisecond into its decode — sizes the ring and
+  removes from the queue the focus-origin entries the cap excludes (a
+  decode already running completes: a decode is never interrupted), so
+  what the cap can miss is bounded by what the workers took in that
+  millisecond — one neighbour at most, once per session, and only when the
+  budget holds fewer than two frames. At the default (2 GiB, 14 A1 frames)
+  both windows are unchanged, 5 and 11 frames, with room; at 0.5 GB (3 A1
+  frames) the settled 1:1 window is the focused frame and its two nearest
+  neighbours; at the 200 MB floor (one A1 frame) it is the focused frame
+  alone — the user's choice of budget, and a step there pays the one
+  decode it asked for. `set_view` re-keys the mapping only; the cap is
+  applied where the window is planned, at every `focus()` (brief 012,
+  2026-10-05; issue #99).
+- A deferred upgrade — an in-flight index whose
   wanted rung grew mid-decode — is revived at land time only while the
-  index is still inside ±`PREFETCH`, and a ring neighbour never outranks
+  index is still inside the settled window the budget allows (±`PREFETCH`
+  at the default; brief 012), and a ring neighbour never outranks
   the focused frame's own pending work (a stale revival at top priority
   once captured both workers for frames the cursor had left and starved
   the current frame past the shutter's 60 s cap). A deferred upgrade for a
-  frame 3-8 away is therefore dropped rather than revived — harmless today,
-  since transit never escalates a target, and a trap for any future
-  widening. A dropped upgrade loses nothing: the next refresh re-requests
-  it (`focus()` at the loupe, `want()`/`ensure()` for grid cells).
+  frame outside that window is therefore dropped rather than revived —
+  harmless today, since transit never escalates a target, and a trap for
+  any future widening. A dropped upgrade loses nothing: the next refresh
+  re-requests it (`focus()` at the loupe, `want()`/`ensure()` for grid
+  cells).
 - A byte-budget LRU (the loupe memory setting, default 2 GiB, floored at
   `BUDGET_FLOOR_BYTES`, 200 MB — settings.md) evicts the least recently
   focused images, never the focused one. The app's view-distance eviction
@@ -138,12 +173,21 @@ BACKLOG workers and one FOCUS-RESERVED lane.
 - A ring member evicted to make room for another is not re-requested while
   the focus rests on the same frame and its target does not grow: each
   member is decoded at most once per settled focus, and a step or a bigger
-  target asks for the new window whole. So a budget smaller than the
-  ±`PREFETCH` window (five A1 frames, ~712 MB — 0.7 GB in the app's binary
-  units) costs a re-decode on the next step, never a loop while the user is
-  idle (QE 2026-10-01, D1; brief 008 D20; the window's size corrected
-  2026-10-01, QE D30 — it read ~746 MB, decimal megabytes, where the app's
-  byte formatter and settings.md's GB are binary).
+  target asks for the new window whole — the window the budget allows (QE
+  2026-10-01, D1; brief 008 D20). Since the ring fits the budget the
+  window itself fits, and a member is evicted under a settled focus only at
+  the margin (the mids of a transit share the budget), so a budget smaller
+  than the ±`PREFETCH` window (five A1 frames, ~712 MB — 0.7 GB in the
+  app's binary units; corrected 2026-10-01, QE D30 — it read ~746 MB,
+  decimal megabytes, where the app's byte formatter and settings.md's GB
+  are binary) narrows the ring rather than churning it: a step back past
+  the ring re-decodes what the budget let go, and nothing else is decoded
+  twice. Until brief 012 this sentence read "costs a re-decode on the next
+  step, never a loop while the user is idle" — true of the engine then,
+  whose every step asked for the whole window and evicted what did not
+  fit, decoding frames the budget could not keep; the measured waste is
+  brief 012's before table, and the sentence is retracted here (brief 012,
+  2026-10-05).
 - turbojpeg DCT scaling is a recorded future optimization only (~35–45 %
   off the cook; the ladder already hides that latency).
 - The lane's three rules each answer a starvation that shipped once: a
@@ -347,7 +391,9 @@ medium's measured behaviour:
   capped at total RAM, handed to `LoupeEngine::start` at the next folder
   open (settings.md; brief 008, 2026-10-01 — "configurable" was a promise
   with no path until then, and the budget was `DEFAULT_BUDGET_BYTES` at
-  every start); mid-rung textures count toward it. The app's footprint
+  every start); mid-rung textures count toward it, and the prefetch ring
+  asks only for the frames it holds (the ring fits the budget, above;
+  brief 012, 2026-10-05). The app's footprint
   runs 1–2 GB above the budget because textures sit outside it (issue #3,
   2026-07-31), which the setting's note says.
 
@@ -356,10 +402,16 @@ medium's measured behaviour:
 - `LoupeEngine`: `focus(index, display_long)`, `want(range, cell_width)`,
   `set_view` (deferred revival is internal), `budget()` (the budget the
   engine adopted, floored — what the app's `loupe engine started budget`
-  mark reports); events `Ready` (with the `terminal` flag)
-  and `Failed`; constants `PREFETCH = 2`, `TRANSIT_BEHIND = 2`,
-  `TRANSIT_AHEAD = 8`, `FOCUS_DEBOUNCE` (~250 ms), `MID_RUNG_MAX_LONG =
-  2048`, `UPSCALE_THRESHOLD = 1.25`.
+  mark reports), `ring_report() -> Option<RingReport>` (`budget`, the
+  largest full-res `frame_bytes` and `mid_bytes` parsed so far, and the
+  `rest` and `transit` windows the budget allows for them as
+  `(behind, ahead)` — `None` until a header has been parsed; what the
+  app's `loupe ring` mark reads; brief 012); events `Ready` (with the
+  `terminal` flag) and `Failed`; constants `PREFETCH = 2`,
+  `TRANSIT_BEHIND = 2`, `TRANSIT_AHEAD = 8` — the UNCAPPED windows, which
+  `loupe::ring_within_budget(budget, rung_bytes, behind, ahead) ->
+  (behind, ahead)` caps (the pure rule, brief 012) — `FOCUS_DEBOUNCE`
+  (~250 ms), `MID_RUNG_MAX_LONG = 2048`, `UPSCALE_THRESHOLD = 1.25`.
 - `loupe::decode_oriented` is the perf-budget target; `raw/mod.rs` holds
   `MAX_EMBEDDED_JPEG_LEN`, `MAX_DECODED_PIXELS` and `GRID_SOURCE_MAX_PIXELS`;
   `loupe::DEFAULT_BUDGET_BYTES` and `loupe::BUDGET_FLOOR_BYTES` are the
@@ -377,7 +429,9 @@ medium's measured behaviour:
   files/s.
 - Trace marks (test-harness.md): `thumb bytes idx N` (the pipeline read the
   embedded JPEG), `thumb landed idx N` (the kitchen decoded it), `loupe
-  ready idx N long L`; the read pool's stderr line.
+  ready idx N long L`, `loupe ring budget <B> frame <F> rest <b>/<a>
+  transit <b>/<a>` (the ring the budget allows, on change; brief 012); the
+  read pool's stderr line.
 - What the transit contract asks of this engine — the request states and
   the settle guarantee in the reserved lane — is specified in ui-grid.md;
   the engine rules above are what make it hold.
@@ -413,13 +467,67 @@ medium's measured behaviour:
 - [x] `set_visible` promotion: with a saturated queue a newly visible
       image's thumb arrives before ≥ 90 % of background items —
       `tests/pipeline.rs::promoted_jobs_finish_before_background_bulk`.
-- [x] **A budget below the prefetch window goes quiet** — settled at 512
-      MiB (three A1 frames against a window of five), each frame of the
-      window is decoded once and an idle engine decodes nothing more; a
-      step asks for the new window whole, the frames the budget evicted
-      included, each once — `tests/loupe.rs::a_budget_below_the_prefetch_window_goes_quiet_when_idle`
+- [ ] **A budget below the prefetch window asks for the ring it holds and
+      goes quiet** — settled at 512 MiB (three A1 frames against a window
+      of five), the engine asks for the focused frame and its two nearest
+      neighbours, each decoded at full size once, the two frames of the
+      ±`PREFETCH` window outside that ring never; an idle engine decodes
+      nothing more; a step asks for the new window whole — one new frame —
+      and a step back re-decodes the one frame the budget let go, each
+      once — `tests/loupe.rs::a_budget_below_the_prefetch_window_goes_quiet_when_idle`
       (the app's refresh simulated: a re-focus on every landing),
       `loupe::tests::a_frame_evicted_under_a_settled_focus_waits_for_the_next_step`.
+      Open because brief 012 re-states the promise (until 2026-10-05 the
+      step asked for the whole five-frame window, and the test pinned
+      that); the box closes when the test follows the sentence in the
+      unit's implementation commit.
+- [ ] **AC1 (brief 012) The ring rule's table**: at the default both windows
+      are unchanged (2/2 and 2/8); at 0.5 GB with A1 frames the settled 1:1
+      window is 1/1; at the 200 MB floor 0/0; a budget holding exactly two
+      frames keeps the travel-side neighbour (0/1); the transit window
+      shrinks far side first (2/8 with room for six neighbours → 2/4); a
+      24 MP body's 72 MB frame fits more per GB (2/2 at 1 GiB), a 100 MP
+      body's 305 MB frame fewer (1/1 at 1 GiB); an unknown size leaves the
+      window uncapped; a budget below one frame still asks for the focused
+      frame — `loupe::tests::the_ring_fits_the_budget` (planned; brief 012).
+      Open until the test lands.
+- [ ] **AC2 (brief 012) No frame outside the ring is decoded**: at 512 MiB
+      a cold settled focus decodes exactly the three frames of its capped
+      window at full size, each once, the two outside it never; a step
+      decodes one; a step back decodes the one the budget let go; a
+      deferred upgrade for a frame outside the capped window is dropped —
+      `tests/loupe.rs::a_budget_below_the_prefetch_window_goes_quiet_when_idle`
+      (re-stated above; mutants: the cap bypassed, the queue not culled at
+      the first parse, the frame size never learned — each red on "outside
+      the window"), `loupe::tests::deferred_revival_respects_the_capped_ring`
+      (planned). Open until the tests land.
+- [ ] **AC3 (brief 012) The frame size is the folder's**: the engine learns
+      full and mid bytes from the headers it parses — a synthetic TIFF with
+      a 640×400 mid and a 2000×1500 full teaches 2000×1500×3 and 640×400×3,
+      a second file with a larger full raises the maximum, a file that
+      fails to parse teaches nothing; no A1 constant is referenced from
+      `loupe.rs` — `loupe::tests::frame_bytes_come_from_the_headers_parsed`
+      (planned) and the review's grep. Open until the test lands.
+- [ ] **AC4 (brief 012) The mark names the ring**: `loupe ring budget <B>
+      frame <F> rest <b>/<a> transit <b>/<a>` fires when the engine first
+      knows a frame size and whenever the report changes, never at start;
+      the loupe memory test enters the loupe in its 0.5 GB session and
+      waits on `rest 1/1` for the exact budget —
+      `screenshot.rs::loupe_memory_takes_effect_at_the_next_folder_open`
+      (extended; brief 012). Open until the test is extended.
+- [ ] **AC5 (brief 012) Measured before and after** with brief 012's recipe
+      (release, the development seat, 60 frames, 1:1 on frame 10, a 15 s
+      rest, ten 1 s taps forward, three back): fewer full-res decodes per
+      step at 0.5 GB and at the floor, identical counts at 2 GiB; the perf
+      budgets `budget_fullres_decode_under_350ms` and
+      `budget_pipeline_throughput_over_60_per_sec` green in release on the
+      idle seat — the after table recorded in the brief. Open until the
+      after table is recorded.
+- [ ] **AC6 (brief 012) The specs say so**: this section's ring rule, the
+      Memory bullet and the Contracts; settings.md's Loupe memory row
+      points here; test-harness.md names the mark; ui-grid.md's
+      SETTLED-AND-IDLE row points here; docs/settings.md's sentence about
+      small budgets follows. Open until the Manager ticks it at the merge.
 - [x] The budgets of 01-architecture.md are enforced by release-mode tests —
       `tests/perf_budgets.rs`: `budget_open_exif_under_1ms`,
       `budget_grid_thumb_under_25ms`, `budget_fullres_decode_under_350ms`,
@@ -451,6 +559,13 @@ medium's measured behaviour:
 
 ## History
 
+- 2026-10-05 — Brief 012 (issue #99): the prefetch ring fits the loupe
+  memory budget — the window is capped to the frames the budget holds, the
+  focused frame first, sized from the headers the engine parses (M11), with
+  the deferred-upgrade revival inside the capped window; the D20 sentence
+  "costs a re-decode on the next step" retracted; `ring_report()` and the
+  `loupe ring` mark added to the Contracts; the ledger's budget criterion
+  re-stated and AC1–AC6 opened.
 - 2026-10-02 — QE round 5 of brief 008 (SC-7): the override paragraph
   names the wrapper both binaries call, `resolve_max_readers_from_env`,
   beside the pure function it calls.

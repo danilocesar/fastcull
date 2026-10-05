@@ -123,9 +123,97 @@ A1 frames the budget holds ("≈ 14 A1 frames" at the default).
   0.5 GB and at the floor, the same at 2 GB; the perf budgets green.
 - AC6. raw-pipeline.md and settings.md say so.
 
+## Measurements (M6)
+
+The recipe (senior developer, 2026-10-05; the after table repeats it
+exactly): a release build of the head (2e8a2fd) in the tree's own
+`target/`; a folder of 60 symlinks to `testdata/raws/A1_full_compressed.ARW`
+under the scratch tree; `FASTCULL_NO_CACHE=1 FASTCULL_NO_CONFIG=1
+FASTCULL_TRACE=1`, `FASTCULL_CONFIG_DIR` pointing at a scratch dir whose
+`settings.toml` is `[performance]` / `loupe_memory = "<n>"` (an empty dir
+for the default); the drive script
+
+```
+1500:wait:load settled gen 0;2000:key:right;2200:key:right;…(ten taps 200 ms
+apart, the cursor on frame 10)…;3800:key:right;4300:key:z;4700:dump.at11;
+19300:key:right;20300:key:right;…(ten taps 1 s apart)…;28300:key:right;
+29300:key:left;30300:key:left;31300:key:left;33800:dump.end;34000:quit
+```
+
+(`Z` from the grid is the first loupe focus of the session, at 1:1 — the
+engine is focused only `at_loupe`, presenter.rs); the whole run under
+bash's `time`. Full-res decodes are the `loupe ready idx N long 8640`
+lines on stderr, counted between consecutive `drive:` echoes: "rest" is
+`key:z` to the first `key:right`, "step k" the k-th forward tap to the next
+echo, "back k" the k-th `key:left`. Every full-res ladder also lands a mid
+(`long 1616`) first; those are not counted. Two runs per budget; the seat
+is the i7-8665U laptop, idle, Wayland, GPU renderer.
+
+**Before** (head 2e8a2fd):
+
+| budget (`loupe engine started budget`) | rest, 15 s | full-res decodes per forward step (ten) | per back step (three) | total from `Z` | CPU user+sys over wall |
+|---|---|---|---|---|---|
+| 2 GiB default (2147483648) | 5 | 1,1,1,1,1,1,1,1,1,1 (both runs) | 0,0,0 (both) | 15 / 15 | 13.1 s / 34.2 s; 12.8 s / 34.3 s |
+| 0.5 GB (536870912) | 5 | 3,3,3,2,3,2,2,3,2,3 — 2,3,3,3,2,2,3,2,2,2 | 2,2,2 — 2,3,2 | 37 / 36 | 25.4 s / 34.2 s; 24.5 s / 34.1 s |
+| 0.2 GB (214748365 — the setting's 0.2 GiB, 5 MB above the engine's 200 MiB floor) | 5 | 4 at every step (both runs) | 4,4,4 (both) | 57 / 57 | 38.2 s / 34.1 s; 39.3 s / 34.2 s |
+
+The mechanism, read in the code and visible in the indexes decoded: every
+settled focus asks for the whole ±`PREFETCH` window (`focus_plan`), the
+byte LRU (`evict_to_budget`) keeps `⌊budget ÷ 149 MB⌋` of it — 14, 3 and 1
+frames — and brief 008 D20's hold keeps the rest quiet while the cursor
+rests (the rest column is 5 and then nothing at every budget). A step
+re-asks the window whole, so at 0.5 GB each step decodes the new frame
+plus one or two the LRU let go (which two is the LRU's tie-break — every
+re-focus stamps the cached members alike, hence 2 or 3), and at the floor
+all four neighbours, every step, including the two decoded one second
+earlier. Frames kept: at the default the back steps decode nothing (the
+window was kept); at 0.5 GB two of the five; at the floor none but the
+focused frame. The expected after, from the rule: at 0.5 GB the ring is
+1/1 — rest 3, one decode per forward step, one per back step, 16 in all
+(~13 s CPU); at the floor 0/0 — rest 1, one per step, 14 in all; at the
+default unchanged.
+
 ## Decisions log
 
 - D1 (2026-10-04, Manager): no persona gate — invisible at the default;
   the persona accepted the follow-up at brief 008.
 - D2 (2026-10-04, Manager, M12): the branch was cut while unit 011 ran its
   gate; it is rebased onto unit 011's merge before any role touches it.
+- D3 (2026-10-05, senior developer's plan; for the Manager to confirm):
+  R1's `frame_bytes` is the bytes of the RUNG the window asks for, not one
+  full-frame figure — the full-res frame for a request above what the mid
+  serves (1:1; fit on a 4K display), the mid preview when the mid serves
+  it (transit; fit on a ≤2K display). A transit ring asks for ~5 MB mids:
+  capped by a 149 MB measure it would shrink to the focused frame at the
+  floor for no memory reason (eleven A1 mids are 58 MB and fit under the
+  floor's 200 MiB beside one full frame), losing the look-ahead the
+  transit contract exists for. With the mid's bytes the transit window is
+  unchanged at every budget above 58 MB — i.e. always.
+- D4 (2026-10-05, senior developer's plan; for the Manager to confirm):
+  before the first header of a session is parsed the engine assumes
+  nothing and asks for the uncapped window; the first parse (the focused
+  frame's own, ~1 ms into its decode) sizes the ring and culls the
+  focus-origin queue entries the cap excludes. Residual: what the workers
+  took in that millisecond — at most one neighbour, once per session, and
+  only when the budget holds fewer than two frames (the two backlog
+  workers pop the focused frame and its nearest neighbour; the reserved
+  lane is still in its 250 ms debounce). Rejected: assuming a size at
+  start (M11 — there is none to assume); assuming "the focused frame
+  alone" until a parse succeeds, which would leave a corrupt first frame's
+  neighbours unprefetched — the promise `corrupt_file_reports_failed_and_
+  engine_survives` pins.
+- D5 (2026-10-05, senior developer's plan; for the Manager to confirm):
+  R4's mark is a NEW mark, `loupe ring budget <B> frame <F> rest <b>/<a>
+  transit <b>/<a>`, emitted when the engine first knows a frame size and
+  on every change, not an extension of `loupe engine started budget` — at
+  start no size is known, and a mark printed from an assumed one would be
+  constant across budgets, the D23 shape (a mark that cannot go red). AC4
+  reads accordingly; the loupe memory test enters the loupe in its 0.5 GB
+  session and waits on `rest 1/1`.
+- D6 (2026-10-05, senior developer's plan; for the Manager to confirm):
+  R5's "no docs change" does not hold — docs/settings.md said the loupe
+  "cannot keep all five frames … so a step at 1:1 decodes again the frames
+  it had to let go", which the cap makes false; the sentence follows the
+  spec in the same commit. ui-grid.md's SETTLED-AND-IDLE row ("full-res
+  look-ahead on the ±PREFETCH neighbours") gets a pointer clause, since it
+  is the contract for what is ASKED of the decoder.

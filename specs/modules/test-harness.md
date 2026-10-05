@@ -339,7 +339,19 @@ sidecars — scripts target throwaway copies of test data only.
   bridge's (QE 2026-10-02, round 5); `loupe
   engine started budget <bytes>` at every folder open — the budget the engine ADOPTED
   (`LoupeEngine::budget()`, floored), the proof that the loupe memory
-  setting reached the engine (QE 2026-10-01, D23); `read pool started
+  setting reached the engine (QE 2026-10-01, D23); `loupe ring budget <B>
+  frame <F> rest <b>/<a> transit <b>/<a>` when the engine first knows a
+  frame size and whenever the report changes — never at start, where no
+  size is known and none is assumed (M11): `B` the adopted budget, `F` the
+  largest full-res frame parsed so far (width × height × 3 from the
+  header), `rest` the ±PREFETCH window the budget allows for that frame
+  (behind/ahead of the travel direction — what a settled 1:1 focus asks
+  for), `transit` the 2/8 window for the largest mid preview seen
+  (`LoupeEngine::ring_report()`; the pump emits it on change) — the proof
+  that the budget reached the RING, as the start mark proves it reached the
+  engine; decodes per step are counted on the same stream, the `loupe
+  ready idx N long L` lines between two `drive:` echoes (brief 012,
+  2026-10-05); `read pool started
   floor <F> cap <C>` at every folder open — the bounds the read pool
   ADOPTED (`Pipeline::read_pool_bounds()`), the proof that the read workers
   setting reached the pool (QE 2026-10-01, D27); a launch folder's own

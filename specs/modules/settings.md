@@ -464,7 +464,10 @@ their precedence is `fastcull-core`'s; the app binds (brief 008, 2026-10-01).
   frames`. Total RAM comes from `/proc/meminfo`'s `MemTotal` on Linux and
   `GlobalMemoryStatusEx` on Windows (core's one `unsafe` block; `sysinfo`
   refused 2026-09-26, no new crate), read once at startup. `LoupeEngine::
-  start` receives the bytes in force at every folder open. Note: "Memory
+  start` receives the bytes in force at every folder open; a budget below
+  the ±PREFETCH window narrows the loupe's prefetch ring to the frames it
+  holds, never the frames it would evict — raw-pipeline.md's ring rule
+  (brief 012, 2026-10-05). Note: "Memory
   for decoded full-size frames: a number in GB (2, 0.5 GB) or a share of
   this machine's RAM (40 %) (default 2 GB; applies at the next folder
   open — File › Open Folder…, the same folder is fine). The app's

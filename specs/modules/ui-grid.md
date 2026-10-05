@@ -82,7 +82,7 @@ DISPLAYED — the renderer always shows the best rung in cache:
 |---|---|---|
 | TRANSIT | frame changes < `TRANSIT_GAP` (250 ms) apart | the mid rung ONLY, over a wide ring leaning the way of travel |
 | SETTLED | the user stops (~250 ms, the reserved lane's `FOCUS_DEBOUNCE`) | the app's real target for the focused frame |
-| SETTLED-AND-IDLE | after that lands | full-res look-ahead on the ±`PREFETCH` neighbours |
+| SETTLED-AND-IDLE | after that lands | full-res look-ahead on the ±`PREFETCH` neighbours — as many of them as the loupe memory budget holds (raw-pipeline.md, "The ring fits the budget"; brief 012) |
 
 - **Every ring is a VIEW-ORDER ring** (issue #46): transit, settled,
   look-ahead and the deferred-revival gate are planned in view positions
@@ -98,7 +98,9 @@ DISPLAYED — the renderer always shows the best rung in cache:
   regression tests assert the excuse-less form away.
 - SETTLED-AND-IDLE is not optional: requesting only the focused frame on
   settle would make tap-stepping through a burst at 1:1 pay a full decode
-  on every frame, forever.
+  on every frame, forever. A loupe memory budget that holds one frame —
+  the 200 MB floor — is the one case where it does, by the user's choice
+  of budget (raw-pipeline.md's ring rule; brief 012, 2026-10-05).
 - The same rule at every factor, fit included: on displays up to ~2K, fit
   asks for less than the mid, so `transit_request` is a no-op; on QHD and
   4K, transit DOES engage at fit and a hold shows mids upscaled ~1.6–2.4×
