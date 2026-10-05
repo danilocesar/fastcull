@@ -371,7 +371,8 @@ pub(crate) fn start(window: &MainWindow, state: &Rc<RefCell<AppState>>) -> slint
 
 /// Print the `loupe ring budget <B> frame <F> rest <b>/<a> transit <b>/<a>`
 /// mark when the engine's ring report changes (test-harness.md; brief 012
-/// D5) — the proof the loupe memory budget reached the prefetch ring, as
+/// D5) — the proof the loupe memory budget reached the ring rule (the
+/// windows it allows, not what `focus()` asks for; QE 2026-10-05, D3), as
 /// `loupe engine started budget` proves it reached the engine. The report
 /// and its arithmetic are core's (`LoupeEngine::ring_report`); this only
 /// compares it with the last one printed.

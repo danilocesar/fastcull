@@ -16088,13 +16088,18 @@ fn auto_advance_off_holds_the_cursor_in_the_loupe_at_one_to_one() {
 /// own mark with the exact budget, so a run whose engine started with any
 /// other number never satisfies it and fails loudly at the wait's cap.
 ///
-/// And it reaches the RING (raw-pipeline.md, "The ring fits the budget";
-/// brief 012 AC4): `Z` in the 0.5 GB session is the session's first loupe
-/// focus, at 1:1; the first header the engine parses sizes the ring, and
-/// the `loupe ring` mark must name the window three A1 frames allow — the
-/// focused frame and its two nearest neighbours, `rest 1/1` — with the held
-/// arrow's ring of mids left whole, `transit 2/8`. The mark comes from the
-/// engine's own report, never from the app (brief 012 D5).
+/// And it reaches the ring RULE (raw-pipeline.md, "The ring fits the
+/// budget"; brief 012 AC4): `Z` in the 0.5 GB session is the session's
+/// first loupe focus, at 1:1; the first header the engine parses sizes the
+/// ring, and the `loupe ring` mark must name the windows three A1 frames
+/// allow — the focused frame and its two nearest neighbours, `rest 1/1`,
+/// and the held arrow's ring of mids whole, `transit 2/8`. The mark comes
+/// from the engine's own report, never from the app (brief 012 D5), and it
+/// reports what the budget allows, not what `focus()` asks for — that is
+/// pinned in core, by `a_budget_below_the_prefetch_window_goes_quiet_when_idle`
+/// and `a_held_arrow_keeps_its_ring_of_mids_at_the_floor` (QE 2026-10-05,
+/// D2, D3: this paragraph said the test pinned the ring of mids left whole,
+/// where it pins the report's arithmetic).
 ///
 /// Mutants: (2026-10-01) `session.rs` starting the engine with
 /// `DEFAULT_BUDGET_BYTES` again → the second mark says 2147483648, the wait
@@ -16143,9 +16148,9 @@ fn loupe_memory_takes_effect_at_the_next_folder_open() {
     );
     assert!(
         stderr.contains(&format!("wait:{ring} (satisfied")),
-        "the 0.5 GB budget never reached the loupe's prefetch ring — no `{ring}` \
-         mark after the session's first 1:1 focus (raw-pipeline.md, \"The ring fits \
-         the budget\"):\n{stderr}"
+        "the 0.5 GB budget never reached the ring rule — no `{ring}` mark after \
+         the session's first 1:1 focus (raw-pipeline.md, \"The ring fits the \
+         budget\"):\n{stderr}"
     );
     let wide: Vec<&str> = mark_labels(&stderr)
         .into_iter()

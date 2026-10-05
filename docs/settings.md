@@ -55,8 +55,12 @@ Folder…**, and the same folder is fine. Below 200 MB it is held at 200 MB
 figure is fine, with one cost: below about 0.7 GB (on an A1) the loupe
 keeps fewer frames around the one you are looking at — only as many as
 fit, down to that one frame at 200 MB — so stepping back past them
-decodes again what it let go. It never decodes a frame it cannot keep,
-and never keeps decoding while you sit still.
+decodes again what it let go. It asks only for the frames it can keep —
+the first time you open the loupe after opening a folder, before it has
+learned how big the folder's frames are, it may decode one or two more,
+and again the first time it meets a frame from a higher-resolution
+camera in a folder that mixes cameras — and never keeps decoding while
+you sit still.
 
 **Thumbnail cache cap** (2 GB). The most the thumbnail cache (see below)
 may hold in thumbnails; past it the oldest are dropped when a folder is

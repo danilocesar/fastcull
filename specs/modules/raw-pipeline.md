@@ -133,27 +133,52 @@ BACKLOG workers and one FOCUS-RESERVED lane.
   full-res frame when the request is above what the mid rung serves (1:1;
   fit on a 4K display), the mid preview when the mid serves it (transit;
   fit on a ≤2K display) — so a transit ring of ~5 MB mids is never
-  narrowed by a budget meant for 149 MB frames. Both sizes come from the
-  headers the engine parses — `find_embedded_jpegs` gives each preview's
-  width × height before a pixel is decoded; bytes = width × height × 3 —
-  the largest seen in the session governing, so a folder mixing bodies is
-  sized by its biggest frame, and never from a constant of any body (M11:
-  the setting's hint is where an A1 number belongs, and it names the
-  body). Before the first header of a session is parsed the engine knows
-  no size and asks for the uncapped window; the first parse — the focused
-  frame's own, about a millisecond into its decode — sizes the ring and
-  removes from the queue the focus-origin entries the cap excludes (a
-  decode already running completes: a decode is never interrupted), so
-  what the cap can miss is bounded by what the workers took in that
-  millisecond — one neighbour at most, once per session, and only when the
-  budget holds fewer than two frames. At the default (2 GiB, 14 A1 frames)
-  both windows are unchanged, 5 and 11 frames, with room; at 0.5 GB (3 A1
-  frames) the settled 1:1 window is the focused frame and its two nearest
-  neighbours; at the 200 MB floor (one A1 frame) it is the focused frame
-  alone — the user's choice of budget, and a step there pays the one
-  decode it asked for. `set_view` re-keys the mapping only; the cap is
-  applied where the window is planned, at every `focus()` (brief 012,
-  2026-10-05; issue #99).
+  narrowed by a budget meant for 149 MB frames. Whether the mid serves a
+  request is judged by the SMALLEST mid long edge among the folder's files
+  that have a full rung above their mid, one-rung files (bare JPEGs)
+  excluded (`LoupeState::mid_long`): the largest mid would size a
+  fit-on-4K request by mids in an A1 + phone-JPEG folder and re-create the
+  waste, and the smallest of all mids would let a tiny JPEG size a held
+  arrow's ring of mids by full frames (developer 2026-10-05, brief 012;
+  Manager-confirmed; senior-developer review 2026-10-05, F1: the rule was
+  in the code only). Both sizes come from the headers the engine parses —
+  `find_embedded_jpegs` gives each preview's width × height before a pixel
+  is decoded; bytes = width × height × 3 — the largest seen in the session
+  governing, so a folder mixing bodies is sized by its biggest frame — a
+  one-rung file (a bare JPEG) counts in both maxima, since its one rung is
+  what any request decodes, so a folder holding one large bare JPEG sizes
+  a held arrow's ring of mids by that JPEG's bytes at budgets small enough
+  for it to bind (QE 2026-10-05, D9) — and never from a constant of any
+  body (M11: the setting's hint is where an A1 number belongs, and it
+  names the body). The sizes are the headers' claims —
+  `find_embedded_jpegs` takes a preview's dimensions from its IFD's
+  ImageWidth/ImageLength when present, from the JPEG's SOF otherwise — so
+  one file whose IFD overstates its preview sizes the ring for the session
+  though the frame decodes normally; confirming a rung's size at its first
+  successful decode is the follow-up (issue #108; QE 2026-10-05, D6 — the
+  senior-developer review's F3 named a SOF corruption, which on the A1
+  does not reach the ring). Before the first header of a session is parsed
+  the engine knows no size and asks for the uncapped window; the first
+  parse — the focused frame's own, about a millisecond into its decode —
+  sizes the ring and removes from the queue the focus-origin entries the
+  cap excludes (a decode already running completes: a decode is never
+  interrupted), so what the cap can miss is what the two backlog workers
+  took before the first header parsed: when the focused frame's own header
+  parses first, one neighbour, and only below two frames; when the focused
+  frame fails to parse, up to two neighbours — one per backlog worker — at
+  any budget whose window leaves them out; once per session in a
+  single-body folder, and once more each time a bigger body's first header
+  grows the size, since that frame's own decode completes (brief 012 D4;
+  corrected QE 2026-10-05, D5: it read "one neighbour at most, once per
+  session, and only when the budget holds fewer than two frames", refuted
+  by a corrupt first focus and by a mixed folder). At the default (2 GiB,
+  14 A1 frames) both windows are unchanged, 5 and 11 frames, with room; at
+  0.5 GB (3 A1 frames) the settled 1:1 window is the focused frame and its
+  two nearest neighbours; at the 200 MB floor (one A1 frame) it is the
+  focused frame alone — the user's choice of budget, and a step there pays
+  the one decode it asked for. `set_view` re-keys the mapping only; the
+  cap is applied where the window is planned, at every `focus()` (brief
+  012, 2026-10-05; issue #99).
 - A deferred upgrade — an in-flight index whose
   wanted rung grew mid-decode — is revived at land time only while the
   index is still inside the settled window the budget allows (±`PREFETCH`
@@ -182,12 +207,16 @@ BACKLOG workers and one FOCUS-RESERVED lane.
   decimal megabytes, where the app's byte formatter and settings.md's GB
   are binary) narrows the ring rather than churning it: a step back past
   the ring re-decodes what the budget let go, and nothing else is decoded
-  twice. Until brief 012 this sentence read "costs a re-decode on the next
-  step, never a loop while the user is idle" — true of the engine then,
-  whose every step asked for the whole window and evicted what did not
-  fit, decoding frames the budget could not keep; the measured waste is
-  brief 012's before table, and the sentence is retracted here (brief 012,
-  2026-10-05).
+  twice but a frame the parse that sized or grew the ring could not cull
+  (above; corrected QE 2026-10-05, D5, D8: it ended "and nothing else is
+  decoded twice", and at the floor the neighbour a backlog worker took
+  before the first parse was decoded, evicted, and decoded again on the
+  next step). Until brief 012 this sentence read "costs a re-decode
+  on the next step, never a loop while the user is idle" — true of the
+  engine then, whose every step asked for the whole window and evicted
+  what did not fit, decoding frames the budget could not keep; the
+  measured waste is brief 012's before table, and the sentence is
+  retracted here (brief 012, 2026-10-05).
 - turbojpeg DCT scaling is a recorded future optimization only (~35–45 %
   off the cook; the ladder already hides that latency).
 - The lane's three rules each answer a starvation that shipped once: a
@@ -392,8 +421,10 @@ medium's measured behaviour:
   open (settings.md; brief 008, 2026-10-01 — "configurable" was a promise
   with no path until then, and the budget was `DEFAULT_BUDGET_BYTES` at
   every start); mid-rung textures count toward it, and the prefetch ring
-  asks only for the frames it holds (the ring fits the budget, above;
-  brief 012, 2026-10-05). The app's footprint
+  narrows to the frames the budget holds (the ring fits the budget,
+  above; brief 012, 2026-10-05; corrected QE 2026-10-05, D5, D8: it read
+  "asks only for the frames it holds", and a session's first focus asks
+  for the uncapped window). The app's footprint
   runs 1–2 GB above the budget because textures sit outside it (issue #3,
   2026-07-31), which the setting's note says.
 
@@ -404,10 +435,19 @@ medium's measured behaviour:
   engine adopted, floored — what the app's `loupe engine started budget`
   mark reports), `ring_report() -> Option<RingReport>` (`budget`, the
   largest full-res `frame_bytes` and `mid_bytes` parsed so far, and the
-  `rest` and `transit` windows the budget allows for them as
-  `(behind, ahead)` — `None` until a header has been parsed; what the
-  app's `loupe ring` mark reads; brief 012); events `Ready` (with the
-  `terminal` flag) and `Failed`; constants `PREFETCH = 2`,
+  windows the budget allows as `(behind, ahead)`: `rest` the ±`PREFETCH`
+  window for `frame_bytes`; `transit` the 2/8 window for the rung a held
+  arrow's request climbs to — the largest mid's bytes when the smallest
+  two-rung mid serves `MID_RUNG_TARGET` (the 1616 px a held arrow asks for
+  at 1:1, and at fit on any display at least that long), the largest
+  full's otherwise — exactly as `focus()` sizes that window through
+  `rung_bytes_for`, so the figure is the engine's for every body
+  (senior-developer review 2026-10-05, F2; QE 2026-10-05, D7: until then
+  it was the largest mid's, overstating the window for a body whose mid
+  is under ~1293 px — a 12 MP body with a 1280×853 mid read 2/8 at the
+  200 MB floor where the engine plans 2/2) — `None` until a header has
+  been parsed; what the app's `loupe ring` mark reads; brief 012); events
+  `Ready` (with the `terminal` flag) and `Failed`; constants `PREFETCH = 2`,
   `TRANSIT_BEHIND = 2`, `TRANSIT_AHEAD = 8` — the UNCAPPED windows, which
   `loupe::ring_within_budget(budget, rung_bytes, behind, ahead) ->
   (behind, ahead)` caps (the pure rule, brief 012) — `FOCUS_DEBOUNCE`
@@ -523,10 +563,15 @@ medium's measured behaviour:
       frame <F> rest <b>/<a> transit <b>/<a>` fires when the engine first
       knows a frame size and whenever the report changes, never at start;
       the loupe memory test enters the loupe in its 0.5 GB session and
-      waits on `rest 1/1` for the exact budget —
+      waits on `rest 1/1` for the exact budget; the report's `transit` is
+      sized by the rung a held arrow's request climbs to, as `focus()`
+      sizes it —
       `screenshot.rs::loupe_memory_takes_effect_at_the_next_folder_open`
       (extended; brief 012),
-      `loupe::tests::the_ring_report_waits_for_a_size_and_reports_the_ring_it_allows`.
+      `loupe::tests::the_ring_report_waits_for_a_size_and_reports_the_ring_it_allows`,
+      `loupe::tests::the_ring_report_sizes_transit_by_the_rung_a_held_arrow_climbs_to`
+      (senior-developer review 2026-10-05, F2; QE 2026-10-05, D7; mutant:
+      the transit figure sized by the largest mid again — red).
 - [x] **AC5 (brief 012) Measured before and after** with brief 012's recipe
       (release, the development seat, 60 frames, 1:1 on frame 10, a 15 s
       rest, ten 1 s taps forward, three back): fewer full-res decodes per
@@ -570,6 +615,22 @@ medium's measured behaviour:
 
 ## History
 
+- 2026-10-05 — Brief 012, QE round 1 (D3, D5, D6, D7, D8, D9) and the
+  senior developer's review (F1, F2) and test-integrity review: the mid's
+  reach — the smallest mid with a full rung above it — is stated as a
+  rule, which had lived in the code only; a bare JPEG counts in both
+  maxima; the sizes are the headers' claims, so an IFD that overstates its
+  preview narrows the ring for the session (issue #108; the review's SOF
+  recipe retracted); the D4 residual's bound is corrected for a corrupt
+  first focus and a mixed folder; `ring_report()`'s transit figure is
+  sized as `focus()` sizes a held arrow's window, by the rung its request
+  climbs to — it was the largest mid's, wider than the window the engine
+  plans for a body whose mid is under ~1293 px (AC4 gains its test);
+  test-harness.md's `loupe ring` mark proves the ring RULE, not the
+  window `focus()` asks for; docs/settings.md's "never decodes a frame it
+  cannot keep" says when it may, and the same claim is corrected where the
+  ring's budget rule and the Memory bullet made it ("nothing else is
+  decoded twice", "asks only for the frames it holds").
 - 2026-10-05 — Brief 012, QE round 1 D2 and D4 (the senior developer's
   test-integrity review, TP1–TP3): the held arrow's ring of mids at the
   floor — brief 012 D3 and D7's promise, which nothing guarded — gains a

@@ -345,11 +345,21 @@ sidecars — scripts target throwaway copies of test data only.
   size is known and none is assumed (M11): `B` the adopted budget, `F` the
   largest full-res frame parsed so far (width × height × 3 from the
   header), `rest` the ±PREFETCH window the budget allows for that frame
-  (behind/ahead of the travel direction — what a settled 1:1 focus asks
-  for), `transit` the 2/8 window for the largest mid preview seen
-  (`LoupeEngine::ring_report()`; the pump emits it on change) — the proof
-  that the budget reached the RING, as the start mark proves it reached the
-  engine; decodes per step are counted on the same stream, the `loupe
+  (behind/ahead of the travel direction — the window the rule gives a
+  settled 1:1 focus), `transit` the 2/8 window for the rung a held
+  arrow's request climbs to, the mid for every body whose mid serves
+  1616 px and the full frame otherwise (`LoupeEngine::ring_report()`; the
+  pump emits it on change; senior-developer review 2026-10-05, F2, and QE
+  2026-10-05, D7: it read "for the largest mid preview seen") — the proof
+  that the budget and the learned sizes reached the ring RULE
+  (`ring_report()` applies `ring_within_budget` to them as `focus()`
+  does), as the start mark proves the budget reached the engine; it
+  reports the windows the budget allows, not what `focus()` asked for,
+  which core's `a_budget_below_the_prefetch_window_goes_quiet_when_idle`
+  and `a_held_arrow_keeps_its_ring_of_mids_at_the_floor` pin (corrected QE
+  2026-10-05, D3: until then this read "the proof that the budget reached
+  the RING", and a `focus()` that bypassed the cap would still print
+  `rest 1/1`); decodes per step are counted on the same stream, the `loupe
   ready idx N long L` lines between two `drive:` echoes (brief 012,
   2026-10-05); `read pool started
   floor <F> cap <C>` at every folder open — the bounds the read pool
@@ -637,6 +647,16 @@ shot 2.
 
 ## History
 
+- 2026-10-05 — Brief 012 (issue #99), QE round 1 D3 and D7, the senior
+  developer's review F2: the `loupe ring budget …` mark the brief added is
+  the proof that the budget and the learned sizes reached the ring RULE —
+  it reports the windows the budget allows, not what `focus()` asks for;
+  it read "the proof that the budget reached the RING", and with the cap
+  bypassed in `focus()` the app still printed `rest 1/1`. Its `transit` is
+  the window for the rung a held arrow's request climbs to, as `focus()`
+  sizes it; it read "for the largest mid preview seen", which said 2/8 at
+  the floor for a body whose mid is under ~1293 px, where the engine
+  plans 2/2.
 - 2026-10-05 — Brief 011 merged: the suite-size sentence keeps the count
   and the thirds and sends the seat timings to the briefs (QE round 4
   D3; CLAUDE.md's spec shape).

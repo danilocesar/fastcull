@@ -88,9 +88,13 @@ their precedence is `fastcull-core`'s; the app binds (brief 008, 2026-10-01).
   above this machine's RAM), and its hint says how it was clamped
   (developer 2026-10-01, brief 008 commit A — the spec was silent;
   Manager-accepted under M2, senior-developer review 2026-10-01).
-- A loupe budget below the prefetch window is legal: the engine holds what
-  fits and re-decodes the rest on a step, never while the user is idle
-  (raw-pipeline.md, the ring's budget rule; QE 2026-10-01, D1).
+- A loupe budget below the prefetch window is legal: the ring narrows to
+  the frames the budget holds and a step back past it re-decodes what it
+  let go, never while the user is idle (raw-pipeline.md, "The ring fits
+  the budget"; QE 2026-10-01, D1; brief 012; corrected 2026-10-05,
+  senior-developer test-integrity review SD1: it read "the engine holds
+  what fits and re-decodes the rest on a step", which brief 012 made
+  false — the ring narrows to what fits).
 - **A file that fails to parse is never overwritten in place** (brief 008
   D5: a hand-edited config is the user's data). The defaults are in
   force; every read that finds the file so — at startup in both binaries,
@@ -466,8 +470,10 @@ their precedence is `fastcull-core`'s; the app binds (brief 008, 2026-10-01).
   refused 2026-09-26, no new crate), read once at startup. `LoupeEngine::
   start` receives the bytes in force at every folder open; a budget below
   the ±PREFETCH window narrows the loupe's prefetch ring to the frames it
-  holds, never the frames it would evict — raw-pipeline.md's ring rule
-  (brief 012, 2026-10-05). Note: "Memory
+  holds — raw-pipeline.md's ring rule (brief 012, 2026-10-05; corrected
+  QE 2026-10-05, D5, D8: it went on "never the frames it would evict",
+  and the parse that sizes the ring cannot cull what the workers took
+  before it). Note: "Memory
   for decoded full-size frames: a number in GB (2, 0.5 GB) or a share of
   this machine's RAM (40 %) (default 2 GB; applies at the next folder
   open — File › Open Folder…, the same folder is fine). The app's
@@ -1094,6 +1100,13 @@ their precedence is `fastcull-core`'s; the app binds (brief 008, 2026-10-01).
 
 ## History
 
+- 2026-10-05 — Brief 012 (issue #99), the senior developer's
+  test-integrity review and QE round 1 (D5, D8): the sentence on a loupe
+  budget below the prefetch window points at raw-pipeline.md's "The ring
+  fits the budget" — it read "the engine holds what fits and re-decodes
+  the rest on a step", which the ring that fits the budget made false —
+  and the Loupe memory row's pointer drops "never the frames it would
+  evict", which the parse that sizes the ring cannot promise.
 - 2026-10-04 — Brief 011 (issue #98): "Keyboard" points at ui-grid.md's
   "Modal keyboard containment" for the Tab rule it had stated itself —
   the rule now lives there once, for every dialog; nothing in this dialog

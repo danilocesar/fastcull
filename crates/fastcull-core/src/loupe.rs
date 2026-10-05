@@ -100,7 +100,15 @@ pub struct RingReport {
     /// settled 1:1 focus asks for — as `(behind, ahead)` of the direction
     /// of travel.
     pub rest: (usize, usize),
-    /// The 2/8 transit window the budget allows for `mid_bytes`.
+    /// The 2/8 transit window the budget allows for the rung a held arrow's
+    /// request climbs to — `MID_RUNG_TARGET`, what a held arrow asks for at
+    /// 1:1 and at fit on any display at least that long: `mid_bytes` when
+    /// the folder's smallest two-rung mid serves it, `frame_bytes`
+    /// otherwise — sized exactly as `focus()` sizes that window
+    /// (`rung_bytes_for`). Sized by `mid_bytes` alone it said 2/8 at the
+    /// floor for a body whose mid is under ~1293 px (1616 ÷ 1.25), where
+    /// the engine climbs to the full in transit and plans 2/2 (QE
+    /// 2026-10-05, D7; senior-developer review 2026-10-05, F2).
     pub transit: (usize, usize),
 }
 
@@ -336,8 +344,10 @@ impl LoupeEngine {
     /// no size is known before then and none is assumed (M11; a report
     /// built from an assumed size would read the same at every budget, a
     /// mark that cannot go red — brief 012 D5). The app prints it as its
-    /// `loupe ring` mark on change: the proof the budget reached the RING,
-    /// as `budget()` proves it reached the engine. Takes the engine's lock
+    /// `loupe ring` mark on change: the proof the budget and the learned
+    /// sizes reached the ring RULE, as `budget()` proves the budget reached
+    /// the engine — it reports the windows the budget allows, not what
+    /// `focus()` asks for (QE 2026-10-05, D3). Takes the engine's lock
     /// briefly and reads no file, so the UI thread may call it.
     pub fn ring_report(&self) -> Option<RingReport> {
         let state = lock(&self.shared);
@@ -352,7 +362,7 @@ impl LoupeEngine {
             rest: ring_within_budget(budget, state.frame_bytes_full, PREFETCH, PREFETCH),
             transit: ring_within_budget(
                 budget,
-                state.frame_bytes_mid,
+                rung_bytes_for(&state, MID_RUNG_TARGET),
                 TRANSIT_BEHIND,
                 TRANSIT_AHEAD,
             ),
@@ -2198,6 +2208,7 @@ mod tests {
             let mut state = lock(&engine.shared);
             state.frame_bytes_full = 8640 * 5760 * 3;
             state.frame_bytes_mid = 1616 * 1080 * 3;
+            state.mid_long = 1616;
         }
         assert_eq!(
             engine.ring_report(),
@@ -2734,6 +2745,42 @@ mod tests {
             plan(true, false, 4 * A1_FULL),
             (8, 11),
             "backward transit at four frames: two below, one above"
+        );
+    }
+
+    /// The report's transit figure is the engine's: the window the budget
+    /// allows for the rung a held arrow's request climbs to — the mid when
+    /// the folder's smallest two-rung mid serves `MID_RUNG_TARGET`, the full
+    /// otherwise — exactly as `focus()` sizes it (`rung_bytes_for`). A body
+    /// whose mid is under ~1293 px (1616 ÷ 1.25) climbs to its full in
+    /// transit, so its transit ring is sized by the full frame; a report
+    /// sized by the largest mid said 2/8 at the floor where the engine asks
+    /// for 2/2 (QE 2026-10-05, D7: a 12 MP body with a 1280×853 mid).
+    #[test]
+    fn the_ring_report_sizes_transit_by_the_rung_a_held_arrow_climbs_to() {
+        let (engine, _rx) = LoupeEngine::start(vec![], BUDGET_FLOOR_BYTES);
+        {
+            let mut state = lock(&engine.shared);
+            state.frame_bytes_full = 4000 * 3000 * 3; // 36,000,000
+            state.frame_bytes_mid = 1280 * 853 * 3;
+            state.mid_long = 1280;
+        }
+        assert_eq!(
+            engine.ring_report().expect("a size is known").transit,
+            (2, 2),
+            "a 1280 px mid does not serve a 1616 px transit request, so the \
+             held arrow climbs to the 36 MB full and the floor holds five"
+        );
+        // An A1-shaped folder keeps 2/8: its 1616 mid serves the request.
+        {
+            let mut state = lock(&engine.shared);
+            state.frame_bytes_full = 8640 * 5760 * 3;
+            state.frame_bytes_mid = 1616 * 1080 * 3;
+            state.mid_long = 1616;
+        }
+        assert_eq!(
+            engine.ring_report().expect("a size is known").transit,
+            (TRANSIT_BEHIND, TRANSIT_AHEAD)
         );
     }
 }
