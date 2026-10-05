@@ -513,14 +513,13 @@ medium's measured behaviour:
       `screenshot.rs::loupe_memory_takes_effect_at_the_next_folder_open`
       (extended; brief 012),
       `loupe::tests::the_ring_report_waits_for_a_size_and_reports_the_ring_it_allows`.
-- [ ] **AC5 (brief 012) Measured before and after** with brief 012's recipe
+- [x] **AC5 (brief 012) Measured before and after** with brief 012's recipe
       (release, the development seat, 60 frames, 1:1 on frame 10, a 15 s
       rest, ten 1 s taps forward, three back): fewer full-res decodes per
       step at 0.5 GB and at the floor, identical counts at 2 GiB; the perf
       budgets `budget_fullres_decode_under_350ms` and
       `budget_pipeline_throughput_over_60_per_sec` green in release on the
-      idle seat — the after table recorded in the brief. Open until the
-      after table is recorded.
+      idle seat — the after table recorded in the brief (2026-10-05).
 - [ ] **AC6 (brief 012) The specs say so**: this section's ring rule, the
       Memory bullet and the Contracts; settings.md's Loupe memory row
       points here; test-harness.md names the mark; ui-grid.md's

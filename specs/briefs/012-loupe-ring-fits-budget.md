@@ -173,6 +173,24 @@ focused frame. The expected after, from the rule: at 0.5 GB the ring is
 (~13 s CPU); at the floor 0/0 — rest 1, one per step, 14 in all; at the
 default unchanged.
 
+**After** (head 4436eda, 2026-10-05, the developer; the same recipe, two
+runs per budget; `loupe ring` marks: `rest 2/2`, `1/1`, `0/0`, `transit
+2/8` at all three):
+
+| budget (`loupe engine started budget`) | rest, 15 s | full-res decodes per forward step (ten) | per back step (three) | total from `Z` | CPU user+sys over wall |
+|---|---|---|---|---|---|
+| 2 GiB default (2147483648) | 5 (both runs) | 1,1,1,1,1,1,1,1,1,1 (both runs) | 0,0,0 (both) | 15 / 15 | 13.2 s / 34.3 s; 13.2 s / 34.3 s |
+| 0.5 GB (536870912) | 3 (both) | 1 at every step (both runs) | 1,1,1 (both) | 16 / 16 | 13.6 s / 34.2 s; 13.4 s / 34.2 s |
+| 0.2 GB (214748365) | 2 (both) | 1 at every step (both runs) | 1,1,1 (both) | 15 / 15 | 13.4 s / 34.2 s; 13.4 s / 34.2 s |
+
+The floor's rest is 2, not the rule's 1: both backlog workers took 10 and
+11 from the uncapped first queue, the first parse culled 8, 9 and 12, the
+running decode of 11 completed and 10's landing evicted it, so step 1
+decoded 11 again — D4's bounded residual (one neighbour, once per session,
+below two frames). Perf budgets in release on the idle seat: all six
+green, `budget_fullres_decode_under_350ms` median 286.4 ms,
+`budget_pipeline_throughput_over_60_per_sec` green.
+
 ## Decisions log
 
 - D1 (2026-10-04, Manager): no persona gate — invisible at the default;
