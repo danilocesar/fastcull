@@ -2665,5 +2665,75 @@ mod tests {
             "at the default budget the cap does not bind and the queue must be \
              left exactly as it was"
         );
+
+        // Exactly two frames: the window is the focused frame and its
+        // travel-side neighbour (0/1) — 7 moving forward, 5 moving back.
+        // Mutant X6 (QE 2026-10-05, D4): the cull reading the direction
+        // mirrored keeps the frame the user is leaving — both rows red.
+        let two_frames = 2 * 8640 * 5760 * 3;
+        let forward = test_shared(Vec::new(), cold_focus_on_6(), two_frames);
+        note_frame_dims(&forward, &previews, now);
+        assert_eq!(
+            lock(&forward).queue,
+            vec![(20, 1616, false), (7, u32::MAX, true), (6, u32::MAX, true)],
+            "moving forward at two frames the cull must keep 7, the frame the \
+             next arrow lands on, and drop 5"
+        );
+        let backward = test_shared(
+            Vec::new(),
+            LoupeState {
+                travel_forward: false,
+                ..cold_focus_on_6()
+            },
+            two_frames,
+        );
+        note_frame_dims(&backward, &previews, now);
+        assert_eq!(
+            lock(&backward).queue,
+            vec![(20, 1616, false), (5, u32::MAX, true), (6, u32::MAX, true)],
+            "moving backward at two frames the cull must keep 5, the frame the \
+             next arrow lands on, and drop 7"
+        );
+    }
+
+    /// The planner caps the window in TRAVEL coordinates, before the mapping
+    /// to view positions (raw-pipeline.md, "The ring fits the budget": the
+    /// travel side first) — pinned moving BACKWARD, where the two orders
+    /// differ. Mutant X2 (QE 2026-10-05, D4): the cap applied after
+    /// `view_reach` → a two-frame budget moving backward keeps the frame
+    /// ABOVE, the one the user is leaving (the second row goes red), and a
+    /// four-frame transit backward keeps two above and one below (the fourth
+    /// row goes red). Moving forward the two orders agree, which is why the
+    /// forward rows alone could not see X2.
+    #[test]
+    fn the_planner_caps_before_the_view_mapping() {
+        const A1_FULL: usize = 8640 * 5760 * 3;
+        let plan = |transit: bool, forward: bool, budget: usize| {
+            let (_, lo, hi) = focus_plan(transit, forward, 10, u32::MAX, 20, budget, A1_FULL);
+            (lo, hi)
+        };
+        // Two frames, settled: the travel-side neighbour only.
+        assert_eq!(
+            plan(false, true, 2 * A1_FULL),
+            (10, 11),
+            "forward at two frames: the frame ahead"
+        );
+        assert_eq!(
+            plan(false, false, 2 * A1_FULL),
+            (9, 10),
+            "backward at two frames: the frame behind is the travel side"
+        );
+        // Four frames in transit (2/8 uncapped): three neighbours, two of
+        // them on the travel side.
+        assert_eq!(
+            plan(true, true, 4 * A1_FULL),
+            (9, 12),
+            "forward transit at four frames: one behind, two ahead"
+        );
+        assert_eq!(
+            plan(true, false, 4 * A1_FULL),
+            (8, 11),
+            "backward transit at four frames: two below, one above"
+        );
     }
 }

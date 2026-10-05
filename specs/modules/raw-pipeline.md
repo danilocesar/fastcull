@@ -492,12 +492,26 @@ medium's measured behaviour:
       a cold settled focus decodes exactly the three frames of its capped
       window at full size, each once, the two outside it never; a step
       decodes one; a step back decodes the one the budget let go; a
-      deferred upgrade for a frame outside the capped window is dropped —
+      deferred upgrade for a frame outside the capped window is dropped;
+      the planner and the first parse's cull keep the travel side moving
+      backward as well as forward —
       `tests/loupe.rs::a_budget_below_the_prefetch_window_goes_quiet_when_idle`
       (re-stated above; mutants: the cap bypassed, the queue not culled at
       the first parse, the frame size never learned — each red on "outside
       the window"), `loupe::tests::deferred_revival_respects_the_capped_ring`,
-      `loupe::tests::the_first_parse_culls_what_the_cap_excludes`.
+      `loupe::tests::the_first_parse_culls_what_the_cap_excludes` (its
+      two-frame rows, both directions),
+      `loupe::tests::the_planner_caps_before_the_view_mapping` (QE
+      2026-10-05, D4; mutants: the cap applied after the mapping to view
+      positions, the cull reading the direction mirrored — each red).
+- [x] **A held arrow's ring of mids is not narrowed by a budget meant for
+      full frames** (brief 012 D3, D7): at the 200 MB floor, once the size
+      is known, a held key still prefetches mids beyond the settled reach
+      and never a full frame ahead of the cursor —
+      `tests/loupe.rs::a_held_arrow_keeps_its_ring_of_mids_at_the_floor`
+      (QE 2026-10-05, D2; mutant: `focus()` sizing the transit window by
+      the rung the display climbs to, not the rung its request climbs to —
+      red).
 - [x] **AC3 (brief 012) The frame size is the folder's**: the engine learns
       full and mid bytes from the headers it parses — a synthetic TIFF with
       a 640×400 mid and a 2000×1500 full teaches 2000×1500×3 and 640×400×3,
@@ -556,6 +570,12 @@ medium's measured behaviour:
 
 ## History
 
+- 2026-10-05 — Brief 012, QE round 1 D2 and D4 (the senior developer's
+  test-integrity review, TP1–TP3): the held arrow's ring of mids at the
+  floor — brief 012 D3 and D7's promise, which nothing guarded — gains a
+  criterion beside its test; AC2 names the guards of the travel side
+  moving backward, in the planner and in the first parse's cull, which
+  nothing pinned either.
 - 2026-10-05 — Brief 012 (issue #99): the prefetch ring fits the loupe
   memory budget — the window is capped to the frames the budget holds, the
   focused frame first, sized from the headers the engine parses (M11), with

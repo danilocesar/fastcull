@@ -14,7 +14,9 @@ use std::time::Duration;
 /// an arithmetic ratio, is what this mutex answers.
 static SERIAL: std::sync::Mutex<()> = std::sync::Mutex::new(());
 
-use fastcull_core::loupe::{LoupeEngine, LoupeEvent, DEFAULT_BUDGET_BYTES};
+use fastcull_core::loupe::{
+    LoupeEngine, LoupeEvent, BUDGET_FLOOR_BYTES, DEFAULT_BUDGET_BYTES, PREFETCH,
+};
 
 fn testdata(name: &str) -> PathBuf {
     let path = PathBuf::from(env!("CARGO_MANIFEST_DIR"))
@@ -543,6 +545,66 @@ fn a_budget_below_the_prefetch_window_goes_quiet_when_idle() {
         "the step back to 6 lost its frame (landings {back:?})"
     );
     assert_each_once(&back, &[5], "stepped back to 6");
+}
+
+/// A held arrow's ring of mids is not narrowed by a budget meant for full
+/// frames (raw-pipeline.md, "The ring fits the budget"; brief 012 D3 and D7):
+/// once the engine knows the folder's sizes, a transit focus at the 200 MB
+/// floor — where the settled 1:1 window is the focused frame alone — still
+/// prefetches mids well beyond the settled reach, and never a full frame
+/// ahead of the cursor. The queue is fixed at the second focus, so the
+/// assertions are counts over a deterministic set, not timings.
+///
+/// Mutant X1 (QE 2026-10-05, D2): `focus()` sizing the window by the rung
+/// the DISPLAY climbs to (`rung_bytes_for(&state, display_long)`) instead of
+/// the rung the transit REQUEST climbs to — the transit window becomes 0/0
+/// at the floor, nothing beyond the cursor is asked for, and the first
+/// assertion goes red. Every other transit test runs at the default budget,
+/// where the cap does not bind, so the rest of the suite stays green under
+/// X1 — this test is its only guard.
+#[test]
+fn a_held_arrow_keeps_its_ring_of_mids_at_the_floor() {
+    let _serial = SERIAL
+        .lock()
+        .unwrap_or_else(std::sync::PoisonError::into_inner);
+    let (engine, rx) = LoupeEngine::start(a1_cycled(30), BUDGET_FLOOR_BYTES);
+    // A settled focus first, so the size is learned and the cap is live from
+    // here on (the uncapped first window is brief 012 D4's, not this test's).
+    engine.focus(10, u32::MAX);
+    let learned = collect(&rx, 120, |b| b.get(&10) == Some(&A1_FULL));
+    assert_eq!(
+        learned.get(&10),
+        Some(&A1_FULL),
+        "the focused frame never landed at full size: {learned:?}"
+    );
+    assert!(
+        engine.ring_report().is_some(),
+        "no header was parsed, so the cap is not live and this test proves nothing"
+    );
+
+    // Two focuses in immediate succession: a held key, by definition (the
+    // shape of a_held_key_reaches_transit_through_the_public_api).
+    engine.focus(11, u32::MAX);
+    engine.focus(12, u32::MAX);
+    // Past any settled reach: a landing here can only come from the transit
+    // ring of mids.
+    let beyond = 12 + PREFETCH + 1;
+    let best = collect(&rx, 120, |b| b.keys().any(|&i| i >= beyond));
+    let mut seen: Vec<_> = best.keys().copied().collect();
+    seen.sort_unstable();
+    assert!(
+        seen.iter().any(|&i| i >= beyond),
+        "at the floor a held key prefetched nothing beyond the settled reach — \
+         the budget meant for full frames narrowed the ring of mids: saw {seen:?}"
+    );
+    // And what the look-ahead asks for is the MID, never the top rung.
+    for (&i, &long) in &best {
+        assert!(
+            i <= 12 || long <= 2020,
+            "idx {i} is a look-ahead frame the user has not reached, yet it was \
+             decoded at {long} px — transit must cap look-ahead at the mid"
+        );
+    }
 }
 
 /// `decode_oriented` must actually APPLY the orientation it is given —
