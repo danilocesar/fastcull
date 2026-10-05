@@ -9114,9 +9114,13 @@ fn the_video_export_asks_before_replacing_a_file() {
     // writes ONE file, and for one file "skip" IS Cancel (Manager D9), so
     // `n` must stay a swallowed key. The NUDGE half of that sentence —
     // that the swallow raises the "Pick one" line — stays review-verified:
-    // there is no `clipnudged=` dump field, and adding one for a line
-    // this unit does not touch is not worth the facility (QE 2026-09-12,
-    // senior-developer integrity review, proposal 4).
+    // this script's Enter on the question has already raised the nudge
+    // when the `n` arrives (`clipnudged=true` from dump.inert on), so the
+    // `n`'s own nudge cannot be told apart here (corrected 2026-10-04, QE
+    // round 3 D3: this said there is no `clipnudged=` dump field and that
+    // adding one was not worth the facility — the field exists since brief
+    // 011, QE round 2 D3; QE 2026-09-12, senior-developer integrity review,
+    // proposal 4).
     let inert_n = qedump(&stderr, "inert_n");
     assert_eq!(
         dump_field(inert_n, "clipstate"),
