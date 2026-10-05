@@ -567,16 +567,15 @@ shot 2.
   -- --list`, re-measured 2026-10-04 at the fix round of brief 011's
   second QE round; its QE rounds added launches, not tests). They no
   longer fit one 600 s foreground call in debug on the development seat
-  and run there as three `--exact` thirds split from that list: 372 s +
-  319 s + 325 s, 1016 s, in debug on the idle seat at that fix round (QE
-  2026-10-04, round 2 D6: this gave 349 s + 298 s + 323 s, 970 s,
-  measured at brief 011's commit C, before the QE rounds' held launches;
-  327 s + 280 s + 325 s, 932 s, for the 120 at brief 010's commit E;
-  326 s + 271 s + 311 s, 908 s, for the 118); halves would run some
-  508 s each, too near the cap (brief 010 R8 and D5; this sentence said
-  two halves and left the figures to be measured until brief 010's
-  implementation; the "87 tests, 318 s + 288 s" of the agent files dates
-  from 2026-09-12, before briefs 008–009 added 31).
+  and run there as three `--exact` thirds split from that list — each
+  third well under the cap, halves too near it. The measured times of
+  each unit's head are that unit's brief's (brief 011 D8 for the 122:
+  ~1040 s in three thirds, three independent measurements; brief 010 D5
+  for the 120; this sentence carried the seat timings themselves until
+  2026-10-05 — moved out under CLAUDE.md's spec shape, which keeps seat
+  measurements in the brief or the commit, QE round 4 D3 of brief 011;
+  brief 010 R8 and D5 made it thirds; the "87 tests, 318 s + 288 s" of the
+  agent files dates from 2026-09-12, before briefs 008–011 added 35).
 - CI facts: a pull request's runs share one concurrency group per ref with
   `cancel-in-progress` (a run that vanishes without a verdict is a cancel,
   not a hang); every other event gets its own group; the job cap is 90
@@ -626,6 +625,9 @@ shot 2.
 
 ## History
 
+- 2026-10-05 — Brief 011 merged: the suite-size sentence keeps the count
+  and the thirds and sends the seat timings to the briefs (QE round 4
+  D3; CLAUDE.md's spec shape).
 - 2026-10-04 — Brief 011, QE round 2 D6 and D7: the suite's size
   re-measured at the second QE round's fix — 122 tests, three thirds of
   372 s + 319 s + 325 s in debug on the idle seat; the Focus bullet's

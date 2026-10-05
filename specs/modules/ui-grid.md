@@ -1261,12 +1261,14 @@ host, not the footer, absorbs the high-water mark's extra height).
       export dialog moves nothing either — the first launch of each ring
       test, red when the ring's arm is moved ahead of the dialog's
       containment arm.
-- [ ] AC5 (brief 011) — the two dialogs' other keys and every answer
+- [x] AC5 (brief 011) — the two dialogs' other keys and every answer
       behave as before: the existing copy and export driven tests, run
-      unchanged (open until brief 011's suite is green on both runners).
-- [ ] AC6 (brief 011) — the spec sentences and the docs say so and the
-      Slint-facts gap is retracted: review-verified at brief 011's merge
-      (open until then).
+      unchanged, green on both runners at every head of the unit (ticked
+      at the merge, 2026-10-05, M10; QE round 4).
+- [x] AC6 (brief 011) — the spec sentences and the docs say so and the
+      Slint-facts gap is retracted: review-verified at the senior
+      developer's reviews and QE's rounds 1–4 (ticked at the merge,
+      2026-10-05, M10).
 - [x] AC7 (brief 011, the senior developer's review F1) — a button that
       starts the dialog's run puts the keyboard home before it starts:
       `Tab` onto Choose…, a click on Copy (or Export), `Esc` back to the

@@ -272,4 +272,36 @@ No user report; measured, not seen in the wild.
   recipe needs inert `zenity`, `xdg-open` and `kdialog` shims — recorded
   as the directive candidate's correction, the Manager's to carry, not
   code). Then re-review, QE round 4, merge on PASS.
+- D8 (2026-10-05, Manager, at the merge): the extra round PASSED. The
+  developer, checking every Enter and Space in both ring tests against
+  the rule, found two more exposures beyond QE's A4/A5 — a report Space
+  that a `slot-ok` regression would send to Open destination (A6), and a
+  one-token forward home start that would send 2b's Enter to Choose…
+  (A7) — and closed all four the same way: dry launches 3a and 2a replay
+  launch 3's and launch 2's scripts with the presses swapped out, 2b
+  replays launch 2's walk, so every press follows a walk an earlier
+  launch drove and asserted; 34 mutants red at a landing assertion inside
+  the sandbox, 0 picker, 0 shim calls, every run exiting by itself; the
+  copy test 59.5 s (was 46), the export test 47.9 s (was 40). Re-review
+  APPROVED (a nit: the suite-size sentence's figures — 122 driven tests at
+  the head, three independent measurements from the tree's own target:
+  QE 385.8 + 327.6 + 326.3 = 1039.7 s, the developer 1041.6 s, the senior
+  developer 1039.1 s, in debug on the idle seat; halves would run ~520 s;
+  the figures live here, not in test-harness.md's Behaviour — QE round 4
+  D3 and CLAUDE.md's spec shape);
+  QE round 4 PASS with two minors sent to issue #106: QE4-D1 — under a
+  one-identifier regression of the export ring's refocus the PRE-EXISTING
+  export clash test can reach the native picker through `Ctrl+O` on the
+  grid (a harness-level hazard; QE's P1, a harness switch that makes
+  native dialogs unreachable from any driven run, is the follow-up) — and
+  QE4-D2 — two export ring rules without a red mutant (the first Shift+Tab
+  from the plan's home; a scope gain without a state change). AC5 and AC6
+  ticked at the merge (M10: the existing copy and export tests unchanged
+  and green on both runners at every head; the spec and docs
+  review-verified). CI green on both runners at 5923df7 (ubuntu 23m09s,
+  windows 49m42s); merged after this commit's own run. Unit 011 spent
+  four QE rounds; three of them on how a hypothetical regression of the
+  tests' own subject would fail — a cost the Manager records for the
+  user without a rule change (the user, 2026-10-03: the rule questions
+  were only questions).
 
