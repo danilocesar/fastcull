@@ -156,8 +156,11 @@ BACKLOG workers and one FOCUS-RESERVED lane.
   one file whose IFD overstates its preview sizes the ring for the session
   though the frame decodes normally; confirming a rung's size at its first
   successful decode is the follow-up (issue #108; QE 2026-10-05, D6 — the
-  senior-developer review's F3 named a SOF corruption, which on the A1
-  does not reach the ring). Before the first header of a session is parsed
+  senior-developer review's F3 named a SOF corruption, which reaches the
+  ring through the mid: the A1's mid preview is sized from its SOF while
+  its full rung, in the third IFD, is IFD-sized — this parenthesis said
+  "which on the A1 does not reach the ring" until 2026-10-05, QE round 2
+  D11). Before the first header of a session is parsed
   the engine knows no size and asks for the uncapped window; the first
   parse — the focused frame's own, about a millisecond into its decode —
   sizes the ring and removes from the queue the focus-origin entries the
@@ -579,11 +582,12 @@ medium's measured behaviour:
       budgets `budget_fullres_decode_under_350ms` and
       `budget_pipeline_throughput_over_60_per_sec` green in release on the
       idle seat — the after table recorded in the brief (2026-10-05).
-- [ ] **AC6 (brief 012) The specs say so**: this section's ring rule, the
+- [x] **AC6 (brief 012) The specs say so**: this section's ring rule, the
       Memory bullet and the Contracts; settings.md's Loupe memory row
       points here; test-harness.md names the mark; ui-grid.md's
       SETTLED-AND-IDLE row points here; docs/settings.md's sentence about
-      small budgets follows. Open until the Manager ticks it at the merge.
+      small budgets follows. Review-verified at the senior developer's two
+      reviews and QE's two rounds; ticked at the merge, 2026-10-05 (M10).
 - [x] The budgets of 01-architecture.md are enforced by release-mode tests —
       `tests/perf_budgets.rs`: `budget_open_exif_under_1ms`,
       `budget_grid_thumb_under_25ms`, `budget_fullres_decode_under_350ms`,

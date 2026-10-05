@@ -2431,7 +2431,10 @@ mod tests {
         use crate::raw::jpeg_hostile::encoded;
         use crate::raw::tiff_testutil::{tiny_jpeg, TiffBuilder};
         // The A1's layout at synthetic sizes: the mid preview in IFD0, the
-        // full rung in the next IFD (sized from its SOF, as on the A1).
+        // full rung in the next IFD. In this synthetic file the full rung
+        // is sized from its SOF; on the A1 the full rung sits in the third
+        // IFD and is IFD-sized — the mid is the SOF-sized one (QE 2026-10-05,
+        // round 2 D12: this comment had said "as on the A1").
         let tiff = |mid: &[u8], full: &[u8]| {
             let mut b = TiffBuilder::new(true);
             let mid_off = b.add_blob(mid);

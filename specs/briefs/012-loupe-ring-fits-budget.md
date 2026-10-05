@@ -85,10 +85,13 @@ A1 frames the budget holds ("≈ 14 A1 frames" at the default).
   and transit), and the deferred-upgrade revival respects it too (a
   neighbour outside the budget's ring is dropped, never revived). The
   eviction rule of brief 008 D20 stands.
-- R4. **The mark says what was asked**: `loupe engine started budget <bytes>`
-  gains the ring the budget allows at start (`ring <behind>/<ahead>` at
-  rest and in transit, for the frame size assumed), and a per-focus mark
-  or the existing `loupe ready` marks let a test count decodes per step.
+- R4. **The mark says what was asked**: the ring the budget allows is
+  reported in its own on-change mark, `loupe ring budget <B> frame <F>
+  rest <b>/<a> transit <b>/<a>`, emitted when the size becomes known and
+  whenever it changes — never at start, where nothing is known (D5; this
+  requirement said "the start mark gains the ring" until 2026-10-05, QE
+  round 2 D13) — and the existing `loupe ready` marks let a test count
+  decodes per step.
 - R5. **Spec and docs, same commit**: raw-pipeline.md's ring paragraph and
   Memory bullet state the rule once; settings.md's "Loupe memory" row
   points at it in one sentence (the note is core's text — unchanged unless
@@ -118,7 +121,9 @@ A1 frames the budget holds ("≈ 14 A1 frames" at the default).
   the mutant is red.
 - AC3. The frame size comes from the folder's frames, never from an A1
   constant.
-- AC4. The start mark names the ring; the loupe memory test reads it.
+- AC4. The on-change `loupe ring …` mark names the ring the budget
+  allows; the loupe memory test waits on it (D5; "the start mark" until
+  2026-10-05, QE round 2 D13).
 - AC5. The before/after measurement is recorded: fewer decodes per step at
   0.5 GB and at the floor, the same at 2 GB; the perf budgets green.
 - AC6. raw-pipeline.md and settings.md say so.
@@ -186,8 +191,9 @@ runs per budget; `loupe ring` marks: `rest 2/2`, `1/1`, `0/0`, `transit
 The floor's rest is 2, not the rule's 1: both backlog workers took 10 and
 11 from the uncapped first queue, the first parse culled 8, 9 and 12, the
 running decode of 11 completed and 10's landing evicted it, so step 1
-decoded 11 again — D4's bounded residual (one neighbour, once per session,
-below two frames). Perf budgets in release on the idle seat: all six
+decoded 11 again — D4's bounded residual (one neighbour per first parse,
+below two frames; see D4's corrected bound). Perf budgets in release on
+the idle seat: all six
 green, `budget_fullres_decode_under_350ms` median 286.4 ms,
 `budget_pipeline_throughput_over_60_per_sec` green.
 
@@ -212,10 +218,15 @@ green, `budget_fullres_decode_under_350ms` median 286.4 ms,
   nothing and asks for the uncapped window; the first parse (the focused
   frame's own, ~1 ms into its decode) sizes the ring and culls the
   focus-origin queue entries the cap excludes. Residual: what the workers
-  took in that millisecond — at most one neighbour, once per session, and
+  took in that millisecond — at most one neighbour per first parse, and
   only when the budget holds fewer than two frames (the two backlog
   workers pop the focused frame and its nearest neighbour; the reserved
-  lane is still in its 250 ms debounce). Rejected: assuming a size at
+  lane is still in its 250 ms debounce). "Once per session" is what this
+  entry said until 2026-10-05: the first parse is the first *successful*
+  header parse, so a session whose first frame refuses its header parses
+  again at the next focus and the residual recurs there (QE round 1
+  SC-D5); the bound is per first parse, and the number of first parses is
+  the number of leading refusals plus one. Rejected: assuming a size at
   start (M11 — there is none to assume); assuming "the focused frame
   alone" until a parse succeeds, which would leave a corrupt first frame's
   neighbours unprefetched — the promise `corrupt_file_reports_failed_and_
@@ -247,3 +258,26 @@ green, `budget_fullres_decode_under_350ms` median 286.4 ms,
   lands — a promise re-stated, not a promise dropped (M1). The AFTER
   measurement is the developer's, with the brief's recipe exactly (two
   runs per budget), recorded in the Measurements section and the commit.
+- D8 (2026-10-05, Manager, the record of the gate): the senior developer's
+  review of the four implementation commits (decf985..cca9b79) was
+  APPROVED with three minors and two nits; QE round 1 was PASS with one
+  pre-existing major (an IFD that overstates its preview re-decodes on
+  every focus — issue #108, not this unit's), seven minors and three test
+  proposals, TP1–TP3 approved by the senior developer for this unit. The
+  small round that followed — `7e36b81` (the three guards QE found
+  missing: a held arrow keeps its ring of mids at the floor, the planner
+  caps before the view mapping, the first parse's cull keeps the travel
+  side at two frames) and `3d55191` (the spec sentences the review's F1
+  and F2 and QE's SC-D3, D5, D6, D8, D9 and SD1 asked for; the report's
+  transit sized as `focus()` sizes it) — was re-reviewed APPROVED (one
+  minor, three nits) and re-tested by QE round 2 as PASS with four minors
+  (D10–D13: the three bookkeeping corrections in this commit and the
+  deferrals filed as issue #109) and the AFTER measurement reproduced
+  index for index. The developer stage died three times on an overloaded
+  API mid-round and was resumed on the tree it left; nothing was lost. CI
+  at `3d55191`: ubuntu 23m1s, windows 49m3s, both green. The stale
+  sentences this commit corrects — R4 and AC4 (the start mark D5
+  replaced), D4's "once per session" bound, raw-pipeline.md's claim that
+  a SOF corruption does not reach the ring on the A1, a loupe.rs comment
+  that called the synthetic fixture's SOF-sized full rung the A1's layout
+  — are each marked where they stood, and AC6 is ticked (M10).
