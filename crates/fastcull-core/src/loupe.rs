@@ -646,6 +646,52 @@ const SETTLE_DEBOUNCE: std::time::Duration = std::time::Duration::from_millis(15
 const TRANSIT_AHEAD: usize = 8;
 const TRANSIT_BEHIND: usize = 2;
 
+/// The window the budget lets the engine ask for — the one site of the
+/// rule (raw-pipeline.md, "The ring fits the budget"; brief 012, issue
+/// #99).
+///
+/// `behind` and `ahead` are in TRAVEL coordinates: `ahead` is the side the
+/// user is moving toward. The budget holds `max(1, ⌊budget ÷ rung_bytes⌋)`
+/// decoded frames of the rung being asked for. The focused frame takes the
+/// first slot whatever the budget — a loupe that cannot show the frame the
+/// user is looking at is broken, not frugal — and the rest go to the
+/// neighbours nearest the focus, the travel side first at equal distance
+/// (that is where the next arrow lands), so the far side shrinks first.
+/// The result is never wider than the window it was given.
+///
+/// `rung_bytes == 0` means no header has been parsed yet, so no size is
+/// known: the window comes back uncapped (brief 012 D4 — there is no size
+/// to assume, M11). Without this cap every step asked for the whole window
+/// and the byte LRU evicted what did not fit: at 0.5 GB two or three
+/// full-res decodes per step keeping two, at the 200 MB floor four keeping
+/// none but the focused frame (brief 012's before table).
+pub fn ring_within_budget(
+    budget: usize,
+    rung_bytes: usize,
+    behind: usize,
+    ahead: usize,
+) -> (usize, usize) {
+    if rung_bytes == 0 {
+        return (behind, ahead);
+    }
+    // The slots left once the focused frame has its own.
+    let mut room = (budget / rung_bytes).max(1) - 1;
+    let (mut kept_behind, mut kept_ahead) = (0, 0);
+    let mut distance = 1;
+    while room > 0 && (distance <= ahead || distance <= behind) {
+        if distance <= ahead {
+            kept_ahead = distance;
+            room -= 1;
+        }
+        if distance <= behind && room > 0 {
+            kept_behind = distance;
+            room -= 1;
+        }
+        distance += 1;
+    }
+    (kept_behind, kept_ahead)
+}
+
 /// Is the user MOVING between frames (held key, `[`/`]`, a Y/N
 /// auto-advance chain) rather than looking at one?
 ///
@@ -1928,6 +1974,82 @@ mod tests {
         assert!(
             schedule(&mut state, 8, u32::MAX, 12, Origin::Focus),
             "an escalated target did not ask for the evicted frame again"
+        );
+    }
+
+    /// The ring rule's table (raw-pipeline.md, "The ring fits the budget";
+    /// brief 012 AC1). Windows are `(behind, ahead)` in travel coordinates.
+    /// The bodies' frame sizes are fixtures here — the engine itself learns
+    /// them from the headers it parses and holds no body constant (M11).
+    #[test]
+    fn the_ring_fits_the_budget() {
+        /// budget, rung bytes, the window asked for, the window allowed, why.
+        type Row = (usize, usize, (usize, usize), (usize, usize), &'static str);
+        const GIB: usize = 1 << 30;
+        const DEF: usize = DEFAULT_BUDGET_BYTES;
+        const FLOOR: usize = BUDGET_FLOOR_BYTES;
+        // Decoded RGB bytes of one frame: width × height × 3.
+        const A1_FULL: usize = 8640 * 5760 * 3; // 149,299,200
+        const A1_MID: usize = 1616 * 1080 * 3; // 5,235,840
+        const MP24_FULL: usize = 6000 * 4000 * 3; // 72,000,000
+        const MP100_FULL: usize = 11_648 * 8_736 * 3; // 305,270,784
+        let rest = (PREFETCH, PREFETCH);
+        let transit = (TRANSIT_BEHIND, TRANSIT_AHEAD);
+        let rows: [Row; 19] = [
+            // The default: both windows unchanged, with room (14 A1 frames).
+            (DEF, A1_FULL, rest, rest, "default, 1:1"),
+            (DEF, A1_FULL, transit, transit, "default, 2/8 fulls"),
+            (DEF, A1_MID, transit, transit, "default, 2/8 mids"),
+            // 0.5 GB holds three A1 frames: the focused one and its nearest two.
+            (512 << 20, A1_FULL, (2, 2), (1, 1), "0.5 GB, A1 at 1:1"),
+            // The floor holds one: the focused frame alone — at the engine's
+            // floor and at the setting's 0.2 GiB, 5 MB above it.
+            (FLOOR, A1_FULL, (2, 2), (0, 0), "the 200 MiB floor"),
+            (214_748_365, A1_FULL, (2, 2), (0, 0), "0.2 GiB setting"),
+            // Two frames, at both ends of the range: the travel-side
+            // neighbour, never the one behind.
+            (2 * A1_FULL, A1_FULL, (2, 2), (0, 1), "two frames exactly"),
+            (3 * A1_FULL - 1, A1_FULL, (2, 2), (0, 1), "byte short of 3"),
+            // Room for six neighbours of a 2/8 window: nearest first, the far
+            // side shrinks first.
+            (2 * GIB, MP100_FULL, (2, 8), (2, 4), "2 GiB, 100 MP, 2/8"),
+            // Other bodies: a 24 MP frame fits more per GB, a 100 MP one fewer.
+            (GIB, MP24_FULL, (2, 2), (2, 2), "1 GiB, 24 MP"),
+            (GIB, MP100_FULL, (2, 2), (1, 1), "1 GiB, 100 MP"),
+            // No header parsed yet: no size, no cap.
+            (512 << 20, 0, (2, 2), (2, 2), "unknown size, settled"),
+            (FLOOR, 0, (2, 8), (2, 8), "unknown size, transit"),
+            // A budget below one frame still asks for the focused frame.
+            (A1_FULL - 1, A1_FULL, (2, 2), (0, 0), "byte short of 1"),
+            (1, A1_FULL, (2, 8), (0, 0), "one byte"),
+            // A transit of A1 mids is never narrowed above 58 MB (eleven
+            // mids): not at the floor, not at exactly eleven, and the
+            // boundary bites one byte below.
+            (FLOOR, A1_MID, (2, 8), (2, 8), "mids at the floor"),
+            (11 * A1_MID, A1_MID, (2, 8), (2, 8), "exactly 11 mids"),
+            (11 * A1_MID - 1, A1_MID, (2, 8), (2, 7), "short of 11 mids"),
+            // Never wider than asked, however large the budget.
+            (usize::MAX, 1, (2, 2), (2, 2), "a budget of everything"),
+        ];
+        // Every row is checked before anything fails, so a red run names
+        // every row the rule broke, not only the first.
+        let wrong: Vec<String> = rows
+            .iter()
+            .filter_map(|&(budget, rung_bytes, (behind, ahead), want, why)| {
+                let got = ring_within_budget(budget, rung_bytes, behind, ahead);
+                (got != want).then(|| {
+                    format!(
+                        "{why}: budget {budget}, rung {rung_bytes} bytes, window \
+                         {behind}/{ahead} -> {}/{}, expected {}/{}",
+                        got.0, got.1, want.0, want.1
+                    )
+                })
+            })
+            .collect();
+        assert!(
+            wrong.is_empty(),
+            "the ring does not fit the budget as raw-pipeline.md states it:\n{}",
+            wrong.join("\n")
         );
     }
 }

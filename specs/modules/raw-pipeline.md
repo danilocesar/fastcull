@@ -481,7 +481,7 @@ medium's measured behaviour:
       step asked for the whole five-frame window, and the test pinned
       that); the box closes when the test follows the sentence in the
       unit's implementation commit.
-- [ ] **AC1 (brief 012) The ring rule's table**: at the default both windows
+- [x] **AC1 (brief 012) The ring rule's table**: at the default both windows
       are unchanged (2/2 and 2/8); at 0.5 GB with A1 frames the settled 1:1
       window is 1/1; at the 200 MB floor 0/0; a budget holding exactly two
       frames keeps the travel-side neighbour (0/1); the transit window
@@ -489,8 +489,7 @@ medium's measured behaviour:
       24 MP body's 72 MB frame fits more per GB (2/2 at 1 GiB), a 100 MP
       body's 305 MB frame fewer (1/1 at 1 GiB); an unknown size leaves the
       window uncapped; a budget below one frame still asks for the focused
-      frame — `loupe::tests::the_ring_fits_the_budget` (planned; brief 012).
-      Open until the test lands.
+      frame — `loupe::tests::the_ring_fits_the_budget` (brief 012).
 - [ ] **AC2 (brief 012) No frame outside the ring is decoded**: at 512 MiB
       a cold settled focus decodes exactly the three frames of its capped
       window at full size, each once, the two outside it never; a step
