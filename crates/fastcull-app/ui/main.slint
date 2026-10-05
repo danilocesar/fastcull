@@ -2406,10 +2406,118 @@ export component MainWindow inherits Window {
                 // Owner token (#63): a dialog scope is -1, which no
                 // rebuild reclaim ever matches — while this dialog is up
                 // the keyboard is ITS business, and a panel rebuild
-                // underneath must not pull focus out of it.
+                // underneath must not pull focus out of it. The scope is
+                // also the keyboard's HOME in the ring below (slot -1).
                 changed has-focus => {
                     root.dbg-focus-changed("copy dialog", self.has-focus);
-                    if (self.has-focus) { root.focus-owner = -1; }
+                    if (self.has-focus) {
+                        root.focus-owner = -1;
+                        self.slot = -1;
+                    }
+                }
+                // THE KEYBOARD RING (issue #98, brief 011; the rule is
+                // ui-grid.md "Modal keyboard containment", the controls
+                // per state fileops.md "The keyboard ring"). Tab and
+                // Shift+Tab are handled HERE, because the WINDOW handles a
+                // Tab no scope accepted by walking the whole item tree,
+                // the grid and the panel behind the scrim included — the
+                // third Tab used to land on the grid, where a Y marked a
+                // hidden frame (Cargo.toml, the fourth canary's fact 1).
+                //
+                // Which control holds the keyboard, in visible order:
+                // -1 the scope itself (home), 0 Choose…, 1 the rename
+                // field, 2 Open destination, 3 Cancel, 4 Copy/Close.
+                // Written by every control's own focus gain and by
+                // `focus-slot`.
+                property <int> slot: -1;
+                // The three row buttons live inside `if`s, and an element
+                // inside an `if` cannot be named from out here (why the
+                // dialog has its `claim-focus` watch below). So the ring
+                // asks for one by writing its slot here, and the button
+                // whose slot it is focuses itself and clears the request.
+                property <int> want-slot: -1;
+                // EVERY STATE CHANGE BRINGS THE KEYBOARD HOME. A control
+                // the new state removes — the run's end removes Cancel,
+                // which the keyboard may be on (by Tab, or by the Space
+                // that cancelled the run) — would otherwise keep a focus
+                // that Slint never takes back (a destroyed item delivers
+                // no FocusOut: Cargo.toml, the second canary's fact 2),
+                // and every key after it would be delivered to nothing.
+                // Copy/Close goes home by itself BEFORE the state changes
+                // (its `clicked`, brief 011 review F1), so Enter on a
+                // focused Copy no longer relies on this.
+                // Residual, MEASURED on Linux, where the menu bar is
+                // in-window (QE 2026-10-04, round 2 D2; this said
+                // "unmeasured"): a run that finishes while a menu is open
+                // takes the keyboard from the open menu — `set_focus_item`
+                // redirects only to a top-level popup's window
+                // (window.rs:1231), and the in-window menu is not one — so
+                // the menu stays drawn, the arrows no longer reach it, and
+                // the next Esc closes the report, not the menu. Without
+                // this refocus the menu keeps the keyboard, but a Cancel
+                // the keyboard was on becomes the menu's restore target,
+                // dies with the run, and the next Tab leaves the dialog:
+                // this is the lesser evil. A fix needs a design for the
+                // MenuBar's restore target (a follow-up issue).
+                property <int> state: root.copy-state;
+                changed state => {
+                    self.slot = -1;
+                    self.want-slot = -1;
+                    self.focus();
+                }
+                // A slot the ring may land on in this state. NEVER focus a
+                // slot this has not approved: a `focus()` from code on a
+                // disabled control does not fail, it moves on to the next
+                // item in tree order that takes the keyboard — the grid
+                // behind the scrim, measured with the greyed Copy
+                // (ui-grid.md, "Slint facts this module depends on"). Each
+                // line is its control's own `if` and `enabled`.
+                function slot-ok(s: int) -> bool {
+                    if (s == 0 || s == 1) { return root.copy-state == 0; }
+                    if (s == 2) { return root.copy-state == 2; }
+                    if (s == 3) { return root.copy-state == 1; }
+                    if (s == 4) { return (root.copy-state == 0 && root.copy-ready) || root.copy-state == 2; }
+                    return false;
+                }
+                // The rename field is SELECTED on arrival, so what is
+                // typed replaces the template shown: Slint selects a field
+                // only on its own Tab navigation, never on a `focus()`
+                // from code (Cargo.toml, the fourth canary's fact 6) —
+                // without it a typed `z` went in at the caret, `zx.{ext}`.
+                // Focus first, then select, as the Settings ring does.
+                function focus-slot(s: int) {
+                    self.slot = s;
+                    root.focus-owner = -1;
+                    if (s == 0) {
+                        copy-choose.focus();
+                        return;
+                    }
+                    if (s == 1) {
+                        copy-template-field.focus();
+                        copy-template-field.select-all();
+                        return;
+                    }
+                    self.want-slot = s;
+                }
+                // One step of the ring, wrapping, to the next slot this
+                // state shows and enables. From home a Tab starts before
+                // the first control and a Shift+Tab after the last, so the
+                // first Shift+Tab lands on Copy (or Close), not on the
+                // control before it. Five tries reach every slot from
+                // anywhere; none approved walks nowhere (the clash
+                // question never gets here — it swallows Tab above).
+                function walk(dir: int) {
+                    let start = self.slot >= 0 ? self.slot : (dir > 0 ? -1 : 5);
+                    let s1 = Math.mod(start + dir + 5, 5);
+                    if (self.slot-ok(s1)) { self.focus-slot(s1); return; }
+                    let s2 = Math.mod(s1 + dir + 5, 5);
+                    if (self.slot-ok(s2)) { self.focus-slot(s2); return; }
+                    let s3 = Math.mod(s2 + dir + 5, 5);
+                    if (self.slot-ok(s3)) { self.focus-slot(s3); return; }
+                    let s4 = Math.mod(s3 + dir + 5, 5);
+                    if (self.slot-ok(s4)) { self.focus-slot(s4); return; }
+                    let s5 = Math.mod(s4 + dir + 5, 5);
+                    if (self.slot-ok(s5)) { self.focus-slot(s5); return; }
                 }
                 // Move the report body by `dy`, clamped to what there is
                 // to see. `viewport-y` is 0 at the top and negative going
@@ -2520,6 +2628,19 @@ export component MainWindow inherits Window {
                         root.copy-confirm-nudged = true;
                         return accept;
                     }
+                    // THE RING's keys (see `walk`). HERE, after the three
+                    // arms above and before Esc and Enter: under About or
+                    // the shortcuts card Tab stays swallowed, and on the
+                    // clash question it keeps its nudge. With Ctrl, Alt or
+                    // Meta held it is not the ring's key, and it dies in
+                    // the window like before — Ctrl+Tab does nothing here
+                    // (ui-grid.md).
+                    if ((event.text == Key.Tab || event.text == Key.Backtab)
+                        && !event.modifiers.control && !event.modifiers.alt
+                        && !event.modifiers.meta) {
+                        self.walk((event.modifiers.shift || event.text == Key.Backtab) ? -1 : 1);
+                        return accept;
+                    }
                     if (event.text == Key.Escape && root.copy-state != 1) {
                         root.copy-close();
                         return accept;
@@ -2592,12 +2713,23 @@ export component MainWindow inherits Window {
                                 width: parent.width - 20px;
                             }
                         }
-                        Button {
+                        copy-choose := Button {
                             text: "Choose…";
                             enabled: root.copy-state == 0;
                             clicked => {
                                 root.copy-pick-dest();
                                 copy-keys.focus();
+                            }
+                            // Ring slot 0. The token is written by the
+                            // gain itself, the claim-site rule of the
+                            // owner token (#63): a control the keyboard
+                            // reached by any path must leave -1 behind.
+                            changed has-focus => {
+                                root.dbg-focus-changed("copy choose", self.has-focus);
+                                if (self.has-focus) {
+                                    copy-keys.slot = 0;
+                                    root.focus-owner = -1;
+                                }
                             }
                         }
                     }
@@ -2610,21 +2742,32 @@ export component MainWindow inherits Window {
                             font-size: 12px;
                             vertical-alignment: center;
                         }
-                        LineEdit {
+                        // `copy-template-field`, never `copy-template`:
+                        // that name is the root property this field is
+                        // bound to.
+                        copy-template-field := LineEdit {
                             text <=> root.copy-template;
                             placeholder-text: "empty = keep original names   e.g. {date}_{seq}.{ext}";
                             font-size: 12px;
                             height: 28px;
                             enabled: root.copy-state == 0;
                             changed has-focus => {
-                                // Focus continuity (#41 D2 class): if a
-                                // modal opens over the dialog while this
-                                // field is focused, the field must not
-                                // keep eating keys behind the scrim —
-                                // bounce to the dialog's scope, whose
-                                // containment branch handles the modal.
-                                if (self.has-focus && (root.about-visible || root.shortcuts-visible)) {
-                                    copy-keys.focus();
+                                root.dbg-focus-changed("copy template", self.has-focus);
+                                if (self.has-focus) {
+                                    // Ring slot 1, the token from the
+                                    // gain (see Choose… above).
+                                    copy-keys.slot = 1;
+                                    root.focus-owner = -1;
+                                    // Focus continuity (#41 D2 class): if
+                                    // a modal opens over the dialog while
+                                    // this field is focused, the field
+                                    // must not keep eating keys behind
+                                    // the scrim — bounce to the dialog's
+                                    // scope, whose containment branch
+                                    // handles the modal.
+                                    if (root.about-visible || root.shortcuts-visible) {
+                                        copy-keys.focus();
+                                    }
                                 }
                             }
                             edited => { root.copy-replan(); }
@@ -2827,13 +2970,46 @@ export component MainWindow inherits Window {
                             root.dbg-card-laid-out("copy buttons", self.absolute-position.x,
                                 self.absolute-position.y, self.width, self.height);
                         }
+                        // The ring reaches the three row buttons through
+                        // `want-slot` (see the scope): each one focuses
+                        // itself when the request names its slot, and
+                        // clears it. Its gain writes the slot and the
+                        // token like Choose… does.
                         if root.copy-state == 2: Button {
                             text: "Open destination";
                             clicked => { root.copy-open-dest-folder(); }
+                            property <int> want: copy-keys.want-slot;
+                            changed want => {
+                                if (self.want == 2) {
+                                    self.focus();
+                                    copy-keys.want-slot = -1;
+                                }
+                            }
+                            changed has-focus => {
+                                root.dbg-focus-changed("copy open-dest", self.has-focus);
+                                if (self.has-focus) {
+                                    copy-keys.slot = 2;
+                                    root.focus-owner = -1;
+                                }
+                            }
                         }
                         if root.copy-state == 1: Button {
                             text: "Cancel";
                             clicked => { root.copy-cancel(); }
+                            property <int> want: copy-keys.want-slot;
+                            changed want => {
+                                if (self.want == 3) {
+                                    self.focus();
+                                    copy-keys.want-slot = -1;
+                                }
+                            }
+                            changed has-focus => {
+                                root.dbg-focus-changed("copy cancel", self.has-focus);
+                                if (self.has-focus) {
+                                    copy-keys.slot = 3;
+                                    root.focus-owner = -1;
+                                }
+                            }
                         }
                         // No Copy button while the question is up: a
                         // greyed fourth control is one more thing to parse
@@ -2842,11 +3018,55 @@ export component MainWindow inherits Window {
                             text: root.copy-state == 2 ? "Close" : "Copy";
                             enabled: root.copy-state == 2 || root.copy-ready;
                             clicked => {
+                                // The keyboard goes HOME FIRST, while Choose…
+                                // and the rename field are still enabled.
+                                // After `copy-start()` it is too late: the
+                                // run disables them, and a disabled control
+                                // ignores the FocusOut — Choose…, reached by
+                                // Tab and left by a mouse click here, kept
+                                // `has-focus`, wore its focus border with the
+                                // keyboard at home and emitted no `gained`
+                                // when the ring landed on it again (Cargo.toml,
+                                // the fourth canary's fact 11; brief 011
+                                // review F1). Harmless before Close.
+                                copy-keys.focus();
                                 if (root.copy-state == 2) {
                                     root.copy-close();
                                 } else {
                                     root.copy-start();
                                 }
+                            }
+                            property <int> want: copy-keys.want-slot;
+                            changed want => {
+                                if (self.want == 4) {
+                                    self.focus();
+                                    copy-keys.want-slot = -1;
+                                }
+                            }
+                            changed has-focus => {
+                                root.dbg-focus-changed("copy copy-close", self.has-focus);
+                                if (self.has-focus) {
+                                    copy-keys.slot = 4;
+                                    root.focus-owner = -1;
+                                }
+                            }
+                            // Where the layout put this button, so a driven
+                            // test clicks it BY NAME (`click:copy
+                            // copy-close`, test-harness.md): a coordinate
+                            // measured on one platform lands elsewhere on
+                            // another (issue #70). The button is created per
+                            // state, so its mark reappears with it.
+                            init => {
+                                root.dbg-card-laid-out("copy copy-close", self.absolute-position.x,
+                                    self.absolute-position.y, self.width, self.height);
+                            }
+                            changed absolute-position => {
+                                root.dbg-card-laid-out("copy copy-close", self.absolute-position.x,
+                                    self.absolute-position.y, self.width, self.height);
+                            }
+                            changed height => {
+                                root.dbg-card-laid-out("copy copy-close", self.absolute-position.x,
+                                    self.absolute-position.y, self.width, self.height);
                             }
                         }
                     }
@@ -2908,10 +3128,75 @@ export component MainWindow inherits Window {
             clip-keys := FocusScope {
                 width: 100%;
                 height: 100%;
-                // Owner token (#63), same rule as the copy dialog's scope.
+                // Owner token (#63), same rule as the copy dialog's scope;
+                // the scope is the ring's home (slot -1) here too.
                 changed has-focus => {
                     root.dbg-focus-changed("clip dialog", self.has-focus);
-                    if (self.has-focus) { root.focus-owner = -1; }
+                    if (self.has-focus) {
+                        root.focus-owner = -1;
+                        self.slot = -1;
+                    }
+                }
+                // THE KEYBOARD RING (issue #98, brief 011; video-export.md
+                // "The keyboard ring"): the Copy Picks ring, for the same
+                // reason — read its comments there. The fourth Tab used to
+                // land on the grid, where a Y marked a frame and collapsed
+                // the selection this dialog is about to export.
+                //
+                // Slots in visible order: -1 the scope (home), 0 Choose…,
+                // 1 Open folder, 2 Cancel — the plan state's and the
+                // running state's, which never coexist — 3 Export/Close.
+                property <int> slot: -1;
+                // The request the four conditional row buttons watch (the
+                // copy ring's `want-slot`).
+                property <int> want-slot: -1;
+                // Every state change brings the keyboard home: the
+                // writer's finish removes the running Cancel, which the
+                // keyboard may be on. (Export/Close goes home by itself
+                // before the run starts — its `clicked`, review F1.)
+                // Residual, MEASURED on Linux (QE 2026-10-04, round 2 D2;
+                // this said "unmeasured"): an export that finishes while a
+                // menu is open takes the keyboard from the open menu, and
+                // the next Esc closes the report, not the menu — the copy
+                // scope's comment has why, and why the refocus stays.
+                property <int> state: root.clip-state;
+                changed state => {
+                    self.slot = -1;
+                    self.want-slot = -1;
+                    self.focus();
+                }
+                // Never focus a slot this has not approved (see the copy
+                // ring's `slot-ok`): each line is its control's own `if`
+                // and `enabled`.
+                function slot-ok(s: int) -> bool {
+                    if (s == 0) { return root.clip-state == 0; }
+                    if (s == 1) { return root.clip-state == 2; }
+                    if (s == 2) { return root.clip-state == 0 || root.clip-state == 1; }
+                    if (s == 3) { return (root.clip-state == 0 && root.clip-ready) || root.clip-state == 2; }
+                    return false;
+                }
+                function focus-slot(s: int) {
+                    self.slot = s;
+                    root.focus-owner = -1;
+                    if (s == 0) {
+                        clip-choose.focus();
+                        return;
+                    }
+                    self.want-slot = s;
+                }
+                // The copy ring's `walk`, over four slots: from home a Tab
+                // starts before the first control and a Shift+Tab after
+                // the last; four tries reach every slot from anywhere.
+                function walk(dir: int) {
+                    let start = self.slot >= 0 ? self.slot : (dir > 0 ? -1 : 4);
+                    let s1 = Math.mod(start + dir + 4, 4);
+                    if (self.slot-ok(s1)) { self.focus-slot(s1); return; }
+                    let s2 = Math.mod(s1 + dir + 4, 4);
+                    if (self.slot-ok(s2)) { self.focus-slot(s2); return; }
+                    let s3 = Math.mod(s2 + dir + 4, 4);
+                    if (self.slot-ok(s3)) { self.focus-slot(s3); return; }
+                    let s4 = Math.mod(s3 + dir + 4, 4);
+                    if (self.slot-ok(s4)) { self.focus-slot(s4); return; }
                 }
                 // The export dialog's half of the keyboard scrolling —
                 // same contract as `scroll-copy-body` above.
@@ -2993,6 +3278,16 @@ export component MainWindow inherits Window {
                         // Everything else is swallowed, and the question
                         // says out loud that it is still waiting.
                         root.clip-confirm-nudged = true;
+                        return accept;
+                    }
+                    // The ring's keys, placed as in the copy scope and for
+                    // the same reasons: after the containment, the body
+                    // scroll and the question, before Esc and Enter;
+                    // Ctrl/Alt/Meta+Tab are not the ring's.
+                    if ((event.text == Key.Tab || event.text == Key.Backtab)
+                        && !event.modifiers.control && !event.modifiers.alt
+                        && !event.modifiers.meta) {
+                        self.walk((event.modifiers.shift || event.text == Key.Backtab) ? -1 : 1);
                         return accept;
                     }
                     if (event.text == Key.Escape && root.clip-state != 1) {
@@ -3090,12 +3385,21 @@ export component MainWindow inherits Window {
                                 width: parent.width - 20px;
                             }
                         }
-                        Button {
+                        clip-choose := Button {
                             text: "Choose…";
                             enabled: root.clip-state == 0;
                             clicked => {
                                 root.clip-pick-dest();
                                 clip-keys.focus();
+                            }
+                            // Ring slot 0; the token from the gain, the
+                            // owner token's claim-site rule (#63).
+                            changed has-focus => {
+                                root.dbg-focus-changed("clip choose", self.has-focus);
+                                if (self.has-focus) {
+                                    clip-keys.slot = 0;
+                                    root.focus-owner = -1;
+                                }
                             }
                         }
                     }
@@ -3249,13 +3553,45 @@ export component MainWindow inherits Window {
                             root.dbg-card-laid-out("clip buttons", self.absolute-position.x,
                                 self.absolute-position.y, self.width, self.height);
                         }
+                        // The ring reaches these through `want-slot`, as in
+                        // the copy dialog; each gain writes the slot and
+                        // the token. The two Cancels share slot 2 and the
+                        // mark `clip cancel`: they never coexist.
                         if root.clip-state == 2: Button {
                             text: "Open folder";
                             clicked => { root.clip-open-dest-folder(); }
+                            property <int> want: clip-keys.want-slot;
+                            changed want => {
+                                if (self.want == 1) {
+                                    self.focus();
+                                    clip-keys.want-slot = -1;
+                                }
+                            }
+                            changed has-focus => {
+                                root.dbg-focus-changed("clip open-folder", self.has-focus);
+                                if (self.has-focus) {
+                                    clip-keys.slot = 1;
+                                    root.focus-owner = -1;
+                                }
+                            }
                         }
                         if root.clip-state == 1: Button {
                             text: "Cancel";
                             clicked => { root.clip-cancel(); }
+                            property <int> want: clip-keys.want-slot;
+                            changed want => {
+                                if (self.want == 2) {
+                                    self.focus();
+                                    clip-keys.want-slot = -1;
+                                }
+                            }
+                            changed has-focus => {
+                                root.dbg-focus-changed("clip cancel", self.has-focus);
+                                if (self.has-focus) {
+                                    clip-keys.slot = 2;
+                                    root.focus-owner = -1;
+                                }
+                            }
                         }
                         // A real Cancel button in the plan state, which
                         // the Copy Picks dialog does not have: the scrim
@@ -3265,6 +3601,20 @@ export component MainWindow inherits Window {
                         if root.clip-state == 0: Button {
                             text: "Cancel";
                             clicked => { root.clip-close(); }
+                            property <int> want: clip-keys.want-slot;
+                            changed want => {
+                                if (self.want == 2) {
+                                    self.focus();
+                                    clip-keys.want-slot = -1;
+                                }
+                            }
+                            changed has-focus => {
+                                root.dbg-focus-changed("clip cancel", self.has-focus);
+                                if (self.has-focus) {
+                                    clip-keys.slot = 2;
+                                    root.focus-owner = -1;
+                                }
+                            }
                         }
                         // No Export button while the question is up: a
                         // greyed fourth control is one more thing to parse
@@ -3273,11 +3623,47 @@ export component MainWindow inherits Window {
                             text: root.clip-state == 2 ? "Close" : "Export";
                             enabled: root.clip-state == 2 || root.clip-ready;
                             clicked => {
+                                // Home FIRST, while Choose… is still enabled:
+                                // the run disables it, and a disabled control
+                                // cannot let go of the keyboard (the copy
+                                // dialog's Copy button says how; fact 11 of
+                                // the fourth canary; brief 011 review F1).
+                                clip-keys.focus();
                                 if (root.clip-state == 2) {
                                     root.clip-close();
                                 } else {
                                     root.clip-start();
                                 }
+                            }
+                            property <int> want: clip-keys.want-slot;
+                            changed want => {
+                                if (self.want == 3) {
+                                    self.focus();
+                                    clip-keys.want-slot = -1;
+                                }
+                            }
+                            changed has-focus => {
+                                root.dbg-focus-changed("clip export-close", self.has-focus);
+                                if (self.has-focus) {
+                                    clip-keys.slot = 3;
+                                    root.focus-owner = -1;
+                                }
+                            }
+                            // Clicked BY NAME in the driven tests (`click:clip
+                            // export-close`), as the copy dialog's Copy/Close;
+                            // created per state, so the mark reappears with
+                            // the button.
+                            init => {
+                                root.dbg-card-laid-out("clip export-close", self.absolute-position.x,
+                                    self.absolute-position.y, self.width, self.height);
+                            }
+                            changed absolute-position => {
+                                root.dbg-card-laid-out("clip export-close", self.absolute-position.x,
+                                    self.absolute-position.y, self.width, self.height);
+                            }
+                            changed height => {
+                                root.dbg-card-laid-out("clip export-close", self.absolute-position.x,
+                                    self.absolute-position.y, self.width, self.height);
                             }
                         }
                     }

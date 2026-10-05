@@ -387,9 +387,9 @@ their precedence is `fastcull-core`'s; the app binds (brief 008, 2026-10-01).
   call, 2026-10-03).
 - **Keyboard.** `Tab`/`Shift+Tab` walk the strip and the active tab's
   controls in order — the strip, the controls top to bottom, Reset, Close
-  — and never leave the dialog: the dialog's own key scope handles both,
-  so Slint's window-level Tab navigation can never carry the keyboard into
-  a field hidden behind the scrim. `Left`/`Right` on the strip switch
+  — and never leave the dialog (the rule every dialog scope follows,
+  stated once in ui-grid.md "Modal keyboard containment"; since brief 011
+  the copy and export scopes follow it too). `Left`/`Right` on the strip switch
   tabs; `Ctrl+Tab`/`Ctrl+Shift+Tab` switch tabs from anywhere in the
   dialog, wrapping; a tab switch puts the keyboard on the strip. **Digits
   never switch tabs** — `1`–`5` are reserved (ui-grid.md) and in a dialog
@@ -1091,6 +1091,10 @@ their precedence is `fastcull-core`'s; the app binds (brief 008, 2026-10-01).
 
 ## History
 
+- 2026-10-04 — Brief 011 (issue #98): "Keyboard" points at ui-grid.md's
+  "Modal keyboard containment" for the Tab rule it had stated itself —
+  the rule now lives there once, for every dialog; nothing in this dialog
+  changes.
 - 2026-10-03 — Brief 010, QE round 1 D2: AC27 names what reads "the field
   keeps its text" — the Revert slot still empty after the chord, so the
   open's commit is the open's own — which it had lacked.

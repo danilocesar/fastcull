@@ -871,12 +871,33 @@ impl Drop for CopyHandle {
 /// (barrier — see module docs) and answered the clash question: a plan
 /// that still carries `PlanAction::Clash` jobs copies NOTHING.
 pub fn execute(plan: CopyPlan) -> (CopyHandle, Receiver<CopyEvent>) {
+    execute_held(plan, None)
+}
+
+/// [`execute`] with the worker HELD for `hold` before its first file: the
+/// driven suite's pacing knob `FASTCULL_COPY_HOLD_MS` (test-harness.md),
+/// never a setting. A test copy of two 2 KB files is over before a
+/// scripted key can reach the running dialog; a held one keeps its Cancel
+/// button up for as long as the script needs (brief 011, QE's P3). The
+/// hold is spent on the worker, so the UI thread never waits for it, and
+/// it polls the cancel flag: a Cancel pressed during it — or the handle
+/// dropped by a quit or a folder swap — ends the run before its first file,
+/// the way a cancel between files ends it. `None` is [`execute`].
+pub fn execute_held(
+    plan: CopyPlan,
+    hold: Option<std::time::Duration>,
+) -> (CopyHandle, Receiver<CopyEvent>) {
     let (tx, rx) = std::sync::mpsc::channel();
     let cancel = Arc::new(AtomicBool::new(false));
     let flag = Arc::clone(&cancel);
     let handle = std::thread::Builder::new()
         .name("copy-picks".into())
-        .spawn(move || run_plan(plan, &tx, &flag))
+        .spawn(move || {
+            if let Some(hold) = hold {
+                hold_unless_cancelled(hold, &flag);
+            }
+            run_plan(plan, &tx, &flag)
+        })
         .expect("spawn copy worker");
     (
         CopyHandle {
@@ -885,6 +906,23 @@ pub fn execute(plan: CopyPlan) -> (CopyHandle, Receiver<CopyEvent>) {
         },
         rx,
     )
+}
+
+/// Wait out `hold` on the calling worker, returning as soon as `cancel` is
+/// set — the harness hold of [`execute_held`] and of
+/// [`crate::clip::execute_held`]. In slices of at most 10 ms because both
+/// handles' `Drop` sets the flag and then JOINS the worker: one long sleep
+/// would make a quit or a folder swap during the hold wait out the rest of
+/// it, on the UI thread.
+pub(crate) fn hold_unless_cancelled(hold: std::time::Duration, cancel: &AtomicBool) {
+    let until = std::time::Instant::now() + hold;
+    while !cancel.load(Ordering::Relaxed) {
+        let left = until.saturating_duration_since(std::time::Instant::now());
+        if left.is_zero() {
+            return;
+        }
+        std::thread::sleep(left.min(std::time::Duration::from_millis(10)));
+    }
 }
 
 fn run_plan(plan: CopyPlan, tx: &Sender<CopyEvent>, cancel: &AtomicBool) {
@@ -3943,6 +3981,84 @@ mod tests {
                 assert_eq!(std::fs::metadata(&p).unwrap().len(), 3_000_000);
             }
         }
+        std::fs::remove_dir_all(&dir).ok();
+    }
+
+    /// The harness hold (test-harness.md, `FASTCULL_COPY_HOLD_MS`; brief
+    /// 011, QE's P3): the held worker sends NOTHING before the hold is over
+    /// — not even the first file's progress line, which is what keeps the
+    /// dialog on its running Cancel for the script — and then copies the
+    /// plan as `execute` would. Only a lower bound is asserted, and a
+    /// sleep never ends early, so no machine's load can turn this red.
+    #[test]
+    fn a_held_copy_starts_its_first_file_after_the_hold() {
+        let dir = tmp();
+        let sources = src_with(&dir, &[("a.ARW", b"aaaa"), ("b.ARW", b"bbbb")]);
+        let dest = dir.join("out");
+        let p = super::plan(
+            &sources,
+            &dest,
+            None,
+            ClashPolicy::Ask,
+            &SessionCopies::default(),
+        )
+        .unwrap();
+        let hold = std::time::Duration::from_millis(400);
+        let started = std::time::Instant::now();
+        let (_h, rx) = execute_held(p, Some(hold));
+        match rx.recv().expect("first event") {
+            CopyEvent::File { index, .. } => assert_eq!(index, 1),
+            other => panic!("expected the first file event, got {other:?}"),
+        }
+        let at = started.elapsed();
+        assert!(
+            at >= hold,
+            "the first file went out {at:?} into a {hold:?} hold"
+        );
+        let report = drain(rx);
+        assert_eq!((report.copied, report.cancelled), (2, false), "{report:?}");
+        assert!(report.earned_the_green_light(), "{report:?}");
+        assert_eq!(names_in(&dest), ["a.ARW", "b.ARW"]);
+        std::fs::remove_dir_all(&dir).ok();
+    }
+
+    /// A Cancel during the hold ends the run before its first file, and at
+    /// once: the hold polls the cancel flag, so it can never keep a quit or
+    /// a folder swap — which cancel and then JOIN this worker — waiting out
+    /// the rest of it. The cancel goes 100 ms in, so the worker is inside
+    /// its hold rather than not yet started; the 5 s bound is fifty times
+    /// that, and the 10 s hold twice the bound.
+    #[test]
+    fn a_cancel_during_the_hold_ends_the_copy_before_its_first_file() {
+        let dir = tmp();
+        let sources = src_with(&dir, &[("a.ARW", b"aaaa"), ("b.ARW", b"bbbb")]);
+        let dest = dir.join("out");
+        let p = super::plan(
+            &sources,
+            &dest,
+            None,
+            ClashPolicy::Ask,
+            &SessionCopies::default(),
+        )
+        .unwrap();
+        let (h, rx) = execute_held(p, Some(std::time::Duration::from_secs(10)));
+        std::thread::sleep(std::time::Duration::from_millis(100));
+        h.cancel();
+        let first = rx
+            .recv_timeout(std::time::Duration::from_secs(5))
+            .expect("the hold did not end on the cancel");
+        let CopyEvent::Finished(report) = first else {
+            panic!("a file went out after the cancel: {first:?}");
+        };
+        assert!(
+            report.cancelled && report.copied == 0 && report.failed.is_empty(),
+            "{report:?}"
+        );
+        assert!(
+            !dest.exists() || names_in(&dest).is_empty(),
+            "a cancel during the hold left files behind: {:?}",
+            names_in(&dest)
+        );
         std::fs::remove_dir_all(&dir).ok();
     }
 }

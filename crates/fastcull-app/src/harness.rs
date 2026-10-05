@@ -83,6 +83,33 @@ const WAIT_POLL: Duration = Duration::from_millis(5);
 /// click must not depend on whether the run also asked for a trace log.
 type LayoutMap = Rc<RefCell<HashMap<String, (f32, f32, f32, f32)>>>;
 
+/// The worker holds of Copy Picks and the video export (test-harness.md,
+/// `FASTCULL_COPY_HOLD_MS` and `FASTCULL_CLIP_HOLD_MS`; brief 011, QE's
+/// P3): `var` in ms, read ONCE per process into `cell` and said out loud
+/// the first time, unconditionally — a leftover value in some environment
+/// makes every copy or export mysteriously slow, and a knob that ships in
+/// release builds must be diagnosable from a bug report's stderr (the
+/// kitchen knob's reason, `FASTCULL_KITCHEN_COOK_MS`). `None` — no hold,
+/// no cost — when unset, 0 or unparsable. The hold itself is core's
+/// (`execute_held`): it runs on the worker and the cancel ends it.
+pub(crate) fn worker_hold(
+    cell: &'static std::sync::OnceLock<u64>,
+    var: &str,
+    what: &str,
+) -> Option<Duration> {
+    let ms = *cell.get_or_init(|| {
+        let ms = std::env::var(var)
+            .ok()
+            .and_then(|v| v.parse().ok())
+            .unwrap_or(0);
+        if ms > 0 {
+            eprintln!("fastcull: {var}={ms} — every {what} is held");
+        }
+        ms
+    });
+    (ms > 0).then(|| Duration::from_millis(ms))
+}
+
 /// Schedule every step of the FASTCULL_DRIVE script (a no-op when the
 /// variable is unset). Returns the not-yet-fired counter the screenshot
 /// shutter waits on, so a scripted run means the same thing in every
@@ -776,7 +803,8 @@ fn dispatch(win: &MainWindow, state: &Rc<RefCell<AppState>>, key: &str, layout: 
                          clip={} clipstate={} clipavail={} clipsummary={:?} clipskipped={:?} \
                          cliperror={:?} clipreport={:?} clipconfirm={:?} clipprogress={:?} \
                          cliphint={:?} exported={} curexported={} \
-                         cursor={} selected={} vpy={:.1} focusowner={} {} thumbtex={}",
+                         cursor={} selected={} vpy={:.1} focusowner={} {} thumbtex={} \
+                         clipnudged={}",
             win.get_dbg_keys_focus(),
             win.get_one2one(),
             st.grid.zoom,
@@ -896,10 +924,18 @@ fn dispatch(win: &MainWindow, state: &Rc<RefCell<AppState>>, key: &str, layout: 
             crate::settings_bridge::dump_fields(win, &st),
             // The decoded thumb textures the session holds — what "the open
             // session keeps its painted thumbs" after Clear cache is read
-            // from (settings.md AC12; brief 010). LAST, after the settings
-            // block: fields are appended, and `format!` pairs placeholders
-            // with arguments by position.
+            // from (settings.md AC12; brief 010). After the settings block:
+            // fields are appended, and `format!` pairs placeholders with
+            // arguments by position.
             st.textures.images.len(),
+            // The export clash question's nudge, the twin of the copy
+            // block's `nudged=` (brief 011, QE round 2 D3): whether a key
+            // the question does not take was answered with "Pick one: B, O
+            // or Esc." or swallowed in silence — the only way a driven run
+            // tells the two apart, which is what the export ring's Tab on
+            // the question promises. Appended, LAST, for the same reason
+            // as `thumbtex` above.
+            win.get_clip_confirm_nudged(),
         ));
         return;
     }

@@ -31,13 +31,16 @@ an editor; it is never one.** The export has no options.
 - Pick state is irrelevant and untouched — the export reads marks like Copy
   Picks does and never writes them; by definition the frames are usually
   rejects. Nothing consumes the selection: a finished export leaves it as
-  it was, Cancel changes nothing, and Esc in any dialog state closes the
-  dialog with the selection intact — the next plain move, or a second Esc
-  on the grid, ends it (the user rejected auto-deselect: "I don't think
-  auto deselecting is intuitive"). The per-burst rhythm needs no Esc: a
-  plain `]` collapses the selection (ui-grid.md's selection rule), so
-  "export this burst, `]`, export the next" takes the burst under the
-  cursor the second time.
+  it was, Cancel changes nothing, and Esc from the plan or the report
+  closes the dialog with the selection intact (on the clash question Esc
+  returns to the plan, and while the export runs it does nothing —
+  Cancel is the way out; corrected 2026-10-04, QE round 2 D5: this said
+  "Esc in any dialog state closes the dialog") — the next plain move, or
+  a second Esc on the grid, ends it (the user rejected auto-deselect: "I
+  don't think auto deselecting is intuitive"). The per-burst rhythm needs
+  no Esc: a plain `]` collapses the selection (ui-grid.md's selection
+  rule), so "export this burst, `]`, export the next" takes the burst
+  under the cursor the second time.
 - **Every frame keeps its whole image.** No crop, no scale, no rotation of
   pixels.
 
@@ -225,6 +228,30 @@ express.
   Picks; the clash question swallows everything but `B`, `O` and `Esc` and
   says so. The dialog never marks, never moves the cursor, never touches
   the selection.
+- **The keyboard ring** (issue #98, brief 011, 2026-10-04; the rule is
+  ui-grid.md's "Modal keyboard containment"): `Tab`/`Shift+Tab` walk, in
+  this order and wrapping, Choose…, Cancel and Export in the plan state
+  (Export skipped while it is greyed), Cancel alone while the export runs,
+  Open folder and Close on the report; the clash question has no control
+  that takes the keyboard, so `Tab` there is swallowed with the nudge like
+  every other key; the keyboard's home is the dialog's scope, where the
+  open and every state change put it (residual, measured on Linux, where
+  the menu bar is in-window, as in Copy Picks — fileops.md has why the
+  refocus stays: an export that ends while a menu is open takes the
+  keyboard back to the dialog from the open menu, which stays drawn, and
+  the next `Esc` closes the report instead of the menu; a fix needs a
+  design for the MenuBar's restore target, a follow-up issue; QE
+  2026-10-04, round 2 D2: this said "unmeasured"), and where pressing
+  Export — a click, or `Enter`/`Space` on it — puts it before the run
+  starts (brief 011
+  review F1, 2026-10-04: a control the run disables cannot let go of the
+  keyboard afterwards; residual, not fixed: a re-plan that greys Export
+  while the keyboard is on it — a destination Choose… returns that the
+  plan refuses, a folder opened under the dialog — leaves Export holding
+  that stale focus, a second focus border once Export is live again and a
+  silent landing on it; measured in Copy Picks, the same mechanism here,
+  QE 2026-10-04, D3); `Enter`/`Space` on the focused Cancel, Export or
+  Close press it, and from the scope `Enter` keeps the meaning above.
 - **The card's height follows its content** (issue #62): a floor of 260 px
   (380 px while the clash question is up), the window as the ceiling
   (`parent.height - 40px`), and past the ceiling the text body scrolls in a
@@ -362,12 +389,20 @@ are skipped, not failed, elsewhere.
 - For the driven suite (test-harness.md): the marks `clip export finished
   run N` (fires when the report card goes up; a run cancelled by a session
   swap emits none), `clip card laid out …`, `clip buttons laid out …`,
-  `clip body scrolled to Y`; the dump fields `clip=`, `clipstate=`,
+  `clip body scrolled to Y`, and since brief 011 the focus marks `focus:
+  clip choose|open-folder|cancel|export-close gained|lost` of the ring's
+  controls and `clip export-close laid out …` of the Export/Close button
+  (review F1); the dump fields `clip=`, `clipstate=`,
   `clipavail=`, `clipsummary=`, `clipskipped=`, `cliperror=`,
   `clipreport=`, `clipconfirm=`, `clipprogress=`, `cliphint=`, `exported=`,
-  `curexported=`;
+  `curexported=`, and since brief 011 `clipnudged=` (the clash question's
+  nudge; QE 2026-10-04, round 2 D3);
   the tokens `clipdest:PATH` (before the `Ctrl+Shift+E` that should see
-  it), `key:ctrl+shift+e`.
+  it), `key:ctrl+shift+e`, `click:clip export-close`; the variable
+  `FASTCULL_CLIP_HOLD_MS`, which core takes as `execute_held(plan, hold)`
+  — the writer held before its first frame, the cancel polled through the
+  hold; `execute(plan)` is the same call with no hold (brief 011, QE's
+  P3).
 
 ## Acceptance criteria
 
@@ -535,9 +570,85 @@ Windows runner too. `core:` = a `fastcull-core` unit test, `muxer:` =
       dialog's was driven; the export one cannot be reached on synthetic
       data, which has nothing to export — the two arms are
       character-identical).
+- [x] The keyboard ring (brief 011, AC2): `Tab`/`Shift+Tab` walk Choose…,
+      Cancel and Export, then Open folder and Close on the report,
+      wrapping and skipping the greyed Export (the third launch; QE
+      2026-10-04, D4); Cancel alone while the export runs, and the run's
+      end — the writer's finish, or `Space` on that Cancel — brings the
+      keyboard home (QE 2026-10-04, P3); `Ctrl+Tab` and `Ctrl+Shift+Tab`
+      move nothing (QE 2026-10-04, P2); `focusowner` stays `-1`; a `Y` on
+      a focused button marks nothing and keeps the selection, the running
+      Cancel included; `Space` on the focused Cancel closes; `Enter` on
+      the focused Export then `B` on the question exports; `Tab` on the
+      question moves nothing and raises the nudge, `clipnudged=true` (QE
+      2026-10-04, round 2 D3); `Esc` with the keyboard on Open folder
+      closes — app
+      `export_tab_walks_its_own_controls_and_never_leaves_the_dialog`
+      (red on the pre-fix build at the fourth `Tab`, `focusowner=0`: the
+      keyboard on the grid, where brief 011 D3 measured a `Y` marking the
+      frame and collapsing the selection).
+- [x] The mixed path (brief 011, review F1): `Tab` onto Choose…, a click
+      on Export, `Esc` back to the plan — the click lets go of Choose…
+      while it is enabled (`focus: clip choose lost` after it) and the
+      next `Tab` lands on Choose… with its own `gained` — app
+      `export_tab_walks_its_own_controls_and_never_leaves_the_dialog`
+      (red on 6eed28b, 841bb1d with the button's layout mark: no `clip
+      choose lost` after the click, a silent `Tab` after `Esc`).
 
 ## History
 
+- 2026-10-04 — Brief 011, QE round 2 D5: "Esc in any dialog state closes
+  the dialog" corrected to the plan and the report — on the clash
+  question Esc returns to the plan, and while the export runs it does
+  nothing (the dialog scope's Esc arm, unchanged since M9; surfaced when
+  the ring test's running strand could not pin an Esc against the
+  sentence).
+- 2026-10-04 — Brief 011, QE round 2 D2: the ring sentence's menu
+  residual, recorded as unmeasured at the senior developer's review F2,
+  is measured — an export that ends while a menu is open takes the
+  keyboard from the menu, and the next `Esc` closes the report rather
+  than the menu (Linux; the account is fileops.md's).
+- 2026-10-04 — Brief 011, QE round 2 D3: the ring's box gains `Tab` on
+  the clash question raising the nudge, which the export test reads from
+  the dump's new `clipnudged=` (Contracts) — the copy half was pinned by
+  `nudged=`; this half had no field, and the ring's arm moved ahead of
+  the question's branch kept the suite green.
+- 2026-10-04 — Brief 011, QE's test proposal P3: the ring's box gains the
+  running state — Cancel alone while the export runs, and the run's end
+  bringing the keyboard home — which the export test's fourth and fifth
+  launches drive with the writer held; until then the finish refocus was
+  review-verified only.
+- 2026-10-04 — Brief 011, QE's test proposal P3 (the senior developer's
+  Shape A), spec first: the driven suite's contract gains
+  `FASTCULL_CLIP_HOLD_MS` and core's `execute_held`, so a test can reach
+  the running Cancel and the writer's finish (test-harness.md).
+- 2026-10-04 — Brief 011, QE's spec correction D3 (its defect D1, the
+  senior developer's F4): the ring sentence records the stale focus a
+  re-plan leaves on an Export it greys while the keyboard is on it — a
+  residual, recorded and not fixed, measured in Copy Picks (fileops.md).
+- 2026-10-04 — Brief 011, QE's test proposal P2: the ring's box gains
+  `Ctrl+Tab` and `Ctrl+Shift+Tab` moving nothing — ui-grid.md's "`Ctrl+Tab`
+  does nothing unless a dialog's module says otherwise", which this module
+  does not, and which had no test.
+- 2026-10-04 — Brief 011, QE's test proposal P1 (spec correction D4): the
+  ring's box gains the greyed Export's skip, which the export test's third
+  launch drives — a destination the plan refuses greys Export, and the
+  wrap passes over it; until then "(Export skipped while it is greyed)"
+  had no test.
+- 2026-10-04 — Brief 011, the senior developer's review F2: the ring
+  sentence records the state-change refocus's residual under an open menu
+  — unmeasured, recorded rather than fixed (the Manager's ruling).
+- 2026-10-04 — Brief 011, the senior developer's review F1: pressing
+  Export puts the keyboard home before the run starts (the rule is
+  ui-grid.md's) — Choose…, reached by `Tab` and left by a click on Export,
+  had kept its focus border with the keyboard at home; the mixed path's
+  box.
+- 2026-10-04 — Brief 011, the senior developer's review F1: the
+  Export/Close button reports its layout, `clip export-close laid out …`,
+  for a test that clicks it by name.
+- 2026-10-04 — Brief 011 (issue #98): the dialog's keyboard ring — `Tab`
+  stays inside, the scope the keyboard's home; the rule itself is
+  ui-grid.md's.
 - 2026-09-17 — Rewritten (brief 007). The pre-rewrite text, with every
   validator and QE finding of the M9 rounds, is
   `specs/history/video-export.md`.

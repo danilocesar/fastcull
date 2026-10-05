@@ -74,6 +74,23 @@ explain itself on stderr.
   on stderr when set (`fastcull: FASTCULL_CLEAR_HOLD_MS=N — every cache
   clear is held`). Test plumbing in `FASTCULL_KITCHEN_COOK_MS`'s family,
   not a setting (brief 010 D3, 2026-10-03; brief 008 D13 and D42 stand).
+- `FASTCULL_COPY_HOLD_MS=N` and `FASTCULL_CLIP_HOLD_MS=N` — hold the Copy
+  Picks worker, or the video export's writer, N ms on the worker itself
+  before its first file (its first frame), with the run's cancel flag
+  polled at least every 10 ms through the hold, so a Cancel pressed during
+  it ends the run with nothing copied or written: the pacing knob for the
+  running dialog's keyboard ring and the refocus at the worker's finish
+  (fileops.md and video-export.md, "The keyboard ring") — with the worker
+  held, a `Tab` reaches the running Cancel while the dump still reads
+  `copystate=1` (`clipstate=1`), where a 2 KB copy or a three-frame export
+  ends in milliseconds and leaves no running state to drive; default 0,
+  off. Read once per process, at the first run's start, and announced
+  then on stderr (`fastcull: FASTCULL_COPY_HOLD_MS=N — every copy is
+  held`, `fastcull: FASTCULL_CLIP_HOLD_MS=N — every video export is
+  held`). Test plumbing in `FASTCULL_KITCHEN_COOK_MS`'s family, not a
+  setting: core's `fileops::execute_held` and `clip::execute_held` take
+  the hold, and `execute` is the same call without one (brief 011,
+  2026-10-04: QE's test proposal P3, the senior developer's Shape A).
 - `FASTCULL_MAX_READERS=N` — the read pool override (raw-pipeline.md);
   wins over the `performance.max_readers` setting, whose field the dialog
   then shows read-only (settings.md).
@@ -139,7 +156,8 @@ sidecars — scripts target throwaway copies of test data only.
   `settings wash`, `settings loupe-memory`, `settings cache-cap`,
   `settings readers-adaptive`, `settings readers-limit`,
   `settings clear-cache`, `settings reset`, `settings close`,
-  `failed badge <id>`), resolved at dispatch time from a table the
+  `failed badge <id>`, and since brief 011 `copy copy-close` and `clip
+  export-close`), resolved at dispatch time from a table the
   layout marks write unconditionally; it echoes `drive ptr click X,Y
   (<element>)`, which a test reads to assert the click landed inside the
   rectangle. A name with no mark yet aborts the run loudly (`drive: click:
@@ -220,7 +238,11 @@ sidecars — scripts target throwaway copies of test data only.
   `copy card laid out …`, `copy buttons laid out …`, `clip card …`, `clip
   buttons …` (from `changed absolute-position` and `changed height`; a
   card's mark is also the landing witness for a `resize:` while a dialog
-  is up, the card being centred); `copy answer N|B|O|Esc laid out …`; `copy
+  is up, the card being centred); `copy copy-close laid out …` and `clip
+  export-close laid out …` (the Copy/Close and Export/Close buttons, from
+  `init`, `changed absolute-position` and `changed height`; created per
+  state, so the mark reappears with the button — brief 011, the senior
+  developer's review F1); `copy answer N|B|O|Esc laid out …`; `copy
   body scrolled to Y` / `clip body scrolled to Y` (0 at the top, negative
   going down, on change); `shortcuts card laid out …`; `status selected
   laid out …` / `status head laid out …`; since brief 008 `settings card
@@ -355,15 +377,37 @@ sidecars — scripts target throwaway copies of test data only.
   card went up; N counts the copies (exports) this PROCESS started,
   1-based, carried across a session swap; a bare `wait:copy finished`
   matches as a substring; a run cancelled by a session swap emits none —
-  cancelled is not finished.
+  cancelled is not finished — while a run the Cancel button stops puts its
+  report card up and emits it like any other (clarified 2026-10-04, brief
+  011, QE's P3: "cancelled is not finished" is the swap's case, and the
+  ring tests' cancelled strand waits on the mark).
 - `sidecar writer closed gen N: K pending flushed` — N is the CLOSED
   session's generation, K the writes still inside their debounce; startup
   and process exit never trace it (xmp-sidecars.md).
 - **Focus**: `focus: <what> gained|lost` from the `changed has-focus`
   handlers of the main scope (`keys`), each `iptc field N`, the keyword
-  field, `copy dialog`, `clip dialog`, and since brief 008 `settings
-  dialog` and `settings strip` — a `gained` with no matching `lost` from
-  the previous holder is the dangling-weak signature. `settings dialog` is
+  field, `copy dialog`, `clip dialog`, since brief 008 `settings
+  dialog` and `settings strip`, and since brief 011 the Copy Picks and
+  Export dialogs' ring controls (QE 2026-10-04, D2: this said "the two
+  export dialogs'", and Copy Picks is not one) — `copy choose`, `copy
+  template`, `copy open-dest`, `copy cancel`, `copy copy-close`, `clip
+  choose`, `clip open-folder`, `clip cancel`, `clip export-close` — each
+  from its own `changed has-focus`, so a ring's landing is the control's
+  `gained` and the dialog scope's own `gained` is the keyboard back at its
+  home (the export dialog's two Cancel buttons, the plan state's and the
+  running state's, share `clip cancel`: they never coexist; a focused
+  button that a state change destroys would emit no `lost` — the
+  dangling-weak shape — so the dialog brings the keyboard home first and
+  the button's `lost` lands with the scope's `gained`; QE 2026-10-04, D1:
+  this said the destroyed button emits no `lost`, which holds only with
+  that refocus removed) — a `gained` with no matching `lost` from the
+  previous holder is the dangling-weak signature, except where a dialog
+  closes on a press of its own focused button — `Space` or `Enter` on
+  Close, or on the export's plan-state Cancel: there only `focus: keys
+  gained` is traced and the button's `lost` never comes, with the
+  keyboard alive on the grid (`focusowner=0`; QE 2026-10-04, round 2 D7:
+  the signature was stated without this exception).
+  `settings dialog` is
   the Settings dialog's own scope: `gained` when a press on the scrim, or
   on the card outside any control, hands it the keyboard (a FocusScope
   takes focus on a click), `lost` when the keyboard moves on from there.
@@ -444,7 +488,10 @@ that proves a commit reached the renderer, not the model),
 then `thumbtex=` (brief 010, 2026-10-03), the number of decoded thumb
 textures the session holds (`TextureStore.images`) — what "the open
 session keeps its painted thumbs" after Clear is read from (settings.md
-AC12).
+AC12); then `clipnudged=` (brief 011, 2026-10-04, QE round 2 D3), the
+export clash question's nudge, the twin of the copy block's `nudged=`:
+`true` once a key the question does not take has been answered with
+"Pick one: B, O or Esc." rather than swallowed in silence.
 New fields are APPENDED; `dump_field` finds `name=` by prefix. The
 nav-token swallow mirror (`drive swallowed by modal`) covers the Settings
 dialog like About and the card.
@@ -515,16 +562,20 @@ shot 2.
   009 commit B: it said ten, and nine before brief 009 — 1010x520, driven
   since 2026-09-04, was never counted; `grep -o 'resize:[0-9]*x[0-9]*'
   crates/fastcull-app/tests/screenshot.rs | sort -u` lists them).
-- The suite's size: 120 driven tests after brief 010, 118 at its start
-  (`cargo test -p fastcull-app --test screenshot -- --list`, 2026-10-03).
-  They no longer fit one 600 s foreground call in debug on the development
-  seat and run there as three `--exact` thirds split from that list:
-  327 s + 280 s + 325 s, 932 s, in debug on the idle seat at brief 010's
-  commit E (326 s + 271 s + 311 s, 908 s, for the 118 at its start);
-  halves would run some 470 s each, too near the cap (brief 010 R8 and
-  D5; this sentence said two halves and left the figures to be measured
-  until brief 010's implementation; the "87 tests, 318 s + 288 s" of the
-  agent files dates from 2026-09-12, before briefs 008–009 added 31).
+- The suite's size: 122 driven tests after brief 011, 120 after brief
+  010 and 118 at its start (`cargo test -p fastcull-app --test screenshot
+  -- --list`, re-measured 2026-10-04 at the fix round of brief 011's
+  second QE round; its QE rounds added launches, not tests). They no
+  longer fit one 600 s foreground call in debug on the development seat
+  and run there as three `--exact` thirds split from that list — each
+  third well under the cap, halves too near it. The measured times of
+  each unit's head are that unit's brief's (brief 011 D8 for the 122:
+  ~1040 s in three thirds, three independent measurements; brief 010 D5
+  for the 120; this sentence carried the seat timings themselves until
+  2026-10-05 — moved out under CLAUDE.md's spec shape, which keeps seat
+  measurements in the brief or the commit, QE round 4 D3 of brief 011;
+  brief 010 R8 and D5 made it thirds; the "87 tests, 318 s + 288 s" of the
+  agent files dates from 2026-09-12, before briefs 008–011 added 35).
 - CI facts: a pull request's runs share one concurrency group per ref with
   `cancel-in-progress` (a run that vanishes without a verdict is a cancel,
   not a hang); every other event gets its own group; the job cap is 90
@@ -574,6 +625,42 @@ shot 2.
 
 ## History
 
+- 2026-10-05 — Brief 011 merged: the suite-size sentence keeps the count
+  and the thirds and sends the seat timings to the briefs (QE round 4
+  D3; CLAUDE.md's spec shape).
+- 2026-10-04 — Brief 011, QE round 2 D6 and D7: the suite's size
+  re-measured at the second QE round's fix — 122 tests, three thirds of
+  372 s + 319 s + 325 s in debug on the idle seat; the Focus bullet's
+  dangling-weak signature gains its one exception, a dialog closed by a
+  press of its own focused button, whose `lost` is never traced.
+- 2026-10-04 — Brief 011, QE round 2 D3: the dump gains `clipnudged=`,
+  appended after `thumbtex=` — the export clash question's nudge, the
+  twin of `nudged=` — so the export ring test can tell a `Tab` swallowed
+  with the nudge from one swallowed in silence.
+- 2026-10-04 — Brief 011, QE's spec corrections D1 and D2 (its defect
+  D6): the Focus bullet said a button a state change destroys emits no
+  `lost` — on the shipped dialogs it does, beside the scope's `gained`,
+  because the keyboard goes home before the button goes (`copy finished
+  run 1` → `focus: copy dialog gained` + `focus: copy cancel lost`, driven
+  since QE's P3), and the no-`lost` shape is the refocus removed; and it
+  called Copy Picks an export dialog.
+- 2026-10-04 — Brief 011, QE's test proposal P3 (the senior developer's
+  Shape A), spec first: `FASTCULL_COPY_HOLD_MS` and `FASTCULL_CLIP_HOLD_MS`
+  hold the copy worker and the export writer before their first file,
+  cancellable, so a driven test can reach the running Cancel and wait for
+  the finish — a 2 KB copy is over before any key lands, and the other
+  shape, 1.2 GB of sparse fakes, would have written 1.2 GB per run into
+  the temp directory, and allocated it on Windows; the finished-run
+  marks' sentence says a run the Cancel button stops emits its mark too,
+  which the cancelled strand waits on.
+- 2026-10-04 — Brief 011, the senior developer's review F1: the Copy/Close
+  and Export/Close buttons report their layout (`copy copy-close`, `clip
+  export-close`), so a driven test clicks them by name.
+- 2026-10-04 — Brief 011 commit C: the suite's size re-measured — 122
+  tests, three thirds of 349 s + 298 s + 323 s in debug on the idle seat.
+- 2026-10-04 — Brief 011 (issue #98): the focus-mark family gains the two
+  export dialogs' ring controls, nine names; no new token and no new dump
+  field — `key:tab` and `key:shift+tab` existed.
 - 2026-10-03 — Brief 010, QE round 1 D3: the known-failed gate's sentence
   keeps the order of the drop's and the badge's marks and loses the
   seat-measured gap between them, which the gate does not depend on.

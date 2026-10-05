@@ -410,6 +410,36 @@ is the eventual fix; no perf budget covers plan time.
   line, the failures with reasons, and an *Open destination folder* action.
   Modal in v1. Cut from v1: per-file mode selectors, speed and ETA, pause,
   background copy.
+- **The keyboard ring** (issue #98, brief 011, 2026-10-04; the rule is
+  ui-grid.md's "Modal keyboard containment"): `Tab`/`Shift+Tab` walk, in
+  this order and wrapping, Choose…, the rename field and Copy in the plan
+  state (Copy skipped while it is greyed), Cancel alone while the copy
+  runs, Open destination and Close on the report; the clash question has
+  no control that takes the keyboard — its rows answer to bare letters and
+  to clicks — so `Tab` there is swallowed with the nudge like every other
+  key; the rename field entered by `Tab` is selected, so what is typed
+  replaces the template shown; the keyboard's home is the dialog's scope,
+  where the open and every state change put it (residual, measured on
+  Linux, where the menu bar is in-window, and unmeasured under Windows'
+  system menu bar, outside the window: a run that ends while a menu is
+  open takes the keyboard back to the dialog from the open menu — the
+  menu stays drawn, the arrow keys no longer reach it, and the next `Esc`
+  closes the report instead of the menu; without that refocus the menu
+  kept the keyboard and `Esc` closed it, but a Cancel the keyboard was on
+  became the menu's restore target, died with the run, and the next
+  `Tab` left the dialog — so the refocus stays, and a fix needs a design
+  for the MenuBar's restore target, a follow-up issue; QE 2026-10-04,
+  round 2 D2: this said "unmeasured"), and where pressing Copy —
+  a click, or `Enter`/`Space` on it — puts it before the run starts (brief
+  011 review F1, 2026-10-04: a control the run disables cannot let go of
+  the keyboard afterwards; residual, not fixed: a re-plan that greys Copy
+  while the keyboard is on it — the *Use last* chip, a destination Choose…
+  returns that the plan refuses, a folder opened under the dialog — leaves
+  Copy holding that stale focus, a second focus border once Copy is live
+  again and a silent landing on it, QE 2026-10-04, D3); `Enter`/`Space`
+  on the focused Copy or Close press it, and from the scope `Enter` keeps
+  the meaning above. The *Use last* chip takes the pointer only
+  (recorded).
 - **Sizes on screen** (user decision 2026-09-12, brief 006): every byte
   count either dialog prints goes through the one formatter the two bridges
   share (`human_bytes`, app crate — presentation, not a rule about files):
@@ -465,14 +495,21 @@ is the eventual fix; no perf budget covers plan time.
   destination is deleted; nothing is replaced without the Overwrite answer.
 - For the driven suite (test-harness.md): the marks `copy finished run N`,
   `copy card laid out …`, `copy buttons laid out …`, `copy body scrolled to
-  Y`, `copy answer N|B|O|Esc laid out …`; the dump fields `copystate=` (0
+  Y`, `copy answer N|B|O|Esc laid out …`, and since brief 011 the focus
+  marks `focus: copy choose|template|open-dest|cancel|copy-close
+  gained|lost` of the ring's controls and `copy copy-close laid out …` of
+  the Copy/Close button (review F1); the dump fields `copystate=` (0
   plan, 1 running, 2 report, 3 the question), `confirm=`, `newonly=`,
   `nudge=`, `nudged=`, `warning=`, `copyprogress=` (`Starting…` before the
   first file; the last line survives into the report), `copyerror=`,
   `copynote=` (the preview's notes, the `{seq}` note among them), `report=`;
   the tokens `copydest:PATH` (before the
   `Ctrl+E` that should see it), `copytemplate:TEXT` (after it — opening
-  clears the field), `click:copy answer B`.
+  clears the field), `click:copy answer B`, `click:copy copy-close`; the
+  variable `FASTCULL_COPY_HOLD_MS`, which core takes as
+  `execute_held(plan, hold)` — the worker held before its first file, the
+  cancel polled through the hold; `execute(plan)` is the same call with no
+  hold (brief 011, QE's P3).
 - A `#[cfg(unix)]` test takes its private helpers with it — `cargo clippy
   --all-targets -- -D warnings` on the Windows job refuses dead code —
   while helpers shared with a platform-neutral test are never gated (red on
@@ -657,9 +694,75 @@ dialog with real key events.
 - [ ] Windows reserved names (`CON`, `NUL`, trailing dots) in templated
       names — deferred with the user's OK (2026-07-26, "low priority"),
       issue #10; spaces and Unicode in paths are covered.
+- [x] The keyboard ring (brief 011, AC1 and AC3): `Tab`/`Shift+Tab` walk
+      Choose…, the rename field and Copy, then Open destination and Close
+      on the report, wrapping and skipping the greyed Copy; Cancel alone
+      while the copy runs, and the run's end — the worker's finish, or
+      `Space` on that Cancel — brings the keyboard home (QE 2026-10-04,
+      P3); `Ctrl+Tab` and `Ctrl+Shift+Tab` move nothing (QE 2026-10-04,
+      P2); `focusowner` stays `-1`; a `Y` on a focused button marks
+      nothing, the running Cancel included; the field
+      entered by `Tab` is selected and the next letter replaces its text;
+      `Enter` in the rename field puts the keyboard home and the next
+      `Tab` starts at Choose… (QE 2026-10-04, P4); `Enter` on the focused
+      Copy then `B` on the question copies; `Space` on the focused Close
+      closes — app
+      `copy_picks_tab_walks_its_own_controls_and_never_leaves_the_dialog`
+      (red on the pre-fix build at the third `Tab` with Copy greyed,
+      `focusowner=0`, the keyboard on the grid).
+- [x] The mixed path (brief 011, review F1): `Tab` onto Choose…, a click
+      on Copy, `Esc` back to the plan — the click lets go of Choose…
+      while it is enabled (`focus: copy choose lost` after it) and the
+      next `Tab` lands on Choose… with its own `gained` — app
+      `copy_picks_tab_walks_its_own_controls_and_never_leaves_the_dialog`
+      (red on 6eed28b, 841bb1d with the button's layout mark: no `copy
+      choose lost` after the click, a silent `Tab` after `Esc`).
 
 ## History
 
+- 2026-10-04 — Brief 011, QE round 2 D2: the ring sentence's menu
+  residual, recorded as unmeasured at the senior developer's review F2,
+  is measured — on Linux, where the menu bar is in-window, a run that
+  ends while a menu is open takes the keyboard from the menu, and the
+  next `Esc` closes the report rather than the menu; the refocus stays
+  (without it a destroyed Cancel became the menu's restore target), and
+  the fix is a follow-up issue.
+- 2026-10-04 — Brief 011, QE's test proposal P3: the ring's box gains the
+  running state — Cancel alone while the copy runs, and the run's end
+  bringing the keyboard home — which the copy test's fourth and fifth
+  launches drive with the worker held; until then the finish refocus was
+  review-verified only.
+- 2026-10-04 — Brief 011, QE's test proposal P3 (the senior developer's
+  Shape A), spec first: the driven suite's contract gains
+  `FASTCULL_COPY_HOLD_MS` and core's `execute_held`, so a test can reach
+  the running Cancel and the worker's finish (test-harness.md).
+- 2026-10-04 — Brief 011, QE's spec correction D3 (its defect D1, the
+  senior developer's F4): the ring sentence records the stale focus a
+  re-plan leaves on a Copy it greys while the keyboard is on it — a
+  residual, recorded and not fixed: the keyboard would have to leave Copy
+  before the re-plan disables it, and the re-plan runs in Rust from the
+  field, the chip, the picker and the folder swap.
+- 2026-10-04 — Brief 011, QE's test proposal P4: the ring's box gains
+  `Enter` in the rename field — it re-plans, brings the keyboard home, and
+  the next `Tab` starts the ring over at Choose… (visible order after an
+  arrival the ring did not make), which had no test.
+- 2026-10-04 — Brief 011, QE's test proposal P2: the ring's box gains
+  `Ctrl+Tab` and `Ctrl+Shift+Tab` moving nothing — ui-grid.md's "`Ctrl+Tab`
+  does nothing unless a dialog's module says otherwise", which this module
+  does not, and which had no test.
+- 2026-10-04 — Brief 011, the senior developer's review F2: the ring
+  sentence records the state-change refocus's residual under an open menu
+  — unmeasured, recorded rather than fixed (the Manager's ruling).
+- 2026-10-04 — Brief 011, the senior developer's review F1: pressing Copy
+  puts the keyboard home before the run starts (the rule is ui-grid.md's)
+  — Choose…, reached by `Tab` and left by a click on Copy, had kept its
+  focus border with the keyboard at home; the mixed path's box.
+- 2026-10-04 — Brief 011, the senior developer's review F1: the Copy/Close
+  button reports its layout, `copy copy-close laid out …`, for a test that
+  clicks it by name.
+- 2026-10-04 — Brief 011 (issue #98): the dialog's keyboard ring — `Tab`
+  stays inside, the rename field selected on arrival, the scope the
+  keyboard's home; the rule itself is ui-grid.md's.
 - 2026-09-17 — Rewritten in the brief 007 shape. The pre-rewrite text, with
   every gate finding and measurement, is `specs/history/fileops.md`.
 - 2026-09-12 — New only, the fourth answer to the clash question (issue #86,

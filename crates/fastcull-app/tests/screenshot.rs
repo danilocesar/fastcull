@@ -2323,6 +2323,12 @@ fn panel_toggle_at_one_to_one_reanchors_the_crop() {
 /// FocusScope. The keyboard's whereabouts is asserted with them: a
 /// stranded keyboard would swallow the keys just as thoroughly and mean
 /// the opposite.
+///
+/// Tab and Shift+Tab are among the swallowed keys (brief 011, AC4;
+/// ui-grid.md "Modal keyboard containment": About holds no control that
+/// takes the keyboard): pressed first, they leave the owner token on the
+/// main scope and the window's own Tab walk never runs. No code stands
+/// behind this — the pre-fix build passes it too, which is the claim.
 #[test]
 fn about_dialog_renders_and_contains_the_keyboard() {
     if !has_display() {
@@ -2341,7 +2347,8 @@ fn about_dialog_renders_and_contains_the_keyboard() {
         "900:about"
     };
     let script = format!(
-        "{open};1300:dump.up;1600:key:n;1900:key:p;2300:dump.contained;\
+        "{open};1300:dump.up;1400:key:tab;1500:key:shift+tab;1600:key:n;1900:key:p;\
+         2300:dump.contained;\
          2600:key:escape;2900:dump.closed;3200:key:n;3600:dump.control;\
          3900:about;4300:dump.shot"
     );
@@ -2367,7 +2374,7 @@ fn about_dialog_renders_and_contains_the_keyboard() {
          `keysfocus`: a deactivated window reads false there with the \
          keyboard alive (issue #63):\n{stderr}"
     );
-    // THE containment: two real keystrokes, no mark.
+    // THE containment: Tab, Shift+Tab and two real keystrokes, no mark.
     let contained = qedump(&stderr, "contained");
     assert_eq!(
         dump_field(contained, "about"),
@@ -2377,6 +2384,13 @@ fn about_dialog_renders_and_contains_the_keyboard() {
     assert!(
         dump_text(contained, "status").contains("★0 ✕0"),
         "a mark leaked through the About modal: {contained}"
+    );
+    assert_eq!(
+        dump_field(contained, "focusowner"),
+        "0",
+        "Tab or Shift+Tab under About moved the keyboard off the main scope \
+         — About holds no control, so both are swallowed like every other \
+         key (ui-grid.md, \"Modal keyboard containment\"; brief 011 AC4):\n{stderr}"
     );
     // The control: Esc closes it and the SAME key now marks. Without this
     // the containment assertion also passes on a build where N is simply
@@ -2493,7 +2507,9 @@ fn about_dialog_renders_and_contains_the_keyboard() {
 /// after issue #13's fidelity note: the REAL Help > Keyboard Shortcuts
 /// item, a REAL N, and the keyboard's whereabouts asserted alongside the
 /// mark counts (see the About test for why the token-plus-nav version
-/// was testing the harness rather than the app).
+/// was testing the harness rather than the app). Tab and Shift+Tab are
+/// swallowed here too (brief 011, AC4: the card holds no control that
+/// takes the keyboard) — a claim the pre-fix build already met.
 #[test]
 fn shortcuts_popup_contains_the_keyboard() {
     if !has_display() {
@@ -2508,7 +2524,8 @@ fn shortcuts_popup_contains_the_keyboard() {
         "900:shortcuts"
     };
     let script = format!(
-        "{open};1300:dump.up;1600:key:n;2000:dump.contained;\
+        "{open};1300:dump.up;1400:key:tab;1500:key:shift+tab;1600:key:n;\
+         2000:dump.contained;\
          2300:key:escape;2600:dump.closed;2900:key:n;3300:dump.control;\
          3600:shortcuts;4000:dump.shot"
     );
@@ -2540,6 +2557,14 @@ fn shortcuts_popup_contains_the_keyboard() {
     assert!(
         dump_text(contained, "status").contains("★0 ✕0"),
         "a mark leaked through the shortcuts modal: {contained}"
+    );
+    assert_eq!(
+        dump_field(contained, "focusowner"),
+        "0",
+        "Tab or Shift+Tab under the shortcuts card moved the keyboard off the \
+         main scope — the card holds no control, so both are swallowed like \
+         every other key (ui-grid.md, \"Modal keyboard containment\"; brief \
+         011 AC4):\n{stderr}"
     );
     assert_eq!(
         dump_field(qedump(&stderr, "closed"), "shortcuts"),
@@ -6916,6 +6941,1068 @@ fn copy_picks_new_only_copies_the_new_pick_and_leaves_the_rest_alone() {
     );
 }
 
+/// Where the key before `dump.<dump>` put the keyboard: that key's own
+/// `drive: key:…` echo — the last one before the dump's echo — and the
+/// `focus: … gained` marks between the two, in order (brief 011; the focus
+/// marks of test-harness.md). A `lost` is not a landing and is left out,
+/// and a repeat of the same `gained` collapses into one: a window that is
+/// deactivated and reactivated hands the keyboard back to the control that
+/// had it. So a press that lands on a control reads as exactly that
+/// control's mark, and a press that moves nothing reads as no mark.
+fn landing<'a>(labels: &[&'a str], dump: &str) -> (&'a str, Vec<&'a str>) {
+    let echo = format!("drive: dump.{dump}");
+    let at = labels
+        .iter()
+        .position(|l| *l == echo)
+        .unwrap_or_else(|| panic!("no `{echo}` in the trace: {labels:?}"));
+    let key = labels[..at]
+        .iter()
+        .rposition(|l| l.starts_with("drive: key:"))
+        .unwrap_or_else(|| panic!("no key step before `{echo}`: {labels:?}"));
+    let mut gained: Vec<&str> = labels[key + 1..at]
+        .iter()
+        .copied()
+        .filter(|l| l.starts_with("focus: ") && l.ends_with(" gained"))
+        .collect();
+    gained.dedup();
+    (labels[key], gained)
+}
+
+/// Where the keyboard was when the step `echo` (a `drive: key:…` line) was
+/// dispatched: the last `focus: … gained` mark before that echo (brief 011,
+/// the senior developer's review F3). The harness prints a step's echo
+/// before it dispatches the step, so nothing the press itself moves is
+/// counted. A [`landing`] row reads a press from its key to the next dump;
+/// this reads the premise of a press that ACTIVATES a button (Space, Enter)
+/// at the press itself, so the gap between the dump before it and the key
+/// is covered too. The echo must occur once in the run: a premise is about
+/// one press.
+fn last_gained_before<'a>(labels: &[&'a str], echo: &str) -> &'a str {
+    let at = label_positions(labels, echo);
+    assert_eq!(
+        at.len(),
+        1,
+        "`{echo}` is not exactly one step of this run: {labels:?}"
+    );
+    labels[..at[0]]
+        .iter()
+        .rev()
+        .copied()
+        .find(|l| l.starts_with("focus: ") && l.ends_with(" gained"))
+        .unwrap_or_else(|| panic!("no `focus: … gained` before `{echo}`: {labels:?}"))
+}
+
+/// The first scripted step dispatched after the trace mark at `from`: the
+/// index of its `drive:` echo (brief 011, QE's P3). A `wait:`'s own
+/// "(satisfied …)" line is narration, not a step, and is passed over: it
+/// can be traced in the same timer pass as the mark it waited for, AHEAD of
+/// the change handlers that pass set off — Slint fires every due timer and
+/// only then runs the change handlers (`update_timers_and_animations`,
+/// i-slint-core 1.17.1 `platform.rs`) — so the refocus a run's finish makes
+/// may be traced after the wait's line and before the next real step.
+fn next_step_after(labels: &[&str], from: usize) -> usize {
+    labels[from + 1..]
+        .iter()
+        .position(|l| l.starts_with("drive: ") && !l.starts_with("drive: wait:"))
+        .map(|p| from + 1 + p)
+        .unwrap_or_else(|| panic!("no scripted step after `{}`: {labels:?}", labels[from]))
+}
+
+/// A run that ends with the keyboard on its running Cancel brings the
+/// keyboard home (ui-grid.md, "Modal keyboard containment": every state
+/// change of a dialog puts it back on the dialog's scope; brief 011, QE's
+/// P3): between `finished` — the run's finished-run mark, emitted once —
+/// and the next scripted step, the scope's `focus: <dialog> dialog gained`
+/// AND the destroyed Cancel's `focus: <dialog> cancel lost`. The `lost` is
+/// traced only because the keyboard leaves Cancel before Cancel is
+/// destroyed (test-harness.md, Focus): with the refocus gone there is
+/// neither mark, and the next key is delivered to nothing.
+fn assert_the_finish_brings_the_keyboard_home(stderr: &str, finished: &str, dialog: &str) {
+    let labels = mark_labels(stderr);
+    let at = label_positions(&labels, finished);
+    assert_eq!(
+        at.len(),
+        1,
+        "`{finished}` is not exactly one mark of this run:\n{stderr}"
+    );
+    let next = next_step_after(&labels, at[0]);
+    for mark in [
+        format!("focus: {dialog} dialog gained"),
+        format!("focus: {dialog} cancel lost"),
+    ] {
+        assert!(
+            marks_between(&labels, at[0], next, &mark) > 0,
+            "after `{finished}` no `{mark}` before the next step: the run's \
+             end destroyed the focused Cancel without bringing the keyboard \
+             home first, and every key after it goes nowhere (ui-grid.md, \
+             \"Modal keyboard containment\"; brief 011, QE's P3). When this \
+             fails this way it is that defect; do not quiet it:\n{stderr}"
+        );
+    }
+}
+
+/// AC1 and AC3 of brief 011 (issue #98; ui-grid.md "Modal keyboard
+/// containment", fileops.md "The keyboard ring"): in the Copy Picks dialog
+/// `Tab` and `Shift+Tab` walk the dialog's own controls in visible order,
+/// wrapping, passing over a control the state disables or does not show,
+/// and the keyboard never leaves the dialog — `focusowner` reads `-1` after
+/// every press, and the control a press lands on is read from that
+/// control's own `focus: copy <name> gained` mark (test-harness.md).
+///
+/// One folder of three 2 KB fakes, `a` and `b` picked and the cursor left
+/// on the unpicked `c`, so a key that reached the grid behind the scrim
+/// would show in the status line: a `Y` would pick `c`. Seven launches, in
+/// this order:
+///   1. No destination, so Copy is greyed — the old-red's own shape (brief
+///      011 D3). Ctrl+Tab and Ctrl+Shift+Tab first: neither moves the
+///      keyboard (ui-grid.md: "`Ctrl+Tab` does nothing unless a dialog's
+///      module says otherwise"; QE's P2). About next, over the dialog: a
+///      Tab under it moves nothing and the first Esc closes About alone.
+///      Then Tab, Tab, Tab land on Choose…, the rename field, and Choose…
+///      again, wrapping over the greyed Copy; Shift+Tab goes back over it
+///      to the field.
+///   2. An empty destination and the template `x.{ext}`, so Copy is live.
+///      The first Shift+Tab from the dialog's home lands on Copy, the LAST
+///      control — visible order, wrapping, so it is the mirror of the first
+///      Tab; then four Tabs — Choose… (the wrap), the field, Copy, Choose…
+///      again; a `Y` with the keyboard on Choose… marks nothing; two
+///      Shift+Tabs — Copy, the field — and the `z` typed there REPLACES
+///      `x.{ext}` (AC3: the field the ring lands on is selected); Esc closes
+///      the dialog from the field — the field lets Escape through to the
+///      dialog's scope — and the `+` after it zooms the grid. No Enter and
+///      no Space: this launch is the first to walk the ring with Copy live.
+///
+///      2b. Enter in the rename field (QE's P4), in a launch of its own
+///      (split out of launch 2 at QE's round 2, D1): launch 2's script, the
+///      same string, up to the `z` it types into the field (QE round 3,
+///      D1), so every landing before the Enter is one launch 2 asserted.
+///      Enter in the field re-plans without copying and brings the keyboard
+///      home (`focus: copy dialog gained`), and the next Tab starts the ring
+///      over at Choose…, the first control — the home reset on a gain that
+///      did not come from the ring (Copy stays live under `z`, so a ring
+///      that kept the field's slot would land on Copy). Esc closes the
+///      dialog from Choose… (corrected 2026-10-04, QE round 3 D1: 2b
+///      reached the field by Tab, Tab from home and called them "the two
+///      landings launch 1 asserted" — launch 1 makes them with Copy greyed,
+///      and with Copy live a forward Tab's home start moved to the last
+///      control left launches 1 and 2 green and put 2b's Enter on
+///      Choose…).
+///
+///      3a. Launch 3, dry (QE round 3, D1; QE's P1): launch 3's script, the
+///      same string, with a click on Copy where launch 3 presses Enter on
+///      it and Esc where launch 3 presses its closing Space, from the same
+///      destination seeded afresh. It runs before launch 3 and asserts every
+///      landing launch 3's two presses follow: the mixed path's three Tabs
+///      from the home the clash question's Esc leaves, and the report's
+///      four from the home the run's finish leaves.
+///   3. A destination holding another body's `a.ARW`. First the mixed path
+///      (the senior developer's review F1): Tab puts the keyboard on
+///      Choose…, a mouse click on Copy — by name, `click:copy copy-close` —
+///      asks the clash question, and the keyboard leaves Choose… while
+///      Choose… is still enabled (`focus: copy choose lost` and `focus: copy
+///      dialog gained` after the click); Esc goes back to the plan, and the
+///      next Tab lands on Choose… with its own `gained` — a control the run
+///      disabled while it held the keyboard keeps `has-focus` and is landed
+///      on silently. Two more Tabs reach Copy; Enter on the focused Copy
+///      asks the question and the keyboard is home (`focus: copy dialog
+///      gained`); Tab on the question moves nothing and nudges; `B` copies;
+///      on the report Tab, Tab, Shift+Tab, Tab walk Open destination,
+///      Close, Open destination, Close — past the disabled Choose… and
+///      field and the absent Cancel — and Space on the focused Close closes
+///      the dialog.
+///   4. The running state (QE's P3): an empty destination, and the worker
+///      held 3 s before its first file (`FASTCULL_COPY_HOLD_MS`,
+///      test-harness.md), so a 2 KB copy is still running while the keys
+///      land. Enter from the dialog's home starts it; Tab lands on Cancel,
+///      the one control a running copy shows, with the dump reading the
+///      running state and its `Starting…` line; a `Y` there marks nothing,
+///      and the dump after it still reads the running state. The finish
+///      brings the keyboard home: after `copy finished run 1`, before the
+///      next step, the scope's `focus: copy dialog gained` and the
+///      destroyed Cancel's `focus: copy cancel lost`
+///      ([`assert_the_finish_brings_the_keyboard_home`]); the next Tab
+///      walks the report from Open destination, and Esc closes.
+///   5. The same start, then Space on the running Cancel: the copy ends
+///      cancelled before its first file, the report says "cancelled —
+///      finished files remain", the keyboard comes home the same way, the
+///      next Tab lands on Open destination, Esc closes, and nothing is left
+///      at the destination.
+///
+/// No Enter or Space in this test lands on Choose… or Open destination,
+/// whatever a regression does to the ring: they open the native folder
+/// picker and the file manager, and the picker holds the app until the
+/// watchdog kills it 90 s later, with no assertion reached. What keeps it
+/// so: every Enter and every Space follows a walk that an EARLIER launch
+/// drove — the same keys, from the same home, in the same dialog state —
+/// and asserted landing by landing, so a ring that lands one control off
+/// is red at that launch's landing assertion and the launch with the press
+/// never runs (`held` and `landings` run between the `run(…)` calls). An
+/// earlier launch is the only place a landing can be asserted before a
+/// press: a launch's trace is read after its app exits, and no `wait:` can
+/// hold a press until the keyboard is where the script put it — a wait is
+/// satisfied by a mark emitted at any time in the run (test-harness.md),
+/// and a control's `gained` mark recurs. The presses, and the walks they
+/// follow:
+///   - launch 2b's Enter in the rename field: launch 2's script, up to it;
+///   - launch 3's Enter on Copy: the mixed path, then three Tabs from the
+///     home the clash question's Esc leaves — launch 3a's script, up to it;
+///   - launch 3's closing Space on Close: after the question, the `B` and
+///     the run, the report's Tab, Tab, Shift+Tab, Tab from the home the
+///     run's finish leaves — launch 3a's script too, which asks its
+///     question with a click on the focused Copy where launch 3 presses
+///     Enter on it (both reach Copy's `clicked`, which puts the keyboard
+///     home before the run starts, and both landings are asserted);
+///   - launch 4's Enter: from the dialog's home as it opens, after no
+///     landing at all;
+///   - launch 5's Space on the running Cancel: launch 4's script, up to it
+///     — Enter from home, one Tab (and were launch 5 driven alone under a
+///     ring that loses the running Cancel, the M14 mutant below, that Tab
+///     would go nowhere and the Space land on the dialog's home, which
+///     ignores it).
+///
+/// (Corrected 2026-10-04, QE round 3 D1: this said the same while launch
+/// 3's Enter followed three Tabs from the home the clash question's Esc
+/// leaves, which no earlier launch made — under a one-token regression of
+/// that home, `self.slot = 0` for `-1` in the scope's `changed state`
+/// (QE's A4), launches 1, 2 and 2b stayed green and the Enter landed on
+/// Choose… — while it called launch 3's closing Space the one press no
+/// earlier launch covered, and while 2b's Tabs were launch 1's landings
+/// made with Copy greyed, see 2b. QE round 2 D1 had corrected it once: it
+/// said the same while launch 2 still pressed Enter in the field after six
+/// landings no earlier launch had asserted, and under the home-start
+/// mutant that Return opened the native picker.)
+///
+/// Each press that activates a button also has its premise read at the
+/// press itself (the senior developer's review F3, [`last_gained_before`]):
+/// the keyboard on Copy when launch 3's Return goes, on Close when its
+/// Space goes (shown red by a script mutant: an Esc slipped in before the
+/// Space closes the dialog under it, and the premise reads `focus: keys
+/// gained`), and on the running Cancel when launch 5's Space goes. These
+/// read the trace after the run, so they name a wrong press after it
+/// happened; the earlier launches are what stop one from happening
+/// (corrected 2026-10-04, QE round 3 D1: this recorded launch 3's closing
+/// Space as a run-time exposure no assertion could close — Close dropped
+/// from `slot-ok` in the report state alone would put it on Open
+/// destination, the file manager — and launch 3a now walks the report
+/// first, red at its dump.r2 under exactly that regression, QE's A6).
+///
+/// RED on b6c238f, the head before the fix (brief 011 D3 measured the same
+/// on f1520b9): launch 1's third Tab puts the keyboard on the grid's scope
+/// behind the scrim — `focus: keys gained`, dump.g3 `focusowner=0`. The
+/// same build driven through the other two scripts as they stood before
+/// review F1: launch 2's first Shift+Tab lands on `keys` at once
+/// (`focusowner=0`); in launch 3 the window's own Tab walk reaches the live
+/// Copy, Enter there asks the question and leaves the keyboard on the
+/// destroyed button, the Tab after it lands on `keys` (`focusowner=0`, no
+/// nudge) and the `B` never answers. When this fails that way it is that
+/// defect; do not quiet it.
+///
+/// RED on 6eed28b, the build with the Copy button's layout mark and
+/// without review F1's fix: after the click on Copy no `copy choose lost`
+/// — the state change brought the keyboard home with Choose… already
+/// disabled — and after Esc the Tab onto Choose… is silent (`focus: copy
+/// dialog lost` alone, so dump.c2's landing is empty). When this fails that
+/// way it is that defect; do not quiet it.
+///
+/// Mutants (2026-10-04), each alone: the scope's Tab arm removed → red at
+/// dump.g3, `focusowner=0`; the rename field left out of `slot-ok` → red at
+/// dump.g2, no landing; the wrap removed (`clamp` for `Math.mod` in `walk`)
+/// → red at dump.g3, no landing; `select-all()` removed → dump.z reads
+/// `zx.{ext}`, the letter typed in at the caret; `copy-keys.focus()` removed
+/// from Copy's `clicked` (review F1) → red after launch 3a's first click, no
+/// `copy choose lost`; the `changed state` refocus removed (QE's mutant M5)
+/// → red on 841bb1d through Enter-on-Copy (no focus at all after the
+/// Return, the Tab on the question on `keys`, the run dead at `wait:copy
+/// finished run 1`); since F1, which sends the keyboard home from Copy's
+/// own `clicked`, it guards the worker-finish path — a run ending under a
+/// focused Cancel — which launch 4 drives with the held worker: red at
+/// launch 4's dump.f1, `focusowner=0`, the Tab after the finish on `keys`
+/// behind the scrim, and neither `copy dialog gained` nor `copy cancel
+/// lost` after `copy finished run 1` (corrected 2026-10-04, QE D5: this
+/// said no fixture holds a copy long enough to Tab onto Cancel and called
+/// that path review-verified — a held worker does); the running Cancel
+/// left out of `slot-ok` (`if (s == 3) { return false; }`, QE's mutant
+/// M14) → red at launch 4's dump.run, the Tab landing nowhere, and launch
+/// 5's script driven alone against that build has its Space land on the
+/// dialog's home, where it is ignored, and the copy runs to "2 copied";
+/// the home start removed (`slot + dir` from -1, `let start = self.slot;`
+/// in `walk`; QE's mutant M6) → the first Shift+Tab lands on the field,
+/// red at launch 2's dump.home, `left: ["focus: copy template gained"]
+/// right: ["focus: copy copy-close gained"]` (corrected 2026-10-04, QE
+/// round 2 D1: this said red at dump.home while launch 2 still pressed
+/// Return in the field after that landing — under this mutant the Return
+/// landed on Choose…, the native picker opened and the run hung until the
+/// watchdog, so the assertion was never reached); `slot-ok` approving the
+/// greyed Copy → the ring's `focus()` on it walks on to `keys` behind the
+/// scrim, red at dump.g3, `focusowner=0`;
+/// the ring's arm moved ahead of the dialog's About containment → the Tab
+/// under About lands on Choose…, red at dump.abtab; the arm moved ahead of
+/// the clash question's branch → the Tab is eaten without the nudge, red
+/// at 3a's dump.qtab; the ring's arm without its `!event.modifiers.control`
+/// (QE's mutant X5) → Ctrl+Tab walks the ring, red at dump.ct, its landing
+/// `focus: copy choose gained` (the Ctrl+Shift+Tab after it then lands on
+/// the field); the scope's own gain no longer resetting the ring to home
+/// (`self.slot = -1` removed from `copy-keys`' `changed has-focus`, QE's
+/// mutant M12) → after Enter in the rename field the next Tab goes on from
+/// the field's slot to Copy, red at launch 2b's dump.hometab, `focus: copy
+/// copy-close gained`; every state change leaving the ring at Choose…
+/// instead of home (`self.slot = 0` for `-1` in the scope's `changed
+/// state`, QE's mutant A4) → after the clash question's Esc the first Tab
+/// lands on the field, red at launch 3a's dump.c2, `left: ["focus: copy
+/// template gained"] right: ["focus: copy choose gained"]`, before any Enter
+/// or Space reaches that walk (QE round 3 D1: before launch 3a, launches 1,
+/// 2 and 2b stayed green and launch 3's Enter landed on Choose…); Close left
+/// out of `slot-ok` on the report (`if (s == 4) { return root.copy-state ==
+/// 0 && root.copy-ready; }`, QE's mutant A6) → the report's second Tab
+/// stays on Open destination, red at launch 3a's dump.r2, `left: []`, no
+/// Space pressed; a forward Tab's home start moved from before the first
+/// control to before the last (`(dir > 0 ? 3 : 5)` for `(dir > 0 ? -1 : 5)`
+/// in `walk`) → launches 1 and 2 stay green — launch 1's first Tab passes
+/// the greyed Copy on to Choose…, and launch 2 starts with a Shift+Tab —
+/// and the Tab after Enter in the field lands on Copy, red at launch 2b's
+/// dump.hometab, `left: ["focus: copy copy-close gained"]` (QE round 3 D1:
+/// when 2b reached the field by Tab, Tab from home, this put its Enter on
+/// Choose…). The controls' own token writes have no red mutant —
+/// `focus-slot` writes the token too, and nothing else writes it while the
+/// dialog is up — and stay as the owner token's claim-site rule.
+#[test]
+fn copy_picks_tab_walks_its_own_controls_and_never_leaves_the_dialog() {
+    if !has_display() {
+        eprintln!("screenshot smoke skipped: no display server");
+        return;
+    }
+    let _s = serial();
+    let src = out_dir().join("tabring-copy-src");
+    let dest = out_dir().join("tabring-copy-dest");
+    let dest2 = out_dir().join("tabring-copy-dest2");
+    // Launches 4 and 5 copy for real, each into its own empty folder.
+    let dest3 = out_dir().join("tabring-copy-dest3");
+    let dest4 = out_dir().join("tabring-copy-dest4");
+    for d in [&src, &dest, &dest2, &dest3, &dest4] {
+        std::fs::remove_dir_all(d).ok();
+        std::fs::create_dir_all(d).unwrap();
+    }
+    for (name, byte) in [("a", 0xABu8), ("b", 0xCD), ("c", 0xEF)] {
+        std::fs::write(src.join(format!("{name}.ARW")), vec![byte; 2048]).unwrap();
+    }
+    // Launches 3a and 3 each start from this destination as seeded here —
+    // another body's `a.ARW` and nothing else. Launch 3a copies into it, so
+    // it is seeded afresh before each: the two launches play the same
+    // script, destination path included, from the same folder.
+    let seed_clash_dest = || {
+        std::fs::remove_dir_all(&dest2).ok();
+        std::fs::create_dir_all(&dest2).unwrap();
+        std::fs::write(dest2.join("a.ARW"), b"another body's frame").unwrap();
+    };
+    let run = |shot: &str, script: &str| -> String {
+        shoot_env_stderr(
+            &[src.to_str().unwrap()],
+            &[("FASTCULL_TRACE", "1"), ("FASTCULL_DRIVE", script)],
+            &out_dir().join(shot),
+        )
+    };
+    // Launches 4 and 5: the worker held 3 s before its first file
+    // (test-harness.md, `FASTCULL_COPY_HOLD_MS`), so the run is still
+    // running when their keys land. Their in-run strand ends 1 s after the
+    // Return, which leaves 2 s before the finish; a premise that reads red
+    // on a slow runner is answered with a longer hold, never a later key
+    // and never a dropped premise.
+    let run_held = |shot: &str, script: &str| -> String {
+        shoot_env_stderr(
+            &[src.to_str().unwrap()],
+            &[
+                ("FASTCULL_TRACE", "1"),
+                ("FASTCULL_COPY_HOLD_MS", "3000"),
+                ("FASTCULL_DRIVE", script),
+            ],
+            &out_dir().join(shot),
+        )
+    };
+    // Every press's landing: its key, and the one control it reached.
+    let landings = |stderr: &str, rows: &[(&str, &str, &str)]| {
+        let labels = mark_labels(stderr);
+        for (dump, key, mark) in rows {
+            let (step, gained) = landing(&labels, dump);
+            assert_eq!(
+                step,
+                format!("drive: key:{key}"),
+                "the script's step before dump.{dump} is not the key this row \
+                 is about:\n{stderr}"
+            );
+            assert_eq!(
+                gained,
+                vec![format!("focus: {mark} gained")],
+                "the {key} before dump.{dump} did not land on {mark} alone \
+                 (fileops.md, \"The keyboard ring\"):\n{stderr}"
+            );
+        }
+    };
+    // The token after every press — the old-red, asserted first.
+    let held = |stderr: &str, dumps: &[&str]| {
+        for dump in dumps {
+            let line = qedump(stderr, dump);
+            assert_eq!(
+                dump_field(line, "focusowner"),
+                "-1",
+                "at dump.{dump} the keyboard has left the Copy Picks dialog \
+                 (focusowner is not the dialog's -1): a Tab or Shift+Tab \
+                 carried it behind the scrim — issue #98. When this fails \
+                 this way it is that defect; do not quiet it:\n{stderr}"
+            );
+            assert_eq!(dump_field(line, "copy"), "true", "{line}");
+        }
+    };
+
+    // --- 1. no destination: the greyed Copy is passed over both ways ------
+    let grey = run(
+        "tabring-copy-grey.jpg",
+        "1500:wait:load settled gen 0;1700:key:y;1900:key:y;2300:key:ctrl+e;\
+         2700:dump.grey;2800:key:ctrl+tab;3100:dump.ct;3300:key:ctrl+shift+tab;3600:dump.cst;\
+         3700:about;4000:dump.ab;4200:key:tab;4500:dump.abtab;\
+         4700:key:escape;5000:dump.abclosed;\
+         5200:key:tab;5500:dump.g1;5700:key:tab;6000:dump.g2;\
+         6200:key:tab;6500:dump.g3;6700:key:shift+tab;7000:dump.g4",
+    );
+    held(
+        &grey,
+        &[
+            "grey", "ct", "cst", "ab", "abtab", "abclosed", "g1", "g2", "g3", "g4",
+        ],
+    );
+    assert!(
+        grey.contains("wait:load settled gen 0 (satisfied"),
+        "the picks were pressed before the folder settled:\n{grey}"
+    );
+    let premise = qedump(&grey, "grey");
+    assert_eq!(dump_field(premise, "copystate"), "0", "{premise}");
+    assert_eq!(
+        dump_text(premise, "summary"),
+        "2 picked images. Choose a destination.",
+        "the premise is a plan with no destination, where Copy is greyed: {premise}"
+    );
+    let status = dump_text(premise, "status");
+    assert!(
+        status.contains("c.ARW (3/3) · unmarked") && status.contains("★2 ✕0"),
+        "the premise is a and b picked and the cursor on the unmarked c: {premise}"
+    );
+    // Ctrl+Tab and Ctrl+Shift+Tab move nothing (ui-grid.md, "Modal keyboard
+    // containment"; QE's P2). The ring's arm declines a Tab with Ctrl held,
+    // and Slint's window refuses its own Tab walk for one with Control,
+    // Meta or Alt (`window.rs` `process_key_input`, its `extra_mod`), so the
+    // arm's `!event.modifiers.control` is the one thing between the chord
+    // and the ring — which is the promise this pins.
+    let labels = mark_labels(&grey);
+    for (dump, chord) in [("ct", "ctrl+tab"), ("cst", "ctrl+shift+tab")] {
+        let echo = format!("drive: key:{chord}");
+        assert_eq!(
+            landing(&labels, dump),
+            (echo.as_str(), Vec::new()),
+            "{chord} moved the keyboard in the Copy Picks dialog — ui-grid.md: \
+             \"`Ctrl+Tab` does nothing unless a dialog's module says \
+             otherwise\":\n{grey}"
+        );
+    }
+    // About over the dialog takes Tab like every other key: the ring's arm
+    // comes after the containment arm, so nothing moves behind the popup,
+    // and the first Esc closes About alone (ui-grid.md, "Modal keyboard
+    // containment").
+    assert_eq!(dump_field(qedump(&grey, "ab"), "about"), "true", "{grey}");
+    assert_eq!(
+        landing(&mark_labels(&grey), "abtab").1,
+        Vec::<&str>::new(),
+        "Tab under About moved the keyboard behind the popup — the ring ran \
+         before the dialog's containment arm:\n{grey}"
+    );
+    let abclosed = qedump(&grey, "abclosed");
+    assert_eq!(
+        (
+            dump_field(abclosed, "about"),
+            dump_field(abclosed, "copystate")
+        ),
+        ("false", "0"),
+        "the first Esc did not close About alone: {abclosed}"
+    );
+    landings(
+        &grey,
+        &[
+            ("g1", "tab", "copy choose"),
+            ("g2", "tab", "copy template"),
+            ("g3", "tab", "copy choose"),
+            ("g4", "shift+tab", "copy template"),
+        ],
+    );
+    assert_eq!(
+        dump_text(qedump(&grey, "g4"), "status"),
+        status,
+        "a key reached the grid behind the dialog:\n{grey}"
+    );
+
+    // --- 2. Copy live: the whole ring, a Y, the field selected ------------
+    // Launch 2's walk up to the `z` it types into the field. Launch 2b plays
+    // this same string before its Enter in the field (QE round 3, D1), so
+    // every landing that Enter follows is one launch 2 has asserted.
+    let ring_walk = format!(
+        "1500:wait:load settled gen 0;1700:key:y;1900:key:y;2100:copydest:{dest};\
+         2300:key:ctrl+e;2600:copytemplate:x.{{ext}};2900:dump.plan;\
+         3100:key:shift+tab;3400:dump.home;\
+         3600:key:tab;3900:dump.t1;4100:key:y;4400:dump.y1;4600:key:tab;4900:dump.t2;\
+         5100:key:tab;5400:dump.t3;5600:key:tab;5900:dump.t4;\
+         6100:key:shift+tab;6400:dump.s1;6600:key:shift+tab;6900:dump.s2;\
+         7100:key:z;7400:dump.z;",
+        dest = dest.display()
+    );
+    let ring = run(
+        "tabring-copy-ring.jpg",
+        &format!("{ring_walk}7600:key:escape;7900:dump.closed;8100:key:+;8400:dump.zoom"),
+    );
+    held(
+        &ring,
+        &[
+            "plan", "home", "t1", "y1", "t2", "t3", "t4", "s1", "s2", "z",
+        ],
+    );
+    let plan = qedump(&ring, "plan");
+    assert_eq!(dump_field(plan, "copystate"), "0", "{plan}");
+    assert_eq!(dump_text(plan, "template"), "x.{ext}", "{plan}");
+    assert!(
+        dump_text(plan, "summary").contains(" to copy · ")
+            && dump_text(plan, "copyerror").is_empty(),
+        "the premise is a clean plan, where Copy is live: {plan}"
+    );
+    landings(
+        &ring,
+        &[
+            ("home", "shift+tab", "copy copy-close"),
+            ("t1", "tab", "copy choose"),
+            ("t2", "tab", "copy template"),
+            ("t3", "tab", "copy copy-close"),
+            ("t4", "tab", "copy choose"),
+            ("s1", "shift+tab", "copy copy-close"),
+            ("s2", "shift+tab", "copy template"),
+        ],
+    );
+    // A Y with the keyboard on Choose… marks nothing: the button takes only
+    // Space and Enter, and the dialog's scope swallows the rest.
+    let y1 = qedump(&ring, "y1");
+    assert_eq!(
+        (dump_text(y1, "status"), dump_field(y1, "cursor")),
+        (dump_text(plan, "status"), dump_field(plan, "cursor")),
+        "the Y on the focused Choose… reached the grid behind the dialog:\n{ring}"
+    );
+    assert_eq!(
+        landing(&mark_labels(&ring), "y1").1,
+        Vec::<&str>::new(),
+        "the Y moved the keyboard:\n{ring}"
+    );
+    // AC3: the field the ring lands on is selected, so the letter replaces
+    // the template instead of joining it. Tab and Shift+Tab arrive through
+    // the same `focus-slot`, so the selection is the arrival's, either way.
+    assert_eq!(
+        dump_text(qedump(&ring, "z"), "template"),
+        "z",
+        "the `z` typed after Shift+Tab into the rename field did not replace \
+         its text — the ring's arrival did not select it (fileops.md, \"The \
+         keyboard ring\"; AC3):\n{ring}"
+    );
+    let closed = qedump(&ring, "closed");
+    assert_eq!(
+        (dump_field(closed, "copy"), dump_field(closed, "focusowner")),
+        ("false", "0"),
+        "Esc in the rename field did not close the dialog and hand the keyboard \
+         back to the grid: {closed}"
+    );
+    assert_eq!(
+        dump_field(qedump(&ring, "zoom"), "zoom"),
+        "2",
+        "the `+` after the dialog closed was dead:\n{ring}"
+    );
+
+    // --- 2b. Enter in the rename field (QE's P4) --------------------------
+    // A launch of its own (QE's round 2, D1) that plays launch 2's walk, the
+    // same string, up to the `z` in the field (QE round 3, D1): its Enter
+    // follows only landings launch 2 has asserted, never one this launch is
+    // the first to make.
+    let enter = run(
+        "tabring-copy-enter.jpg",
+        &format!(
+            "{ring_walk}7600:key:return;7900:dump.acc;\
+             8100:key:tab;8400:dump.hometab;8600:key:escape;8900:dump.closed"
+        ),
+    );
+    held(
+        &enter,
+        &[
+            "plan", "home", "t1", "y1", "t2", "t3", "t4", "s1", "s2", "z", "acc", "hometab",
+        ],
+    );
+    let eplan = qedump(&enter, "plan");
+    assert_eq!(dump_field(eplan, "copystate"), "0", "{eplan}");
+    assert_eq!(dump_text(eplan, "template"), "x.{ext}", "{eplan}");
+    assert!(
+        dump_text(eplan, "summary").contains(" to copy · ")
+            && dump_text(eplan, "copyerror").is_empty(),
+        "the premise is a clean plan, where Copy is live: {eplan}"
+    );
+    // Launch 2's landings, read again here: the walk is the same string.
+    landings(
+        &enter,
+        &[
+            ("home", "shift+tab", "copy copy-close"),
+            ("t1", "tab", "copy choose"),
+            ("t2", "tab", "copy template"),
+            ("t3", "tab", "copy copy-close"),
+            ("t4", "tab", "copy choose"),
+            ("s1", "shift+tab", "copy copy-close"),
+            ("s2", "shift+tab", "copy template"),
+        ],
+    );
+    // The `z` replaced the selected template and Copy stays live under it —
+    // the premise that lets the Tab after Enter tell the scope's home reset
+    // from a ring that kept the field's slot, which would land on Copy.
+    let pz = qedump(&enter, "z");
+    assert_eq!(
+        (
+            dump_field(pz, "copystate"),
+            dump_text(pz, "template"),
+            dump_text(pz, "copyerror")
+        ),
+        ("0", "z", ""),
+        "the `z` typed after Shift+Tab into the rename field did not replace \
+         its text, or left Copy greyed: {pz}"
+    );
+    // Enter in the rename field re-plans and does not copy (the field's
+    // `accepted`), with Copy still live.
+    let acc = qedump(&enter, "acc");
+    assert_eq!(
+        (
+            dump_field(acc, "copystate"),
+            dump_text(acc, "template"),
+            dump_text(acc, "copyerror")
+        ),
+        ("0", "z", ""),
+        "Enter in the rename field must re-plan without copying, with Copy \
+         still live: {acc}"
+    );
+    landings(
+        &enter,
+        &[
+            // The keyboard home…
+            ("acc", "return", "copy dialog"),
+            // …and the ring from its start, not from the field.
+            ("hometab", "tab", "copy choose"),
+        ],
+    );
+    let eclosed = qedump(&enter, "closed");
+    assert_eq!(
+        (
+            dump_field(eclosed, "copy"),
+            dump_field(eclosed, "focusowner")
+        ),
+        ("false", "0"),
+        "Esc with the keyboard on Choose… did not close the dialog and hand \
+         the keyboard back to the grid: {eclosed}"
+    );
+
+    // Launch 3's script in pieces, so that launch 3a plays the same string
+    // with its two presses swapped out (QE round 3, D1): the walk up to the
+    // Enter on Copy — the mixed path, then three Tabs from the home the
+    // clash question's Esc leaves — and, after the Enter, the question, the
+    // `B`, the run and the report's walk up to the closing Space, its Tabs
+    // starting from the home the run's finish leaves.
+    let clash_walk = format!(
+        "1500:wait:load settled gen 0;1700:key:y;1900:key:y;2100:copydest:{dest2};\
+         2300:key:ctrl+e;2700:dump.plan2;\
+         2900:key:tab;3200:dump.c1;3400:click:copy copy-close;3700:dump.cq;\
+         3900:key:escape;4200:dump.cback;4400:key:tab;4700:dump.c2;\
+         4900:key:tab;5200:dump.c3;5400:key:tab;5700:dump.oncopy;",
+        dest2 = dest2.display()
+    );
+    let clash_report = "6200:dump.q;6400:key:tab;6700:dump.qtab;\
+         6900:key:b;7000:wait:copy finished run 1;7400:dump.report;\
+         7600:key:tab;7900:dump.r1;8100:key:tab;8400:dump.r2;\
+         8600:key:shift+tab;8900:dump.r3;9100:key:tab;9400:dump.r4;";
+
+    // --- 3a. launch 3, dry (QE round 3, D1) -------------------------------
+    // A click on Copy where launch 3 presses Enter on it, and Esc where it
+    // presses its closing Space: every landing launch 3's two presses follow
+    // is asserted here first, and launch 3 runs only if this one passed.
+    seed_clash_dest();
+    let dry = run(
+        "tabring-copy-mixed.jpg",
+        &format!(
+            "{clash_walk}5900:click:copy copy-close;{clash_report}9600:key:escape;9900:dump.end"
+        ),
+    );
+    held(
+        &dry,
+        &[
+            "plan2", "c1", "cq", "cback", "c2", "c3", "oncopy", "q", "qtab", "report", "r1", "r2",
+            "r3", "r4",
+        ],
+    );
+    let dplan = qedump(&dry, "plan2");
+    assert_eq!(dump_field(dplan, "copystate"), "0", "{dplan}");
+    assert!(
+        dump_text(dplan, "copynote").contains("already exist here — Copy will ask"),
+        "the premise is a live Copy that will ask: {dplan}"
+    );
+    assert_eq!(
+        (
+            dump_field(qedump(&dry, "cq"), "copystate"),
+            dump_field(qedump(&dry, "cback"), "copystate")
+        ),
+        ("3", "0"),
+        "the click on Copy did not ask the clash question, or Esc did not \
+         take it back to the plan:\n{dry}"
+    );
+    // The first click let go of Choose… while Choose… was still enabled
+    // (launch 3 below says why that matters).
+    let dlabels = mark_labels(&dry);
+    let dclicks = label_positions(&dlabels, "drive: click:copy copy-close");
+    let dcq = label_positions(&dlabels, "drive: dump.cq");
+    let dq = label_positions(&dlabels, "drive: dump.q");
+    assert!(
+        dclicks.len() == 2
+            && dcq.len() == 1
+            && dq.len() == 1
+            && dclicks[0] < dcq[0]
+            && dcq[0] < dclicks[1]
+            && dclicks[1] < dq[0],
+        "the two click strands are not in the trace as written:\n{dry}"
+    );
+    for mark in ["focus: copy choose lost", "focus: copy dialog gained"] {
+        assert!(
+            marks_between(&dlabels, dclicks[0], dcq[0], mark) > 0,
+            "after the click on Copy no `{mark}`: the keyboard did not leave \
+             Choose… before the run disabled it (ui-grid.md, \"Modal keyboard \
+             containment\"; review F1). When this fails this way it is that \
+             defect; do not quiet it:\n{dry}"
+        );
+    }
+    landings(
+        &dry,
+        &[
+            ("c1", "tab", "copy choose"),
+            // From the home the clash question's Esc leaves: the walk
+            // launch 3's Enter follows.
+            ("c2", "tab", "copy choose"),
+            ("c3", "tab", "copy template"),
+            ("oncopy", "tab", "copy copy-close"),
+            // From the home the run's finish leaves: the walk launch 3's
+            // closing Space follows.
+            ("r1", "tab", "copy open-dest"),
+            ("r2", "tab", "copy copy-close"),
+            ("r3", "shift+tab", "copy open-dest"),
+            ("r4", "tab", "copy copy-close"),
+        ],
+    );
+    // The second click, on the Copy the keyboard is on, asks the question
+    // with the keyboard home — what launch 3's Enter on it does: both reach
+    // Copy's `clicked`, which sends the keyboard home first (review F1).
+    let mut dgained: Vec<&str> = dlabels[dclicks[1] + 1..dq[0]]
+        .iter()
+        .copied()
+        .filter(|l| l.starts_with("focus: ") && l.ends_with(" gained"))
+        .collect();
+    dgained.dedup();
+    assert_eq!(
+        (dump_field(qedump(&dry, "q"), "copystate"), dgained),
+        ("3", vec!["focus: copy dialog gained"]),
+        "the click on the focused Copy did not ask the clash question with \
+         the keyboard home:\n{dry}"
+    );
+    let dqtab = qedump(&dry, "qtab");
+    assert_eq!(
+        (dump_field(dqtab, "copystate"), dump_field(dqtab, "nudged")),
+        ("3", "true"),
+        "Tab on the clash question must be swallowed with the nudge, like \
+         every key that is not an answer (fileops.md): {dqtab}"
+    );
+    assert_eq!(
+        landing(&dlabels, "qtab").1,
+        Vec::<&str>::new(),
+        "Tab on the clash question moved the keyboard:\n{dry}"
+    );
+    assert!(
+        dry.contains("wait:copy finished run 1 (satisfied"),
+        "the `B` answered nothing — the report dump was timed, not gated:\n{dry}"
+    );
+    let dreport = qedump(&dry, "report");
+    assert!(
+        dump_field(dreport, "copystate") == "2"
+            && dump_text(dreport, "report").contains("1 landed under new names (a_1.ARW"),
+        "the `B` after the click on Copy did not keep both: {dreport}"
+    );
+    let dend = qedump(&dry, "end");
+    assert_eq!(
+        (dump_field(dend, "copy"), dump_field(dend, "focusowner")),
+        ("false", "0"),
+        "Esc with the keyboard on Close did not close the report and hand \
+         the keyboard back: {dend}"
+    );
+
+    // --- 3. the mixed path, the clash question and the report -------------
+    seed_clash_dest();
+    let clash = run(
+        "tabring-copy-clash.jpg",
+        &format!("{clash_walk}5900:key:return;{clash_report}9600:key:space;9900:dump.end"),
+    );
+    held(
+        &clash,
+        &[
+            "plan2", "c1", "cq", "cback", "c2", "c3", "oncopy", "q", "qtab", "report", "r1", "r2",
+            "r3", "r4",
+        ],
+    );
+    let plan2 = qedump(&clash, "plan2");
+    assert_eq!(dump_field(plan2, "copystate"), "0", "{plan2}");
+    assert!(
+        dump_text(plan2, "copynote").contains("already exist here — Copy will ask"),
+        "the premise is a live Copy that will ask: {plan2}"
+    );
+    // The mixed path (review F1): the keyboard on Choose… by Tab, then a
+    // mouse click on Copy. The click asked the question and Esc went back
+    // to the plan — the premise of the two assertions after it.
+    assert_eq!(
+        (
+            dump_field(qedump(&clash, "cq"), "copystate"),
+            dump_field(qedump(&clash, "cback"), "copystate")
+        ),
+        ("3", "0"),
+        "the click on Copy did not ask the clash question, or Esc did not \
+         take it back to the plan:\n{clash}"
+    );
+    // The click let go of Choose… while Choose… was still enabled. The run
+    // it starts disables Choose…, and a disabled control ignores the
+    // FocusOut (Cargo.toml, the fourth canary's fact 11), so a keyboard
+    // moved home only by the state change leaves Choose… holding a stale
+    // `has-focus` — its focus border on, the keyboard elsewhere.
+    let labels = mark_labels(&clash);
+    let click = label_positions(&labels, "drive: click:copy copy-close");
+    let cq = label_positions(&labels, "drive: dump.cq");
+    assert!(
+        click.len() == 1 && cq.len() == 1 && click[0] < cq[0],
+        "the click strand is not in the trace as written:\n{clash}"
+    );
+    for mark in ["focus: copy choose lost", "focus: copy dialog gained"] {
+        assert!(
+            marks_between(&labels, click[0], cq[0], mark) > 0,
+            "after the click on Copy no `{mark}`: the keyboard did not leave \
+             Choose… before the run disabled it (ui-grid.md, \"Modal keyboard \
+             containment\"; review F1). When this fails this way it is that \
+             defect; do not quiet it:\n{clash}"
+        );
+    }
+    // The premise of each press that activates a button, read at the press
+    // itself (review F3): the Return was dispatched with the keyboard on
+    // Copy, and the closing Space with it on Close. A wrong landing between
+    // the dump before a press and the press is caught here, after the run
+    // — not before it: see the doc above on what no assertion can do.
+    for (echo, on) in [
+        ("drive: key:return", "focus: copy copy-close gained"),
+        ("drive: key:space", "focus: copy copy-close gained"),
+    ] {
+        assert_eq!(
+            last_gained_before(&labels, echo),
+            on,
+            "`{echo}` was not dispatched with the keyboard where the script \
+             put it — the outcome read after it is not that press's:\n{clash}"
+        );
+    }
+    landings(
+        &clash,
+        &[
+            ("c1", "tab", "copy choose"),
+            // After Esc, Choose… is focused again WITH its own `gained`: a
+            // stale `has-focus` would make this Tab silent.
+            ("c2", "tab", "copy choose"),
+            ("c3", "tab", "copy template"),
+            ("oncopy", "tab", "copy copy-close"),
+            ("q", "return", "copy dialog"),
+            ("r1", "tab", "copy open-dest"),
+            ("r2", "tab", "copy copy-close"),
+            ("r3", "shift+tab", "copy open-dest"),
+            ("r4", "tab", "copy copy-close"),
+        ],
+    );
+    assert_eq!(
+        dump_field(qedump(&clash, "q"), "copystate"),
+        "3",
+        "Enter on the focused Copy did not ask the clash question:\n{clash}"
+    );
+    let qtab = qedump(&clash, "qtab");
+    assert_eq!(
+        (dump_field(qtab, "copystate"), dump_field(qtab, "nudged")),
+        ("3", "true"),
+        "Tab on the clash question must be swallowed with the nudge, like \
+         every key that is not an answer (fileops.md): {qtab}"
+    );
+    assert_eq!(
+        landing(&mark_labels(&clash), "qtab").1,
+        Vec::<&str>::new(),
+        "Tab on the clash question moved the keyboard:\n{clash}"
+    );
+    assert!(
+        clash.contains("wait:copy finished run 1 (satisfied"),
+        "the `B` answered nothing — the report dump was timed, not gated:\n{clash}"
+    );
+    let report = qedump(&clash, "report");
+    assert_eq!(dump_field(report, "copystate"), "2", "{report}");
+    assert!(
+        dump_text(report, "report").contains("1 landed under new names (a_1.ARW"),
+        "the `B` after Enter on the focused Copy did not keep both: {report}"
+    );
+    let end = qedump(&clash, "end");
+    assert_eq!(
+        (dump_field(end, "copy"), dump_field(end, "focusowner")),
+        ("false", "0"),
+        "Space on the focused Close did not close the dialog and hand the \
+         keyboard back: {end}"
+    );
+
+    // --- 4. the running ring and the finish (QE's P3) ---------------------
+    let running = run_held(
+        "tabring-copy-run.jpg",
+        &format!(
+            "1500:wait:load settled gen 0;1700:key:y;1900:key:y;2100:copydest:{dest3};\
+             2300:key:ctrl+e;2700:dump.plan4;\
+             2900:key:return;3100:key:tab;3400:dump.run;3600:key:y;3900:dump.inrun;\
+             4100:wait:copy finished run 1;4400:dump.fin;\
+             4600:key:tab;4900:dump.f1;5100:key:escape;5400:dump.closed4",
+            dest3 = dest3.display()
+        ),
+    );
+    held(&running, &["plan4", "run", "inrun", "fin", "f1"]);
+    assert!(
+        running.contains("fastcull: FASTCULL_COPY_HOLD_MS=3000 — every copy is held"),
+        "the copy worker's hold was not read, so this launch's run is not the \
+         held one it is about:\n{running}"
+    );
+    let plan4 = qedump(&running, "plan4");
+    assert!(
+        dump_field(plan4, "copystate") == "0"
+            && dump_text(plan4, "summary").contains(" to copy · ")
+            && dump_text(plan4, "copyerror").is_empty(),
+        "the premise is a clean plan, where Return from home copies: {plan4}"
+    );
+    // The launch's premise (QE's P3): the copy is still running — held
+    // before its first file — when the Tab lands, and the Tab lands on its
+    // Cancel. A run that outran the Tab fails HERE, loudly.
+    let run4 = qedump(&running, "run");
+    assert_eq!(
+        (
+            dump_field(run4, "copystate"),
+            dump_text(run4, "copyprogress")
+        ),
+        ("1", "Starting…"),
+        "the copy was not running, held before its first file, when the Tab \
+         landed: {run4}"
+    );
+    landings(&running, &[("run", "tab", "copy cancel")]);
+    // A Y with the keyboard on the running Cancel marks nothing, and the
+    // dump after it still reads the running state: a Y that arrived after
+    // the finish would be swallowed at home and pass for the wrong reason.
+    let inrun = qedump(&running, "inrun");
+    assert_eq!(
+        (
+            dump_field(inrun, "copystate"),
+            dump_text(inrun, "status"),
+            dump_field(inrun, "cursor")
+        ),
+        ("1", dump_text(plan4, "status"), dump_field(plan4, "cursor")),
+        "the Y on the running Cancel reached the grid, or the run had ended \
+         before it:\n{running}"
+    );
+    assert_eq!(
+        landing(&mark_labels(&running), "inrun"),
+        ("drive: key:y", Vec::new()),
+        "the Y moved the keyboard:\n{running}"
+    );
+    assert!(
+        running.contains("wait:copy finished run 1 (satisfied"),
+        "the copy never finished — the report dump was timed, not gated:\n{running}"
+    );
+    let fin = qedump(&running, "fin");
+    assert!(
+        dump_field(fin, "copystate") == "2" && dump_text(fin, "report").contains("2 copied"),
+        "the held copy did not finish with both picks copied: {fin}"
+    );
+    assert_the_finish_brings_the_keyboard_home(&running, "copy finished run 1", "copy");
+    landings(&running, &[("f1", "tab", "copy open-dest")]);
+    let closed4 = qedump(&running, "closed4");
+    assert_eq!(
+        (
+            dump_field(closed4, "copy"),
+            dump_field(closed4, "focusowner")
+        ),
+        ("false", "0"),
+        "Esc with the keyboard on Open destination did not close the report: {closed4}"
+    );
+
+    // --- 5. Space on the running Cancel (QE's P3) --------------------------
+    // Cancel is reached by launch 4's own path, Return from home then Tab,
+    // which launch 4 has asserted: the Space can only press Cancel.
+    let cancelling = run_held(
+        "tabring-copy-cancel.jpg",
+        &format!(
+            "1500:wait:load settled gen 0;1700:key:y;1900:key:y;2100:copydest:{dest4};\
+             2300:key:ctrl+e;2700:dump.plan5;\
+             2900:key:return;3100:key:tab;3400:dump.runb;3600:key:space;\
+             3700:wait:copy finished run 1;4000:dump.cancelled;\
+             4200:key:tab;4500:dump.cb1;4700:key:escape;5000:dump.closed5",
+            dest4 = dest4.display()
+        ),
+    );
+    held(&cancelling, &["plan5", "runb", "cancelled", "cb1"]);
+    let runb = qedump(&cancelling, "runb");
+    assert_eq!(
+        (
+            dump_field(runb, "copystate"),
+            dump_text(runb, "copyprogress")
+        ),
+        ("1", "Starting…"),
+        "the copy was not running, held before its first file, when the Tab \
+         landed: {runb}"
+    );
+    landings(&cancelling, &[("runb", "tab", "copy cancel")]);
+    assert_eq!(
+        last_gained_before(&mark_labels(&cancelling), "drive: key:space"),
+        "focus: copy cancel gained",
+        "the Space was not dispatched with the keyboard on the running Cancel \
+         — the outcome read after it is not that press's:\n{cancelling}"
+    );
+    assert!(
+        cancelling.contains("wait:copy finished run 1 (satisfied"),
+        "the cancelled copy never put its report up — the dump was timed, \
+         not gated:\n{cancelling}"
+    );
+    let cancelled = qedump(&cancelling, "cancelled");
+    assert!(
+        dump_field(cancelled, "copystate") == "2"
+            && dump_text(cancelled, "report").contains("cancelled — finished files remain"),
+        "Space on the running Cancel did not cancel the copy: {cancelled}"
+    );
+    assert_the_finish_brings_the_keyboard_home(&cancelling, "copy finished run 1", "copy");
+    landings(&cancelling, &[("cb1", "tab", "copy open-dest")]);
+    let closed5 = qedump(&cancelling, "closed5");
+    assert_eq!(
+        (
+            dump_field(closed5, "copy"),
+            dump_field(closed5, "focusowner")
+        ),
+        ("false", "0"),
+        "Esc with the keyboard on Open destination did not close the report: {closed5}"
+    );
+    assert_eq!(
+        std::fs::read_dir(&dest4).map(|d| d.count()).unwrap_or(0),
+        0,
+        "a copy cancelled during its hold left files at the destination"
+    );
+    for d in [&src, &dest, &dest2, &dest3, &dest4] {
+        std::fs::remove_dir_all(d).ok();
+    }
+}
+
 /// `{camera}` used to expand to nothing in the app: both template engines
 /// were handed `camera: None`, so a rename template of `{camera}.{ext}`
 /// wrote `.ARW` — a hidden file with no name of its own — and an IPTC
@@ -8223,9 +9310,13 @@ fn the_video_export_asks_before_replacing_a_file() {
     // writes ONE file, and for one file "skip" IS Cancel (Manager D9), so
     // `n` must stay a swallowed key. The NUDGE half of that sentence —
     // that the swallow raises the "Pick one" line — stays review-verified:
-    // there is no `clipnudged=` dump field, and adding one for a line
-    // this unit does not touch is not worth the facility (QE 2026-09-12,
-    // senior-developer integrity review, proposal 4).
+    // this script's Enter on the question has already raised the nudge
+    // when the `n` arrives (`clipnudged=true` from dump.inert on), so the
+    // `n`'s own nudge cannot be told apart here (corrected 2026-10-04, QE
+    // round 3 D3: this said there is no `clipnudged=` dump field and that
+    // adding one was not worth the facility — the field exists since brief
+    // 011, QE round 2 D3; QE 2026-09-12, senior-developer integrity review,
+    // proposal 4).
     let inert_n = qedump(&stderr, "inert_n");
     assert_eq!(
         dump_field(inert_n, "clipstate"),
@@ -8326,6 +9417,860 @@ fn the_video_export_asks_before_replacing_a_file() {
         b"ftyp",
         "the replacement is not a QuickTime file"
     );
+}
+
+/// AC2 of brief 011 (issue #98; ui-grid.md "Modal keyboard containment",
+/// video-export.md "The keyboard ring"): the Copy Picks ring's rule in the
+/// Export Frames as Video dialog — Choose…, Cancel and Export in the plan
+/// state, Open folder and Close on the report, wrapping — with
+/// `focusowner` at the dialog's `-1` after every press and each landing
+/// read from the control's own `focus: clip <name> gained` mark
+/// (test-harness.md).
+///
+/// Three synthetic 400×300 frames, all selected, the cursor on `a`, so a
+/// key that reached the grid behind the scrim would show: a `Y` would pick
+/// `a`, move the cursor and collapse the selection the dialog is about to
+/// export. The destination holds another day's `a-c.mov`. Six launches, in
+/// this order:
+///   1. The plan state. Ctrl+Tab and Ctrl+Shift+Tab first: neither moves
+///      the keyboard (QE's P2; the copy test says why the ring's guard is
+///      the one thing this pins). About next, over the dialog: a Tab under
+///      it moves nothing and the first Esc closes About alone. Then four
+///      Tabs — Choose…, Cancel, Export, and the wrap to Choose…; a `Y` with
+///      the keyboard on Choose… marks nothing and keeps the selection; two
+///      Shift+Tabs — Export (the wrap back), Cancel; Esc with the keyboard
+///      on Cancel closes the dialog.
+///
+///      2a. Launch 2, dry, up to its Enter (QE round 3, D1; QE's P1):
+///      launch 2's script, the same string, up to its Enter on Export, and
+///      Esc in the Enter's place. It runs before launch 2 and asserts every
+///      landing that Enter follows — among them the three Tabs from the home
+///      the clash question's Esc leaves. The question is cancelled
+///      unanswered, so the destination is left as it was, which the launch
+///      asserts.
+///   2. Two Tabs from the dialog's home reach Cancel, and Space there
+///      closes the dialog. Reopened, the mixed path (the senior developer's
+///      review F1, the copy test's strand): Tab puts the keyboard on
+///      Choose…, a mouse click on Export — by name, `click:clip
+///      export-close` — asks the clash question while the keyboard leaves
+///      Choose… still enabled (`focus: clip choose lost`, `focus: clip
+///      dialog gained`), Esc goes back to the plan and the next Tab lands
+///      on Choose… with its own `gained`; two more Tabs reach Cancel and
+///      Export, and Enter there asks the question with the keyboard home
+///      (`focus: clip dialog gained`); Tab on the question moves nothing
+///      and raises the nudge (`clipnudged=true`, QE round 2 D3); `B`
+///      exports; on the report the first Shift+Tab from
+///      home lands on Close, the LAST control, and Tab, Tab, Shift+Tab walk
+///      Open folder, Close, Open folder — past the disabled Choose… and the
+///      absent Cancel — and Esc with the keyboard on Open folder closes.
+///   3. Export greyed (QE's P1, 2026-10-04): the destination is a FILE, so
+///      the plan refuses it — `cliperror` names the refusal, which is what
+///      tells a greyed Export from a selection the plan could not use — and
+///      Export is greyed. Tab, Tab, Tab land on Choose…, Cancel and Choose…
+///      again: the wrap passes over the greyed Export (video-export.md,
+///      "Export skipped while it is greyed"); a `Y` with the keyboard on
+///      Choose… marks nothing and keeps the selection; Shift+Tab, Shift+Tab
+///      land on Cancel and Choose…; Esc closes. No Enter or Space anywhere
+///      in this launch: Choose… opens the native folder picker.
+///   4. The running state (QE's P3, the copy test's launch 4): an empty
+///      destination, the writer held 3 s before its first frame
+///      (`FASTCULL_CLIP_HOLD_MS`, test-harness.md). Enter from home starts
+///      it; Tab lands on Cancel, the one control while it runs, with the
+///      dump reading the running state and its `Starting…` line; a `Y`
+///      there marks nothing and keeps the selection, the run still running
+///      at the dump after it; the finish brings the keyboard home — `focus:
+///      clip dialog gained` and `focus: clip cancel lost` after `clip
+///      export finished run 1`, before the next step — and the next Tab
+///      walks the report from Open folder; Esc closes, the selection kept.
+///   5. The same start, then Space on the running Cancel: the export ends
+///      before its first frame, the report says "Cancelled — nothing was
+///      written", the keyboard comes home the same way, the next Tab lands
+///      on Open folder, Esc closes, and the destination stays empty — not
+///      even the hidden temp file.
+///
+/// Launches 1 and 2 split what the plan had as one launch, so that no
+/// Space or Enter is pressed before the plan-state ring has been asserted:
+/// in a single launch a ring without its wrap would put the Space meant for
+/// Cancel on Choose… (the native folder picker), and a ring missing Cancel
+/// would put the Enter meant for Export there. What keeps every Enter and
+/// every Space off Choose… and Open folder (xdg-open), whatever a
+/// regression does to the ring, is the copy test's rule: each follows a
+/// walk that an EARLIER launch drove — the same keys, from the same home,
+/// in the same dialog state — and asserted landing by landing, an earlier
+/// launch being the only place a landing can be asserted before a press.
+/// The presses, and the walks they follow:
+///   - launch 2a's and launch 2's Space on Cancel: Tab, Tab from the
+///     dialog's home as it opens — the two landings launch 1 asserted from
+///     that home in the same plan state, where launch 1 makes them after a
+///     Ctrl+Tab, a Ctrl+Shift+Tab, a Tab under About and (between them) a
+///     `Y`, each asserted to move nothing;
+///   - launch 2's Enter on Export: the Space on Cancel, the reopen, the
+///     mixed path and three Tabs from the home the clash question's Esc
+///     leaves — launch 2a's script, up to it; the report after it takes
+///     Esc, never Enter or Space on Open folder;
+///   - launch 4's Enter: from the dialog's home as it opens, after no
+///     landing at all;
+///   - launch 5's Space on the running Cancel: launch 4's script, up to it
+///     — Enter from home, one Tab.
+///
+/// (Corrected 2026-10-04, QE round 3 D1: this said launch 2 reached Export
+/// only by Tabs launch 1 had asserted, which no ring that passed launch 1
+/// could turn onto Choose…, and recorded a regression showing only after
+/// the reopen or the mixed path's Esc as a run-time residual; under a
+/// one-token regression of the state change's home, `self.slot = 0` for
+/// `-1` in the scope's `changed state` (QE's A5), launch 1 stayed green and
+/// the Enter landed on Choose….)
+///
+/// Each press that activates a button also has its premise read at the
+/// press itself (review F3, the copy test's [`last_gained_before`]): the
+/// keyboard on Cancel when launch 2's Space goes (and launch 2a's), on
+/// Export when its Return goes, and on the running Cancel when launch 5's
+/// Space goes. These read the trace after the run, so they name a wrong
+/// press after it happened; the earlier launches are what stop one from
+/// happening.
+///
+/// RED on b6c238f, the head before the fix (brief 011 D3 measured the same
+/// on f1520b9): launch 1's fourth Tab puts the keyboard on the grid's scope
+/// behind the scrim — `focus: keys gained`, dump.t4 `focusowner=0` — where
+/// D3 saw a `Y` mark the frame and collapse the selection. The same build
+/// driven through launch 2 as it stood before review F1: the window's own
+/// Tab walk reaches the live Export (`onexport` reads -1), Enter there asks
+/// the question and leaves the keyboard on the destroyed button, the Tab
+/// after it lands on `keys` (`qtab` reads 0) and the `B` never answers.
+/// When this fails that way it is that defect; do not quiet it.
+///
+/// RED on 6eed28b, the build with the Export button's layout mark and
+/// without review F1's fix: after the click on Export no `clip choose
+/// lost`, and after Esc the Tab onto Choose… is silent (`focus: clip dialog
+/// lost` alone, dump.c2's landing empty). When this fails that way it is
+/// that defect; do not quiet it.
+///
+/// Mutants (2026-10-04), each alone: the scope's Tab arm removed → red at
+/// dump.t4, `focusowner=0`; Cancel left out of `slot-ok` → red at dump.t2,
+/// the Tab lands on Export; the wrap removed (`clamp` for `Math.mod` in
+/// `walk`) → red at dump.t4, no landing; `clip-keys.focus()` removed from
+/// the Export button's `clicked` (review F1) → red after launch 2a's click,
+/// no `clip choose lost`; the `changed state` refocus removed (QE's mutant
+/// E4) → red on 841bb1d through Enter-on-Export (no focus at all after the
+/// Return, the Tab on the question on `keys`, `qtab` 0, the run dead at
+/// `wait:clip export finished run 1`); since F1, which sends the keyboard
+/// home from Export's own `clicked`, it guards the writer-finish path — a
+/// run ending under a focused Cancel — which launch 4 drives with the held
+/// writer: red at launch 4's dump.f1, `focusowner=0`, the Tab after the
+/// finish on `keys` behind the scrim, and neither `clip dialog gained` nor
+/// `clip cancel lost` after `clip export finished run 1` (corrected
+/// 2026-10-04, QE D5: this said no fixture holds an export long enough to
+/// Tab onto Cancel and called that path review-verified — a held writer
+/// does); the running Cancel left out of `slot-ok` (`if (s == 2) { return
+/// root.clip-state == 0; }`, QE's mutant E8) → red at launch 4's dump.run,
+/// the Tab landing nowhere, and launch 5's script driven alone against that
+/// build has its Space land on the dialog's home, where it is ignored, and
+/// the export runs to its verified file; the home start removed (`slot +
+/// dir` from -1) → red at dump.rhome, the first Shift+Tab on the report
+/// landing on Open folder instead of Close; the ring's arm moved ahead of
+/// the dialog's About containment → the Tab under About lands on Choose…,
+/// red at dump.abtab; `slot-ok` approving the greyed Export (QE's mutant E9,
+/// `if (s == 3) { return root.clip-state == 0 || root.clip-state == 2; }`)
+/// → the ring's `focus()` on the disabled Export walks on in tree order to
+/// the grid behind the scrim (the fourth canary's fact 10), red at launch
+/// 3's dump.g3, `focusowner=0`, the third Tab's landing `focus: keys
+/// gained` — issue #98 back in this dialog, with launches 1 and 2 green;
+/// the ring's arm without its `!event.modifiers.control` (QE's mutant X6)
+/// → Ctrl+Tab walks the ring, red at dump.ct, its landing `focus: clip
+/// choose gained` (the Ctrl+Shift+Tab after it then lands on Export); the
+/// ring's arm moved ahead of the clash question's branch (QE's mutant E11)
+/// → Tab there is eaten without the nudge, red at dump.qtab, `clipnudged`
+/// false (QE round 2 D3: green until the dump carried the field); every
+/// state change leaving the ring at Choose… instead of home (`self.slot =
+/// 0` for `-1` in the scope's `changed state`, QE's mutant A5) → after the
+/// clash question's Esc the first Tab lands on Cancel, red at launch 2a's
+/// dump.c2, `left: ["focus: clip cancel gained"] right: ["focus: clip
+/// choose gained"]`, before any Enter reaches that walk (QE round 3 D1:
+/// before launch 2a, launch 1 stayed green and launch 2's Enter landed on
+/// Choose…).
+#[test]
+fn export_tab_walks_its_own_controls_and_never_leaves_the_dialog() {
+    if !has_display() {
+        eprintln!("screenshot smoke skipped: no display server");
+        return;
+    }
+    let _s = serial();
+    let src = out_dir().join("tabring-clip-src");
+    let dest = out_dir().join("tabring-clip-dest");
+    // Launch 3's destination: a FILE, which the plan refuses.
+    let dest_file = out_dir().join("tabring-clip-dest-file");
+    // Launches 4 and 5 export for real, each into its own empty folder.
+    let dest3 = out_dir().join("tabring-clip-dest3");
+    let dest4 = out_dir().join("tabring-clip-dest4");
+    for d in [&src, &dest, &dest3, &dest4] {
+        std::fs::remove_dir_all(d).ok();
+        std::fs::create_dir_all(d).unwrap();
+    }
+    write_synthetic_raw(&src.join("a.ARW"), 400, 300, 1, 4096);
+    write_synthetic_raw(&src.join("b.ARW"), 400, 300, 1, 5000);
+    write_synthetic_raw(&src.join("c.ARW"), 400, 300, 1, 4500);
+    std::fs::write(dest.join("a-c.mov"), b"another day's export").unwrap();
+    std::fs::write(&dest_file, b"a file where the folder should be").unwrap();
+    let opened = format!(
+        "1400:wait:load settled gen 0;1500:select-all;1700:clipdest:{dest};1900:key:ctrl+shift+e;",
+        dest = dest.display()
+    );
+    let run = |shot: &str, script: &str| -> String {
+        let script = format!("{opened}{script}");
+        shoot_env_stderr(
+            &[src.to_str().unwrap()],
+            &[("FASTCULL_TRACE", "1"), ("FASTCULL_DRIVE", script.as_str())],
+            &out_dir().join(shot),
+        )
+    };
+    // Launches 4 and 5: the writer held 3 s before its first frame
+    // (test-harness.md, `FASTCULL_CLIP_HOLD_MS`) — the copy test's hold, for
+    // the same reason and with the same rule: a premise that reads red on a
+    // slow runner is answered with a longer hold, never a later key. Their
+    // own scripts in full: the shared prefix carries the clashing folder.
+    let run_held = |shot: &str, script: &str| -> String {
+        shoot_env_stderr(
+            &[src.to_str().unwrap()],
+            &[
+                ("FASTCULL_TRACE", "1"),
+                ("FASTCULL_CLIP_HOLD_MS", "3000"),
+                ("FASTCULL_DRIVE", script),
+            ],
+            &out_dir().join(shot),
+        )
+    };
+    // Every press's landing: its key, and the one control it reached.
+    let landings = |stderr: &str, rows: &[(&str, &str, &str)]| {
+        let labels = mark_labels(stderr);
+        for (dump, key, mark) in rows {
+            let (step, gained) = landing(&labels, dump);
+            assert_eq!(
+                step,
+                format!("drive: key:{key}"),
+                "the script's step before dump.{dump} is not the key this row \
+                 is about:\n{stderr}"
+            );
+            assert_eq!(
+                gained,
+                vec![format!("focus: {mark} gained")],
+                "the {key} before dump.{dump} did not land on {mark} alone \
+                 (video-export.md, \"The keyboard ring\"):\n{stderr}"
+            );
+        }
+    };
+    // The token after every press — the old-red, asserted first.
+    let held = |stderr: &str, dumps: &[&str]| {
+        for dump in dumps {
+            let line = qedump(stderr, dump);
+            assert_eq!(
+                dump_field(line, "focusowner"),
+                "-1",
+                "at dump.{dump} the keyboard has left the Export dialog \
+                 (focusowner is not the dialog's -1): a Tab or Shift+Tab \
+                 carried it behind the scrim — issue #98. When this fails \
+                 this way it is that defect; do not quiet it:\n{stderr}"
+            );
+            assert_eq!(dump_field(line, "clip"), "true", "{line}");
+        }
+    };
+
+    // --- 1. the plan state's ring, a Y, and Esc ----------------------------
+    let ring = run(
+        "tabring-clip-ring.jpg",
+        "2300:dump.plan;2400:key:ctrl+tab;2700:dump.ct;2900:key:ctrl+shift+tab;3200:dump.cst;\
+         3300:about;3600:dump.ab;3800:key:tab;4100:dump.abtab;\
+         4300:key:escape;4600:dump.abclosed;\
+         4800:key:tab;5100:dump.t1;5300:key:y;5600:dump.y1;\
+         5800:key:tab;6100:dump.t2;6300:key:tab;6600:dump.t3;6800:key:tab;7100:dump.t4;\
+         7300:key:shift+tab;7600:dump.s1;7800:key:shift+tab;8100:dump.s2;\
+         8300:key:escape;8600:dump.closed",
+    );
+    held(
+        &ring,
+        &[
+            "plan", "ct", "cst", "ab", "abtab", "abclosed", "t1", "y1", "t2", "t3", "t4", "s1",
+            "s2",
+        ],
+    );
+    assert!(
+        ring.contains("wait:load settled gen 0 (satisfied"),
+        "the selection was made before the folder settled:\n{ring}"
+    );
+    let plan = qedump(&ring, "plan");
+    assert_eq!(
+        (dump_field(plan, "clipstate"), dump_field(plan, "selected")),
+        ("0", "3"),
+        "{plan}"
+    );
+    assert!(
+        dump_text(plan, "clipsummary").starts_with("3 frames · 400×300 ·")
+            && dump_text(plan, "cliperror").is_empty(),
+        "the premise is a clean plan, where Export is live: {plan}"
+    );
+    assert!(
+        dump_text(plan, "status").contains("★0 ✕0"),
+        "the premise is a session with no marks: {plan}"
+    );
+    // Ctrl+Tab and Ctrl+Shift+Tab move nothing (QE's P2; the copy test's
+    // strand, for this scope).
+    let labels = mark_labels(&ring);
+    for (dump, chord) in [("ct", "ctrl+tab"), ("cst", "ctrl+shift+tab")] {
+        let echo = format!("drive: key:{chord}");
+        assert_eq!(
+            landing(&labels, dump),
+            (echo.as_str(), Vec::new()),
+            "{chord} moved the keyboard in the Export dialog — ui-grid.md: \
+             \"`Ctrl+Tab` does nothing unless a dialog's module says \
+             otherwise\":\n{ring}"
+        );
+    }
+    // About over the dialog takes Tab like every other key, and the first
+    // Esc closes About alone (the copy test's strand, for this scope).
+    assert_eq!(dump_field(qedump(&ring, "ab"), "about"), "true", "{ring}");
+    assert_eq!(
+        landing(&mark_labels(&ring), "abtab").1,
+        Vec::<&str>::new(),
+        "Tab under About moved the keyboard behind the popup — the ring ran \
+         before the dialog's containment arm:\n{ring}"
+    );
+    let abclosed = qedump(&ring, "abclosed");
+    assert_eq!(
+        (
+            dump_field(abclosed, "about"),
+            dump_field(abclosed, "clipstate")
+        ),
+        ("false", "0"),
+        "the first Esc did not close About alone: {abclosed}"
+    );
+    landings(
+        &ring,
+        &[
+            ("t1", "tab", "clip choose"),
+            ("t2", "tab", "clip cancel"),
+            ("t3", "tab", "clip export-close"),
+            ("t4", "tab", "clip choose"),
+            ("s1", "shift+tab", "clip export-close"),
+            ("s2", "shift+tab", "clip cancel"),
+        ],
+    );
+    // A Y with the keyboard on Choose… marks nothing, moves nothing and
+    // keeps the selection (video-export.md: the dialog never marks, never
+    // moves the cursor, never touches the selection).
+    let y1 = qedump(&ring, "y1");
+    assert_eq!(
+        (
+            dump_text(y1, "status"),
+            dump_field(y1, "cursor"),
+            dump_field(y1, "selected")
+        ),
+        (
+            dump_text(plan, "status"),
+            dump_field(plan, "cursor"),
+            dump_field(plan, "selected")
+        ),
+        "the Y on the focused Choose… reached the grid behind the dialog:\n{ring}"
+    );
+    assert_eq!(
+        landing(&mark_labels(&ring), "y1").1,
+        Vec::<&str>::new(),
+        "the Y moved the keyboard:\n{ring}"
+    );
+    let closed = qedump(&ring, "closed");
+    assert_eq!(
+        (
+            dump_field(closed, "clip"),
+            dump_field(closed, "focusowner"),
+            dump_field(closed, "selected")
+        ),
+        ("false", "0", "3"),
+        "Esc with the keyboard on Cancel did not close the dialog, hand the \
+         keyboard back and keep the selection: {closed}"
+    );
+
+    // Launch 2's walk up to its Enter on Export — Space on Cancel, the
+    // reopen, the mixed path, and three Tabs from the home the clash
+    // question's Esc leaves — which launch 2a plays first (QE round 3, D1).
+    let flow_walk = "2300:dump.open;2500:key:tab;2700:key:tab;3000:dump.oncancel;\
+         3200:key:space;3500:dump.cancelled;\
+         3800:key:ctrl+shift+e;4100:key:tab;4400:dump.c1;\
+         4600:click:clip export-close;4900:dump.cq;5100:key:escape;5400:dump.cback;\
+         5600:key:tab;5900:dump.c2;6100:key:tab;6400:dump.c3;6600:key:tab;6900:dump.onexport;";
+
+    // --- 2a. launch 2, dry, up to its Enter (QE round 3, D1) --------------
+    // Esc where launch 2 presses Enter on Export: every landing that Enter
+    // follows is asserted here first, and launch 2 runs only if this one
+    // passed. The question is cancelled unanswered, so nothing is written
+    // and launch 2 finds the destination as this launch did.
+    let mixed = run(
+        "tabring-clip-mixed.jpg",
+        &format!("{flow_walk}7100:key:escape;7400:dump.closed"),
+    );
+    held(
+        &mixed,
+        &[
+            "open", "oncancel", "c1", "cq", "cback", "c2", "c3", "onexport",
+        ],
+    );
+    let mlabels = mark_labels(&mixed);
+    assert_eq!(
+        last_gained_before(&mlabels, "drive: key:space"),
+        "focus: clip cancel gained",
+        "`drive: key:space` was not dispatched with the keyboard on Cancel — \
+         the outcome read after it is not that press's:\n{mixed}"
+    );
+    let mcancelled = qedump(&mixed, "cancelled");
+    assert_eq!(
+        (
+            dump_field(mcancelled, "clip"),
+            dump_field(mcancelled, "focusowner"),
+            dump_field(mcancelled, "selected")
+        ),
+        ("false", "0", "3"),
+        "Space on the focused Cancel did not close the dialog, hand the \
+         keyboard back and keep the selection: {mcancelled}"
+    );
+    assert_eq!(
+        (
+            dump_field(qedump(&mixed, "cq"), "clipstate"),
+            dump_field(qedump(&mixed, "cback"), "clipstate")
+        ),
+        ("3", "0"),
+        "the click on Export did not ask the clash question, or Esc did not \
+         take it back to the plan:\n{mixed}"
+    );
+    let mclick = label_positions(&mlabels, "drive: click:clip export-close");
+    let mcq = label_positions(&mlabels, "drive: dump.cq");
+    assert!(
+        mclick.len() == 1 && mcq.len() == 1 && mclick[0] < mcq[0],
+        "the click strand is not in the trace as written:\n{mixed}"
+    );
+    for mark in ["focus: clip choose lost", "focus: clip dialog gained"] {
+        assert!(
+            marks_between(&mlabels, mclick[0], mcq[0], mark) > 0,
+            "after the click on Export no `{mark}`: the keyboard did not leave \
+             Choose… before the run disabled it (ui-grid.md, \"Modal keyboard \
+             containment\"; review F1). When this fails this way it is that \
+             defect; do not quiet it:\n{mixed}"
+        );
+    }
+    landings(
+        &mixed,
+        &[
+            ("oncancel", "tab", "clip cancel"),
+            ("c1", "tab", "clip choose"),
+            // From the home the clash question's Esc leaves: the walk
+            // launch 2's Enter follows.
+            ("c2", "tab", "clip choose"),
+            ("c3", "tab", "clip cancel"),
+            ("onexport", "tab", "clip export-close"),
+        ],
+    );
+    let mclosed = qedump(&mixed, "closed");
+    assert_eq!(
+        (
+            dump_field(mclosed, "clip"),
+            dump_field(mclosed, "focusowner"),
+            dump_field(mclosed, "selected")
+        ),
+        ("false", "0", "3"),
+        "Esc with the keyboard on Export did not close the dialog, hand the \
+         keyboard back and keep the selection: {mclosed}"
+    );
+    let mut mleft: Vec<String> = std::fs::read_dir(&dest)
+        .map(|it| {
+            it.filter_map(|e| e.ok())
+                .map(|e| e.file_name().to_string_lossy().into_owned())
+                .collect()
+        })
+        .unwrap_or_default();
+    mleft.sort();
+    assert_eq!(
+        mleft,
+        vec!["a-c.mov".to_string()],
+        "the question cancelled unanswered wrote at the destination, so \
+         launch 2 would not start from the folder launch 2a did"
+    );
+
+    // --- 2. Space on Cancel; the mixed path; Enter on Export, the question,
+    // the report ----------------------------------------------------------
+    let flow = run(
+        "tabring-clip-flow.jpg",
+        &format!(
+            "{flow_walk}7100:key:return;7400:dump.q;7600:key:tab;7900:dump.qtab;\
+             8100:key:b;8200:wait:clip export finished run 1;8900:dump.report;\
+             9100:key:shift+tab;9400:dump.rhome;9600:key:tab;9900:dump.r1;\
+             10100:key:tab;10400:dump.r2;10600:key:shift+tab;10900:dump.r3;\
+             11100:key:escape;11400:dump.end"
+        ),
+    );
+    held(
+        &flow,
+        &[
+            "open", "oncancel", "c1", "cq", "cback", "c2", "c3", "onexport", "q", "qtab", "report",
+            "rhome", "r1", "r2", "r3",
+        ],
+    );
+    // The mixed path (review F1), the copy test's strand: the keyboard on
+    // Choose… by Tab, a mouse click on Export asks the clash question, Esc
+    // goes back to the plan.
+    assert_eq!(
+        (
+            dump_field(qedump(&flow, "cq"), "clipstate"),
+            dump_field(qedump(&flow, "cback"), "clipstate")
+        ),
+        ("3", "0"),
+        "the click on Export did not ask the clash question, or Esc did not \
+         take it back to the plan:\n{flow}"
+    );
+    // The click let go of Choose… while Choose… was still enabled (the copy
+    // test says why: a disabled control ignores the FocusOut, fact 11).
+    let labels = mark_labels(&flow);
+    let click = label_positions(&labels, "drive: click:clip export-close");
+    let cq = label_positions(&labels, "drive: dump.cq");
+    assert!(
+        click.len() == 1 && cq.len() == 1 && click[0] < cq[0],
+        "the click strand is not in the trace as written:\n{flow}"
+    );
+    for mark in ["focus: clip choose lost", "focus: clip dialog gained"] {
+        assert!(
+            marks_between(&labels, click[0], cq[0], mark) > 0,
+            "after the click on Export no `{mark}`: the keyboard did not leave \
+             Choose… before the run disabled it (ui-grid.md, \"Modal keyboard \
+             containment\"; review F1). When this fails this way it is that \
+             defect; do not quiet it:\n{flow}"
+        );
+    }
+    // The premise of each press that activates a button, read at the press
+    // itself (review F3; the copy test's helper): the Space was dispatched
+    // with the keyboard on Cancel, the Return with it on Export. The closing
+    // Esc needs none: Esc bubbles to the scope wherever the keyboard is and
+    // never presses a button.
+    for (echo, on) in [
+        ("drive: key:space", "focus: clip cancel gained"),
+        ("drive: key:return", "focus: clip export-close gained"),
+    ] {
+        assert_eq!(
+            last_gained_before(&labels, echo),
+            on,
+            "`{echo}` was not dispatched with the keyboard where the script \
+             put it — the outcome read after it is not that press's:\n{flow}"
+        );
+    }
+    landings(
+        &flow,
+        &[
+            ("oncancel", "tab", "clip cancel"),
+            ("c1", "tab", "clip choose"),
+            // After Esc, Choose… is focused again WITH its own `gained`.
+            ("c2", "tab", "clip choose"),
+            ("c3", "tab", "clip cancel"),
+            ("onexport", "tab", "clip export-close"),
+            ("q", "return", "clip dialog"),
+            ("rhome", "shift+tab", "clip export-close"),
+            ("r1", "tab", "clip open-folder"),
+            ("r2", "tab", "clip export-close"),
+            ("r3", "shift+tab", "clip open-folder"),
+        ],
+    );
+    let cancelled = qedump(&flow, "cancelled");
+    assert_eq!(
+        (
+            dump_field(cancelled, "clip"),
+            dump_field(cancelled, "focusowner"),
+            dump_field(cancelled, "selected")
+        ),
+        ("false", "0", "3"),
+        "Space on the focused Cancel did not close the dialog, hand the \
+         keyboard back and keep the selection: {cancelled}"
+    );
+    let q = qedump(&flow, "q");
+    assert!(
+        dump_field(q, "clipstate") == "3" && dump_text(q, "clipconfirm").contains("a-c.mov"),
+        "Enter on the focused Export did not ask the clash question: {q}"
+    );
+    // The question opens without its nudge, so the nudge at dump.qtab is
+    // the Tab's.
+    assert_eq!(
+        dump_field(q, "clipnudged"),
+        "false",
+        "the clash question opened already nudging: {q}"
+    );
+    // Tab on the question moves nothing and is swallowed WITH the nudge,
+    // like every key that is not an answer (video-export.md, "The keyboard
+    // ring"; QE round 2 D3): the question's branch sees the Tab before the
+    // ring's arm does.
+    let qtab = qedump(&flow, "qtab");
+    assert_eq!(
+        (
+            dump_field(qtab, "clipstate"),
+            dump_field(qtab, "clipnudged")
+        ),
+        ("3", "true"),
+        "Tab on the clash question must be swallowed with the nudge, like \
+         every key that is not an answer (video-export.md): {qtab}"
+    );
+    assert_eq!(
+        landing(&mark_labels(&flow), "qtab").1,
+        Vec::<&str>::new(),
+        "Tab on the clash question moved the keyboard:\n{flow}"
+    );
+    assert!(
+        flow.contains("wait:clip export finished run 1 (satisfied"),
+        "the `B` answered nothing — the report dump was timed, not gated:\n{flow}"
+    );
+    let report = qedump(&flow, "report");
+    assert_eq!(dump_field(report, "clipstate"), "2", "{report}");
+    assert!(
+        dump_text(report, "clipreport").contains("a-c_1.mov")
+            && dump_text(report, "clipreport").contains("all checksums verified"),
+        "the `B` after Enter on the focused Export did not keep both: {report}"
+    );
+    let end = qedump(&flow, "end");
+    assert_eq!(
+        (
+            dump_field(end, "clip"),
+            dump_field(end, "focusowner"),
+            dump_field(end, "selected")
+        ),
+        ("false", "0", "3"),
+        "Esc with the keyboard on Open folder did not close the dialog and \
+         hand the keyboard back: {end}"
+    );
+
+    // --- 3. Export greyed: the ring passes over it both ways (QE's P1) -----
+    // Its own prefix: the shared one carries the folder destination.
+    let script = format!(
+        "1400:wait:load settled gen 0;1500:select-all;1700:clipdest:{dest_file};\
+         1900:key:ctrl+shift+e;2300:dump.plan;\
+         2500:key:tab;2800:dump.g1;3000:key:tab;3300:dump.g2;3500:key:tab;3800:dump.g3;\
+         4000:key:y;4300:dump.gy;\
+         4500:key:shift+tab;4800:dump.g4;5000:key:shift+tab;5300:dump.g5;\
+         5500:key:escape;5800:dump.closed",
+        dest_file = dest_file.display()
+    );
+    let grey = shoot_env_stderr(
+        &[src.to_str().unwrap()],
+        &[("FASTCULL_TRACE", "1"), ("FASTCULL_DRIVE", script.as_str())],
+        &out_dir().join("tabring-clip-grey.jpg"),
+    );
+    held(&grey, &["plan", "g1", "g2", "g3", "gy", "g4", "g5"]);
+    assert!(
+        grey.contains("wait:load settled gen 0 (satisfied"),
+        "the selection was made before the folder settled:\n{grey}"
+    );
+    // The premise names the refusal: Export greyed because the destination
+    // is not a folder, not because the selection gave the plan nothing to
+    // export.
+    let gplan = qedump(&grey, "plan");
+    assert_eq!(
+        (
+            dump_field(gplan, "clipstate"),
+            dump_text(gplan, "cliperror"),
+            dump_field(gplan, "selected")
+        ),
+        ("0", "the destination is not a folder", "3"),
+        "the premise is a plan the destination refuses, where Export is \
+         greyed: {gplan}"
+    );
+    assert!(
+        dump_text(gplan, "status").contains("★0 ✕0"),
+        "the premise is a session with no marks: {gplan}"
+    );
+    landings(
+        &grey,
+        &[
+            ("g1", "tab", "clip choose"),
+            ("g2", "tab", "clip cancel"),
+            // The wrap, over the greyed Export.
+            ("g3", "tab", "clip choose"),
+            ("g4", "shift+tab", "clip cancel"),
+            ("g5", "shift+tab", "clip choose"),
+        ],
+    );
+    let gy = qedump(&grey, "gy");
+    assert_eq!(
+        (
+            dump_text(gy, "status"),
+            dump_field(gy, "cursor"),
+            dump_field(gy, "selected")
+        ),
+        (
+            dump_text(gplan, "status"),
+            dump_field(gplan, "cursor"),
+            dump_field(gplan, "selected")
+        ),
+        "the Y on the focused Choose… reached the grid behind the dialog:\n{grey}"
+    );
+    assert_eq!(
+        landing(&mark_labels(&grey), "gy").1,
+        Vec::<&str>::new(),
+        "the Y moved the keyboard:\n{grey}"
+    );
+    let gclosed = qedump(&grey, "closed");
+    assert_eq!(
+        (
+            dump_field(gclosed, "clip"),
+            dump_field(gclosed, "focusowner"),
+            dump_field(gclosed, "selected")
+        ),
+        ("false", "0", "3"),
+        "Esc with the keyboard on Choose… did not close the dialog, hand the \
+         keyboard back and keep the selection: {gclosed}"
+    );
+
+    // --- 4. the running ring and the finish (QE's P3) ---------------------
+    let running = run_held(
+        "tabring-clip-run.jpg",
+        &format!(
+            "1400:wait:load settled gen 0;1500:select-all;1700:clipdest:{dest3};\
+             1900:key:ctrl+shift+e;2300:dump.plan4;\
+             2500:key:return;2700:key:tab;3000:dump.run;3200:key:y;3500:dump.inrun;\
+             3700:wait:clip export finished run 1;4000:dump.fin;\
+             4200:key:tab;4500:dump.f1;4700:key:escape;5000:dump.closed4",
+            dest3 = dest3.display()
+        ),
+    );
+    held(&running, &["plan4", "run", "inrun", "fin", "f1"]);
+    assert!(
+        running.contains("fastcull: FASTCULL_CLIP_HOLD_MS=3000 — every video export is held"),
+        "the writer's hold was not read, so this launch's run is not the held \
+         one it is about:\n{running}"
+    );
+    let plan4 = qedump(&running, "plan4");
+    assert!(
+        dump_field(plan4, "clipstate") == "0"
+            && dump_field(plan4, "selected") == "3"
+            && dump_text(plan4, "clipsummary").starts_with("3 frames · 400×300 ·")
+            && dump_text(plan4, "cliperror").is_empty(),
+        "the premise is a clean plan, where Return from home exports: {plan4}"
+    );
+    // The launch's premise (the copy test's): still running, held before
+    // its first frame, when the Tab lands — and the Tab on its Cancel.
+    let run4 = qedump(&running, "run");
+    assert_eq!(
+        (
+            dump_field(run4, "clipstate"),
+            dump_text(run4, "clipprogress")
+        ),
+        ("1", "Starting…"),
+        "the export was not running, held before its first frame, when the \
+         Tab landed: {run4}"
+    );
+    landings(&running, &[("run", "tab", "clip cancel")]);
+    // A Y on the running Cancel marks nothing, moves nothing and keeps the
+    // selection, with the run still running at the dump after it.
+    let inrun = qedump(&running, "inrun");
+    assert_eq!(
+        (
+            dump_field(inrun, "clipstate"),
+            dump_text(inrun, "status"),
+            dump_field(inrun, "cursor"),
+            dump_field(inrun, "selected")
+        ),
+        (
+            "1",
+            dump_text(plan4, "status"),
+            dump_field(plan4, "cursor"),
+            dump_field(plan4, "selected")
+        ),
+        "the Y on the running Cancel reached the grid, or the run had ended \
+         before it:\n{running}"
+    );
+    assert_eq!(
+        landing(&mark_labels(&running), "inrun"),
+        ("drive: key:y", Vec::new()),
+        "the Y moved the keyboard:\n{running}"
+    );
+    assert!(
+        running.contains("wait:clip export finished run 1 (satisfied"),
+        "the export never finished — the report dump was timed, not gated:\n{running}"
+    );
+    let fin = qedump(&running, "fin");
+    assert!(
+        dump_field(fin, "clipstate") == "2"
+            && dump_text(fin, "clipreport").contains("a-c.mov")
+            && dump_text(fin, "clipreport").contains("all checksums verified"),
+        "the held export did not finish with its file verified: {fin}"
+    );
+    assert_the_finish_brings_the_keyboard_home(&running, "clip export finished run 1", "clip");
+    landings(&running, &[("f1", "tab", "clip open-folder")]);
+    let closed4 = qedump(&running, "closed4");
+    assert_eq!(
+        (
+            dump_field(closed4, "clip"),
+            dump_field(closed4, "focusowner"),
+            dump_field(closed4, "selected")
+        ),
+        ("false", "0", "3"),
+        "Esc with the keyboard on Open folder did not close the report, hand \
+         the keyboard back and keep the selection: {closed4}"
+    );
+
+    // --- 5. Space on the running Cancel (QE's P3) --------------------------
+    // Cancel is reached by launch 4's own path, which launch 4 has
+    // asserted: the Space can only press Cancel.
+    let cancelling = run_held(
+        "tabring-clip-cancel.jpg",
+        &format!(
+            "1400:wait:load settled gen 0;1500:select-all;1700:clipdest:{dest4};\
+             1900:key:ctrl+shift+e;2300:dump.plan5;\
+             2500:key:return;2700:key:tab;3000:dump.runb;3200:key:space;\
+             3300:wait:clip export finished run 1;3600:dump.cancelled;\
+             3800:key:tab;4100:dump.cb1;4300:key:escape;4600:dump.closed5",
+            dest4 = dest4.display()
+        ),
+    );
+    held(&cancelling, &["plan5", "runb", "cancelled", "cb1"]);
+    let runb = qedump(&cancelling, "runb");
+    assert_eq!(
+        (
+            dump_field(runb, "clipstate"),
+            dump_text(runb, "clipprogress")
+        ),
+        ("1", "Starting…"),
+        "the export was not running, held before its first frame, when the \
+         Tab landed: {runb}"
+    );
+    landings(&cancelling, &[("runb", "tab", "clip cancel")]);
+    assert_eq!(
+        last_gained_before(&mark_labels(&cancelling), "drive: key:space"),
+        "focus: clip cancel gained",
+        "the Space was not dispatched with the keyboard on the running Cancel \
+         — the outcome read after it is not that press's:\n{cancelling}"
+    );
+    assert!(
+        cancelling.contains("wait:clip export finished run 1 (satisfied"),
+        "the cancelled export never put its report up — the dump was timed, \
+         not gated:\n{cancelling}"
+    );
+    let cancelled = qedump(&cancelling, "cancelled");
+    assert!(
+        dump_field(cancelled, "clipstate") == "2"
+            && dump_text(cancelled, "clipreport").contains("Cancelled — nothing was written"),
+        "Space on the running Cancel did not cancel the export: {cancelled}"
+    );
+    assert_the_finish_brings_the_keyboard_home(&cancelling, "clip export finished run 1", "clip");
+    landings(&cancelling, &[("cb1", "tab", "clip open-folder")]);
+    let closed5 = qedump(&cancelling, "closed5");
+    assert_eq!(
+        (
+            dump_field(closed5, "clip"),
+            dump_field(closed5, "focusowner"),
+            dump_field(closed5, "selected")
+        ),
+        ("false", "0", "3"),
+        "Esc with the keyboard on Open folder did not close the report, hand \
+         the keyboard back and keep the selection: {closed5}"
+    );
+    assert_eq!(
+        std::fs::read_dir(&dest4).map(|d| d.count()).unwrap_or(0),
+        0,
+        "an export cancelled during its hold left a file at the destination"
+    );
+    for d in [&src, &dest, &dest3, &dest4] {
+        std::fs::remove_dir_all(d).ok();
+    }
+    std::fs::remove_file(&dest_file).ok();
 }
 
 /// Issue #55: Shift+`]` / Shift+`[` extend the selection by WHOLE bursts,
