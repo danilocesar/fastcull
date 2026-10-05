@@ -245,3 +245,31 @@ No user report; measured, not seen in the wild.
   undoable; Enter already behaves so on the report), (b) buttons acting
   on release, or (c) the grid ignoring a Space within a few hundred
   milliseconds of a close; the Manager recommends (a).
+- D7 (2026-10-04, the user, at the circuit breaker — two consecutive QE
+  FAILs at one stage): QE round 3 fixed everything round 2 asked (the
+  home-start mutant red at launch 2's `dump.home` with no picker; the
+  export clash-question nudge guarded by `clipnudged=`, E11 red; the menu
+  residual recorded as measured on Linux; video-export.md's Esc sentence
+  per state; test-harness.md's exception and suite size — 122 tests,
+  1016 s) and found the same class one launch on: T1's launch 3 presses
+  Return after Tabs taken from the home a STATE CHANGE leaves (click Copy →
+  question → Esc → plan), a home no earlier launch asserts; under a
+  one-token regression of the `changed state` reset (`slot = 0` for `-1`),
+  not in the tests' own mutant lists, the Return lands on Choose… and the
+  test fails as a native picker (or a 90 s Windows hang), not a clean red;
+  the export test records the same exposure honestly, the copy test's
+  safety note denied it. QE: FAIL, one more round (split each
+  post-question path into its own launch, ~8 s per test). The Manager and
+  the senior developer: merge with the risk recorded. Put to the user per
+  the circuit breaker; the user chose ONE MORE ROUND, then merge. Its
+  scope: QE3-P1 (each mixed path in a launch of its own, so every landing
+  is asserted before any Enter or Space, in both tests; the docs made
+  true; the A4/A5 regressions added to the mutant lists and shown red at a
+  landing assertion with no picker); QE3-D3 (the stale "no `clipnudged=`
+  field" comment reason corrected); QE3-D2 (the senior developer's sandbox
+  recipe — a private session bus without service activation — is unsafe
+  alone: rfd 0.15.4 falls back to `zenity`, installed on the seat; the
+  recipe needs inert `zenity`, `xdg-open` and `kdialog` shims — recorded
+  as the directive candidate's correction, the Manager's to carry, not
+  code). Then re-review, QE round 4, merge on PASS.
+
