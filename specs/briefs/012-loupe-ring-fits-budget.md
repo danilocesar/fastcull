@@ -179,7 +179,7 @@ default unchanged.
   the persona accepted the follow-up at brief 008.
 - D2 (2026-10-04, Manager, M12): the branch was cut while unit 011 ran its
   gate; it is rebased onto unit 011's merge before any role touches it.
-- D3 (2026-10-05, senior developer's plan; for the Manager to confirm):
+- D3 (2026-10-05, senior developer's plan, confirmed by the Manager 2026-10-05):
   R1's `frame_bytes` is the bytes of the RUNG the window asks for, not one
   full-frame figure — the full-res frame for a request above what the mid
   serves (1:1; fit on a 4K display), the mid preview when the mid serves
@@ -189,7 +189,7 @@ default unchanged.
   floor's 200 MiB beside one full frame), losing the look-ahead the
   transit contract exists for. With the mid's bytes the transit window is
   unchanged at every budget above 58 MB — i.e. always.
-- D4 (2026-10-05, senior developer's plan; for the Manager to confirm):
+- D4 (2026-10-05, senior developer's plan, confirmed by the Manager 2026-10-05):
   before the first header of a session is parsed the engine assumes
   nothing and asks for the uncapped window; the first parse (the focused
   frame's own, ~1 ms into its decode) sizes the ring and culls the
@@ -202,7 +202,7 @@ default unchanged.
   alone" until a parse succeeds, which would leave a corrupt first frame's
   neighbours unprefetched — the promise `corrupt_file_reports_failed_and_
   engine_survives` pins.
-- D5 (2026-10-05, senior developer's plan; for the Manager to confirm):
+- D5 (2026-10-05, senior developer's plan, confirmed by the Manager 2026-10-05):
   R4's mark is a NEW mark, `loupe ring budget <B> frame <F> rest <b>/<a>
   transit <b>/<a>`, emitted when the engine first knows a frame size and
   on every change, not an extension of `loupe engine started budget` — at
@@ -210,10 +210,22 @@ default unchanged.
   constant across budgets, the D23 shape (a mark that cannot go red). AC4
   reads accordingly; the loupe memory test enters the loupe in its 0.5 GB
   session and waits on `rest 1/1`.
-- D6 (2026-10-05, senior developer's plan; for the Manager to confirm):
+- D6 (2026-10-05, senior developer's plan, confirmed by the Manager 2026-10-05):
   R5's "no docs change" does not hold — docs/settings.md said the loupe
   "cannot keep all five frames … so a step at 1:1 decodes again the frames
   it had to let go", which the cap makes false; the sentence follows the
   spec in the same commit. ui-grid.md's SETTLED-AND-IDLE row ("full-res
   look-ahead on the ±PREFETCH neighbours") gets a pointer clause, since it
   is the contract for what is ASKED of the decoder.
+- D7 (2026-10-05, Manager): the held-arrow (transit) prefetch ring stays
+  wide — a ring of ~5 MB mids is capped only by its own rung's bytes (D3),
+  so a small budget narrows the sharp 1:1 neighbours and not what a held
+  arrow prefetches; the brief's non-goal and the parked #60 both point that
+  way, and the Manager answers it under M2 rather than putting it to the
+  user (the senior developer offered the question; the recommendation is
+  this). raw-pipeline.md's D20 ledger criterion is re-opened `- [ ]` with
+  its reason until the re-stated test
+  (`a_budget_below_the_prefetch_window_goes_quiet_when_idle`, four phases)
+  lands — a promise re-stated, not a promise dropped (M1). The AFTER
+  measurement is the developer's, with the brief's recipe exactly (two
+  runs per budget), recorded in the Measurements section and the commit.
