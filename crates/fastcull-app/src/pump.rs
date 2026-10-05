@@ -284,6 +284,7 @@ pub(crate) fn start(window: &MainWindow, state: &Rc<RefCell<AppState>>) -> slint
                         .as_ref()
                         .map(|rx| rx.try_iter().collect())
                         .unwrap_or_default();
+                    let loupe_spoke = !loupe_events.is_empty();
                     for event in loupe_events {
                         match event {
                             fastcull_core::loupe::LoupeEvent::Ready {
@@ -331,6 +332,13 @@ pub(crate) fn start(window: &MainWindow, state: &Rc<RefCell<AppState>>) -> slint
                             }
                         }
                     }
+                    // Only on a tick that drained a loupe event: the engine
+                    // learns a frame size from the header it parses BEFORE
+                    // it decodes that frame, so the tick of a session's
+                    // first landing already sees the ring.
+                    if loupe_spoke {
+                        note_ring(&mut st);
+                    }
                     if dirty {
                         // Picks/keys may have changed membership or order.
                         // ENGINE-driven: must not move an untouched cursor
@@ -359,6 +367,26 @@ pub(crate) fn start(window: &MainWindow, state: &Rc<RefCell<AppState>>) -> slint
         );
     }
     timer
+}
+
+/// Print the `loupe ring budget <B> frame <F> rest <b>/<a> transit <b>/<a>`
+/// mark when the engine's ring report changes (test-harness.md; brief 012
+/// D5) — the proof the loupe memory budget reached the prefetch ring, as
+/// `loupe engine started budget` proves it reached the engine. The report
+/// and its arithmetic are core's (`LoupeEngine::ring_report`); this only
+/// compares it with the last one printed.
+fn note_ring(st: &mut AppState) {
+    let report = st.loupe_view.engine.as_ref().and_then(|e| e.ring_report());
+    let Some(ring) = report.filter(|r| st.loupe_view.last_ring != Some(*r)) else {
+        return;
+    };
+    trace_mark_with(|| {
+        format!(
+            "loupe ring budget {} frame {} rest {}/{} transit {}/{}",
+            ring.budget, ring.frame_bytes, ring.rest.0, ring.rest.1, ring.transit.0, ring.transit.1
+        )
+    });
+    st.loupe_view.last_ring = Some(ring);
 }
 
 /// Adopt every texture the kitchen has finished — UNBUDGETED, per the

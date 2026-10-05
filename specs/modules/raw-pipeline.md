@@ -505,13 +505,14 @@ medium's measured behaviour:
       fails to parse teaches nothing; no A1 constant is referenced from
       `loupe.rs` — `loupe::tests::frame_bytes_come_from_the_headers_parsed`
       and the review's grep.
-- [ ] **AC4 (brief 012) The mark names the ring**: `loupe ring budget <B>
+- [x] **AC4 (brief 012) The mark names the ring**: `loupe ring budget <B>
       frame <F> rest <b>/<a> transit <b>/<a>` fires when the engine first
       knows a frame size and whenever the report changes, never at start;
       the loupe memory test enters the loupe in its 0.5 GB session and
       waits on `rest 1/1` for the exact budget —
       `screenshot.rs::loupe_memory_takes_effect_at_the_next_folder_open`
-      (extended; brief 012). Open until the test is extended.
+      (extended; brief 012),
+      `loupe::tests::the_ring_report_waits_for_a_size_and_reports_the_ring_it_allows`.
 - [ ] **AC5 (brief 012) Measured before and after** with brief 012's recipe
       (release, the development seat, 60 frames, 1:1 on frame 10, a 15 s
       rest, ten 1 s taps forward, three back): fewer full-res decodes per

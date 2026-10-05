@@ -84,6 +84,26 @@ pub enum LoupeEvent {
     },
 }
 
+/// The ring the engine's budget allows for the frame sizes it has learned
+/// (`LoupeEngine::ring_report`): what the app's `loupe ring` trace mark
+/// prints (test-harness.md; brief 012 D5).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct RingReport {
+    /// The budget the engine adopted, floored (`LoupeEngine::budget`).
+    pub budget: usize,
+    /// The largest full-res frame whose header was parsed this session, in
+    /// decoded bytes (width × height × 3).
+    pub frame_bytes: usize,
+    /// The largest mid preview parsed, likewise; 0 if none was.
+    pub mid_bytes: usize,
+    /// The ±PREFETCH window the budget allows for `frame_bytes` — what a
+    /// settled 1:1 focus asks for — as `(behind, ahead)` of the direction
+    /// of travel.
+    pub rest: (usize, usize),
+    /// The 2/8 transit window the budget allows for `mid_bytes`.
+    pub transit: (usize, usize),
+}
+
 #[derive(Default)]
 struct LoupeState {
     /// Pending (index, display-long-edge), most urgent last (workers pop
@@ -309,6 +329,34 @@ impl LoupeEngine {
     /// the engine started on the default).
     pub fn budget(&self) -> usize {
         self.shared.budget
+    }
+
+    /// The ring this engine's budget allows for the frame sizes it has
+    /// learned so far — `None` until a worker has parsed a header, because
+    /// no size is known before then and none is assumed (M11; a report
+    /// built from an assumed size would read the same at every budget, a
+    /// mark that cannot go red — brief 012 D5). The app prints it as its
+    /// `loupe ring` mark on change: the proof the budget reached the RING,
+    /// as `budget()` proves it reached the engine. Takes the engine's lock
+    /// briefly and reads no file, so the UI thread may call it.
+    pub fn ring_report(&self) -> Option<RingReport> {
+        let state = lock(&self.shared);
+        if state.frame_bytes_full == 0 {
+            return None;
+        }
+        let budget = self.shared.budget;
+        Some(RingReport {
+            budget,
+            frame_bytes: state.frame_bytes_full,
+            mid_bytes: state.frame_bytes_mid,
+            rest: ring_within_budget(budget, state.frame_bytes_full, PREFETCH, PREFETCH),
+            transit: ring_within_budget(
+                budget,
+                state.frame_bytes_mid,
+                TRANSIT_BEHIND,
+                TRANSIT_AHEAD,
+            ),
+        })
     }
 
     /// The user is looking at `index` on a display whose longest edge is
@@ -2135,6 +2183,38 @@ mod tests {
     fn the_engine_reports_the_budget_it_adopted() {
         assert_eq!(LoupeEngine::start(vec![], 1).0.budget(), BUDGET_FLOOR_BYTES);
         assert_eq!(LoupeEngine::start(vec![], 3 << 30).0.budget(), 3 << 30);
+    }
+
+    /// `ring_report()` (brief 012 D5, the `loupe ring` mark's source):
+    /// nothing before a size is learned — no size is assumed — then the
+    /// adopted budget, the sizes learned and the two windows the budget
+    /// allows for them. No paths, so no worker decodes anything; the sizes
+    /// are written as a parse would write them (A1-shaped fixtures).
+    #[test]
+    fn the_ring_report_waits_for_a_size_and_reports_the_ring_it_allows() {
+        let (engine, _rx) = LoupeEngine::start(vec![], 512 << 20);
+        assert_eq!(engine.ring_report(), None, "no header parsed: no report");
+        {
+            let mut state = lock(&engine.shared);
+            state.frame_bytes_full = 8640 * 5760 * 3;
+            state.frame_bytes_mid = 1616 * 1080 * 3;
+        }
+        assert_eq!(
+            engine.ring_report(),
+            Some(RingReport {
+                budget: 512 << 20,
+                frame_bytes: 149_299_200,
+                mid_bytes: 5_235_840,
+                rest: (1, 1),
+                transit: (TRANSIT_BEHIND, TRANSIT_AHEAD),
+            })
+        );
+        // The budget reported is the one ADOPTED: a figure under the floor
+        // reports the floor, and the ring it allows there.
+        let (floored, _rx) = LoupeEngine::start(vec![], 1);
+        lock(&floored.shared).frame_bytes_full = 8640 * 5760 * 3;
+        let report = floored.ring_report().expect("a size is known");
+        assert_eq!((report.budget, report.rest), (BUDGET_FLOOR_BYTES, (0, 0)));
     }
 
     #[test]
