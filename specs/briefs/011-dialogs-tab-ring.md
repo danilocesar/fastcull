@@ -238,13 +238,13 @@ No user report; measured, not seen in the wild.
   follow-up issue with the menu residual: the rename field's slot write on
   a mouse arrival (needs a layout mark for the field), AC4 strengthened
   with the IPTC panel open, Enter on the focused plan-state export Cancel,
-  and D5's stale-focus-on-re-plan residual. Relayed to the user, not
-  decided: Space on a focused Close or Cancel closes on the key-press, and
-  a second or held Space then picks the frame behind the closing dialog
-  (measured 30 ms later) — option (a) as shipped (the mark is visible and
-  undoable; Enter already behaves so on the report), (b) buttons acting
-  on release, or (c) the grid ignoring a Space within a few hundred
-  milliseconds of a close; the Manager recommends (a).
+  and D5's stale-focus-on-re-plan residual. Relayed to the user (decided
+  2026-10-05, D9): Space on a focused Close or Cancel closes on the
+  key-press, and a second or held Space then picks the frame behind the
+  closing dialog (measured 30 ms later) — option (a) as shipped (the mark
+  is visible and undoable; Enter already behaves so on the report), (b)
+  buttons acting on release, or (c) the grid ignoring a Space within a few
+  hundred milliseconds of a close; the Manager recommends (a).
 - D7 (2026-10-04, the user, at the circuit breaker — two consecutive QE
   FAILs at one stage): QE round 3 fixed everything round 2 asked (the
   home-start mutant red at launch 2's `dump.home` with no picker; the
@@ -305,3 +305,11 @@ No user report; measured, not seen in the wild.
   user without a rule change (the user, 2026-10-03: the rule questions
   were only questions).
 
+- D9 (2026-10-05, the user, at brief 012's closing report): the Space
+  question D6 relayed is decided — option (a), accept as shipped. Space on
+  a focused Close or Cancel closes on the key-press, as the toolkit's
+  buttons do; a quick second or held Space that then picks the frame
+  behind the dialog is a visible, undoable mark and stays. Dialog buttons
+  keep acting on press, the grid takes no post-close guard window, and
+  issue #106's section 4 carries no follow-up (recorded there the same
+  day). Sections 1–3 and 5 of #106 stand.
