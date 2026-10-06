@@ -192,19 +192,18 @@ upgrade re-checks them.
 --workspace` on both runners; `ci:` the Windows job's "Verify Windows
 artifact" step.
 
-- [ ] **AC1 — the set, reproducible.** `assets/icon/` holds exactly the
+- [x] **AC1 — the set, reproducible.** `assets/icon/` holds exactly the
       files above, each PNG N×N 8-bit RGBA, the `.ico` its seven members in
       order — app `the_icon_assets_are_exactly_the_spec_set`; the script
       run into a temp dir reproduces every PNG and the `.ico` byte for byte
       on the recorded tool versions, and passes with a printed reason on
       any other seat — app `the_render_script_reproduces_the_committed_renders`
-      (never compares on CI: no usable ImageMagick on either runner). Open:
-      lands in brief 013's assets commit.
-- [ ] **AC2 — metadata-free.** Every committed PNG walks as
+      (never compares on CI: no usable ImageMagick on either runner).
+- [x] **AC2 — metadata-free.** Every committed PNG walks as
       `IHDR`/`IDAT`/`IEND` only, every PNG-encoded `.ico` member too, and no
       file holds a marker — app `every_rendered_icon_file_is_metadata_free`;
       red on a `tEXt` chunk appended to one PNG and on the bytes `c2pa`
-      appended to the `.ico`. Open: lands in brief 013's assets commit.
+      appended to the `.ico`.
 - [ ] **AC3 — the Windows exe carries it.** ci: `RT_GROUP_ICON` present in
       `fastcull-app.exe`, absent in `fastcull-cli.exe`; the walker proved on
       the development seat against the pre-change artifact (both exes
@@ -233,6 +232,9 @@ artifact" step.
 
 ## History
 
+- 2026-10-06 — brief 013, the assets commit: the asset set, its render
+  script and `tests/app_icon.rs` landed; AC1 and AC2 ticked beside their
+  tests.
 - 2026-10-06 — brief 013: written by the senior developer from the brief
   and the persona's verdicts; the spec home is this new module rather than
   a section of `01-architecture.md` because the icon has its own asset set,
