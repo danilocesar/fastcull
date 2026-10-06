@@ -174,3 +174,21 @@ the silhouette (the refinement pass's job).
   (146 commits since v0.14.0: the Settings dialog, its card, the Failed
   badge tooltip, the dialogs' Tab rings, the failed-cursor fix, the loupe
   ring budget, the icon).
+- D6 (2026-10-06, Manager, M2, on the senior developer's Q1): `winresource`
+  writes a `VERSIONINFO` resource whether asked or not, so its strings are
+  chosen: `FileDescription` and `ProductName` "FastCull", the numeric
+  versions from `CARGO_PKG_VERSION`, en-US — the name Task Manager and
+  Explorer's Details tab show. The crate's default would be the package
+  name `fastcull-app`.
+- D7 (2026-10-06, Manager, M3, on the senior developer's Q2):
+  `THIRD-PARTY-LICENSES.md` is not regenerated in this unit — a
+  build-dependency never links into the executable — and its drift since
+  2026-07-25 (CODE-AUDIT C1) is the Manager's own bookkeeping: regenerated
+  with `cargo about` in the release commit of v0.15.0, as RELEASING.md's
+  archive promise requires.
+- D8 (2026-10-06, Manager, on the senior developer's Q3): AC7's human half
+  is asked of the user BEFORE the merge, on the PR's `fastcull-windows-x64`
+  artifact (Explorer, the title bar, the taskbar while it runs), so that a
+  soft or generic running-window icon is fixed in this PR — the Windows-
+  only fallback that loads the window icon from the exe's own `.ico` —
+  rather than after v0.15.0.
