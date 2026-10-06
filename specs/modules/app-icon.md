@@ -69,24 +69,40 @@ hicolor installation — is not here: it waits for packaging (the user,
   image installs ImageMagick's official Windows build, which bundles its
   own librsvg (2.40.20) — read from the image's toolset and ImageMagick's
   Windows dependency list, not measured on the runner).
-- The script's output is byte-deterministic on one seat and one tool
-  version, and that is the limit of the reproduction promise: a different
-  ImageMagick or librsvg may render different bytes without any regression,
-  so the reproduction test runs the script on any unix seat whose `magick`
-  lists the librsvg delegate and compares the bytes: a match is green on
-  any versions; a mismatch is red on the recorded tool versions (Contracts)
-  and passes with a printed reason on any other, where the tool is as
-  likely as the drawing to be the cause; when the development seat's tools
-  move, the recorded versions move to the seat's in the same commit — with
-  the re-rendered files when the bytes changed, alone when they did not —
-  so that the one seat that can compare keeps comparing, the commit saying
-  so (senior-developer plan 2026-10-06; corrected 2026-10-06,
-  senior-developer review F1: it said a different version "renders
-  different bytes" and moved the recorded versions only with re-rendered
-  files, which left the test comparing on no seat once the seat's
-  ImageMagick moved from 7.1.2-27 to 7.1.2-32 with every byte unchanged;
-  limited to unix seats (developer 2026-10-06, F1 fix; the reason in
-  Contracts)).
+- The script's output is byte-deterministic on one seat and one set of
+  tools, and that is the limit of the reproduction promise. The bytes are
+  shaped by the whole chain, not by ImageMagick alone: the rasteriser
+  (librsvg with its cairo and pixman) fixes the pixels, and the PNG encoder
+  (ImageMagick's libpng and the zlib under it) fixes how they are written;
+  a move in any of them may change bytes without any regression. The
+  reproduction test runs the script on any unix seat whose `magick` lists
+  the librsvg delegate and compares the bytes: a match is green on any
+  versions; a mismatch is red on the recorded tool versions (Contracts —
+  the versions `magick` itself reports; zlib reports nothing and is the one
+  link it cannot name) and passes with a printed reason on any other, where
+  the tool is as likely as the drawing to be the cause. The red says which
+  of two things it found, because the test decodes every differing PNG and
+  compares the pixels: pixels that differ mean the drawing changed without
+  a re-render, a render was edited by hand, or a rasteriser library moved
+  under the recorded versions; pixels that are identical mean only the
+  encoding changed — zlib moved, or a file was re-encoded by another tool —
+  and the remedy for both is a re-render committed with the reason, the
+  recorded versions moving only when `magick`'s own report moved (the
+  `.ico` holds uncompressed members, so a difference there is never the
+  encoder). When the development seat's tools move, the recorded versions
+  move to the seat's in the same commit — with the re-rendered files when
+  the bytes changed, alone when they did not — so that the one seat that
+  can compare keeps comparing, the commit saying so (senior-developer plan
+  2026-10-06; corrected 2026-10-06, senior-developer review F1: it said a
+  different version "renders different bytes" and moved the recorded
+  versions only with re-rendered files, which left the test comparing on no
+  seat once the seat's ImageMagick moved from 7.1.2-27 to 7.1.2-32 with
+  every byte unchanged; limited to unix seats (developer 2026-10-06, F1
+  fix; the reason in Contracts); corrected 2026-10-06, QE D2: it named
+  ImageMagick and librsvg as the whole of what fixes the bytes and recorded
+  only those, while a zlib change under the same versions rewrote bytes
+  with every pixel unchanged, so the red would have blamed the drawing —
+  libpng is now recorded and the red reads the pixels before it speaks).
 
 ### Metadata-free
 
@@ -103,6 +119,14 @@ hicolor installation — is not here: it waits for packaging (the user,
   false-positive (senior-developer plan 2026-10-06). An `.ico` member that
   is PNG-encoded is held to the chunk rule as well; ImageMagick writes DIB
   members today.
+- The two SVG sources are bare drawings too: no `<metadata>`, `<title>`,
+  `<desc>` or XML comment (the places a name or a manifest is typed into
+  an SVG), no `<image>`, `href=`, `<script>` or `<foreignObject>` (an
+  external or hidden payload), none of the markers above, and the root
+  `viewBox` is `0 0 512 512` (the user, 2026-10-06, "c2pa free", and M7;
+  widened to the sources by the Manager 2026-10-06, QE Q1, because a source
+  carrying any of these would render it, or carry it into the repository,
+  unnoticed).
 - The script audits both rules and refuses the render; the repository test
   asserts both over the committed files, so a regenerated set cannot ship
   a manifest unnoticed (brief 013 R2).
@@ -153,12 +177,20 @@ hicolor installation — is not here: it waits for packaging (the user,
 - `MainWindow.icon` is bound to the 48 px PNG with `@image-url`. The Slint
   compiler embeds the file in the binary and the app decodes it at load;
   no file is read at run time (brief 013 R5).
-- The backend hands the OS that one 48×48 bitmap unchanged and the OS
-  scales it: on Windows both the title bar's small icon and the taskbar
-  button's big icon come from it; on X11 it is the window's `_NET_WM_ICON`;
-  on Wayland nothing is drawn — winit's Wayland `set_window_icon` is empty,
-  and a dock there needs the app-id and a `.desktop`, deferred with the
-  packaging unit (brief 013 R5, D3, D4; the facts below).
+- The backend hands the OS that one 48×48 bitmap with its colour channels
+  premultiplied by alpha twice — Slint decodes the PNG into a premultiplied
+  buffer and its winit adapter premultiplies again before handing winit
+  straight RGBA — and the OS scales it: on Windows both the title bar's
+  small icon and the taskbar button's big icon come from it; on X11 it is
+  the window's `_NET_WM_ICON`; on Wayland nothing is drawn — winit's
+  Wayland `set_window_icon` is empty, and a dock there needs the app-id and
+  a `.desktop`, deferred with the packaging unit. The double premultiply
+  darkens only pixels that are neither opaque nor fully transparent — the
+  anti-aliased rim of the plate's rounded corners — and is invisible at the
+  sizes the OS draws; it is Slint's to fix, not ours (hard rule 2), and an
+  upgrade re-checks fact 3 (brief 013 R5, D3, D4; the facts below;
+  corrected 2026-10-06, QE D5: it said "unchanged", which the second
+  premultiply makes false).
 - 48 px is the one size bound: the taskbar's size at 150 % and a clean
   3:1 to the title bar's 16 (persona 2026-10-06: a 32 or a 48, never the
   16).
@@ -185,14 +217,18 @@ upgrade re-checks them.
    its own manifest, so the embedded PNG decodes in this app's feature set
    (`default-features = false`, no `image-default-formats`).
 3. The winit adapter renders the icon through `render_to_buffer`, which
-   returns an embedded raster image AS IS — the 64-logical-px target size
-   it passes applies to SVG only (`i-slint-core/graphics/image.rs`,
-   `ImageInner::EmbeddedImage`) — and on Windows calls
+   returns an embedded raster image at its own size — the 64-logical-px
+   target it passes applies to SVG only (`i-slint-core/graphics/image.rs`,
+   `ImageInner::EmbeddedImage`) — as the premultiplied buffer the decoder
+   made of it (`dynamic_image_to_shared_image_buffer`, same file);
+   `icon_to_winit` premultiplies that buffer a second time before
+   `winit::window::Icon::from_rgba`, which takes straight RGBA
+   (`i-slint-backend-winit/winitwindowadapter.rs`), and on Windows calls
    `set_taskbar_icon` and `set_window_icon` with that one bitmap
-   (`i-slint-backend-winit/winitwindowadapter.rs`, `WinitWindowOrNone::
-   set_window_icon`). winit's Windows `set_window_icon` sets `ICON_SMALL`
-   only and `set_taskbar_icon` `ICON_BIG`; its Wayland `set_window_icon` is
-   an empty function; its X11 one writes `_NET_WM_ICON`.
+   (`WinitWindowOrNone::set_window_icon`). winit's Windows
+   `set_window_icon` sets `ICON_SMALL` only and `set_taskbar_icon`
+   `ICON_BIG`; its Wayland `set_window_icon` is an empty function; its X11
+   one writes `_NET_WM_ICON` (corrected 2026-10-06, QE D5).
 
 ## Contracts
 
@@ -202,20 +238,29 @@ upgrade re-checks them.
   `fastcull.ico` under out-dir, exit non-zero on an audit failure, the
   tool versions printed first.
 - The recorded tool versions a reproduction mismatch is red on:
-  ImageMagick `7.1.2-32`, quantum `Q16-HDRI`, librsvg `RSVG 2.62.3` — the
-  development seat's on 2026-10-06, held as constants in the test and
-  moved whenever the development seat's tools move (Behaviour). Every
-  reason the reproduction test prints when it passes without a verdict — a
-  skip, or a mismatch off these versions — goes to stderr (visible under
-  `--nocapture`).
-- The probe-race test is `#[cfg(unix)]`: its stand-in `magick` is an
-  executable shell script found through PATH, which the Windows runner's
-  Git Bash is not known to resolve from an extension-less file, and the
-  script is the Linux development seat's maintainer tool. For the same
-  reason the reproduction test runs the script on unix only and on Windows
-  passes with its printed reason before anything runs — there Rust's
-  program search looks in System32, where WSL puts its `bash.exe`, before
-  PATH (`std`'s `sys/process/windows.rs`, `search_paths`, Rust 1.99.0).
+  ImageMagick `7.1.2-32`, quantum `Q16-HDRI`, librsvg `RSVG 2.62.3`,
+  libpng `libpng 1.6.58` — the versions `magick -version` and `magick -list
+  format` report, the development seat's on 2026-10-06, held as constants
+  in the test and moved whenever the development seat's tools move
+  (Behaviour); zlib is reported nowhere and is named only by the red
+  message. Every reason the reproduction test prints when it passes
+  without a verdict — a skip, or a mismatch off these versions — goes to
+  stderr (visible under `--nocapture`).
+- The tests that run the script are unix-only, each for its own reason.
+  The probe-race, delegate and audit tests are `#[cfg(unix)]` because they
+  cannot compile elsewhere: their stand-ins are executable shell scripts
+  made with `std::os::unix::fs::PermissionsExt` and put first on a
+  `:`-joined PATH. The reproduction test compiles everywhere and on
+  Windows passes with its printed reason before anything runs, because it
+  gives its child no PATH of its own, and Rust's program search for such a
+  child looks in the executable's directory, then System32 — where WSL
+  puts its `bash.exe` — then the Windows directory, and only then in the
+  parent's PATH, where Git Bash would be (`std`'s
+  `sys/process/windows.rs`, `search_paths`, Rust 1.99.0; a child given its
+  own PATH is searched there first). The script is the Linux development
+  seat's maintainer tool either way (corrected 2026-10-06, review N1 with
+  QE's reading of `search_paths`: it gave Git Bash's handling of
+  extension-less files as the reason, a claim never measured).
 - The tests are `crates/fastcull-app/tests/app_icon.rs`, reading the
   repository from `CARGO_MANIFEST_DIR` two levels up as
   `tests/shortcuts_map.rs` does; their PNG and ICO walkers are test code
@@ -241,7 +286,9 @@ artifact" step.
 
 - [x] **AC1 — the set, reproducible.** `assets/icon/` holds exactly the
       files above, each PNG N×N 8-bit RGBA, the `.ico` its seven 32-bit DIB
-      members in order — app `the_icon_assets_are_exactly_the_spec_set`; the
+      members in order, each `.ico` member its exact DIB length and, where a
+      PNG of its size exists, its pixels — app
+      `the_icon_assets_are_exactly_the_spec_set`; the
       script run into a temp dir reproduces every PNG and the `.ico` byte
       for byte, a mismatch red on the recorded tool versions and passing
       with a printed reason on any other — app
@@ -253,20 +300,26 @@ artifact" step.
       (unix only, Contracts); the render names the librsvg coder so no
       external SVG delegate is consulted — app
       `the_render_names_the_librsvg_coder_and_never_runs_an_svg_delegate`
-      (unix only; compares on the development seat).
+      (unix only; compares on the development seat); the script's audit
+      refuses a text chunk and a marker — app
+      `the_render_scripts_audit_refuses_a_text_chunk_and_a_marker` (unix
+      only).
 - [x] **AC2 — metadata-free.** Every committed PNG walks as
-      `IHDR`/`IDAT`/`IEND` only, every PNG-encoded `.ico` member too, and no
-      file holds a marker — app `every_rendered_icon_file_is_metadata_free`;
-      red on a `tEXt` chunk appended to one PNG and on the bytes `c2pa`
-      appended to the `.ico`.
+      `IHDR`/`IDAT`/`IEND` only, every chunk's CRC verified, every
+      PNG-encoded `.ico` member too, and no file holds a marker — app
+      `every_rendered_icon_file_is_metadata_free`; red on a `tEXt` chunk
+      appended to one PNG and on the bytes `c2pa` appended to the `.ico`;
+      and both SVG sources bare drawings — app
+      `the_svg_sources_are_bare_drawings`.
 - [x] **AC3 — the Windows exe carries it.** ci: `RT_GROUP_ICON` present in
       `fastcull-app.exe`, absent in `fastcull-cli.exe`; the walker proved on
       the development seat against the pre-change artifact (both exes
       without any resource — the old red for the app assertion) and an
       iconed third-party executable (the positive).
 - [x] **AC4 — the window binds it.** `MainWindow`'s block of `main.slint`
-      carries the exact `icon: @image-url(…fastcull-48.png)` line and the
-      path resolves to the committed file — app
+      carries the exact `icon: @image-url(…fastcull-48.png)` line at
+      MainWindow's own depth, outside a comment, and the path resolves to
+      the committed file — app
       `the_window_binds_the_48_px_icon`; that the OS receives the bitmap is
       review-verified from the facts above (measurable on an X11 seat:
       under `xvfb-run` with `WAYLAND_DISPLAY` unset, `xprop -name FastCull
@@ -275,7 +328,8 @@ artifact" step.
       which Slint 1.17.1 parses as an unknown renderer named `x11`, while
       winit 0.30.13 takes Wayland whenever `WAYLAND_DISPLAY` is set).
 - [x] **AC5 — the README mark.** The README's first heading line carries
-      the 64 px PNG at 64×64 — app `the_readme_title_row_carries_the_64_px_mark`.
+      the 64 px PNG at 64×64, left of the title text, outside an HTML
+      comment — app `the_readme_title_row_carries_the_64_px_mark`.
 - [ ] **AC6 — the specs say so.** This spec, the architecture pointer and
       the docs sentence — review-verified; ticked at the merge.
 - [ ] **AC7 — the release.** v0.15.0 is cut after the merge per
@@ -287,10 +341,14 @@ artifact" step.
 
 ## History
 
-- 2026-10-06 — brief 013, QE's fix commit (QE D1, D3, Q2): the script
-  names the librsvg coder — ImageMagick's `svg:decode` delegate ran first
-  and the recorded versions could not see it; the race test depends on
-  bash alone; a unix seat where the script refuses stays red.
+- 2026-10-06 — brief 013, QE's fix commit (QE D1–D5, Q1, Q2; review N1):
+  the script names the librsvg coder — ImageMagick's `svg:decode` delegate
+  ran first and the recorded versions could not see it; the reproduction
+  red reads the pixels and records libpng; the sources are under the
+  metadata-free rule; the race test depends on bash alone; the `.ico`
+  members' lengths and pixels, every chunk's CRC, the binding's depth, the
+  README mark's position and the script's audit are pinned; the window
+  icon's double premultiply recorded; the unix-only reasons corrected.
 - 2026-10-06 — brief 013, the review's fix commit (senior-developer review
   F1, F2, F3, F7; D9): the reproduction test compares first and its
   recorded versions moved to 7.1.2-32 with every byte unchanged; it and the

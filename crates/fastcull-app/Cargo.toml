@@ -209,10 +209,14 @@ fastcull-core.workspace = true
 #      and slint-build emits `rerun-if-changed` for each embedded file:
 #      why `MainWindow.icon` is a path in main.slint and no image ships
 #      beside the exe.
-#   2. `render_to_buffer` returns an embedded raster image unchanged
+#   2. `render_to_buffer` returns an embedded raster image at its own size
 #      (i-slint-core graphics/image.rs, `ImageInner::EmbeddedImage`); the
-#      64-logical-px target size the winit adapter passes applies to SVG
-#      only, so the OS receives the 48 px PNG as drawn.
+#      64-logical-px target the winit adapter passes applies to SVG only.
+#      The buffer is the decoder's premultiplied one, and `icon_to_winit`
+#      (winitwindowadapter.rs) premultiplies it again before winit's
+#      straight-RGBA `Icon::from_rgba` — a Slint defect (QE 2026-10-06, D5)
+#      that darkens only the icon's anti-aliased rim. If an upgrade fixes
+#      it, the rim gets lighter and nothing else moves.
 #   3. The winit adapter sets BOTH Windows icons from `Window.icon` —
 #      `set_taskbar_icon`, then `set_window_icon`
 #      (i-slint-backend-winit winitwindowadapter.rs
@@ -259,6 +263,11 @@ winresource = { version = "0.1", default-features = false }
 
 [dev-dependencies]
 zune-jpeg = "0.4"
+# tests/app_icon.rs decodes the committed icon PNGs: each `.ico` member is
+# compared with its PNG pixel for pixel, and a reproduction mismatch reads
+# the pixels before it names a cause (specs/modules/app-icon.md). Already in
+# Cargo.lock through Slint's image decoding; a test-only edge.
+png = "0.18"
 
 [build-dependencies]
 slint-build = "1"

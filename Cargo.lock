@@ -1509,6 +1509,7 @@ dependencies = [
  "fast_image_resize",
  "fastcull-core",
  "jpeg-encoder",
+ "png",
  "rfd",
  "slint",
  "slint-build",
