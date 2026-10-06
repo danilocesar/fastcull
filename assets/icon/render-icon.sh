@@ -17,12 +17,13 @@
 #                          .ico only and is not kept as a PNG)
 #
 # Needs ImageMagick 7 (`magick`) with the librsvg delegate, and python3 for the
-# chunk walk. The committed renders were made with the tool versions the
-# reproduction test records (crates/fastcull-app/tests/app_icon.rs); the output
-# is byte-deterministic on one seat and tool version, and a different
-# ImageMagick or librsvg renders different bytes without any regression — so a
-# tool upgrade means: re-run, and if the bytes changed, commit the renders and
-# the test's recorded versions together, saying so in the commit.
+# chunk walk. The output is byte-deterministic on one seat and tool version; a
+# different ImageMagick or librsvg may render different bytes without any
+# regression. So when this seat's tools move, re-run and compare: the versions
+# the reproduction test records (crates/fastcull-app/tests/app_icon.rs) move to
+# the seat's in the same commit — with the re-rendered files when the bytes
+# changed, alone when they did not — saying so in the commit
+# (specs/modules/app-icon.md, "The render script is the only producer").
 set -euo pipefail
 
 here="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"

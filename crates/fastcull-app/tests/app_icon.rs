@@ -5,18 +5,20 @@
 //! `assets/icon/` is derived output committed beside its sources: two SVG
 //! drawings, `render-icon.sh` (the only producer), nine PNGs and the Windows
 //! `.ico`. Neither CI runner can render them (the Linux image has no
-//! ImageMagick, the Windows image one without librsvg), so the renders are
+//! ImageMagick, and the script does not run on Windows), so the renders are
 //! committed, and these tests are what stops a hand-edited, mis-sized or
 //! manifest-carrying file from shipping unnoticed:
 //!
 //! - the set is exactly the spec's, each PNG N×N 8-bit RGBA and the `.ico`
-//!   its seven members in order (AC1);
+//!   its seven 32-bit DIB members in order (AC1);
 //! - every file is metadata-free: PNG chunks `IHDR`/`IDAT`/`IEND` only, and
 //!   no C2PA, JUMBF, XMP or EXIF marker anywhere (AC2 — "Make sure it's
 //!   c2pa free", the user, 2026-10-06);
-//! - the script, run into a temp dir, reproduces the committed bytes — on
-//!   the recorded tool versions only, because a different ImageMagick or
-//!   librsvg renders different bytes without any regression (AC1);
+//! - the script, run into a temp dir, reproduces the committed bytes: a
+//!   match is green on any tool versions, a mismatch red on the recorded
+//!   ones and passed with a printed reason on any other, where the tool is
+//!   as likely as the drawing to be the cause (AC1); and its librsvg probe
+//!   never refuses a seat that has the delegate (AC1);
 //! - the window binds the 48 px PNG (AC4) and the README's title row wears
 //!   the 64 px one (AC5).
 //!
@@ -67,12 +69,16 @@ const MARKERS: &[&[u8]] = &[
     b"Exif",
 ];
 
-/// The tool versions the committed renders were made with: ImageMagick's
-/// version and quantum, and its librsvg delegate (app-icon.md, "Contracts").
-/// They move only together with re-rendered files, in one commit that says
-/// so; on any other seat the reproduction test passes with a printed reason
-/// instead of comparing bytes it cannot expect to match.
-const RECORDED_TOOLS: (&str, &str, &str) = ("7.1.2-27", "Q16-HDRI", "RSVG 2.62.3");
+/// The development seat's tool versions — ImageMagick's version and
+/// quantum, and its librsvg delegate (app-icon.md, "Contracts") — on which
+/// the committed renders reproduce byte for byte. The reproduction test
+/// compares on any versions; these decide only what a mismatch means: red
+/// on them, a printed reason on any other. They follow the development
+/// seat's tools whenever those move — with the re-rendered files when the
+/// bytes changed, alone when they did not (7.1.2-27 → 7.1.2-32 on
+/// 2026-10-06 changed none of the ten files) — so that the one seat that
+/// can compare keeps comparing.
+const RECORDED_TOOLS: (&str, &str, &str) = ("7.1.2-32", "Q16-HDRI", "RSVG 2.62.3");
 
 /// The eight bytes every PNG file starts with.
 const PNG_SIGNATURE: &[u8; 8] = b"\x89PNG\r\n\x1a\n";
@@ -235,6 +241,25 @@ fn ico_members<'a>(bytes: &'a [u8], what: &str) -> Vec<IcoMember<'a>> {
         .collect()
 }
 
+/// The `BITMAPINFOHEADER` fields that make an `.ico` member "a 32-bit DIB of
+/// its stated size" (app-icon.md, "The asset set"): the header's own size
+/// (40 for a BITMAPINFOHEADER), the width, the height — twice the width in
+/// an icon, whose bitmap is the colour image stacked on its 1-bit AND mask —
+/// and the bits per pixel. The directory entry repeats the size and depth,
+/// but a member is decoded from this header, so the two are checked apart.
+fn dib_header(member: &[u8], what: &str) -> (u32, i32, i32, u16) {
+    let header = member
+        .get(..40)
+        .unwrap_or_else(|| panic!("{what}: shorter than a BITMAPINFOHEADER"));
+    let le32 = |at: usize| [header[at], header[at + 1], header[at + 2], header[at + 3]];
+    (
+        u32::from_le_bytes(le32(0)),
+        i32::from_le_bytes(le32(4)),
+        i32::from_le_bytes(le32(8)),
+        u16::from_le_bytes([header[14], header[15]]),
+    )
+}
+
 /// The first metadata marker the bytes contain, if any.
 fn marker_in(bytes: &[u8]) -> Option<&'static [u8]> {
     MARKERS
@@ -246,12 +271,18 @@ fn marker_in(bytes: &[u8]) -> Option<&'static [u8]> {
 /// AC1, the set: `assets/icon/` holds exactly the spec's files — an extra
 /// file, a missing size, a leftover `_ico-20.png` or a renamed script is red,
 /// which also pins R7 (no other concept of the three rounds enters the
-/// repository) — each PNG N×N 8-bit RGBA, and the `.ico` its seven 32-bit
-/// members in the spec's order.
+/// repository) — each PNG N×N 8-bit RGBA, and the `.ico` its seven members
+/// in the spec's order, each a 32-bit DIB of its stated size: the directory
+/// entry says N×N at 32 bits, and so does the member's own header (size 40,
+/// width N, height 2N, 32 bits per pixel). ImageMagick writes exactly that
+/// for all seven, the 256 px member included.
 ///
 /// Mutants (2026-10-06, each in the working tree, then restored with `git
 /// checkout`): an empty `png/extra.png` → red at the listing; the 32 px PNG
-/// copied over the 48 → red at its IHDR (32 ≠ 48).
+/// copied over the 48 → red at its IHDR (32 ≠ 48); the 16 px member replaced
+/// by `png/fastcull-16.png`'s bytes, the directory's sizes and offsets
+/// rewritten to match → red naming member 0 as PNG-encoded; member 4's
+/// header bit count edited from 32 to 24 → red at its header.
 #[test]
 fn the_icon_assets_are_exactly_the_spec_set() {
     let icon = icon_dir();
@@ -276,7 +307,8 @@ fn the_icon_assets_are_exactly_the_spec_set() {
         );
     }
     let ico = read(&icon.join("fastcull.ico"));
-    let got: Vec<(u32, u32, u16)> = ico_members(&ico, "fastcull.ico")
+    let members = ico_members(&ico, "fastcull.ico");
+    let got: Vec<(u32, u32, u16)> = members
         .iter()
         .map(|m| (m.width, m.height, m.bits_per_pixel))
         .collect();
@@ -285,6 +317,21 @@ fn the_icon_assets_are_exactly_the_spec_set() {
         got, want,
         "fastcull.ico: its members (width, height, bits per pixel), in the spec's order"
     );
+    for (i, (member, n)) in members.iter().zip(ICO_SIZES).enumerate() {
+        let what = format!("fastcull.ico member {i} ({n} px)");
+        assert!(
+            !member.data.starts_with(PNG_SIGNATURE),
+            "{what} is PNG-encoded, but each member is a 32-bit DIB (app-icon.md, \"The asset set\")"
+        );
+        let side = i32::try_from(n).expect("an icon's side fits an i32");
+        assert_eq!(
+            dib_header(member.data, &what),
+            (40, side, 2 * side, 32),
+            "{what}: its BITMAPINFOHEADER (header size, width, height, bits per pixel) must be a \
+             32-bit DIB of its stated size, the height doubled by the AND mask (app-icon.md, \"The \
+             asset set\")"
+        );
+    }
 }
 
 /// AC2, metadata-free: every committed PNG walks as `IHDR`/`IDAT`/`IEND`
@@ -332,8 +379,10 @@ fn every_rendered_icon_file_is_metadata_free() {
 
 /// The seat's ImageMagick version, quantum and librsvg delegate, in
 /// `RECORDED_TOOLS`'s shape, or `None` when `magick` cannot be started. A
-/// field the output does not carry comes back empty, so it differs from the
-/// recorded value and the test skips rather than compares.
+/// field the output does not carry comes back empty: an empty librsvg field
+/// means the seat has no delegate, and the reproduction test skips; an empty
+/// version or quantum never equals the recorded one, so a mismatch there
+/// passes with its printed reason rather than red.
 fn render_tools() -> Option<(String, String, String)> {
     let version = Command::new("magick").arg("-version").output().ok()?;
     let version = String::from_utf8_lossy(&version.stdout);
@@ -395,36 +444,56 @@ impl Drop for TempDir {
 /// for "the script is the only producer": a drawing changed without a
 /// re-render, or a render edited by hand, is red here.
 ///
-/// It compares only on the recorded tool versions (`RECORDED_TOOLS`): a
-/// different ImageMagick or librsvg renders different bytes without any
-/// regression, so on any other seat it passes with a printed reason. That
-/// includes both CI runners — the Linux image has no ImageMagick and the
-/// Windows image's 7.1.2-25 has no librsvg, so the gate skips before `bash`
-/// is needed there. The residual (no CI seat compares) is written in
-/// app-icon.md and its AC1 box.
+/// Compare first, judge second (app-icon.md, "The render script is the only
+/// producer"): on any unix seat whose `magick` lists the librsvg delegate,
+/// the script runs and its ten files are compared with the committed ones.
+/// A match is green on any tool versions, so the guard keeps comparing when
+/// the seat's tools move without changing a byte — the old gate compared
+/// only on the recorded versions, and compared nowhere once this seat's
+/// ImageMagick moved from 7.1.2-27 to 7.1.2-32 on 2026-10-06 with every
+/// byte unchanged. A mismatch is red on the recorded versions
+/// (`RECORDED_TOOLS`) and passes with a printed reason on any other, where
+/// a different ImageMagick or librsvg is as likely as the drawing to be the
+/// cause.
 ///
-/// Mutants (2026-10-06, this seat, restored with `git checkout --
-/// assets/icon`): one byte flipped in `png/fastcull-22.png` → red naming
-/// it; a colour of `fastcull.svg` edited without a re-render → red on the
-/// first PNG the master renders.
+/// Neither CI runner compares. The Linux image has no ImageMagick. On
+/// Windows the test passes with a printed reason before anything runs: the
+/// script is the Linux development seat's maintainer tool, and Rust's
+/// program search there looks in System32, where WSL puts its `bash.exe`,
+/// before PATH (`std`'s `sys/process/windows.rs`, `search_paths`, Rust
+/// 1.99.0). The runner's ImageMagick is the official Windows build, which
+/// by its dependency list bundles librsvg 2.40.20 (not measured on the
+/// runner), so "wherever `magick` lists the delegate" alone could run the
+/// script where it cannot succeed. The printed reasons go to stderr, which
+/// libtest shows on a pass only under `--nocapture`.
+///
+/// Mutants (2026-10-06, this seat on 7.1.2-32, each file restored with `git
+/// checkout --`): one IDAT byte flipped in `png/fastcull-22.png` → red
+/// naming it; `#4da3ff` → `#4da3fe` in `fastcull.svg` without a re-render →
+/// red on `png/fastcull-48.png`, the first PNG the master renders. With
+/// `RECORDED_TOOLS` edited to another version (not committed), the first
+/// mutant passes with the printed reason and the clean tree is green.
 #[test]
 fn the_render_script_reproduces_the_committed_renders() {
+    if !cfg!(unix) {
+        eprintln!(
+            "icon reproduction skipped: render-icon.sh is the Linux development seat's \
+             maintainer tool and is not run on this OS (app-icon.md, \"Contracts\")"
+        );
+        return;
+    }
     let Some(found) = render_tools() else {
         eprintln!(
-            "icon reproduction skipped: magick not found on this seat (app-icon.md: the \
-             reproduction test compares only on the recorded tool versions)"
+            "icon reproduction skipped: magick not found on this seat (app-icon.md, \"The render \
+             script is the only producer\")"
         );
         return;
     };
-    let recorded = (
-        RECORDED_TOOLS.0.to_string(),
-        RECORDED_TOOLS.1.to_string(),
-        RECORDED_TOOLS.2.to_string(),
-    );
-    if found != recorded {
+    if found.2.is_empty() {
         eprintln!(
-            "icon reproduction skipped: this seat renders with {found:?}, the committed files \
-             were rendered with {recorded:?} (app-icon.md, \"Contracts\")"
+            "icon reproduction skipped: this seat's magick ({} {}) lists no librsvg delegate, \
+             which render-icon.sh needs (app-icon.md, \"The render script is the only producer\")",
+            found.0, found.1
         );
         return;
     }
@@ -442,18 +511,112 @@ fn the_render_script_reproduces_the_committed_renders() {
         run.status,
         String::from_utf8_lossy(&run.stderr)
     );
-    for name in rendered_files() {
-        let committed = read(&icon.join(&name));
-        let rendered = read(&out.0.join(&name));
-        assert!(
-            rendered == committed,
-            "{name}: the script renders {} bytes that differ from the committed {} — a drawing \
-             changed without a re-render, or a render edited by hand (app-icon.md, \"The render \
-             script is the only producer\")",
-            rendered.len(),
-            committed.len()
-        );
-    }
+    let files = rendered_files();
+    // Every file that differs, with the rendered and the committed length.
+    let differing: Vec<(&str, usize, usize)> = files
+        .iter()
+        .filter_map(|name| {
+            let committed = read(&icon.join(name));
+            let rendered = read(&out.0.join(name));
+            if rendered == committed {
+                None
+            } else {
+                Some((name.as_str(), rendered.len(), committed.len()))
+            }
+        })
+        .collect();
+    let Some(&(first, rendered_len, committed_len)) = differing.first() else {
+        // Every byte reproduced, on whatever tool versions this seat has.
+        return;
+    };
+    let names: Vec<&str> = differing.iter().map(|&(name, _, _)| name).collect();
+    let recorded = (
+        RECORDED_TOOLS.0.to_string(),
+        RECORDED_TOOLS.1.to_string(),
+        RECORDED_TOOLS.2.to_string(),
+    );
+    assert!(
+        found != recorded,
+        "{first}: the script renders {rendered_len} bytes that differ from the committed \
+         {committed_len} — a drawing changed without a re-render, or a render edited by hand \
+         (app-icon.md, \"The render script is the only producer\"); {} of {} files differ: \
+         {names:?}",
+        differing.len(),
+        files.len()
+    );
+    eprintln!(
+        "icon reproduction not judged: {} of {} files differ ({names:?}), but this seat renders \
+         with {found:?} and the recorded versions are {recorded:?}, so the tool is as likely as \
+         the drawing to be the cause (app-icon.md, \"The render script is the only producer\")",
+        differing.len(),
+        files.len()
+    );
+}
+
+/// The librsvg probe reads ImageMagick's whole format list before it
+/// searches it (render-icon.sh; brief 013's fix commit 3376ce6): piped
+/// straight into `grep -q`, grep quit at the first match while magick was
+/// still writing, magick died of SIGPIPE and `pipefail` turned a seat WITH
+/// librsvg into a refusal (955 of 3,200 runs under 8-way load). This test
+/// forces that race without load: a stand-in `magick` whose format list puts
+/// the RSVG line first and then writes more than a pipe holds (1 MiB), so a
+/// reader that quits early leaves it with unwritable bytes every time. The
+/// script must get PAST the probe — the stand-in refuses the render with
+/// exit 7, so the script ends there — and must not print the librsvg refusal.
+///
+/// Unix only: the stand-in is an executable shell script found through
+/// PATH, which Git Bash on the Windows runner is not known to resolve from an
+/// extension-less file, and the script is the Linux development seat's
+/// maintainer tool (app-icon.md, "The render script is the only producer").
+///
+/// Old red (2026-10-06): with eefd561's script it refuses at the probe 20 of
+/// 20; with the fixed script it reaches the render 20 of 20.
+#[cfg(unix)]
+#[test]
+fn the_render_script_reads_the_whole_format_list_before_probing_for_librsvg() {
+    use std::os::unix::fs::PermissionsExt;
+    let dir = TempDir::new(
+        std::env::temp_dir().join(format!("fastcull-icon-probe-{}", std::process::id())),
+    );
+    let bin = dir.0.join("bin");
+    fs::create_dir_all(&bin).expect("creating the stand-in's directory");
+    let standin = bin.join("magick");
+    fs::write(
+        &standin,
+        "#!/usr/bin/env bash\n\
+         case \"$1\" in\n\
+           -version) echo \"Version: ImageMagick 0.0.0-0 Q16-HDRI stand-in\" ;;\n\
+           -list) echo \"      SVG  RSVG      rw+   Scalable Vector Graphics (RSVG 2.62.3)\"; \
+                  head -c 1048576 /dev/zero | tr '\\0' x ;;\n\
+           *) echo \"stand-in magick: render refused\" >&2; exit 7 ;;\n\
+         esac\n",
+    )
+    .expect("writing the stand-in magick");
+    fs::set_permissions(&standin, fs::Permissions::from_mode(0o755)).expect("chmod +x");
+    let path = format!(
+        "{}:{}",
+        bin.display(),
+        std::env::var("PATH").unwrap_or_default()
+    );
+    let run = Command::new("bash")
+        .arg(icon_dir().join("render-icon.sh"))
+        .arg(dir.0.join("out"))
+        .env("PATH", path)
+        .output()
+        .expect("starting bash for assets/icon/render-icon.sh");
+    let stderr = String::from_utf8_lossy(&run.stderr);
+    assert!(
+        !stderr.contains("no librsvg delegate"),
+        "render-icon.sh refused a magick that lists librsvg: the probe stopped reading before \
+         magick finished writing (app-icon.md, \"The render script is the only producer\"); \
+         stderr:\n{stderr}"
+    );
+    assert_eq!(
+        run.status.code(),
+        Some(7),
+        "render-icon.sh should get past the probe and stop at the stand-in's render refusal; \
+         stderr:\n{stderr}"
+    );
 }
 
 /// The line that binds the window's icon, exactly as `MainWindow` carries it

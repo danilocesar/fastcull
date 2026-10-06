@@ -46,17 +46,31 @@ hicolor installation — is not here: it waits for packaging (the user,
   32, 48, 64 and 256 px renders, stripped (senior-developer plan
   2026-10-06).
 - The rendered files are committed, because neither CI runner can produce
-  them — the Linux image carries no ImageMagick and the Windows image a
-  build whose rasteriser is not librsvg (brief 013 R1; senior-developer
-  plan 2026-10-06).
+  them — the Linux image carries no ImageMagick, and the script does not
+  run on Windows (Contracts) (brief 013 R1; senior-developer plan
+  2026-10-06; corrected 2026-10-06, review F1 fix: it said the Windows
+  image's ImageMagick is a build whose rasteriser is not librsvg, but that
+  image installs ImageMagick's official Windows build, which bundles its
+  own librsvg (2.40.20) — read from the image's toolset and ImageMagick's
+  Windows dependency list, not measured on the runner).
 - The script's output is byte-deterministic on one seat and one tool
   version, and that is the limit of the reproduction promise: a different
-  ImageMagick or librsvg renders different bytes without any regression, so
-  the reproduction test compares bytes only on the recorded tool versions
-  (Contracts) and passes with a printed reason elsewhere; when the seat's
-  tools move, the script is re-run and, if the bytes changed, the renders
-  and the recorded versions are committed together, the commit saying so
-  (senior-developer plan 2026-10-06).
+  ImageMagick or librsvg may render different bytes without any regression,
+  so the reproduction test runs the script on any unix seat whose `magick`
+  lists the librsvg delegate and compares the bytes: a match is green on
+  any versions; a mismatch is red on the recorded tool versions (Contracts)
+  and passes with a printed reason on any other, where the tool is as
+  likely as the drawing to be the cause; when the development seat's tools
+  move, the recorded versions move to the seat's in the same commit — with
+  the re-rendered files when the bytes changed, alone when they did not —
+  so that the one seat that can compare keeps comparing, the commit saying
+  so (senior-developer plan 2026-10-06; corrected 2026-10-06,
+  senior-developer review F1: it said a different version "renders
+  different bytes" and moved the recorded versions only with re-rendered
+  files, which left the test comparing on no seat once the seat's
+  ImageMagick moved from 7.1.2-27 to 7.1.2-32 with every byte unchanged;
+  limited to unix seats (developer 2026-10-06, F1 fix; the reason in
+  Contracts)).
 
 ### Metadata-free
 
@@ -171,10 +185,21 @@ upgrade re-checks them.
 - `render-icon.sh [out-dir]`: the sources beside the script, `png/` and
   `fastcull.ico` under out-dir, exit non-zero on an audit failure, the
   tool versions printed first.
-- The recorded tool versions the reproduction test compares on:
-  ImageMagick `7.1.2-27`, quantum `Q16-HDRI`, librsvg `RSVG 2.62.3` — the
+- The recorded tool versions a reproduction mismatch is red on:
+  ImageMagick `7.1.2-32`, quantum `Q16-HDRI`, librsvg `RSVG 2.62.3` — the
   development seat's on 2026-10-06, held as constants in the test and
-  moved only together with re-rendered files.
+  moved whenever the development seat's tools move (Behaviour). Every
+  reason the reproduction test prints when it passes without a verdict — a
+  skip, or a mismatch off these versions — goes to stderr (visible under
+  `--nocapture`).
+- The probe-race test is `#[cfg(unix)]`: its stand-in `magick` is an
+  executable shell script found through PATH, which the Windows runner's
+  Git Bash is not known to resolve from an extension-less file, and the
+  script is the Linux development seat's maintainer tool. For the same
+  reason the reproduction test runs the script on unix only and on Windows
+  passes with its printed reason before anything runs — there Rust's
+  program search looks in System32, where WSL puts its `bash.exe`, before
+  PATH (`std`'s `sys/process/windows.rs`, `search_paths`, Rust 1.99.0).
 - The tests are `crates/fastcull-app/tests/app_icon.rs`, reading the
   repository from `CARGO_MANIFEST_DIR` two levels up as
   `tests/shortcuts_map.rs` does; their PNG and ICO walkers are test code
@@ -199,12 +224,17 @@ upgrade re-checks them.
 artifact" step.
 
 - [x] **AC1 — the set, reproducible.** `assets/icon/` holds exactly the
-      files above, each PNG N×N 8-bit RGBA, the `.ico` its seven members in
-      order — app `the_icon_assets_are_exactly_the_spec_set`; the script
-      run into a temp dir reproduces every PNG and the `.ico` byte for byte
-      on the recorded tool versions, and passes with a printed reason on
-      any other seat — app `the_render_script_reproduces_the_committed_renders`
-      (never compares on CI: no usable ImageMagick on either runner).
+      files above, each PNG N×N 8-bit RGBA, the `.ico` its seven 32-bit DIB
+      members in order — app `the_icon_assets_are_exactly_the_spec_set`; the
+      script run into a temp dir reproduces every PNG and the `.ico` byte
+      for byte, a mismatch red on the recorded tool versions and passing
+      with a printed reason on any other — app
+      `the_render_script_reproduces_the_committed_renders` (never compares
+      on CI: no ImageMagick on the Linux runner, and the script does not run
+      on Windows); its librsvg probe never refuses a seat that has the
+      delegate — app
+      `the_render_script_reads_the_whole_format_list_before_probing_for_librsvg`
+      (unix only, Contracts).
 - [x] **AC2 — metadata-free.** Every committed PNG walks as
       `IHDR`/`IDAT`/`IEND` only, every PNG-encoded `.ico` member too, and no
       file holds a marker — app `every_rendered_icon_file_is_metadata_free`;
@@ -238,6 +268,12 @@ artifact" step.
 
 ## History
 
+- 2026-10-06 — brief 013, the review's fix commit (senior-developer review
+  F1, F2, F3, F7; D9): the reproduction test compares first and its
+  recorded versions moved to 7.1.2-32 with every byte unchanged; it and the
+  new probe-race test run the script on unix only; the `.ico` members' own
+  headers are pinned; the premise that the Windows image's ImageMagick has
+  no librsvg corrected in place.
 - 2026-10-06 — brief 013, the build commit: the window's binding, the
   exe's resource icon with CI's assertion, and the README mark landed;
   AC3, AC4 and AC5 ticked beside their tests; the `VERSIONINFO` sentence

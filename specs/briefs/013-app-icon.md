@@ -192,3 +192,17 @@ the silhouette (the refinement pass's job).
   soft or generic running-window icon is fixed in this PR — the Windows-
   only fallback that loads the window icon from the exe's own `.ico` —
   rather than after v0.15.0.
+- D9 (2026-10-06, Manager, M3, on the senior developer's review F1; the
+  unix limit approved in the senior developer's test-integrity verdict the
+  same day): AC1's reproduction test compares first. It runs the script on
+  any unix seat whose `magick` lists the librsvg delegate; a match is green
+  on any tool versions, a mismatch red on the recorded versions and
+  passing with a printed reason on any other; the recorded versions follow
+  the development seat's tools whenever they move — to 7.1.2-32 in this
+  round, every byte unchanged — so the one seat that can compare keeps
+  comparing (the versions-first gate had compared nowhere since the seat's
+  ImageMagick moved from 7.1.2-27). It does not run on Windows: the runner
+  image installs ImageMagick's official Windows build, which bundles its
+  own librsvg, and Rust's program search there finds WSL's `bash.exe`
+  before Git Bash, so a delegate check alone would have run the script
+  where it cannot succeed.
