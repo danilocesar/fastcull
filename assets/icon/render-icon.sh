@@ -34,7 +34,13 @@ for f in "$master" "$small"; do
   [ -f "$f" ] || { echo "render-icon.sh: missing source $f" >&2; exit 2; }
 done
 command -v magick >/dev/null || { echo "render-icon.sh: ImageMagick 7 (magick) not found" >&2; exit 2; }
-magick -list format | grep -q 'RSVG' || { echo "render-icon.sh: ImageMagick has no librsvg delegate" >&2; exit 2; }
+# The whole format list is read before it is searched. Piped straight into
+# `grep -q`, grep exits at the first match while magick may still be
+# writing; magick then dies of SIGPIPE (exit 141) and `pipefail` turns a
+# seat that HAS librsvg into a refusal (2026-10-06: 955 of 3200 runs under
+# 8-way load, 1 of 300 idle).
+formats="$(magick -list format)" || formats=""
+grep -q 'RSVG' <<<"$formats" || { echo "render-icon.sh: ImageMagick has no librsvg delegate" >&2; exit 2; }
 command -v python3 >/dev/null || { echo "render-icon.sh: python3 not found (the chunk audit needs it)" >&2; exit 2; }
 
 echo "tools: $(magick -version | head -1 | sed 's/^Version: //'); $(magick -list format | grep -o 'RSVG [0-9.]*' | head -1)"
