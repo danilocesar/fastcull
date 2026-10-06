@@ -79,7 +79,10 @@ windows binary uses the new icon."
   no icon (persona: an iconless CLI reads as "not the one you
   double-click").
 - R4. **CI asserts it.** The "Verify Windows artifact" step of `ci.yml`
-  (and so every artifact and every release) additionally asserts that
+  (and so every CI artifact — not the release: `release.yml` is
+  dist-generated and runs no artifact check, so v0.15.0's zip is parsed
+  by hand after the release; this sentence said "every release" until
+  2026-10-06, QE round 1 D6) additionally asserts that
   `fastcull-app.exe` contains an icon resource (`RT_GROUP_ICON`) and that
   `fastcull-cli.exe` does not — the same shape as its PE-subsystem
   assertion (issue #40).
@@ -204,8 +207,9 @@ the silhouette (the refinement pass's job).
   round, every byte unchanged — so the one seat that can compare keeps
   comparing (the versions-first gate had compared nowhere since the seat's
   ImageMagick moved from 7.1.2-27). It does not run on Windows: the runner
-  image installs ImageMagick's official Windows build, which bundles its
-  own librsvg, and Rust's program search there finds WSL's `bash.exe`
+  image installs ImageMagick's official Windows build, which by its
+  dependency list bundles its own librsvg (not measured on the runner;
+  review N2), and Rust's program search there finds WSL's `bash.exe`
   before Git Bash, so a delegate check alone would have run the script
   where it cannot succeed.
 - D10 (2026-10-06, Manager, M3, on QE D1–D5 and Q1–Q3): the render names
@@ -222,3 +226,25 @@ the silhouette (the refinement pass's job).
   the pass-with-reason stood until the user, as the customer, chose it with
   the trade-off stated (a pixel-identical re-encode by another tool is not
   noticed).
+- D12 (2026-10-06, Manager, the record of the gate): the senior
+  developer's review of the three implementation commits was
+  CHANGES_REQUESTED (F1 major: the reproduction guard dead after the
+  seat's ImageMagick moved 7.1.2-27 → 7.1.2-32 with every byte unchanged;
+  F2 minor: the SIGPIPE race fix without its regression test; nits
+  F3–F7); the fix `b7aad8c` was re-reviewed APPROVED; QE round 1 was FAIL
+  (D1 major: the script handed the SVG to ImageMagick unnamed and the
+  `svg:decode` Inkscape delegate runs first; minors D2–D6; proposals
+  TP1–TP10); the senior developer's test-integrity review approved every
+  proposal in an exact shape and refused TP2 as a pass-with-reason, a
+  refusal the user then overrode as the customer (D11, option B); the
+  developer's five commits `f29c231`, `23f0a95`, `571efa9`, `568b6d7`,
+  `c090363` were re-reviewed APPROVED (nits N1–N3) and QE round 2 was
+  PASS with three minors (D7: three PNGs never decoded on CI; D8: the
+  SVG rule misses editor namespaces, hidden text and entities; D9: CI
+  proves an icon, not this icon) and proposals TP11–TP13. Deferred, all
+  six, to issue #112 — CI-depth improvements on guards the development
+  seat already holds, none a defect in what ships — so v0.15.0 ships from
+  the passing PR; the senior developer's nits N1–N3 go with them. The
+  Windows artifact's `.rsrc` section is byte-identical across the PR's
+  three builds (QE), so the user's D8 look at any of them stands for the
+  head. CI at `c090363`: both runners green (run 37526836736).

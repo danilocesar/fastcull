@@ -345,8 +345,9 @@ artifact" step.
 - [x] **AC5 — the README mark.** The README's first heading line carries
       the 64 px PNG at 64×64, left of the title text, outside an HTML
       comment — app `the_readme_title_row_carries_the_64_px_mark`.
-- [ ] **AC6 — the specs say so.** This spec, the architecture pointer and
-      the docs sentence — review-verified; ticked at the merge.
+- [x] **AC6 — the specs say so.** This spec, the architecture pointer and
+      the docs sentence — review-verified at two reviews, two re-reviews
+      and two QE rounds; ticked at the merge, 2026-10-06 (M10).
 - [ ] **AC7 — the release.** v0.15.0 is cut after the merge per
       RELEASING.md and its Windows archive's `fastcull-app.exe` shows the
       icon in Explorer, the title bar and the taskbar — the user verifies on
