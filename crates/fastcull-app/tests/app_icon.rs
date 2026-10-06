@@ -569,6 +569,13 @@ fn the_render_script_reproduces_the_committed_renders() {
 /// extension-less file, and the script is the Linux development seat's
 /// maintainer tool (app-icon.md, "The render script is the only producer").
 ///
+/// The test needs bash and nothing else on the seat: the script refuses to
+/// start without python3 (its chunk audit), so a stand-in `python3` sits
+/// beside the stand-in `magick` and the script gets past that check on a seat
+/// without one — it stops at the stand-in's render refusal before any audit
+/// runs (QE 2026-10-06, D3). Without it this test was red on such a seat for
+/// the seat's lack of python3, never for the probe.
+///
 /// Old red (2026-10-06): with eefd561's script it refuses at the probe 20 of
 /// 20; with the fixed script it reaches the render 20 of 20.
 #[cfg(unix)]
@@ -593,6 +600,11 @@ fn the_render_script_reads_the_whole_format_list_before_probing_for_librsvg() {
     )
     .expect("writing the stand-in magick");
     fs::set_permissions(&standin, fs::Permissions::from_mode(0o755)).expect("chmod +x");
+    // Never run: the script only asks `command -v python3`, and stops at the
+    // stand-in magick's render refusal before its audit would call it.
+    let python = bin.join("python3");
+    fs::write(&python, "#!/usr/bin/env bash\nexit 0\n").expect("writing the stand-in python3");
+    fs::set_permissions(&python, fs::Permissions::from_mode(0o755)).expect("chmod +x");
     let path = format!(
         "{}:{}",
         bin.display(),
@@ -616,6 +628,104 @@ fn the_render_script_reads_the_whole_format_list_before_probing_for_librsvg() {
         Some(7),
         "render-icon.sh should get past the probe and stop at the stand-in's render refusal; \
          stderr:\n{stderr}"
+    );
+}
+
+/// The render names ImageMagick's librsvg coder (`RSVG:<file>`), so no
+/// external SVG delegate is ever consulted (app-icon.md, "The render script
+/// is the only producer"; QE 2026-10-06, D1). Handed a bare file name,
+/// ImageMagick's SVG reader (`coders/svg.c`, `ReadSVGImage`, 7.1.2-32) first
+/// runs the `svg:decode` delegate its `delegates.xml` names — `inkscape`, on
+/// Fedora's — and falls back to librsvg only when that command is absent or
+/// fails. A seat with Inkscape installed therefore rendered other bytes
+/// while the script still reported librsvg's version, and the recorded tool
+/// versions could not see the rasteriser that made the files.
+///
+/// A stand-in `inkscape`, first on PATH, logs every call and exits 1, so
+/// ImageMagick falls back to librsvg and the bytes come out the same either
+/// way: the red is the CALL LOG, never the bytes. `MSVG:` (ImageMagick's own
+/// renderer) would leave the log empty too but changes the bytes, which the
+/// reproduction test catches — the two tests pin `RSVG:` together.
+///
+/// Gated exactly like the reproduction test: it returns early, with a
+/// printed reason, only where `magick` is absent or lists no librsvg
+/// delegate, so it compares on the development seat and on neither CI
+/// runner. Unix only because it cannot compile elsewhere: the stand-in is
+/// made executable with `std::os::unix::fs::PermissionsExt` and put first on
+/// a `:`-joined PATH.
+///
+/// Old red (2026-10-06, this seat, ImageMagick 7.1.2-32 with RSVG 2.62.3):
+/// with b7aad8c's script, which handed ImageMagick the bare file name, the
+/// stand-in logged 10 calls — one per render — in each of 10 runs; with
+/// `RSVG:$1`, none, 10 runs of 10.
+#[cfg(unix)]
+#[test]
+fn the_render_names_the_librsvg_coder_and_never_runs_an_svg_delegate() {
+    use std::os::unix::fs::PermissionsExt;
+    let Some(found) = render_tools() else {
+        eprintln!(
+            "icon delegate check skipped: magick not found on this seat (app-icon.md, \"The \
+             render script is the only producer\")"
+        );
+        return;
+    };
+    if found.2.is_empty() {
+        eprintln!(
+            "icon delegate check skipped: this seat's magick ({} {}) lists no librsvg delegate, \
+             which render-icon.sh needs (app-icon.md, \"The render script is the only producer\")",
+            found.0, found.1
+        );
+        return;
+    }
+    let dir = TempDir::new(
+        std::env::temp_dir().join(format!("fastcull-icon-delegate-{}", std::process::id())),
+    );
+    let bin = dir.0.join("bin");
+    fs::create_dir_all(&bin).expect("creating the stand-in's directory");
+    let standin = bin.join("inkscape");
+    fs::write(
+        &standin,
+        "#!/usr/bin/env bash\nprintf '%s\\n' \"$*\" >> \"$INKSCAPE_LOG\"\nexit 1\n",
+    )
+    .expect("writing the stand-in inkscape");
+    fs::set_permissions(&standin, fs::Permissions::from_mode(0o755)).expect("chmod +x");
+    let log = dir.0.join("calls.log");
+    fs::write(&log, "").expect("creating the stand-in's call log");
+    let path = format!(
+        "{}:{}",
+        bin.display(),
+        std::env::var("PATH").unwrap_or_default()
+    );
+    let out = dir.0.join("out");
+    let run = Command::new("bash")
+        .arg(icon_dir().join("render-icon.sh"))
+        .arg(&out)
+        .env("INKSCAPE_LOG", &log)
+        .env("PATH", path)
+        .output()
+        .expect("starting bash for assets/icon/render-icon.sh");
+    assert!(
+        run.status.success(),
+        "render-icon.sh exited with {}; its stderr:\n{}",
+        run.status,
+        String::from_utf8_lossy(&run.stderr)
+    );
+    for name in ["png/fastcull-16.png", "fastcull.ico"] {
+        assert!(
+            out.join(name).is_file(),
+            "render-icon.sh exited 0 but wrote no {name}"
+        );
+    }
+    let calls = String::from_utf8_lossy(&read(&log)).into_owned();
+    let calls: Vec<&str> = calls.lines().collect();
+    assert!(
+        calls.is_empty(),
+        "ImageMagick ran the stand-in inkscape {} times (the first: `{}`): the render must name \
+         the librsvg coder (`RSVG:<file>`), because a seat whose delegates.xml routes SVG to \
+         Inkscape renders different bytes under the same reported versions (app-icon.md, \"The \
+         render script is the only producer\")",
+        calls.len(),
+        calls.first().copied().unwrap_or_default()
     );
 }
 

@@ -17,13 +17,10 @@
 #                          .ico only and is not kept as a PNG)
 #
 # Needs ImageMagick 7 (`magick`) with the librsvg delegate, and python3 for the
-# chunk walk. The output is byte-deterministic on one seat and tool version; a
-# different ImageMagick or librsvg may render different bytes without any
-# regression. So when this seat's tools move, re-run and compare: the versions
-# the reproduction test records (crates/fastcull-app/tests/app_icon.rs) move to
-# the seat's in the same commit — with the re-rendered files when the bytes
-# changed, alone when they did not — saying so in the commit
-# (specs/modules/app-icon.md, "The render script is the only producer").
+# chunk walk. The output is byte-deterministic on one seat and one set of tools
+# — app-icon.md says which links shape the bytes and what a mismatch means;
+# when this seat's tools move, re-run and compare, and the versions the
+# reproduction test records move with the seat's in the same commit.
 set -euo pipefail
 
 here="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
@@ -47,8 +44,13 @@ command -v python3 >/dev/null || { echo "render-icon.sh: python3 not found (the 
 echo "tools: $(magick -version | head -1 | sed 's/^Version: //'); $(magick -list format | grep -o 'RSVG [0-9.]*' | head -1)"
 mkdir -p "$out/png"
 
+# `RSVG:` names ImageMagick's librsvg coder. Handed a bare file name, its SVG
+# reader first runs the `svg:decode` delegate delegates.xml names (Inkscape, on
+# Fedora's) and uses librsvg only when that command is absent or fails, so a
+# seat with Inkscape rendered other bytes under the same reported versions (QE
+# 2026-10-06, D1; tests/app_icon.rs pins it with a stand-in inkscape).
 render() { # render <svg> <size> <file>
-  magick -background none -density 384 "$1" -resize 512x512 \
+  magick -background none -density 384 "RSVG:$1" -resize 512x512 \
     -filter Lanczos -resize "${2}x${2}" -strip "PNG32:$3"
 }
 for n in 16 22 24 32; do render "$small" "$n" "$out/png/fastcull-$n.png"; done

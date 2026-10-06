@@ -206,3 +206,13 @@ the silhouette (the refinement pass's job).
   own librsvg, and Rust's program search there finds WSL's `bash.exe`
   before Git Bash, so a delegate check alone would have run the script
   where it cannot succeed.
+- D10 (2026-10-06, Manager, M3, on QE D1–D5 and Q1–Q3): the render names
+  the librsvg coder (`RSVG:`); the SVG sources are under the metadata-free
+  rule, `<title>`, `<desc>` and XML comments included (M7); a unix seat
+  where the script refuses stays red; the reproduction promise stays
+  byte-for-byte with the pixel diagnosis inside the red and libpng recorded
+  (the senior developer refused the pass-with-reason as a loosening; the
+  user is asked whether to move to a pixel promise — a follow-up if so);
+  the CI walker asserts VERSIONINFO and that the CLI carries no resource at
+  all; the window icon's double premultiply is recorded as Slint's,
+  relayed to the user under hard rule 2.

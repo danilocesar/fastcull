@@ -37,14 +37,30 @@ hicolor installation — is not here: it waits for packaging (the user,
 - `render-icon.sh [out-dir]` reads the two SVGs beside itself and writes
   `png/` and `fastcull.ico` into out-dir, which defaults to its own
   directory. It needs ImageMagick 7 (`magick`) with the librsvg delegate
-  and python3 for its chunk audit, refuses to run without them, and exits
-  non-zero when any output fails the audit below. No rendered file is
+  and python3 for its chunk audit, refuses to run without them (exit 2,
+  naming what is missing), and exits non-zero when any output fails the
+  audit below. A unix seat where the script refuses is red in every test
+  that runs it: a refusal is never a mismatch and never a skip — the
+  reproduction test skips only where `magick` is absent or lists no
+  librsvg, and a seat with both but no python3 is one the maintainer
+  completes, not one the tests excuse (Manager 2026-10-06, QE Q2). The
+  probe-race test alone needs bash only: its stand-in folder carries a
+  stand-in `python3`, since the script stops at the stand-in's render
+  refusal before any audit runs (QE 2026-10-06, D3). No rendered file is
   edited by hand or produced by any other tool: a change to a drawing is a
   run of the script and a commit of what it wrote (brief 013 R1).
-- The rendering is fixed: rasterise at 384 dpi, resize to 512, Lanczos to
-  N, strip, write 32-bit PNG; the `.ico` is assembled from the 16, 20, 24,
-  32, 48, 64 and 256 px renders, stripped (senior-developer plan
-  2026-10-06).
+- The rendering is fixed: the script hands each SVG to ImageMagick as
+  `RSVG:<file>`, naming the librsvg coder, and rasterises at 384 dpi,
+  resizes to 512, Lanczos to N, strips and writes a 32-bit PNG; the `.ico`
+  is assembled from the 16, 20, 24, 32, 48, 64 and 256 px renders, stripped
+  (senior-developer plan 2026-10-06; corrected 2026-10-06, QE D1: it handed
+  the SVG over by its name alone, and ImageMagick's SVG reader first runs
+  the external `svg:decode` delegate its `delegates.xml` names — Inkscape,
+  on Fedora's — and falls back to librsvg only when that command is absent
+  or fails, so a seat with Inkscape rendered other bytes while the script
+  still reported librsvg's version; named `RSVG:`, the delegate is never
+  consulted, and the probe-race and reproduction tests keep their
+  meaning).
 - The rendered files are committed, because neither CI runner can produce
   them — the Linux image carries no ImageMagick, and the script does not
   run on Windows (Contracts) (brief 013 R1; senior-developer plan
@@ -234,7 +250,10 @@ artifact" step.
       on Windows); its librsvg probe never refuses a seat that has the
       delegate — app
       `the_render_script_reads_the_whole_format_list_before_probing_for_librsvg`
-      (unix only, Contracts).
+      (unix only, Contracts); the render names the librsvg coder so no
+      external SVG delegate is consulted — app
+      `the_render_names_the_librsvg_coder_and_never_runs_an_svg_delegate`
+      (unix only; compares on the development seat).
 - [x] **AC2 — metadata-free.** Every committed PNG walks as
       `IHDR`/`IDAT`/`IEND` only, every PNG-encoded `.ico` member too, and no
       file holds a marker — app `every_rendered_icon_file_is_metadata_free`;
@@ -268,6 +287,10 @@ artifact" step.
 
 ## History
 
+- 2026-10-06 — brief 013, QE's fix commit (QE D1, D3, Q2): the script
+  names the librsvg coder — ImageMagick's `svg:decode` delegate ran first
+  and the recorded versions could not see it; the race test depends on
+  bash alone; a unix seat where the script refuses stays red.
 - 2026-10-06 — brief 013, the review's fix commit (senior-developer review
   F1, F2, F3, F7; D9): the reproduction test compares first and its
   recorded versions moved to 7.1.2-32 with every byte unchanged; it and the
