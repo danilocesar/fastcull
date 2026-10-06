@@ -642,7 +642,29 @@ jobs:
       # last artifact without the icon (run 37379352601) both exes walk as
       # [] and the app line goes red; an iconed third-party exe walks as
       # [3, 5, 14, 16, 24, 2000].
-      - name: Verify Windows artifact (static CRT + subsystems + icon + starts)
+      #
+      # VERSIONINFO (brief 013 D6 and D10, specs/modules/app-icon.md):
+      # winresource writes a VERSIONINFO resource (type 16) beside the icon,
+      # and its strings are what Task Manager and Explorer's Details tab
+      # show, so they are asserted line by line: FileDescription and
+      # ProductName "FastCull", FileVersion and ProductVersion the version
+      # as written in Cargo.toml's [workspace.package] -- read here, so a
+      # release's bump flows through -- the numeric FILEVERSION and
+      # PRODUCTVERSION that version as X.Y.Z.0, the en-US Unicode string
+      # table 040904B0 and its Translation pair (0x409, 0x4B0).
+      # `version_resource` follows the resource tree type -> name ->
+      # language to the first RT_VERSION's bytes, and `parse_block` walks
+      # their VS_VERSIONINFO nodes (a length, a value length, a type, a
+      # UTF-16 key, each part 32-bit aligned). fastcull-cli carries no
+      # resources at all -- no icon, no VERSIONINFO -- the control for both:
+      # a walker that found a VERSIONINFO everywhere would fail on the CLI.
+      # Proved before it landed (2026-10-06): the PR's artifact at b7aad8c
+      # (run 37493711848) passes every line; the pre-change artifact (run
+      # 37379352601) has no VERSIONINFO and goes red; PuTTY, whose string
+      # table is 080904B0, goes red on every line; a copy of that app exe
+      # with FastCull edited to Fastcull in its UTF-16 FileDescription goes
+      # red on that line alone.
+      - name: Verify Windows artifact (static CRT + subsystems + icon + VERSIONINFO + starts)
         if: runner.os == 'Windows'
         shell: bash
         run: |
@@ -654,7 +676,7 @@ jobs:
             fi
           done
           python - <<'EOF'
-          import struct, sys
+          import re, struct, sys
 
           def subsystem(path):
               with open(path, "rb") as f:
@@ -700,6 +722,103 @@ jobs:
                       types.add(name)
               return types
 
+          RT_VERSION = 16
+
+          def rva_to_offset(data, rva):
+              """The file offset of an RVA, through the section table."""
+              pe = struct.unpack_from("<I", data, 0x3C)[0]
+              coff = pe + 4
+              nsections = struct.unpack_from("<H", data, coff + 2)[0]
+              opt_size = struct.unpack_from("<H", data, coff + 16)[0]
+              sections = coff + 20 + opt_size
+              for i in range(nsections):
+                  s = sections + 40 * i
+                  vsize, vaddr, rawsize, rawptr = struct.unpack_from("<IIII", data, s + 8)
+                  if vaddr <= rva < vaddr + max(vsize, rawsize):
+                      return rawptr + (rva - vaddr)
+              raise AssertionError(f"RVA {rva:#x} maps to no section")
+
+          def version_resource(path):
+              """The bytes of the first RT_VERSION resource (any name, any
+              language), or None when the PE has none."""
+              with open(path, "rb") as f:
+                  data = f.read()
+              pe = struct.unpack_from("<I", data, 0x3C)[0]
+              assert data[pe:pe + 4] == b"PE\0\0", f"{path}: no PE signature"
+              opt = pe + 4 + 20
+              magic = struct.unpack_from("<H", data, opt)[0]
+              dd = opt + (112 if magic == 0x20B else 96)
+              rva, size = struct.unpack_from("<II", data, dd + 2 * 8)
+              if rva == 0 or size == 0:
+                  return None
+              base = rva_to_offset(data, rva)
+              def entries(d):
+                  named, ids = struct.unpack_from("<HH", data, d + 12)
+                  return [struct.unpack_from("<II", data, d + 16 + 8 * i) for i in range(named + ids)]
+              for name, off in entries(base):
+                  if name & 0x80000000 or name != RT_VERSION:
+                      continue
+                  for _n, off2 in entries(base + (off & 0x7FFFFFFF)):
+                      for _l, off3 in entries(base + (off2 & 0x7FFFFFFF)):
+                          drva, dsize = struct.unpack_from("<II", data, base + off3)
+                          o = rva_to_offset(data, drva)
+                          return data[o:o + dsize]
+              return None
+
+          def parse_block(buf, pos):
+              """One VS_VERSIONINFO node: (key, value bytes, children, end)."""
+              length, vlen, kind = struct.unpack_from("<HHH", buf, pos)
+              end = pos + length
+              assert length >= 6 and end <= len(buf), f"VERSIONINFO node at {pos}: length {length}"
+              q = pos + 6
+              while q < end and buf[q:q + 2] != b"\0\0":
+                  q += 2
+              key = buf[pos + 6:q].decode("utf-16-le")
+              q = (q + 2 + 3) & ~3
+              n = 2 * vlen if kind == 1 else vlen
+              value = buf[q:q + n]
+              q = (q + n + 3) & ~3
+              children = []
+              while q < end:
+                  c = parse_block(buf, q)
+                  children.append(c)
+                  q = (c[3] + 3) & ~3
+              return key, value, children, end
+
+          def versioninfo(path):
+              """The numeric versions, the string tables (keys lower-cased)
+              and the Translation pair of the PE's VERSIONINFO, or None."""
+              res = version_resource(path)
+              if res is None:
+                  return None
+              key, fixed, children, _end = parse_block(res, 0)
+              assert key == "VS_VERSION_INFO", f"{path}: VERSIONINFO root key {key!r}"
+              sig, _struc, fv_ms, fv_ls, pv_ms, pv_ls = struct.unpack_from("<IIIIII", fixed, 0)
+              assert sig == 0xFEEF04BD, f"{path}: VS_FIXEDFILEINFO signature {sig:#x}"
+              info = {
+                  "FILEVERSION": (fv_ms >> 16, fv_ms & 0xFFFF, fv_ls >> 16, fv_ls & 0xFFFF),
+                  "PRODUCTVERSION": (pv_ms >> 16, pv_ms & 0xFFFF, pv_ls >> 16, pv_ls & 0xFFFF),
+                  "tables": {},
+                  "Translation": None,
+              }
+              for ckey, _v, cchildren, _e in children:
+                  if ckey == "StringFileInfo":
+                      for tkey, _tv, strings, _te in cchildren:
+                          info["tables"][tkey.lower()] = {
+                              k: v.decode("utf-16-le").rstrip("\0") for k, v, _c, _e2 in strings
+                          }
+                  elif ckey == "VarFileInfo":
+                      for vkey, vv, _c, _e3 in cchildren:
+                          if vkey == "Translation":
+                              info["Translation"] = struct.unpack_from("<HH", vv, 0)
+              return info
+
+          with open("Cargo.toml", encoding="utf-8") as f:
+              m = re.search(r'^\[workspace\.package\][^\[]*?^version\s*=\s*"([^"]+)"', f.read(), re.M | re.S)
+          assert m, "Cargo.toml: no version in [workspace.package]"
+          version = m.group(1)
+          x, y, z = (int(t) for t in version.split("."))
+
           want = {"artifact/fastcull-app.exe": 2, "artifact/fastcull-cli.exe": 3}
           bad = False
           for exe, expected in want.items():
@@ -721,6 +840,50 @@ jobs:
                   print(f"::error::{exe} {'has no' if expected else 'has an'} icon resource "
                         "(RT_GROUP_ICON); see specs/modules/app-icon.md")
                   bad = True
+          # VERSIONINFO (brief 013, specs/modules/app-icon.md): the app's
+          # strings and versions, one line each, against Cargo.toml's
+          # version; the CLI carries no resources at all, the control.
+          app, cli = "artifact/fastcull-app.exe", "artifact/fastcull-cli.exe"
+          info = versioninfo(app)
+          if info is None:
+              print(f"::error::{app} has no VERSIONINFO resource (RT_VERSION); "
+                    "see specs/modules/app-icon.md")
+              bad = True
+          else:
+              tables = sorted(info["tables"])
+              print(f"{app}: VERSIONINFO string tables = {tables} (want one keyed 040904b0)")
+              if "040904b0" not in info["tables"]:
+                  print(f"::error::{app} VERSIONINFO has no en-US Unicode string table 040904b0 "
+                        f"(it has {tables}); see specs/modules/app-icon.md")
+                  bad = True
+              table = info["tables"].get("040904b0", {})
+              checks = [
+                  ("FILEVERSION", info["FILEVERSION"], (x, y, z, 0)),
+                  ("PRODUCTVERSION", info["PRODUCTVERSION"], (x, y, z, 0)),
+                  ("FileDescription", table.get("FileDescription"), "FastCull"),
+                  ("ProductName", table.get("ProductName"), "FastCull"),
+                  ("FileVersion", table.get("FileVersion"), version),
+                  ("ProductVersion", table.get("ProductVersion"), version),
+                  ("Translation", info["Translation"], (0x409, 0x4B0)),
+              ]
+              for name, got, expected in checks:
+                  print(f"{app}: VERSIONINFO {name} = {got!r} (want {expected!r})")
+                  if got != expected:
+                      print(f"::error::{app} VERSIONINFO {name} is {got!r}, expected {expected!r} "
+                            "(see specs/modules/app-icon.md)")
+                      bad = True
+          cli_types = resource_types(cli)
+          cli_version = version_resource(cli)
+          print(f"{cli}: VERSIONINFO {'present' if cli_version is not None else 'none'} (want none); "
+                f"resource types={sorted(cli_types)} (want none at all)")
+          if cli_version is not None:
+              print(f"::error::{cli} has a VERSIONINFO resource (RT_VERSION); it carries no "
+                    "resources at all (see specs/modules/app-icon.md)")
+              bad = True
+          if cli_types:
+              print(f"::error::{cli} carries resources {sorted(cli_types)}; it carries none at all "
+                    "-- no icon, no VERSIONINFO (see specs/modules/app-icon.md)")
+              bad = True
           sys.exit(1 if bad else 0)
           EOF
           ./artifact/fastcull-cli.exe --version

@@ -163,8 +163,9 @@ hicolor installation — is not here: it waits for packaging (the user,
   which applies to every link of the package: on Windows the app crate's
   test binaries carry the resource too, harmlessly (senior-developer plan
   2026-10-06).
-- `fastcull-cli.exe` carries no icon resource — an iconless CLI reads as
-  "not the one you double-click" (persona 2026-10-06, brief 013 R3).
+- `fastcull-cli.exe` carries no resources at all — no icon, no
+  VERSIONINFO (persona 2026-10-06, brief 013 R3; the control widened
+  2026-10-06, review of QE TP10).
 - CI's "Verify Windows artifact" step asserts both: `RT_GROUP_ICON` (type
   14) present at the root of `fastcull-app.exe`'s resource directory and
   absent from `fastcull-cli.exe`'s — the same PE walk as its subsystem
@@ -273,7 +274,10 @@ upgrade re-checks them.
 - CI: the "Verify Windows artifact" step's Python `resource_types(path)`
   returns the type ids at the root of the resource directory (an empty set
   when the PE has no resource data directory); `14` must be in the app's
-  set and not in the CLI's.
+  set and not in the CLI's; the same walker parses the app's `RT_VERSION`
+  and asserts the `VERSIONINFO` strings and numeric versions of Behaviour
+  against `[workspace.package] version`, and that the CLI has no
+  `RT_VERSION` either, nor any other resource.
 - `01-architecture.md` points here in one sentence from its Windows
   subsystems paragraph; `docs/index.md`'s Install section says the Windows
   exe carries the icon.
@@ -312,7 +316,9 @@ artifact" step.
       and both SVG sources bare drawings — app
       `the_svg_sources_are_bare_drawings`.
 - [x] **AC3 — the Windows exe carries it.** ci: `RT_GROUP_ICON` present in
-      `fastcull-app.exe`, absent in `fastcull-cli.exe`; the walker proved on
+      `fastcull-app.exe`, absent in `fastcull-cli.exe`, and the
+      `VERSIONINFO` strings, and no resource at all in the CLI; the walker
+      proved on
       the development seat against the pre-change artifact (both exes
       without any resource — the old red for the app assertion) and an
       iconed third-party executable (the positive).
@@ -347,7 +353,8 @@ artifact" step.
   red reads the pixels and records libpng; the sources are under the
   metadata-free rule; the race test depends on bash alone; the `.ico`
   members' lengths and pixels, every chunk's CRC, the binding's depth, the
-  README mark's position and the script's audit are pinned; the window
+  README mark's position, the script's audit and the exe's `VERSIONINFO`
+  are pinned; the CLI's absence of any resource is the control; the window
   icon's double premultiply recorded; the unix-only reasons corrected.
 - 2026-10-06 — brief 013, the review's fix commit (senior-developer review
   F1, F2, F3, F7; D9): the reproduction test compares first and its
