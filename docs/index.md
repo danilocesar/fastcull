@@ -26,7 +26,9 @@ an unsigned executable, not a virus warning. Click **More info**, then
 **Run anyway**; Windows remembers the choice for that copy of the file.
 Double-clicking opens just the FastCull window — no console window
 appears alongside it (releases up to 0.8.0 dragged one along, and
-closing it killed the app).
+closing it killed the app). The exe carries FastCull's icon (since
+0.15.0), so Explorer, the Start menu and a pinned taskbar show the mark
+instead of the generic executable tile.
 
 ## Can I trust it with my photos?
 

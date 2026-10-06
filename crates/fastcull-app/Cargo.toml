@@ -199,6 +199,32 @@ fastcull-core.workspace = true
 #      its geometry and its layout constraints, so a hidden element's
 #      `preferred-height` is live and exact — why the card can take the
 #      TALLEST of the three tab bodies while two of them are hidden.
+# SIXTH CANARY (brief 013, the application icon; same 1.17.1 + winit
+# 0.30.13). Three behaviours the window's icon stands on, none documented
+# upstream (read 2026-10-06 in the sources by the senior developer; each
+# one is in app-icon.md's "Slint and winit facts this module depends on"):
+#   1. The Slint compiler's Rust output embeds every `@image-url` file by
+#      default — `EmbedAllResources` unless SLINT_EMBED_RESOURCES says
+#      otherwise (i-slint-compiler lib.rs `CompilerConfiguration::new`) —
+#      and slint-build emits `rerun-if-changed` for each embedded file:
+#      why `MainWindow.icon` is a path in main.slint and no image ships
+#      beside the exe.
+#   2. `render_to_buffer` returns an embedded raster image at its own size
+#      (i-slint-core graphics/image.rs, `ImageInner::EmbeddedImage`); the
+#      64-logical-px target the winit adapter passes applies to SVG only.
+#      The buffer is the decoder's premultiplied one, and `icon_to_winit`
+#      (winitwindowadapter.rs) premultiplies it again before winit's
+#      straight-RGBA `Icon::from_rgba` — a Slint defect (QE 2026-10-06, D5)
+#      that darkens only the icon's anti-aliased rim. If an upgrade fixes
+#      it, the rim gets lighter and nothing else moves.
+#   3. The winit adapter sets BOTH Windows icons from `Window.icon` —
+#      `set_taskbar_icon`, then `set_window_icon`
+#      (i-slint-backend-winit winitwindowadapter.rs
+#      `WinitWindowOrNone::set_window_icon`) — and winit's Wayland
+#      `set_window_icon` is an empty function (winit 0.30.13).
+# If (1) changes, the icon is read from a path that does not exist on the
+# user's machine; if (3) changes, the taskbar button loses the icon while
+# the title bar keeps it.
 slint = { version = "1", default-features = false, features = [
     "std",
     "backend-winit",
@@ -225,8 +251,23 @@ toml = "0.8"
 [target.'cfg(windows)'.dependencies]
 windows-sys = { version = "0.61", features = ["Win32_System_Console"] }
 
+# The Windows executable's icon (specs/modules/app-icon.md, brief 013):
+# build.rs compiles assets/icon/fastcull.ico into fastcull-app.exe with the
+# Windows SDK's rc.exe through this crate. A build-dependency on a Windows
+# HOST only — Cargo evaluates this cfg against the host — with its default
+# `toml` feature off: that feature reads [package.metadata.winresource],
+# which this manifest does not carry. With it off the crate's only
+# dependency is version_check, already in Cargo.lock.
+[target.'cfg(windows)'.build-dependencies]
+winresource = { version = "0.1", default-features = false }
+
 [dev-dependencies]
 zune-jpeg = "0.4"
+# tests/app_icon.rs decodes the committed icon PNGs: each `.ico` member is
+# compared with its PNG pixel for pixel, and a reproduction mismatch reads
+# the pixels before it names a cause (specs/modules/app-icon.md). Already in
+# Cargo.lock through Slint's image decoding; a test-only edge.
+png = "0.18"
 
 [build-dependencies]
 slint-build = "1"

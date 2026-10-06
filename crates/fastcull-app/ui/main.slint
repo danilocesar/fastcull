@@ -538,6 +538,15 @@ export struct KeywordChip {
 
 export component MainWindow inherits Window {
     title: "FastCull";
+    // The application icon (specs/modules/app-icon.md, brief 013): one 48 px
+    // bitmap the OS scales — the Windows title bar and taskbar button, X11's
+    // _NET_WM_ICON. Wayland draws nothing from this property (winit's Wayland
+    // set_window_icon is empty; a dock there waits for the packaging unit's
+    // app-id and .desktop). The Slint compiler embeds the file in the binary,
+    // so no file is read at run time and a wrong path fails the build;
+    // tests/app_icon.rs pins the 48, which the build cannot. Explorer's icon
+    // is the exe's resource (build.rs), a separate mechanism.
+    icon: @image-url("../../../assets/icon/png/fastcull-48.png");
     preferred-width: 1440px;
     preferred-height: 900px;
     background: #161618;

@@ -32,7 +32,11 @@ docs/faq.md; a Ctrl+C handler is considered with the panic-visibility work,
 issue #44). A double-click launch attaches to nothing and has no such
 coupling. `fastcull-cli` deliberately stays console-subsystem: it is a
 terminal tool. CI asserts both PE subsystem fields on every Windows build
-(ci.yml "Verify Windows artifact": app = 2/GUI, cli = 3/console).
+(ci.yml "Verify Windows artifact": app = 2/GUI, cli = 3/console) and, since
+brief 013 (2026-10-06), the icon resource beside them — `fastcull-app.exe`
+carries `RT_GROUP_ICON`, `fastcull-cli.exe` none; the icon, its assets under
+`assets/icon/`, the window's `icon` binding and the README mark are
+`modules/app-icon.md`'s.
 
 ## Core modules (every file in `fastcull-core/src`, and the spec in `modules/` that owns it)
 

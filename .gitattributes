@@ -2,3 +2,8 @@
 # sidecars (which always emit LF): CRLF conversion on Windows checkout
 # made fresh_sidecars_match_golden_fixtures fail in CI. No eol mangling.
 crates/fastcull-core/tests/golden/*.xmp -text
+
+# The icon's render script is bash (specs/modules/app-icon.md, its only
+# producer): a checkout under core.autocrlf would end every line in `\r`,
+# which bash reads as part of each command. LF on every OS.
+assets/icon/render-icon.sh text eol=lf

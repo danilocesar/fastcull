@@ -1,5 +1,6 @@
 fn main() {
     build_version_suffix();
+    embed_windows_icon();
     // The Slint compiler is deeply recursive and build scripts are compiled
     // unoptimized; Windows gives the main thread 1 MB of stack (vs 8 MB on
     // Linux), which main.slint's growth overflowed (CI: STATUS_STACK_OVERFLOW
@@ -13,6 +14,59 @@ fn main() {
         .expect("slint-build thread panicked")
         .expect("compiling ui/main.slint");
 }
+
+/// The Windows executable's icon (specs/modules/app-icon.md, brief 013):
+/// `assets/icon/fastcull.ico` becomes icon resource 1 of fastcull-app.exe,
+/// which is what Explorer, the Start menu, a pinned taskbar and
+/// SmartScreen's dialog show. The running window's icon is a separate
+/// mechanism (`MainWindow.icon`, main.slint).
+///
+/// Gated twice. On the HOST, by `#[cfg(windows)]`: a build script is
+/// compiled for the machine that builds, and the `winresource`
+/// build-dependency exists only under `[target.'cfg(windows)'.
+/// build-dependencies]`, which Cargo also evaluates against the host — so
+/// the Linux build never compiles this body or the crate. On the TARGET, by
+/// `CARGO_CFG_TARGET_OS`, so a Windows host building for another OS does not
+/// run rc.exe for nothing. fastcull-cli deliberately gets no icon: an
+/// iconless CLI reads as "not the one you double-click" (persona
+/// 2026-10-06).
+#[cfg(windows)]
+fn embed_windows_icon() {
+    if std::env::var("CARGO_CFG_TARGET_OS").as_deref() != Ok("windows") {
+        return;
+    }
+    // Built lexically, never with `canonicalize()`: on Windows that yields a
+    // `\\?\` path, which rc.exe's ICON statement must not be handed.
+    let manifest_dir = std::path::PathBuf::from(
+        std::env::var("CARGO_MANIFEST_DIR").expect("CARGO_MANIFEST_DIR is set by cargo"),
+    );
+    let ico = manifest_dir
+        .parent()
+        .and_then(std::path::Path::parent)
+        .expect("crates/fastcull-app sits two levels below the workspace root")
+        .join("assets")
+        .join("icon")
+        .join("fastcull.ico");
+    assert!(ico.is_file(), "missing {}", ico.display());
+    println!("cargo:rerun-if-changed={}", ico.display());
+    let mut res = winresource::WindowsResource::new();
+    res.set_icon(ico.to_str().expect("a UTF-8 path to fastcull.ico"))
+        // winresource writes a VERSIONINFO resource whether asked or not;
+        // these are its user-visible strings (Task Manager, Explorer's
+        // Details tab), chosen in app-icon.md rather than left at the
+        // crate's default, the package NAME "fastcull-app". The version
+        // fields stay the crate's own, from CARGO_PKG_VERSION.
+        .set("FileDescription", "FastCull")
+        .set("ProductName", "FastCull")
+        // en-US (LANG_ENGLISH | SUBLANG_ENGLISH_US << 10).
+        .set_language(0x0409);
+    res.compile()
+        .expect("compiling the Windows icon resource with the Windows SDK's rc.exe");
+}
+
+/// Not a Windows host: nothing to embed (see the Windows version above).
+#[cfg(not(windows))]
+fn embed_windows_icon() {}
 
 /// About-dialog version suffix (issue #23, user decision 2026-07-27):
 /// an OFFICIAL build — HEAD sitting exactly on the release tag
