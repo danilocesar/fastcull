@@ -337,6 +337,9 @@ fn decode_png(bytes: &[u8]) -> Result<DecodedPng, png::DecodingError> {
 /// A 1×1 transparent RGBA PNG carrying a `tEXt` chunk (keyword `Comment`),
 /// written by the `png` crate: the smallest file the chunk rule must refuse.
 /// Its text holds none of `MARKERS`, so only the chunk rule can catch it.
+/// Unix only, like its one caller, the audit test: on Windows it would be
+/// dead code, which clippy's `-D warnings` refuses (CI run 37519581454).
+#[cfg(unix)]
 fn png_with_a_text_chunk() -> Vec<u8> {
     let mut bytes = Vec::new();
     let mut encoder = png::Encoder::new(&mut bytes, 1, 1);
