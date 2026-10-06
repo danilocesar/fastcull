@@ -76,20 +76,23 @@ hicolor installation — is not here: it waits for packaging (the user,
   (ImageMagick's libpng and the zlib under it) fixes how they are written;
   a move in any of them may change bytes without any regression. The
   reproduction test runs the script on any unix seat whose `magick` lists
-  the librsvg delegate and compares the bytes: a match is green on any
-  versions; a mismatch is red on the recorded tool versions (Contracts —
-  the versions `magick` itself reports; zlib reports nothing and is the one
-  link it cannot name) and passes with a printed reason on any other, where
-  the tool is as likely as the drawing to be the cause. The red says which
-  of two things it found, because the test decodes every differing PNG and
-  compares the pixels: pixels that differ mean the drawing changed without
-  a re-render, a render was edited by hand, or a rasteriser library moved
-  under the recorded versions; pixels that are identical mean only the
-  encoding changed — zlib moved, or a file was re-encoded by another tool —
-  and the remedy for both is a re-render committed with the reason, the
-  recorded versions moving only when `magick`'s own report moved (the
-  `.ico` holds uncompressed members, so a difference there is never the
-  encoder). When the development seat's tools move, the recorded versions
+  the librsvg delegate and compares the bytes, then the pixels: a match is
+  green on any versions; a pixel mismatch is red on the recorded tool
+  versions (Contracts — the versions `magick` itself reports; zlib reports
+  nothing and is the one link it cannot name), and any mismatch passes with
+  a printed reason on any other, where the tool is as likely as the drawing
+  to be the cause.
+  On the recorded versions the pixels decide, because the test decodes
+  every differing PNG and compares them: pixels that differ mean the
+  drawing changed without a re-render, a render was edited by hand, or a
+  rasteriser library moved under the recorded versions; pixels that are
+  identical mean only the encoding changed — zlib moved, or a file was
+  re-encoded — and the test passes with a printed reason naming the
+  encoder: the reproduction promise is the pixels, and the bytes only on
+  the full tool set no listing can name (user decision 2026-10-06, brief
+  013 D11) (the `.ico` holds uncompressed members, so a difference there
+  is never the encoder's: it stays compared byte for byte, red on any
+  difference). When the development seat's tools move, the recorded versions
   move to the seat's in the same commit — with the re-rendered files when
   the bytes changed, alone when they did not — so that the one seat that
   can compare keeps comparing, the commit saying so (senior-developer plan
@@ -238,15 +241,18 @@ upgrade re-checks them.
 - `render-icon.sh [out-dir]`: the sources beside the script, `png/` and
   `fastcull.ico` under out-dir, exit non-zero on an audit failure, the
   tool versions printed first.
-- The recorded tool versions a reproduction mismatch is red on:
-  ImageMagick `7.1.2-32`, quantum `Q16-HDRI`, librsvg `RSVG 2.62.3`,
-  libpng `libpng 1.6.58` — the versions `magick -version` and `magick -list
-  format` report, the development seat's on 2026-10-06, held as constants
-  in the test and moved whenever the development seat's tools move
-  (Behaviour); zlib is reported nowhere and is named only by the red
-  message. Every reason the reproduction test prints when it passes
-  without a verdict — a skip, or a mismatch off these versions — goes to
-  stderr (visible under `--nocapture`).
+- The recorded tool versions on which a reproduction mismatch is judged by
+  its pixels: ImageMagick `7.1.2-32`, quantum `Q16-HDRI`, librsvg `RSVG
+  2.62.3`, libpng `libpng 1.6.58` — the versions `magick -version` and
+  `magick -list format` report, the development seat's on 2026-10-06, held
+  as constants in the test and moved whenever the development seat's tools
+  move (Behaviour); zlib is reported nowhere and is named only by the
+  reason the test prints when only the encoding changed. Every reason the
+  reproduction test prints when it passes without a red — a skip, a
+  mismatch off these versions, or one on them in the encoding alone — goes
+  to stderr (visible under `--nocapture`) (corrected 2026-10-06, brief 013
+  D11: it said a mismatch on these versions is red and that only a red
+  message names zlib).
 - The tests that run the script are unix-only, each for its own reason.
   The probe-race, delegate and audit tests are `#[cfg(unix)]` because they
   cannot compile elsewhere: their stand-ins are executable shell scripts
@@ -293,9 +299,12 @@ artifact" step.
       members in order, each `.ico` member its exact DIB length and, where a
       PNG of its size exists, its pixels — app
       `the_icon_assets_are_exactly_the_spec_set`; the
-      script run into a temp dir reproduces every PNG and the `.ico` byte
-      for byte, a mismatch red on the recorded tool versions and passing
-      with a printed reason on any other — app
+      script run into a temp dir reproduces every PNG pixel for pixel and
+      the `.ico` byte for byte — it compares the bytes, then the pixels: on
+      the recorded tool versions a pixel difference, or any in the `.ico`,
+      is red and a difference in the encoding alone passes with a printed
+      reason naming the encoder (brief 013 D11), and on any other versions
+      a mismatch passes with a printed reason — app
       `the_render_script_reproduces_the_committed_renders` (never compares
       on CI: no ImageMagick on the Linux runner, and the script does not run
       on Windows); its librsvg probe never refuses a seat that has the
@@ -347,6 +356,10 @@ artifact" step.
 
 ## History
 
+- 2026-10-06 — brief 013 D11 (the user): the reproduction promise is the
+  pixels — a byte mismatch whose pixels are identical passes with a printed
+  reason naming the encoder, a pixel difference stays red, and the `.ico`
+  stays compared byte for byte.
 - 2026-10-06 — brief 013, QE's fix commit (QE D1–D5, Q1, Q2; review N1):
   the script names the librsvg coder — ImageMagick's `svg:decode` delegate
   ran first and the recorded versions could not see it; the reproduction

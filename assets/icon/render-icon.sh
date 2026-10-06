@@ -18,9 +18,11 @@
 #
 # Needs ImageMagick 7 (`magick`) with the librsvg delegate, and python3 for the
 # chunk walk. The output is byte-deterministic on one seat and one set of tools
-# — app-icon.md says which links shape the bytes and what a mismatch means;
-# when this seat's tools move, re-run and compare, and the versions the
-# reproduction test records move with the seat's in the same commit.
+# — app-icon.md says which links shape the bytes and what a mismatch means; the
+# reproduction test compares the bytes, then the pixels, and the promise is the
+# pixels (brief 013 D11). When this seat's tools move, re-run and compare, and
+# the versions the reproduction test records move with the seat's in the same
+# commit.
 set -euo pipefail
 
 here="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"

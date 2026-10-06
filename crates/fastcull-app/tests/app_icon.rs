@@ -16,11 +16,14 @@
 //!   chunk's CRC verified, and no C2PA, JUMBF, XMP or EXIF marker anywhere;
 //!   the two SVG sources are bare drawings (AC2 — "Make sure it's c2pa
 //!   free", the user, 2026-10-06);
-//! - the script, run into a temp dir, reproduces the committed bytes: a
-//!   match is green on any tool versions, a mismatch red on the recorded
-//!   ones — saying whether the pixels or only the encoding moved — and
-//!   passed with a printed reason on any other, where the tool is as likely
-//!   as the drawing to be the cause (AC1); its librsvg probe never refuses a
+//! - the script, run into a temp dir, reproduces the committed renders, the
+//!   PNGs pixel for pixel and the `.ico` byte for byte (the user,
+//!   2026-10-06, brief 013 D11): it compares the bytes, then the pixels; a
+//!   match is green on any tool versions; on the recorded ones a pixel
+//!   difference, or any in the `.ico`, is red and a difference in the
+//!   encoding alone passes with a printed reason; on any other a mismatch
+//!   passes with a printed reason, the tool as likely as the drawing to be
+//!   the cause (AC1); its librsvg probe never refuses a
 //!   seat that has the delegate, it names the librsvg coder so no external
 //!   SVG delegate runs, and its own audit refuses a text chunk and a marker
 //!   (AC1);
@@ -78,14 +81,16 @@ const MARKERS: &[&[u8]] = &[
 /// quantum, its librsvg delegate and its libpng, as `magick -version` and
 /// `magick -list format` report them (app-icon.md, "Contracts") — on which
 /// the committed renders reproduce byte for byte. The reproduction test
-/// compares on any versions; these decide only what a mismatch means: red
-/// on them, a printed reason on any other. They follow the development
+/// compares on any versions; these decide only what a mismatch means: on
+/// them the pixels decide, on any other it passes with a printed reason
+/// (brief 013 D11). They follow the development
 /// seat's tools whenever those move — with the re-rendered files when the
 /// bytes changed, alone when they did not (7.1.2-27 → 7.1.2-32 on
 /// 2026-10-06 changed none of the ten files) — so that the one seat that
 /// can compare keeps comparing. zlib, which writes the PNGs' compressed
-/// data under libpng, reports itself nowhere `magick` can show; the red
-/// names it when only the encoding moved (QE 2026-10-06, D2).
+/// data under libpng, reports itself nowhere `magick` can show; the reason
+/// the test prints when only the encoding moved names it (QE 2026-10-06,
+/// D2; brief 013 D11).
 const RECORDED_TOOLS: (&str, &str, &str, &str) =
     ("7.1.2-32", "Q16-HDRI", "RSVG 2.62.3", "libpng 1.6.58");
 
@@ -698,9 +703,10 @@ impl Drop for TempDir {
 }
 
 /// AC1, reproducible: `render-icon.sh`, run into a temp dir, reproduces
-/// every committed PNG and the `.ico` byte for byte. This is the only guard
-/// for "the script is the only producer": a drawing changed without a
-/// re-render, or a render edited by hand, is red here.
+/// every committed PNG pixel for pixel and the `.ico` byte for byte (the
+/// user, 2026-10-06, brief 013 D11). This is the only guard for "the script
+/// is the only producer": a drawing changed without a re-render, or a render
+/// edited by hand, is red here.
 ///
 /// Compare first, judge second (app-icon.md, "The render script is the only
 /// producer"): on any unix seat whose `magick` lists the librsvg delegate,
@@ -709,22 +715,25 @@ impl Drop for TempDir {
 /// the seat's tools move without changing a byte — the old gate compared
 /// only on the recorded versions, and compared nowhere once this seat's
 /// ImageMagick moved from 7.1.2-27 to 7.1.2-32 on 2026-10-06 with every
-/// byte unchanged. A mismatch is red on the recorded versions
-/// (`RECORDED_TOOLS`) and passes with a printed reason on any other, where
-/// a different ImageMagick, librsvg or libpng is as likely as the drawing to
-/// be the cause.
+/// byte unchanged. A mismatch passes with a printed reason off the recorded
+/// versions (`RECORDED_TOOLS`), where a different ImageMagick, librsvg or
+/// libpng is as likely as the drawing to be the cause; on them the pixels
+/// decide.
 ///
-/// The red reads the pixels before it speaks (QE 2026-10-06, D2): every
-/// differing PNG pair is decoded, checksums on, and compared. Pixels that
-/// differ mean the drawing changed without a re-render, a render was edited
-/// by hand, or a rasteriser library under the recorded ImageMagick and
-/// librsvg (cairo, pixman) moved. Pixels identical in every differing file
-/// mean only the encoding changed — zlib, which ImageMagick does not report,
-/// moved under the recorded versions, or a file was re-encoded by another
-/// tool. Both are red: the remedy for both is a re-render committed with its
-/// reason, and `RECORDED_TOOLS` moves only when `magick`'s own report moved.
-/// The `.ico`'s members are uncompressed, so a difference there is never the
-/// encoder's.
+/// The bytes are compared first, then the pixels (the user, 2026-10-06,
+/// brief 013 D11; QE 2026-10-06, D2): every differing PNG pair is decoded,
+/// checksums on, and compared. Pixels that differ are red: the drawing
+/// changed without a re-render, a render was edited by hand, or a
+/// rasteriser library under the recorded ImageMagick and librsvg (cairo,
+/// pixman) moved. Pixels identical in every differing file mean only the
+/// encoding changed — zlib, which ImageMagick does not report, moved under
+/// the recorded versions, or a file was re-encoded by another tool — and
+/// the test passes, printing why: the promise is the pixels, and the bytes
+/// only on the full tool set no listing can name. The trade-off the user
+/// chose with it: a pixel-identical re-encode by another tool is not
+/// noticed. The `.ico`'s members are uncompressed, so a difference there is
+/// never the encoder's: it stays compared byte for byte, red on any
+/// difference.
 ///
 /// Neither CI runner compares. The Linux image has no ImageMagick. On
 /// Windows the test passes with a printed reason before anything runs: it
@@ -743,11 +752,14 @@ impl Drop for TempDir {
 /// checkout --`): one IDAT byte flipped in `png/fastcull-22.png` → red
 /// naming it, its committed file failing to decode; `#4da3ff` → `#4da3fe` in
 /// `fastcull.svg` without a re-render → red on `png/fastcull-48.png`, the
-/// first PNG the master renders, its pixels differing; the renders re-encoded
-/// by a classic zlib 1.3.1 in place of this seat's zlib-ng → red saying only
-/// the encoding changed. With `RECORDED_TOOLS` edited to another version (not
-/// committed), the first mutant passes with the printed reason and the clean
-/// tree is green.
+/// first PNG the master renders, its pixels differing; one pixel byte of the
+/// `.ico`'s 20 px member flipped → red on `fastcull.ico` alone. The renders
+/// re-encoded by a classic zlib 1.3.1 in place of this seat's zlib-ng, and
+/// one committed PNG re-encoded by the `png` crate at another compression
+/// level, each pass printing that only the encoding changed — red before
+/// D11. With `RECORDED_TOOLS` edited to another version (not committed),
+/// the first mutant passes with the printed reason and the clean tree is
+/// green.
 #[test]
 fn the_render_script_reproduces_the_committed_renders() {
     if !cfg!(unix) {
@@ -822,9 +834,10 @@ fn the_render_script_reproduces_the_committed_renders() {
         );
         return;
     }
-    // On the recorded versions every mismatch is red; the pixels decide
-    // which red. Each entry is a file whose content, not only its encoding,
-    // differs, and how.
+    // On the recorded versions the pixels decide (the user, 2026-10-06,
+    // brief 013 D11). Each entry is a file whose content, not only its
+    // encoding, differs, and how; the `.ico` is uncompressed, so any
+    // difference in it is content.
     let changed: Vec<String> = differing
         .iter()
         .filter_map(|&(name, rendered_len, committed_len)| {
@@ -839,17 +852,18 @@ fn the_render_script_reproduces_the_committed_renders() {
             }
         })
         .collect();
-    assert!(
-        !changed.is_empty(),
-        "{} of {} files differ in their bytes but decode to the same pixels ({names:?}): only \
-         the encoding changed — zlib moved under the recorded versions (ImageMagick does not \
-         report it; this seat's zlib-ng reports itself as 1.3.1) or a file was re-encoded by \
-         another tool — re-render and commit the new bytes saying which; move nothing in \
-         RECORDED_TOOLS (fastcull.ico reproduced: its members are uncompressed, so no encoder \
-         writes them) (app-icon.md, \"The render script is the only producer\")",
-        differing.len(),
-        files.len()
-    );
+    if changed.is_empty() {
+        eprintln!(
+            "icon reproduction passed on the pixels: only the encoding changed — zlib moved under \
+             the recorded versions, or a file was re-encoded by another tool; the reproduction \
+             promise is the pixels (user decision 2026-10-06, brief 013 D11); bytes differ in {} \
+             files, each decoding to the committed pixels: {names:?} (zlib reports itself nowhere \
+             magick can show; this seat's zlib-ng reports itself as 1.3.1) (app-icon.md, \"The \
+             render script is the only producer\")",
+            differing.len()
+        );
+        return;
+    }
     panic!(
         "the pixels differ in {} — the drawing changed without a re-render, a render was edited \
          by hand, or a rasteriser library under the recorded ImageMagick and librsvg (cairo, \

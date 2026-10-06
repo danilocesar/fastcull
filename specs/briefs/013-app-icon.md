@@ -64,7 +64,8 @@ windows binary uses the new icon."
   for N in 16, 22, 24, 32, 48, 64, 128, 256, 512 (the small drawing up to
   32, the master from 48) and `fastcull.ico` holding 16, 20, 24, 32, 48,
   64 and 256 px. The rendered files are committed (CI has no ImageMagick);
-  the script is the only way they are produced.
+  the script is the only way they are produced — pixel for pixel; bytes
+  follow the encoder (D11).
 - R2. **Metadata-free.** Every PNG holds exactly the chunks `IHDR`, `IDAT`
   and `IEND`; no PNG or the `.ico` contains a C2PA, JUMBF (`jumb`),
   `urn:uuid`, XMP (`x:xmpmeta`, `adobe:ns:meta`) or `Exif` marker. The
@@ -102,10 +103,11 @@ windows binary uses the new icon."
 ## Acceptance criteria
 
 - AC1. `assets/icon/` holds exactly the files R1 lists; `render-icon.sh`
-  run on the sources reproduces the committed PNGs and `.ico` byte for
-  byte (the test: regenerate into a temp dir on a seat with ImageMagick
-  and compare; skipped with a stated reason where `magick` is absent,
-  never on CI's Linux runner if ImageMagick is installed there).
+  run on the sources reproduces the committed PNGs pixel for pixel and the
+  `.ico` byte for byte (D11) (the test: regenerate into a temp dir on a
+  seat with ImageMagick and compare; skipped with a stated reason where
+  `magick` is absent, never on CI's Linux runner if ImageMagick is
+  installed there).
 - AC2. A test walks every committed PNG's chunks and asserts
   `IHDR`/`IDAT`/`IEND` only, and scans every PNG and the `.ico` for the
   markers R2 names; a mutant that appends a `tEXt` chunk to one PNG turns
@@ -209,10 +211,14 @@ the silhouette (the refinement pass's job).
 - D10 (2026-10-06, Manager, M3, on QE D1–D5 and Q1–Q3): the render names
   the librsvg coder (`RSVG:`); the SVG sources are under the metadata-free
   rule, `<title>`, `<desc>` and XML comments included (M7); a unix seat
-  where the script refuses stays red; the reproduction promise stays
-  byte-for-byte with the pixel diagnosis inside the red and libpng recorded
-  (the senior developer refused the pass-with-reason as a loosening; the
-  user is asked whether to move to a pixel promise — a follow-up if so);
-  the CI walker asserts VERSIONINFO and that the CLI carries no resource at
-  all; the window icon's double premultiply is recorded as Slint's,
-  relayed to the user under hard rule 2.
+  where the script refuses stays red; the reproduction promise was put to
+  the user, and libpng is recorded; the CI walker asserts VERSIONINFO and
+  that the CLI carries no resource at all; the window icon's double
+  premultiply is recorded as Slint's, relayed to the user under hard
+  rule 2.
+- D11 (2026-10-06, the user): the pixel promise — option B. A byte
+  mismatch whose pixels are identical passes with a printed reason naming
+  the encoder; a pixel difference is red. The senior developer's refusal of
+  the pass-with-reason stood until the user, as the customer, chose it with
+  the trade-off stated (a pixel-identical re-encode by another tool is not
+  noticed).
