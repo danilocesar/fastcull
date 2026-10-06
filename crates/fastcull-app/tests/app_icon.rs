@@ -1,5 +1,6 @@
-//! THE APPLICATION ICON IS THE SPEC'S SET, METADATA-FREE, AND MADE BY ITS
-//! SCRIPT — the repository half of specs/modules/app-icon.md.
+//! THE APPLICATION ICON IS THE SPEC'S SET, METADATA-FREE, MADE BY ITS SCRIPT,
+//! AND WORN WHERE THE SPEC SAYS — the repository half of
+//! specs/modules/app-icon.md.
 //!
 //! `assets/icon/` is derived output committed beside its sources: two SVG
 //! drawings, `render-icon.sh` (the only producer), nine PNGs and the Windows
@@ -15,7 +16,13 @@
 //!   c2pa free", the user, 2026-10-06);
 //! - the script, run into a temp dir, reproduces the committed bytes — on
 //!   the recorded tool versions only, because a different ImageMagick or
-//!   librsvg renders different bytes without any regression (AC1).
+//!   librsvg renders different bytes without any regression (AC1);
+//! - the window binds the 48 px PNG (AC4) and the README's title row wears
+//!   the 64 px one (AC5).
+//!
+//! The Windows executable's resource icon (AC3) is not tested here: it
+//! exists only in a Windows build, and CI's "Verify Windows artifact" step
+//! asserts it on the built exe.
 //!
 //! The files are read from the repository through `CARGO_MANIFEST_DIR`, as
 //! `tests/shortcuts_map.rs` reads the spec and the `.slint`. The PNG and ICO
@@ -447,4 +454,96 @@ fn the_render_script_reproduces_the_committed_renders() {
             committed.len()
         );
     }
+}
+
+/// The line that binds the window's icon, exactly as `MainWindow` carries it
+/// in main.slint. The path is relative to main.slint's own directory:
+/// `crates/fastcull-app/ui/`, three levels below the repository root.
+const ICON_BINDING: &str = r#"icon: @image-url("../../../assets/icon/png/fastcull-48.png");"#;
+
+/// AC4: `MainWindow`'s block of main.slint carries the exact `icon:` line
+/// for the 48 px PNG, and the path in it resolves to the committed file. A
+/// wrong path already fails the build (the Slint compiler embeds the file),
+/// so what this test adds is the SIZE, which the build cannot see. That the
+/// OS receives the bitmap is review-verified (app-icon.md, "Slint and winit
+/// facts this module depends on").
+///
+/// Mutants (2026-10-06, main.slint restored from a copy): `48` → `32` in the
+/// line → red while the build stays green; the line deleted → red (the
+/// window would silently show no icon, which is what this test exists to
+/// catch).
+#[test]
+fn the_window_binds_the_48_px_icon() {
+    let root = repo_root();
+    let ui = root.join("crates").join("fastcull-app").join("ui");
+    let slint = String::from_utf8(read(&ui.join("main.slint"))).expect("main.slint is UTF-8");
+    let start = slint
+        .find("export component MainWindow inherits Window {")
+        .expect("main.slint declares MainWindow");
+    // MainWindow's block runs to the next top-level component, or to the end
+    // of the file.
+    let main_window: Vec<&str> = slint[start..]
+        .lines()
+        .skip(1)
+        .take_while(|line| {
+            !line.starts_with("export component ") && !line.starts_with("component ")
+        })
+        .collect();
+    assert!(
+        main_window.iter().any(|line| line.trim() == ICON_BINDING),
+        "MainWindow's block of main.slint lacks the line `{ICON_BINDING}` (app-icon.md, \"The \
+         running window's icon\")"
+    );
+    let relative = ICON_BINDING
+        .strip_prefix("icon: @image-url(\"")
+        .and_then(|rest| rest.strip_suffix("\");"))
+        .expect("ICON_BINDING holds one quoted path");
+    let bound = ui.join(relative);
+    assert!(
+        bound.is_file(),
+        "main.slint binds {}, which does not exist",
+        bound.display()
+    );
+    let committed = icon_dir().join("png").join(png_name(48));
+    assert_eq!(
+        bound
+            .canonicalize()
+            .expect("resolving the bound icon's path"),
+        committed
+            .canonicalize()
+            .expect("resolving assets/icon/png/fastcull-48.png"),
+        "main.slint's icon path must resolve to assets/icon/png/fastcull-48.png"
+    );
+}
+
+/// AC5: the README's first heading line carries the 64 px PNG at 64×64 —
+/// left of the title and no bigger (persona 2026-10-06) — and the image it
+/// names exists.
+///
+/// Mutants (2026-10-06, README.md restored from a copy): the `img` removed
+/// → red; `width="96"` → red.
+#[test]
+fn the_readme_title_row_carries_the_64_px_mark() {
+    let root = repo_root();
+    let readme = String::from_utf8(read(&root.join("README.md"))).expect("README.md is UTF-8");
+    // `lines()` drops a `\r\n` line end whole, so a CRLF checkout reads the
+    // same.
+    let title = readme
+        .lines()
+        .find(|line| line.starts_with("# "))
+        .expect("README.md has a top-level heading");
+    for attribute in [
+        r#"src="assets/icon/png/fastcull-64.png""#,
+        r#"width="64""#,
+        r#"height="64""#,
+    ] {
+        assert!(
+            title.contains(attribute),
+            "README.md's title row `{title}` lacks {attribute} (app-icon.md, \"The README mark\")"
+        );
+    }
+    assert!(
+        icon_dir().join("png").join(png_name(64)).is_file(),
+        "README.md's mark assets/icon/png/fastcull-64.png does not exist"
+    );
 }

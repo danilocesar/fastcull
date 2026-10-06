@@ -626,7 +626,23 @@ jobs:
       # "PE\0\0" + 20-byte COFF header + offset 68. 2 = WINDOWS_GUI,
       # 3 = WINDOWS_CUI. v0.8.0 shipped both as 3 -- that regression is what
       # this assertion pins.
-      - name: Verify Windows artifact (static CRT + subsystems + starts)
+      #
+      # Icon resource (brief 013, specs/modules/app-icon.md): fastcull-app
+      # must carry an RT_GROUP_ICON (resource type 14) -- build.rs compiles
+      # assets/icon/fastcull.ico into it with winresource and the Windows
+      # SDK's rc.exe, and Explorer, the Start menu, a pinned taskbar and
+      # SmartScreen's dialog show it -- while fastcull-cli must carry none
+      # (an iconless CLI reads as "not the one you double-click").
+      # `resource_types` walks the PE: data directory 2 of the optional
+      # header gives the resource table's RVA, the section table maps that
+      # to a file offset, and the root directory's entries are the resource
+      # TYPE ids. The two assertions are each other's control: a walker that
+      # found icons everywhere would fail on the CLI, one that found none
+      # would fail on the app. Proved before it landed (2026-10-06): on the
+      # last artifact without the icon (run 37379352601) both exes walk as
+      # [] and the app line goes red; an iconed third-party exe walks as
+      # [3, 5, 14, 16, 24, 2000].
+      - name: Verify Windows artifact (static CRT + subsystems + icon + starts)
         if: runner.os == 'Windows'
         shell: bash
         run: |
@@ -647,6 +663,43 @@ jobs:
               assert head[pe:pe + 4] == b"PE\0\0", f"{path}: no PE signature"
               return struct.unpack_from("<H", head, pe + 4 + 20 + 68)[0]
 
+          RT_GROUP_ICON = 14
+
+          def resource_types(path):
+              """The resource TYPE ids at the root of a PE's resource directory
+              (RT_GROUP_ICON = 14, RT_ICON = 3, RT_VERSION = 16); empty when the
+              executable has no .rsrc data directory."""
+              with open(path, "rb") as f:
+                  data = f.read()
+              pe = struct.unpack_from("<I", data, 0x3C)[0]
+              assert data[pe:pe + 4] == b"PE\0\0", f"{path}: no PE signature"
+              coff = pe + 4
+              nsections = struct.unpack_from("<H", data, coff + 2)[0]
+              opt_size = struct.unpack_from("<H", data, coff + 16)[0]
+              opt = coff + 20
+              magic = struct.unpack_from("<H", data, opt)[0]
+              # data directories start at 96 (PE32) or 112 (PE32+); entry 2 is the resource table
+              dd = opt + (112 if magic == 0x20B else 96)
+              rsrc_rva, rsrc_size = struct.unpack_from("<II", data, dd + 2 * 8)
+              if rsrc_rva == 0 or rsrc_size == 0:
+                  return set()
+              sections = opt + opt_size
+              base = None
+              for i in range(nsections):
+                  s = sections + 40 * i
+                  vsize, vaddr, rawsize, rawptr = struct.unpack_from("<IIII", data, s + 8)
+                  if vaddr <= rsrc_rva < vaddr + max(vsize, rawsize):
+                      base = rawptr + (rsrc_rva - vaddr)
+                      break
+              assert base is not None, f"{path}: resource RVA {rsrc_rva:#x} maps to no section"
+              named, ids = struct.unpack_from("<HH", data, base + 12)
+              types = set()
+              for i in range(named + ids):
+                  name, _off = struct.unpack_from("<II", data, base + 16 + 8 * i)
+                  if not name & 0x80000000:
+                      types.add(name)
+              return types
+
           want = {"artifact/fastcull-app.exe": 2, "artifact/fastcull-cli.exe": 3}
           bad = False
           for exe, expected in want.items():
@@ -655,6 +708,18 @@ jobs:
               if got != expected:
                   print(f"::error::{exe} has PE subsystem {got}, expected {expected} "
                         "(2=GUI, 3=console; see issue #40)")
+                  bad = True
+          # The icon resource (brief 013, specs/modules/app-icon.md): the app
+          # carries RT_GROUP_ICON, the CLI deliberately does not. Each line
+          # is the other's control.
+          want_icon = {"artifact/fastcull-app.exe": True, "artifact/fastcull-cli.exe": False}
+          for exe, expected in want_icon.items():
+              types = resource_types(exe)
+              has = RT_GROUP_ICON in types
+              print(f"{exe}: resource types={sorted(types)} icon={'yes' if has else 'no'} (want {'yes' if expected else 'no'})")
+              if has != expected:
+                  print(f"::error::{exe} {'has no' if expected else 'has an'} icon resource "
+                        "(RT_GROUP_ICON); see specs/modules/app-icon.md")
                   bad = True
           sys.exit(1 if bad else 0)
           EOF

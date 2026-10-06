@@ -1,4 +1,4 @@
-# FastCull
+# <img src="assets/icon/png/fastcull-64.png" width="64" height="64" alt="" align="middle"> FastCull
 
 **Cull thousands of RAW photos at the speed you can think.**
 

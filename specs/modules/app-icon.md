@@ -94,11 +94,17 @@ hicolor installation — is not here: it waits for packaging (the user,
 - `winresource` writes a `VERSIONINFO` resource beside the icon whether or
   not one is asked for, so its user-visible strings are chosen rather than
   defaulted: `FileDescription` and `ProductName` are "FastCull" — the
-  names Task Manager and Explorer's Details tab show — `FileVersion` and
-  `ProductVersion` are the package version as `X.Y.Z.0`, the language is
-  en-US (0x0409), and nothing else is set. A dev build's `-devel-…` suffix
-  has no place in the numeric fields and stays in `--version` and About
-  (senior-developer plan 2026-10-06).
+  names Task Manager and Explorer's Details tab show — the `FileVersion`
+  and `ProductVersion` strings are the package version as written
+  (`X.Y.Z`) and the numeric `FILEVERSION` and `PRODUCTVERSION` fields the
+  same version as `X.Y.Z.0`, both the crate's defaults; the language is
+  en-US (0x0409), and no other string is set. A dev build's `-devel-…`
+  suffix has no place in the numeric fields and stays in `--version` and
+  About (senior-developer plan 2026-10-06; corrected 2026-10-06, brief
+  013's build commit: it gave the two strings as `X.Y.Z.0`, which only
+  the numeric fields carry in the resource script winresource 0.1.31
+  writes, and read "nothing else is set" where the crate also writes its
+  fixed-info defaults).
 - The compiled resource reaches the link through `cargo:rustc-link-arg`,
   which applies to every link of the package: on Windows the app crate's
   test binaries carry the resource too, harmlessly (senior-developer plan
@@ -204,23 +210,23 @@ artifact" step.
       file holds a marker — app `every_rendered_icon_file_is_metadata_free`;
       red on a `tEXt` chunk appended to one PNG and on the bytes `c2pa`
       appended to the `.ico`.
-- [ ] **AC3 — the Windows exe carries it.** ci: `RT_GROUP_ICON` present in
+- [x] **AC3 — the Windows exe carries it.** ci: `RT_GROUP_ICON` present in
       `fastcull-app.exe`, absent in `fastcull-cli.exe`; the walker proved on
       the development seat against the pre-change artifact (both exes
       without any resource — the old red for the app assertion) and an
-      iconed third-party executable (the positive). Open: lands in brief
-      013's build commit; the Windows runner is its first execution.
-- [ ] **AC4 — the window binds it.** `MainWindow`'s block of `main.slint`
+      iconed third-party executable (the positive).
+- [x] **AC4 — the window binds it.** `MainWindow`'s block of `main.slint`
       carries the exact `icon: @image-url(…fastcull-48.png)` line and the
       path resolves to the committed file — app
       `the_window_binds_the_48_px_icon`; that the OS receives the bitmap is
       review-verified from the facts above (measurable on an X11 seat:
-      `SLINT_BACKEND=winit-x11` under `xvfb-run`, `xprop -name FastCull
-      _NET_WM_ICON` reports a 48×48 icon; not a suite test). Open: lands in
-      brief 013's build commit.
-- [ ] **AC5 — the README mark.** The README's first heading line carries
+      under `xvfb-run` with `WAYLAND_DISPLAY` unset, `xprop -name FastCull
+      _NET_WM_ICON` reports one 48×48 icon; not a suite test; corrected
+      2026-10-06, brief 013's build commit: it said `SLINT_BACKEND=winit-x11`,
+      which Slint 1.17.1 parses as an unknown renderer named `x11`, while
+      winit 0.30.13 takes Wayland whenever `WAYLAND_DISPLAY` is set).
+- [x] **AC5 — the README mark.** The README's first heading line carries
       the 64 px PNG at 64×64 — app `the_readme_title_row_carries_the_64_px_mark`.
-      Open: lands in brief 013's build commit.
 - [ ] **AC6 — the specs say so.** This spec, the architecture pointer and
       the docs sentence — review-verified; ticked at the merge.
 - [ ] **AC7 — the release.** v0.15.0 is cut after the merge per
@@ -232,6 +238,10 @@ artifact" step.
 
 ## History
 
+- 2026-10-06 — brief 013, the build commit: the window's binding, the
+  exe's resource icon with CI's assertion, and the README mark landed;
+  AC3, AC4 and AC5 ticked beside their tests; the `VERSIONINFO` sentence
+  and AC4's X11 recipe corrected in place, each saying what was wrong.
 - 2026-10-06 — brief 013, the assets commit: the asset set, its render
   script and `tests/app_icon.rs` landed; AC1 and AC2 ticked beside their
   tests.
