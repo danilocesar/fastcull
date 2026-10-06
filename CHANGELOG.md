@@ -5,6 +5,84 @@ at release time (RELEASING.md, "Cutting a release"); the milestone plan and
 its closures are `specs/milestones.md`. Moved here from that file on
 2026-09-17 (brief 007), verbatim.
 
+## v0.15.0 (released 2026-10-06)
+
+Everything since v0.14.0: a Settings dialog and a settings file, the
+Failed badge's tooltip, a keyboard ring inside the Copy Picks and Export
+dialogs, a loupe that asks only for the frames its memory budget can
+keep, an application icon, and six more units through the spec-first
+pipeline (briefs 008 to 013 under `specs/briefs/`).
+
+**Settings: File › Settings… or `Ctrl+,`** (issue #39, briefs 008, 009
+and 010, `modules/settings.md`, `docs/settings.md`). A tabbed modal —
+General | UI | Performance — that applies on Close and keeps the file
+beside the other config files as `settings.toml`: a named group, a named
+key, a value, hand-editable, every key carrying a one-line note. The
+settings the specs had promised and never had a home: auto-advance after
+Y/N (`general.auto_advance`), the selection wash strength
+(`ui.selection_wash`), the loupe memory budget as a number or a share of
+this machine's RAM (`performance.loupe_memory = "2 GB"` or `"40%"`), the
+thumbnail cache cap (`performance.cache_cap`), the read workers
+(`performance.max_readers`, 0 = adaptive) and Clear cache with a size
+readout. An environment variable wins over the file wherever one governs
+a knob — today `FASTCULL_MAX_READERS` — and is never written back into
+it. A file the app cannot read is moved aside at the first write, never
+overwritten in place. Every field explains itself on the screen: a
+one-line note under each, nothing behind a hover. The card holds still
+(brief 009): one height per open, the tallest tab's, so a tab switch
+never moves an edge, a button or a label. Brief 010 added the guards QE
+listed and a mark-based wait that closed the one intermittent Windows
+red of the suite (issue #101).
+
+**The Failed badge explains itself** (brief 008, `docs/faq.md`). A frame
+that could not be decoded shows the Failed badge as before; the badge now
+carries a tooltip with the reason.
+
+**Copy Picks and Export own `Tab`** (issue #98, brief 011,
+`modules/ui-grid.md` "Modal keyboard containment", `docs/copy-picks.md`,
+`docs/export-video.md`). `Tab` and `Shift+Tab` move the keyboard between
+the dialog's own controls in a visible order, wrapping, and never leave
+the dialog — before this release a window-level Tab could carry the
+keyboard to the grid behind the scrim. Every other key the dialogs own
+behaves exactly as it did.
+
+**The loupe's prefetch ring fits the memory budget** (issue #99, brief
+012, `modules/raw-pipeline.md` "The ring fits the budget",
+`docs/settings.md`). The ring of full-size neighbours the loupe decodes
+ahead is sized from the budget and the frames' own headers — the focused
+frame first, the nearest neighbours next in the direction of travel —
+so a small budget never decodes a frame it cannot keep. Measured with
+QE's recipe: at a 0.5 GB budget one full-size decode per step where there
+were two to three (CPU 25 s → 13 s over the run), at the 200 MB floor one
+where there were four (38 s → 13 s); at the 2 GB default nothing changes
+— the same counts, the same times, the perf budgets green. The on-change
+mark `loupe ring budget <B> frame <F> rest <b>/<a> transit <b>/<a>` says
+what the ring is.
+
+**An icon** (brief 013, `modules/app-icon.md`, `assets/icon/`). "Hand of
+three": three prints fanned like a hand of cards, the lead upright and
+sharp, the two behind swept back — chosen from sixty concepts over three
+rounds, refined for 16 px. `fastcull-app.exe` carries it as its resource
+icon, so Explorer, the Start menu and a pinned taskbar show it instead of
+the generic executable tile; the running window shows it in the title bar
+and on the taskbar; the README wears it. The sources are two SVGs and the
+renders are produced by one script and are free of any metadata — no
+C2PA manifest, no XMP, no EXIF, no text chunks — which a test holds. Linux
+launcher integration (an app-id, a `.desktop` file) waits for packaging.
+
+**The specs, rewritten as behaviour** (brief 007, PR #92; directives M11
+and M12, PR #95). Every module spec now has the same five sections and
+each rule lives in exactly one of them; `CHANGELOG.md` is the release
+notes and `specs/milestones.md` the plan. Two standing directives: other
+cameras are a design constraint, not an afterthought; every unit starts
+from `origin/main` as it is.
+
+Known and deferred, with their issues: the cache-cap stall on the next
+folder open (#97), the failed-cursor test's clock steps (#104), the
+dialogs' ring residuals (#106), an IFD that overstates its preview
+re-decodes while idle (#108), the ring rule's unguarded terms (#109), and
+the icon's CI-depth guards (#112).
+
 ## v0.14.0 (released 2026-09-12)
 
 Everything since v0.13.1: a fourth answer to the Copy Picks clash

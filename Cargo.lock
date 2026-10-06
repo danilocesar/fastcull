@@ -1504,7 +1504,7 @@ dependencies = [
 
 [[package]]
 name = "fastcull-app"
-version = "0.14.0"
+version = "0.15.0"
 dependencies = [
  "fast_image_resize",
  "fastcull-core",
@@ -1521,7 +1521,7 @@ dependencies = [
 
 [[package]]
 name = "fastcull-cli"
-version = "0.14.0"
+version = "0.15.0"
 dependencies = [
  "anyhow",
  "clap",
@@ -1530,7 +1530,7 @@ dependencies = [
 
 [[package]]
 name = "fastcull-core"
-version = "0.14.0"
+version = "0.15.0"
 dependencies = [
  "blake3",
  "caseless",
