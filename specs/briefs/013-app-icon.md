@@ -248,3 +248,8 @@ the silhouette (the refinement pass's job).
   Windows artifact's `.rsrc` section is byte-identical across the PR's
   three builds (QE), so the user's D8 look at any of them stands for the
   head. CI at `c090363`: both runners green (run 37526836736).
+- D13 (2026-10-06, the user): PR #111 merged and v0.15.0 cut without the
+  D8 look — "Haven't looked — merge and release now"; AC7's human half
+  moves to the release zip, a soft running-window icon being a follow-up
+  after v0.15.0 if it comes. The Slint double-premultiply (QE D5) is
+  recorded and not filed upstream ("nah, move on"; hard rule 2).
