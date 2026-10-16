@@ -211,6 +211,16 @@ at a model replacement (ui-grid.md, *Slint facts*; brief 014 D4,
       `keyword_enter_commit_still_writes_and_returns_focus`; the mutant
       that drops the swap's forced replacement turns AC1 and AC2 red (run
       on the fix and recorded in brief 014 D13 and the fix commit).
+- [ ] **The template list is replaced at the swap too** (brief 014 R1 and
+      D14): the names model is replaced at the first refresh after a swap
+      whatever its content, so a templates file that had templates at the
+      launch folder and none at the swap leaves no stale names in the
+      dropdown. No test pins it — every driven run is `FASTCULL_NO_CONFIG`,
+      the names are empty in both sessions and the dump has no template
+      field, so the mutant that drops the forced replacement turns nothing
+      red (the senior developer's review, 2026-10-16). Open until the next
+      template unit lands a `templates=` dump field and the driven test
+      shaped in brief 014 D14.
 
 ## History
 
@@ -223,7 +233,8 @@ at a model replacement (ui-grid.md, *Slint facts*; brief 014 D4,
   when the new content differed from a cache the swap had reset to empty,
   so a new folder with no keywords kept the old folder's chips and counts
   until its first keyword landed — with the panel open across the swap and
-  reopened after it alike.
+  reopened after it alike. The template list's own forced replacement
+  ships without a test, the ledger's open box (D14).
 - 2026-10-01 — `templates.toml` resolves through the one config-dir
   resolver of settings.md, hermetic under `FASTCULL_NO_CONFIG` (brief 008).
 - 2026-09-17 — Rewritten (brief 007). The pre-rewrite text is

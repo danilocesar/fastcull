@@ -299,3 +299,30 @@ one moment it was skipped.
   before the fix commit (D10): 126 tests in three `--exact` thirds of 38,
   46 and 42, 301 s + 420 s + 336 s, all green; the eight named tests
   green in release in 47 s.
+- D14 (2026-10-16, Manager, on the senior developer's review gap G1): the
+  template model's forced replacement at the swap — the `swapped ||` on
+  the names block of `refresh_iptc_panel` — ships reviewed but without a
+  test of its own, and is recorded here as the unit's one untested line,
+  not as acceptance. The reviewer's reading, re-run by the reviewer: with
+  `swapped ||` removed from that block all three swap tests stay green,
+  because every driven run is `FASTCULL_NO_CONFIG` — the names are empty
+  in both sessions and the window's model is Slint's default empty list,
+  correct by accident as on the pre-fix tree — and the dump has no
+  template field. The consequence of the line's absence: a `templates.toml`
+  that had templates at the launch folder and none at the swap (deleted
+  or emptied mid-session) leaves the dropdown offering names the file no
+  longer has, with Apply a no-op — the aliasing this brief named, in its
+  rarest form. The proof has a known shape and a known cost: a
+  `templates=` dump field (one harness argument and its sentence in
+  test-harness.md "The dump", a spec change) and a driven test modelled on
+  `templates_and_ui_prefs_are_read_from_the_one_config_dir`
+  (`FASTCULL_CONFIG_DIR` with a one-template file, `key:i`, the file
+  deleted from `shoot_env_stderr_watching`'s `on_line` at the first
+  `templates loaded from` line — the issue #50 pattern — then `open:` B
+  and `templates=[]` after `load settled gen 1`; red with the line
+  removed, green with it). There is no unit-level pin: the app's unit
+  tests have no headless `MainWindow`. Ruling: this unit is the chips the
+  user reported, and a harness field for a dropdown's rare stale names is
+  the next template unit's first item, not this release's blocker; the
+  line ships, the module ledger carries the open box with this reason,
+  and the report names the deferral.
