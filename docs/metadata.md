@@ -61,7 +61,9 @@ anywhere (opening the panel if needed).
 - **Opening another folder empties the panel of the old folder's data**
   — fields, keyword chips and their counts alike; the chips fill in again
   as the new folder's sidecars are read. Your template choice in the
-  dropdown stays, like the panel itself. (Until 0.15.1 the old folder's
+  dropdown stays as long as the panel stays open; closing the panel puts
+  the dropdown back on the first template — folder swap or not, as it
+  always has. (Until 0.15.1 the old folder's
   keywords and counts lingered until the new folder's first keyword
   appeared — a count that could not be true of the photos in front of
   you.)

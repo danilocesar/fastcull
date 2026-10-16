@@ -146,7 +146,8 @@ can.
   green by design (this line said "AC1–AC3" and listed the Enter-commit
   test among the mark readers until 2026-10-16, the senior developer's
   spec review).
-- AC5. **The specs and docs say so** (R5), ticked at the merge.
+- AC5. **The specs and docs say so** (R5) — ticked 2026-10-16 at the
+  record's close (D15), PR #115 merged on both runners green right after.
 
 ## Applicable directives
 
@@ -241,7 +242,10 @@ one moment it was skipped.
   is the user's stationery, not the folder's data — and Slint's ComboBox
   keeps it across the model replacement on its own (clamped index, value
   re-derived on `changed model`); the fix neither forces nor forbids it,
-  and the spec records it as kept.
+  and the spec records it as kept. Narrowed by QE's measurement (D15,
+  2026-10-16): it survives the swap WHILE THE PANEL STAYS OPEN; closing
+  the panel resets the dropdown to the first template, swap or no swap,
+  before and after the fix — the ComboBox lives under the panel's `if`.
 - D5 (2026-10-16, Manager): the persona's follow-up candidate (keyword
   completion from this session's sidecars) is recorded here and not
   opened as an issue; the unit does not grow toward it.
@@ -295,7 +299,9 @@ one moment it was skipped.
   rows-rebuild count, `iptc rows rebuilt (gen 0)` emitted twice (the
   panel's open and the Enter), and
   `a_cursor_move_rebuild_keeps_the_keyboard_in_the_field` red, its
-  `wait:row 0 (gen 4)` never satisfied. The whole driven suite once,
+  `wait:row 0 (gen 4)` never satisfied (QE's re-run, D15: so is
+  `a_dismissed_menu_over_a_focused_field_row_keeps_the_keyboard`, at
+  :5379). The whole driven suite once,
   before the fix commit (D10): 126 tests in three `--exact` thirds of 38,
   46 and 42, 301 s + 420 s + 336 s, all green; the eight named tests
   green in release in 47 s.
@@ -326,3 +332,59 @@ one moment it was skipped.
   the next template unit's first item, not this release's blocker; the
   line ships, the module ledger carries the open box with this reason,
   and the report names the deferral.
+- D15 (2026-10-16, Manager, on QE round 1 — PASS): the old behaviour
+  reproduced on `002c8c5` by the worktree overlay — the one-liner's
+  `swapped` dump reading `keywords=[("wip", "2/2")]` under the header
+  `three.ARW`, the three tests `2 passed; 2 failed` (AC1 at :4436, AC2 at
+  :4537, both `left: "[(\"wip\", \"2/2\")]"`) — and `d1977cf` green:
+  the driven suite in debug thirds 302 s + 420 s + 336 s and in release
+  564 s + 158 s + 250 s (126 tests), the perf budgets 6 of 6, the new
+  tests 3 of 3 under load, fmt and clippy clean, the RAWs' checksums
+  unchanged. QE's mutants in the worktree: A as D13; A-chips (the
+  chips line alone) — AC1 and AC2 red, so the tests pin that exact line;
+  N (the names line) — all green, G1 confirmed; R (the rows line) — no
+  observable effect, eleven rows never equal the reset cache, the line
+  documents intent; C — the second casualty added to D13. The `keywords=`
+  encoding read back through a keyword typed as `a] b"c\d`. D14's line
+  shown working by hand: a `templates.toml` deleted after the panel read
+  it, then a swap — the dropdown still offered `solo` with Apply enabled
+  on `002c8c5` and on mutant N, empty and disabled on the fix. D4 by
+  hand with the panel open: `beta` before and after the swap, clamped to
+  `gamma` when the file shrank to one template. Probes on the fix:
+  A → B → A refills the row from A's sidecar; a failed open keeps A's
+  chips and revert; a zero-byte `.ARW` and a JPEG named `.ARW` give `[]`
+  without a crash; a swap from a scrolled grid adds no refresh. Three
+  minor findings, none a defect of the fix: (1) the dropdown's selection
+  does not survive CLOSING the panel, swap or no swap, before and after
+  the fix — the ComboBox lives under the panel's `if` — so D4's sentence
+  and the docs line promised more than is true; narrowed in this commit
+  (D4, iptc-templates.md, docs/metadata.md — the senior developer's
+  wording); whether the choice should survive a close is a follow-up
+  candidate for the persona, not this unit's; (2) D4's survival now rests
+  on the ComboBox clamp at every swap with the panel open, verified by
+  the canary's reading and QE's probe only — D14's open box carries it,
+  and the `templates=` field pins it once it also carries the selected
+  index; (3) outside the diff and older than the unit: iptc-templates.md
+  says templates are read "on panel open and on Apply", but Apply has not
+  re-read the file since M5 (`8e67cd6`) — the marks show reads at the
+  panel's open and at the swap, none after an Apply, and the user guide
+  describes what the code does. A promise found unimplemented is recorded
+  and put to the user, never quietly deleted (M10, M8); the sentence
+  stands until the user answers QE's question, relayed verbatim: "The
+  templates spec says templates.toml is re-read when you open the panel
+  *and when you click Apply*. Since the panel shipped, it has only been
+  re-read when you open the panel or open a folder. So if you edit
+  templates.toml while the panel is open and click Apply, you get the old
+  version until you close and reopen the panel; the user guide already
+  tells you to toggle the panel. Should Apply re-read the file, so a
+  saved edit applies at once? Or should the spec be corrected to 'panel
+  open and folder open', matching what you have today?" Directive
+  candidates for the curation after the release: qe.md's "~460 s serial"
+  for the release suite (QE: ~970 s on this seat, a 60-test half 564 s);
+  a worktree has no `testdata/raws` (symlink before a driven run, unlink
+  before `git worktree remove` — the plan's old-red command missed it);
+  developer.md's "two halves of 87" (thirds — the senior developer's
+  measurement agrees). QE's visual note — an emptied chip row moves the
+  add-keywords field down, as any keyword-free folder does — is not a
+  defect. No test change proposed for this unit; QE endorses D14's test
+  shape, dump-read, never pixels.

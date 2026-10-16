@@ -128,11 +128,15 @@ keywords yet, never a promise of an empty moment; the template list is the
 all three models whatever their content, at the first refresh after it —
 the swap's own refresh with the panel open, the refresh the reopen runs
 before its first frame with it closed (issue #114, brief 014 D3,
-2026-10-16). The template dropdown's selection survives the swap like the
-dock's visibility — the user's stationery, not the folder's data — by
-index, clamped to the re-read list, which Slint's ComboBox does on its own
-at a model replacement (ui-grid.md, *Slint facts*; brief 014 D4,
-2026-10-16).
+2026-10-16). The template dropdown's selection survives the swap while the
+panel stays open across it — the user's stationery, not the folder's data
+— by index, clamped to the re-read list, which Slint's ComboBox does on
+its own at a model replacement (ui-grid.md, *Slint facts*; brief 014 D4,
+2026-10-16); closing the panel resets the dropdown to the first template,
+swap or no swap, as it did before the fix — the dropdown is created with
+the panel and dies with it (corrected 2026-10-16, brief 014 D15, QE
+finding 1: this sentence said the selection survives "like the dock's
+visibility", which survives a close).
 
 ## Contracts
 
@@ -220,7 +224,12 @@ at a model replacement (ui-grid.md, *Slint facts*; brief 014 D4,
       field, so the mutant that drops the forced replacement turns nothing
       red (the senior developer's review, 2026-10-16). Open until the next
       template unit lands a `templates=` dump field and the driven test
-      shaped in brief 014 D14.
+      shaped in brief 014 D14 — and, with the panel open across the swap,
+      the selection's survival by index (D4), which rests on the ComboBox's
+      clamp at every such swap and is verified only by the seventh canary's
+      reading and QE's manual probe (QE 2026-10-16, finding 2; brief 014
+      D15); the same `templates=` field pins it once it also carries the
+      selected index.
 
 ## History
 
@@ -229,7 +238,10 @@ at a model replacement (ui-grid.md, *Slint facts*; brief 014 D4,
   the swap and reopened after it; the change-only rebuild rule and the
   chip rule, shipped with M5 and never written into this spec, are stated
   under *The panel's models*; the template dropdown's selection is
-  recorded as kept (D4). Until the fix the chip model was replaced only
+  recorded as kept (D4) — narrowed the same day to "while the panel stays
+  open" (QE finding 1, D15: the dropdown is created with the panel, so a
+  close resets it, before and after the fix), its survival by index joining
+  the ledger's open box. Until the fix the chip model was replaced only
   when the new content differed from a cache the swap had reset to empty,
   so a new folder with no keywords kept the old folder's chips and counts
   until its first keyword landed — with the panel open across the swap and
