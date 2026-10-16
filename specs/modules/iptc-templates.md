@@ -33,9 +33,12 @@ before the casefold dedup.
 - **The three read moments** (user decisions 2026-10-16, brief 015 D1 and
   D2): `templates.toml` is read when the panel opens, at every folder
   open, and every time Apply is clicked — before anything is applied —
-  through core's one config-dir resolver, each read marked `templates
-  loaded from <path>` from the very path it read (test-harness.md); under
-  `FASTCULL_NO_CONFIG` there is no path, no read and no mark. Never
+  through core's one config-dir resolver, each successful read marked
+  `templates loaded from <path>` and each failed one `templates: <path>
+  could not be read: <error>`, both from the very path it read
+  (test-harness.md; corrected 2026-10-16, QE at brief 015's round: this
+  said every read carries the first mark); under `FASTCULL_NO_CONFIG`
+  there is no path, no read and no mark. Never
   otherwise: no file watcher, no timer, no Reload button, no re-read when
   the dropdown opens or the window regains focus; a template added while
   the panel is open is in the dropdown after the next of the three. This
@@ -242,9 +245,11 @@ brief 015 D11 — 014 D15's follow-up is resolved here, not deferred).
 - The template names the window holds and the dropdown's selected index
   are the dump's `templates=` and `tplsel=` fields, the warning strip its
   `iptcwarning=` field (test-harness.md, *The dump*); every Apply ends in
-  a `template apply '<name>': <outcome>` mark; the dropdown and the Apply
-  button are clicked by name (`click:template dropdown`, `click:template
-  apply`) — brief 015, 2026-10-16.
+  a `template apply '<name>': <outcome>` mark; every replacement of the
+  names model is preceded by an `iptc names replaced (gen G)` mark
+  (test-harness.md, *Template names*; QE 2026-10-16, finding 4); the
+  dropdown and the Apply button are clicked by name (`click:template
+  dropdown`, `click:template apply`) — brief 015, 2026-10-16.
 - Hard rule 5's split for brief 015: the name lookup (exact,
   case-sensitive; a missing name is the error `IptcError::TemplateMissing`,
   whose text is the strip's sentence) and the selection after a
@@ -413,7 +418,31 @@ brief 015 D11 — 014 D15's follow-up is resolved here, not deferred).
       the seven tests above green and turns this one red at its `swapped`
       read, `templates=[]`, `tplsel=0`, the error alone (the senior
       developer's review F1, 2026-10-16: until then the rule was pinned at
-      Apply only).
+      Apply only); red on `a084df2` with the test added, at `swapped`,
+      `left: ("[]", "0")` — the old code emptied the list at every failed
+      read (QE 2026-10-16).
+- [x] **An Apply over an empty view applies nothing, and the mark says
+      so** (brief 015 D12; QE 2026-10-16, finding 1): a one-image folder
+      filtered to nothing, Apply — `no image — nothing applied`, one mark,
+      `revert=""`, the strip and the folder untouched, three reads — app
+      `an_apply_over_an_empty_view_applies_nothing_and_says_so`; the early
+      return deleted stamps zero images and arms Revert, red at the mark.
+- [x] **A broken file at launch is an empty list with the error alone**
+      (R4's launch clause; QE 2026-10-16, finding 2): `templates.toml`
+      unparseable from the start — after the launch folder's read and the
+      panel's open the dropdown is empty (`templates=[]`, `tplsel=0`) and
+      the strip shows the parse error without the last-read note; two
+      failed reads, two `templates: … could not be read` marks and no
+      `templates loaded from` — app
+      `a_broken_templates_toml_at_launch_is_an_empty_list_with_the_error_alone`;
+      the last-read note shown over an empty list turns it red at the
+      strip.
+- [x] **Applying nothing leaves the revert slot alone** (R3, R4; QE
+      2026-10-16, finding 3): `alpha` applied, then a vanished name and a
+      failed re-read — `revert=` still names `alpha` after both, the
+      sidecar still `A` — app
+      `an_apply_that_applies_nothing_leaves_the_revert_slot_alone`; the
+      slot cleared on either path turns it red at that read.
 - [x] **The pure rules in core**: `Osprey` is not `osprey`, and a missing
       name is the error whose text is the strip's sentence, never another
       template; the selection after a replacement is the old name's new
@@ -432,8 +461,11 @@ brief 015 D11 — 014 D15's follow-up is resolved here, not deferred).
       of brief 014 AC4 keep their promises, count for count, and the
       change-only rule stands within a session (the names model replaced
       only when the names changed; the selection set without a
-      replacement). Ticked when the full suite is green on the fix commit
-      on both runners.
+      replacement); the names model's replacements are counted — `iptc
+      names replaced (gen N)`, 1 in AC1, 4 in AC5, 1 in AC10 — and a
+      replacement on every refresh turns the counts red (QE 2026-10-16,
+      finding 4). Ticked when the full suite is green on the fix commit on
+      both runners.
 
 ## History
 

@@ -392,8 +392,19 @@ sidecars — scripts target throwaway copies of test data only.
   Apply test: `templates loaded from` is emitted by the panel's open too,
   and a wait is never "next"; the outcome is what differs between two
   clicks in one run. The `no image — nothing applied` outcome is
-  review-verified: no test drives an empty batch, reachable only from an
-  empty folder (brief 015 D18, the senior developer's review F2).
+  reachable whenever the view is empty — a filter that matches nothing, or
+  an empty folder — and is pinned by
+  `an_apply_over_an_empty_view_applies_nothing_and_says_so` (QE 2026-10-16,
+  finding 1: this sentence said the outcome was reachable only from an
+  empty folder and review-verified, brief 015 D18).
+- **Template names** (brief 015, QE 2026-10-16, finding 4): `iptc names
+  replaced (gen G)` just before the dropdown's names model is replaced —
+  the first time the panel shows a list, and whenever a read moment's
+  names differ from the window's; a failed read, an unchanged file and
+  every refresh in between emit none, so a COUNT of it is the change-only
+  rule's witness (1 in AC1, 4 in AC5, 1 in AC10), where `iptc rows rebuilt
+  (gen G)` is the rows'. Written through `trace_mark_with`, like the rows
+  mark: nothing is formatted when nobody listens.
 - **`load settled gen N: cursor pos P, `** — the CONTRACTUAL PREFIX, the
   whole substring a `wait:` registers; the tail differs by zoom and is
   free to (the scroll correction above one column; `scroll X kept (one
@@ -635,11 +646,12 @@ shot 2.
   009 commit B: it said ten, and nine before brief 009 — 1010x520, driven
   since 2026-09-04, was never counted; `grep -o 'resize:[0-9]*x[0-9]*'
   crates/fastcull-app/tests/screenshot.rs | sort -u` lists them).
-- The suite's size: 135 tests after brief 015 — 133 driven and the two
+- The suite's size: 138 tests after brief 015 — 136 driven and the two
   list readers' own unit tests, `keywords=`'s and `templates=`'s
   (`cargo test -p fastcull-app --test screenshot -- --list`, measured
-  2026-10-16 at brief 015's review round 1 commit; 134 at its fix commit,
-  before the review's R4 test, D17) — 126 after brief 014 (125 driven
+  2026-10-16 at brief 015's QE round commit; 134 at its fix commit, 135
+  after the review's R4 test, D17, and three more at QE's round, D20) —
+  126 after brief 014 (125 driven
   and the `keywords=` reader's unit test), 122 driven after brief 011, 120
   after brief 010 and 118 at its start (re-measured 2026-10-16 at brief
   014's fix commit; brief 011's QE rounds added launches, not tests). They
@@ -710,9 +722,12 @@ shot 2.
   dropdown's model and selection, never pixels; the `template apply
   '<name>': <outcome>` mark, one per click; `click:template dropdown` and
   `click:template apply`; the Config reads bullet gains Apply as a read
-  moment; the suite's size, re-measured at the fix commit, is 134, and 135
-  after the review round's R4 test (D17); the `no image — nothing applied`
-  outcome is recorded as review-verified (D18).
+  moment; the suite's size, re-measured at the fix commit, is 134, 135
+  after the review round's R4 test (D17) and 138 after QE's round (D20);
+  QE's round adds the **Template names** mark, `iptc names replaced (gen
+  G)`, whose count is the names model's change-only witness, and pins the
+  `no image — nothing applied` outcome, which the review round had
+  recorded as review-verified (D18, amended).
 - 2026-10-16 — Brief 014 (issue #114): the dump gains `keywords=`,
   appended after `clipnudged=` — the keyword chips the window holds, text
   and coverage per chip in model order — so a driven swap test reads the

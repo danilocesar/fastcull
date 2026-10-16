@@ -523,6 +523,12 @@ pub(crate) fn refresh_iptc_panel(win: &MainWindow, st: &mut AppState) {
     // put (ui-grid.md, *Slint facts*; Cargo.toml's seventh canary). Within
     // an unchanged list nothing is written: the selection is the user's.
     if st.iptc_panel.cache.names != names {
+        // The twin of `iptc rows rebuilt (gen G)` (test-harness.md,
+        // "Template names"): a COUNT of this mark is the change-only rule's
+        // witness — a failed read, an unchanged file and every refresh in
+        // between emit none (QE 2026-10-16, finding 4). A closure, so
+        // nothing is formatted when nobody listens.
+        crate::trace::trace_mark_with(|| format!("iptc names replaced (gen {session_gen})"));
         let selected = st
             .iptc_panel
             .cache

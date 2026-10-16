@@ -195,6 +195,20 @@ or coordinates; both runners.
   selection and shows the parse error followed by the bare note `the
   templates shown are the last read`; two failed reads, two `templates: …
   could not be read` marks.
+- AC11. **An Apply over an empty view applies nothing, and the mark says
+  so** (D12; added 2026-10-16 at QE's round, finding 1, D20): a one-image
+  folder filtered to nothing, Apply — `no image — nothing applied`, one
+  mark, `revert=""`, the strip and the folder untouched, three reads.
+- AC12. **A broken file at launch is an empty list with the error alone**
+  (R4's launch clause; added 2026-10-16 at QE's round, finding 2, D20):
+  `templates.toml` unparseable from the start — after the launch folder's
+  read and the panel's open the dropdown is empty and the strip shows the
+  parse error without the last-read note; two failed reads and no
+  `templates loaded from`.
+- AC13. **Applying nothing leaves the revert slot alone** (R3, R4; added
+  2026-10-16 at QE's round, finding 3, D20): `alpha` applied, then a
+  vanished name and a failed re-read — `revert=` still names `alpha` after
+  both, the sidecar still `A`.
 
 ## Applicable directives
 
@@ -386,7 +400,9 @@ None. The persona's one question for the user is answered (D2).
   `--doc`, core's and the CLI's integration tests, the app's `app_icon` and
   `shortcuts_map`); `cargo test -p fastcull-core --release --locked --test
   perf_budgets` 6/6 green, idle (load 0.40). `testdata/raws/*.ARW`
-  checksums unchanged before and after.
+  checksums unchanged before and after. QE's re-measurement (2026-10-16):
+  M3 also turns AC2 red (`zulu` stamped), M5a also turns AC2 red at
+  `tplsel` (`left: "1"`), M5b also turns AC10 red at `reopened`.
 - D17 (2026-10-16, Manager, on the senior developer's review F1): R4's
   keep-last-good at the folder open and the panel's open gets its own pin
   in this unit — AC10 and the test
@@ -397,15 +413,36 @@ None. The persona's one question for the user is answered (D2).
   field doc invited; the mutant that resets it there leaves the earlier
   seven tests green and this test red at its `swapped` read. The test also
   pins the bare note wording at the swap and the reopen, which nothing
-  checked.
-- D18 (2026-10-16, Manager, on the senior developer's review F2): the `no
-  image — nothing applied` outcome (D12) is review-verified only —
-  `apply_by_name`'s empty-batch early return is three lines, read twice at
-  the review — and test-harness.md's Template apply bullet says so; no test
-  drives an empty batch in this unit.
+  checked. Old-red measured by QE on a084df2 with the test added: red at
+  `swapped`, `left: ("[]", "0")` — the old code emptied the list at every
+  failed read.
+- D18 (2026-10-16, Manager, on the senior developer's review F2; amended
+  at QE's round, finding 1): the `no image — nothing applied` outcome (D12)
+  is reachable whenever the view is empty — a filter that matches nothing,
+  or an empty folder — not only from an empty folder as this entry first
+  said; it is pinned by AC11
+  `an_apply_over_an_empty_view_applies_nothing_and_says_so` (the
+  empty-batch early return deleted stamps zero images and arms Revert, red
+  at the mark). test-harness.md's Template apply bullet says so.
 - D19 (2026-10-16, Manager, on the senior developer's review F4): a corrupt
   entry of the selected template at Apply lands in the vanished-name
   sentence beside the loader's per-entry error, because the entry is
   dropped from the list; acceptable under the spec's wording;
   docs/metadata.md gets a word on it the next time the page is touched. No
   change in this unit.
+- D20 (2026-10-16, Manager, on QE's round-1 PASS and the senior developer's
+  integrity review): QE's seven findings are all fixed in this unit, none
+  deferred — the senior developer approved all seven proposals (three as
+  written, four with changes) and judged none disproportionate. Finding 4
+  is a clause of AC7, an acceptance criterion, so it is pinned rather than
+  deferred: the bridge emits `iptc names replaced (gen G)` just before the
+  names model is replaced, counted 1 in AC1, 4 in AC5 and 1 in AC10 (a
+  replacement on every refresh explodes the counts; brief 014's forced
+  line put back reads 2 in AC10). The three new pins are AC11 (an Apply
+  over an empty view, finding 1), AC12 (a broken file at launch is an
+  empty list with the error alone, finding 2) and AC13 (applying nothing
+  leaves the revert slot alone, finding 3); AC3 asserts the re-read saw the
+  edit (finding 5), AC6 asserts a missing file gives no warning (finding
+  6), every Apply test counts one mark per click (finding 7). Spec
+  corrections carried in the same commit: the three read moments' two
+  marks, AC10's old-red reading, D18's reach.
