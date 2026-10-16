@@ -315,18 +315,20 @@ if it works, say it works.
   never matches its own text) and the check is `ps -eo pid,args` filtered
   the same way, never `pgrep` on the plain text.
 - **The driven suite no longer fits one foreground call.** (senior
-  developer, unit 006, 2026-09-12; re-measured at brief 014, 2026-10-16)
-  The screenshot suite is 126 tests (87 at unit 006) and about 1060 s in
-  debug on this seat — far over the 600000 ms cap, so a single
-  `cargo test --test screenshot` call is cut off mid-suite. Run it as
-  three `--exact` thirds split from `cargo test -p fastcull-app --test
-  screenshot -- --list`, each its own foreground call (measured
-  2026-10-16: 301 s + 420 s + 336 s; a half of 63 would run ~530 s
-  against the cap — the "two halves" this bullet said until brief 014
-  came too near it), never a background run and never a shorter list
-  than the whole. The release suite is ~970 s on this seat (QE, brief
-  014: 564 s + 158 s + 250 s in chunks of 60/36/30), so it is chunked
-  too — a 60-test chunk already takes 564 s.
+  developer, unit 006, 2026-09-12; re-measured at briefs 014 and 015,
+  2026-10-16) The screenshot suite is 138 tests (126 at brief 014, 87 at
+  unit 006) and about 1100 s in debug on this seat — far over the 600000
+  ms cap, so a single `cargo test --test screenshot` call is cut off
+  mid-suite. Run it as three `--exact` thirds split BY LINES from `cargo
+  test -p fastcull-app --test screenshot -- --list` (`split -l` at a third
+  of the count rounded up — 46 at brief 015; never `split -n l/3`, which
+  splits by bytes and handed brief 015's developer a 50-test third), each
+  its own foreground call (measured at brief 015: 337 s + 414 s + 367 s
+  for 46/46/46; at brief 014: 301 s + 420 s + 336 s for 42/42/42; a half
+  would run ~560 s against the cap), never a background run and never a
+  shorter list than the whole. The release suite is ~970 s on this seat
+  (QE, brief 014: 564 s + 158 s + 250 s in chunks of 60/36/30), so it is
+  chunked too — a 60-test chunk already takes 564 s.
 - **A worktree has no `testdata/raws/`.** (QE, brief 014, 2026-10-16: the
   first old-red attempt in the overlay worktree panicked at the fetch
   guard, "run testdata/fetch.sh") The sample RAWs are gitignored and
@@ -334,3 +336,29 @@ if it works, say it works.
   checkout's `testdata/raws` into the worktree before any driven run or
   integration test there, and unlink it before `git worktree remove`;
   the checksums before and after still cover the one real directory.
+- **A test of "nothing happened" to a slot arms the slot first.** (brief
+  015, 2026-10-16, QE finding 3: "the revert slot is untouched" was
+  checked as an empty slot staying empty, and the mutant that cleared the
+  slot stayed green) A promise that a path leaves state alone is pinned by
+  putting something in that state first and reading it after the path; an
+  empty state read as still empty is a proxy that the clearing mutant also
+  passes.
+- **Spinners are spawned from a script file and killed by the PID of a
+  simple command.** (QE, brief 015, 2026-10-16: `$!` of a backgrounded
+  `&&` list is the subshell, and `kill -9` on it orphaned a live spinner
+  that was found and killed by hand seconds later) A load spinner is a
+  simple command in a script file so `$!` names the spinner itself;
+  survivors are checked by exact arguments, never by a bracketed
+  `pgrep`/`pkill` pattern, which still matches the calling shell when the
+  same command line contains the plain spinner text.
+- **One cold build serves two worktrees.** (QE, brief 015, 2026-10-16: 27
+  s and 29 s instead of 516 s and 521 s cold, twice) When the old-red
+  worktree and the mutant worktree build the same crates, rename the first
+  one's `target-qe-*` for the second, `touch` every `.rs` and `.slint`
+  under the second's crates so cargo rebuilds the workspace crates only,
+  and confirm the binary with `strings` before trusting it; peak scratch
+  was 7.5 GB.
+- **Core-only mutants in an app-shaped target dir cost a second build.**
+  (QE, brief 015, 2026-10-16: `-p fastcull-core --lib` recompiled about
+  140 crates, 125 s and +1.27 GB) Run the core mutants first in a fresh
+  target, or budget the space and the time.

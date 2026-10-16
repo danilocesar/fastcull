@@ -495,18 +495,20 @@ on the answer. The Manager relays them verbatim; the user is the customer.
   character never matches its own text) and the check is `ps -eo pid,args`
   filtered the same way.
 - **The driven suite no longer fits one foreground call.** (senior
-  developer, unit 006, 2026-09-12; re-measured at brief 014, 2026-10-16)
-  The screenshot suite is 126 tests (87 at unit 006) and about 1060 s in
-  debug on this seat — far over the 600000 ms cap, so a single
-  `cargo test --test screenshot` call is cut off mid-suite. Run it as
-  three `--exact` thirds split from `cargo test -p fastcull-app --test
-  screenshot -- --list`, each its own foreground call (measured
-  2026-10-16: 301 s + 420 s + 336 s; a half of 63 would run ~530 s
-  against the cap — the "two halves" this bullet said until brief 014
-  came too near it), never a background run and never a shorter list
-  than the whole. The release suite is ~970 s on this seat (QE, brief
-  014: 564 s + 158 s + 250 s in chunks of 60/36/30), so it is chunked
-  too — a 60-test chunk already takes 564 s.
+  developer, unit 006, 2026-09-12; re-measured at briefs 014 and 015,
+  2026-10-16) The screenshot suite is 138 tests (126 at brief 014, 87 at
+  unit 006) and about 1100 s in debug on this seat — far over the 600000
+  ms cap, so a single `cargo test --test screenshot` call is cut off
+  mid-suite. Run it as three `--exact` thirds split BY LINES from `cargo
+  test -p fastcull-app --test screenshot -- --list` (`split -l` at a third
+  of the count rounded up — 46 at brief 015; never `split -n l/3`, which
+  splits by bytes and handed brief 015's developer a 50-test third), each
+  its own foreground call (measured at brief 015: 337 s + 414 s + 367 s
+  for 46/46/46; at brief 014: 301 s + 420 s + 336 s for 42/42/42; a half
+  would run ~560 s against the cap), never a background run and never a
+  shorter list than the whole. The release suite is ~970 s on this seat
+  (QE, brief 014: 564 s + 158 s + 250 s in chunks of 60/36/30), so it is
+  chunked too — a 60-test chunk already takes 564 s.
 - **A plan's worktree command names the RAWs.** (brief 014, 2026-10-16:
   the plan's old-red command for QE omitted it and QE's first attempt
   panicked at the fetch guard) `testdata/raws/` is gitignored and
@@ -514,3 +516,38 @@ on the answer. The Manager relays them verbatim; the user is the customer.
   role into a worktree for a driven run says to symlink the main
   checkout's `testdata/raws` in first and unlink it before the worktree
   is removed.
+- **A guard's negative fixture puts the mutant's answer where the correct
+  answer is not.** (brief 015, 2026-10-16: the plan named the case-folded
+  `position` mutant for the line `Some("Zebra")` over `["zebra"]` → 0, but
+  the folded match is position 0 too, the same as "gone", so the developer
+  measured the mutant green; over `["alpha", "zebra"]` the folded answer
+  is 1 and the mutant is red) When a plan names the mutant that must turn
+  a line red, write the line so the mutant's value differs from the
+  correct value; a line where they coincide is blind, and the developer
+  reports it as such rather than shipping the plan's fixture.
+- **When a rule survives an event because a constructor skips a field, the
+  pin is of the skip.** (brief 015, 2026-10-16, review F1: the plan pinned
+  `reload_templates` — the function that reads the kept list — and left
+  `AppState::begin_session`'s skip of `templates` to a comment; the mutant
+  that reset the field there left all seven tests green, and the eighth
+  test, AC10, was added at the review) A rule of the shape "X survives Y"
+  is pinned by a test that performs Y and reads X after it, with the
+  mutant that makes Y forget X; pinning the function that reads X proves
+  nothing about Y.
+- **An "only when" clause inside an acceptance criterion needs its
+  countable witness at plan time.** (brief 015, 2026-10-16, QE finding 4:
+  AC7's clause "the names model is replaced only when the names changed"
+  had no mark to count, so a mutant that replaced it on every refresh left
+  all seventeen tests green and the box would have been ticked on a green
+  CI without evidence) A rule of the shape "X happens only when Y" is
+  pinned by a mark emitted where X happens and a count of it asserted in a
+  test where Y happens a known number of times; the plan names the mark
+  and the counts, as `iptc rows rebuilt (gen G)` and `iptc names replaced
+  (gen G)` do.
+- **A test of "nothing happened" to a slot arms the slot first.** (brief
+  015, 2026-10-16, QE finding 3: "the revert slot is untouched" was
+  checked as an empty slot staying empty, and the mutant that cleared the
+  slot stayed green) A promise that a path leaves state alone is pinned by
+  putting something in that state first and reading it after the path; an
+  empty state read as still empty is a proxy that the clearing mutant also
+  passes.
