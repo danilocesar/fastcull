@@ -388,3 +388,11 @@ one moment it was skipped.
   add-keywords field down, as any keyword-free folder does — is not a
   defect. No test change proposed for this unit; QE endorses D14's test
   shape, dump-read, never pixels.
+- D16 (2026-10-16, Manager, the release): PR #115 merged into main at
+  `9dedb4b` with both runners green on `b97315b` (CI run 38887211918);
+  v0.15.1 cut from it per D2 — the version bump, Cargo.lock, the
+  CHANGELOG entry and this line in one "Release 0.15.1" commit;
+  THIRD-PARTY-LICENSES.md untouched, no dependency having moved since
+  v0.15.0 (Cargo.lock's only change is the workspace crates' version).
+  The three directive candidates of D15 are promoted in PR #116,
+  independent of the release. D15's question for the user stays open.

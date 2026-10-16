@@ -5,6 +5,32 @@ at release time (RELEASING.md, "Cutting a release"); the milestone plan and
 its closures are `specs/milestones.md`. Moved here from that file on
 2026-09-17 (brief 007), verbatim.
 
+## v0.15.1 (released 2026-10-16)
+
+One fix since v0.15.0.
+
+**The IPTC panel forgets the old folder when you open another** (issue
+#114, brief 014, `modules/iptc-templates.md` "The panel's models",
+`docs/metadata.md`). After tagging in one folder and opening the next,
+the panel kept showing the previous folder's keyword chips with the
+previous folder's counts — `wip 2/2` under a header naming a photo that
+had no sidecar at all — until the new folder's first keyword appeared,
+whether the panel stayed open across the change or was closed and
+reopened. The panel replaces its field rows, keyword chips and template
+list only when what they should show changes; a folder change reset its
+memory of what it last showed to "nothing", and a new folder with no
+keywords yet looked the same as "nothing", so the chips were never
+replaced. The first refresh after a folder change now replaces all three
+regardless; within a folder nothing rebuilds more than before. Your
+template choice in the dropdown stays as long as the panel stays open
+(closing the panel puts it back on the first template, as it always
+has). Three
+driven tests pin it — the panel open across the change, closed and
+reopened, and the new folder's own sidecar filling the row — and the
+drive harness's state dump now carries the keyword chips the window
+holds (`keywords=`), so those tests read the panel's model rather than
+a screenshot.
+
 ## v0.15.0 (released 2026-10-06)
 
 Everything since v0.14.0: a Settings dialog and a settings file, the
