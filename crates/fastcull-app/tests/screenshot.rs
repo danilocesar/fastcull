@@ -5426,6 +5426,96 @@ fn an_apply_time_expansion_error_joins_the_read_warnings() {
     );
 }
 
+/// Brief 015 R4 at the folder open and the panel's open (iptc-templates.md,
+/// "One rule for a bad file, at every read moment"): the file made
+/// unparseable after the panel read it and `zebra` selected, then a swap
+/// with the panel open — the swap's read fails as a whole, the LAST GOOD
+/// list stays in the dropdown with its selection, and the strip shows the
+/// parse error followed by the bare note `the templates shown are the last
+/// read`; the panel closed and reopened over the same broken file — the
+/// reopen's read fails too, and the list, the selection and the note stay.
+/// Two failed reads, two `templates: … could not be read` marks. The list
+/// lives on `AppState`, which `begin_session` leaves alone: the mutant that
+/// resets it there empties the dropdown at the swap (`templates=[]`,
+/// `tplsel=0`, the error alone).
+#[test]
+fn a_broken_templates_toml_at_a_swap_and_a_reopen_keeps_the_last_good_list() {
+    if !has_display() {
+        eprintln!("screenshot smoke skipped: no display server");
+        return;
+    }
+    let _s = serial();
+    let dir_a = template_folder("broken-swap", "a", "one.ARW");
+    let dir_b = template_folder("broken-swap", "b", "three.ARW");
+    let cfg = templates_config("broken-swap", TPL_ALPHA_ZEBRA);
+    let rewrites = [("] iptc rows rebuilt (gen 0)", Some(TPL_BROKEN))];
+    let drive = format!(
+        "2400:wait:load settled gen 0;2500:key:i;2600:wait:iptc rows rebuilt (gen 0);\
+         3300:click:template dropdown;3600:key:down;3900:key:return;4300:dump.before;\
+         4700:open:{};4900:wait:load settled gen 1;5100:dump.swapped;5700:iptc;6100:iptc;\
+         6500:dump.reopened",
+        dir_b.display()
+    );
+    let (stderr, landed) = shoot_templates("tpl-broken-swap", &dir_a, &cfg, &drive, &rewrites);
+    assert_template_gates(
+        &stderr,
+        &[
+            "load settled gen 0",
+            "iptc rows rebuilt (gen 0)",
+            "load settled gen 1",
+        ],
+        &landed,
+        &rewrites,
+    );
+    let kept = (r#"["alpha", "zebra"]"#, "1");
+    let before = qedump(&stderr, "before");
+    assert_eq!(
+        (dump_templates(before), dump_field(before, "tplsel")),
+        kept,
+        "zebra was not selected over the launch file's list before the swap: {before}"
+    );
+    let swapped = qedump(&stderr, "swapped");
+    assert!(
+        dump_text(swapped, "status").contains("three.ARW"),
+        "the open: swap never landed: {swapped}"
+    );
+    assert_eq!(
+        (dump_templates(swapped), dump_field(swapped, "tplsel")),
+        kept,
+        "the swap's failed read did not keep the last good list with its \
+         selection (brief 015 R4, one rule at every read moment): {swapped}"
+    );
+    let strip = dump_text(swapped, "iptcwarning");
+    assert!(
+        strip.contains("templates file is not valid TOML")
+            && strip.contains("the templates shown are the last read")
+            && !strip.contains("nothing was applied"),
+        "the strip after the swap's failed read does not carry the parse error \
+         and the bare last-read note: {swapped}"
+    );
+    let reopened = qedump(&stderr, "reopened");
+    assert_eq!(
+        dump_field(reopened, "iptc"),
+        "true",
+        "the panel did not reopen: {reopened}"
+    );
+    assert_eq!(
+        (dump_templates(reopened), dump_field(reopened, "tplsel")),
+        kept,
+        "the reopen's failed read did not keep the last good list with its \
+         selection (brief 015 R4): {reopened}"
+    );
+    assert!(
+        dump_text(reopened, "iptcwarning").contains("the templates shown are the last read"),
+        "the strip after the reopen's failed read lost the last-read note: {reopened}"
+    );
+    assert_eq!(
+        mark_lines(&stderr, "templates: "),
+        2,
+        "not exactly two failed reads — the swap's and the reopen's:\n{stderr}"
+    );
+}
+
 /// Issue #42: Esc over stacked modals must close the TOPMOST one. With
 /// About opened over the live Copy Picks dialog, the first Esc used to
 /// act on the HIDDEN dialog — discarding its plan state while About

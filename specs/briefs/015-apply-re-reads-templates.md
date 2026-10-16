@@ -188,6 +188,13 @@ or coordinates; both runners.
   variable — after Apply the strip carries the CLEAR warning AND the
   expansion error. Red on the pre-change tree, where the error replaced
   the read warnings.
+- AC10. **The last good list at a swap and a reopen** (R4; added
+  2026-10-16 at the senior developer's review, F1, D17): a broken
+  `templates.toml` at a folder open with the panel open, and at a panel
+  reopen over the same broken file, keeps the last good list with its
+  selection and shows the parse error followed by the bare note `the
+  templates shown are the last read`; two failed reads, two `templates: …
+  could not be read` marks.
 
 ## Applicable directives
 
@@ -347,9 +354,17 @@ None. The persona's one question for the user is answered (D2).
   panel's close — AC5 red at `reopened` alone, `tplsel=1` (`aardvark`),
   `applied` 2 and `swapped` 3; M6, the names cache reset to empty at
   `IptcPanelState::begin_session` — AC6 red at `swapped`, `left:
-  ("[\"alpha\", \"zebra\"]", "0")`; M9, the expansion error put in place of
-  the read's warnings — AC9 red at the CLEAR read. The core mutants, on the
-  core commit's two tests: a case-folded lookup (`eq_ignore_ascii_case`) —
+  ("[\"alpha\", \"zebra\"]", "0")`, and AC5 red at its `swapped` read too,
+  `left: ("[\"aardvark\", \"alpha\", \"mid\", \"zebra\"]", "0")` against
+  `"3"`: the list is right and the selection is lost, because the kept
+  names cache is what R5 at the swap rests on, not only AC6 (amended
+  2026-10-16 at review round 1, the senior developer's F3; re-measured by
+  the developer with M6 re-applied: AC5's `reopened` then follows
+  `aardvark` to `tplsel=1`, and AC10's test is red at its `swapped` read
+  as well, `left: ("[\"alpha\", \"zebra\"]", "0")`); M9, the expansion
+  error put in place of the read's warnings — AC9 red at the CLEAR read.
+  The core mutants, on the core commit's two tests: a case-folded lookup
+  (`eq_ignore_ascii_case`) —
   `template_by_name_is_exact_and_case_sensitive` red at the `osprey` read,
   `left: Some("upper")`; a case-folded `position` — GREEN with the plan's
   case line, `Some("Zebra")` in `["zebra"]`, whose folded match is
@@ -372,3 +387,25 @@ None. The persona's one question for the user is answered (D2).
   `shortcuts_map`); `cargo test -p fastcull-core --release --locked --test
   perf_budgets` 6/6 green, idle (load 0.40). `testdata/raws/*.ARW`
   checksums unchanged before and after.
+- D17 (2026-10-16, Manager, on the senior developer's review F1): R4's
+  keep-last-good at the folder open and the panel's open gets its own pin
+  in this unit — AC10 and the test
+  `a_broken_templates_toml_at_a_swap_and_a_reopen_keeps_the_last_good_list`
+  — because the rule is the user's choice (D5) for all three moments and
+  the survivor it rests on (`TemplateState` on `AppState`, which
+  `begin_session` leaves alone) has a one-line regression path the old
+  field doc invited; the mutant that resets it there leaves the earlier
+  seven tests green and this test red at its `swapped` read. The test also
+  pins the bare note wording at the swap and the reopen, which nothing
+  checked.
+- D18 (2026-10-16, Manager, on the senior developer's review F2): the `no
+  image — nothing applied` outcome (D12) is review-verified only —
+  `apply_by_name`'s empty-batch early return is three lines, read twice at
+  the review — and test-harness.md's Template apply bullet says so; no test
+  drives an empty batch in this unit.
+- D19 (2026-10-16, Manager, on the senior developer's review F4): a corrupt
+  entry of the selected template at Apply lands in the vanished-name
+  sentence beside the loader's per-entry error, because the entry is
+  dropped from the list; acceptable under the spec's wording;
+  docs/metadata.md gets a word on it the next time the page is touched. No
+  change in this unit.

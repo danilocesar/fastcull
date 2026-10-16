@@ -401,6 +401,19 @@ brief 015 D11 — 014 D15's follow-up is resolved here, not deferred).
       the expansion error alone; the error put back in place of the read's
       warnings turns it red at the same read, and inserted ahead of them at
       the order read.
+- [x] **The last good list at a swap and a reopen** (brief 015 AC10, D17):
+      a broken `templates.toml` at a folder open with the panel open, and at
+      a panel reopen over the same broken file, keeps the last good list
+      with its selection and shows the parse error followed by the bare
+      note `the templates shown are the last read`; two failed reads, two
+      `templates: … could not be read` marks — app
+      `a_broken_templates_toml_at_a_swap_and_a_reopen_keeps_the_last_good_list`;
+      the list reset in `AppState::begin_session` (`self.templates =
+      TemplateState::default()`, the survivor this rule rests on) leaves
+      the seven tests above green and turns this one red at its `swapped`
+      read, `templates=[]`, `tplsel=0`, the error alone (the senior
+      developer's review F1, 2026-10-16: until then the rule was pinned at
+      Apply only).
 - [x] **The pure rules in core**: `Osprey` is not `osprey`, and a missing
       name is the error whose text is the strip's sentence, never another
       template; the selection after a replacement is the old name's new

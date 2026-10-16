@@ -391,7 +391,9 @@ sidecars — scripts target throwaway copies of test data only.
   applied` and `no image — nothing applied`. The `wait:` target of every
   Apply test: `templates loaded from` is emitted by the panel's open too,
   and a wait is never "next"; the outcome is what differs between two
-  clicks in one run.
+  clicks in one run. The `no image — nothing applied` outcome is
+  review-verified: no test drives an empty batch, reachable only from an
+  empty folder (brief 015 D18, the senior developer's review F2).
 - **`load settled gen N: cursor pos P, `** — the CONTRACTUAL PREFIX, the
   whole substring a `wait:` registers; the tail differs by zoom and is
   free to (the scroll correction above one column; `scroll X kept (one
@@ -633,18 +635,19 @@ shot 2.
   009 commit B: it said ten, and nine before brief 009 — 1010x520, driven
   since 2026-09-04, was never counted; `grep -o 'resize:[0-9]*x[0-9]*'
   crates/fastcull-app/tests/screenshot.rs | sort -u` lists them).
-- The suite's size: 134 tests after brief 015 — 132 driven and the two
+- The suite's size: 135 tests after brief 015 — 133 driven and the two
   list readers' own unit tests, `keywords=`'s and `templates=`'s
   (`cargo test -p fastcull-app --test screenshot -- --list`, measured
-  2026-10-16 at brief 015's fix commit) — 126 after brief 014 (125 driven
+  2026-10-16 at brief 015's review round 1 commit; 134 at its fix commit,
+  before the review's R4 test, D17) — 126 after brief 014 (125 driven
   and the `keywords=` reader's unit test), 122 driven after brief 011, 120
   after brief 010 and 118 at its start (re-measured 2026-10-16 at brief
   014's fix commit; brief 011's QE rounds added launches, not tests). They
   no longer fit one 600 s foreground call in debug on the development seat
   and run there as three `--exact` thirds split from that list — each third
   well under the cap, halves too near it. The measured times of each unit's
-  head are that unit's brief's (brief 015 D16 for the 134; brief 014 D13
-  for the 126; brief 011 D8 for the 122:
+  head are that unit's brief's (brief 015 D16 for the 134 of its fix
+  commit; brief 014 D13 for the 126; brief 011 D8 for the 122:
   ~1040 s in three thirds, three independent measurements; brief 010 D5
   for the 120; this sentence carried the seat timings themselves until
   2026-10-05 — moved out under CLAUDE.md's spec shape, which keeps seat
@@ -707,7 +710,9 @@ shot 2.
   dropdown's model and selection, never pixels; the `template apply
   '<name>': <outcome>` mark, one per click; `click:template dropdown` and
   `click:template apply`; the Config reads bullet gains Apply as a read
-  moment; the suite's size, re-measured at the fix commit, is 134.
+  moment; the suite's size, re-measured at the fix commit, is 134, and 135
+  after the review round's R4 test (D17); the `no image — nothing applied`
+  outcome is recorded as review-verified (D18).
 - 2026-10-16 — Brief 014 (issue #114): the dump gains `keywords=`,
   appended after `clipnudged=` — the keyword chips the window holds, text
   and coverage per chip in model order — so a driven swap test reads the
