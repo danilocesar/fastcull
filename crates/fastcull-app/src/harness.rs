@@ -9,7 +9,7 @@ use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Arc;
 use std::time::{Duration, Instant};
 
-use slint::ComponentHandle;
+use slint::{ComponentHandle, Model};
 
 use crate::nav::handle_nav;
 use crate::presenter::refresh;
@@ -804,7 +804,7 @@ fn dispatch(win: &MainWindow, state: &Rc<RefCell<AppState>>, key: &str, layout: 
                          cliperror={:?} clipreport={:?} clipconfirm={:?} clipprogress={:?} \
                          cliphint={:?} exported={} curexported={} \
                          cursor={} selected={} vpy={:.1} focusowner={} {} thumbtex={} \
-                         clipnudged={}",
+                         clipnudged={} keywords={:?}",
             win.get_dbg_keys_focus(),
             win.get_one2one(),
             st.grid.zoom,
@@ -933,9 +933,25 @@ fn dispatch(win: &MainWindow, state: &Rc<RefCell<AppState>>, key: &str, layout: 
             // the question does not take was answered with "Pick one: B, O
             // or Esc." or swallowed in silence — the only way a driven run
             // tells the two apart, which is what the export ring's Tab on
-            // the question promises. Appended, LAST, for the same reason
-            // as `thumbtex` above.
+            // the question promises. Appended after `thumbtex`, for the
+            // same reason.
             win.get_clip_confirm_nudged(),
+            // The keyword chips the WINDOW holds — the `iptc-keywords`
+            // model the panel's chip repeater is built from, whether the
+            // panel is up or not — as `(text, coverage)` pairs in model
+            // order (test-harness.md "The dump"; brief 014, issue #114).
+            // The model, never the bridge's cache or a screenshot: a panel
+            // reopened after a session swap is instantiated from this
+            // model, and the defect was a model the swap never replaced.
+            // `{:?}` of a `Vec<(String, String)>` prints `[("wip", "2/2")]`,
+            // and `[]` when empty. `.iter()` is the `Model` trait's (hence
+            // the import), and `.to_string()` turns Slint's `SharedString`
+            // into a plain `String`. Appended, LAST, for the same reason as
+            // `thumbtex` above.
+            win.get_iptc_keywords()
+                .iter()
+                .map(|chip| (chip.text.to_string(), chip.coverage.to_string()))
+                .collect::<Vec<(String, String)>>(),
         ));
         return;
     }
