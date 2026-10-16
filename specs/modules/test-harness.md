@@ -156,9 +156,14 @@ sidecars — scripts target throwaway copies of test data only.
   `settings wash`, `settings loupe-memory`, `settings cache-cap`,
   `settings readers-adaptive`, `settings readers-limit`,
   `settings clear-cache`, `settings reset`, `settings close`,
-  `failed badge <id>`, and since brief 011 `copy copy-close` and `clip
-  export-close`), resolved at dispatch time from a table the
-  layout marks write unconditionally; it echoes `drive ptr click X,Y
+  `failed badge <id>`, since brief 011 `copy copy-close` and `clip
+  export-close`, and since brief 015 `template dropdown` and `template
+  apply` — the IPTC panel's ComboBox and its Apply button: a click on the
+  dropdown focuses it and opens its list, where `key:down`/`key:up` move
+  the selection and `key:return` closes it, so a test selects a template
+  by a name-resolved click and real keys), resolved at dispatch time from
+  a table the layout marks write unconditionally; it echoes `drive ptr
+  click X,Y
   (<element>)`, which a test reads to assert the click landed inside the
   rectangle. A name with no mark yet aborts the run loudly (`drive: click:
   no layout mark for <element> — abandoning the run`, exit non-zero). A
@@ -370,13 +375,23 @@ sidecars — scripts target throwaway copies of test data only.
   tooltip popup is instantiated.
 - **Config reads** (brief 008 D11; QE 2026-10-01, D37): `templates loaded
   from <path>` / `templates: <path> could not be read: <error>` at every
-  `templates.toml` read (the IPTC panel's open, every folder open; a missing
+  `templates.toml` read (the IPTC panel's open, every folder open and —
+  since brief 015 — every Apply, before anything is applied; a missing
   file loads empty, so it is "loaded from" too), and `ui prefs read from
   <path>` at every `ui.toml` read (the copy and export dialogs, and the
   read half of each save) — each built from the very path the read used,
   so a driven run sees that both files go through the one config-dir
   resolver; under `FASTCULL_NO_CONFIG` there is no path, no read and no
   mark.
+- **Template apply** (brief 015, 2026-10-16): `template apply '<name>':
+  <outcome>`, once per Apply click, after the re-read — `<name>` what the
+  dropdown showed at the click, `<outcome>` one of `applied to N
+  image(s)`, `not in templates.toml — nothing applied`, `templates.toml
+  could not be re-read — nothing applied`, `<expansion error> — nothing
+  applied` and `no image — nothing applied`. The `wait:` target of every
+  Apply test: `templates loaded from` is emitted by the panel's open too,
+  and a wait is never "next"; the outcome is what differs between two
+  clicks in one run.
 - **`load settled gen N: cursor pos P, `** — the CONTRACTUAL PREFIX, the
   whole substring a `wait:` registers; the tail differs by zoom and is
   free to (the scroll correction above one column; `scroll X kept (one
@@ -530,6 +545,24 @@ after a swap is instantiated from it — and because a chip's pixels move
 with the seat's font; with the panel closed across a swap the field lags,
 holding the old session's chips until the reopen replaces the model
 before the panel's first frame (brief 014 D11, 2026-10-16).
+Then, appended after `keywords=` (brief 015, 2026-10-16): `templates=`,
+the template names the WINDOW holds — the `iptc-templates` model the
+dropdown is built from, panel open or closed — as the `{:?}` of a list of
+strings in model order (`templates=[]`, `templates=["Mid", "alpha",
+"zebra"]`), Debug-escaped and read to its closing bracket outside quotes
+exactly as `keywords=` is, never with `dump_field`; `tplsel=`, the
+dropdown's selected index — the window property its `current-index` is
+two-way bound to — `0` for an empty list, unchanged by a close (the
+reopened dropdown starts on it, brief 015 D11), so it reads the same with
+the panel open or closed; and
+`iptcwarning=`, the warning strip's text as the window holds it (`{:?}`,
+lines joined by `\n`, `""` when the strip is hidden), read with
+`dump_text`. A test asserts the dropdown by these three and never by
+pixels: iptc-templates.md's "first entry" is `tplsel=0` over the re-read
+`templates=`, its "same name at its new position" is `templates[tplsel]`
+equal to the name selected before the replacement. Apply's enabled state
+is not a field: it is bound to the list's length in main.slint, so
+`templates=[]` is Apply disabled.
 New fields are APPENDED; `dump_field` finds `name=` by prefix. The
 nav-token swallow mirror (`drive swallowed by modal`) covers the Settings
 dialog like About and the card.
@@ -600,7 +633,11 @@ shot 2.
   009 commit B: it said ten, and nine before brief 009 — 1010x520, driven
   since 2026-09-04, was never counted; `grep -o 'resize:[0-9]*x[0-9]*'
   crates/fastcull-app/tests/screenshot.rs | sort -u` lists them).
-- The suite's size: 126 tests after brief 014 — 125 driven and the
+- The suite's size: **to be measured at brief 015's fix commit** — 126
+  plus brief 015's driven tests and the `templates=` reader's own unit
+  test, from `cargo test -p fastcull-app --test screenshot -- --list` on
+  that commit; the plan names the commit that fills this number — 126
+  tests after brief 014 — 125 driven and the
   `keywords=` reader's own unit test — 122 driven after brief 011, 120
   after brief 010 and 118 at its start (`cargo test -p fastcull-app --test
   screenshot -- --list`, re-measured 2026-10-16 at brief 014's fix commit;
@@ -664,6 +701,14 @@ shot 2.
 
 ## History
 
+- 2026-10-16 — Brief 015: the dump gains `templates=`, `tplsel=` and
+  `iptcwarning=`, appended after `keywords=` — the template names the
+  window holds, the dropdown's selected index and the warning strip — so
+  the Apply tests and brief 014 D14's deferred swap tests read the
+  dropdown's model and selection, never pixels; the `template apply
+  '<name>': <outcome>` mark, one per click; `click:template dropdown` and
+  `click:template apply`; the Config reads bullet gains Apply as a read
+  moment; the suite's size is to be re-measured at the fix commit.
 - 2026-10-16 — Brief 014 (issue #114): the dump gains `keywords=`,
   appended after `clipnudged=` — the keyword chips the window holds, text
   and coverage per chip in model order — so a driven swap test reads the

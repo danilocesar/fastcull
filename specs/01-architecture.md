@@ -91,11 +91,23 @@ copy picks
 ## Threading model
 
 - **Main/UI thread**: Slint event loop only. Never blocks on I/O or decode —
-  with one recorded exception, the two ~1 KB config writes on an explicit
+  with two recorded exceptions: the two ~1 KB config writes on an explicit
   user action inside a dialog, `ui.toml` and `settings.toml` (ADR 0005;
   this bullet said "never" while `ui.toml` had been written here since M6
   — corrected 2026-10-01, brief 008; the cache clear's VACUUM runs on a
-  worker) —
+  worker), and the reads of the same three files at the moments their
+  specs name — `templates.toml` at the panel's open, every folder open
+  and every Apply (iptc-templates.md), `ui.toml` when a copy or export
+  dialog opens and at the read half of each save (test-harness.md),
+  `settings.toml` at launch and when its dialog opens
+  (settings.md) — each a few KB read and parsed on the spot (this bullet
+  listed the writes and not the reads brief 008 routed through the one
+  resolver — corrected 2026-10-16, brief 015). The folder scan runs here
+  too: `Session::open` (`crates/fastcull-core/src/catalog.rs:95`, one
+  `read_dir` and one `metadata` per entry, no file contents) from
+  `session::load_folder` (`crates/fastcull-app/src/session.rs:99`) at
+  launch and at every folder open — never listed until 2026-10-16 (brief
+  015, M10) —
   and as of the user decision 2026-08-02, **"decode" includes ALL pixel
   work**: JPEG decoding, full-frame copies into texture buffers, and
   downscaling. The M2-era deviations that budgeted such work per refresh

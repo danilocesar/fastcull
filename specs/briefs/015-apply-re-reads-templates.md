@@ -183,14 +183,23 @@ or coordinates; both runners.
   model is replaced only when the names changed; the selection is set
   without a replacement).
 - AC8. **The specs and docs say so** (R8), ticked at the merge.
+- AC9. **Warnings add up** (R6; added 2026-10-16 at the spec change, the
+  senior developer's Q1): a template with a `""` field and an unknown
+  variable — after Apply the strip carries the CLEAR warning AND the
+  expansion error. Red on the pre-change tree, where the error replaced
+  the read warnings.
 
 ## Applicable directives
 
 - Hard rule 1 (sidecars only; the tests' RAWs are copies or symlinks
   under the test's scratch; checksums before and after); hard rule 4
-  (every step a commit); hard rule 5 (the name lookup and the
-  keep-last-good are bridging and app state — the loader's error
-  semantics stay in core, unchanged); hard rule 6 (nothing per tick).
+  (every step a commit); hard rule 5 — the name lookup and the
+  selection-after-replacement are pure rules in `fastcull-core`
+  (`iptc.rs`) with unit tests beside them, the keep-last-good is app
+  state around the unchanged loader, the loader's error semantics stay
+  in core (this line called the lookup bridging until the spec change,
+  2026-10-16 — the senior developer's Q2, D14); hard rule 6 (nothing
+  per tick).
 - ADR 0003. M1 (the spec moves first), M2 (the UX rulings below),
   M7, M8 (the one persona question went to the user — D2), M12.
 - iptc-templates.md (the Templates section, "Applying to a selection",
@@ -268,9 +277,49 @@ None. The persona's one question for the user is answered (D2).
   plumbing — the dump field and the swap tests (R7, AC5, AC6) — and
   closes 014's open ledger box.
 - D9 (2026-10-16, Manager): follow-ups recorded, not opened: the
-  dropdown's reset on panel close (014 D15); the warning strip's
-  position above the Apply row.
+  dropdown's reset on panel close (014 D15) — superseded by D11 the
+  same day; the warning strip's position above the Apply row stays a
+  follow-up.
 - D10 (2026-10-16, Manager, M9/M12): the branch cut from `origin/main`
   at `52f3a29` (v0.15.1 plus PR #118); the start-of-unit clean freed
   22.4 GiB (`target/` 83 → 63 GB; no `target-qe-*`, no `.qe-scratch`
   left by brief 014); no peer session in this repo.
+- D11 (2026-10-16, Manager, M2, on the senior developer's candidate
+  question for the user at the spec change): the dropdown's selection
+  SURVIVES closing and reopening the panel for as long as the app runs,
+  by name — the reopen is a read moment, so the selection follows the
+  name as at every replacement; at launch the first entry. The senior
+  developer's probe showed that a window property two-way bound to the
+  dropdown's index is what a recreated dropdown starts from, so "keep"
+  is zero lines and the reset would be one deliberate line; with the
+  cost gone, the persona's USEFUL verdict and its own words — the one
+  control carrying the user's intent for the evening must not
+  re-decide itself — are the best-practice answer. Resolves 014 D15's
+  follow-up; supersedes D9's first item; AC5 gains a close-and-reopen
+  read with its mutant.
+- D12 (2026-10-16, Manager, on Q3): an Apply with an empty batch is a
+  `no image — nothing applied` mark only; the strip is unchanged.
+- D13 (2026-10-16, Manager, M10, on Q4 and Q5): two corrections outside
+  the brief's list ride in the spec commit — 01-architecture.md's
+  UI-thread bullet lists the config READS beside the writes (and the
+  folder scan, if verified by reading), and docs/metadata.md's field-row
+  rebuild triggers lose "when templates reload" (a reload replaces the
+  names model only).
+- D14 (2026-10-16, Manager, on Q1, Q2 and Q6): R6 gets AC9 and its test;
+  the lookup and the selection rule live in core (the directives line
+  corrected); the test and core function names are as the spec change
+  proposes.
+- D15 (2026-10-16, Manager, on the plan's four questions): (1) edit D as
+  the senior developer recommends — the names cache survives
+  `IptcPanelState::begin_session`, so the names model follows the
+  change-only rule at every moment, the swap included, and 014 D14's
+  untested forced-replacement line is deleted rather than tested (the
+  aliasing 014 fixed cannot touch a cache that is never reset); 014's
+  "all three models" sentence and AC6's mutant are rewritten in the spec
+  commit; (2) commit 1 carries the window-held dropdown index and so
+  D11's keep-across-close, its message saying so, so the dump's field
+  order stays the spec's; (3) one full driven suite on the final tree,
+  no extra run on commit 1 (014 D10's shape: commit 1 is verified by the
+  eleven named tests); (4) AC5's test is renamed
+  `the_template_dropdown_follows_the_name_at_apply_at_a_swap_and_at_a_reopen`
+  so its name says what it proves; the ledger follows.
