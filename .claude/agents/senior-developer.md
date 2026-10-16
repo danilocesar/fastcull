@@ -495,9 +495,22 @@ on the answer. The Manager relays them verbatim; the user is the customer.
   character never matches its own text) and the check is `ps -eo pid,args`
   filtered the same way.
 - **The driven suite no longer fits one foreground call.** (senior
-  developer, unit 006, 2026-09-12) The screenshot suite is 87 tests and
-  about 600 s in debug on this seat — over the 600000 ms cap, so a single
-  `cargo test --test screenshot` call is cut off mid-suite. Run it as two
-  `--exact` halves split from `cargo test -p fastcull-app --test
-  screenshot -- --list`, each its own foreground call (measured: 318 s +
-  288 s), never a background run and never a shorter list than the whole.
+  developer, unit 006, 2026-09-12; re-measured at brief 014, 2026-10-16)
+  The screenshot suite is 126 tests (87 at unit 006) and about 1060 s in
+  debug on this seat — far over the 600000 ms cap, so a single
+  `cargo test --test screenshot` call is cut off mid-suite. Run it as
+  three `--exact` thirds split from `cargo test -p fastcull-app --test
+  screenshot -- --list`, each its own foreground call (measured
+  2026-10-16: 301 s + 420 s + 336 s; a half of 63 would run ~530 s
+  against the cap — the "two halves" this bullet said until brief 014
+  came too near it), never a background run and never a shorter list
+  than the whole. The release suite is ~970 s on this seat (QE, brief
+  014: 564 s + 158 s + 250 s in chunks of 60/36/30), so it is chunked
+  too — a 60-test chunk already takes 564 s.
+- **A plan's worktree command names the RAWs.** (brief 014, 2026-10-16:
+  the plan's old-red command for QE omitted it and QE's first attempt
+  panicked at the fetch guard) `testdata/raws/` is gitignored and
+  fetched, so a `git worktree add` checkout has none: a plan that sends a
+  role into a worktree for a driven run says to symlink the main
+  checkout's `testdata/raws` in first and unlink it before the worktree
+  is removed.
