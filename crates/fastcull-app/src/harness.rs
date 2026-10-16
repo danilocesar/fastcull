@@ -804,7 +804,7 @@ fn dispatch(win: &MainWindow, state: &Rc<RefCell<AppState>>, key: &str, layout: 
                          cliperror={:?} clipreport={:?} clipconfirm={:?} clipprogress={:?} \
                          cliphint={:?} exported={} curexported={} \
                          cursor={} selected={} vpy={:.1} focusowner={} {} thumbtex={} \
-                         clipnudged={} keywords={:?}",
+                         clipnudged={} keywords={:?} templates={:?} tplsel={} iptcwarning={:?}",
             win.get_dbg_keys_focus(),
             win.get_one2one(),
             st.grid.zoom,
@@ -952,6 +952,22 @@ fn dispatch(win: &MainWindow, state: &Rc<RefCell<AppState>>, key: &str, layout: 
                 .iter()
                 .map(|chip| (chip.text.to_string(), chip.coverage.to_string()))
                 .collect::<Vec<(String, String)>>(),
+            // The template dropdown (test-harness.md "The dump"; brief 015):
+            // the names the WINDOW holds — the `iptc-templates` model the
+            // dropdown is built from, panel open or closed — in model order,
+            // then the selected index, then the warning strip's text.
+            // `templates[tplsel]` is the template Apply will look up by
+            // name, so a driven test asserts the dropdown by these and never
+            // by pixels. The index is the window property the dropdown's
+            // `current-index` is two-way bound to, so it reads the same with
+            // the panel closed (brief 015 D11). Appended after `keywords=`,
+            // in this order, for the same positional reason as `thumbtex`.
+            win.get_iptc_templates()
+                .iter()
+                .map(|name| name.to_string())
+                .collect::<Vec<String>>(),
+            win.get_iptc_template_index(),
+            win.get_iptc_warning().as_str(),
         ));
         return;
     }

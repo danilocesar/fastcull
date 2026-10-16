@@ -252,13 +252,15 @@ pub(crate) fn wire(window: &MainWindow, state: &Rc<RefCell<AppState>>) {
         let win = window.as_weak();
         window.on_iptc_apply_template(move |tpl_index| {
             let Some(win) = win.upgrade() else { return };
-            {
+            let (name, outcome) = {
                 let mut st = state.borrow_mut();
                 let batch = st.grid.selection.batch(&st.grid.view, st.grid.cursor);
                 let Some(tpl) = st.session.templates.get(tpl_index as usize).cloned() else {
                     return;
                 };
-                if !batch.is_empty() {
+                let outcome = if batch.is_empty() {
+                    "no image — nothing applied".to_string()
+                } else {
                     // Contexts in batch (= view) order: the {seq} contract.
                     let ctxs: Vec<_> = batch
                         .iter()
@@ -292,14 +294,24 @@ pub(crate) fn wire(window: &MainWindow, state: &Rc<RefCell<AppState>>) {
                             }
                             let label = format!("apply '{}' to {} image(s)", tpl.name, batch.len());
                             commit_batch_mutation(&mut st, &batch, snaps, &label);
+                            format!("applied to {} image(s)", batch.len())
                         }
                         Err(e) => {
                             // All-or-nothing: nothing changed; surface it.
-                            st.session.template_warnings = vec![e.to_string()];
+                            let error = e.to_string();
+                            st.session.template_warnings = vec![error.clone()];
+                            format!("{error} — nothing applied")
                         }
                     }
-                }
-            }
+                };
+                (tpl.name, outcome)
+            };
+            // Every click ends in ONE mark naming its outcome
+            // (test-harness.md, "Template apply"): the `wait:` target of
+            // every Apply test — `templates loaded from` is emitted by the
+            // panel's open too, and a wait is never "next", so the outcome
+            // is what tells two clicks in one run apart.
+            crate::trace::trace_mark_with(|| format!("template apply '{name}': {outcome}"));
             refresh(&win, &state);
         });
     }

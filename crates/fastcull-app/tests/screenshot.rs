@@ -5591,16 +5591,17 @@ fn dump_text<'a>(dump: &'a str, name: &str) -> &'a str {
     &rest[..end]
 }
 
-/// The `keywords=` list of a QEDUMP line (test-harness.md "The dump"): from
-/// `keywords=` to the `]` that closes the list, read past a `]` or a space
-/// inside a Debug-quoted keyword. `dump_field` cannot read it — its
+/// A `{:?}`-printed list field of a QEDUMP line (test-harness.md "The
+/// dump"), `tag` being ` name=` with its leading space: from the tag to the
+/// `]` that closes the list, read past a `]` or a space inside a
+/// Debug-quoted string. `dump_field` cannot read such a list — its
 /// whitespace split stops at the first space, and a chip prints as
 /// `("wip", "2/2")`.
-fn dump_keywords(dump: &str) -> &str {
-    let tag = " keywords=";
+fn dump_list<'a>(dump: &'a str, tag: &str) -> &'a str {
+    let name = tag.trim();
     let start = dump
         .find(tag)
-        .unwrap_or_else(|| panic!("no keywords= in dump line: {dump}"))
+        .unwrap_or_else(|| panic!("no {name} in dump line: {dump}"))
         + tag.len();
     let rest = &dump[start..];
     let (mut in_quotes, mut escaped) = (false, false);
@@ -5616,7 +5617,19 @@ fn dump_keywords(dump: &str) -> &str {
         }
         escaped = false;
     }
-    panic!("unterminated keywords= list in dump line: {dump}")
+    panic!("unterminated {name} list in dump line: {dump}")
+}
+
+/// The `keywords=` list of a QEDUMP line: the keyword chips the window
+/// holds, `(text, coverage)` per chip ([`dump_list`]).
+fn dump_keywords(dump: &str) -> &str {
+    dump_list(dump, " keywords=")
+}
+
+/// The `templates=` list of a QEDUMP line: the template names the window
+/// holds, in the dropdown's order (brief 015; [`dump_list`]).
+fn dump_templates(dump: &str) -> &str {
+    dump_list(dump, " templates=")
 }
 
 /// `dump_keywords` reads exactly what the harness prints — the `{:?}` of a
@@ -5634,6 +5647,28 @@ fn dump_keywords_reads_the_list_to_its_closing_bracket() {
     let line = format!("QEDUMP x clipnudged=false keywords={list} next=1");
     assert_eq!(dump_keywords(&line), list);
     assert_eq!(dump_keywords("QEDUMP x keywords=[] x=1"), "[]");
+}
+
+/// `dump_templates` reads exactly what the harness prints — the `{:?}` of a
+/// `Vec<String>` (brief 015) — through a `]` and a space inside a name, an
+/// escaped quote, and an escaped backslash right before a closing quote,
+/// and stops at the bracket that closes the list, never at the `]` of the
+/// `keywords=` list printed before it. Pure: no app launch.
+#[test]
+fn dump_templates_reads_the_list_to_its_closing_bracket() {
+    let names: Vec<String> = ["a] b", "c\"d", "e\\"]
+        .iter()
+        .map(|n| n.to_string())
+        .collect();
+    let list = format!("{names:?}");
+    assert_eq!(list, r#"["a] b", "c\"d", "e\\"]"#);
+    let line =
+        format!("QEDUMP x keywords=[(\"k]\", \"\")] templates={list} tplsel=1 iptcwarning=\"\"");
+    assert_eq!(dump_templates(&line), list);
+    assert_eq!(
+        dump_templates("QEDUMP x keywords=[] templates=[] tplsel=0 x=1"),
+        "[]"
+    );
 }
 
 /// Ten files cycling the three A1 classes: identical per-class EXIF

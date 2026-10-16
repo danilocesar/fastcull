@@ -612,6 +612,17 @@ export component MainWindow inherits Window {
     in property <string> iptc-warning: "";
     in property <string> iptc-revert-label: "";
     in property <bool> iptc-revert-enabled: false;
+    // The template dropdown's selection, two-way bound to its
+    // `current-index` (brief 015, iptc-templates.md "The panel's models").
+    // The bridge reads it before a replacement of the template list and
+    // writes the selected NAME's new position with the replacement; the
+    // harness dumps it as `tplsel=`. It outlives the panel's close: the
+    // dropdown is created and destroyed with the panel's `if`, and a runtime
+    // `link_two_way` keeps THIS side's value when the dropdown is recreated
+    // (ui-grid.md, *Slint facts*; Cargo.toml's seventh canary), so the
+    // reopened dropdown starts on the user's choice. Never written at a
+    // close (brief 015 D11): one write there would reset the choice.
+    in-out property <int> iptc-template-index: 0;
     // Set by Rust when K should land focus in the keyword field.
     in-out property <bool> iptc-focus-keywords: false;
     // Session generation, bumped by Rust on every folder swap (#41 D3):
@@ -1950,6 +1961,34 @@ export component MainWindow inherits Window {
                     tplbox := ComboBox {
                         model: root.iptc-templates;
                         enabled: root.iptc-templates.length > 0;
+                        // The selection lives in the window, not in this
+                        // dropdown, which dies with the panel: see
+                        // `iptc-template-index`.
+                        current-index <=> root.iptc-template-index;
+                        // Where the layout put the dropdown and the Apply
+                        // button, so a driven test clicks them BY NAME
+                        // (`click:template dropdown`, `click:template
+                        // apply`; test-harness.md, issue #70). `init` alone
+                        // is not enough: it runs before the first layout
+                        // (Cargo.toml's fifth canary), and the warning strip
+                        // above this row moves it whenever the strip appears
+                        // or changes its line count.
+                        init => {
+                            root.dbg-card-laid-out("template dropdown", self.absolute-position.x,
+                                self.absolute-position.y, self.width, self.height);
+                        }
+                        changed absolute-position => {
+                            root.dbg-card-laid-out("template dropdown", self.absolute-position.x,
+                                self.absolute-position.y, self.width, self.height);
+                        }
+                        changed width => {
+                            root.dbg-card-laid-out("template dropdown", self.absolute-position.x,
+                                self.absolute-position.y, self.width, self.height);
+                        }
+                        changed height => {
+                            root.dbg-card-laid-out("template dropdown", self.absolute-position.x,
+                                self.absolute-position.y, self.width, self.height);
+                        }
                     }
                     Button {
                         text: "Apply";
@@ -1959,6 +1998,22 @@ export component MainWindow inherits Window {
                             root.dbg-focus-claim("template-apply");
                             keys.focus();
                             root.focus-owner = 0; // #63: record the claim now, not a tick later
+                        }
+                        init => {
+                            root.dbg-card-laid-out("template apply", self.absolute-position.x,
+                                self.absolute-position.y, self.width, self.height);
+                        }
+                        changed absolute-position => {
+                            root.dbg-card-laid-out("template apply", self.absolute-position.x,
+                                self.absolute-position.y, self.width, self.height);
+                        }
+                        changed width => {
+                            root.dbg-card-laid-out("template apply", self.absolute-position.x,
+                                self.absolute-position.y, self.width, self.height);
+                        }
+                        changed height => {
+                            root.dbg-card-laid-out("template apply", self.absolute-position.x,
+                                self.absolute-position.y, self.width, self.height);
                         }
                     }
                 }
