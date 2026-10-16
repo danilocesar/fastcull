@@ -31,7 +31,11 @@ pub(crate) fn wire(window: &MainWindow, state: &Rc<RefCell<AppState>>) {
                 let mut st = state.borrow_mut();
                 st.iptc_panel.visible = !st.iptc_panel.visible;
                 if st.iptc_panel.visible {
-                    reload_templates(&mut st); // read-on-open live-reload
+                    // The panel's open: one of templates.toml's three read
+                    // moments (iptc-templates.md). The close reads nothing
+                    // and writes nothing — not even the dropdown's index,
+                    // which is what keeps the choice across it (D11).
+                    reload_templates(&mut st, false);
                 }
                 // Publish the new dock state BEFORE any geometry read:
                 // grid-width is a binding on it, and revealing against
@@ -254,57 +258,23 @@ pub(crate) fn wire(window: &MainWindow, state: &Rc<RefCell<AppState>>) {
             let Some(win) = win.upgrade() else { return };
             let (name, outcome) = {
                 let mut st = state.borrow_mut();
-                let batch = st.grid.selection.batch(&st.grid.view, st.grid.cursor);
-                let Some(tpl) = st.session.templates.get(tpl_index as usize).cloned() else {
-                    return;
-                };
-                let outcome = if batch.is_empty() {
-                    "no image — nothing applied".to_string()
-                } else {
-                    // Contexts in batch (= view) order: the {seq} contract.
-                    let ctxs: Vec<_> = batch
-                        .iter()
-                        .map(|id| {
-                            let name = st.session.labels.get(*id).cloned().unwrap_or_default();
-                            let mtime = st
-                                .session
-                                .paths
-                                .get(*id)
-                                .and_then(|p| std::fs::metadata(p).ok())
-                                .and_then(|m| m.modified().ok())
-                                .unwrap_or(std::time::UNIX_EPOCH);
-                            fastcull_core::iptc::ExpandContext::from_sort_key(
-                                st.session.capture_keys.get(*id).and_then(|k| k.as_deref()),
-                                mtime,
-                                &name,
-                                st.session.camera_models.get(*id).and_then(|c| c.as_deref()),
-                            )
-                        })
-                        .collect();
-                    let mut images: Vec<_> = batch
-                        .iter()
-                        .filter_map(|id| st.session.iptc.get(*id).cloned())
-                        .collect();
-                    match fastcull_core::iptc::apply_template(&tpl, &mut images, &ctxs) {
-                        Ok(snaps) => {
-                            for (id, data) in batch.iter().zip(images) {
-                                if let Some(slot) = st.session.iptc.get_mut(*id) {
-                                    *slot = data;
-                                }
-                            }
-                            let label = format!("apply '{}' to {} image(s)", tpl.name, batch.len());
-                            commit_batch_mutation(&mut st, &batch, snaps, &label);
-                            format!("applied to {} image(s)", batch.len())
-                        }
-                        Err(e) => {
-                            // All-or-nothing: nothing changed; surface it.
-                            let error = e.to_string();
-                            st.session.template_warnings = vec![error.clone()];
-                            format!("{error} — nothing applied")
-                        }
-                    }
-                };
-                (tpl.name, outcome)
+                // The NAME the dropdown showed at the click, from the cache
+                // of the window's names model — set in the same block as the
+                // model itself (`refresh_iptc_panel`), so the index and the
+                // name come from one list. Never the ComboBox's
+                // `current-value`, which a deferred handler derives. An index
+                // past the list (unreachable: Apply is disabled on an empty
+                // list) reads as a name no template has, so it ends in the
+                // vanished-name warning, never in a silent return.
+                let name = st
+                    .iptc_panel
+                    .cache
+                    .names
+                    .get(tpl_index.max(0) as usize)
+                    .cloned()
+                    .unwrap_or_default();
+                let outcome = apply_by_name(&mut st, &name);
+                (name, outcome)
             };
             // Every click ends in ONE mark naming its outcome
             // (test-harness.md, "Template apply"): the `wait:` target of
@@ -389,12 +359,12 @@ pub(crate) fn refresh_iptc_panel(win: &MainWindow, st: &mut AppState) {
         }
         .into(),
     );
-    win.set_iptc_warning(st.session.template_warnings.join("\n").into());
+    win.set_iptc_warning(st.templates.warnings.join("\n").into());
     // Build plain-data snapshots first; the Slint models are rebuilt ONLY
     // when content changed (gate finding: unconditional rebuilds tore the
-    // field editors down mid-typing on every 33 ms engine tick) — and all
-    // three at the first refresh after a session swap (issue #114, the
-    // swap rule below).
+    // field editors down mid-typing on every 33 ms engine tick) — and the
+    // rows and the chips at the first refresh after a session swap too
+    // (issue #114, the swap rule below).
     let rows: Vec<(String, String, bool)> = (0..IptcField::ALL.len())
         .map(|i| {
             let mut vs = batch.iter().filter_map(|id| {
@@ -448,12 +418,7 @@ pub(crate) fn refresh_iptc_panel(win: &MainWindow, st: &mut AppState) {
             (text, cov)
         })
         .collect();
-    let names: Vec<String> = st
-        .session
-        .templates
-        .iter()
-        .map(|t| t.name.clone())
-        .collect();
+    let names: Vec<String> = st.templates.list.iter().map(|t| t.name.clone()).collect();
 
     let session_gen = win.get_session_gen();
     // THE SWAP RULE (iptc-templates.md "The panel's models", issue #114).
@@ -462,16 +427,18 @@ pub(crate) fn refresh_iptc_panel(win: &MainWindow, st: &mut AppState) {
     // per session: at the first refresh the panel runs after a swap — the
     // swap's own refresh with the panel open, or the reopen's synchronous
     // refresh (`on_iptc_toggle` → `reveal_cursor` → `refresh`) with it
-    // closed. It is read HERE, before that stamp, so the chip and template
-    // blocks below the stamp still see the swap through this local. On
-    // that refresh every model is replaced WHATEVER the comparison says: a
+    // closed. It is read HERE, before that stamp, so the chip block below
+    // the stamp still sees the swap through this local. On that refresh
+    // the rows and the chips are replaced WHATEVER the comparison says: a
     // cache reset to empty can alias the new session's content — a batch
     // with no keywords yet compares equal to the reset chip cache — and the
     // old folder's chips stayed on screen with the old folder's counts
     // until the new folder's first keyword landed. Within a session content
     // alone decides, as before. The rows rebuild no more often than they
     // did: the first visible refresh of a session always found eleven rows
-    // against an empty cache.
+    // against an empty cache. The template names are not part of this
+    // rule: their cache is never reset (`IptcPanelState::begin_session`),
+    // so it cannot alias, and the comparison alone decides at the swap too.
     let swapped = st.iptc_panel.cache.seen_gen != session_gen;
     if swapped || st.iptc_panel.cache.rows != rows {
         // THE ITEM-TREE MUTATION (issues #63/#64): replacing the model
@@ -523,9 +490,9 @@ pub(crate) fn refresh_iptc_panel(win: &MainWindow, st: &mut AppState) {
         st.iptc_panel.cache.rows = rows;
     }
     st.iptc_panel.cache.seen_gen = session_gen;
-    // No reclaim after these two replacements — the swap's forced
-    // replacement included — deliberately (#63/#64): the chip repeater
-    // holds Text and TouchArea items and the template model feeds a
+    // No reclaim after these two replacements — the chips' forced
+    // replacement at a swap included — deliberately (#63/#64): the chip
+    // repeater holds Text and TouchArea items and the template model feeds a
     // ComboBox — neither owns an editor, and the keyword LineEdit is a
     // SIBLING of both, not a child. A reclaim here would fire while the
     // editor it "rescued" was still alive and focused, taking the keyboard
@@ -544,17 +511,107 @@ pub(crate) fn refresh_iptc_panel(win: &MainWindow, st: &mut AppState) {
         )));
         st.iptc_panel.cache.chips = chips;
     }
-    if swapped || st.iptc_panel.cache.names != names {
+    // The template names: replaced exactly when the re-read names differ
+    // from what the window holds — at a swap, a reopen or an Apply alike —
+    // and the dropdown FOLLOWS THE NAME (iptc-templates.md "The panel's
+    // models"; brief 015 R5): the name the window's index points at in the
+    // OLD list keeps its selection at its position in the NEW one, the first
+    // entry when it is gone. Model first, index second, which reads as cause
+    // then effect; the order is immaterial, because the ComboBox answers a
+    // new model with `reset-current()`, a CLAMP, run deferred after this
+    // callback returns, and a clamp leaves an in-range index where it was
+    // put (ui-grid.md, *Slint facts*; Cargo.toml's seventh canary). Within
+    // an unchanged list nothing is written: the selection is the user's.
+    if st.iptc_panel.cache.names != names {
+        let selected = st
+            .iptc_panel
+            .cache
+            .names
+            .get(win.get_iptc_template_index().max(0) as usize)
+            .map(String::as_str);
+        let index = fastcull_core::iptc::selection_after_replacement(selected, &names);
         win.set_iptc_templates(slint::ModelRc::new(VecModel::from(
             names
                 .iter()
                 .map(|n| slint::SharedString::from(n.as_str()))
                 .collect::<Vec<_>>(),
         )));
+        win.set_iptc_template_index(index as i32);
         st.iptc_panel.cache.names = names;
     }
     win.set_iptc_revert_enabled(!st.iptc_panel.revert_ids.is_empty());
     win.set_iptc_revert_label(st.iptc_panel.revert_label.clone().into());
+}
+
+/// Apply, after the click (iptc-templates.md, "Apply re-reads first and
+/// applies by name"; brief 015 R1–R3, R6): re-read templates.toml, find the
+/// template called `name` in what was read, and stamp it on the batch.
+/// Returns the outcome the `template apply` mark names. Every way to apply
+/// NOTHING leaves the revert slot untouched and returns early, in this
+/// order: the re-read failed as a whole (R4 — the strip already carries the
+/// error and the last-read note); the name is not in the file any more (R3
+/// — the strip is told, and no other template is stamped in its place); no
+/// image to stamp (D12 — the strip unchanged); the expansion failed (R6 —
+/// the error APPENDED to the read's warnings, never put in their place).
+fn apply_by_name(st: &mut AppState, name: &str) -> String {
+    // R1: the third read moment, BEFORE anything is applied — a saved edit
+    // applies at once.
+    if !reload_templates(st, true) {
+        return "templates.toml could not be re-read — nothing applied".to_string();
+    }
+    let tpl = match fastcull_core::iptc::template_by_name(&st.templates.list, name) {
+        Ok(tpl) => tpl.clone(),
+        Err(e) => {
+            st.templates.warnings.push(e.to_string());
+            return "not in templates.toml — nothing applied".to_string();
+        }
+    };
+    let batch = st.grid.selection.batch(&st.grid.view, st.grid.cursor);
+    if batch.is_empty() {
+        return "no image — nothing applied".to_string();
+    }
+    // Contexts in batch (= view) order: the {seq} contract.
+    let ctxs: Vec<_> = batch
+        .iter()
+        .map(|id| {
+            let name = st.session.labels.get(*id).cloned().unwrap_or_default();
+            let mtime = st
+                .session
+                .paths
+                .get(*id)
+                .and_then(|p| std::fs::metadata(p).ok())
+                .and_then(|m| m.modified().ok())
+                .unwrap_or(std::time::UNIX_EPOCH);
+            fastcull_core::iptc::ExpandContext::from_sort_key(
+                st.session.capture_keys.get(*id).and_then(|k| k.as_deref()),
+                mtime,
+                &name,
+                st.session.camera_models.get(*id).and_then(|c| c.as_deref()),
+            )
+        })
+        .collect();
+    let mut images: Vec<_> = batch
+        .iter()
+        .filter_map(|id| st.session.iptc.get(*id).cloned())
+        .collect();
+    match fastcull_core::iptc::apply_template(&tpl, &mut images, &ctxs) {
+        Ok(snaps) => {
+            for (id, data) in batch.iter().zip(images) {
+                if let Some(slot) = st.session.iptc.get_mut(*id) {
+                    *slot = data;
+                }
+            }
+            let label = format!("apply '{}' to {} image(s)", tpl.name, batch.len());
+            commit_batch_mutation(st, &batch, snaps, &label);
+            format!("applied to {} image(s)", batch.len())
+        }
+        Err(e) => {
+            // All-or-nothing: nothing changed; surface it.
+            let error = e.to_string();
+            st.templates.warnings.push(error.clone());
+            format!("{error} — nothing applied")
+        }
+    }
 }
 
 /// Persist + arm the shared revert slot after a batch mutation (template

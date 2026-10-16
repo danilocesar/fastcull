@@ -633,19 +633,18 @@ shot 2.
   009 commit B: it said ten, and nine before brief 009 — 1010x520, driven
   since 2026-09-04, was never counted; `grep -o 'resize:[0-9]*x[0-9]*'
   crates/fastcull-app/tests/screenshot.rs | sort -u` lists them).
-- The suite's size: **to be measured at brief 015's fix commit** — 126
-  plus brief 015's driven tests and the `templates=` reader's own unit
-  test, from `cargo test -p fastcull-app --test screenshot -- --list` on
-  that commit; the plan names the commit that fills this number — 126
-  tests after brief 014 — 125 driven and the
-  `keywords=` reader's own unit test — 122 driven after brief 011, 120
-  after brief 010 and 118 at its start (`cargo test -p fastcull-app --test
-  screenshot -- --list`, re-measured 2026-10-16 at brief 014's fix commit;
-  brief 011's QE rounds added launches, not tests). They no longer fit one
-  600 s foreground call in debug on the development seat and run there as
-  three `--exact` thirds split from that list — each third well under the
-  cap, halves too near it. The measured times of each unit's head are that
-  unit's brief's (brief 014 D13 for the 126; brief 011 D8 for the 122:
+- The suite's size: 134 tests after brief 015 — 132 driven and the two
+  list readers' own unit tests, `keywords=`'s and `templates=`'s
+  (`cargo test -p fastcull-app --test screenshot -- --list`, measured
+  2026-10-16 at brief 015's fix commit) — 126 after brief 014 (125 driven
+  and the `keywords=` reader's unit test), 122 driven after brief 011, 120
+  after brief 010 and 118 at its start (re-measured 2026-10-16 at brief
+  014's fix commit; brief 011's QE rounds added launches, not tests). They
+  no longer fit one 600 s foreground call in debug on the development seat
+  and run there as three `--exact` thirds split from that list — each third
+  well under the cap, halves too near it. The measured times of each unit's
+  head are that unit's brief's (brief 015 D16 for the 134; brief 014 D13
+  for the 126; brief 011 D8 for the 122:
   ~1040 s in three thirds, three independent measurements; brief 010 D5
   for the 120; this sentence carried the seat timings themselves until
   2026-10-05 — moved out under CLAUDE.md's spec shape, which keeps seat
@@ -708,7 +707,7 @@ shot 2.
   dropdown's model and selection, never pixels; the `template apply
   '<name>': <outcome>` mark, one per click; `click:template dropdown` and
   `click:template apply`; the Config reads bullet gains Apply as a read
-  moment; the suite's size is to be re-measured at the fix commit.
+  moment; the suite's size, re-measured at the fix commit, is 134.
 - 2026-10-16 — Brief 014 (issue #114): the dump gains `keywords=`,
   appended after `clipnudged=` — the keyword chips the window holds, text
   and coverage per chip in model order — so a driven swap test reads the

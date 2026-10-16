@@ -321,40 +321,50 @@ brief 015 D11 — 014 D15's follow-up is resolved here, not deferred).
       `keyword_enter_commit_still_writes_and_returns_focus`; the mutant
       that drops the swap's forced replacement turns AC1 and AC2 red (run
       on the fix and recorded in brief 014 D13 and the fix commit).
-- [ ] **An edited template applies as saved** (brief 015 AC1): panel open,
+- [x] **An edited template applies as saved** (brief 015 AC1): panel open,
       a template selected, its `title` rewritten on disk after the open
-      (the issue #50 `on_line` rewrite, anchored on the open's `templates
-      loaded from` mark), Apply — the sidecar carries the NEW value and
-      `revert=` names the template; red on the pre-change tree, where the
-      OLD value lands (the persona's fact 2) — app
-      `apply_re_reads_templates_toml_and_stamps_the_saved_edit`. Open
-      until the test exists.
-- [ ] **A vanished name applies nothing, visibly** (AC2): the selected
+      (the issue #50 `on_line` rewrite, anchored on the panel open's rows
+      mark, `iptc rows rebuilt (gen 0)`, which follows the open's read in
+      the same refresh), Apply — the sidecar carries the NEW value and
+      `revert=` names the template — app
+      `apply_re_reads_templates_toml_and_stamps_the_saved_edit`; red before
+      the fix, on `a084df2` (the harness and core commits, the Apply flow
+      the old one) with the test added, at its title read, where the
+      sidecar held `Z`, the OLD value (the persona's fact 2) (corrected
+      2026-10-16, the developer at brief 015's fix commit: this box said the
+      rewrite was anchored on the open's `templates loaded from` mark — a
+      run's first such mark is the launch folder's read, before the panel
+      opens, and an edit made there would reach the open's read and leave
+      the test green on the old tree).
+- [x] **A vanished name applies nothing, visibly** (AC2): the selected
       template renamed in the file before Apply — no sidecar, `revert=""`,
       `iptcwarning=` carries `is no longer in templates.toml — nothing was
-      applied`, `tplsel=0` over the re-read `templates=`; red on the
-      pre-change tree, where the stale template is applied — app
-      `apply_of_a_vanished_template_name_applies_nothing_and_says_so`.
-      Open until the test exists.
-- [ ] **By name, not by position** (AC3): a name that sorts before the
+      applied`, `tplsel=0` over the re-read `templates=` — app
+      `apply_of_a_vanished_template_name_applies_nothing_and_says_so`; red
+      on `a084df2` with the test added at its first read, `one.ARW.xmp`
+      written — the stale template applied; the warning deleted from the
+      vanished-name path turns it red at the strip read.
+- [x] **By name, not by position** (AC3): a name that sorts before the
       selected one inserted in the file before Apply — the selected name's
-      fields land, not the inserted template's; green on the pre-change
-      tree (no re-read at all): it guards the over-fix, a re-read followed
-      by a lookup at the old index, which its mutant (the index lookup in
-      place of the name lookup) turns red — app
-      `apply_finds_the_template_by_name_not_by_position`. Open until the
-      test exists.
-- [ ] **A broken file at Apply keeps the list and applies nothing** (AC4):
+      fields land, not the inserted template's — app
+      `apply_finds_the_template_by_name_not_by_position`; green on
+      `a084df2` (no re-read at all), as designed: it guards the over-fix, a
+      re-read followed by a lookup at the old index, which its mutant (the
+      click's index looked up in the re-read list) turns red at the title
+      read, `M` — the inserted template's.
+- [x] **A broken file at Apply keeps the list and applies nothing** (AC4):
       the file made unparseable before Apply — no sidecar, `iptcwarning=`
       carries the parse error and `the templates shown are the last read —
       nothing was applied`, `templates=` still lists the previous names
       (Apply's `enabled` is bound to that list's length in main.slint, so
       the list is the button's state); after the file is repaired a second
-      Apply applies; red on the pre-change tree, where the stale template
-      is applied — app
-      `a_broken_templates_toml_at_apply_keeps_the_last_good_list_and_applies_nothing`.
-      Open until the test exists.
-- [ ] **The dropdown follows the name** (AC5, D11): after AC3's insertion
+      Apply applies — app
+      `a_broken_templates_toml_at_apply_keeps_the_last_good_list_and_applies_nothing`;
+      red on `a084df2` with the test added at the first Apply's revert
+      read, `Revert: apply 'zebra' to 1 image(s)` — the stale template
+      applied; the failed re-read ignored and the kept list applied turns
+      it red at the same read.
+- [x] **The dropdown follows the name** (AC5, D11): after AC3's insertion
       and Apply, `templates[tplsel]` is still the selected NAME, at its new
       position; with the panel open across a folder swap, another name
       inserted ahead of it before the `open:`, `templates[tplsel]` after
@@ -363,32 +373,34 @@ brief 015 D11 — 014 D15's follow-up is resolved here, not deferred).
       by-index, so the test changes the file first); and after
       `iptc;…;iptc` — the panel closed and reopened with yet another name
       inserted ahead — `templates[tplsel]` is still that name (D11: the
-      reopen is a read moment). The mutant that keeps the index turns the
-      first two reads red; a reset of the window property at the panel's
-      close turns the third red — app
-      `the_template_dropdown_follows_the_name_at_apply_at_a_swap_and_at_a_reopen`. Open
-      until the test exists.
-- [ ] **The list at a swap, as brief 014 D14 shaped it** (AC6): the file
+      reopen is a read moment) — app
+      `the_template_dropdown_follows_the_name_at_apply_at_a_swap_and_at_a_reopen`;
+      red on `a084df2` with the test added at the first read, `templates=`
+      unchanged by the Apply and `tplsel=1`. The mutant that keeps the
+      index (the bridge's index write deleted) turns the first two reads
+      red — measured, all three read `tplsel=1`; a reset of the window
+      property at the panel's close turns the third red alone, `tplsel=1`.
+- [x] **The list at a swap, as brief 014 D14 shaped it** (AC6): the file
       deleted after the panel read it, then a swap — `templates=[]` after
-      `load settled gen 1`, which is Apply disabled; red with `names`
-      dropped from the cache `IptcPanelState::begin_session` keeps — the
-      014 aliasing shape (014 G1's forced-replacement line is deleted by
-      the plan, see *The panel's models*) — app
-      `a_session_swap_replaces_the_template_list_even_when_the_file_is_gone`.
-      Open until the test exists. Brief 014's open box — "the template
-      list is replaced at the swap too", with the selection's survival by
-      index — closes into this box and AC5's: its first half is this test,
-      its second is rewritten by R5 and pinned by AC5's swap read; the
-      selection no longer rests on the ComboBox's clamp (ui-grid.md,
-      *Slint facts*).
-- [ ] **Warnings add up** (R6): a template with a `""` field and an
-      unknown variable — after Apply `iptcwarning=` carries the CLEAR
-      warning AND the expansion error; red on the pre-change tree, where
-      the error replaced the list — app
-      `an_apply_time_expansion_error_joins_the_read_warnings`. Open until
-      the test exists (a criterion the brief's list does not carry for R6;
-      proposed with this spec change, deferrable under D7 with a reason in
-      the plan).
+      `load settled gen 1`, which is Apply disabled — app
+      `a_session_swap_replaces_the_template_list_even_when_the_file_is_gone`;
+      green on `a084df2` (014's forced replacement still in place), red with
+      `names` dropped from the cache `IptcPanelState::begin_session` keeps —
+      the 014 aliasing shape, the old names still listed after the swap
+      (014 G1's forced-replacement line is deleted, see *The panel's
+      models*). Brief 014's open box — "the template list is replaced at
+      the swap too", with the selection's survival by index — closes into
+      this box and AC5's: its first half is this test, its second is
+      rewritten by R5 and pinned by AC5's swap read; the selection no
+      longer rests on the ComboBox's clamp (ui-grid.md, *Slint facts*).
+- [x] **Warnings add up** (R6, brief 015 AC9): a template with a `""` field
+      and an unknown variable — after Apply `iptcwarning=` carries the
+      CLEAR warning AND, after it, the expansion error — app
+      `an_apply_time_expansion_error_joins_the_read_warnings`; red on
+      `a084df2` with the test added at the CLEAR read, the strip holding
+      the expansion error alone; the error put back in place of the read's
+      warnings turns it red at the same read, and inserted ahead of them at
+      the order read.
 - [x] **The pure rules in core**: `Osprey` is not `osprey`, and a missing
       name is the error whose text is the strip's sentence, never another
       template; the selection after a replacement is the old name's new

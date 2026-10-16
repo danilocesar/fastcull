@@ -232,11 +232,13 @@ fastcull-core.workspace = true
 # depends on", iptc-templates.md's "The panel's models", brief 014 D4 and
 # brief 015 D11):
 #   1. A `ComboBox` answers a model replacement with `changed model =>
-#      reset-current()`: the index is clamped into the new list (0 when the
+#      reset-current()`: the index is CLAMPED into the new list (0 when the
 #      list is empty) and the value re-derived from it at once
-#      (i-slint-compiler widgets/common/combobox-base.slint:56-77) — why the
-#      swap may replace the template model and the selection survives, by
-#      index.
+#      (i-slint-compiler widgets/common/combobox-base.slint:56-77), deferred
+#      past the callback that replaced the model — why the bridge may set
+#      the selected name's new position with the replacement: the deferred
+#      clamp finds it and leaves an in-range index alone, so the dropdown
+#      follows the template by NAME (brief 015 D6).
 #   2. `ModelRc`'s equality is pointer equality (i-slint-core model.rs:719),
 #      so a fresh `VecModel` with identical contents still fires that
 #      handler, deferred like every change handler.
@@ -248,7 +250,8 @@ fastcull-core.workspace = true
 #      root.iptc-template-index`, main.slint), not on its own 0: why the
 #      user's choice survives closing and reopening the panel (brief 015
 #      D11).
-# If (1) changes, the dropdown forgets its selection at every folder swap.
+# If (1) changes — a reset instead of a clamp — the dropdown forgets the name
+# at every Apply and swap that changes the list; brief 015 AC5 says so.
 # If (3) changes, the selection dies with the panel — brief 015 AC5's
 # reopen read says so.
 slint = { version = "1", default-features = false, features = [

@@ -323,3 +323,52 @@ None. The persona's one question for the user is answered (D2).
   eleven named tests); (4) AC5's test is renamed
   `the_template_dropdown_follows_the_name_at_apply_at_a_swap_and_at_a_reopen`
   so its name says what it proves; the ledger follows.
+- D16 (2026-10-16, developer, the fix commit's record): the old-red, the
+  mutants and the suite, measured on the development seat (debug unless
+  named). Old-red, on `a084df2` — the harness commit `1e795d8` and the core
+  commit, the Apply flow still the old one — with the seven tests added and
+  the fix not yet applied (`about version 0.15.1-devel-20261016-a084df2` in
+  the trace), `cargo test -p fastcull-app --test screenshot --locked --
+  --test-threads=1 --exact` and the seven names, 38.7 s: AC1 red at its
+  title read, `left: Some("Z")`, `right: Some("Z EDITED")`; AC2 at its
+  first read, `one.ARW.xmp` written (the stale `zebra` stamped); AC4 at the
+  `broken` revert read, `left: "Revert: apply 'zebra' to 1 image(s)"`; AC5
+  at `applied`, `left: ("[\"alpha\", \"zebra\"]", "1")`, `right:
+  ("[\"alpha\", \"mid\", \"zebra\"]", "2")`; AC9 at the CLEAR read, the
+  strip holding `unknown variable {nope} in template field 'title'` alone;
+  AC3 and AC6 green, as designed. On the fix, the seven green three runs in
+  three (38.9 s, 38.7 s, 38.7 s). Mutants, each run once on the fix and
+  restored: M3, the click's index looked up in the re-read list — AC3 red
+  at the title, `left: Some("M")`; M4, the failed re-read ignored and the
+  kept list applied — AC4 red at the `broken` revert, `Revert: apply
+  'zebra' to 1 image(s)`; M5a, the bridge's index write deleted — AC5 red
+  at `applied`, `tplsel=1` (`mid`), and the trace shows `swapped` and
+  `reopened` at `tplsel=1` too; M5b, the window property reset to 0 at the
+  panel's close — AC5 red at `reopened` alone, `tplsel=1` (`aardvark`),
+  `applied` 2 and `swapped` 3; M6, the names cache reset to empty at
+  `IptcPanelState::begin_session` — AC6 red at `swapped`, `left:
+  ("[\"alpha\", \"zebra\"]", "0")`; M9, the expansion error put in place of
+  the read's warnings — AC9 red at the CLEAR read. The core mutants, on the
+  core commit's two tests: a case-folded lookup (`eq_ignore_ascii_case`) —
+  `template_by_name_is_exact_and_case_sensitive` red at the `osprey` read,
+  `left: Some("upper")`; a case-folded `position` — GREEN with the plan's
+  case line, `Some("Zebra")` in `["zebra"]`, whose folded match is
+  position 0, the gone-name answer, so the line could not see it; with the
+  other spelling at position 1 (`["alpha", "zebra"]`, the line the core
+  commit carries) the same mutant is red, `left: 1`, `right: 0`. Beyond the
+  plan's list, as verification only: the vanished-name warning deleted —
+  AC2 red at the strip read; the expansion error inserted AHEAD of the read
+  warnings — AC9 red at its order read; keep-last-good removed (the list
+  cleared at a failed read) — AC4's dropdown empties (`templates=[]`,
+  `tplsel=0`, no last-read note), Apply is disabled, and the run exits 1 at
+  `wait never satisfied: template apply 'zebra': applied to`; the template
+  list reset at `AppState::begin_session` — all seven GREEN: R4's
+  keep-last-good is pinned at Apply only, and no test reads it at a folder
+  open or a panel open (in the developer's report, for the senior
+  developer). The whole driven suite once, on the final tree: 134 tests
+  (`--list`) in three `--exact` thirds of 45, 45 and 44, 338 s + 412 s +
+  350 s, all green; every other test target green (`--lib --bins`,
+  `--doc`, core's and the CLI's integration tests, the app's `app_icon` and
+  `shortcuts_map`); `cargo test -p fastcull-core --release --locked --test
+  perf_budgets` 6/6 green, idle (load 0.40). `testdata/raws/*.ARW`
+  checksums unchanged before and after.

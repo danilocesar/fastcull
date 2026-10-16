@@ -13,7 +13,7 @@ use slint::ComponentHandle;
 use crate::focus::refocus_topmost_deferred;
 use crate::nav::recompute_view;
 use crate::presenter::refresh;
-use crate::state::{AppState, BurstIndex, SessionState};
+use crate::state::{AppState, BurstIndex, SessionState, TemplateState};
 use crate::MainWindow;
 
 /// Wire File > Open Folder (the native picker; the action itself is
@@ -131,10 +131,13 @@ fn load_folder(state: &Rc<RefCell<AppState>>, folder: &std::path::Path) -> Resul
     // of, and the startup path has no writer to close.
     let flushed = st.session.writer.take().map_or(0, |w| w.close());
     st.begin_session(labels, paths.clone());
-    // templates.toml: read at session open (spec: live-reload = re-read
-    // here and on panel toggle, no watcher). Errors/warnings surface in
-    // the panel warning strip.
-    reload_templates(&mut st);
+    // templates.toml: every folder open is one of its three read moments —
+    // the panel's open, every folder open, every Apply; no watcher
+    // (iptc-templates.md, "The three read moments"). The list lives on
+    // `AppState`, which `begin_session` just left alone, so a read that
+    // fails here keeps the last good list across the swap (brief 015 R4);
+    // errors and warnings go to the panel's warning strip.
+    reload_templates(&mut st, false);
     let (writer, errs) = fastcull_core::sidecar_writer::SidecarWriter::start();
     st.session.writer = Some(writer);
     st.session.sidecar_errs = Some(errs);
@@ -310,9 +313,22 @@ pub(crate) fn open_folder_at(
     }
 }
 
-/// Re-read templates.toml (session open + panel toggle = the spec's
-/// read-on-open live-reload). Parse errors and CLEAR warnings both land in
-/// the panel warning strip.
+/// Read templates.toml at one of its three read moments — the panel's
+/// open, every folder open, every Apply (iptc-templates.md, "The three
+/// read moments"; `at_apply` says which kind) — into `AppState::templates`.
+///
+/// Returns whether the list now IS what is on disk. True after a read that
+/// succeeded: the list and the strip are replaced — the per-entry errors,
+/// then the CLEAR warnings — and a MISSING file is such a read, zero
+/// templates and no warning. False after a read that failed as a whole (a
+/// file the parser cannot segment, or one that cannot be read at all): the
+/// LAST GOOD list stays, untouched, and the strip shows the error followed
+/// by the last-read note —
+/// whenever there is a last good list to show; at launch there is none, and
+/// the error stands alone ("One rule for a bad file, at every read moment";
+/// brief 015 R4). Apply applies nothing on false — what is on disk is not
+/// what would be applied — and `at_apply` makes the note say so. Under
+/// FASTCULL_NO_CONFIG there is no file: an empty list, true, no mark.
 ///
 /// The marks name the file this read used, from the very `path` it read
 /// (test-harness.md): the proof that templates.toml goes through core's one
@@ -321,18 +337,18 @@ pub(crate) fn open_folder_at(
 /// looked exactly like a hermetic one (QE 2026-10-01, D37). A missing file
 /// is an empty load, so it is "loaded from" too; under FASTCULL_NO_CONFIG
 /// there is no path and no mark.
-pub(crate) fn reload_templates(st: &mut AppState) {
-    st.session.templates.clear();
-    st.session.template_warnings.clear();
+pub(crate) fn reload_templates(st: &mut AppState, at_apply: bool) -> bool {
     let Some(path) = fastcull_core::iptc::default_templates_path() else {
-        return;
+        st.templates = TemplateState::default();
+        return true;
     };
     match fastcull_core::iptc::load_templates(&path) {
         Ok(load) => {
             crate::trace::trace_mark(&format!("templates loaded from {}", path.display()));
-            st.session.templates = load.templates;
-            st.session.template_warnings = load.entry_errors;
-            st.session.template_warnings.extend(load.warnings);
+            st.templates.list = load.templates;
+            st.templates.warnings = load.entry_errors;
+            st.templates.warnings.extend(load.warnings);
+            true
         }
         Err(e) => {
             let error = e.to_string();
@@ -341,7 +357,21 @@ pub(crate) fn reload_templates(st: &mut AppState) {
                 path.display(),
                 error.lines().next().unwrap_or("")
             ));
-            st.session.template_warnings.push(error);
+            // Keep-last-good: `list` is deliberately not touched. The two
+            // notes are the strip's exact strings, which driven tests pin
+            // (iptc-templates.md, "One rule for a bad file").
+            st.templates.warnings = vec![error];
+            if !st.templates.list.is_empty() {
+                st.templates.warnings.push(
+                    if at_apply {
+                        "the templates shown are the last read — nothing was applied"
+                    } else {
+                        "the templates shown are the last read"
+                    }
+                    .to_string(),
+                );
+            }
+            false
         }
     }
 }
