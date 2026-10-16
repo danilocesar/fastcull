@@ -4309,6 +4309,331 @@ fn session_swap_mid_keyword_edit_never_writes_into_the_new_session() {
     }
 }
 
+/// Brief 014's two folders under `out_dir()`, named for the test that asks
+/// for them: A holds `one.ARW` and `two.ARW`, B holds `three.ARW` — the
+/// same A1 frame three times (`place_fixture`: symlinks on unix, copies on
+/// Windows). The three swap-chip tests run in one process and share
+/// `out_dir()`, hence the per-test `name`.
+fn swap_chip_folders(name: &str) -> (PathBuf, PathBuf) {
+    let src = raws_dir().join("A1_full_compressed.ARW");
+    let dir_a = out_dir().join(format!("{name}-a"));
+    let dir_b = out_dir().join(format!("{name}-b"));
+    std::fs::create_dir_all(&dir_a).unwrap();
+    std::fs::create_dir_all(&dir_b).unwrap();
+    place_fixture(&src, &dir_a.join("one.ARW"));
+    place_fixture(&src, &dir_a.join("two.ARW"));
+    place_fixture(&src, &dir_b.join("three.ARW"));
+    (dir_a, dir_b)
+}
+
+/// The first half of every brief 014 script, asserted: folder A settled
+/// before the panel opened (a rows rebuild the load adds after the panel
+/// key would be counted against the swap below), and `wip` typed after `K`
+/// and committed with Enter built the chip `wip 2/2` on A's two selected
+/// images and armed the revert slot. The anti-vacuity half: an empty chip
+/// row after the swap means something only if the row held a chip before.
+fn assert_wip_tagged_on_both(stderr: &str) {
+    assert!(
+        stderr.contains("wait:load settled gen 0 (satisfied"),
+        "the `wait:load settled gen 0` step never fired — the panel opened \
+         on the clock:\n{stderr}"
+    );
+    assert!(
+        stderr.contains("wait:focus-keys (keyword-accepted) (satisfied"),
+        "the `wait:` on the Enter's own claim mark never fired — the \
+         `tagged` dump was timed, not gated:\n{stderr}"
+    );
+    let tagged = qedump(stderr, "tagged");
+    assert_eq!(
+        dump_keywords(tagged),
+        r#"[("wip", "2/2")]"#,
+        "the keyword commit did not build the chip `wip 2/2` on A's two \
+         images — the swap would have nothing to forget: {tagged}"
+    );
+    assert_eq!(
+        dump_text(tagged, "revert"),
+        "Revert: keywords on 2 image(s)",
+        "the keyword commit never armed the revert slot: {tagged}"
+    );
+    assert_eq!(
+        dump_field(tagged, "selected"),
+        "2",
+        "select-all did not select A's two images: {tagged}"
+    );
+}
+
+/// Brief 014 R3 (AC4) in both sessions: the panel's open in A and its
+/// first refresh in B are each session's ONLY rows rebuild — the keyword
+/// commit, B's load and the `+` change no row, so the change-only rule
+/// skips them all. Counted as emitted mark lines (`mark_lines`), so a
+/// `wait:` step that quotes the mark in its own echo is not counted with
+/// it.
+fn assert_one_rows_rebuild_per_session(stderr: &str) {
+    for gen in 0..=1 {
+        let mark = format!("iptc rows rebuilt (gen {gen})");
+        let count = mark_lines(stderr, &mark);
+        assert_eq!(
+            count, 1,
+            "`{mark}` was emitted {count} times, not once — a rows rebuild \
+             the change-only rule should have skipped (brief 014 R3):\n{stderr}"
+        );
+    }
+}
+
+/// Issue #114 with the panel OPEN across the swap (brief 014 AC1;
+/// iptc-templates.md "The panel's models"): a keyword tagged on folder A's
+/// two images, `open:` folder B — one image, no sidecar — and once B has
+/// settled the window's chip model is EMPTY and the revert slot is B's.
+/// The panel's models are replaced only when their content changes, and
+/// the swap resets the cache that comparison reads to empty; B's chip list
+/// is empty too, so before the fix the comparison said "unchanged", the
+/// model was never replaced, and folder A's `wip 2/2` stayed under B's
+/// header until B's first keyword landed. The swap is now the one event
+/// that replaces every panel model whatever the comparison says.
+///
+/// RED before the fix, on the harness commit (002c8c5): `swapped` reads
+/// `keywords=[("wip", "2/2")]`. Mutants: `let swapped = false;` in
+/// `refresh_iptc_panel` (the forced replacement dropped) turns it red at
+/// the same assertion; deleting the `seen_gen` stamp (every refresh a
+/// "swap", the unconditional rebuild back) turns the rebuild count red.
+#[test]
+fn a_session_swap_empties_the_keyword_chips_with_the_panel_open() {
+    if !has_display() {
+        eprintln!("screenshot smoke skipped: no display server");
+        return;
+    }
+    let _s = serial();
+    let (dir_a, dir_b) = swap_chip_folders("swap-chips-open");
+    let out = out_dir().join("swap-chips-open.jpg");
+    // No clock where it matters: the panel opens behind A's settle, the
+    // `tagged` dump follows the Enter's own claim mark, and `swapped`
+    // follows B's settle — which is emitted inside the refresh pass that
+    // also runs the panel's refresh (presenter.rs: the mark, then
+    // `refresh_iptc_panel`, one synchronous pass), so the dump, a timer
+    // that fires after that pass, reads the models the settle left.
+    let drive = format!(
+        "2400:wait:load settled gen 0;2500:select-all;2600:key:k;3000:key:w;3100:key:i;\
+         3200:key:p;3400:key:return;3500:wait:focus-keys (keyword-accepted);3600:dump.tagged;\
+         4000:open:{};4200:wait:load settled gen 1;4400:dump.swapped;4700:key:+;5000:dump.end",
+        dir_b.display()
+    );
+    let stderr = shoot_env_stderr(
+        &[dir_a.to_str().unwrap()],
+        &[("FASTCULL_TRACE", "1"), ("FASTCULL_DRIVE", &drive)],
+        &out,
+    );
+    assert_wip_tagged_on_both(&stderr);
+    assert!(
+        stderr.contains("wait:load settled gen 1 (satisfied"),
+        "the post-swap `wait:` never fired — `swapped` was timed against a \
+         session that may still be loading:\n{stderr}"
+    );
+    let swapped = qedump(&stderr, "swapped");
+    assert!(
+        dump_text(swapped, "status").contains("three.ARW"),
+        "the open: swap never landed: {swapped}"
+    );
+    assert_eq!(
+        dump_keywords(swapped),
+        "[]",
+        "folder A's keyword chips survived the swap into folder B, whose one \
+         image has no keyword — the old folder's chips and counts under the \
+         new folder's header (issue #114): {swapped}"
+    );
+    assert_eq!(
+        dump_text(swapped, "revert"),
+        "",
+        "the revert slot survived the swap: {swapped}"
+    );
+    // The `+` acts (brief 014 D12): the forced replacements run in the
+    // swap's own refresh pass, beside its focus reclaim, and the keyboard
+    // must still be the grid's after them.
+    assert!(
+        qedump(&stderr, "end").contains("zoom=2"),
+        "the `+` after the swap was dead — the keyboard was stranded:\n{stderr}"
+    );
+    assert_one_rows_rebuild_per_session(&stderr);
+    assert!(
+        !dir_b.join("three.ARW.xmp").exists(),
+        "the swap wrote a sidecar into folder B — folder A's keyword reached \
+         the new session"
+    );
+}
+
+/// Issue #114 with the panel CLOSED across the swap and reopened after it
+/// (brief 014 AC2): the same tagging, `iptc` closes the panel, `open:`
+/// folder B, and the panel `iptc` reopens once B has settled reads an
+/// empty chip row. Closing and reopening is what a user does to "refresh"
+/// a panel, and a panel's `if` instantiates it from the window's models:
+/// before the fix the reopen built it from the chip model the swap never
+/// replaced, so the ghost survived the reopen too.
+///
+/// RED before the fix, on the harness commit (002c8c5): `reopened` reads
+/// `keywords=[("wip", "2/2")]`. Mutant: `let swapped = false;` turns it
+/// red at the same assertion — the reopen's refresh is the session's first
+/// visible refresh, and the forced replacement it carries is the fix.
+#[test]
+fn a_session_swap_empties_the_keyword_chips_with_the_panel_closed_and_reopened() {
+    if !has_display() {
+        eprintln!("screenshot smoke skipped: no display server");
+        return;
+    }
+    let _s = serial();
+    let (dir_a, dir_b) = swap_chip_folders("swap-chips-reopen");
+    let out = out_dir().join("swap-chips-reopen.jpg");
+    // The close is 400 ms ahead of the `open:` so that its deferred focus
+    // claim has landed before the swap (handled either way; this keeps the
+    // test out of that corner). The reopen is gated on its own rows
+    // rebuild: with the panel closed across the swap there is no
+    // `(gen 1)` rebuild before it, and the reopen's refresh runs inside
+    // the toggle (`on_iptc_toggle` → `reveal_cursor` → `refresh`), so the
+    // mark says the models are what the reopened panel was built from.
+    let drive = format!(
+        "2400:wait:load settled gen 0;2500:select-all;2600:key:k;3000:key:w;3100:key:i;\
+         3200:key:p;3400:key:return;3500:wait:focus-keys (keyword-accepted);3600:dump.tagged;\
+         3900:iptc;4300:open:{};4500:wait:load settled gen 1;4700:dump.closed;\
+         4800:iptc;4900:wait:iptc rows rebuilt (gen 1);5000:dump.reopened;5300:key:+;5600:dump.end",
+        dir_b.display()
+    );
+    let stderr = shoot_env_stderr(
+        &[dir_a.to_str().unwrap()],
+        &[("FASTCULL_TRACE", "1"), ("FASTCULL_DRIVE", &drive)],
+        &out,
+    );
+    assert_wip_tagged_on_both(&stderr);
+    assert!(
+        stderr.contains("wait:load settled gen 1 (satisfied"),
+        "the post-swap `wait:` never fired — `closed` was timed against a \
+         session that may still be loading:\n{stderr}"
+    );
+    let closed = qedump(&stderr, "closed");
+    assert_eq!(
+        dump_field(closed, "iptc"),
+        "false",
+        "the panel was not closed across the swap: {closed}"
+    );
+    assert!(
+        dump_text(closed, "status").contains("three.ARW"),
+        "the open: swap never landed: {closed}"
+    );
+    // NOTHING about `keywords=` or `revert=` in `closed`, on purpose: with
+    // the panel closed `refresh_iptc_panel` returns before it touches the
+    // window (brief 014 R1 as corrected), so the window's chip model and
+    // revert label still hold folder A's until the reopen replaces them
+    // before the panel's first frame — on the fixed tree too. `[]` asserted
+    // here would be a promise the spec does not make (test-harness.md "The
+    // dump", the `keywords=` lag clause).
+    assert!(
+        stderr.contains("wait:iptc rows rebuilt (gen 1) (satisfied"),
+        "the reopen never rebuilt the panel's rows — `reopened` was timed, \
+         not gated:\n{stderr}"
+    );
+    let reopened = qedump(&stderr, "reopened");
+    assert_eq!(
+        dump_field(reopened, "iptc"),
+        "true",
+        "the panel did not reopen: {reopened}"
+    );
+    assert_eq!(
+        dump_keywords(reopened),
+        "[]",
+        "the panel reopened after the swap showed folder A's keyword chips \
+         and counts — it was built from the chip model the swap never \
+         replaced (issue #114): {reopened}"
+    );
+    assert_eq!(
+        dump_text(reopened, "revert"),
+        "",
+        "the reopened panel showed the old session's revert slot: {reopened}"
+    );
+    assert!(
+        qedump(&stderr, "end").contains("zoom=2"),
+        "the `+` after the reopen was dead — the keyboard was stranded:\n{stderr}"
+    );
+    assert_one_rows_rebuild_per_session(&stderr);
+}
+
+/// Brief 014 AC3: the swap empties the chip row of the OLD folder, not for
+/// good — folder B's image carries a prepared sidecar with the keyword
+/// `bee`, and once B has settled the chip row is exactly `bee`, with no
+/// coverage (a single image) and never `wip`.
+///
+/// GREEN before the fix too, by design: the row corrected itself the
+/// moment a keyword entered the new batch, because `bee` differs from the
+/// reset cache. It guards the over-fix — a swap that empties the models
+/// and then bypasses the change-only comparison. Mutants: the chip block's
+/// comparison dropped after a swap only (`if swapped || (session_gen == 0
+/// && …)`) turns this test alone red, at the `bee` read (`left: "[]"`):
+/// the swap's refresh, which runs before B's sidecar is read, empties the
+/// row, and the refresh that applies `bee` no longer replaces it. Dropped
+/// everywhere (`if swapped {`), it turns all three swap-chip tests red
+/// earlier, at `tagged` — the keyword commit in A is a non-swap refresh
+/// too.
+#[test]
+fn the_new_folders_sidecar_fills_the_keyword_chips_after_a_swap() {
+    if !has_display() {
+        eprintln!("screenshot smoke skipped: no display server");
+        return;
+    }
+    let _s = serial();
+    let (dir_a, dir_b) = swap_chip_folders("swap-chips-bee");
+    // The sidecar is written by core's own keyword writer — the packet the
+    // app itself writes (`dc:subject` and `lr:hierarchicalSubject` bags,
+    // golden-tested) — so B's read is the production round trip and this
+    // test carries no XML a reader must trust. It writes `three.ARW.xmp`
+    // beside the link (or copy) and never touches the RAW (hard rule 1).
+    fastcull_core::xmp::write_keywords(&dir_b.join("three.ARW"), &["bee".to_string()]).unwrap();
+    let sidecar = std::fs::read_to_string(dir_b.join("three.ARW.xmp"))
+        .unwrap_or_else(|e| panic!("the prepared sidecar was not written: {e}"));
+    assert!(
+        sidecar.contains(">bee<"),
+        "the prepared sidecar does not carry the keyword: {sidecar}"
+    );
+    let out = out_dir().join("swap-chips-bee.jpg");
+    // Clock-free like the open-panel test: B's sidecar event is sent
+    // before its thumb on the same channel (pipeline.rs `process_job`) and
+    // the pump applies them in order, so the sidecar has been applied, and
+    // the panel refreshed, before the refresh that emits B's settle.
+    let drive = format!(
+        "2400:wait:load settled gen 0;2500:select-all;2600:key:k;3000:key:w;3100:key:i;\
+         3200:key:p;3400:key:return;3500:wait:focus-keys (keyword-accepted);3600:dump.tagged;\
+         4000:open:{};4200:wait:load settled gen 1;4400:dump.swapped;4700:key:+;5000:dump.end",
+        dir_b.display()
+    );
+    let stderr = shoot_env_stderr(
+        &[dir_a.to_str().unwrap()],
+        &[("FASTCULL_TRACE", "1"), ("FASTCULL_DRIVE", &drive)],
+        &out,
+    );
+    assert_wip_tagged_on_both(&stderr);
+    assert!(
+        stderr.contains("wait:load settled gen 1 (satisfied"),
+        "the post-swap `wait:` never fired — `swapped` was timed against a \
+         session that may still be loading:\n{stderr}"
+    );
+    let swapped = qedump(&stderr, "swapped");
+    assert!(
+        dump_text(swapped, "status").contains("three.ARW"),
+        "the open: swap never landed: {swapped}"
+    );
+    assert_eq!(
+        dump_keywords(swapped),
+        r#"[("bee", "")]"#,
+        "folder B's own keyword did not fill the chip row after the swap — \
+         the swap emptied the row for good, or kept folder A's: {swapped}"
+    );
+    assert_eq!(
+        dump_text(swapped, "revert"),
+        "",
+        "the revert slot survived the swap: {swapped}"
+    );
+    assert_one_rows_rebuild_per_session(&stderr);
+    assert!(
+        qedump(&stderr, "end").contains("zoom=2"),
+        "the `+` after the swap was dead — the keyboard was stranded:\n{stderr}"
+    );
+}
+
 /// Issue #42: Esc over stacked modals must close the TOPMOST one. With
 /// About opened over the live Copy Picks dialog, the first Esc used to
 /// act on the HIDDEN dialog — discarding its plan state while About
@@ -5264,6 +5589,51 @@ fn dump_text<'a>(dump: &'a str, name: &str) -> &'a str {
         })
         .unwrap_or(rest.len());
     &rest[..end]
+}
+
+/// The `keywords=` list of a QEDUMP line (test-harness.md "The dump"): from
+/// `keywords=` to the `]` that closes the list, read past a `]` or a space
+/// inside a Debug-quoted keyword. `dump_field` cannot read it — its
+/// whitespace split stops at the first space, and a chip prints as
+/// `("wip", "2/2")`.
+fn dump_keywords(dump: &str) -> &str {
+    let tag = " keywords=";
+    let start = dump
+        .find(tag)
+        .unwrap_or_else(|| panic!("no keywords= in dump line: {dump}"))
+        + tag.len();
+    let rest = &dump[start..];
+    let (mut in_quotes, mut escaped) = (false, false);
+    for (i, b) in rest.bytes().enumerate() {
+        match b {
+            b'\\' if in_quotes && !escaped => {
+                escaped = true;
+                continue;
+            }
+            b'"' if !escaped => in_quotes = !in_quotes,
+            b']' if !in_quotes => return &rest[..=i],
+            _ => {}
+        }
+        escaped = false;
+    }
+    panic!("unterminated keywords= list in dump line: {dump}")
+}
+
+/// `dump_keywords` reads exactly what the harness prints — the `{:?}` of a
+/// `Vec<(String, String)>` — through a `]` and a space inside a keyword,
+/// an escaped quote, and an escaped backslash right before a closing quote,
+/// and stops at the bracket that closes the list. Pure: no app launch.
+#[test]
+fn dump_keywords_reads_the_list_to_its_closing_bracket() {
+    let chips: Vec<(String, String)> = [("a] b", "1/2"), ("c\"d", ""), ("e\\", "2/2")]
+        .iter()
+        .map(|(t, c)| (t.to_string(), c.to_string()))
+        .collect();
+    let list = format!("{chips:?}");
+    assert_eq!(list, r#"[("a] b", "1/2"), ("c\"d", ""), ("e\\", "2/2")]"#);
+    let line = format!("QEDUMP x clipnudged=false keywords={list} next=1");
+    assert_eq!(dump_keywords(&line), list);
+    assert_eq!(dump_keywords("QEDUMP x keywords=[] x=1"), "[]");
 }
 
 /// Ten files cycling the three A1 classes: identical per-class EXIF

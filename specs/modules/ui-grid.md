@@ -951,6 +951,15 @@ positive stretch, in proportion (`layout.rs` `adjust_items::<Grow>`) — a
 `preferred-height`, `min-height` and `vertical-stretch: 1` instead is the
 one that takes it (read 2026-10-03 for settings.md's card: why the body
 host, not the footer, absorbs the high-water mark's extra height).
+A `ComboBox` keeps its `current-index` across a model replacement and
+re-derives `current-value` from the new model at once: `changed model =>
+reset-current()` clamps the index into the new list (0 when the list is
+empty) and calls `update-current-value()`
+(`widgets/common/combobox-base.slint:56-77`), and the handler fires for
+every replacement because `ModelRc`'s equality is pointer equality
+(`model.rs:719`), deferred like every change handler (read 2026-10-16 for
+iptc-templates.md's template dropdown: why its selection survives a
+session swap that replaces the template model, brief 014 D4).
 
 ## Contracts
 
@@ -1290,6 +1299,11 @@ host, not the footer, absorbs the high-water mark's extra height).
 
 ## History
 
+- 2026-10-16 — Brief 014 (issue #114): the Slint list gains the
+  ComboBox's behaviour at a model replacement — the index kept and
+  clamped, the value re-derived — which iptc-templates.md's swap rule
+  leans on (D4). Nothing else here moves: the swap's focus rules and the
+  tests that pin them keep their promises.
 - 2026-10-04 — Brief 011, the senior developer's review F1: a button that
   starts a dialog's run puts the keyboard home before it starts — Choose…,
   reached by `Tab` and left by a click on Copy or Export, kept its focus

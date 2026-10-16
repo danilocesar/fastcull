@@ -44,9 +44,10 @@
 //! Four groups DO carry something across a swap, and each names it in its
 //! own `begin_session`: the grid keeps the zoom step (the launch flags set
 //! it before the first folder loads) and the filter bar's visibility, the
-//! IPTC panel keeps the dock's visibility, and both export dialogs keep
-//! their remembered destination (fileops.md, video-export.md). Everything else in those structs
-//! goes back to its default.
+//! IPTC panel keeps the dock's visibility — its window models are replaced
+//! at its next refresh (issue #114) — and both export dialogs keep their
+//! remembered destination (fileops.md, video-export.md). Everything else in
+//! those structs goes back to its default.
 //!
 //! # Per-image vectors
 //!
@@ -113,17 +114,23 @@ pub(crate) fn clamp_wash_opacity(v: f32) -> f32 {
 }
 
 /// Last-set IPTC panel model contents (field rows, keyword chips,
-/// template names): models rebuild ONLY when these change.
+/// template names): the models are rebuilt only when these change WITHIN a
+/// session. The first refresh after a swap replaces all three regardless,
+/// because a cache reset to empty can alias the new session's content
+/// (iptc-templates.md "The panel's models", issue #114).
 #[derive(PartialEq)]
 pub(crate) struct PanelCache {
     pub(crate) rows: Vec<(String, String, bool)>,
     pub(crate) chips: Vec<(String, String)>,
     pub(crate) names: Vec<String>,
-    /// The session generation the cached rows were built for (issues
-    /// #63/#64). A rows rebuild that destroys the focused editor is
-    /// answered differently depending on this: within ONE session the
-    /// keyboard goes back to the same field (the row is recreated, and G7
-    /// says focus stays where the user put it), but across a SWAP the
+    /// The session generation the cached models were built for — the
+    /// panel's swap detector for ALL THREE models (issue #114): `-1` after
+    /// `begin_session` and at launch, so the first refresh of a session
+    /// finds it stale and replaces every model whatever the comparison
+    /// says, then stamps it. It also picks how a rows rebuild that destroys
+    /// the focused editor is answered (issues #63/#64): within ONE session
+    /// the keyboard goes back to the same field (the row is recreated, and
+    /// G7 says focus stays where the user put it), but across a SWAP the
     /// field's meaning is gone and it goes to the grid (#41 D3).
     /// `-1` = nothing cached yet.
     pub(crate) seen_gen: i32,
@@ -414,9 +421,12 @@ pub(crate) struct IptcPanelState {
     /// Is the dock on screen? Survives a session swap (see
     /// [`IptcPanelState::begin_session`]).
     pub(crate) visible: bool,
-    /// Last-set panel model contents: the models are ONLY rebuilt when
-    /// these differ (gate finding: rebuilding on every engine event tore
-    /// down the field editors mid-typing).
+    /// Last-set panel model contents: within a session the models are ONLY
+    /// rebuilt when these differ (gate finding: rebuilding on every engine
+    /// event tore down the field editors mid-typing); the first refresh
+    /// after a swap replaces all three regardless, because the reset cache
+    /// can alias the new session's content (iptc-templates.md "The panel's
+    /// models", issue #114).
     pub(crate) cache: PanelCache,
     /// ONE shared single-level revert slot (user decision): armed by every
     /// batch mutation from the panel; the ids the snapshots belong to ride
@@ -430,6 +440,12 @@ impl IptcPanelState {
     /// Everything a session swap must forget. The dock's VISIBILITY
     /// survives — it is a window layout the user chose, and a folder swap
     /// is not a reason to open or close a panel under their hands.
+    ///
+    /// The cache reset (`seen_gen` back to -1) is what makes the next
+    /// visible refresh replace every window model (issue #114). The
+    /// window's models are deliberately not touched here: the panel may be
+    /// closed, and the reopen's refresh replaces them before the panel's
+    /// first frame — one mechanism, in `refresh_iptc_panel`, not two.
     pub(crate) fn begin_session(&mut self) {
         *self = Self {
             visible: self.visible,
