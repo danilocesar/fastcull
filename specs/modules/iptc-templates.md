@@ -246,9 +246,14 @@ brief 015 D11 — 014 D15's follow-up is resolved here, not deferred).
   button are clicked by name (`click:template dropdown`, `click:template
   apply`) — brief 015, 2026-10-16.
 - Hard rule 5's split for brief 015: the name lookup (exact,
-  case-sensitive, `None` for a missing name) and the selection after a
+  case-sensitive; a missing name is the error `IptcError::TemplateMissing`,
+  whose text is the strip's sentence) and the selection after a
   replacement (the old name's new position, else 0) are pure rules in
-  `fastcull-core` (`iptc.rs`) with unit tests beside them; the
+  `fastcull-core` (`iptc.rs`, `template_by_name` and
+  `selection_after_replacement`) with unit tests beside them (corrected
+  2026-10-16, the developer at brief 015's core commit: this said "`None`
+  for a missing name" — the plan's lookup returns the error that carries
+  the strip's sentence, so the app never composes it); the
   keep-last-good is app state around the unchanged loader
   (`session::reload_templates`), carried across `begin_session`; the
   strip's two sentences above are the exact strings the tests pin.
@@ -384,12 +389,18 @@ brief 015 D11 — 014 D15's follow-up is resolved here, not deferred).
       the test exists (a criterion the brief's list does not carry for R6;
       proposed with this spec change, deferrable under D7 with a reason in
       the plan).
-- [ ] **The pure rules in core**: `Osprey` is not `osprey` and a missing
-      name is `None`; the selection after a replacement is the old name's
-      new position, 0 when the name is gone or the list is empty — core
-      `template_by_name_is_exact_and_case_sensitive`,
-      `template_selection_follows_the_name_across_a_replacement` (names
-      the plan confirms). Open until they exist.
+- [x] **The pure rules in core**: `Osprey` is not `osprey`, and a missing
+      name is the error whose text is the strip's sentence, never another
+      template; the selection after a replacement is the old name's new
+      position, 0 when the name is gone, nothing was selected or the list
+      is empty — core `template_by_name_is_exact_and_case_sensitive`,
+      `template_selection_follows_the_name_across_a_replacement`; a
+      case-folded lookup (`eq_ignore_ascii_case`) turns the first red at
+      the `osprey` read, a case-folded `position` the second at its case
+      line, which holds the other spelling at position 1 so that the folded
+      match cannot hide behind the gone-name answer 0 (corrected
+      2026-10-16, the developer at brief 015's core commit: this box said a
+      missing name is `None`).
 - [ ] **Nothing else moves** (AC7):
       `templates_and_ui_prefs_are_read_from_the_one_config_dir`, the core
       template tests, the five focus tests and the three swap-chip tests
