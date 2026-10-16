@@ -360,7 +360,8 @@ fn iptc_field_set(d: &mut fastcull_core::iptc::IptcData, i: usize, v: Option<Str
 /// order, or the cursor). Field rows get the tri-state UI mapping: common
 /// value across the batch = shown; differing values = `mixed`; unset
 /// everywhere = untouched. Keyword chips show the batch UNION with
-/// coverage counts on multi-selections (persona: an un-revertible
+/// coverage counts on multi-selections — the chip rule, stated in
+/// iptc-templates.md "The panel's models" (persona: an un-revertible
 /// batch-destructive X is unacceptable — removal arms the shared slot).
 pub(crate) fn refresh_iptc_panel(win: &MainWindow, st: &mut AppState) {
     win.set_iptc_visible(st.iptc_panel.visible);
@@ -379,7 +380,9 @@ pub(crate) fn refresh_iptc_panel(win: &MainWindow, st: &mut AppState) {
     win.set_iptc_warning(st.session.template_warnings.join("\n").into());
     // Build plain-data snapshots first; the Slint models are rebuilt ONLY
     // when content changed (gate finding: unconditional rebuilds tore the
-    // field editors down mid-typing on every 33 ms engine tick).
+    // field editors down mid-typing on every 33 ms engine tick) — and all
+    // three at the first refresh after a session swap (issue #114, the
+    // swap rule below).
     let rows: Vec<(String, String, bool)> = (0..IptcField::ALL.len())
         .map(|i| {
             let mut vs = batch.iter().filter_map(|id| {
@@ -441,7 +444,24 @@ pub(crate) fn refresh_iptc_panel(win: &MainWindow, st: &mut AppState) {
         .collect();
 
     let session_gen = win.get_session_gen();
-    if st.iptc_panel.cache.rows != rows {
+    // THE SWAP RULE (iptc-templates.md "The panel's models", issue #114).
+    // `seen_gen` is -1 after `begin_session` (and at launch) and is stamped
+    // just after the rows block below, so `swapped` is true exactly once
+    // per session: at the first refresh the panel runs after a swap — the
+    // swap's own refresh with the panel open, or the reopen's synchronous
+    // refresh (`on_iptc_toggle` → `reveal_cursor` → `refresh`) with it
+    // closed. It is read HERE, before that stamp, so the chip and template
+    // blocks below the stamp still see the swap through this local. On
+    // that refresh every model is replaced WHATEVER the comparison says: a
+    // cache reset to empty can alias the new session's content — a batch
+    // with no keywords yet compares equal to the reset chip cache — and the
+    // old folder's chips stayed on screen with the old folder's counts
+    // until the new folder's first keyword landed. Within a session content
+    // alone decides, as before. The rows rebuild no more often than they
+    // did: the first visible refresh of a session always found eleven rows
+    // against an empty cache.
+    let swapped = st.iptc_panel.cache.seen_gen != session_gen;
+    if swapped || st.iptc_panel.cache.rows != rows {
         // THE ITEM-TREE MUTATION (issues #63/#64): replacing the model
         // destroys all eleven `LineEdit`s and builds eleven new ones, so
         // whichever of them held the keyboard stops existing. Slint's
@@ -482,24 +502,25 @@ pub(crate) fn refresh_iptc_panel(win: &MainWindow, st: &mut AppState) {
         crate::focus::reclaim_destroyed_editors(
             win,
             1..=crate::focus::FIELD_ROWS,
-            if st.iptc_panel.cache.seen_gen == session_gen {
-                crate::focus::Reclaim::SameRow
-            } else {
+            if swapped {
                 crate::focus::Reclaim::TopmostScope
+            } else {
+                crate::focus::Reclaim::SameRow
             },
         );
         st.iptc_panel.cache.rows = rows;
     }
     st.iptc_panel.cache.seen_gen = session_gen;
-    // No reclaim after these two replacements, deliberately (#63/#64): the
-    // chip repeater holds Text and TouchArea items and the template model
-    // feeds a ComboBox — neither owns an editor, and the keyword LineEdit
-    // is a SIBLING of both, not a child. A reclaim here would fire while
-    // the editor it "rescued" was still alive and focused, taking the
-    // keyboard away from a user mid-word every time another image's
-    // sidecar landed a keyword. The rows model is the only one whose
-    // replacement destroys a focus holder.
-    if st.iptc_panel.cache.chips != chips {
+    // No reclaim after these two replacements — the swap's forced
+    // replacement included — deliberately (#63/#64): the chip repeater
+    // holds Text and TouchArea items and the template model feeds a
+    // ComboBox — neither owns an editor, and the keyword LineEdit is a
+    // SIBLING of both, not a child. A reclaim here would fire while the
+    // editor it "rescued" was still alive and focused, taking the keyboard
+    // away from a user mid-word every time another image's sidecar landed
+    // a keyword. The rows model is the only one whose replacement destroys
+    // a focus holder.
+    if swapped || st.iptc_panel.cache.chips != chips {
         win.set_iptc_keywords(slint::ModelRc::new(VecModel::from(
             chips
                 .iter()
@@ -511,7 +532,7 @@ pub(crate) fn refresh_iptc_panel(win: &MainWindow, st: &mut AppState) {
         )));
         st.iptc_panel.cache.chips = chips;
     }
-    if st.iptc_panel.cache.names != names {
+    if swapped || st.iptc_panel.cache.names != names {
         win.set_iptc_templates(slint::ModelRc::new(VecModel::from(
             names
                 .iter()

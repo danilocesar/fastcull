@@ -177,7 +177,7 @@ at a model replacement (ui-grid.md, *Slint facts*; brief 014 D4,
       `camera_template_stamps_the_exif_model` (two A1 frames and a
       `{camera}.{ext}` rename → `ILCE-1.ARW` and `ILCE-1_1.ARW`, the in-batch
       suffix included).
-- [ ] **The panel forgets the old folder with it open across the swap**
+- [x] **The panel forgets the old folder with it open across the swap**
       (brief 014 AC1): a keyword tagged on folder A's two images, `open:`
       folder B (one image, no sidecar), and after `load settled gen 1` the
       dump reads `keywords=[]` and `revert=""` — app
@@ -185,16 +185,14 @@ at a model replacement (ui-grid.md, *Slint facts*; brief 014 D4,
       on the pre-fix behaviour with the dump field in place (the harness
       commit lands before the fix commit), where it reads
       `keywords=[("wip", "2/2")]` — on `aacf45c` itself the field does not
-      exist and the record is the brief's screenshot. The test does not
-      exist yet.
-- [ ] **…and with it closed across the swap and reopened** (AC2): the same
+      exist and the record is the brief's screenshot.
+- [x] **…and with it closed across the swap and reopened** (AC2): the same
       with `iptc` before the `open:` and `iptc` after `load settled gen 1`,
       the dump after the reopen reading `keywords=[]` — app
       `a_session_swap_empties_the_keyword_chips_with_the_panel_closed_and_reopened`;
       red on the same pre-fix behaviour, where the reopened panel is
-      instantiated from the model the swap never replaced. The test does
-      not exist yet.
-- [ ] **The new folder fills the row** (AC3): B's image carries a prepared
+      instantiated from the model the swap never replaced.
+- [x] **The new folder fills the row** (AC3): B's image carries a prepared
       sidecar with the keyword `bee`, and after `load settled gen 1` the
       dump reads exactly `keywords=[("bee", "")]` — no coverage on a single
       image, never `wip` — app
@@ -202,8 +200,8 @@ at a model replacement (ui-grid.md, *Slint facts*; brief 014 D4,
       on the pre-fix tree too (the row corrected itself the moment a
       keyword entered the new batch): it guards the over-fix — a swap that
       empties the models and then bypasses the change-only comparison —
-      not the defect. The test does not exist yet.
-- [ ] **Nothing else rebuilds more** (AC4): the focus tests that read or
+      not the defect.
+- [x] **Nothing else rebuilds more** (AC4): the focus tests that read or
       order the `iptc rows rebuilt` marks keep them, count for count —
       `session_swap_mid_field_edit_discards_and_keeps_the_keyboard`,
       `a_cursor_move_rebuild_keeps_the_keyboard_in_the_field`,
@@ -211,8 +209,8 @@ at a model replacement (ui-grid.md, *Slint facts*; brief 014 D4,
       the within-session chip path keeps its promise —
       `session_swap_mid_keyword_edit_never_writes_into_the_new_session`,
       `keyword_enter_commit_still_writes_and_returns_focus`; the mutant
-      that drops the swap's forced replacement turns AC1 and AC2 red. Open
-      until the mutant has been run on the fix and recorded in the brief.
+      that drops the swap's forced replacement turns AC1 and AC2 red (run
+      on the fix and recorded in brief 014 D13 and the fix commit).
 
 ## History
 

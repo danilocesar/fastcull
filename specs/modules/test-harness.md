@@ -527,7 +527,9 @@ split stops at the first space — the empty case is the one `dump_field`
 reads correctly. It is the model and not a screenshot because the model
 is what the user sees whether or not the panel is up — a panel reopened
 after a swap is instantiated from it — and because a chip's pixels move
-with the seat's font.
+with the seat's font; with the panel closed across a swap the field lags,
+holding the old session's chips until the reopen replaces the model
+before the panel's first frame (brief 014 D11, 2026-10-16).
 New fields are APPENDED; `dump_field` finds `name=` by prefix. The
 nav-token swallow mirror (`drive swallowed by modal`) covers the Settings
 dialog like About and the card.
@@ -598,14 +600,15 @@ shot 2.
   009 commit B: it said ten, and nine before brief 009 — 1010x520, driven
   since 2026-09-04, was never counted; `grep -o 'resize:[0-9]*x[0-9]*'
   crates/fastcull-app/tests/screenshot.rs | sort -u` lists them).
-- The suite's size: 122 driven tests after brief 011, 120 after brief
-  010 and 118 at its start (`cargo test -p fastcull-app --test screenshot
-  -- --list`, re-measured 2026-10-04 at the fix round of brief 011's
-  second QE round; its QE rounds added launches, not tests). They no
-  longer fit one 600 s foreground call in debug on the development seat
-  and run there as three `--exact` thirds split from that list — each
-  third well under the cap, halves too near it. The measured times of
-  each unit's head are that unit's brief's (brief 011 D8 for the 122:
+- The suite's size: 126 tests after brief 014 — 125 driven and the
+  `keywords=` reader's own unit test — 122 driven after brief 011, 120
+  after brief 010 and 118 at its start (`cargo test -p fastcull-app --test
+  screenshot -- --list`, re-measured 2026-10-16 at brief 014's fix commit;
+  brief 011's QE rounds added launches, not tests). They no longer fit one
+  600 s foreground call in debug on the development seat and run there as
+  three `--exact` thirds split from that list — each third well under the
+  cap, halves too near it. The measured times of each unit's head are that
+  unit's brief's (brief 014 D13 for the 126; brief 011 D8 for the 122:
   ~1040 s in three thirds, three independent measurements; brief 010 D5
   for the 120; this sentence carried the seat timings themselves until
   2026-10-05 — moved out under CLAUDE.md's spec shape, which keeps seat
@@ -664,7 +667,10 @@ shot 2.
 - 2026-10-16 — Brief 014 (issue #114): the dump gains `keywords=`,
   appended after `clipnudged=` — the keyword chips the window holds, text
   and coverage per chip in model order — so a driven swap test reads the
-  panel's model instead of a screenshot.
+  panel's model instead of a screenshot. At the fix commit the field's
+  sentence says it lags with the panel closed across a swap until the
+  reopen (D11), and the suite's size is re-measured — 126 tests, three of
+  them the swap-chip tests and one the field reader's own unit test.
 - 2026-10-05 — Brief 012 (issue #99), QE round 1 D3 and D7, the senior
   developer's review F2: the `loupe ring budget …` mark the brief added is
   the proof that the budget and the learned sizes reached the ring RULE —

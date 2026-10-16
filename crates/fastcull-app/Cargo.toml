@@ -225,6 +225,21 @@ fastcull-core.workspace = true
 # If (1) changes, the icon is read from a path that does not exist on the
 # user's machine; if (3) changes, the taskbar button loses the icon while
 # the title bar keeps it.
+# SEVENTH CANARY (brief 014, the IPTC panel at a session swap; same
+# 1.17.1). Two behaviours the template dropdown's selection stands on when a
+# swap replaces the template model with the same names, neither documented
+# upstream (read 2026-10-16 in the sources; ui-grid.md's "Slint facts this
+# module depends on", iptc-templates.md's swap rule and brief 014 D4):
+#   1. A `ComboBox` answers a model replacement with `changed model =>
+#      reset-current()`: the index is clamped into the new list (0 when the
+#      list is empty) and the value re-derived from it at once
+#      (i-slint-compiler widgets/common/combobox-base.slint:56-77) — why the
+#      swap may replace the template model and the selection survives, by
+#      index.
+#   2. `ModelRc`'s equality is pointer equality (i-slint-core model.rs:719),
+#      so a fresh `VecModel` with identical contents still fires that
+#      handler, deferred like every change handler.
+# If (1) changes, the dropdown forgets its selection at every folder swap.
 slint = { version = "1", default-features = false, features = [
     "std",
     "backend-winit",

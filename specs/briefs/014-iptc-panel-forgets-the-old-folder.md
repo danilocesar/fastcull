@@ -273,3 +273,29 @@ one moment it was skipped.
 - D12 (2026-10-16, Manager, on plan Q3): the `key:+` / `dump.end` probe
   stays in the three new tests — the forced replacements sit in the
   swap's reclaim pass, and the probe costs nothing.
+- D13 (2026-10-16, developer, the fix commit's record): the old-red, the
+  mutants and the suite, measured on the development seat (debug unless
+  named). Old-red, on the harness commit `002c8c5` with the three tests
+  added and the fix not yet applied — `cargo test -p fastcull-app --test
+  screenshot --locked -- --test-threads=1 --exact` and the three names:
+  AC1 red at its `swapped` read and AC2 at its `reopened` read, both
+  `left: "[(\"wip\", \"2/2\")]"`, `right: "[]"`; AC3 green, as designed.
+  On the fix, the three green three runs in three. Mutants, each run once
+  on the fix and restored: A, `let swapped = false;` (the defect back) —
+  AC1 and AC2 red at the same two reads, AC3 green; B, the chip block's
+  condition reduced to `if swapped {` — all three red, and earlier than
+  the plan predicted, at the shared `tagged` read (`left: "[]"`, `right:
+  "[(\"wip\", \"2/2\")]"`): the keyword commit in folder A is a non-swap
+  refresh too, so dropping the comparison empties the row before any
+  swap; B2, the same comparison dropped after a swap only (`if swapped ||
+  (session_gen == 0 && …)`) — AC1 and AC2 green, AC3 red at its `bee`
+  read (`left: "[]"`), the reading the plan expected of B and the one
+  that shows AC3 guarding the over-fix on its own; C, the `seen_gen`
+  stamp deleted (every refresh a "swap") — all three red at the
+  rows-rebuild count, `iptc rows rebuilt (gen 0)` emitted twice (the
+  panel's open and the Enter), and
+  `a_cursor_move_rebuild_keeps_the_keyboard_in_the_field` red, its
+  `wait:row 0 (gen 4)` never satisfied. The whole driven suite once,
+  before the fix commit (D10): 126 tests in three `--exact` thirds of 38,
+  46 and 42, 301 s + 420 s + 336 s, all green; the eight named tests
+  green in release in 47 s.
