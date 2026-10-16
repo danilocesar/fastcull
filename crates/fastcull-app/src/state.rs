@@ -114,24 +114,28 @@ pub(crate) fn clamp_wash_opacity(v: f32) -> f32 {
 }
 
 /// Last-set IPTC panel model contents (field rows, keyword chips,
-/// template names): the models are rebuilt only when these change WITHIN a
-/// session. The first refresh after a swap replaces all three regardless,
-/// because a cache reset to empty can alias the new session's content
-/// (iptc-templates.md "The panel's models", issue #114).
+/// template names): the models are rebuilt only when these change. The
+/// first refresh after a swap replaces the rows and the chips regardless,
+/// because their caches are reset to empty and an empty cache can alias the
+/// new session's content (iptc-templates.md "The panel's models", issue
+/// #114); the names cache is never reset, so the names model follows the
+/// change-only rule at every moment, the swap included (brief 015 D15).
 #[derive(PartialEq)]
 pub(crate) struct PanelCache {
     pub(crate) rows: Vec<(String, String, bool)>,
     pub(crate) chips: Vec<(String, String)>,
+    /// The template names the window's dropdown model holds — kept across
+    /// a session swap (`IptcPanelState::begin_session`).
     pub(crate) names: Vec<String>,
     /// The session generation the cached models were built for — the
-    /// panel's swap detector for ALL THREE models (issue #114): `-1` after
-    /// `begin_session` and at launch, so the first refresh of a session
-    /// finds it stale and replaces every model whatever the comparison
-    /// says, then stamps it. It also picks how a rows rebuild that destroys
-    /// the focused editor is answered (issues #63/#64): within ONE session
-    /// the keyboard goes back to the same field (the row is recreated, and
-    /// G7 says focus stays where the user put it), but across a SWAP the
-    /// field's meaning is gone and it goes to the grid (#41 D3).
+    /// panel's swap detector for the rows and the chips (issue #114): `-1`
+    /// after `begin_session` and at launch, so the first refresh of a
+    /// session finds it stale and replaces those two models whatever the
+    /// comparison says, then stamps it. It also picks how a rows rebuild
+    /// that destroys the focused editor is answered (issues #63/#64): within
+    /// ONE session the keyboard goes back to the same field (the row is
+    /// recreated, and G7 says focus stays where the user put it), but across
+    /// a SWAP the field's meaning is gone and it goes to the grid (#41 D3).
     /// `-1` = nothing cached yet.
     pub(crate) seen_gen: i32,
 }
@@ -410,12 +414,31 @@ impl BurstIndex {
     }
 }
 
+/// The user's templates — the stationery, not the folder's data
+/// (iptc-templates.md, "Templates"): the list the last SUCCESSFUL read of
+/// templates.toml produced, and what the panel's warning strip says.
+/// `AppState::begin_session` leaves it alone, which is how the last good
+/// list survives a folder swap whose read fails as a whole ("One rule for
+/// a bad file, at every read moment"; brief 015 R4). Written by
+/// `session::reload_templates` at the three read moments, and by Apply,
+/// which APPENDS its own outcome to the read's warnings (R3, R6).
+#[derive(Default)]
+pub(crate) struct TemplateState {
+    /// The templates, in the loader's order — the dropdown's order. Never
+    /// replaced by a read that failed as a whole.
+    pub(crate) list: Vec<fastcull_core::iptc::IptcTemplate>,
+    /// The warning strip's lines: the last read's per-entry errors and
+    /// CLEAR warnings — or its parse error and the last-read note — then
+    /// anything Apply appended.
+    pub(crate) warnings: Vec<String>,
+}
+
 /// The IPTC panel's own state (M5, iptc-templates.md): whether the dock is
 /// up, what its models currently show, and the one shared revert slot.
 ///
-/// Not here: the per-image IPTC DATA (`iptc`, `touched_iptc`) and the
-/// templates — those belong to the session, not to the panel, and they
-/// outlive the panel being closed.
+/// Not here: the per-image IPTC DATA (`iptc`, `touched_iptc`), which
+/// belongs to the session, and the templates, which belong to the app
+/// (`AppState::templates`) — both outlive the panel being closed.
 #[derive(Default)]
 pub(crate) struct IptcPanelState {
     /// Is the dock on screen? Survives a session swap (see
@@ -424,9 +447,10 @@ pub(crate) struct IptcPanelState {
     /// Last-set panel model contents: within a session the models are ONLY
     /// rebuilt when these differ (gate finding: rebuilding on every engine
     /// event tore down the field editors mid-typing); the first refresh
-    /// after a swap replaces all three regardless, because the reset cache
-    /// can alias the new session's content (iptc-templates.md "The panel's
-    /// models", issue #114).
+    /// after a swap replaces the rows and the chips regardless, because
+    /// their reset caches can alias the new session's content, while the
+    /// names follow the comparison alone (iptc-templates.md "The panel's
+    /// models", issue #114, brief 015 D15).
     pub(crate) cache: PanelCache,
     /// ONE shared single-level revert slot (user decision): armed by every
     /// batch mutation from the panel; the ids the snapshots belong to ride
@@ -442,13 +466,28 @@ impl IptcPanelState {
     /// is not a reason to open or close a panel under their hands.
     ///
     /// The cache reset (`seen_gen` back to -1) is what makes the next
-    /// visible refresh replace every window model (issue #114). The
+    /// visible refresh replace the rows and the chips (issue #114). The
     /// window's models are deliberately not touched here: the panel may be
     /// closed, and the reopen's refresh replaces them before the panel's
     /// first frame — one mechanism, in `refresh_iptc_panel`, not two.
+    ///
+    /// The template NAMES cache survives: it records what the window's
+    /// dropdown model holds, which a swap does not change, so the next
+    /// refresh compares the swap's re-read list with the truth and replaces
+    /// the model exactly when the names differ — the change-only rule at
+    /// every moment (iptc-templates.md "The panel's models", brief 015
+    /// D15). It is also the OLD list the dropdown's selection is looked up
+    /// in when the new one replaces it, so the selection follows the name
+    /// across the swap (brief 015 R5). Reset to empty here, it would compare
+    /// equal to a swap's empty list and leave the old names on screen —
+    /// the aliasing brief 014 fixed for the chips.
     pub(crate) fn begin_session(&mut self) {
         *self = Self {
             visible: self.visible,
+            cache: PanelCache {
+                names: std::mem::take(&mut self.cache.names),
+                ..PanelCache::default()
+            },
             ..Self::default()
         };
     }
@@ -755,10 +794,6 @@ pub(crate) struct SessionState {
     pub(crate) pipeline_rx: Option<std::sync::mpsc::Receiver<SessionEvent>>,
     /// Finished pipeline jobs (ThumbReady AND Failed both count).
     pub(crate) thumbs_done: usize,
-    /// Templates + load warnings (templates.toml, read at session open —
-    /// live-reload is read-on-open per spec).
-    pub(crate) templates: Vec<fastcull_core::iptc::IptcTemplate>,
-    pub(crate) template_warnings: Vec<String>,
     /// True for --synthetic sessions: cells get distinct placeholder hues;
     /// real folders use the spec's neutral gray.
     pub(crate) synthetic: bool,
@@ -789,8 +824,6 @@ impl Default for SessionState {
             pipeline: None,
             pipeline_rx: None,
             thumbs_done: 0,
-            templates: Vec::new(),
-            template_warnings: Vec::new(),
             synthetic: false,
             session_open: false,
         }
@@ -951,6 +984,10 @@ pub(crate) struct AppState {
     /// The Settings dialog and the settings in force (brief 008). Survives
     /// every session swap: the settings are the app's, not the folder's.
     pub(crate) settings: SettingsState,
+    /// templates.toml as last read, and the warning strip (brief 015).
+    /// Survives every session swap for the same reason as `settings`, and
+    /// because a read that fails keeps the last good list across the swap.
+    pub(crate) templates: TemplateState,
     /// SURVIVOR: the one VecModel the window binds. It is not session
     /// data at all — replacing it would unbind the grid from the window,
     /// so refresh mutates it in place for the life of the process.
@@ -989,6 +1026,7 @@ impl AppState {
             copy: CopyState::default(),
             clip: ClipState::default(),
             settings,
+            templates: TemplateState::default(),
             cells,
             kitchen,
         }
@@ -1025,6 +1063,9 @@ impl AppState {
         self.copy.begin_session();
         self.clip.begin_session();
         // `settings` is not touched: the app's, not the folder's.
+        // `templates` neither: the user's stationery, and the LAST GOOD list
+        // a failed read at this swap must keep (brief 015 R4) — the caller
+        // re-reads the file right after this call.
         // SURVIVOR: the kitchen is a worker thread. Retargeting bumps its
         // generation so queued work is dropped and late completions are
         // orphaned, without paying to restart a thread per folder.

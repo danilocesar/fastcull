@@ -4634,6 +4634,1217 @@ fn the_new_folders_sidecar_fills_the_keyword_chips_after_a_swap() {
     );
 }
 
+// ---------------------------------------------------------------------------
+// Brief 015: Apply re-reads templates.toml and applies the selected template
+// BY NAME (iptc-templates.md, "Apply re-reads first and applies by name",
+// "One rule for a bad file, at every read moment", "The panel's models").
+// Every run points FASTCULL_CONFIG_DIR at a scratch dir of its own holding
+// templates.toml, and the file is edited from the drain thread the first
+// time the app emits the anchor mark (issue #50's `on_line` pattern) — an
+// editor's save between two of the app's own marks, never a guess at a wall
+// clock. A template is selected by a click on the dropdown and real keys,
+// Apply by a click on its name; the dropdown is read from the dump's
+// `templates=` and `tplsel=`, the warning strip from `iptcwarning=`
+// (test-harness.md, "The dump") — never from pixels.
+// ---------------------------------------------------------------------------
+
+/// The launch file of brief 015's runs. The dropdown lists a file's
+/// templates alphabetically by byte, not in file order (`toml` iterates a
+/// table as a `BTreeMap`): `alpha, zebra`.
+const TPL_ALPHA_ZEBRA: &str = r#"[templates.alpha]
+title = "A"
+
+[templates.zebra]
+title = "Z"
+"#;
+
+/// `zebra`'s title edited — the save AC1 re-reads.
+const TPL_ZEBRA_EDITED: &str = r#"[templates.alpha]
+title = "A"
+
+[templates.zebra]
+title = "Z EDITED"
+"#;
+
+/// `zebra` renamed `zulu` — AC2's vanished name.
+const TPL_ZEBRA_RENAMED: &str = r#"[templates.alpha]
+title = "A"
+
+[templates.zulu]
+title = "Z"
+"#;
+
+/// `mid` added, sorting AHEAD of `zebra`: `alpha, mid, zebra` — zebra moves
+/// from position 1 to 2, and `mid` takes position 1 (AC3, AC5).
+const TPL_MID_INSERTED: &str = r#"[templates.alpha]
+title = "A"
+
+[templates.zebra]
+title = "Z"
+
+[templates.mid]
+title = "M"
+"#;
+
+/// A file that does not parse as a whole (AC4).
+const TPL_BROKEN: &str = "not toml at [[[";
+
+/// AC4's file repaired, `zebra`'s title fixed.
+const TPL_ZEBRA_FIXED: &str = r#"[templates.alpha]
+title = "A"
+
+[templates.zebra]
+title = "Z fixed"
+"#;
+
+/// `aardvark` added ahead of everything: `aardvark, alpha, mid, zebra`
+/// (AC5's swap).
+const TPL_AARDVARK_INSERTED: &str = r#"[templates.alpha]
+title = "A"
+
+[templates.zebra]
+title = "Z"
+
+[templates.mid]
+title = "M"
+
+[templates.aardvark]
+title = "V"
+"#;
+
+/// `aaa` added ahead of that: `aaa, aardvark, alpha, mid, zebra` (AC5's
+/// reopen).
+const TPL_AAA_INSERTED: &str = r#"[templates.alpha]
+title = "A"
+
+[templates.zebra]
+title = "Z"
+
+[templates.mid]
+title = "M"
+
+[templates.aardvark]
+title = "V"
+
+[templates.aaa]
+title = "X"
+"#;
+
+/// One template whose `city = ""` loads with the CLEAR warning and whose
+/// unknown variable fails at Apply (AC9). `title` expands before `city`
+/// (the core field table's order), so the error names `title`.
+const TPL_WIPE: &str = r#"[templates.wipe]
+city = ""
+title = "{nope}"
+"#;
+
+/// The selection and the Apply every brief 015 Apply script starts with:
+/// folder A settled, the panel opened behind the settle (the file's second
+/// read — the first is the launch folder's own open), `zebra` selected by
+/// a click on the dropdown and two real keys — the list is `alpha, zebra`,
+/// so `down` moves the selection from 0 to 1 and `return` closes the list —
+/// and Apply clicked by name, everything after it gated on Apply's own
+/// outcome mark (test-harness.md, "Template apply"). The steps keep 700 ms
+/// between the panel's rows mark — the anchor of every first edit — and the
+/// dropdown click, and 1.7 s to the Apply, so an edit made on the drain
+/// thread at that mark is on disk long before anything reads the file.
+const SELECT_ZEBRA_AND_APPLY: &str = "2400:wait:load settled gen 0;2500:key:i;\
+     2600:wait:iptc rows rebuilt (gen 0);3300:click:template dropdown;3600:key:down;\
+     3900:key:return;4300:click:template apply;4400:wait:template apply 'zebra'";
+
+/// One of brief 015's folders under `out_dir()`, named for the test that
+/// asks for it: `tpl-<tag>-<side>` holding the A1 frame as `file`
+/// (`place_fixture`: a symlink on unix, a COPY on Windows — which is why a
+/// test makes only the folders it opens). Folder A holds `one.ARW`, a swap's
+/// folder B `three.ARW`, as in brief 014's swap tests.
+fn template_folder(tag: &str, side: &str, file: &str) -> PathBuf {
+    let dir = out_dir().join(format!("tpl-{tag}-{side}"));
+    std::fs::remove_dir_all(&dir).ok();
+    std::fs::create_dir_all(&dir).unwrap();
+    place_fixture(&raws_dir().join("A1_full_compressed.ARW"), &dir.join(file));
+    dir
+}
+
+/// A fresh config dir for one brief 015 run (`settings_scratch`) holding
+/// `templates.toml` with `text`: what the run's `FASTCULL_CONFIG_DIR` points
+/// at, so the app reads this file through the one config-dir resolver and
+/// never the user's.
+fn templates_config(tag: &str, text: &str) -> PathBuf {
+    let dir = settings_scratch(&format!("tpl-{tag}"), None);
+    save_templates_toml(&dir, text).unwrap();
+    dir
+}
+
+/// Save `text` as `dir/templates.toml` the way an editor's atomic save does:
+/// a temp file renamed over the old one (`rename` replaces an existing file
+/// on Windows too), so a read never meets half a file. The error is
+/// returned, not panicked on: this also runs on the drain thread, where a
+/// panic would stop the drain and stall the child on a full pipe.
+fn save_templates_toml(dir: &Path, text: &str) -> std::io::Result<()> {
+    let tmp = dir.join("templates.toml.tmp");
+    std::fs::write(&tmp, text)?;
+    std::fs::rename(&tmp, dir.join("templates.toml"))
+}
+
+/// One edit of a run's `templates.toml`, made the first time the app emits a
+/// trace line containing the anchor: `Some(text)` saves `text`, `None`
+/// deletes the file. Every anchor starts with the trace prefix's `] `, so it
+/// matches the MARK's own line and never a `wait:` echo, which quotes the
+/// same words after `wait:`; first-only, because a mark can come again (an
+/// Apply that changes a field rebuilds the rows a second time).
+type Rewrite = (&'static str, Option<&'static str>);
+
+/// A brief 015 run: folder `dir_a` at launch, `FASTCULL_CONFIG_DIR` at
+/// `cfg`, the trace on, `drive` as the script, and each of `rewrites` made
+/// on the drain thread at its anchor's first line (issue #50's `on_line`):
+/// a write and a rename of a few hundred bytes wait on no lock, which is
+/// the drain thread's rule. Returns the trace and the anchors whose edit
+/// landed, in the order they landed — an edit that failed is listed with
+/// its error, so the assertion names it.
+fn shoot_templates(
+    name: &str,
+    dir_a: &Path,
+    cfg: &Path,
+    drive: &str,
+    rewrites: &[Rewrite],
+) -> (String, Vec<String>) {
+    let (landed_tx, landed_rx) = std::sync::mpsc::channel();
+    let dir = cfg.to_path_buf();
+    let edits = rewrites.to_vec();
+    let mut fired = vec![false; edits.len()];
+    let stderr = shoot_env_stderr_watching(
+        &[dir_a.to_str().unwrap()],
+        &[
+            ("FASTCULL_TRACE", "1"),
+            ("FASTCULL_CONFIG_DIR", cfg.to_str().unwrap()),
+            ("FASTCULL_DRIVE", drive),
+        ],
+        &out_dir().join(format!("{name}.jpg")),
+        move |line| {
+            for (i, (anchor, text)) in edits.iter().enumerate() {
+                if fired[i] || !line.contains(anchor) {
+                    continue;
+                }
+                fired[i] = true;
+                let edit = match text {
+                    Some(text) => save_templates_toml(&dir, text),
+                    None => std::fs::remove_file(dir.join("templates.toml")),
+                };
+                let _ = landed_tx.send(match edit {
+                    Ok(()) => anchor.to_string(),
+                    Err(e) => format!("{anchor} (the edit failed: {e})"),
+                });
+            }
+        },
+    );
+    (stderr, landed_rx.try_iter().collect())
+}
+
+/// The gates of a brief 015 run, asserted before anything is read from it:
+/// every `wait:` in `waits` reported `(satisfied` — a dropped or misspelled
+/// token puts a script back on the clock in silence (test-harness.md, "Rules
+/// for script authors") — and every edit landed, in order, at its anchor: an
+/// anchor mark renamed or never emitted would leave the file as it was, and
+/// a test of a re-read would then pass on a tree that never re-reads (the
+/// issue #50 corrupter's guard).
+fn assert_template_gates(stderr: &str, waits: &[&str], landed: &[String], rewrites: &[Rewrite]) {
+    for wait in waits {
+        assert!(
+            stderr.contains(&format!("wait:{wait} (satisfied")),
+            "the `wait:{wait}` step never fired — the steps behind it ran on \
+             the clock:\n{stderr}"
+        );
+    }
+    let anchors: Vec<String> = rewrites.iter().map(|(a, _)| a.to_string()).collect();
+    assert_eq!(
+        landed, anchors,
+        "the templates.toml edits did not all land at their anchor marks, in \
+         order — the run read a file the test did not mean it to:\n{stderr}"
+    );
+}
+
+/// The IPTC title core reads back from `one.ARW`'s sidecar in `dir` — after
+/// the run, so the writer's flush at exit has landed (as
+/// `keyword_enter_commit_still_writes_and_returns_focus` relies on); `None`
+/// when no sidecar was written.
+fn sidecar_title(dir: &Path) -> Option<String> {
+    fastcull_core::xmp::read_sidecar(&dir.join("one.ARW.xmp"))
+        .unwrap_or_else(|e| panic!("one.ARW's sidecar does not read back: {e}"))
+        .iptc
+        .title
+}
+
+/// Did the run emit a mark whose label is exactly `label`?
+fn has_mark(stderr: &str, label: &str) -> bool {
+    mark_labels(stderr).contains(&label)
+}
+
+/// Brief 015 AC1 (iptc-templates.md, "Apply re-reads first and applies by
+/// name"; the persona's fact 2): the panel open, `zebra` selected, zebra's
+/// title rewritten on disk AFTER the panel's open read the file — and Apply
+/// stamps the title as SAVED, `Z EDITED`, with the revert slot naming the
+/// template. Apply reads templates.toml before it applies anything: three
+/// `templates loaded from` marks — the launch folder's open, the panel's
+/// open and the Apply — and the keyboard is the grid's after the click.
+///
+/// RED before the fix — on `a084df2` (the harness commit `1e795d8` and
+/// core's two rules, the Apply flow still the old one) with this test
+/// added — at the title read: `Some("Z")`, the template as the panel's open
+/// had read it (the persona's fact 2).
+#[test]
+fn apply_re_reads_templates_toml_and_stamps_the_saved_edit() {
+    if !has_display() {
+        eprintln!("screenshot smoke skipped: no display server");
+        return;
+    }
+    let _s = serial();
+    let dir_a = template_folder("reread", "a", "one.ARW");
+    let cfg = templates_config("reread", TPL_ALPHA_ZEBRA);
+    let rewrites = [("] iptc rows rebuilt (gen 0)", Some(TPL_ZEBRA_EDITED))];
+    let drive = format!("{SELECT_ZEBRA_AND_APPLY};4600:dump.applied");
+    let (stderr, landed) = shoot_templates("tpl-reread", &dir_a, &cfg, &drive, &rewrites);
+    assert_template_gates(
+        &stderr,
+        &[
+            "load settled gen 0",
+            "iptc rows rebuilt (gen 0)",
+            "template apply 'zebra'",
+        ],
+        &landed,
+        &rewrites,
+    );
+    assert_eq!(
+        sidecar_title(&dir_a).as_deref(),
+        Some("Z EDITED"),
+        "Apply stamped zebra's title as the panel read it at its open, not as \
+         templates.toml held it at the click — Apply did not re-read the file \
+         (brief 015 R1):\n{stderr}"
+    );
+    let applied = qedump(&stderr, "applied");
+    assert_eq!(
+        dump_text(applied, "revert"),
+        "Revert: apply 'zebra' to 1 image(s)",
+        "the revert slot does not name the template Apply stamped: {applied}"
+    );
+    assert!(
+        has_mark(&stderr, "template apply 'zebra': applied to 1 image(s)"),
+        "no `template apply 'zebra': applied to 1 image(s)` mark — the click's \
+         outcome was not the stamp:\n{stderr}"
+    );
+    assert_eq!(
+        mark_lines(&stderr, "template apply '"),
+        1,
+        "not exactly one `template apply` mark per Apply click — one click in \
+         this script:\n{stderr}"
+    );
+    assert_eq!(
+        mark_lines(&stderr, "templates loaded from "),
+        3,
+        "templates.toml was not read exactly three times — the launch folder's \
+         open, the panel's open and the Apply (iptc-templates.md, \"The three \
+         read moments\"):\n{stderr}"
+    );
+    assert_eq!(
+        dump_field(applied, "focusowner"),
+        "0",
+        "the keyboard is not the grid's after Apply: {applied}"
+    );
+    assert_eq!(
+        mark_lines(&stderr, "iptc names replaced"),
+        1,
+        "the names model was not replaced exactly once — at the panel's open; \
+         Apply's re-read of the same names replaces nothing (the change-only \
+         rule, iptc-templates.md \"The panel's models\"):\n{stderr}"
+    );
+}
+
+/// Brief 015 AC2 (R3): the selected template RENAMED in the file before
+/// Apply (`zebra` → `zulu`) — Apply applies NOTHING: no sidecar, the revert
+/// slot untouched, the strip names the vanished template and says nothing
+/// was applied, and the dropdown shows the re-read list on its first entry
+/// (`tplsel=0` over `alpha, zulu`; Apply enabled, the list being
+/// non-empty). Never the first template as a fallback, never a silent
+/// return — the persona's two MUST-HAVE conditions.
+///
+/// RED before the fix (on `a084df2` with this test added) at its first
+/// read: `one.ARW.xmp` exists — the stale `zebra` of the panel's open read
+/// was stamped. Mutant: the warning deleted from the vanished-name path
+/// turns it red at the strip read — the silent no-op the spec forbids.
+#[test]
+fn apply_of_a_vanished_template_name_applies_nothing_and_says_so() {
+    if !has_display() {
+        eprintln!("screenshot smoke skipped: no display server");
+        return;
+    }
+    let _s = serial();
+    let dir_a = template_folder("vanished", "a", "one.ARW");
+    let cfg = templates_config("vanished", TPL_ALPHA_ZEBRA);
+    let rewrites = [("] iptc rows rebuilt (gen 0)", Some(TPL_ZEBRA_RENAMED))];
+    let drive = format!("{SELECT_ZEBRA_AND_APPLY};4600:dump.applied");
+    let (stderr, landed) = shoot_templates("tpl-vanished", &dir_a, &cfg, &drive, &rewrites);
+    assert_template_gates(
+        &stderr,
+        &[
+            "load settled gen 0",
+            "iptc rows rebuilt (gen 0)",
+            "template apply 'zebra'",
+        ],
+        &landed,
+        &rewrites,
+    );
+    assert!(
+        !dir_a.join("one.ARW.xmp").exists(),
+        "Apply wrote a sidecar for a template the file no longer has — the \
+         stale `zebra`, or another template in its place (brief 015 R3):\n{stderr}"
+    );
+    let applied = qedump(&stderr, "applied");
+    assert_eq!(
+        dump_text(applied, "revert"),
+        "",
+        "the revert slot was armed by an Apply that applied nothing: {applied}"
+    );
+    assert!(
+        dump_text(applied, "iptcwarning")
+            .contains("template 'zebra' is no longer in templates.toml — nothing was applied"),
+        "the warning strip does not say that `zebra` is gone and nothing was \
+         applied — a silent no-op (brief 015 R3): {applied}"
+    );
+    assert_eq!(
+        dump_templates(applied),
+        r#"["alpha", "zulu"]"#,
+        "the dropdown does not show the re-read list: {applied}"
+    );
+    assert_eq!(
+        dump_field(applied, "tplsel"),
+        "0",
+        "the dropdown is not on the re-read list's first entry after its \
+         name vanished: {applied}"
+    );
+    assert!(
+        has_mark(
+            &stderr,
+            "template apply 'zebra': not in templates.toml — nothing applied"
+        ),
+        "no `template apply 'zebra': not in templates.toml — nothing applied` \
+         mark:\n{stderr}"
+    );
+    assert_eq!(
+        mark_lines(&stderr, "template apply '"),
+        1,
+        "not exactly one `template apply` mark per Apply click — one click in \
+         this script:\n{stderr}"
+    );
+    assert_eq!(
+        dump_field(applied, "focusowner"),
+        "0",
+        "the keyboard is not the grid's after Apply: {applied}"
+    );
+}
+
+/// Brief 015 AC3 (R2): `mid` added to the file before Apply, sorting AHEAD
+/// of the selected `zebra` (`alpha, mid, zebra`) — Apply stamps zebra's
+/// title, never mid's, though `mid` now sits at the position the dropdown
+/// held when `zebra` was chosen.
+///
+/// Green before the fix in its first version (the title read only — there
+/// was no re-read at all); red there since the list-and-index read below
+/// landed, which sees the stale tree's `["alpha", "zebra"]` at index 1
+/// (QE 2026-10-16, R2-1). It guards the over-fix, a re-read followed by a
+/// lookup at the old index. Mutant M3 — the click's index looked up in
+/// the re-read list — turns it red at the title read: `Some("M")`.
+#[test]
+fn apply_finds_the_template_by_name_not_by_position() {
+    if !has_display() {
+        eprintln!("screenshot smoke skipped: no display server");
+        return;
+    }
+    let _s = serial();
+    let dir_a = template_folder("by-name", "a", "one.ARW");
+    let cfg = templates_config("by-name", TPL_ALPHA_ZEBRA);
+    let rewrites = [("] iptc rows rebuilt (gen 0)", Some(TPL_MID_INSERTED))];
+    let drive = format!("{SELECT_ZEBRA_AND_APPLY};4600:dump.applied");
+    let (stderr, landed) = shoot_templates("tpl-by-name", &dir_a, &cfg, &drive, &rewrites);
+    assert_template_gates(
+        &stderr,
+        &[
+            "load settled gen 0",
+            "iptc rows rebuilt (gen 0)",
+            "template apply 'zebra'",
+        ],
+        &landed,
+        &rewrites,
+    );
+    assert_eq!(
+        sidecar_title(&dir_a).as_deref(),
+        Some("Z"),
+        "Apply did not stamp `zebra`'s title — `M` is `mid`'s, the template \
+         now at zebra's old position: Apply looked up by position, not by name \
+         (brief 015 R2):\n{stderr}"
+    );
+    let applied = qedump(&stderr, "applied");
+    assert_eq!(
+        (dump_templates(applied), dump_field(applied, "tplsel")),
+        (r#"["alpha", "mid", "zebra"]"#, "2"),
+        "Apply's re-read did not see the inserted mid — the edit landed late and \
+         the test proved nothing: {applied}"
+    );
+    assert_eq!(
+        dump_text(applied, "revert"),
+        "Revert: apply 'zebra' to 1 image(s)",
+        "the revert slot does not name `zebra`: {applied}"
+    );
+    assert_eq!(
+        dump_field(applied, "focusowner"),
+        "0",
+        "the keyboard is not the grid's after Apply: {applied}"
+    );
+    assert_eq!(
+        mark_lines(&stderr, "template apply '"),
+        1,
+        "not exactly one `template apply` mark per Apply click — one click in \
+         this script:\n{stderr}"
+    );
+}
+
+/// Brief 015 AC4 (R4, at Apply): the file made unparseable after the panel
+/// read it — Apply applies NOTHING (what is on disk is not what would be
+/// applied), the LAST GOOD list stays in the dropdown with its selection
+/// (and so Apply stays enabled), and the strip shows the parse error and
+/// says the templates shown are the last read and nothing was applied. The
+/// file repaired, a second Apply stamps the repaired template. Exactly one
+/// read failed: one `templates: … could not be read` mark.
+///
+/// RED before the fix (on `a084df2` with this test added) at the `broken`
+/// revert read: `Revert: apply 'zebra' to 1 image(s)` — the stale `zebra`
+/// stamped while the file did not parse. Mutants: the failed re-read
+/// ignored and the kept list applied (M4) turns it red at the same read;
+/// the last good list dropped at a failed read empties the dropdown
+/// (`templates=[]`), which disables Apply, so the second Apply's `wait:` is
+/// never satisfied and the run exits 1.
+#[test]
+fn a_broken_templates_toml_at_apply_keeps_the_last_good_list_and_applies_nothing() {
+    if !has_display() {
+        eprintln!("screenshot smoke skipped: no display server");
+        return;
+    }
+    let _s = serial();
+    let dir_a = template_folder("broken", "a", "one.ARW");
+    let cfg = templates_config("broken", TPL_ALPHA_ZEBRA);
+    // The repair lands at the first Apply's own outcome mark, so the first
+    // Apply re-reads the broken file and the second the repaired one. The
+    // second Apply waits on its OWN outcome (`: applied to`), which the
+    // first one's cannot satisfy.
+    let rewrites = [
+        ("] iptc rows rebuilt (gen 0)", Some(TPL_BROKEN)),
+        ("] template apply 'zebra'", Some(TPL_ZEBRA_FIXED)),
+    ];
+    let drive = format!(
+        "{SELECT_ZEBRA_AND_APPLY};4600:dump.broken;5200:click:template apply;\
+         5300:wait:template apply 'zebra': applied to;5500:dump.fixed"
+    );
+    let (stderr, landed) = shoot_templates("tpl-broken", &dir_a, &cfg, &drive, &rewrites);
+    assert_template_gates(
+        &stderr,
+        &[
+            "load settled gen 0",
+            "iptc rows rebuilt (gen 0)",
+            "template apply 'zebra'",
+            "template apply 'zebra': applied to",
+        ],
+        &landed,
+        &rewrites,
+    );
+    let broken = qedump(&stderr, "broken");
+    assert_eq!(
+        dump_text(broken, "revert"),
+        "",
+        "Apply stamped a template while templates.toml did not parse — what \
+         it applied is not what is on disk (brief 015 R4): {broken}"
+    );
+    let strip = dump_text(broken, "iptcwarning");
+    assert!(
+        strip.contains("templates file is not valid TOML")
+            && strip.contains("the templates shown are the last read — nothing was applied"),
+        "the warning strip does not carry the parse error and the last-read \
+         note: {broken}"
+    );
+    assert_eq!(
+        dump_templates(broken),
+        r#"["alpha", "zebra"]"#,
+        "the failed re-read did not keep the last good list: {broken}"
+    );
+    assert_eq!(
+        dump_field(broken, "tplsel"),
+        "1",
+        "the dropdown left `zebra` at a failed re-read: {broken}"
+    );
+    assert!(
+        has_mark(
+            &stderr,
+            "template apply 'zebra': templates.toml could not be re-read — nothing applied"
+        ),
+        "no `template apply 'zebra': templates.toml could not be re-read — \
+         nothing applied` mark:\n{stderr}"
+    );
+    assert_eq!(
+        mark_lines(&stderr, "template apply '"),
+        2,
+        "not exactly one `template apply` mark per Apply click — two clicks in \
+         this script:\n{stderr}"
+    );
+    assert_eq!(
+        mark_lines(&stderr, "templates: "),
+        1,
+        "not exactly one failed templates.toml read — the broken file is read \
+         once, by the first Apply:\n{stderr}"
+    );
+    let fixed = qedump(&stderr, "fixed");
+    assert_eq!(
+        dump_text(fixed, "revert"),
+        "Revert: apply 'zebra' to 1 image(s)",
+        "the second Apply, after the repair, did not stamp `zebra`: {fixed}"
+    );
+    assert_eq!(
+        sidecar_title(&dir_a).as_deref(),
+        Some("Z fixed"),
+        "the second Apply did not stamp the repaired title:\n{stderr}"
+    );
+    assert_eq!(
+        dump_field(broken, "focusowner"),
+        "0",
+        "the keyboard is not the grid's after the failed Apply: {broken}"
+    );
+}
+
+/// Brief 015 AC5 (R5, D11; iptc-templates.md, "The panel's models"): the
+/// dropdown follows the NAME at every replacement of its list, and the
+/// choice outlives the panel. `zebra` selected and applied with `mid` added
+/// ahead of it — `templates[tplsel]` is `zebra` at its new position, 2;
+/// `aardvark` added and folder B opened with the panel open — `zebra` at 3;
+/// `aaa` added, the panel closed and reopened (a read moment) — `zebra` at
+/// 4. A swap of an UNCHANGED file could not tell a kept name from a kept
+/// index, which is why every replacement here moves the name. The reopen
+/// is synchronous inside the toggle (`on_iptc_toggle` → `reveal_cursor` →
+/// `refresh`), and no rows rebuild marks a same-session reopen, so its dump
+/// is simply the next step; the `+` after it proves the keyboard is the
+/// grid's.
+///
+/// RED before the fix (on `a084df2` with this test added) at the
+/// `applied` read: `["alpha", "zebra"]` with `tplsel=1` — Apply never
+/// re-read the file. Mutants: the bridge's index write deleted (M5a) — the
+/// ComboBox's clamp keeps index 1, now `mid` — turns it red at `applied`,
+/// `tplsel=1`, and `swapped` and `reopened` read `tplsel=1` too; the window
+/// property reset to 0 at the panel's close (M5b) turns `reopened` alone
+/// red, `tplsel=1`, `aardvark`.
+#[test]
+fn the_template_dropdown_follows_the_name_at_apply_at_a_swap_and_at_a_reopen() {
+    if !has_display() {
+        eprintln!("screenshot smoke skipped: no display server");
+        return;
+    }
+    let _s = serial();
+    let dir_a = template_folder("follow", "a", "one.ARW");
+    let dir_b = template_folder("follow", "b", "three.ARW");
+    let cfg = templates_config("follow", TPL_ALPHA_ZEBRA);
+    let rewrites = [
+        ("] iptc rows rebuilt (gen 0)", Some(TPL_MID_INSERTED)),
+        ("] template apply 'zebra'", Some(TPL_AARDVARK_INSERTED)),
+        ("] QEDUMP swapped ", Some(TPL_AAA_INSERTED)),
+    ];
+    let drive = format!(
+        "{SELECT_ZEBRA_AND_APPLY};4600:dump.applied;5200:open:{};\
+         5400:wait:load settled gen 1;5600:dump.swapped;6200:iptc;6600:iptc;\
+         7000:dump.reopened;7300:key:+;7600:dump.end",
+        dir_b.display()
+    );
+    let (stderr, landed) = shoot_templates("tpl-follow", &dir_a, &cfg, &drive, &rewrites);
+    assert_template_gates(
+        &stderr,
+        &[
+            "load settled gen 0",
+            "iptc rows rebuilt (gen 0)",
+            "template apply 'zebra'",
+            "load settled gen 1",
+        ],
+        &landed,
+        &rewrites,
+    );
+    let applied = qedump(&stderr, "applied");
+    assert_eq!(
+        (dump_templates(applied), dump_field(applied, "tplsel")),
+        (r#"["alpha", "mid", "zebra"]"#, "2"),
+        "after Apply re-read the file with `mid` added ahead of `zebra`, the \
+         dropdown is not on `zebra` at its new position — it kept the index, \
+         now `mid` (brief 015 R5): {applied}"
+    );
+    assert_eq!(
+        dump_field(applied, "focusowner"),
+        "0",
+        "the keyboard is not the grid's after Apply: {applied}"
+    );
+    assert_eq!(
+        mark_lines(&stderr, "template apply '"),
+        1,
+        "not exactly one `template apply` mark per Apply click — one click in \
+         this script:\n{stderr}"
+    );
+    let swapped = qedump(&stderr, "swapped");
+    assert!(
+        dump_text(swapped, "status").contains("three.ARW"),
+        "the open: swap never landed: {swapped}"
+    );
+    assert_eq!(
+        (dump_templates(swapped), dump_field(swapped, "tplsel")),
+        (r#"["aardvark", "alpha", "mid", "zebra"]"#, "3"),
+        "after the folder swap re-read the file with `aardvark` added, the \
+         dropdown is not on `zebra` at its new position (brief 015 R5, the \
+         swap included): {swapped}"
+    );
+    let reopened = qedump(&stderr, "reopened");
+    assert_eq!(
+        dump_field(reopened, "iptc"),
+        "true",
+        "the panel did not reopen: {reopened}"
+    );
+    assert_eq!(
+        (dump_templates(reopened), dump_field(reopened, "tplsel")),
+        (r#"["aaa", "aardvark", "alpha", "mid", "zebra"]"#, "4"),
+        "after closing and reopening the panel over a file with `aaa` added, \
+         the dropdown is not on `zebra` — the choice did not survive the \
+         close, or did not follow the name (brief 015 D11): {reopened}"
+    );
+    assert!(
+        qedump(&stderr, "end").contains("zoom=2"),
+        "the `+` after the reopen was dead — the keyboard was stranded:\n{stderr}"
+    );
+    assert_eq!(
+        mark_lines(&stderr, "iptc names replaced"),
+        4,
+        "the names model was not replaced exactly four times — at the panel's \
+         open, the Apply, the swap and the reopen, each of which changed the \
+         names (the change-only rule, iptc-templates.md \"The panel's \
+         models\"):\n{stderr}"
+    );
+}
+
+/// Brief 015 AC6 (brief 014 D14's shape; iptc-templates.md, "The panel's
+/// models"): templates.toml deleted after the panel read it, then a swap
+/// with the panel open — the swap's read finds no file, which is a
+/// successful read of zero templates, and the dropdown's list is EMPTY
+/// (`templates=[]`, which is Apply disabled; `tplsel=0`). The names model
+/// follows the change-only rule at the swap too: its cache is what the
+/// window holds and no swap resets it, so the empty list differs from it
+/// and replaces it. A missing file is "loaded from" too: three marks, the
+/// launch folder's open, the panel's open and the swap's.
+///
+/// GREEN before the fix too (brief 014's forced replacement of every model
+/// at a swap; this unit deletes that line for the names and keeps their
+/// cache across the swap instead, brief 015 D15). Mutant M6 — the names
+/// cache reset to empty at `IptcPanelState::begin_session`, brief 014's
+/// aliasing shape without its forced line — turns it red at `swapped`:
+/// `["alpha", "zebra"]`.
+#[test]
+fn a_session_swap_replaces_the_template_list_even_when_the_file_is_gone() {
+    if !has_display() {
+        eprintln!("screenshot smoke skipped: no display server");
+        return;
+    }
+    let _s = serial();
+    let dir_a = template_folder("gone", "a", "one.ARW");
+    let dir_b = template_folder("gone", "b", "three.ARW");
+    let cfg = templates_config("gone", TPL_ALPHA_ZEBRA);
+    let rewrites = [("] iptc rows rebuilt (gen 0)", None)];
+    let drive = format!(
+        "2400:wait:load settled gen 0;2500:key:i;2600:wait:iptc rows rebuilt (gen 0);\
+         3200:dump.before;3600:open:{};3800:wait:load settled gen 1;4000:dump.swapped;\
+         4300:key:+;4600:dump.end",
+        dir_b.display()
+    );
+    let (stderr, landed) = shoot_templates("tpl-gone", &dir_a, &cfg, &drive, &rewrites);
+    assert_template_gates(
+        &stderr,
+        &[
+            "load settled gen 0",
+            "iptc rows rebuilt (gen 0)",
+            "load settled gen 1",
+        ],
+        &landed,
+        &rewrites,
+    );
+    let before = qedump(&stderr, "before");
+    assert_eq!(
+        dump_templates(before),
+        r#"["alpha", "zebra"]"#,
+        "the panel's open did not show the launch file's templates — the swap \
+         would have nothing to replace: {before}"
+    );
+    let swapped = qedump(&stderr, "swapped");
+    assert!(
+        dump_text(swapped, "status").contains("three.ARW"),
+        "the open: swap never landed: {swapped}"
+    );
+    assert_eq!(
+        (dump_templates(swapped), dump_field(swapped, "tplsel")),
+        ("[]", "0"),
+        "after a swap whose read found no templates.toml the dropdown still \
+         lists the old templates — stale names under the new folder (brief \
+         014 D14): {swapped}"
+    );
+    assert_eq!(
+        dump_text(swapped, "iptcwarning"),
+        "",
+        "a missing templates.toml is a successful read of zero templates, never \
+         a warning: {swapped}"
+    );
+    assert_eq!(
+        mark_lines(&stderr, "templates loaded from "),
+        3,
+        "templates.toml was not read exactly three times — the launch folder's \
+         open, the panel's open and the swap's (a missing file loads empty):\n{stderr}"
+    );
+    assert!(
+        qedump(&stderr, "end").contains("zoom=2"),
+        "the `+` after the swap was dead — the keyboard was stranded:\n{stderr}"
+    );
+}
+
+/// Brief 015 AC9 (R6; iptc-templates.md, "One rule for a bad file"): a
+/// template with a `""` field and an unknown variable — the panel's read
+/// warns that the empty `city` CLEARS, and Apply's expansion error is
+/// APPENDED to that warning, never put in its place, so the strip carries
+/// both, the read's first. All-or-nothing: no sidecar, no revert.
+///
+/// RED before the fix (on `a084df2` with this test added) at the CLEAR
+/// read: the strip held only `unknown variable {nope} in template field
+/// 'title'`. Mutants: the error put in place of the read's warnings again
+/// (M9) turns it red at the same read; inserted AHEAD of them, at the
+/// order read.
+#[test]
+fn an_apply_time_expansion_error_joins_the_read_warnings() {
+    if !has_display() {
+        eprintln!("screenshot smoke skipped: no display server");
+        return;
+    }
+    let _s = serial();
+    let dir_a = template_folder("wipe", "a", "one.ARW");
+    let cfg = templates_config("wipe", TPL_WIPE);
+    let rewrites: [Rewrite; 0] = [];
+    // One template, so the dropdown is on it from the open: no selection.
+    let drive = "2400:wait:load settled gen 0;2500:key:i;2600:wait:iptc rows rebuilt (gen 0);\
+                 3200:click:template apply;3300:wait:template apply 'wipe';3500:dump.after";
+    let (stderr, landed) = shoot_templates("tpl-wipe", &dir_a, &cfg, drive, &rewrites);
+    assert_template_gates(
+        &stderr,
+        &[
+            "load settled gen 0",
+            "iptc rows rebuilt (gen 0)",
+            "template apply 'wipe'",
+        ],
+        &landed,
+        &rewrites,
+    );
+    let after = qedump(&stderr, "after");
+    let strip = dump_text(after, "iptcwarning");
+    let clear = "template 'wipe': empty 'city' CLEARS that field";
+    let error = "unknown variable {nope} in template field 'title'";
+    assert!(
+        strip.contains(clear),
+        "the read's CLEAR warning is gone from the strip after Apply — the \
+         expansion error replaced it (brief 015 R6): {after}"
+    );
+    assert!(
+        strip.contains(error),
+        "the strip does not carry Apply's expansion error: {after}"
+    );
+    assert!(
+        strip.find(clear) < strip.find(error),
+        "the expansion error is not APPENDED after the read's warning: {after}"
+    );
+    assert!(
+        has_mark(
+            &stderr,
+            "template apply 'wipe': unknown variable {nope} in template field 'title' \
+             — nothing applied"
+        ),
+        "no `template apply 'wipe': <the expansion error> — nothing applied` \
+         mark:\n{stderr}"
+    );
+    assert_eq!(
+        mark_lines(&stderr, "template apply '"),
+        1,
+        "not exactly one `template apply` mark per Apply click — one click in \
+         this script:\n{stderr}"
+    );
+    assert_eq!(
+        dump_text(after, "revert"),
+        "",
+        "the revert slot was armed by an Apply that failed: {after}"
+    );
+    assert!(
+        !dir_a.join("one.ARW.xmp").exists(),
+        "a failed expansion wrote a sidecar — all-or-nothing broken:\n{stderr}"
+    );
+    assert_eq!(
+        dump_field(after, "focusowner"),
+        "0",
+        "the keyboard is not the grid's after Apply: {after}"
+    );
+}
+
+/// Brief 015 R4 at the folder open and the panel's open (iptc-templates.md,
+/// "One rule for a bad file, at every read moment"): the file made
+/// unparseable after the panel read it and `zebra` selected, then a swap
+/// with the panel open — the swap's read fails as a whole, the LAST GOOD
+/// list stays in the dropdown with its selection, and the strip shows the
+/// parse error followed by the bare note `the templates shown are the last
+/// read`; the panel closed and reopened over the same broken file — the
+/// reopen's read fails too, and the list, the selection and the note stay.
+/// Two failed reads, two `templates: … could not be read` marks. The list
+/// lives on `AppState`, which `begin_session` leaves alone: the mutant that
+/// resets it there empties the dropdown at the swap (`templates=[]`,
+/// `tplsel=0`, the error alone).
+#[test]
+fn a_broken_templates_toml_at_a_swap_and_a_reopen_keeps_the_last_good_list() {
+    if !has_display() {
+        eprintln!("screenshot smoke skipped: no display server");
+        return;
+    }
+    let _s = serial();
+    let dir_a = template_folder("broken-swap", "a", "one.ARW");
+    let dir_b = template_folder("broken-swap", "b", "three.ARW");
+    let cfg = templates_config("broken-swap", TPL_ALPHA_ZEBRA);
+    let rewrites = [("] iptc rows rebuilt (gen 0)", Some(TPL_BROKEN))];
+    let drive = format!(
+        "2400:wait:load settled gen 0;2500:key:i;2600:wait:iptc rows rebuilt (gen 0);\
+         3300:click:template dropdown;3600:key:down;3900:key:return;4300:dump.before;\
+         4700:open:{};4900:wait:load settled gen 1;5100:dump.swapped;5700:iptc;6100:iptc;\
+         6500:dump.reopened",
+        dir_b.display()
+    );
+    let (stderr, landed) = shoot_templates("tpl-broken-swap", &dir_a, &cfg, &drive, &rewrites);
+    assert_template_gates(
+        &stderr,
+        &[
+            "load settled gen 0",
+            "iptc rows rebuilt (gen 0)",
+            "load settled gen 1",
+        ],
+        &landed,
+        &rewrites,
+    );
+    let kept = (r#"["alpha", "zebra"]"#, "1");
+    let before = qedump(&stderr, "before");
+    assert_eq!(
+        (dump_templates(before), dump_field(before, "tplsel")),
+        kept,
+        "zebra was not selected over the launch file's list before the swap: {before}"
+    );
+    let swapped = qedump(&stderr, "swapped");
+    assert!(
+        dump_text(swapped, "status").contains("three.ARW"),
+        "the open: swap never landed: {swapped}"
+    );
+    assert_eq!(
+        (dump_templates(swapped), dump_field(swapped, "tplsel")),
+        kept,
+        "the swap's failed read did not keep the last good list with its \
+         selection (brief 015 R4, one rule at every read moment): {swapped}"
+    );
+    let strip = dump_text(swapped, "iptcwarning");
+    assert!(
+        strip.contains("templates file is not valid TOML")
+            && strip.contains("the templates shown are the last read")
+            && !strip.contains("nothing was applied"),
+        "the strip after the swap's failed read does not carry the parse error \
+         and the bare last-read note: {swapped}"
+    );
+    let reopened = qedump(&stderr, "reopened");
+    assert_eq!(
+        dump_field(reopened, "iptc"),
+        "true",
+        "the panel did not reopen: {reopened}"
+    );
+    assert_eq!(
+        (dump_templates(reopened), dump_field(reopened, "tplsel")),
+        kept,
+        "the reopen's failed read did not keep the last good list with its \
+         selection (brief 015 R4): {reopened}"
+    );
+    assert!(
+        dump_text(reopened, "iptcwarning").contains("the templates shown are the last read"),
+        "the strip after the reopen's failed read lost the last-read note: {reopened}"
+    );
+    assert_eq!(
+        mark_lines(&stderr, "templates: "),
+        2,
+        "not exactly two failed reads — the swap's and the reopen's:\n{stderr}"
+    );
+    assert_eq!(
+        mark_lines(&stderr, "iptc names replaced"),
+        1,
+        "the names model was not replaced exactly once — at the panel's open; \
+         the swap's and the reopen's failed reads replace nothing (the \
+         change-only rule, iptc-templates.md \"The panel's models\"):\n{stderr}"
+    );
+}
+
+/// Brief 015 AC11 (D12; test-harness.md, "Template apply"; QE 2026-10-16,
+/// finding 1): an Apply over an EMPTY VIEW applies nothing, and its mark
+/// says so. The folder's one image is unmarked, so the Picked filter shows
+/// nothing and the batch is empty — `Selection::batch` falls back to the
+/// cursor only when the cursor is in the view. Apply re-reads the file,
+/// finds `alpha` (the dropdown's first entry), and ends at `no image —
+/// nothing applied`: one mark, the revert slot and the strip untouched, no
+/// sidecar, three reads (the launch folder's open, the panel's open, the
+/// Apply), and the keyboard the grid's after it. The status line's
+/// `showing 0 of 1` is the precondition: an Apply over a non-empty view
+/// would prove nothing here.
+///
+/// Mutant: the empty-batch return deleted in `apply_by_name` — the mark
+/// reads `applied to 0 image(s)` and Revert is armed for zero images, red
+/// at the first read.
+#[test]
+fn an_apply_over_an_empty_view_applies_nothing_and_says_so() {
+    if !has_display() {
+        eprintln!("screenshot smoke skipped: no display server");
+        return;
+    }
+    let _s = serial();
+    let dir_a = template_folder("empty-view", "a", "one.ARW");
+    let cfg = templates_config("empty-view", TPL_ALPHA_ZEBRA);
+    let rewrites: [Rewrite; 0] = [];
+    let drive = "2400:wait:load settled gen 0;2500:key:i;2600:wait:iptc rows rebuilt (gen 0);\
+                 3000:filter:picked;3800:click:template apply;3900:wait:template apply 'alpha';\
+                 4100:dump.after;4400:filter:all;4700:key:+;5000:dump.end";
+    let (stderr, landed) = shoot_templates("tpl-empty-view", &dir_a, &cfg, drive, &rewrites);
+    assert_template_gates(
+        &stderr,
+        &[
+            "load settled gen 0",
+            "iptc rows rebuilt (gen 0)",
+            "template apply 'alpha'",
+        ],
+        &landed,
+        &rewrites,
+    );
+    assert!(
+        has_mark(
+            &stderr,
+            "template apply 'alpha': no image — nothing applied"
+        ),
+        "no `template apply 'alpha': no image — nothing applied` mark — the \
+         Apply over an empty view stamped something, or said nothing:\n{stderr}"
+    );
+    assert_eq!(
+        mark_lines(&stderr, "template apply '"),
+        1,
+        "not exactly one `template apply` mark per Apply click — one click in \
+         this script:\n{stderr}"
+    );
+    let after = qedump(&stderr, "after");
+    assert!(
+        dump_text(after, "status").contains("showing 0 of 1"),
+        "the Picked filter did not empty the view — the Apply had an image to \
+         stamp and the test proves nothing: {after}"
+    );
+    assert_eq!(
+        dump_text(after, "revert"),
+        "",
+        "an Apply over an empty view armed the revert slot: {after}"
+    );
+    assert_eq!(
+        dump_text(after, "iptcwarning"),
+        "",
+        "an Apply over an empty view put a line in the warning strip — the \
+         outcome is the mark's alone (brief 015 D12): {after}"
+    );
+    assert!(
+        !dir_a.join("one.ARW.xmp").exists(),
+        "an Apply over an empty view wrote a sidecar for the filtered-out \
+         image:\n{stderr}"
+    );
+    assert_eq!(
+        mark_lines(&stderr, "templates loaded from "),
+        3,
+        "templates.toml was not read exactly three times — the launch folder's \
+         open, the panel's open and the Apply:\n{stderr}"
+    );
+    assert_eq!(
+        dump_field(after, "focusowner"),
+        "0",
+        "the keyboard is not the grid's after Apply: {after}"
+    );
+    assert!(
+        qedump(&stderr, "end").contains("zoom=2"),
+        "the `+` after the Apply was dead — the keyboard was stranded:\n{stderr}"
+    );
+}
+
+/// Brief 015 AC12 (R4's launch clause; iptc-templates.md, "One rule for a
+/// bad file, at every read moment"; QE 2026-10-16, finding 2): a
+/// templates.toml that does not parse from the start. At launch there is
+/// no last good list, so the launch folder's read and the panel's open both
+/// fail into an EMPTY list (`templates=[]`, `tplsel=0` — Apply disabled),
+/// and the strip shows the parse error ALONE: the last-read note would
+/// claim a list that is not there. Two failed reads, no successful one.
+///
+/// Mutant Mc: the non-empty guard on the note removed in
+/// `session::reload_templates` — the note shown over an empty list, red at
+/// the strip.
+#[test]
+fn a_broken_templates_toml_at_launch_is_an_empty_list_with_the_error_alone() {
+    if !has_display() {
+        eprintln!("screenshot smoke skipped: no display server");
+        return;
+    }
+    let _s = serial();
+    let dir_a = template_folder("broken-launch", "a", "one.ARW");
+    let cfg = templates_config("broken-launch", TPL_BROKEN);
+    let rewrites: [Rewrite; 0] = [];
+    let drive = "2400:wait:load settled gen 0;2500:key:i;2600:wait:iptc rows rebuilt (gen 0);\
+                 3200:dump.open";
+    let (stderr, landed) = shoot_templates("tpl-broken-launch", &dir_a, &cfg, drive, &rewrites);
+    assert_template_gates(
+        &stderr,
+        &["load settled gen 0", "iptc rows rebuilt (gen 0)"],
+        &landed,
+        &rewrites,
+    );
+    let open = qedump(&stderr, "open");
+    assert_eq!(
+        (dump_templates(open), dump_field(open, "tplsel")),
+        ("[]", "0"),
+        "a templates.toml broken since launch did not leave the dropdown empty \
+         — there is no last good list to keep: {open}"
+    );
+    let strip = dump_text(open, "iptcwarning");
+    assert!(
+        strip.contains("templates file is not valid TOML"),
+        "the strip does not show the parse error: {open}"
+    );
+    assert!(
+        !strip.contains("the templates shown are the last read"),
+        "the strip shows the last-read note over an empty list — at launch \
+         there is no last good list, and the error stands alone (brief 015 \
+         R4): {open}"
+    );
+    assert_eq!(
+        mark_lines(&stderr, "templates: "),
+        2,
+        "not exactly two failed reads — the launch folder's open and the \
+         panel's open:\n{stderr}"
+    );
+    assert_eq!(
+        mark_lines(&stderr, "templates loaded from "),
+        0,
+        "a read of a file broken since launch was marked as loaded:\n{stderr}"
+    );
+}
+
+/// Brief 015 AC13 (R3, R4; iptc-templates.md, "Apply re-reads first and
+/// applies by name"; QE 2026-10-16, finding 3): an Apply that applies
+/// NOTHING leaves the revert slot as it was, on both of its paths. The
+/// first Apply stamps `alpha` (the dropdown's first entry) and arms the
+/// slot; `zebra` is then renamed at that Apply's own mark, while the
+/// dropdown still shows the stale `alpha, zebra`, so `down` selects
+/// `zebra`; the second Apply re-reads, finds it gone, applies nothing and
+/// moves to `alpha`; the file is broken at that Apply's mark; the third
+/// Apply fails its re-read. After both, `revert=` still names `alpha`'s
+/// stamp and the sidecar still holds `A`. The anchors are first-only: the
+/// third Apply's mark is `'alpha'` again.
+///
+/// Mutant Me: the slot cleared on the vanished-name and failed-re-read
+/// returns of `apply_by_name` — red at `vanished`; each path's own mutant
+/// red at its own read.
+#[test]
+fn an_apply_that_applies_nothing_leaves_the_revert_slot_alone() {
+    if !has_display() {
+        eprintln!("screenshot smoke skipped: no display server");
+        return;
+    }
+    let _s = serial();
+    let dir_a = template_folder("revert-kept", "a", "one.ARW");
+    let cfg = templates_config("revert-kept", TPL_ALPHA_ZEBRA);
+    let rewrites = [
+        ("] template apply 'alpha'", Some(TPL_ZEBRA_RENAMED)),
+        ("] template apply 'zebra'", Some(TPL_BROKEN)),
+    ];
+    let drive = "2400:wait:load settled gen 0;2500:key:i;2600:wait:iptc rows rebuilt (gen 0);\
+                 3200:click:template apply;3300:wait:template apply 'alpha';\
+                 3900:click:template dropdown;4200:key:down;4500:key:return;\
+                 4900:click:template apply;5000:wait:template apply 'zebra';5200:dump.vanished;\
+                 5800:click:template apply;\
+                 5900:wait:template apply 'alpha': templates.toml could not be re-read;\
+                 6100:dump.broken";
+    let (stderr, landed) = shoot_templates("tpl-revert-kept", &dir_a, &cfg, drive, &rewrites);
+    assert_template_gates(
+        &stderr,
+        &[
+            "load settled gen 0",
+            "iptc rows rebuilt (gen 0)",
+            "template apply 'alpha'",
+            "template apply 'zebra'",
+            "template apply 'alpha': templates.toml could not be re-read",
+        ],
+        &landed,
+        &rewrites,
+    );
+    let vanished = qedump(&stderr, "vanished");
+    assert_eq!(
+        dump_text(vanished, "revert"),
+        "Revert: apply 'alpha' to 1 image(s)",
+        "the Apply of a vanished name touched the revert slot — it applied \
+         nothing, so the slot is still the first Apply's (brief 015 R3): \
+         {vanished}"
+    );
+    assert!(
+        dump_text(vanished, "iptcwarning")
+            .contains("template 'zebra' is no longer in templates.toml — nothing was applied"),
+        "the strip does not say that `zebra` is gone: {vanished}"
+    );
+    assert_eq!(
+        (dump_templates(vanished), dump_field(vanished, "tplsel")),
+        (r#"["alpha", "zulu"]"#, "0"),
+        "the dropdown is not on the re-read list's first entry: {vanished}"
+    );
+    let broken = qedump(&stderr, "broken");
+    assert_eq!(
+        dump_text(broken, "revert"),
+        "Revert: apply 'alpha' to 1 image(s)",
+        "the Apply whose re-read failed touched the revert slot — it applied \
+         nothing, so the slot is still the first Apply's (brief 015 R4): \
+         {broken}"
+    );
+    assert!(
+        dump_text(broken, "iptcwarning")
+            .contains("the templates shown are the last read — nothing was applied"),
+        "the strip does not carry the failed re-read's note: {broken}"
+    );
+    assert_eq!(
+        mark_lines(&stderr, "template apply '"),
+        3,
+        "not exactly one `template apply` mark per Apply click — three clicks \
+         in this script:\n{stderr}"
+    );
+    assert_eq!(
+        mark_lines(&stderr, "templates: "),
+        1,
+        "not exactly one failed read — the third Apply's:\n{stderr}"
+    );
+    assert_eq!(
+        mark_lines(&stderr, "templates loaded from "),
+        4,
+        "templates.toml was not read successfully exactly four times — the \
+         launch folder's open, the panel's open and the first two Applies:\n{stderr}"
+    );
+    assert_eq!(
+        sidecar_title(&dir_a).as_deref(),
+        Some("A"),
+        "the sidecar does not hold the first Apply's `A` — an Apply that \
+         applied nothing changed it:\n{stderr}"
+    );
+}
+
 /// Issue #42: Esc over stacked modals must close the TOPMOST one. With
 /// About opened over the live Copy Picks dialog, the first Esc used to
 /// act on the HIDDEN dialog — discarding its plan state while About
@@ -5591,16 +6802,17 @@ fn dump_text<'a>(dump: &'a str, name: &str) -> &'a str {
     &rest[..end]
 }
 
-/// The `keywords=` list of a QEDUMP line (test-harness.md "The dump"): from
-/// `keywords=` to the `]` that closes the list, read past a `]` or a space
-/// inside a Debug-quoted keyword. `dump_field` cannot read it — its
+/// A `{:?}`-printed list field of a QEDUMP line (test-harness.md "The
+/// dump"), `tag` being ` name=` with its leading space: from the tag to the
+/// `]` that closes the list, read past a `]` or a space inside a
+/// Debug-quoted string. `dump_field` cannot read such a list — its
 /// whitespace split stops at the first space, and a chip prints as
 /// `("wip", "2/2")`.
-fn dump_keywords(dump: &str) -> &str {
-    let tag = " keywords=";
+fn dump_list<'a>(dump: &'a str, tag: &str) -> &'a str {
+    let name = tag.trim();
     let start = dump
         .find(tag)
-        .unwrap_or_else(|| panic!("no keywords= in dump line: {dump}"))
+        .unwrap_or_else(|| panic!("no {name} in dump line: {dump}"))
         + tag.len();
     let rest = &dump[start..];
     let (mut in_quotes, mut escaped) = (false, false);
@@ -5616,7 +6828,19 @@ fn dump_keywords(dump: &str) -> &str {
         }
         escaped = false;
     }
-    panic!("unterminated keywords= list in dump line: {dump}")
+    panic!("unterminated {name} list in dump line: {dump}")
+}
+
+/// The `keywords=` list of a QEDUMP line: the keyword chips the window
+/// holds, `(text, coverage)` per chip ([`dump_list`]).
+fn dump_keywords(dump: &str) -> &str {
+    dump_list(dump, " keywords=")
+}
+
+/// The `templates=` list of a QEDUMP line: the template names the window
+/// holds, in the dropdown's order (brief 015; [`dump_list`]).
+fn dump_templates(dump: &str) -> &str {
+    dump_list(dump, " templates=")
 }
 
 /// `dump_keywords` reads exactly what the harness prints — the `{:?}` of a
@@ -5634,6 +6858,28 @@ fn dump_keywords_reads_the_list_to_its_closing_bracket() {
     let line = format!("QEDUMP x clipnudged=false keywords={list} next=1");
     assert_eq!(dump_keywords(&line), list);
     assert_eq!(dump_keywords("QEDUMP x keywords=[] x=1"), "[]");
+}
+
+/// `dump_templates` reads exactly what the harness prints — the `{:?}` of a
+/// `Vec<String>` (brief 015) — through a `]` and a space inside a name, an
+/// escaped quote, and an escaped backslash right before a closing quote,
+/// and stops at the bracket that closes the list, never at the `]` of the
+/// `keywords=` list printed before it. Pure: no app launch.
+#[test]
+fn dump_templates_reads_the_list_to_its_closing_bracket() {
+    let names: Vec<String> = ["a] b", "c\"d", "e\\"]
+        .iter()
+        .map(|n| n.to_string())
+        .collect();
+    let list = format!("{names:?}");
+    assert_eq!(list, r#"["a] b", "c\"d", "e\\"]"#);
+    let line =
+        format!("QEDUMP x keywords=[(\"k]\", \"\")] templates={list} tplsel=1 iptcwarning=\"\"");
+    assert_eq!(dump_templates(&line), list);
+    assert_eq!(
+        dump_templates("QEDUMP x keywords=[] templates=[] tplsel=0 x=1"),
+        "[]"
+    );
 }
 
 /// Ten files cycling the three A1 classes: identical per-class EXIF

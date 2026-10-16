@@ -241,6 +241,12 @@ pub enum IptcError {
     Toml(String),
     #[error("templates I/O: {0}")]
     Io(#[from] std::io::Error),
+    /// The name the dropdown showed at Apply is not in the re-read
+    /// templates.toml (renamed or deleted in the editor). The text is the
+    /// warning strip's sentence, word for word (iptc-templates.md, "Apply
+    /// re-reads first and applies by name"), and the tests pin it.
+    #[error("template '{name}' is no longer in templates.toml — nothing was applied")]
+    TemplateMissing { name: String },
 }
 
 // ---------------------------------------------------------------- variables
@@ -681,6 +687,40 @@ pub fn save_templates(path: &Path, templates: &[IptcTemplate]) -> Result<(), Ipt
     Ok(())
 }
 
+/// The template Apply stamps: the one whose NAME — the TOML table key, the
+/// text the dropdown shows — is `name`, by exact, case-sensitive match
+/// (iptc-templates.md, "Apply re-reads first and applies by name"; brief
+/// 015 R2). Never by position: the list comes in the order `toml` iterates
+/// a table, alphabetical by byte, so a position drifts under every edit
+/// that inserts, renames or deletes a name. Case-sensitive because the keys
+/// are: `Osprey` and `osprey` are two templates. A name not in the list is
+/// the error whose text is the warning strip's sentence — applying anything
+/// in its place (the first template, the same position) is the silent
+/// fallback the spec forbids.
+pub fn template_by_name<'a>(
+    templates: &'a [IptcTemplate],
+    name: &str,
+) -> Result<&'a IptcTemplate, IptcError> {
+    templates
+        .iter()
+        .find(|t| t.name == name)
+        .ok_or_else(|| IptcError::TemplateMissing {
+            name: name.to_string(),
+        })
+}
+
+/// Where the template dropdown's selection goes when its list is replaced
+/// (iptc-templates.md, "The panel's models"; brief 015 R5): the position of
+/// the name selected before the replacement in the new list `names` —
+/// matched exactly and case-sensitively, as [`template_by_name`] matches —
+/// and the first entry, 0, when that name is gone, nothing was selected or
+/// the list is empty (0 is also what the dropdown shows for an empty list).
+pub fn selection_after_replacement(selected: Option<&str>, names: &[String]) -> usize {
+    selected
+        .and_then(|name| names.iter().position(|n| n == name))
+        .unwrap_or(0)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -982,6 +1022,61 @@ mod tests {
             .templates
             .is_empty());
         std::fs::remove_dir_all(&dir).ok();
+    }
+
+    /// Apply's lookup (iptc-templates.md, "Apply re-reads first and applies
+    /// by name"): exact and case-sensitive — `Osprey` and `osprey` are two
+    /// templates, each found by its own spelling — and a name not in the
+    /// list is the error carrying the strip's sentence, never some other
+    /// template.
+    #[test]
+    fn template_by_name_is_exact_and_case_sensitive() {
+        let pad = |name: &str, title: &str| IptcTemplate {
+            name: name.into(),
+            title: Some(title.into()),
+            ..Default::default()
+        };
+        let list = vec![pad("Osprey", "upper"), pad("osprey", "lower")];
+        let found = |name: &str| template_by_name(&list, name).map(|t| t.title.clone());
+        assert_eq!(found("Osprey").unwrap().as_deref(), Some("upper"));
+        assert_eq!(found("osprey").unwrap().as_deref(), Some("lower"));
+        let missing = template_by_name(&list, "OSPREY").unwrap_err();
+        assert!(
+            matches!(&missing, IptcError::TemplateMissing { name } if name == "OSPREY"),
+            "{missing:?}"
+        );
+        assert_eq!(
+            missing.to_string(),
+            "template 'OSPREY' is no longer in templates.toml — nothing was applied"
+        );
+        assert!(matches!(
+            template_by_name(&[], "Osprey"),
+            Err(IptcError::TemplateMissing { .. })
+        ));
+    }
+
+    /// The dropdown follows the name across a replacement of its list
+    /// (iptc-templates.md, "The panel's models"): the old name's new
+    /// position, and 0 — the first entry — when the name is gone, nothing
+    /// was selected, or the list is empty.
+    #[test]
+    fn template_selection_follows_the_name_across_a_replacement() {
+        let names = |list: &[&str]| list.iter().map(|n| n.to_string()).collect::<Vec<_>>();
+        let three = names(&["alpha", "mid", "zebra"]);
+        assert_eq!(selection_after_replacement(Some("zebra"), &three), 2);
+        assert_eq!(
+            selection_after_replacement(Some("zebra"), &names(&["alpha", "zulu"])),
+            0
+        );
+        // Case-sensitive: `Zebra` is not `zebra`. The other spelling sits at
+        // 1, not 0, so a case-folded match cannot hide behind the gone-name
+        // answer (with `["zebra"]` alone both answers are 0).
+        assert_eq!(
+            selection_after_replacement(Some("Zebra"), &names(&["alpha", "zebra"])),
+            0
+        );
+        assert_eq!(selection_after_replacement(None, &three), 0);
+        assert_eq!(selection_after_replacement(Some("zebra"), &[]), 0);
     }
 
     /// The `{seq}` fact behind the copy plan's re-run note (brief 005)

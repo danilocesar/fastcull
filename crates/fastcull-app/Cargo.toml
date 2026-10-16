@@ -225,21 +225,35 @@ fastcull-core.workspace = true
 # If (1) changes, the icon is read from a path that does not exist on the
 # user's machine; if (3) changes, the taskbar button loses the icon while
 # the title bar keeps it.
-# SEVENTH CANARY (brief 014, the IPTC panel at a session swap; same
-# 1.17.1). Two behaviours the template dropdown's selection stands on when a
-# swap replaces the template model with the same names, neither documented
-# upstream (read 2026-10-16 in the sources; ui-grid.md's "Slint facts this
-# module depends on", iptc-templates.md's swap rule and brief 014 D4):
+# SEVENTH CANARY (brief 014, the IPTC panel at a session swap; brief 015,
+# the dropdown's choice outliving the panel; same 1.17.1). Three behaviours
+# the template dropdown's selection stands on, none documented upstream
+# (read 2026-10-16 in the sources; ui-grid.md's "Slint facts this module
+# depends on", iptc-templates.md's "The panel's models", brief 014 D4 and
+# brief 015 D11):
 #   1. A `ComboBox` answers a model replacement with `changed model =>
-#      reset-current()`: the index is clamped into the new list (0 when the
+#      reset-current()`: the index is CLAMPED into the new list (0 when the
 #      list is empty) and the value re-derived from it at once
-#      (i-slint-compiler widgets/common/combobox-base.slint:56-77) — why the
-#      swap may replace the template model and the selection survives, by
-#      index.
+#      (i-slint-compiler widgets/common/combobox-base.slint:56-77), deferred
+#      past the callback that replaced the model — why the bridge may set
+#      the selected name's new position with the replacement: the deferred
+#      clamp finds it and leaves an in-range index alone, so the dropdown
+#      follows the template by NAME (brief 015 D6).
 #   2. `ModelRc`'s equality is pointer equality (i-slint-core model.rs:719),
 #      so a fresh `VecModel` with identical contents still fires that
 #      handler, deferred like every change handler.
-# If (1) changes, the dropdown forgets its selection at every folder swap.
+#   3. A runtime `link_two_way` keeps the RIGHT-hand side's value ("The
+#      value or binding of prop2 is kept", i-slint-core
+#      properties/two_way_binding.rs:55-56), so the dropdown — created and
+#      destroyed with the panel's `if` — starts on the window property its
+#      `current-index` is bound to (`current-index <=>
+#      root.iptc-template-index`, main.slint), not on its own 0: why the
+#      user's choice survives closing and reopening the panel (brief 015
+#      D11).
+# If (1) changes — a reset instead of a clamp — the dropdown forgets the name
+# at every Apply and swap that changes the list; brief 015 AC5 says so.
+# If (3) changes, the selection dies with the panel — brief 015 AC5's
+# reopen read says so.
 slint = { version = "1", default-features = false, features = [
     "std",
     "backend-winit",

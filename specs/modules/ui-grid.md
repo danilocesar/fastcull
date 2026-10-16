@@ -953,13 +953,31 @@ one that takes it (read 2026-10-03 for settings.md's card: why the body
 host, not the footer, absorbs the high-water mark's extra height).
 A `ComboBox` keeps its `current-index` across a model replacement and
 re-derives `current-value` from the new model at once: `changed model =>
-reset-current()` clamps the index into the new list (0 when the list is
-empty) and calls `update-current-value()`
-(`widgets/common/combobox-base.slint:56-77`), and the handler fires for
-every replacement because `ModelRc`'s equality is pointer equality
-(`model.rs:719`), deferred like every change handler (read 2026-10-16 for
-iptc-templates.md's template dropdown: why its selection survives a
-session swap that replaces the template model, brief 014 D4).
+reset-current()` CLAMPS the index into the new list — `clamp(0, length −
+1)`, 0 when the list is empty — and calls `update-current-value()`
+(`widgets/common/combobox-base.slint:56-77`); the handler fires for every
+replacement because `ModelRc`'s equality is pointer equality
+(`model.rs:719`), and it runs deferred like every change handler — at the
+start of the next event-loop iteration (`platform.rs`
+`update_timers_and_animations`) or in the instantiation pass before a
+paint (`window.rs` `ensure_tree_instantiated`), never inside the Rust
+callback that replaced the model. So an index the bridge sets in the same
+callback as the replacement is the index the deferred clamp finds, and a
+clamp leaves an in-range index where it is: a bridge that sets the
+selected name's new position with the replacement wins in either order of
+the two writes, and only an out-of-range index is moved. `current-index`
+is `in-out` (`combobox-base.slint:10`, every style's `combobox.slint`),
+reachable from the bridge through a window property two-way bound to it
+from inside the panel's `if` — a runtime `link_two_way`, which keeps the
+RIGHT-hand side's value (`properties/two_way_binding.rs:53-56`), so a
+dropdown recreated with the panel starts on the window property's value,
+not on its own 0 — exactly what iptc-templates.md's "the selection
+survives closing and reopening the panel" rests on: the bridge never
+writes that property at a close, and the reopen's refresh sets it only
+when the re-read list differs (read 2026-10-16 for brief 014 D4 — why the
+by-index survival was the widget's own doing — and re-read and measured
+2026-10-16 for brief 015 D6 and D11: why the dropdown can follow the NAME
+and why its choice outlives the panel).
 
 ## Contracts
 
@@ -1299,6 +1317,13 @@ session swap that replaces the template model, brief 014 D4).
 
 ## History
 
+- 2026-10-16 — Brief 015: the ComboBox fact gains what the dropdown's
+  follow-the-name rests on — the deferred clamp runs after the bridge's
+  callback and leaves an in-range index alone, `current-index` is settable
+  through a two-way-bound window property, and a runtime two-way link
+  keeps the right-hand side's value across the dropdown's recreation,
+  which is what the selection's survival across a close rests on (D11).
+  Nothing else here moves.
 - 2026-10-16 — Brief 014 (issue #114): the Slint list gains the
   ComboBox's behaviour at a model replacement — the index kept and
   clamped, the value re-derived — which iptc-templates.md's swap rule

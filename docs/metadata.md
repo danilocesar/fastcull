@@ -52,7 +52,7 @@ anywhere (opening the panel if needed).
   after an apply.)
 - The panel rebuilds its fields whenever what they should show changes —
   as the folder's metadata arrives (including the metadata of the very
-  image you are on), when the selection changes, when templates reload.
+  image you are on), when the selection changes.
   If a rebuild is what interrupts you mid-word, the un-committed text is
   **discarded** — the same rule as closing the panel — and the keyboard
   stays in the field you were typing in, so you can simply type it
@@ -61,9 +61,11 @@ anywhere (opening the panel if needed).
 - **Opening another folder empties the panel of the old folder's data**
   — fields, keyword chips and their counts alike; the chips fill in again
   as the new folder's sidecars are read. Your template choice in the
-  dropdown stays as long as the panel stays open; closing the panel puts
-  the dropdown back on the first template — folder swap or not, as it
-  always has. (Until 0.15.1 the old folder's
+  dropdown follows the template's *name*: it is the same template even
+  when the file's order changed under it, it goes to the first entry when
+  that template is no longer in the file, and it survives closing and
+  reopening the panel too (until 0.15.1 a close put the dropdown back on
+  the first template). (Until 0.15.1 the old folder's
   keywords and counts lingered until the new folder's first keyword
   appeared — a count that could not be true of the photos in front of
   you.)
@@ -82,8 +84,22 @@ by hand in one TOML file (there is no save-template UI yet):
 - Linux: `~/.config/fastcull/templates.toml`
 - Windows: `%APPDATA%\fastcull\fastcull\config\templates.toml`
 
-The file is re-read every time you open the panel — edit, save, toggle
-the panel, apply. A complete example:
+The file is re-read when you open the panel, when you open a folder,
+and every time you click **Apply** — so the loop is edit, save, Apply,
+and the template you just changed is what gets stamped. (Until 0.15.1
+Apply used what the panel had read when it opened, and this page said to
+toggle the panel first.) A template you *add* while the panel is open
+shows up in the dropdown the next time any of those three happens —
+toggle the panel if you want it right away. If the template you had
+selected is no longer in the file when you click Apply (renamed or
+deleted), nothing is stamped and the panel says so; the dropdown goes to
+the first template in the file. If the file does not parse at all, the
+panel keeps the templates it last read, shows the error, and Apply
+stamps nothing until the file is fixed. Re-applying a template you
+edited overwrites the fields it still sets and leaves the others alone:
+removing a line from a template does not un-stamp what the previous
+version wrote — clear the field in the panel, or set it to `""` in the
+template. A complete example:
 
 ```toml
 [templates.osprey-mornings]

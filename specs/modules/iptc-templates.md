@@ -26,15 +26,50 @@ before the casefold dedup.
   directory is the one `settings::config_dir()` resolves for every config
   file, so `FASTCULL_NO_CONFIG` hides it and `FASTCULL_CONFIG_DIR` moves
   it exactly as for `settings.toml` (brief 008, 2026-10-01; until then
-  every driven run read the user's real `templates.toml`). Read on
-  panel open and on Apply — no file watcher (2026-07-25); `templates.toml`
-  is hand-edited in v1.
-- Errors: a corrupt entry (`[templates.x]` with wrong types) is surfaced per
-  entry and the other templates still load; an unparseable file (broken
-  syntax, duplicate keys) is a hard error — nothing is safe to load from a
-  file the parser cannot segment. Unknown keys inside an entry are ignored
-  by serde, so a typo like `tittle` silently does nothing (known
-  limitation).
+  every driven run read the user's real `templates.toml`). `templates.toml`
+  is hand-edited in v1, and the app never writes it — `save_templates` has
+  no caller — so the editor is its only writer and a re-read can clobber
+  nothing (brief 015, 2026-10-16).
+- **The three read moments** (user decisions 2026-10-16, brief 015 D1 and
+  D2): `templates.toml` is read when the panel opens, at every folder
+  open, and every time Apply is clicked — before anything is applied —
+  through core's one config-dir resolver, each successful read marked
+  `templates loaded from <path>` and each failed one `templates: <path>
+  could not be read: <error>`, both from the very path it read
+  (test-harness.md; corrected 2026-10-16, QE at brief 015's round: this
+  said every read carries the first mark); under `FASTCULL_NO_CONFIG`
+  there is no path, no read and no mark. Never
+  otherwise: no file watcher, no timer, no Reload button, no re-read when
+  the dropdown opens or the window regains focus; a template added while
+  the panel is open is in the dropdown after the next of the three. This
+  bullet said "read on panel open and on Apply — no file watcher
+  (2026-07-25)" while the app, since M5, read the file on panel open and
+  folder open only — Apply applied the list as last read (corrected
+  2026-10-16, brief 015: QE's finding 3 on brief 014, the user choosing to
+  make the app keep the promise).
+- Errors, the loader's (core, unchanged by brief 015): a corrupt entry
+  (`[templates.x]` with wrong types) is surfaced per entry and the other
+  templates still load; an unparseable file (broken syntax, duplicate
+  keys) is a hard error — nothing is safe to load from a file the parser
+  cannot segment; a missing file is a successful read of zero templates,
+  not an error. Unknown keys inside an entry are ignored by serde, so a
+  typo like `tittle` silently does nothing (known limitation).
+- **One rule for a bad file, at every read moment** (brief 015 R4, Manager
+  D5, 2026-10-16): a read that fails as a whole keeps the LAST GOOD list —
+  the result of the last read in this process that succeeded, carried
+  across a folder swap — on screen and in the dropdown, and the warning
+  strip shows the parse error followed, on its own line, by `the
+  templates shown are the last read` whenever that list is non-empty; at
+  launch there is no last good list, so a broken file at launch is an
+  empty list with the error alone, as before. A corrupt entry is not a
+  failed read: it is skipped with its per-entry warning and the rest
+  replace the list. A missing file is not a failed read either: it is a
+  successful read of zero templates and replaces the list with nothing,
+  no warning — a file deleted while the panel is open empties the
+  dropdown at the next read moment, which disables Apply. The read's
+  warnings — per-entry errors and CLEAR warnings — are replaced at every
+  read; an apply-time expansion error is APPENDED to them, never put in
+  their place (R6, D7).
 - Variables, expanded at apply time per image:
 
 | Variable | Value |
@@ -77,6 +112,32 @@ before the casefold dedup.
 - `{seq}` follows the active sort: apply takes the batch slice in view
   order (`Selection::batch`) and the app builds each `ExpandContext` from
   the sort key (`ExpandContext::from_sort_key`) — a caller contract.
+- **Apply re-reads first and applies by name** (brief 015 R1–R3; user
+  decision D1, Manager D3 and D4, 2026-10-16): a click on Apply reads
+  `templates.toml` — the third read moment — and applies the template
+  whose NAME the dropdown showed at the click, found in the re-read list
+  by exact, case-sensitive match on the TOML table key (`Osprey` and
+  `osprey` are two templates), never by position: the dropdown is
+  alphabetical by byte (`toml 0.8` without `preserve_order`, a
+  `BTreeMap`), so a position drifts under every edit that inserts,
+  renames or deletes a name. A name not in the re-read list — renamed or
+  deleted in the editor, or the file gone — applies NOTHING: the revert
+  slot is untouched, the strip says `template '<name>' is no longer in
+  templates.toml — nothing was applied`, and the dropdown shows the
+  re-read list on its first entry, Apply enabled unless that list is
+  empty — never the first template as a fallback, never a silent return
+  (the persona's two MUST-HAVE conditions; until brief 015 the handler's
+  `else { return }` was that silence, unreachable while nothing could
+  change the list between the click and the lookup). A re-read that fails
+  as a whole applies nothing either — what is on disk is not what would
+  be applied — the last good list stays and the strip's last-read line
+  ends `— nothing was applied`. Every click ends in a mark naming its
+  outcome (test-harness.md, `template apply`).
+- **Re-applying an edited template** overwrites the fields it still sets
+  and leaves the others: a line removed from the template preserves what
+  its previous version stamped (ABSENT preserves); to drop that value,
+  clear the field in the panel or set it to `""` in the template (brief
+  015 R8, the persona's docs sentence).
 - **Revert**: one shared single-level slot, armed by every batch mutation
   from the panel — a template Apply, a manual commit to a multi-selection, a
   keyword-chip removal — labelled with what it will revert, and cleared by
@@ -125,18 +186,48 @@ sidecar of the new batch lands and then holds that batch's union with that
 batch's coverage — the empty row is a consequence of the batch having no
 keywords yet, never a promise of an empty moment; the template list is the
 `templates.toml` the swap re-read. The swap is the one event that replaces
-all three models whatever their content, at the first refresh after it —
-the swap's own refresh with the panel open, the refresh the reopen runs
+the rows and the chips whatever their content, at the first refresh after it
+— the swap's own refresh with the panel open, the refresh the reopen runs
 before its first frame with it closed (issue #114, brief 014 D3,
-2026-10-16). The template dropdown's selection survives the swap while the
-panel stays open across it — the user's stationery, not the folder's data
-— by index, clamped to the re-read list, which Slint's ComboBox does on
-its own at a model replacement (ui-grid.md, *Slint facts*; brief 014 D4,
-2026-10-16); closing the panel resets the dropdown to the first template,
-swap or no swap, as it did before the fix — the dropdown is created with
-the panel and dies with it (corrected 2026-10-16, brief 014 D15, QE
-finding 1: this sentence said the selection survives "like the dock's
-visibility", which survives a close).
+2026-10-16). The names model follows the change-only rule at every moment,
+the swap included: its cache is what the window holds, which no swap resets,
+so the model is replaced exactly when the re-read names differ from the
+window's — at a swap, at a reopen, at an Apply (brief 015 plan, D15,
+2026-10-16; this sentence said "all three models", and brief 014 D14
+recorded the names model's forced replacement as that unit's one untested
+line — the line is deleted, not tested: with the cache kept across the swap
+the comparison alone is the rule, and the aliasing 014 fixed for the chips,
+a cache reset to empty against an empty new list, cannot touch a cache that
+is never reset). **The
+dropdown follows the name at every replacement of the names model** —
+Apply's re-read and the folder swap alike: its selection is the entry
+carrying the name selected before the replacement, at that name's new
+position, and the first entry when the name is gone (brief 015 R5,
+Manager D6, 2026-10-16). The rule rests on the bridge, not on the widget:
+the bridge sets the dropdown's index with the replacement — through a
+window property two-way bound to the dropdown's `current-index`, which is
+also what the harness reads — and Slint's own deferred clamp leaves an
+in-range index where it was put (ui-grid.md, *Slint facts*). This
+rewrites brief 014 D4's sentence, "by index, clamped to the re-read list,
+which Slint's ComboBox does on its own at a model replacement": true of
+the widget, wrong as the rule — the index kept is the wrong template
+whenever a name is inserted, renamed or deleted ahead of it, a drift
+nobody noticed at a swap of an unchanged file and that every Apply would
+show (rewritten 2026-10-16, brief 015 D6). **The selection survives
+closing and reopening the panel**, by name, for as long as the app runs:
+the reopen is a read moment, so the names model it builds follows the
+rule above — the entry carrying the name selected before the close, at
+its position in the re-read list, the first entry when it is gone — and
+at launch the dropdown starts on the first entry (brief 015 D11,
+2026-10-16, the Manager under M2 on the persona's words: the one control
+that carries the user's intent for the whole evening must not re-decide
+itself). This replaces the sentence "closing the panel resets the
+dropdown to the first template, swap or no swap — the dropdown is created
+with the panel and dies with it" (brief 014 D15, QE finding 1, itself the
+correction of D4's "like the dock's visibility"): true of the widget
+until brief 015, whose index lives in a window property that the panel's
+close does not touch (ui-grid.md, *Slint facts*; retracted 2026-10-16,
+brief 015 D11 — 014 D15's follow-up is resolved here, not deferred).
 
 ## Contracts
 
@@ -151,6 +242,26 @@ visibility", which survives a close).
 - The keyword chips the window holds are the dump's `keywords=` field
   (test-harness.md, *The dump*): text and coverage per chip, in panel
   order — what a driven swap test reads instead of a screenshot.
+- The template names the window holds and the dropdown's selected index
+  are the dump's `templates=` and `tplsel=` fields, the warning strip its
+  `iptcwarning=` field (test-harness.md, *The dump*); every Apply ends in
+  a `template apply '<name>': <outcome>` mark; every replacement of the
+  names model is preceded by an `iptc names replaced (gen G)` mark
+  (test-harness.md, *Template names*; QE 2026-10-16, finding 4); the
+  dropdown and the Apply button are clicked by name (`click:template
+  dropdown`, `click:template apply`) — brief 015, 2026-10-16.
+- Hard rule 5's split for brief 015: the name lookup (exact,
+  case-sensitive; a missing name is the error `IptcError::TemplateMissing`,
+  whose text is the strip's sentence) and the selection after a
+  replacement (the old name's new position, else 0) are pure rules in
+  `fastcull-core` (`iptc.rs`, `template_by_name` and
+  `selection_after_replacement`) with unit tests beside them (corrected
+  2026-10-16, the developer at brief 015's core commit: this said "`None`
+  for a missing name" — the plan's lookup returns the error that carries
+  the strip's sentence, so the app never composes it); the
+  keep-last-good is app state around the unchanged loader
+  (`session::reload_templates`), carried across `begin_session`; the
+  strip's two sentences above are the exact strings the tests pin.
 
 ## Acceptance criteria
 
@@ -215,24 +326,180 @@ visibility", which survives a close).
       `keyword_enter_commit_still_writes_and_returns_focus`; the mutant
       that drops the swap's forced replacement turns AC1 and AC2 red (run
       on the fix and recorded in brief 014 D13 and the fix commit).
-- [ ] **The template list is replaced at the swap too** (brief 014 R1 and
-      D14): the names model is replaced at the first refresh after a swap
-      whatever its content, so a templates file that had templates at the
-      launch folder and none at the swap leaves no stale names in the
-      dropdown. No test pins it — every driven run is `FASTCULL_NO_CONFIG`,
-      the names are empty in both sessions and the dump has no template
-      field, so the mutant that drops the forced replacement turns nothing
-      red (the senior developer's review, 2026-10-16). Open until the next
-      template unit lands a `templates=` dump field and the driven test
-      shaped in brief 014 D14 — and, with the panel open across the swap,
-      the selection's survival by index (D4), which rests on the ComboBox's
-      clamp at every such swap and is verified only by the seventh canary's
-      reading and QE's manual probe (QE 2026-10-16, finding 2; brief 014
-      D15); the same `templates=` field pins it once it also carries the
-      selected index.
+- [x] **An edited template applies as saved** (brief 015 AC1): panel open,
+      a template selected, its `title` rewritten on disk after the open
+      (the issue #50 `on_line` rewrite, anchored on the panel open's rows
+      mark, `iptc rows rebuilt (gen 0)`, which follows the open's read in
+      the same refresh), Apply — the sidecar carries the NEW value and
+      `revert=` names the template — app
+      `apply_re_reads_templates_toml_and_stamps_the_saved_edit`; red before
+      the fix, on `a084df2` (the harness and core commits, the Apply flow
+      the old one) with the test added, at its title read, where the
+      sidecar held `Z`, the OLD value (the persona's fact 2) (corrected
+      2026-10-16, the developer at brief 015's fix commit: this box said the
+      rewrite was anchored on the open's `templates loaded from` mark — a
+      run's first such mark is the launch folder's read, before the panel
+      opens, and an edit made there would reach the open's read and leave
+      the test green on the old tree).
+- [x] **A vanished name applies nothing, visibly** (AC2): the selected
+      template renamed in the file before Apply — no sidecar, `revert=""`,
+      `iptcwarning=` carries `is no longer in templates.toml — nothing was
+      applied`, `tplsel=0` over the re-read `templates=` — app
+      `apply_of_a_vanished_template_name_applies_nothing_and_says_so`; red
+      on `a084df2` with the test added at its first read, `one.ARW.xmp`
+      written — the stale template applied; the warning deleted from the
+      vanished-name path turns it red at the strip read.
+- [x] **By name, not by position** (AC3): a name that sorts before the
+      selected one inserted in the file before Apply — the selected name's
+      fields land, not the inserted template's — app
+      `apply_finds_the_template_by_name_not_by_position`; green on `a084df2`
+      in 875f6e0's version of the test (the title read only, no re-read at
+      all), red there since 288bf5b at its precondition read, `(["alpha",
+      "zebra"], "1")` — the old tree never re-read (QE 2026-10-16, R2-1); it
+      guards the over-fix, a re-read followed by a lookup at the old index,
+      which its mutant (the click's index looked up in the re-read list)
+      turns red at the title read, `M` — the inserted template's.
+- [x] **A broken file at Apply keeps the list and applies nothing** (AC4):
+      the file made unparseable before Apply — no sidecar, `iptcwarning=`
+      carries the parse error and `the templates shown are the last read —
+      nothing was applied`, `templates=` still lists the previous names
+      (Apply's `enabled` is bound to that list's length in main.slint, so
+      the list is the button's state); after the file is repaired a second
+      Apply applies — app
+      `a_broken_templates_toml_at_apply_keeps_the_last_good_list_and_applies_nothing`;
+      red on `a084df2` with the test added at the first Apply's revert
+      read, `Revert: apply 'zebra' to 1 image(s)` — the stale template
+      applied; the failed re-read ignored and the kept list applied turns
+      it red at the same read.
+- [x] **The dropdown follows the name** (AC5, D11): after AC3's insertion
+      and Apply, `templates[tplsel]` is still the selected NAME, at its new
+      position; with the panel open across a folder swap, another name
+      inserted ahead of it before the `open:`, `templates[tplsel]` after
+      `load settled gen 1` is again that name at its new position (brief
+      014 D4 by name — a swap of an UNCHANGED file cannot tell by-name from
+      by-index, so the test changes the file first); and after
+      `iptc;…;iptc` — the panel closed and reopened with yet another name
+      inserted ahead — `templates[tplsel]` is still that name (D11: the
+      reopen is a read moment) — app
+      `the_template_dropdown_follows_the_name_at_apply_at_a_swap_and_at_a_reopen`;
+      red on `a084df2` with the test added at the first read, `templates=`
+      unchanged by the Apply and `tplsel=1`. The mutant that keeps the
+      index (the bridge's index write deleted) turns the first two reads
+      red — measured, all three read `tplsel=1`; a reset of the window
+      property at the panel's close turns the third red alone, `tplsel=1`.
+- [x] **The list at a swap, as brief 014 D14 shaped it** (AC6): the file
+      deleted after the panel read it, then a swap — `templates=[]` after
+      `load settled gen 1`, which is Apply disabled — app
+      `a_session_swap_replaces_the_template_list_even_when_the_file_is_gone`;
+      green on `a084df2` (014's forced replacement still in place), red with
+      `names` dropped from the cache `IptcPanelState::begin_session` keeps —
+      the 014 aliasing shape, the old names still listed after the swap
+      (014 G1's forced-replacement line is deleted, see *The panel's
+      models*). Brief 014's open box — "the template list is replaced at
+      the swap too", with the selection's survival by index — closes into
+      this box and AC5's: its first half is this test, its second is
+      rewritten by R5 and pinned by AC5's swap read; the selection no
+      longer rests on the ComboBox's clamp (ui-grid.md, *Slint facts*).
+- [x] **Warnings add up** (R6, brief 015 AC9): a template with a `""` field
+      and an unknown variable — after Apply `iptcwarning=` carries the
+      CLEAR warning AND, after it, the expansion error — app
+      `an_apply_time_expansion_error_joins_the_read_warnings`; red on
+      `a084df2` with the test added at the CLEAR read, the strip holding
+      the expansion error alone; the error put back in place of the read's
+      warnings turns it red at the same read, and inserted ahead of them at
+      the order read.
+- [x] **The last good list at a swap and a reopen** (brief 015 AC10, D17):
+      a broken `templates.toml` at a folder open with the panel open, and at
+      a panel reopen over the same broken file, keeps the last good list
+      with its selection and shows the parse error followed by the bare
+      note `the templates shown are the last read`; two failed reads, two
+      `templates: … could not be read` marks — app
+      `a_broken_templates_toml_at_a_swap_and_a_reopen_keeps_the_last_good_list`;
+      the list reset in `AppState::begin_session` (`self.templates =
+      TemplateState::default()`, the survivor this rule rests on) leaves
+      the seven tests above green and turns this one red at its `swapped`
+      read, `templates=[]`, `tplsel=0`, the error alone (the senior
+      developer's review F1, 2026-10-16: until then the rule was pinned at
+      Apply only); red on `a084df2` with the test added, at `swapped`,
+      `left: ("[]", "0")` — the old code emptied the list at every failed
+      read (QE 2026-10-16).
+- [x] **An Apply over an empty view applies nothing, and the mark says so**
+      (brief 015 D12; QE 2026-10-16, finding 1): a one-image folder filtered
+      to nothing, Apply — `no image — nothing applied`, one mark,
+      `revert=""`, the strip and the folder untouched, three reads — app
+      `an_apply_over_an_empty_view_applies_nothing_and_says_so`; the early
+      return deleted stamps zero images and arms Revert, red at the mark.
+      Red on `a084df2` with the test added at its read count, `left: 2`,
+      `right: 3` — the old Apply never re-read (QE 2026-10-16).
+- [x] **A broken file at launch is an empty list with the error alone**
+      (R4's launch clause; QE 2026-10-16, finding 2): `templates.toml`
+      unparseable from the start — after the launch folder's read and the
+      panel's open the dropdown is empty (`templates=[]`, `tplsel=0`) and
+      the strip shows the parse error without the last-read note; two failed
+      reads, two `templates: … could not be read` marks and no `templates
+      loaded from` — app
+      `a_broken_templates_toml_at_launch_is_an_empty_list_with_the_error_alone`;
+      the last-read note shown over an empty list turns it red at the strip.
+      Green on `a084df2`: the old reads never showed the note — a guard of
+      the new code (QE 2026-10-16).
+- [x] **Applying nothing leaves the revert slot alone** (R3, R4; QE
+      2026-10-16, finding 3): `alpha` applied, then a vanished name and a
+      failed re-read — `revert=` still names `alpha` after both, the sidecar
+      still `A` — app
+      `an_apply_that_applies_nothing_leaves_the_revert_slot_alone`; the slot
+      cleared on either path turns it red at that read. Red on `a084df2`
+      with the test added: the run abandoned at exit 1, the stale `zebra`
+      stamped at the second and third clicks, so the wait for the failed
+      re-read never came (QE 2026-10-16).
+- [x] **The pure rules in core**: `Osprey` is not `osprey`, and a missing
+      name is the error whose text is the strip's sentence, never another
+      template; the selection after a replacement is the old name's new
+      position, 0 when the name is gone, nothing was selected or the list
+      is empty — core `template_by_name_is_exact_and_case_sensitive`,
+      `template_selection_follows_the_name_across_a_replacement`; a
+      case-folded lookup (`eq_ignore_ascii_case`) turns the first red at
+      the `osprey` read, a case-folded `position` the second at its case
+      line, which holds the other spelling at position 1 so that the folded
+      match cannot hide behind the gone-name answer 0 (corrected
+      2026-10-16, the developer at brief 015's core commit: this box said a
+      missing name is `None`).
+- [x] **Nothing else moves** (AC7):
+      `templates_and_ui_prefs_are_read_from_the_one_config_dir`, the core
+      template tests, the five focus tests and the three swap-chip tests
+      of brief 014 AC4 keep their promises, count for count, and the
+      change-only rule stands within a session (the names model replaced
+      only when the names changed; the selection set without a
+      replacement); the names model's replacements are counted — `iptc
+      names replaced (gen N)`, 1 in AC1, 4 in AC5, 1 in AC10 — and a
+      replacement on every refresh turns the counts red (QE 2026-10-16,
+      finding 4). Ticked 2026-10-16 at the record's close: CI green on
+      both runners on the fix commit `875f6e0` (run 38938796634, ubuntu
+      23 min, windows 51 min), on the review-round commit `44468e5` (run
+      38946479417, 24 / 45 min) and on the QE-round commit `288bf5b` (run
+      38960163024, 24 / 51 min); QE's local full suite on `288bf5b`: 138
+      driven green in thirds of 46 (337.14 s + 414.46 s + 367.05 s),
+      every non-driven target green, perf budgets 6/6 in release.
 
 ## History
 
+- 2026-10-16 — Brief 015: Apply re-reads `templates.toml` and applies the
+  selected template BY NAME; a vanished name applies nothing and the strip
+  says so; a read that fails as a whole keeps the last good list at every
+  read moment, carried across a swap; the dropdown follows the name at
+  every replacement of the names model, the swap included — brief 014 D4's
+  "by index, clamped" is rewritten (D6) and 014 D14's open box closes into
+  AC5 and AC6 (D8); warnings append (R6); the selection survives closing
+  and reopening the panel, by name (D11 — brief 014 D15's close-reset
+  sentence retracted and its follow-up resolved). The Templates bullet
+  said "read on panel open and on Apply" from 2026-07-25 while the app
+  read the file
+  on panel open and folder open only (M5, `8e67cd6`); the user chose to
+  make the app keep the promise (D1), Apply the only new read moment
+  (D2). The read moments, the bad-file rule and the by-name rule are
+  stated here once; test-harness.md carries the `templates=`, `tplsel=`
+  and `iptcwarning=` dump fields, the `template apply` marks and the two
+  click names; ui-grid.md the Slint fact the dropdown's follow-the-name
+  rests on; docs/metadata.md the user's words.
 - 2026-10-16 — Brief 014 (issue #114): after a session swap the panel's
   models show the new session and nothing else, with the panel open across
   the swap and reopened after it; the change-only rebuild rule and the
