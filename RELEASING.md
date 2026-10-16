@@ -69,10 +69,13 @@ have already built at this commit and then tag it, verify before shipping
 anything you built locally:
 
 ```sh
-./target/release/fastcull-app --version   # or Help > About
+strings ./target/release/fastcull-app | grep -c -- '-devel-'   # must print 0; or Help > About
 ```
 
-A release build must print plain `X.Y.Z`. If it still shows
+A release build carries plain `X.Y.Z` — the app has no `--version` flag
+(its one argument is a folder: at v0.15.1 the flag answered `not a
+directory: --version`), so the check is the binary's strings or the
+About dialog (corrected 2026-10-16). If the binary still carries
 `X.Y.Z-devel-…`, the script did not re-run: `cargo clean -p fastcull-app`
 and build again. This bit v0.5.0. CI is unaffected — it builds from a
 fresh checkout — so this only matters for locally produced binaries.
