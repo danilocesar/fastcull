@@ -85,8 +85,12 @@ can.
   sidecar of the new batch lands and then shows the new batch's union with
   the new batch's coverage; the template list is the `templates.toml` the
   swap re-read; the batch label, the warning strip, the revert label and
-  the revert button are the new session's (these four are already set
-  unconditionally).
+  the revert button are the new session's (these four are set on every
+  refresh the panel runs while it is visible, and a reopen's synchronous
+  refresh sets them before the panel's first frame — corrected
+  2026-10-16, senior-developer spec review: `refresh_iptc_panel` returns
+  before them while the panel is closed, so a dump taken with the panel
+  closed still reads the window's old `revert=` until the reopen).
 - R2. **Both paths.** R1 holds with the panel open across the swap and
   with the panel closed across the swap and opened afterwards: a model
   the panel's `if` re-instantiates from is as visible as one on screen.
@@ -114,20 +118,34 @@ can.
 
 - AC1. **Open across the swap.** The reproduction above, asserted on the
   dump: after `load settled gen 1` the chip row is empty and `revert=""`.
-  Red on `aacf45c` (the chip row reads `wip 2/2`), green after the fix.
+  Red on the pre-fix behaviour with the harness's `keywords=` field in
+  place — the harness commit lands ahead of the fix commit (D6) — where
+  the dump reads `keywords=[("wip", "2/2")]`; on `aacf45c` itself the
+  field does not exist and the record is the reproduction above
+  (corrected 2026-10-16). Green after the fix.
 - AC2. **Closed across the swap.** The same with `iptc` before the `open:`
   and `iptc` after `load settled gen 1`: the chip row is empty.
 - AC3. **The new folder fills the row.** B's image carries a prepared
   sidecar with the keyword `bee`: after B settles the chip row is exactly
   `bee` with no coverage (a single image), never `wip` — the panel is
-  emptied of the old folder, not emptied for good.
-- AC4. **Nothing else rebuilds more.** The existing focus-continuity tests
+  emptied of the old folder, not emptied for good. Green on the pre-fix
+  tree too (the row corrected itself the moment a keyword entered the new
+  batch — the persona's observation, confirmed in the code by the senior
+  developer): it guards the over-fix — a swap that empties the models and
+  then bypasses the change-only comparison — not the defect (corrected
+  2026-10-16).
+- AC4. **Nothing else rebuilds more.** The focus tests that read or
+  order the `iptc rows rebuilt` marks keep them, count for count
   (`session_swap_mid_field_edit_discards_and_keeps_the_keyboard`,
-  `session_swap_mid_keyword_edit_never_writes_into_the_new_session`,
   `a_cursor_move_rebuild_keeps_the_keyboard_in_the_field`,
-  `keyword_enter_commit_still_writes_and_returns_focus`) stay green with
-  the same `iptc rows rebuilt` counts; a mutant that drops the swap's
-  forced replacement turns AC1–AC3 red.
+  `a_dismissed_menu_over_a_focused_field_row_keeps_the_keyboard`), and
+  the within-session chip path keeps its promise
+  (`session_swap_mid_keyword_edit_never_writes_into_the_new_session`,
+  `keyword_enter_commit_still_writes_and_returns_focus`); a mutant that
+  drops the swap's forced replacement turns AC1 and AC2 red — AC3 stays
+  green by design (this line said "AC1–AC3" and listed the Enter-commit
+  test among the mark readers until 2026-10-16, the senior developer's
+  spec review).
 - AC5. **The specs and docs say so** (R5), ticked at the merge.
 
 ## Applicable directives
@@ -227,3 +245,16 @@ one moment it was skipped.
 - D5 (2026-10-16, Manager): the persona's follow-up candidate (keyword
   completion from this session's sidecars) is recorded here and not
   opened as an issue; the unit does not grow toward it.
+- D6 (2026-10-16, Manager, on the senior developer's Q2): two
+  implementation commits — the harness's `keywords=` dump field first, on
+  its own, so the old-red has a real tree (the repo's "pre-fix build plus
+  the drive-harness commit" shape); the fix with its tests second. QE
+  reproduces the old behaviour on the harness commit.
+- D7 (2026-10-16, Manager, on Q1): ui-grid.md's Slint-facts sentence on
+  the ComboBox is kept — the fact is verified in Slint's source and that
+  section exists for exactly such facts.
+- D8 (2026-10-16, Manager, on Q4): AC5 lives in this brief's ledger only;
+  the module ledger carries the four failable criteria, since a criterion
+  whose only test is the merge is decoration there.
+- D9 (2026-10-16, Manager, on Q3): docs/metadata.md names 0.15.1 (D2);
+  the release commit corrects it if the number moves.

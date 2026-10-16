@@ -514,6 +514,20 @@ AC12); then `clipnudged=` (brief 011, 2026-10-04, QE round 2 D3), the
 export clash question's nudge, the twin of the copy block's `nudged=`:
 `true` once a key the question does not take has been answered with
 "Pick one: B, O or Esc." rather than swallowed in silence.
+Then `keywords=` (brief 014, 2026-10-16, issue #114): the keyword chips
+the WINDOW holds — the `iptc-keywords` model the panel's chip repeater is
+built from, panel open or closed — as the `{:?}` of a list of `(text,
+coverage)` pairs in model order: `keywords=[]` for no chip,
+`keywords=[("bee", "")]` for one keyword on a single image,
+`keywords=[("wip", "2/2"), ("bee", "1/2")]` on a two-image selection. The
+strings are Rust Debug-escaped (a `"` or a `\` inside a keyword is
+escaped, a `]` or a space is not), so a non-empty list is read to its
+closing bracket outside quotes, never with `dump_field`, whose whitespace
+split stops at the first space — the empty case is the one `dump_field`
+reads correctly. It is the model and not a screenshot because the model
+is what the user sees whether or not the panel is up — a panel reopened
+after a swap is instantiated from it — and because a chip's pixels move
+with the seat's font.
 New fields are APPENDED; `dump_field` finds `name=` by prefix. The
 nav-token swallow mirror (`drive swallowed by modal`) covers the Settings
 dialog like About and the card.
@@ -647,6 +661,10 @@ shot 2.
 
 ## History
 
+- 2026-10-16 — Brief 014 (issue #114): the dump gains `keywords=`,
+  appended after `clipnudged=` — the keyword chips the window holds, text
+  and coverage per chip in model order — so a driven swap test reads the
+  panel's model instead of a screenshot.
 - 2026-10-05 — Brief 012 (issue #99), QE round 1 D3 and D7, the senior
   developer's review F2: the `loupe ring budget …` mark the brief added is
   the proof that the budget and the learned sizes reached the ring RULE —

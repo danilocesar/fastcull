@@ -100,6 +100,40 @@ become a cull command. Esc inside a field is not an abandon gesture — the
 Slint LineEdit offers no Esc hook in v1 (recorded deviation). Focus
 continuity in full: ui-grid.md, *Focus continuity*.
 
+### The panel's models
+
+The panel shows the batch of the session that is open — the selection in
+view order, or the cursor (`Selection::batch`) — through three window
+models: the field rows (the tri-state mapping above, one row per field),
+the keyword chips and the template names. A chip is one keyword of the
+batch's union, in first-seen order across the batch in view order, with
+its coverage `n/total` after it on a multi-selection and nothing on a
+single image (M5, 2026-07-25; written here by brief 014, 2026-10-16).
+Within a session each model is replaced only when its content changes —
+the rows never on a tick that changes nothing, because a replacement
+destroys the editors (ui-grid.md, *Focus continuity*) and an unconditional
+rebuild tore them down on every engine tick (gate finding at the panel
+step, 2026-07-25; written here by brief 014).
+
+After a session swap (`session::open_folder_at`: File › Open Folder…,
+`Ctrl+O`, the harness's `open:`) everything the panel shows describes the
+new session and nothing else, at every moment — with the panel open across
+the swap and with it closed across the swap and opened afterwards: the
+rows, the chips with their coverage, the template list, the batch label,
+the warning strip and the revert slot. The chip row holds nothing until a
+sidecar of the new batch lands and then holds that batch's union with that
+batch's coverage — the empty row is a consequence of the batch having no
+keywords yet, never a promise of an empty moment; the template list is the
+`templates.toml` the swap re-read. The swap is the one event that replaces
+all three models whatever their content, at the first refresh after it —
+the swap's own refresh with the panel open, the refresh the reopen runs
+before its first frame with it closed (issue #114, brief 014 D3,
+2026-10-16). The template dropdown's selection survives the swap like the
+dock's visibility — the user's stationery, not the folder's data — by
+index, clamped to the re-read list, which Slint's ComboBox does on its own
+at a model replacement (ui-grid.md, *Slint facts*; brief 014 D4,
+2026-10-16).
+
 ## Contracts
 
 - The IPTC field list is one core table; the panel, the writer and the
@@ -110,6 +144,9 @@ continuity in full: ui-grid.md, *Focus continuity*.
   takes the selected ids in view order WITHOUT `batch`'s cursor fallback
   (video-export.md).
 - Copy Picks' rename templates are this engine (fileops.md).
+- The keyword chips the window holds are the dump's `keywords=` field
+  (test-harness.md, *The dump*): text and coverage per chip, in panel
+  order — what a driven swap test reads instead of a screenshot.
 
 ## Acceptance criteria
 
@@ -140,9 +177,55 @@ continuity in full: ui-grid.md, *Focus continuity*.
       `camera_template_stamps_the_exif_model` (two A1 frames and a
       `{camera}.{ext}` rename → `ILCE-1.ARW` and `ILCE-1_1.ARW`, the in-batch
       suffix included).
+- [ ] **The panel forgets the old folder with it open across the swap**
+      (brief 014 AC1): a keyword tagged on folder A's two images, `open:`
+      folder B (one image, no sidecar), and after `load settled gen 1` the
+      dump reads `keywords=[]` and `revert=""` — app
+      `a_session_swap_empties_the_keyword_chips_with_the_panel_open`; red
+      on the pre-fix behaviour with the dump field in place (the harness
+      commit lands before the fix commit), where it reads
+      `keywords=[("wip", "2/2")]` — on `aacf45c` itself the field does not
+      exist and the record is the brief's screenshot. The test does not
+      exist yet.
+- [ ] **…and with it closed across the swap and reopened** (AC2): the same
+      with `iptc` before the `open:` and `iptc` after `load settled gen 1`,
+      the dump after the reopen reading `keywords=[]` — app
+      `a_session_swap_empties_the_keyword_chips_with_the_panel_closed_and_reopened`;
+      red on the same pre-fix behaviour, where the reopened panel is
+      instantiated from the model the swap never replaced. The test does
+      not exist yet.
+- [ ] **The new folder fills the row** (AC3): B's image carries a prepared
+      sidecar with the keyword `bee`, and after `load settled gen 1` the
+      dump reads exactly `keywords=[("bee", "")]` — no coverage on a single
+      image, never `wip` — app
+      `the_new_folders_sidecar_fills_the_keyword_chips_after_a_swap`. Green
+      on the pre-fix tree too (the row corrected itself the moment a
+      keyword entered the new batch): it guards the over-fix — a swap that
+      empties the models and then bypasses the change-only comparison —
+      not the defect. The test does not exist yet.
+- [ ] **Nothing else rebuilds more** (AC4): the focus tests that read or
+      order the `iptc rows rebuilt` marks keep them, count for count —
+      `session_swap_mid_field_edit_discards_and_keeps_the_keyboard`,
+      `a_cursor_move_rebuild_keeps_the_keyboard_in_the_field`,
+      `a_dismissed_menu_over_a_focused_field_row_keeps_the_keyboard` — and
+      the within-session chip path keeps its promise —
+      `session_swap_mid_keyword_edit_never_writes_into_the_new_session`,
+      `keyword_enter_commit_still_writes_and_returns_focus`; the mutant
+      that drops the swap's forced replacement turns AC1 and AC2 red. Open
+      until the mutant has been run on the fix and recorded in the brief.
 
 ## History
 
+- 2026-10-16 — Brief 014 (issue #114): after a session swap the panel's
+  models show the new session and nothing else, with the panel open across
+  the swap and reopened after it; the change-only rebuild rule and the
+  chip rule, shipped with M5 and never written into this spec, are stated
+  under *The panel's models*; the template dropdown's selection is
+  recorded as kept (D4). Until the fix the chip model was replaced only
+  when the new content differed from a cache the swap had reset to empty,
+  so a new folder with no keywords kept the old folder's chips and counts
+  until its first keyword landed — with the panel open across the swap and
+  reopened after it alike.
 - 2026-10-01 — `templates.toml` resolves through the one config-dir
   resolver of settings.md, hermetic under `FASTCULL_NO_CONFIG` (brief 008).
 - 2026-09-17 — Rewritten (brief 007). The pre-rewrite text is
