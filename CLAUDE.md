@@ -363,6 +363,19 @@ developer owns re-verifying such claims against reality.
   JPEG flavours. The panel's rules stand if scope creeps: no editing
   surface (no crop, speed, loop, bounce, montage), README bullet never
   headline.
+- **A second Apply after a vanished template name (brief 015 D21,
+  2026-10-16).** Shipped in brief 015: after a vanished-name Apply the
+  dropdown sits on the first template and the next Apply stamps it, the
+  warning erased by that click's own re-read; at a reopen or a swap with
+  the name gone the dropdown moves to the first entry with no message and
+  the first Apply stamps it. The persona rates that IN-MY-WAY and asks for
+  no selection with Apply disabled until the user picks — one rule at
+  Apply, swap and reopen, the no-selection state surviving a reopen or a
+  swap, the strip naming the gone template — as a MUST-HAVE follow-up
+  wanted before the next tagged release, not a blocker for the unit. Put
+  to the user in brief 015's report; the next template unit takes it up
+  once the user rules (a behaviour change under M1: the "first entry"
+  sentences in iptc-templates.md and docs/metadata.md).
 
 ## Calling for help on a hard defect
 
