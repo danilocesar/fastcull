@@ -60,7 +60,8 @@ before calling it) — not just the tests belonging to the change; a green
 new feature with a red neighbor is a FAIL. On this seat
 `has_display()` is true, so `cargo test --workspace` includes the driven
 screenshot suite in debug (run it in chunks against the 600 s foreground
-cap when it does not fit; the release suite is ~460 s serial). What CI
+cap when it does not fit; the release suite is ~970 s on this seat at
+126 tests, 2026-10-16, chunked too). What CI
 runs, so that you can match it: one job on `ubuntu-latest` and
 `windows-latest` (both 4 vCPU, ~16 GB), every test invocation
 `--test-threads=1` under `RUST_BACKTRACE=1`; on Windows `has_display()` is
@@ -314,9 +315,22 @@ if it works, say it works.
   never matches its own text) and the check is `ps -eo pid,args` filtered
   the same way, never `pgrep` on the plain text.
 - **The driven suite no longer fits one foreground call.** (senior
-  developer, unit 006, 2026-09-12) The screenshot suite is 87 tests and
-  about 600 s in debug on this seat — over the 600000 ms cap, so a single
-  `cargo test --test screenshot` call is cut off mid-suite. Run it as two
-  `--exact` halves split from `cargo test -p fastcull-app --test
-  screenshot -- --list`, each its own foreground call (measured: 318 s +
-  288 s), never a background run and never a shorter list than the whole.
+  developer, unit 006, 2026-09-12; re-measured at brief 014, 2026-10-16)
+  The screenshot suite is 126 tests (87 at unit 006) and about 1060 s in
+  debug on this seat — far over the 600000 ms cap, so a single
+  `cargo test --test screenshot` call is cut off mid-suite. Run it as
+  three `--exact` thirds split from `cargo test -p fastcull-app --test
+  screenshot -- --list`, each its own foreground call (measured
+  2026-10-16: 301 s + 420 s + 336 s; a half of 63 would run ~530 s
+  against the cap — the "two halves" this bullet said until brief 014
+  came too near it), never a background run and never a shorter list
+  than the whole. The release suite is ~970 s on this seat (QE, brief
+  014: 564 s + 158 s + 250 s in chunks of 60/36/30), so it is chunked
+  too — a 60-test chunk already takes 564 s.
+- **A worktree has no `testdata/raws/`.** (QE, brief 014, 2026-10-16: the
+  first old-red attempt in the overlay worktree panicked at the fetch
+  guard, "run testdata/fetch.sh") The sample RAWs are gitignored and
+  fetched, so a `git worktree add` checkout has none. Symlink the main
+  checkout's `testdata/raws` into the worktree before any driven run or
+  integration test there, and unlink it before `git worktree remove`;
+  the checksums before and after still cover the one real directory.
