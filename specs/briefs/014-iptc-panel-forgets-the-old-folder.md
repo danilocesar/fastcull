@@ -258,3 +258,18 @@ one moment it was skipped.
   whose only test is the merge is decoration there.
 - D9 (2026-10-16, Manager, on Q3): docs/metadata.md names 0.15.1 (D2);
   the release commit corrects it if the number moves.
+- D10 (2026-10-16, Manager, on the senior developer's plan Q1): commit 1
+  (the harness field) is verified by fmt, clippy, the build, the unit
+  tests and the eight named driven tests — the field is appended to the
+  end of a line no test reads to the end, grep-verified by the senior
+  developer — and the full driven suite runs once, before commit 2; the
+  developer's rule is "the tests the plan names green before every
+  commit", and the plan names them.
+- D11 (2026-10-16, Manager, on plan Q2): test-harness.md's `keywords=`
+  sentence gains the half-sentence that with the panel closed across a
+  swap the field lags until the reopen replaces the model before the
+  panel's first frame — a clarification landed in commit 2, so no later
+  test author tightens AC2's `closed` dump into a false red.
+- D12 (2026-10-16, Manager, on plan Q3): the `key:+` / `dump.end` probe
+  stays in the three new tests — the forced replacements sit in the
+  swap's reclaim pass, and the probe costs nothing.
