@@ -352,11 +352,13 @@ brief 015 D11 — 014 D15's follow-up is resolved here, not deferred).
 - [x] **By name, not by position** (AC3): a name that sorts before the
       selected one inserted in the file before Apply — the selected name's
       fields land, not the inserted template's — app
-      `apply_finds_the_template_by_name_not_by_position`; green on
-      `a084df2` (no re-read at all), as designed: it guards the over-fix, a
-      re-read followed by a lookup at the old index, which its mutant (the
-      click's index looked up in the re-read list) turns red at the title
-      read, `M` — the inserted template's.
+      `apply_finds_the_template_by_name_not_by_position`; green on `a084df2`
+      in 875f6e0's version of the test (the title read only, no re-read at
+      all), red there since 288bf5b at its precondition read, `(["alpha",
+      "zebra"], "1")` — the old tree never re-read (QE 2026-10-16, R2-1); it
+      guards the over-fix, a re-read followed by a lookup at the old index,
+      which its mutant (the click's index looked up in the re-read list)
+      turns red at the title read, `M` — the inserted template's.
 - [x] **A broken file at Apply keeps the list and applies nothing** (AC4):
       the file made unparseable before Apply — no sidecar, `iptcwarning=`
       carries the parse error and `the templates shown are the last read —
@@ -421,28 +423,34 @@ brief 015 D11 — 014 D15's follow-up is resolved here, not deferred).
       Apply only); red on `a084df2` with the test added, at `swapped`,
       `left: ("[]", "0")` — the old code emptied the list at every failed
       read (QE 2026-10-16).
-- [x] **An Apply over an empty view applies nothing, and the mark says
-      so** (brief 015 D12; QE 2026-10-16, finding 1): a one-image folder
-      filtered to nothing, Apply — `no image — nothing applied`, one mark,
+- [x] **An Apply over an empty view applies nothing, and the mark says so**
+      (brief 015 D12; QE 2026-10-16, finding 1): a one-image folder filtered
+      to nothing, Apply — `no image — nothing applied`, one mark,
       `revert=""`, the strip and the folder untouched, three reads — app
       `an_apply_over_an_empty_view_applies_nothing_and_says_so`; the early
       return deleted stamps zero images and arms Revert, red at the mark.
+      Red on `a084df2` with the test added at its read count, `left: 2`,
+      `right: 3` — the old Apply never re-read (QE 2026-10-16).
 - [x] **A broken file at launch is an empty list with the error alone**
       (R4's launch clause; QE 2026-10-16, finding 2): `templates.toml`
       unparseable from the start — after the launch folder's read and the
       panel's open the dropdown is empty (`templates=[]`, `tplsel=0`) and
-      the strip shows the parse error without the last-read note; two
-      failed reads, two `templates: … could not be read` marks and no
-      `templates loaded from` — app
+      the strip shows the parse error without the last-read note; two failed
+      reads, two `templates: … could not be read` marks and no `templates
+      loaded from` — app
       `a_broken_templates_toml_at_launch_is_an_empty_list_with_the_error_alone`;
-      the last-read note shown over an empty list turns it red at the
-      strip.
+      the last-read note shown over an empty list turns it red at the strip.
+      Green on `a084df2`: the old reads never showed the note — a guard of
+      the new code (QE 2026-10-16).
 - [x] **Applying nothing leaves the revert slot alone** (R3, R4; QE
       2026-10-16, finding 3): `alpha` applied, then a vanished name and a
-      failed re-read — `revert=` still names `alpha` after both, the
-      sidecar still `A` — app
-      `an_apply_that_applies_nothing_leaves_the_revert_slot_alone`; the
-      slot cleared on either path turns it red at that read.
+      failed re-read — `revert=` still names `alpha` after both, the sidecar
+      still `A` — app
+      `an_apply_that_applies_nothing_leaves_the_revert_slot_alone`; the slot
+      cleared on either path turns it red at that read. Red on `a084df2`
+      with the test added: the run abandoned at exit 1, the stale `zebra`
+      stamped at the second and third clicks, so the wait for the failed
+      re-read never came (QE 2026-10-16).
 - [x] **The pure rules in core**: `Osprey` is not `osprey`, and a missing
       name is the error whose text is the strip's sentence, never another
       template; the selection after a replacement is the old name's new
@@ -455,7 +463,7 @@ brief 015 D11 — 014 D15's follow-up is resolved here, not deferred).
       match cannot hide behind the gone-name answer 0 (corrected
       2026-10-16, the developer at brief 015's core commit: this box said a
       missing name is `None`).
-- [ ] **Nothing else moves** (AC7):
+- [x] **Nothing else moves** (AC7):
       `templates_and_ui_prefs_are_read_from_the_one_config_dir`, the core
       template tests, the five focus tests and the three swap-chip tests
       of brief 014 AC4 keep their promises, count for count, and the
@@ -464,8 +472,13 @@ brief 015 D11 — 014 D15's follow-up is resolved here, not deferred).
       replacement); the names model's replacements are counted — `iptc
       names replaced (gen N)`, 1 in AC1, 4 in AC5, 1 in AC10 — and a
       replacement on every refresh turns the counts red (QE 2026-10-16,
-      finding 4). Ticked when the full suite is green on the fix commit on
-      both runners.
+      finding 4). Ticked 2026-10-16 at the record's close: CI green on
+      both runners on the fix commit `875f6e0` (run 38938796634, ubuntu
+      23 min, windows 51 min), on the review-round commit `44468e5` (run
+      38946479417, 24 / 45 min) and on the QE-round commit `288bf5b` (run
+      38960163024, 24 / 51 min); QE's local full suite on `288bf5b`: 138
+      driven green in thirds of 46 (337.14 s + 414.46 s + 367.05 s),
+      every non-driven target green, perf budgets 6/6 in release.
 
 ## History
 

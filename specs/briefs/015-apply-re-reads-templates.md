@@ -159,8 +159,11 @@ or coordinates; both runners.
 - AC3. **By name, not by position.** A name that sorts before the
   selected one inserted in the file before Apply: the selected name's
   fields land, not the inserted template's. Green on the pre-change
-  tree (no re-read at all); it guards the over-fix — a re-read followed
-  by a lookup at the old index — which its mutant must turn red.
+  tree in its first version (the title read only, no re-read at all),
+  red there since QE's round at its precondition read, the stale
+  tree's list and index (QE 2026-10-16, R2-1); it guards the over-fix
+  — a re-read followed by a lookup at the old index — which its
+  mutant must turn red.
 - AC4. **A broken file at Apply keeps the list and applies nothing.**
   The file made unparseable before Apply: no sidecar, the strip shows
   the parse error and the last-read note, the dump still lists the
@@ -181,8 +184,15 @@ or coordinates; both runners.
   three swap-chip tests keep their promises, count for count; the
   change-only rule for the names model stands within a session (the
   model is replaced only when the names changed; the selection is set
-  without a replacement).
-- AC8. **The specs and docs say so** (R8), ticked at the merge.
+  without a replacement); the names model's replacements are counted
+  by `iptc names replaced (gen N)` — 1 in AC1, 4 in AC5, 1 in AC10
+  (D20). Ticked 2026-10-16: CI green on both runners on `875f6e0`,
+  `44468e5` and `288bf5b` (runs 38938796634, 38946479417, 38960163024);
+  QE's full local suite on `288bf5b` green.
+- AC8. **The specs and docs say so** (R8). Ticked 2026-10-16 at the
+  record's close for the merge of PR #119 on green: iptc-templates.md,
+  test-harness.md, ui-grid.md, 01-architecture.md and docs/metadata.md
+  carry the unit (73863da, 875f6e0, 44468e5, 288bf5b).
 - AC9. **Warnings add up** (R6; added 2026-10-16 at the spec change, the
   senior developer's Q1): a template with a `""` field and an unknown
   variable — after Apply the strip carries the CLEAR warning AND the
@@ -446,3 +456,41 @@ None. The persona's one question for the user is answered (D2).
   6), every Apply test counts one mark per click (finding 7). Spec
   corrections carried in the same commit: the three read moments' two
   marks, AC10's old-red reading, D18's reach.
+- D21 (2026-10-16, Manager, on QE's question and the persona's verdict):
+  QE measured that after a vanished-name Apply the dropdown sits on the
+  first template and a second Apply stamps it on the whole selection,
+  the warning erased by that click's own re-read; at a reopen or a swap
+  with the name gone the dropdown moves to the first entry with no
+  message and the first Apply stamps it. The persona walked it at the
+  screen: (a) keep as is — IN-MY-WAY; (b) no selection and Apply
+  disabled until the user picks, one rule at all three replacement
+  moments, the no-selection state surviving a reopen or a swap, the
+  strip naming the gone template — MUST-HAVE; (c) the first template
+  shown with the warning kept until the selection changes — IN-MY-WAY.
+  The persona retracts its first-gate "first entry" verdict (D4) as
+  answered without walking the next click, and calls (b) a follow-up,
+  not a blocker: this unit already turns a silent wrong stamp on the
+  first click into a visible no-op; wanted before the next tagged
+  release. The shipped D4/D6 behaviour stands for this unit. (b) is a
+  behaviour change (M1: the "first entry" sentences of R3/D4, R5/D6 and
+  D11 in the brief, "The panel's models" in iptc-templates.md, the
+  panel bullet in docs/metadata.md) and is put to the user in the
+  report as the next unit; CLAUDE.md's open decisions track it until
+  the user rules.
+- D22 (2026-10-16, Manager, on QE's round-2 PASS on 288bf5b): every
+  round-1 finding closed as QE meant it, each new guard red under its
+  mutant and nothing else moved — the full driven suite run locally by
+  QE's choice (138 tests in thirds of 46: 337.14 s + 414.46 s + 367.05
+  s), 13 non-driven targets green, perf budgets 6/6 in release, CI run
+  38960163024 green on both runners. QE's R2-1 (minor): since finding
+  5's precondition landed, AC3 is red on a084df2 at that read,
+  `(["alpha", "zebra"], "1")`, where 875f6e0's version of the test (the
+  title read only) was green — corrected at the record's close in the
+  ledger, in AC3 above and in the test's doc comment (M10; the comment a
+  trivial fixup, exempt from the gate). R2-2 (nit): the AC11–AC13 boxes
+  gain QE's old-tree readings — AC11 red at the read count (2 of 3),
+  AC12 green (a guard of the new code), AC13 red with the run abandoned
+  at exit 1 after the stale `zebra` was stamped twice. AC13's third
+  click applies the first entry the dropdown jumped to after the
+  vanished name, the behaviour D21 puts to the user; if the user chooses
+  (b), AC13's script changes with it. AC7 and AC8 ticked at this close.

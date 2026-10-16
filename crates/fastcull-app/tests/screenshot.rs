@@ -5046,10 +5046,12 @@ fn apply_of_a_vanished_template_name_applies_nothing_and_says_so() {
 /// title, never mid's, though `mid` now sits at the position the dropdown
 /// held when `zebra` was chosen.
 ///
-/// GREEN before the fix too, by design — there was no re-read at all. It
-/// guards the over-fix, a re-read followed by a lookup at the old index.
-/// Mutant M3 — the click's index looked up in the re-read list — turns it
-/// red at the title read: `Some("M")`.
+/// Green before the fix in its first version (the title read only — there
+/// was no re-read at all); red there since the list-and-index read below
+/// landed, which sees the stale tree's `["alpha", "zebra"]` at index 1
+/// (QE 2026-10-16, R2-1). It guards the over-fix, a re-read followed by a
+/// lookup at the old index. Mutant M3 — the click's index looked up in
+/// the re-read list — turns it red at the title read: `Some("M")`.
 #[test]
 fn apply_finds_the_template_by_name_not_by_position() {
     if !has_display() {
